@@ -24,13 +24,20 @@ serde_json = "1"
 # stream (src/md.rs) — raw HTML downgraded to text, unsafe link/image
 # schemes dropped — so no HTML-parser crate rides into the wasm.
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# AGS-14: the one piece of HTML md.rs builds by hand (the mermaid
+# placeholder) escapes its text with pulldown-cmark's own escaper —
+# already in the tree, so this adds no weight.
+pulldown-cmark-escape = "0.11"
 
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 # Only what the fetch + ReadableStream SSE client (src/net.rs), the
-# board's status control, and the hash router / click-through (MFE-7:
-# Location for the hash, Element for closest()) touch.
+# board's status control, the hash router / click-through (MFE-7:
+# Location for the hash, Element for closest()), and the mermaid mounter
+# (AGS-14: Document/Node/NodeList to inject the script and walk
+# placeholders, HtmlElement for onload/onerror, CssStyleDeclaration to
+# read the palette's background) touch.
 web-sys = { version = "0.3", features = [
   "Window",
   "Headers",
@@ -42,6 +49,13 @@ web-sys = { version = "0.3", features = [
   "HtmlSelectElement",
   "Location",
   "Element",
+  "Document",
+  "Node",
+  "NodeList",
+  "HtmlElement",
+  "HtmlDivElement",
+  "HtmlHeadElement",
+  "CssStyleDeclaration",
 ] }
 
 console_error_panic_hook = "0.1"

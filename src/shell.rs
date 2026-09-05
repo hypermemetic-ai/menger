@@ -120,6 +120,11 @@ async fn serve_dist_file(dist: &std::path::Path, rel: &str) -> Response {
     };
     match tokio::fs::read(dist.join(rel)).await {
         Ok(bytes) => {
+            // An access line per served asset (RUST_LOG=menger=debug): the
+            // one place to see which assets a page actually pulled — AGS-14
+            // pins that the mermaid bundle is fetched only by pages that
+            // hold a diagram.
+            tracing::debug!("app asset served: /app/{rel} ({} bytes)", bytes.len());
             let mime = match rel.rsplit('.').next() {
                 Some("html") => "text/html; charset=utf-8",
                 Some("js") => "text/javascript",
