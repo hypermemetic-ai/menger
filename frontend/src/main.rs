@@ -7,16 +7,30 @@
 //! (owner, 2026-09-05): tickets are created by agents/CLI/API — the
 //! browser reads and changes status.
 //!
+//! MFE-7: the ticket page. Hash-routed (`/app/#/ticket/{id}` — the
+//! deep-link contract recorded in MFE-1): the route never reaches the
+//! server, so a cold load rides the existing `/app/` index serving with
+//! no SPA fallback, and dist assets can never collide with a route. The
+//! page shows every wire-exposed field, renders the body as sanitized
+//! markdown (src/md.rs), resolves blockers via `tickets.blockers`, and
+//! stays live through the same watch stream as the board: `get` and
+//! `blockers` results upsert into the id-keyed row store and the page
+//! renders THROUGH those signals, so a status change arriving from
+//! anywhere updates the open page — and a `created` event can resolve a
+//! dangling blocker in place.
+//!
 //! Reactivity is signal-grained: each row owns an inner `RwSignal<Ticket>`,
 //! so an incoming event updates the affected row's text in place — the
 //! row list signal only fires on insert/remove, and untouched rows keep
 //! their DOM identity across every update.
 
+mod md;
 mod net;
 
 use leptos::prelude::*;
 use serde::Deserialize;
 use serde_json::json;
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
@@ -49,6 +63,11 @@ struct Ticket {
     blocked_by: Vec<String>,
     #[serde(default)]
     unlocks: Vec<String>,
+    /// Markdown body — rendered on the ticket page (MFE-7).
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    created_unix: i64,
     updated_unix: i64,
 }
 
@@ -221,15 +240,408 @@ fn request_set_status(
     });
 }
 
+// ---------------------------------------------------------------------
+// Routing (MFE-7). The deep-link contract this ticket owns, recorded in
+// MFE-1: a ticket's page is `/app/#/ticket/{id}`.
+
+#[derive(Clone, PartialEq)]
+enum Route {
+    Board,
+    Ticket(String),
+}
+
+fn parse_route(hash: &str) -> Route {
+    let path = hash.strip_prefix('#').unwrap_or(hash);
+    let path = path.strip_prefix('/').unwrap_or(path);
+    match path.split_once('/') {
+        Some(("ticket", id)) if !id.is_empty() => Route::Ticket(id.to_string()),
+        _ => Route::Board,
+    }
+}
+
+fn current_route() -> Route {
+    parse_route(&net::window().location().hash().unwrap_or_default())
+}
+
+/// The route as a signal: seeded from the URL (deep links / cold loads),
+/// updated on every hashchange — link clicks, row clicks, and the
+/// browser's back/forward all funnel through the hash.
+fn use_route() -> RwSignal<Route> {
+    let route = RwSignal::new(current_route());
+    let cb = Closure::<dyn FnMut()>::new(move || route.set(current_route()));
+    net::window()
+        .add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref())
+        .expect("hashchange listener");
+    cb.forget(); // lives as long as the app
+    route
+}
+
+fn navigate_to_ticket(id: &str) {
+    let _ = net::window().location().set_hash(&format!("/ticket/{id}"));
+}
+
+/// Unix seconds, human-readable: "2026-09-05T12:34:56Z (1788690896)".
+/// js_sys::Date so no chrono rides into the wasm.
+fn fmt_unix(unix: i64) -> String {
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(unix as f64 * 1000.0));
+    let iso: String = date.to_iso_string().into();
+    let iso = iso
+        .strip_suffix(".000Z")
+        .map(|s| format!("{s}Z"))
+        .unwrap_or(iso);
+    format!("{iso} ({unix})")
+}
+
+// ---------------------------------------------------------------------
+// Views
+
+/// The board (MFE-3), unchanged in behavior; MFE-7 adds click-through:
+/// the id cell is a real link (middle-click friendly) and a click
+/// anywhere else on the row — except the status control — navigates to
+/// the ticket page.
+#[component]
+fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl IntoView {
+    view! {
+        <table>
+            <thead>
+                <tr>
+                    <th>"id"</th><th>"title"</th><th>"type"</th>
+                    <th>"status"</th><th>"severity"</th><th>"blocked by"</th>
+                </tr>
+            </thead>
+            <tbody id="board">
+                <For
+                    each=move || rows.get()
+                    // id alone: mutations re-render fields inside the
+                    // row; the <tr> itself is never replaced.
+                    key=|row| row.id.clone()
+                    children=move |row: Row| {
+                        let ticket = row.ticket;
+                        let id = row.id.clone();
+                        let nav_id = row.id.clone();
+                        let href_id = row.id.clone();
+                        view! {
+                            <tr
+                                data-ticket-id=row.id.clone()
+                                on:click=move |ev| {
+                                    // The select (and its options) keep their own
+                                    // behavior; the id link handles itself.
+                                    let hit_control = ev
+                                        .target()
+                                        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                        .and_then(|el| el.closest("select, option, a").ok().flatten())
+                                        .is_some();
+                                    if !hit_control {
+                                        navigate_to_ticket(&nav_id);
+                                    }
+                                }
+                            >
+                                <td class="id">
+                                    <a href=format!("#/ticket/{href_id}")>{row.id.clone()}</a>
+                                </td>
+                                <td>{move || ticket.with(|t| t.title.clone())}</td>
+                                <td>{move || ticket.with(|t| t.ticket_type.clone())}</td>
+                                <td class="status">
+                                    <select
+                                        class="status"
+                                        prop:value=move || ticket.with(|t| t.status.clone())
+                                        on:change=move |ev| {
+                                            let Some(sel) = ev
+                                                .target()
+                                                .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok())
+                                            else {
+                                                return;
+                                            };
+                                            let chosen = sel.value();
+                                            let current = ticket.with_untracked(|t| t.status.clone());
+                                            if chosen != current {
+                                                request_set_status(id.clone(), chosen, current, sel, last_error);
+                                            }
+                                        }
+                                    >
+                                        {STATUSES
+                                            .iter()
+                                            .map(|s| {
+                                                let s = *s;
+                                                view! {
+                                                    <option
+                                                        value=s
+                                                        selected=move || ticket.with(|t| t.status == s)
+                                                    >
+                                                        {s}
+                                                    </option>
+                                                }
+                                            })
+                                            .collect_view()}
+                                    </select>
+                                </td>
+                                <td>{move || ticket.with(|t| t.severity.clone().unwrap_or_default())}</td>
+                                <td>{move || ticket.with(|t| t.blocked_by.join(" "))}</td>
+                            </tr>
+                        }
+                    }
+                />
+            </tbody>
+        </table>
+    }
+}
+
+/// One entry of the blockers/unlocks lists. Present in the store → a
+/// live link (status and title re-render on watch events). Absent: for
+/// blockers, once the `blockers` call has resolved (`dangling_when`),
+/// the id is a dangling forward reference — visually distinct, unlinked;
+/// until then (and for unlocks entries the snapshot hasn't carried yet)
+/// a plain link. A `created` watch event upserts the store, so a
+/// dangling entry resolves live while the page is open.
+fn dag_entry(
+    id: String,
+    rows: RwSignal<Vec<Row>>,
+    dangling_when: Option<RwSignal<bool>>,
+) -> impl IntoView {
+    let found = {
+        let id = id.clone();
+        Memo::new(move |_| rows.with(|v| v.iter().find(|r| r.id == id).map(|r| r.ticket)))
+    };
+    let attr_id = id.clone();
+    view! {
+        <li data-dag-id=attr_id>
+            {move || match found.get() {
+                Some(t) => {
+                    let href = format!("#/ticket/{id}");
+                    view! {
+                        <a href=href>{id.clone()}</a>
+                        <span class="bstatus">{move || t.with(|x| x.status.clone())}</span>
+                        <span class="btitle">{move || t.with(|x| x.title.clone())}</span>
+                    }
+                        .into_any()
+                }
+                None if dangling_when.is_some_and(|loaded| loaded.get()) => {
+                    view! {
+                        <span class="dangling">{id.clone()}" (dangling — no such ticket yet)"</span>
+                    }
+                        .into_any()
+                }
+                None => {
+                    let href = format!("#/ticket/{id}");
+                    view! { <a href=href>{id.clone()}</a> }.into_any()
+                }
+            }}
+        </li>
+    }
+}
+
+/// The full ticket render: every wire-exposed field. The body is
+/// markdown, sanitized in md.rs; a leading YAML frontmatter block is
+/// collapsed behind a <details>, never painted raw. Body/blockers/
+/// unlocks render through memos so a status change re-renders the status
+/// text without rebuilding those sections (an open frontmatter fold
+/// survives a live update).
+fn ticket_view(
+    ticket: RwSignal<Ticket>,
+    rows: RwSignal<Vec<Row>>,
+    blockers_loaded: RwSignal<bool>,
+) -> impl IntoView {
+    let body_raw = Memo::new(move |_| ticket.with(|t| t.body.clone()));
+    let blocked_by = Memo::new(move |_| ticket.with(|t| t.blocked_by.clone()));
+    let unlocks_ids = Memo::new(move |_| ticket.with(|t| t.unlocks.clone()));
+
+    let blockers = move || {
+        let ids = blocked_by.get();
+        if ids.is_empty() {
+            view! { <p class="none">"none"</p> }.into_any()
+        } else {
+            view! {
+                <ul id="blockers">
+                    {ids
+                        .into_iter()
+                        .map(|bid| dag_entry(bid, rows, Some(blockers_loaded)))
+                        .collect_view()}
+                </ul>
+            }
+                .into_any()
+        }
+    };
+    let unlocks = move || {
+        let ids = unlocks_ids.get();
+        if ids.is_empty() {
+            view! { <p class="none">"none"</p> }.into_any()
+        } else {
+            view! {
+                <ul id="unlocks">
+                    {ids
+                        .into_iter()
+                        .map(|uid| dag_entry(uid, rows, None))
+                        .collect_view()}
+                </ul>
+            }
+                .into_any()
+        }
+    };
+    let body = move || {
+        let raw = body_raw.get();
+        if raw.trim().is_empty() {
+            return view! { <p class="none">"(no body)"</p> }.into_any();
+        }
+        let (fm, md_src) = md::split_frontmatter(&raw);
+        let fm_view = fm.map(|f| {
+            let f = f.to_string();
+            view! {
+                <details class="frontmatter">
+                    <summary>"frontmatter"</summary>
+                    <pre>{f}</pre>
+                </details>
+            }
+        });
+        let html = md::render_markdown(md_src);
+        view! {
+            {fm_view}
+            <div class="md" inner_html=html></div>
+        }
+            .into_any()
+    };
+
+    view! {
+        <article class="ticket">
+            <h2>
+                <span class="id">{move || ticket.with(|t| t.id.clone())}</span>
+                {move || ticket.with(|t| t.title.clone())}
+            </h2>
+            <dl class="meta">
+                <div>
+                    <dt>"status"</dt>
+                    <dd id="t-status" class="status">{move || ticket.with(|t| t.status.clone())}</dd>
+                </div>
+                <div><dt>"type"</dt><dd>{move || ticket.with(|t| t.ticket_type.clone())}</dd></div>
+                <div>
+                    <dt>"severity"</dt>
+                    <dd>{move || ticket.with(|t| t.severity.clone().unwrap_or_else(|| "—".into()))}</dd>
+                </div>
+                <div><dt>"epic"</dt><dd>{move || ticket.with(|t| t.epic.clone())}</dd></div>
+                <div><dt>"seq"</dt><dd>{move || ticket.with(|t| t.seq)}</dd></div>
+                <div><dt>"created"</dt><dd>{move || ticket.with(|t| fmt_unix(t.created_unix))}</dd></div>
+                <div><dt>"updated"</dt><dd>{move || ticket.with(|t| fmt_unix(t.updated_unix))}</dd></div>
+            </dl>
+            <section class="dag">
+                <h3>"blocked by"</h3>
+                {blockers}
+                <h3>"unlocks"</h3>
+                {unlocks}
+            </section>
+            <section class="bodysec">
+                <h3>"body"</h3>
+                {body}
+            </section>
+        </article>
+    }
+}
+
+/// The ticket page (MFE-7). `get` + `blockers` fetch on entry and upsert
+/// into the shared row store; the page renders THROUGH the store's
+/// signals, so the watch stream keeps it live exactly like the board —
+/// no data path of its own. A `not_found` answer shows the not-found
+/// state; if the id comes into existence later (watch `created`), the
+/// store lookup wins and the page upgrades itself.
+#[component]
+fn TicketPage(
+    id: String,
+    rows: RwSignal<Vec<Row>>,
+    last_error: RwSignal<Option<String>>,
+) -> impl IntoView {
+    let not_found = RwSignal::new(false);
+    let blockers_loaded = RwSignal::new(false);
+
+    {
+        let id = id.clone();
+        spawn_local(async move {
+            match net::call("get", &json!({ "id": id })).await {
+                Ok(events) => {
+                    for ev in &events {
+                        match ev.get("type").and_then(|t| t.as_str()) {
+                            Some("ticket") => {
+                                if let Some(t) = parse_ticket(ev) {
+                                    upsert(rows, t);
+                                }
+                            }
+                            Some("not_found") => not_found.set(true),
+                            Some("error") => {
+                                let msg = ev
+                                    .get("message")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("unknown error");
+                                last_error.set(Some(format!("get {id}: {msg}")));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(e) => last_error.set(Some(format!("get {id}: {e}"))),
+            }
+            // Resolve blockers (the DAG position). Resolved blockers
+            // upsert into the shared store — their statuses render live
+            // from it; an id the call did not resolve renders as
+            // dangling once the flag below is set. `not_found` here is
+            // the same fact `get` already surfaced.
+            match net::call("blockers", &json!({ "id": id })).await {
+                Ok(events) => {
+                    for ev in &events {
+                        if ev.get("type").and_then(|t| t.as_str()) == Some("blocker") {
+                            if let Some(t) = parse_ticket(ev) {
+                                upsert(rows, t);
+                            }
+                        }
+                    }
+                }
+                Err(e) => last_error.set(Some(format!("blockers {id}: {e}"))),
+            }
+            blockers_loaded.set(true);
+        });
+    }
+
+    let ticket = {
+        let id = id.clone();
+        Memo::new(move |_| rows.with(|v| v.iter().find(|r| r.id == id).map(|r| r.ticket)))
+    };
+
+    let id_view = id.clone();
+    view! {
+        <div id="ticket-page">
+            <p class="crumbs"><a href="#/">"← board"</a></p>
+            {move || match ticket.get() {
+                Some(t) => ticket_view(t, rows, blockers_loaded).into_any(),
+                None if not_found.get() => {
+                    let id = id_view.clone();
+                    view! {
+                        <div id="notfound">
+                            <h2>{id}" — not found"</h2>
+                            <p>
+                                "No ticket has this id. "
+                                <a href="#/">"Back to the board"</a>
+                                "."
+                            </p>
+                        </div>
+                    }
+                        .into_any()
+                }
+                None => {
+                    view! { <p class="loading">"loading "{id_view.clone()}"…"</p> }.into_any()
+                }
+            }}
+        </div>
+    }
+}
+
 #[component]
 fn App() -> impl IntoView {
     let rows = RwSignal::new(Vec::<Row>::new());
     let health = RwSignal::new(None::<Health>);
     let conn = RwSignal::new(Conn::Connecting);
     let last_error = RwSignal::new(None::<String>);
+    let route = use_route();
 
     // The whole data plane lives in this one task; ~1s retry keeps a
     // server restart to a few seconds of "reconnecting…" (MFE-2 criterion 3).
+    // It runs regardless of route — the ticket page's liveness is this
+    // same stream.
     spawn_local(async move {
         loop {
             let err = session(rows, health, conn, last_error)
@@ -254,8 +666,13 @@ fn App() -> impl IntoView {
 
     view! {
         <header>
-            <h1>"menger"</h1>
-            <span class="tag">"the live board (MFE-3)"</span>
+            <h1><a href="#/">"menger"</a></h1>
+            <span class="tag">
+                {move || match route.get() {
+                    Route::Board => "the live board (MFE-3)",
+                    Route::Ticket(_) => "ticket (MFE-7)",
+                }}
+            </span>
             <span id="conn" class=move || conn_view().0>{move || conn_view().1}</span>
         </header>
         <main>
@@ -268,69 +685,10 @@ fn App() -> impl IntoView {
                     </div>
                 })
             }}
-            <table>
-                <thead>
-                    <tr>
-                        <th>"id"</th><th>"title"</th><th>"type"</th>
-                        <th>"status"</th><th>"severity"</th><th>"blocked by"</th>
-                    </tr>
-                </thead>
-                <tbody id="board">
-                    <For
-                        each=move || rows.get()
-                        // id alone: mutations re-render fields inside the
-                        // row; the <tr> itself is never replaced.
-                        key=|row| row.id.clone()
-                        children=move |row: Row| {
-                            let ticket = row.ticket;
-                            let id = row.id.clone();
-                            view! {
-                                <tr data-ticket-id=row.id.clone()>
-                                    <td class="id">{row.id.clone()}</td>
-                                    <td>{move || ticket.with(|t| t.title.clone())}</td>
-                                    <td>{move || ticket.with(|t| t.ticket_type.clone())}</td>
-                                    <td class="status">
-                                        <select
-                                            class="status"
-                                            prop:value=move || ticket.with(|t| t.status.clone())
-                                            on:change=move |ev| {
-                                                let Some(sel) = ev
-                                                    .target()
-                                                    .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok())
-                                                else {
-                                                    return;
-                                                };
-                                                let chosen = sel.value();
-                                                let current = ticket.with_untracked(|t| t.status.clone());
-                                                if chosen != current {
-                                                    request_set_status(id.clone(), chosen, current, sel, last_error);
-                                                }
-                                            }
-                                        >
-                                            {STATUSES
-                                                .iter()
-                                                .map(|s| {
-                                                    let s = *s;
-                                                    view! {
-                                                        <option
-                                                            value=s
-                                                            selected=move || ticket.with(|t| t.status == s)
-                                                        >
-                                                            {s}
-                                                        </option>
-                                                    }
-                                                })
-                                                .collect_view()}
-                                        </select>
-                                    </td>
-                                    <td>{move || ticket.with(|t| t.severity.clone().unwrap_or_default())}</td>
-                                    <td>{move || ticket.with(|t| t.blocked_by.join(" "))}</td>
-                                </tr>
-                            }
-                        }
-                    />
-                </tbody>
-            </table>
+            {move || match route.get() {
+                Route::Board => view! { <Board rows last_error /> }.into_any(),
+                Route::Ticket(id) => view! { <TicketPage id rows last_error /> }.into_any(),
+            }}
         </main>
     }
 }

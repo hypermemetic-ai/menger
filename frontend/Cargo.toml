@@ -20,11 +20,17 @@ leptos = { version = "0.8", features = ["csr"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# MFE-7: ticket bodies as markdown. Sanitization is done in the event
+# stream (src/md.rs) — raw HTML downgraded to text, unsafe link/image
+# schemes dropped — so no HTML-parser crate rides into the wasm.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-# Only what the fetch + ReadableStream SSE client (src/net.rs) and the
-# board's status control (src/main.rs) touch.
+# Only what the fetch + ReadableStream SSE client (src/net.rs), the
+# board's status control, and the hash router / click-through (MFE-7:
+# Location for the hash, Element for closest()) touch.
 web-sys = { version = "0.3", features = [
   "Window",
   "Headers",
@@ -34,6 +40,8 @@ web-sys = { version = "0.3", features = [
   "ReadableStream",
   "ReadableStreamDefaultReader",
   "HtmlSelectElement",
+  "Location",
+  "Element",
 ] }
 
 console_error_panic_hook = "0.1"

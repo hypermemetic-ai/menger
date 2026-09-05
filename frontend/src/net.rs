@@ -20,7 +20,7 @@ fn describe(v: JsValue) -> String {
         .unwrap_or_else(|| "opaque JS error".into())
 }
 
-fn window() -> web_sys::Window {
+pub(crate) fn window() -> web_sys::Window {
     web_sys::window().expect("no window — this app is browser-only (CSR)")
 }
 

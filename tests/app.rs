@@ -474,3 +474,26 @@ async fn vanilla_page_still_served_at_root() {
     );
     assert!(text.contains("new WebSocket"), "still the WS client");
 }
+
+/// MFE-7, universal click-through (epic user story 6): the vanilla page's
+/// row renderer links every ticket to the app's deep-link URL. This pins
+/// the URL scheme MFE-7 owns (`/app/#/ticket/{id}`, recorded in MFE-1) as
+/// served — a change to the scheme must show up here.
+#[tokio::test]
+async fn vanilla_page_rows_link_to_app_ticket_pages() {
+    let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let s = spawn_server(empty.path(), true).await;
+
+    let (status, _, body) = fetch(s.shell_port, Method::GET, "/", "").await;
+    assert_eq!(status, StatusCode::OK);
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("/app/#/ticket/${t.id}"),
+        "row renderer hrefs the app's deep-link scheme, got:\n{text}"
+    );
+    // The links must not have cost the page its status control.
+    assert!(
+        text.contains("<select data-id="),
+        "per-row status select is still rendered"
+    );
+}

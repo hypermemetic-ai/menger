@@ -47,6 +47,66 @@
   th { color: var(--dim); font-weight: 500; font-size: .8rem; }
   td.id { color: var(--accent); white-space: nowrap; }
   td.status { white-space: nowrap; }
+
+  /* MFE-7: universal click-through + the ticket page. */
+  header h1 a { color: inherit; text-decoration: none; }
+  tbody#board tr { cursor: pointer; }
+  tbody#board tr:hover td { background: #1a1a22; }
+  td.id a { color: inherit; text-decoration: none; }
+  td.id a:hover { text-decoration: underline; }
+  #ticket-page .crumbs { margin: 0 0 .75rem; }
+  #ticket-page .crumbs a { color: var(--dim); text-decoration: none; }
+  #ticket-page .crumbs a:hover { color: var(--accent); }
+  article.ticket h2 { font-size: 1.05rem; margin: .25rem 0 1rem; }
+  article.ticket h2 .id { color: var(--accent); margin-right: .6rem; }
+  dl.meta {
+    display: flex; flex-wrap: wrap; gap: .35rem 1.75rem; margin: 0 0 1rem;
+    padding: .6rem .8rem; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 4px;
+  }
+  dl.meta div { display: flex; gap: .5rem; }
+  dl.meta dt { color: var(--dim); }
+  dl.meta dd { margin: 0; }
+  section.dag h3, section.bodysec h3 {
+    font-size: .8rem; color: var(--dim); font-weight: 500; margin: 1.1rem 0 .35rem;
+  }
+  #blockers, #unlocks { list-style: none; margin: 0; padding: 0; }
+  #blockers li, #unlocks li { padding: .15rem 0; }
+  #blockers a, #unlocks a { color: var(--accent); text-decoration: none; }
+  #blockers a:hover, #unlocks a:hover { text-decoration: underline; }
+  .bstatus {
+    margin-left: .6rem; padding: 0 .4rem; font-size: .8rem;
+    border: 1px solid var(--line); border-radius: 3px;
+  }
+  .btitle { margin-left: .6rem; color: var(--dim); }
+  .dangling { color: var(--dead); }
+  .none, .loading { color: var(--dim); }
+  #notfound h2 { color: var(--dead); font-size: 1.05rem; }
+  details.frontmatter { margin: 0 0 .75rem; }
+  details.frontmatter summary { cursor: pointer; color: var(--dim); font-size: .8rem; }
+  details.frontmatter pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    padding: .6rem .8rem; overflow-x: auto; margin: .35rem 0 0;
+  }
+  .md { line-height: 1.6; max-width: 56rem; }
+  .md h1 { font-size: 1.1rem; margin: 1.1rem 0 .4rem; }
+  .md h2, .md h3, .md h4 { font-size: 1rem; margin: 1.1rem 0 .4rem; }
+  .md code {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 3px; padding: 0 .25rem;
+  }
+  .md pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    padding: .6rem .8rem; overflow-x: auto;
+  }
+  .md pre code { border: 0; padding: 0; background: none; }
+  .md a { color: var(--accent); }
+  .md blockquote {
+    border-left: 3px solid var(--line); margin: .5rem 0;
+    padding: 0 .8rem; color: var(--dim);
+  }
+  .md table { width: auto; }
+  .md th, .md td { border: 1px solid var(--line); padding: .25rem .5rem; }
 </style>
 </head>
 <body></body>
