@@ -14,8 +14,50 @@
 //! later closing `---` line is split; the YAML block is returned
 //! separately (the page renders it collapsed) and only the remainder is
 //! painted as markdown.
+//!
+//! Mermaid (AGS-14): a fenced ```mermaid block does not become a code
+//! block. Its source is collected from the event stream and emitted as
+//! one placeholder — a `div.mermaid[data-state=pending]` wrapping the
+//! source as an escaped `<pre><code>` — the only HTML this module writes
+//! by hand, and it is built from a fixed wrapper plus escaped text, so
+//! the safe-for-`inner_html` contract holds. The page (src/mermaid.rs)
+//! finds the placeholders after mount and replaces each with SVG; until
+//! then, and whenever rendering fails, the reader sees the source.
 
-use pulldown_cmark::{html, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{html, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark_escape::escape_html;
+
+/// The class the mounter queries for — the one name both sides share.
+pub const MERMAID_CLASS: &str = "mermaid";
+
+/// A rendered body: HTML that is safe for `inner_html`, plus how many
+/// mermaid placeholders it holds. Zero means the page never touches the
+/// renderer (nor fetches its bundle).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rendered {
+    pub html: String,
+    pub diagrams: usize,
+}
+
+/// Is this fence's info string a mermaid fence? The language is the first
+/// word (`mermaid title=...` still counts); exact and lowercase, as
+/// GitHub's renderer treats it.
+fn is_mermaid_fence(info: &str) -> bool {
+    info.split_whitespace().next() == Some("mermaid")
+}
+
+/// The placeholder a ```mermaid fence becomes. Wrapper attributes are
+/// fixed; the source is escaped — so nothing body-sourced reaches the DOM
+/// as markup. The mounter reads the source back via `textContent`.
+fn mermaid_placeholder(src: &str) -> String {
+    let mut out = String::with_capacity(src.len() + 96);
+    out.push_str("<div class=\"");
+    out.push_str(MERMAID_CLASS);
+    out.push_str("\" data-state=\"pending\"><pre class=\"mermaid-src\"><code>");
+    escape_html(&mut out, src).expect("escaping into a String cannot fail");
+    out.push_str("</code></pre></div>\n");
+    out
+}
 
 /// Split a leading YAML frontmatter block off a ticket body. Returns
 /// `(Some(frontmatter), rest)` when the body starts with a `---` line and
@@ -65,8 +107,9 @@ fn dest_allowed(dest: &str, allow_mailto: bool) -> bool {
     true // no scheme at all: relative
 }
 
-/// Render markdown to HTML that is safe to inject via `inner_html`.
-pub fn render_markdown(src: &str) -> String {
+/// Render a ticket body to HTML that is safe to inject via `inner_html`,
+/// plus the count of mermaid placeholders it holds.
+pub fn render_body(src: &str) -> Rendered {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
     opts.insert(Options::ENABLE_STRIKETHROUGH);
@@ -76,66 +119,99 @@ pub fn render_markdown(src: &str) -> String {
     // Depth counters for dropped tags, so each End pairs with its Start.
     let mut dropped_links = 0u32;
     let mut dropped_images = 0u32;
-    let events = Parser::new_ext(src, opts).filter_map(|ev| match ev {
-        // Raw HTML renders as inert, visible text (push_html escapes Text).
-        Event::Html(s) | Event::InlineHtml(s) => Some(Event::Text(s)),
-        Event::Start(Tag::Link {
-            link_type,
-            dest_url,
-            title,
-            id,
-        }) => {
-            if dest_allowed(&dest_url, true) {
-                Some(Event::Start(Tag::Link {
-                    link_type,
-                    dest_url,
-                    title,
-                    id,
-                }))
-            } else {
-                dropped_links += 1; // keep the inner text, lose the anchor
+    // Inside a ```mermaid fence: the source collected so far. The fence's
+    // own Start/Text/End events are swallowed; the End emits the placeholder.
+    let mut mermaid_src: Option<String> = None;
+    let mut diagrams = 0usize;
+    let events = Parser::new_ext(src, opts).filter_map(|ev| {
+        if mermaid_src.is_some() {
+            return match ev {
+                Event::Text(t) => {
+                    mermaid_src.as_mut().expect("checked").push_str(&t);
+                    None
+                }
+                Event::End(TagEnd::CodeBlock) => {
+                    let collected = mermaid_src.take().expect("checked");
+                    diagrams += 1;
+                    Some(Event::Html(mermaid_placeholder(&collected).into()))
+                }
+                // A fenced block's body is Text only; anything else here
+                // would be a parser surprise — drop it rather than paint it.
+                _ => None,
+            };
+        }
+        match ev {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref info)))
+                if is_mermaid_fence(info) =>
+            {
+                mermaid_src = Some(String::new());
                 None
             }
-        }
-        Event::End(TagEnd::Link) if dropped_links > 0 => {
-            dropped_links -= 1;
-            None
-        }
-        Event::Start(Tag::Image {
-            link_type,
-            dest_url,
-            title,
-            id,
-        }) => {
-            if dest_allowed(&dest_url, false) {
-                Some(Event::Start(Tag::Image {
-                    link_type,
-                    dest_url,
-                    title,
-                    id,
-                }))
-            } else {
-                dropped_images += 1; // alt text renders as plain text
+            // Raw HTML renders as inert, visible text (push_html escapes Text).
+            Event::Html(s) | Event::InlineHtml(s) => Some(Event::Text(s)),
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
+                if dest_allowed(&dest_url, true) {
+                    Some(Event::Start(Tag::Link {
+                        link_type,
+                        dest_url,
+                        title,
+                        id,
+                    }))
+                } else {
+                    dropped_links += 1; // keep the inner text, lose the anchor
+                    None
+                }
+            }
+            Event::End(TagEnd::Link) if dropped_links > 0 => {
+                dropped_links -= 1;
                 None
             }
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
+                if dest_allowed(&dest_url, false) {
+                    Some(Event::Start(Tag::Image {
+                        link_type,
+                        dest_url,
+                        title,
+                        id,
+                    }))
+                } else {
+                    dropped_images += 1; // alt text renders as plain text
+                    None
+                }
+            }
+            Event::End(TagEnd::Image) if dropped_images > 0 => {
+                dropped_images -= 1;
+                // The alt text already flowed through as ordinary events; a
+                // dropped image needs no closing output.
+                None
+            }
+            other => Some(other),
         }
-        Event::End(TagEnd::Image) if dropped_images > 0 => {
-            dropped_images -= 1;
-            // The alt text already flowed through as ordinary events; a
-            // dropped image needs no closing output.
-            None
-        }
-        other => Some(other),
     });
 
-    let mut out = String::new();
-    html::push_html(&mut out, events);
-    out
+    let mut html = String::new();
+    html::push_html(&mut html, events);
+    Rendered { html, diagrams }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The MFE-7 tests' spelling: just the HTML.
+    fn render_markdown(src: &str) -> String {
+        render_body(src).html
+    }
 
     // -- sanitization -------------------------------------------------
 
@@ -229,6 +305,122 @@ mod tests {
     #[test]
     fn dash_dash_dash_alone_is_a_thematic_break_not_frontmatter() {
         assert_eq!(split_frontmatter("---"), (None, "---"));
-        assert_eq!(split_frontmatter("--- not a fence\nx"), (None, "--- not a fence\nx"));
+        assert_eq!(
+            split_frontmatter("--- not a fence\nx"),
+            (None, "--- not a fence\nx")
+        );
+    }
+
+    // -- mermaid fences (AGS-14) ----------------------------------------
+
+    const FLOW: &str =
+        "# Title\n\n```mermaid\nflowchart LR\n  A[start] --> B{ok?}\n```\n\ntail text\n";
+
+    #[test]
+    fn mermaid_fence_becomes_a_pending_placeholder_holding_the_source() {
+        let r = render_body(FLOW);
+        assert_eq!(r.diagrams, 1);
+        assert!(
+            r.html.contains(
+                "<div class=\"mermaid\" data-state=\"pending\"><pre class=\"mermaid-src\"><code>"
+            ),
+            "placeholder wrapper:\n{}",
+            r.html
+        );
+        assert!(
+            r.html.contains("flowchart LR\n  A[start] --&gt; B{ok?}\n"),
+            "source kept, escaped:\n{}",
+            r.html
+        );
+        assert!(
+            !r.html.contains("language-mermaid"),
+            "no ordinary code block remains:\n{}",
+            r.html
+        );
+        // The surrounding markdown is untouched.
+        assert!(r.html.contains("<h1>Title</h1>"), "{}", r.html);
+        assert!(r.html.contains("<p>tail text</p>"), "{}", r.html);
+    }
+
+    #[test]
+    fn render_markdown_is_the_same_html() {
+        assert_eq!(render_markdown(FLOW), render_body(FLOW).html);
+    }
+
+    #[test]
+    fn other_fences_stay_code_blocks_and_count_no_diagram() {
+        let r =
+            render_body("```rust\nfn main() {}\n```\n\n```\nplain\n```\n\n    indented mermaid\n");
+        assert_eq!(r.diagrams, 0);
+        assert!(
+            r.html.contains("<code class=\"language-rust\">"),
+            "{}",
+            r.html
+        );
+        assert!(!r.html.contains("class=\"mermaid\""), "{}", r.html);
+    }
+
+    #[test]
+    fn a_mention_of_mermaid_is_not_a_fence() {
+        let r = render_body("Use `mermaid` here.\n\n```text\nmermaid\n```\n");
+        assert_eq!(r.diagrams, 0);
+        assert!(!r.html.contains("class=\"mermaid\""), "{}", r.html);
+    }
+
+    #[test]
+    fn fence_info_may_carry_attributes_after_the_language() {
+        assert_eq!(
+            render_body("```mermaid title=\"x\"\ngraph TD\n```\n").diagrams,
+            1
+        );
+        // ...but the language itself is exact.
+        assert_eq!(render_body("```mermaidx\ngraph TD\n```\n").diagrams, 0);
+        assert_eq!(render_body("```Mermaid\ngraph TD\n```\n").diagrams, 0);
+    }
+
+    #[test]
+    fn markup_inside_a_mermaid_fence_is_escaped_never_live() {
+        let r = render_body(
+            "```mermaid\nflowchart LR\n  A[\"<img src=x onerror=window.__pwned=1>\"] --> B\n  click A href \"javascript:window.__pwned=1\"\n```\n<script>window.__pwned=1</script>\n",
+        );
+        assert_eq!(r.diagrams, 1);
+        assert!(!r.html.contains("<img"), "no live element:\n{}", r.html);
+        assert!(!r.html.contains("<script"), "no live script:\n{}", r.html);
+        assert!(
+            r.html
+                .contains("&lt;img src=x onerror=window.__pwned=1&gt;"),
+            "{}",
+            r.html
+        );
+        assert!(
+            r.html.contains("&quot;javascript:window.__pwned=1&quot;"),
+            "{}",
+            r.html
+        );
+    }
+
+    #[test]
+    fn two_fences_yield_two_placeholders() {
+        let r = render_body(
+            "```mermaid\ngraph TD\nA-->B\n```\n\ntext\n\n```mermaid\npie\n\"a\": 1\n```\n",
+        );
+        assert_eq!(r.diagrams, 2);
+        assert_eq!(
+            r.html.matches("data-state=\"pending\"").count(),
+            2,
+            "{}",
+            r.html
+        );
+    }
+
+    #[test]
+    fn unclosed_fence_still_yields_a_placeholder() {
+        // A body still streaming in (AGS-7) may end mid-fence: the parser
+        // closes it at EOF and the renderer will show whatever error the
+        // partial source earns — never a thrown exception.
+        let r = render_body("intro\n\n```mermaid\nflowchart LR\n  A -->");
+        assert_eq!(r.diagrams, 1);
+        assert!(r.html.contains("flowchart LR\n  A --&gt;"), "{}", r.html);
+        assert!(r.html.contains("<p>intro</p>"), "{}", r.html);
     }
 }

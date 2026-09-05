@@ -28,8 +28,16 @@
 //! pattern, tickets grouped under their epics — sits beside every view
 //! and renders through the same row store, so it is live by construction.
 
+//! AGS-14: ```mermaid fences in a body render as SVG. md.rs emits an
+//! inert placeholder per fence; once the body's div is in the DOM the
+//! page hands it to src/mermaid.rs, which lazily loads the vendored
+//! renderer (served by menger, fetched only when a body has a fence) and
+//! draws in strict mode, painting failures inline.
+
 mod md;
 mod nav;
+
+mod mermaid;
 mod net;
 
 use leptos::prelude::*;
@@ -497,10 +505,19 @@ fn ticket_view(
                 </details>
             }
         });
-        let html = md::render_markdown(md_src);
+        let md::Rendered { html, diagrams } = md::render_body(md_src);
+        // AGS-14: once this div is in the DOM, hand its mermaid
+        // placeholders to the renderer. `on_load` fires once per mounted
+        // div, and a body re-render makes a new div (and a new hook), so
+        // navigation never re-renders a stale one; a diagram-free body
+        // never touches the renderer at all.
+        let md_node = NodeRef::<leptos::html::Div>::new();
+        if diagrams > 0 {
+            md_node.on_load(move |el: web_sys::HtmlDivElement| mermaid::mount(&el));
+        }
         view! {
             {fm_view}
-            <div class="md" inner_html=html></div>
+            <div class="md" node_ref=md_node inner_html=html></div>
         }
             .into_any()
     };

@@ -877,6 +877,7 @@ dependencies = [
  "js-sys",
  "leptos",
  "pulldown-cmark",
+ "pulldown-cmark-escape",
  "serde",
  "serde_json",
  "wasm-bindgen",

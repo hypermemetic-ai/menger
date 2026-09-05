@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>menger — app</title>
 <link data-trunk rel="rust" />
+<!-- AGS-14: the vendored mermaid bundle rides into dist/vendor/ as a served
+     file only. Deliberately NOT a <script> here: src/mermaid.rs injects one
+     the first time a rendered body holds a mermaid fence. -->
+<link data-trunk rel="copy-file" href="vendor/mermaid/mermaid-11.17.2.min.js" data-target-path="vendor" />
 <style>
   /* Same visual family as web/index.html so the two shells read as one system. */
   :root {
@@ -162,6 +166,18 @@
   #nav .tag.st-epic { color: #e0b96a; border-color: #5d4a22; }
   #nav .tag.st-superseded { text-decoration: line-through; }
   #nav .group.collapsed .kids { display: none; }
+  /* AGS-14: mermaid placeholders → diagrams. Palette tokens only. */
+  .md .mermaid {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    padding: .6rem .8rem; margin: .5rem 0; overflow-x: auto;
+  }
+  .md .mermaid pre { margin: 0; padding: 0; background: none; border: 0; }
+  .md .mermaid[data-state="rendering"] pre { color: var(--dim); }
+  .md .mermaid[data-state="done"] svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+  .md .mermaid[data-state="error"] { border-color: var(--dead); }
+  .md .mermaid .mermaid-error {
+    color: var(--dead); margin: 0 0 .6rem; white-space: pre-wrap; font-size: .85rem;
+  }
 </style>
 </head>
 <body></body>

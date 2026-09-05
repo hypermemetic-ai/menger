@@ -218,6 +218,44 @@ async fn app_url_serves_dist_from_disk() {
     );
 }
 
+/// AGS-14: the vendored mermaid bundle is a multi-megabyte file under a
+/// `vendor/` subdirectory of dist (trunk copies `frontend/vendor/mermaid/`
+/// there). The wildcard route must serve a nested path, as
+/// `text/javascript`, byte-exact — the browser lazy-loads it by URL, so a
+/// truncated or mistyped body would fail every diagram. Synthetic dist:
+/// the served file is an input to serving, never a compile input.
+#[tokio::test]
+async fn app_serves_nested_vendor_asset_whole() {
+    let dist = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    std::fs::write(dist.path().join("index.html"), "<html>stub</html>").unwrap();
+    std::fs::create_dir(dist.path().join("vendor")).unwrap();
+    // ~3 MiB, the order of the real bundle; a repeating pattern whose
+    // boundaries would reveal any dropped or duplicated chunk.
+    const PATTERN: &[u8] = b"mermaid.initialize({securityLevel:'strict'});\n";
+    let bundle: Vec<u8> = (0..3 * 1024 * 1024)
+        .map(|i| PATTERN[i % PATTERN.len()])
+        .collect();
+    std::fs::write(dist.path().join("vendor/mermaid-1.2.3.min.js"), &bundle).unwrap();
+    let s = spawn_server(dist.path(), true).await;
+
+    let (status, ctype, body) = fetch(
+        s.shell_port,
+        Method::GET,
+        "/app/vendor/mermaid-1.2.3.min.js",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "nested dist path serves");
+    assert_eq!(ctype, "text/javascript", "scripts get a script MIME");
+    assert_eq!(body.len(), bundle.len(), "whole file, no truncation");
+    assert!(body.as_ref() == bundle.as_slice(), "byte-exact body");
+
+    // A sibling that is not there is an ordinary 404, not "not built".
+    let (status, _, text) = fetch(s.shell_port, Method::GET, "/app/vendor/nope.js", "").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!String::from_utf8_lossy(&text).contains("frontend not built"));
+}
+
 /// The same-origin data plane: a unary REST call through the shell port's
 /// /rest proxy round-trips exactly like a direct REST call.
 #[tokio::test]

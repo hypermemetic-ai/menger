@@ -54,6 +54,23 @@ up (the server reads `dist/` from disk per request, no restart needed).
 `--app-dist DIR` / `MENGER_APP_DIST` point the server at a `dist`
 elsewhere.
 
+Diagrams (AGS-14): a ```mermaid fence in a ticket body renders as SVG on
+the ticket page. The renderer is mermaid 11.17.2 (MIT), **vendored** at
+`frontend/vendor/mermaid/` (version, checksum, license, and upgrade steps
+in its README) and copied by trunk into `dist/vendor/`, so the shell
+serves it at `/app/vendor/mermaid-11.17.2.min.js` like any other asset —
+the app still talks to nothing but menger. It is **lazy**:
+`frontend/src/md.rs` turns each fence into an inert placeholder holding
+the escaped source, and `frontend/src/mermaid.rs` injects the `<script>`
+only the first time a rendered body holds one (once per page load, shared
+by every diagram on it), then drives `mermaid.render` under
+`securityLevel: 'strict'` — no HTML labels or click handlers from diagram
+source, and the key is in mermaid's `secure` list, so a `%%{init}%%`
+directive cannot loosen it. A diagram that fails to parse shows the error
+and its source in place; the rest of the page is unaffected.
+`RUST_LOG=menger=debug` logs one line per served asset, which is how to
+see that a diagram-free page never pulls the bundle.
+
 Data plane (MFE-1 pins: REST for calls, SSE for `watch`; the view layer
 owns no routing):
 
