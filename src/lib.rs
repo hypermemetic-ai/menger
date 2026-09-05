@@ -10,4 +10,4 @@ pub mod activations;
 pub mod shell;
 pub mod store;
 
-pub use builder::build_rpc;
+pub use builder::{build_rpc, default_db_path};

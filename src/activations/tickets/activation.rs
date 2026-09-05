@@ -1,7 +1,7 @@
 //! Plexus RPC surface for tickets.
 
 use super::types::TicketsEvent;
-use crate::store::{BlockerRef, Change, NewTicket, Severity, Status, Store, TicketType};
+use crate::store::{BlockerRef, Change, NewTicket, Severity, Status, Store, StoreError, TicketType};
 use async_stream::stream;
 use futures::Stream;
 use std::sync::Arc;
@@ -95,7 +95,7 @@ impl Tickets {
                 severity,
                 blocked_by: blocked_by.unwrap_or_default(),
                 body: body.unwrap_or_default(),
-            }) {
+            }).await {
                 Ok(ticket) => yield TicketsEvent::Created { ticket },
                 Err(e) => yield TicketsEvent::Error { message: e.to_string() },
             }
@@ -168,9 +168,10 @@ impl Tickets {
                     return;
                 }
             };
-            match store.set_status(&id, status) {
+            match store.set_status(&id, status).await {
                 Ok(change) => yield change_event(change),
-                Err(e) => yield TicketsEvent::NotFound { id: e.to_string() },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
             }
         }
     }
