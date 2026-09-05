@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>menger</title>
+<style>
+  :root {
+    --bg: #101014; --panel: #17171d; --ink: #d8d8e0; --dim: #7a7a88;
+    --line: #26262e; --live: #5dbb63; --dead: #c05555; --accent: #8ab4f8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 1rem;
+    padding: .75rem 1.25rem; border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
+  #conn { color: var(--dim); font-size: .8rem; }
+  #conn.live { color: var(--live); }
+  #conn.dead { color: var(--dead); }
+  main { padding: 1rem 1.25rem; max-width: 72rem; margin: 0 auto; }
+  form {
+    display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap;
+  }
+  input, select, button {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 4px; padding: .35rem .6rem; font: inherit;
+  }
+  input#epic { width: 6rem; }
+  input#title { flex: 1; min-width: 12rem; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; font-size: .8rem; }
+  td.id { color: var(--accent); white-space: nowrap; }
+  td.status { white-space: nowrap; }
+  .flash { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: #2a2a3a; } to { background: transparent; } }
+  #log { color: var(--dim); font-size: .8rem; margin-top: 1rem; min-height: 1.2rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>menger</h1>
+  <span id="conn">connecting…</span>
+</header>
+<main id="main">
+  <form id="create">
+    <input id="epic" placeholder="EPIC" value="MNG" required>
+    <input id="title" placeholder="title" required>
+    <select id="ttype">
+      <option>implementation</option><option>analysis</option>
+      <option>spike</option><option>epic</option><option>checkpoint</option>
+    </select>
+    <button>create</button>
+  </form>
+  <table>
+    <thead><tr><th>id</th><th>title</th><th>type</th><th>status</th></tr></thead>
+    <tbody id="board"></tbody>
+  </table>
+  <div id="log"></div>
+</main>
+<script>
+// Speaks the Plexus wire protocol directly: one JSON-RPC subscription
+// ("menger.call") per logical call; events arrive as "result"
+// notifications carrying PlexusStreamItem ({type: "data", content: ...}).
+const WS_PORT = "{{WS_PORT}}";
+const STATUSES = ["Pending", "Ready", "Blocked", "Complete", "Idea", "Epic", "Superseded"];
+const ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
+let nextId = 1;
+const awaitingSubId = new Map(); // request id -> handler
+const subs = new Map();          // subscription id -> handler
+
+function call(method, params, onEvent) {
+  const id = nextId++;
+  awaitingSubId.set(id, onEvent);
+  ws.send(JSON.stringify({ jsonrpc: "2.0", id, method: "menger.call",
+                           params: { method, params: params ?? {} } }));
+}
+
+const tickets = new Map();
+let lastTouched = null;
+
+function render() {
+  const rows = [...tickets.values()]
+    .sort((a, b) => a.epic.localeCompare(b.epic) || a.seq - b.seq)
+    .map(t => {
+      const opts = STATUSES.map(s =>
+        `<option ${s === t.status ? "selected" : ""}>${s}</option>`).join("");
+      const flash = t.id === lastTouched ? ' class="flash"' : "";
+      return `<tr${flash}><td class="id">${t.id}</td><td>${esc(t.title)}</td>` +
+             `<td>${t.ticket_type}</td><td class="status">` +
+             `<select data-id="${t.id}">${opts}</select></td></tr>`;
+    });
+  document.getElementById("board").innerHTML = rows.join("");
+}
+
+function esc(s) { const d = document.createElement("span"); d.textContent = s; return d.innerHTML; }
+
+function onItem(item) {
+  if (item.type === "error") { log(`error: ${item.message}`); return; }
+  if (item.type !== "data") return;
+  const ev = item.content;
+  if (ev.type === "error") { log(`error: ${ev.message}`); return; }
+  const t = ev.ticket;
+  if (!t) return;
+  tickets.set(t.id, t);
+  lastTouched = t.id;
+  render();
+}
+
+function log(msg) { document.getElementById("log").textContent = msg; }
+
+const conn = document.getElementById("conn");
+ws.onopen = () => {
+  conn.textContent = "live"; conn.className = "live";
+  call("tickets.list", {}, onItem);
+  call("tickets.watch", {}, onItem);  // reactivity: server pushes every change
+};
+ws.onclose = () => { conn.textContent = "disconnected"; conn.className = "dead"; };
+ws.onmessage = (m) => {
+  const msg = JSON.parse(m.data);
+  if (msg.id !== undefined && awaitingSubId.has(msg.id)) {
+    subs.set(msg.result, awaitingSubId.get(msg.id));
+    awaitingSubId.delete(msg.id);
+  } else if (msg.method === "result") {
+    subs.get(msg.params.subscription)?.(msg.params.result);
+  }
+};
+
+document.getElementById("create").addEventListener("submit", (e) => {
+  e.preventDefault();
+  call("tickets.create", {
+    epic: document.getElementById("epic").value,
+    title: document.getElementById("title").value,
+    ticket_type: document.getElementById("ttype").value,
+  }, onItem);
+  document.getElementById("title").value = "";
+});
+
+document.getElementById("board").addEventListener("change", (e) => {
+  if (e.target.dataset.id)
+    call("tickets.set_status", { id: e.target.dataset.id, status: e.target.value }, onItem);
+});
+</script>
+</body>
+</html>

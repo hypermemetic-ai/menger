@@ -1,0 +1,46 @@
+[package]
+name = "menger"
+version = "0.5.0"
+edition = "2021"
+license = "MIT"
+description = "A plan is a program whose leaves are prose — ticketing on Plexus RPC"
+
+[lib]
+name = "menger"
+path = "src/lib.rs"
+
+[[bin]]
+name = "menger"
+path = "src/main.rs"
+
+[dependencies]
+plexus-core = "0.5"
+plexus-macros = "0.5"
+plexus-transport = "0.2"
+
+tokio = { version = "1", features = ["full"] }
+async-stream = "0.3"
+futures = "0.3"
+
+# Brought in transitively by the plexus_macros::activation expansion.
+async-trait = "0.1"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+jsonrpsee = { version = "0.26", features = ["server", "macros"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.1", features = ["derive"] }
+
+# Day-one web shell (static page over the Plexus WebSocket).
+axum = "0.8"
+
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+chrono = "0.4"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+# Wire-level tests speak the same protocol as web/index.html.
+jsonrpsee = { version = "0.26", features = ["server", "macros", "ws-client"] }
