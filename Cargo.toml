@@ -16,7 +16,10 @@ path = "src/main.rs"
 [dependencies]
 plexus-core = "0.5"
 plexus-macros = "0.5"
-plexus-transport = "0.2"
+# Slim: default features off drops the rmcp/MCP stack; http-gateway enables
+# the REST + SSE bridge (MNG-8). Note rmcp still arrives via plexus-core —
+# out of scope here, see plans/MNG/artifacts/MNG-8-result.md.
+plexus-transport = { version = "0.2", default-features = false, features = ["http-gateway"] }
 
 tokio = { version = "1", features = ["full"] }
 async-stream = "0.3"
@@ -51,3 +54,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 jsonrpsee = { version = "0.26", features = ["server", "macros", "ws-client"] }
 # Hermetic tests: every server gets its own isolated database location.
 tempfile = "3"
+# REST-level tests (tests/rest.rs) speak plain HTTP/SSE to the spawned
+# binary. All three are already in the dependency graph via axum and the
+# http-gateway feature, so this costs no extra compilation of substance.
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+
+# MNG-8: the REST bridge shipped broken in every published plexus-transport
+# (0.2.2 http-gateway never compiled; 0.3.0 is byte-identical — see
+# plans/MNG/artifacts/MNG-8-result.md). The repaired 0.2.3 is tagged on the
+# public repo but not published to crates.io, so the 0.2 requirement above
+# is satisfied from the git tag instead.
+[patch.crates-io]
+plexus-transport = { git = "https://github.com/hypermemetic-ai/plexus-transport.git", tag = "plexus-transport-v0.2.3" }

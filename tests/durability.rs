@@ -58,6 +58,10 @@ async fn spawn_server(
     let stderr_path = log_dir.join(format!("stderr-{tag}.log"));
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_menger"));
     cmd.arg("--no-shell")
+        // No REST here: with it enabled, every spawned server would bind
+        // the fixed default 4457 and parallel tests would collide on it.
+        // (tests/rest.rs exercises REST, on a free port per server.)
+        .arg("--no-rest")
         .arg("--port")
         .arg(port.to_string())
         // Hermetic: never inherit an override or a filter from the

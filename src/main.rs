@@ -1,7 +1,7 @@
 use clap::Parser;
 use menger::{build_rpc, default_db_path, shell};
 use plexus_core::plexus::DynamicHub;
-use plexus_transport::TransportServer;
+use plexus_transport::{RestHttpConfig, RouteFn, TransportServer};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,6 +16,15 @@ struct Args {
     /// Web shell port
     #[arg(long, default_value = "4456")]
     shell_port: u16,
+
+    /// REST HTTP port (POST /rest/{namespace}/{method}; streaming methods
+    /// respond as SSE)
+    #[arg(long, default_value = "4457")]
+    rest_port: u16,
+
+    /// Disable the REST HTTP listener
+    #[arg(long)]
+    no_rest: bool,
 
     /// Run in stdio mode (MCP-compatible); implies no web shell
     #[arg(long)]
@@ -64,13 +73,29 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("rpc module build failed: {e}"))
     };
 
-    let mut builder = TransportServer::builder(hub, rpc_converter);
+    let mut builder = TransportServer::builder(hub.clone(), rpc_converter);
     if args.stdio {
         builder = builder.with_stdio();
         tracing::info!("Starting stdio transport");
     } else {
         builder = builder.with_websocket(args.port);
         tracing::info!("WebSocket: ws://127.0.0.1:{}", args.port);
+        if !args.no_rest {
+            let route_hub = hub.clone();
+            let route_fn: RouteFn = Arc::new(move |method, params| {
+                let hub = route_hub.clone();
+                Box::pin(async move { hub.route(&method, params, None).await })
+            });
+            builder = builder
+                .with_rest_http_config(
+                    RestHttpConfig::new(args.rest_port)
+                        .with_server_name("menger".into())
+                        .with_server_version(env!("CARGO_PKG_VERSION").into()),
+                )
+                .with_mcp_flat_schemas(hub.list_plugin_schemas())   // registers /rest/tickets/*
+                .with_mcp_route_fn(route_fn);                        // dispatches via hub.route()
+            tracing::info!("REST:      http://127.0.0.1:{}/rest", args.rest_port);
+        }
         if !args.no_shell {
             let (shell_port, ws_port) = (args.shell_port, args.port);
             tokio::spawn(async move {

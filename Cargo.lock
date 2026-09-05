@@ -727,6 +727,7 @@ dependencies = [
  "pin-project-lite",
  "smallvec",
  "tokio",
+ "want",
 ]
 
 [[package]]
@@ -1178,6 +1179,9 @@ dependencies = [
  "clap",
  "dirs",
  "futures",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "jsonrpsee",
  "plexus-core",
  "plexus-macros",
@@ -1379,9 +1383,8 @@ dependencies = [
 
 [[package]]
 name = "plexus-transport"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8f03ef14f99b0e6cdc2e481a7265ede90047ed9712b625ad1aa3882afa3ced7"
+version = "0.2.3"
+source = "git+https://github.com/hypermemetic-ai/plexus-transport.git?tag=plexus-transport-v0.2.3#5db64d28e046ccc49e73f92b2d1a346fc4671fdd"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1391,9 +1394,9 @@ dependencies = [
  "futures",
  "http",
  "http-body",
+ "hyper",
  "jsonrpsee",
  "plexus-core",
- "rmcp",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -2317,6 +2320,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "try-lock"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2398,6 +2407,15 @@ checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
 dependencies = [
  "same-file",
  "winapi-util",
+]
+
+[[package]]
+name = "want"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfa7760aed19e106de2c7c0b581b509f2f25d3dacaf737cb82ac61bc6d760b0e"
+dependencies = [
+ "try-lock",
 ]
 
 [[package]]
