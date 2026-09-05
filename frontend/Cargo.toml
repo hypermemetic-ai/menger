@@ -29,8 +29,10 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 # Only what the fetch + ReadableStream SSE client (src/net.rs), the
-# board's status control, and the hash router / click-through (MFE-7:
-# Location for the hash, Element for closest()) touch.
+# board's status control, the hash router / click-through (MFE-7:
+# Location for the hash, Element for closest()), and the left nav
+# (AGS-12: Storage for persisted collapse/hide, Document + the
+# ScrollIntoView pair to reveal the selected row) touch.
 web-sys = { version = "0.3", features = [
   "Window",
   "Headers",
@@ -42,6 +44,10 @@ web-sys = { version = "0.3", features = [
   "HtmlSelectElement",
   "Location",
   "Element",
+  "Document",
+  "Storage",
+  "ScrollIntoViewOptions",
+  "ScrollLogicalPosition",
 ] }
 
 console_error_panic_hook = "0.1"
