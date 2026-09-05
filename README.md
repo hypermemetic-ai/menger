@@ -6,9 +6,8 @@ A plan is a program whose leaves are prose.
 **frontend and backend are online from the first commit** — every noun added
 is visible the day it is written. What's new is *how* the frontend stays
 current: 0.04 polled `/rev`; 0.05 subscribes. The same typed event streams
-that answer RPC calls push every mutation to the browser as it happens. That
-subscription loop is the seed of a Plexus-native reactive web framework
-(see `plans/MNG/`), with tickets as its first application.
+that answer RPC calls push every mutation to the browser as it happens —
+over WebSocket for the vanilla page, over REST + SSE for the Leptos app.
 
 ## Run
 
@@ -106,7 +105,7 @@ events arrive as `result` notifications carrying `PlexusStreamItem`s.
 src/
   main.rs              CLI args, transports, spawns the shell
   builder.rs           build_rpc() → Arc<DynamicHub> ("menger")
-  store.rs             domain types + in-memory store + change broadcast
+  store.rs             the service-wide cache (SQLite system of record behind it)
   shell.rs             / (embedded vanilla page), /app/ (Leptos dist from
                        disk), /rest/* (same-origin proxy to the REST port)
   activations/
@@ -118,10 +117,15 @@ plans/MNG/             the backend epic; plans/MFE/ the frontend epic
 
 ## Status
 
-The store is an in-memory placeholder — a restart forgets everything.
-The database (MNG-2), ready-set DAG queries (MNG-4), the schema-derived
-shell (MNG-5), and the framework spike (MNG-6) are ticketed in
-`plans/MNG/` (Pending, awaiting promotion).
+Phase one of the backend epic is complete — see
+`plans/MNG/artifacts/CHECKPOINT.md` for the verified state map. Tickets
+live in SQLite behind the service-wide cache (MNG-2); the DAG answers
+ready-set/blockers queries with cycle rejection at create (MNG-4); REST +
+SSE serve on :4457 via plexus-transport 0.2.3 (MNG-8 — consumed as a
+git-tag patch until it's published to crates.io). The Leptos scaffold is
+live at `/app/` (MFE-2). Parked as Idea: MNG-5/6 (schema-derivation and
+framework theses). Next: the frontend board (`plans/MFE/`), and the
+HelixDB graph-store epic (`plans/HLX/`, spike-gated).
 
 ## History
 

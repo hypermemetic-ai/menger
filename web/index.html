@@ -128,7 +128,9 @@ ws.onmessage = (m) => {
   if (msg.id !== undefined && awaitingSubId.has(msg.id)) {
     subs.set(msg.result, awaitingSubId.get(msg.id));
     awaitingSubId.delete(msg.id);
-  } else if (msg.method === "result") {
+  } else if (msg.method === "result" || msg.method === "menger.call") {
+    // plexus-core 0.5.3 emits notifications under the subscribe method's
+    // own name, not the documented "result" — accept both.
     subs.get(msg.params.subscription)?.(msg.params.result);
   }
 };
