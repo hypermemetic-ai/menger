@@ -23,8 +23,13 @@
 //! so an incoming event updates the affected row's text in place — the
 //! row list signal only fires on insert/remove, and untouched rows keep
 //! their DOM identity across every update.
+//!
+//! AGS-12: the persistent left nav (src/nav.rs) — manifest's sidebar
+//! pattern, tickets grouped under their epics — sits beside every view
+//! and renders through the same row store, so it is live by construction.
 
 mod md;
+mod nav;
 mod net;
 
 use leptos::prelude::*;
@@ -50,12 +55,12 @@ const STATUSES: [&str; 7] = [
 /// Mirror of the server's ticket JSON (src/store.rs). Enums arrive as
 /// plain strings so unknown future variants degrade to text, not panics.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
-struct Ticket {
+pub(crate) struct Ticket {
     id: String,
     epic: String,
     seq: u32,
-    title: String,
-    status: String,
+    pub(crate) title: String,
+    pub(crate) status: String,
     ticket_type: String,
     #[serde(default)]
     severity: Option<String>,
@@ -88,11 +93,11 @@ enum Conn {
 /// lifetime (they define its identity and sort position), so they live
 /// outside the signal; everything mutable renders through `ticket`.
 #[derive(Clone)]
-struct Row {
-    id: String,
-    epic: String,
-    seq: u32,
-    ticket: RwSignal<Ticket>,
+pub(crate) struct Row {
+    pub(crate) id: String,
+    pub(crate) epic: String,
+    pub(crate) seq: u32,
+    pub(crate) ticket: RwSignal<Ticket>,
 }
 
 /// Fine-grained upsert. An existing ticket updates its row's inner
@@ -245,7 +250,7 @@ fn request_set_status(
 // MFE-1: a ticket's page is `/app/#/ticket/{id}`.
 
 #[derive(Clone, PartialEq)]
-enum Route {
+pub(crate) enum Route {
     Board,
     Ticket(String),
 }
@@ -664,32 +669,54 @@ fn App() -> impl IntoView {
             .map(|h| format!("menger v{} · {} tickets", h.version, h.ticket_count))
     };
 
+    // AGS-12: the nav's hidden/shown state, persisted. The nav stays
+    // mounted either way (a class hides it), so its rows keep their DOM
+    // identity across hide/reveal and the content column reflows.
+    let nav_hidden = RwSignal::new(nav::load_hidden());
+    Effect::new(move |_| nav::save_hidden(nav_hidden.get()));
+
     view! {
-        <header>
-            <h1><a href="#/">"menger"</a></h1>
-            <span class="tag">
-                {move || match route.get() {
-                    Route::Board => "the live board (MFE-3)",
-                    Route::Ticket(_) => "ticket (MFE-7)",
-                }}
-            </span>
-            <span id="conn" class=move || conn_view().0>{move || conn_view().1}</span>
-        </header>
-        <main>
-            <div id="health">{health_view}</div>
-            {move || {
-                last_error.get().map(|msg| view! {
-                    <div id="error" role="alert">
-                        <span class="msg">{msg}</span>
-                        <button on:click=move |_| last_error.set(None)>"dismiss"</button>
-                    </div>
-                })
-            }}
-            {move || match route.get() {
-                Route::Board => view! { <Board rows last_error /> }.into_any(),
-                Route::Ticket(id) => view! { <TicketPage id rows last_error /> }.into_any(),
-            }}
-        </main>
+        <div id="app" class:nonav=move || nav_hidden.get()>
+            <nav::Nav rows route hidden=nav_hidden />
+            <div class="content">
+                <header>
+                    {move || {
+                        nav_hidden.get().then(|| view! {
+                            <button
+                                class="nav-reveal"
+                                title="show the nav"
+                                on:click=move |_| nav_hidden.set(false)
+                            >
+                                "☰"
+                            </button>
+                        })
+                    }}
+                    <h1><a href="#/">"menger"</a></h1>
+                    <span class="tag">
+                        {move || match route.get() {
+                            Route::Board => "the live board (MFE-3)",
+                            Route::Ticket(_) => "ticket (MFE-7)",
+                        }}
+                    </span>
+                    <span id="conn" class=move || conn_view().0>{move || conn_view().1}</span>
+                </header>
+                <main>
+                    <div id="health">{health_view}</div>
+                    {move || {
+                        last_error.get().map(|msg| view! {
+                            <div id="error" role="alert">
+                                <span class="msg">{msg}</span>
+                                <button on:click=move |_| last_error.set(None)>"dismiss"</button>
+                            </div>
+                        })
+                    }}
+                    {move || match route.get() {
+                        Route::Board => view! { <Board rows last_error /> }.into_any(),
+                        Route::Ticket(id) => view! { <TicketPage id rows last_error /> }.into_any(),
+                    }}
+                </main>
+            </div>
+        </div>
     }
 }
 
