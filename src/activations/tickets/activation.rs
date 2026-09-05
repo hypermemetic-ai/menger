@@ -1,7 +1,7 @@
 //! Plexus RPC surface for tickets.
 
 use super::types::TicketsEvent;
-use crate::store::{Change, NewTicket, Severity, Status, Store, TicketType};
+use crate::store::{BlockerRef, Change, NewTicket, Severity, Status, Store, TicketType};
 use async_stream::stream;
 use futures::Stream;
 use std::sync::Arc;
@@ -23,6 +23,7 @@ fn change_event(change: Change) -> TicketsEvent {
         Change::StatusChanged { ticket, previous } => {
             TicketsEvent::StatusChanged { ticket, previous }
         }
+        Change::UnlocksChanged { ticket, added } => TicketsEvent::UnlocksChanged { ticket, added },
     }
 }
 
@@ -174,13 +175,67 @@ impl Tickets {
         }
     }
 
+    /// The DAG query: which tickets can start now? Yields one `Ticket`
+    /// event per member of the ready set — status `Ready` and every
+    /// `blocked_by` entry `Complete` or `Superseded` — ordered by
+    /// (epic, seq). A dangling blocker keeps its ticket out (use
+    /// `blockers` to see which ids dangle). The epic filter applies to
+    /// membership; blockers resolve globally.
+    #[plexus_macros::method(
+        description = "Tickets that can start now: Ready, with every blocker Complete or Superseded",
+        params(epic = "Only tickets in this epic (optional; blockers still resolve globally)")
+    )]
+    pub async fn ready_set(
+        &self,
+        epic: Option<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            for ticket in store.ready_set(epic.as_deref()) {
+                yield TicketsEvent::Ticket { ticket };
+            }
+        }
+    }
+
+    /// "Why can't this start?" in one call. Yields, in `blocked_by`
+    /// order, one `Blocker` event per blocker that exists (the full
+    /// ticket, at its current status) and one `DanglingBlocker` event per
+    /// id that names no ticket yet; `NotFound` if the queried ticket
+    /// itself doesn't exist. An empty `blocked_by` yields nothing.
+    #[plexus_macros::method(
+        description = "One ticket's blockers resolved to current statuses; dangling ids marked",
+        params(id = "Ticket id whose blockers to resolve, e.g. MNG-2")
+    )]
+    pub async fn blockers(
+        &self,
+        id: String,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            match store.blockers(&id) {
+                Ok(refs) => {
+                    for r in refs {
+                        yield match r {
+                            BlockerRef::Resolved(ticket) => TicketsEvent::Blocker { ticket },
+                            BlockerRef::Dangling(id) => TicketsEvent::DanglingBlocker { id },
+                        };
+                    }
+                }
+                Err(_) => yield TicketsEvent::NotFound { id },
+            }
+        }
+    }
+
     /// The reactive primitive: an open-ended stream of every mutation,
-    /// as `Created` / `StatusChanged` events. Runs until the client
-    /// disconnects. A slow consumer that lags the broadcast buffer skips
-    /// the missed changes and keeps receiving from the current position.
+    /// as `Created` / `StatusChanged` / `UnlocksChanged` events. Runs
+    /// until the client disconnects. Every event carries the full
+    /// affected ticket, so a client that listed once and then only
+    /// watches can compute the ready set itself. A slow consumer that
+    /// lags the broadcast buffer skips the missed changes and keeps
+    /// receiving from the current position.
     #[plexus_macros::method(
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged), until disconnect",
+        description = "Subscribe to ticket changes (Created / StatusChanged / UnlocksChanged), until disconnect",
         params(epic = "Only changes in this epic (optional)")
     )]
     pub async fn watch(
@@ -316,6 +371,237 @@ mod tests {
             TicketsEvent::StatusChanged { previous, .. } => assert_eq!(previous, Status::Pending),
             other => panic!("expected StatusChanged, got {other:?}"),
         }
+    }
+
+    /// Ids of a stream of `Ticket` events, in order.
+    async fn ticket_ids(s: impl Stream<Item = TicketsEvent> + Send + 'static) -> Vec<String> {
+        Box::pin(s)
+            .map(|ev| match ev {
+                TicketsEvent::Ticket { ticket } => ticket.id,
+                other => panic!("expected Ticket, got {other:?}"),
+            })
+            .collect()
+            .await
+    }
+
+    #[tokio::test]
+    async fn ready_set_gates_on_blockers() {
+        let hub = hub();
+        one(hub.create("DAG".into(), "a".into(), None, None, None, None).await).await;
+        one(hub
+            .create("DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None)
+            .await)
+        .await;
+        one(hub.set_status("DAG-1".into(), "Ready".into()).await).await;
+        one(hub.set_status("DAG-2".into(), "Ready".into()).await).await;
+
+        assert_eq!(ticket_ids(hub.ready_set(None).await).await, vec!["DAG-1"]);
+
+        one(hub.set_status("DAG-1".into(), "Complete".into()).await).await;
+        assert_eq!(ticket_ids(hub.ready_set(None).await).await, vec!["DAG-2"]);
+    }
+
+    #[tokio::test]
+    async fn ready_set_accepts_superseded_blockers_and_filters_by_epic() {
+        let hub = hub();
+        one(hub.create("ONE".into(), "a".into(), None, None, None, None).await).await;
+        one(hub
+            .create("ONE".into(), "b".into(), None, None, Some(vec!["ONE-1".into()]), None)
+            .await)
+        .await;
+        one(hub.create("TWO".into(), "c".into(), None, None, None, None).await).await;
+        one(hub.set_status("ONE-1".into(), "Superseded".into()).await).await;
+        one(hub.set_status("ONE-2".into(), "Ready".into()).await).await;
+        one(hub.set_status("TWO-1".into(), "Ready".into()).await).await;
+
+        assert_eq!(
+            ticket_ids(hub.ready_set(None).await).await,
+            vec!["ONE-2", "TWO-1"]
+        );
+        assert_eq!(
+            ticket_ids(hub.ready_set(Some("one".into())).await).await,
+            vec!["ONE-2"]
+        );
+    }
+
+    #[tokio::test]
+    async fn dangling_blocker_excludes_from_ready_set_and_is_marked() {
+        let hub = hub();
+        one(hub
+            .create("DAG".into(), "c".into(), None, None, Some(vec!["DAG-99".into()]), None)
+            .await)
+        .await;
+        one(hub.set_status("DAG-1".into(), "Ready".into()).await).await;
+
+        assert!(ticket_ids(hub.ready_set(None).await).await.is_empty());
+
+        let evs: Vec<_> = Box::pin(hub.blockers("DAG-1".into()).await).collect().await;
+        assert_eq!(evs.len(), 1);
+        match &evs[0] {
+            TicketsEvent::DanglingBlocker { id } => assert_eq!(id, "DAG-99"),
+            other => panic!("expected DanglingBlocker, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn blockers_resolve_to_current_statuses_in_order() {
+        let hub = hub();
+        one(hub.create("DAG".into(), "a".into(), None, None, None, None).await).await;
+        one(hub.create("DAG".into(), "b".into(), None, None, None, None).await).await;
+        one(hub
+            .create(
+                "DAG".into(),
+                "c".into(),
+                None,
+                None,
+                Some(vec!["DAG-1".into(), "DAG-2".into(), "DAG-99".into()]),
+                None,
+            )
+            .await)
+        .await;
+        one(hub.set_status("DAG-1".into(), "Complete".into()).await).await;
+
+        let evs: Vec<_> = Box::pin(hub.blockers("DAG-3".into()).await).collect().await;
+        assert_eq!(evs.len(), 3);
+        match &evs[0] {
+            TicketsEvent::Blocker { ticket } => {
+                assert_eq!(ticket.id, "DAG-1");
+                assert_eq!(ticket.status, Status::Complete);
+            }
+            other => panic!("expected Blocker, got {other:?}"),
+        }
+        match &evs[1] {
+            TicketsEvent::Blocker { ticket } => {
+                assert_eq!(ticket.id, "DAG-2");
+                assert_eq!(ticket.status, Status::Pending);
+            }
+            other => panic!("expected Blocker, got {other:?}"),
+        }
+        match &evs[2] {
+            TicketsEvent::DanglingBlocker { id } => assert_eq!(id, "DAG-99"),
+            other => panic!("expected DanglingBlocker, got {other:?}"),
+        }
+
+        assert!(matches!(
+            one(hub.blockers("DAG-42".into()).await).await,
+            TicketsEvent::NotFound { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
+        let hub = hub();
+        one(hub.create("DAG".into(), "a".into(), None, None, None, None).await).await;
+        let mut watch = Box::pin(hub.watch(None).await);
+
+        one(hub
+            .create("DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None)
+            .await)
+        .await;
+
+        match watch.next().await.expect("change") {
+            TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "DAG-2"),
+            other => panic!("expected Created, got {other:?}"),
+        }
+        match watch.next().await.expect("change") {
+            TicketsEvent::UnlocksChanged { ticket, added } => {
+                assert_eq!(ticket.id, "DAG-1");
+                assert_eq!(ticket.unlocks, vec!["DAG-2"]);
+                assert_eq!(added, "DAG-2");
+            }
+            other => panic!("expected UnlocksChanged, got {other:?}"),
+        }
+
+        match one(hub.get("DAG-1".into()).await).await {
+            TicketsEvent::Ticket { ticket } => assert_eq!(ticket.unlocks, vec!["DAG-2"]),
+            other => panic!("expected Ticket, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dangling_forward_reference_resolves_at_birth() {
+        let hub = hub();
+        one(hub
+            .create("DAG".into(), "d1".into(), None, None, Some(vec!["DAG-2".into()]), None)
+            .await)
+        .await;
+        // The ticket that becomes DAG-2 has DAG-1 in unlocks from birth.
+        match one(hub.create("DAG".into(), "d2".into(), None, None, None, None).await).await {
+            TicketsEvent::Created { ticket } => {
+                assert_eq!(ticket.id, "DAG-2");
+                assert_eq!(ticket.unlocks, vec!["DAG-1"]);
+            }
+            other => panic!("expected Created, got {other:?}"),
+        }
+        match one(hub.get("DAG-2".into()).await).await {
+            TicketsEvent::Ticket { ticket } => assert_eq!(ticket.unlocks, vec!["DAG-1"]),
+            other => panic!("expected Ticket, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_rejects_self_reference() {
+        let hub = hub();
+        // First create in the epic allocates DAG-1; naming it is a self-cycle.
+        let ev = one(hub
+            .create("DAG".into(), "me".into(), None, None, Some(vec!["DAG-1".into()]), None)
+            .await)
+        .await;
+        match ev {
+            TicketsEvent::Error { message } => assert!(message.contains("cycle"), "{message}"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(matches!(
+            one(hub.get("DAG-1".into()).await).await,
+            TicketsEvent::NotFound { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_cycle_through_dangling_forward_reference() {
+        let hub = hub();
+        // DAG-1 blocked_by the not-yet-existing DAG-2.
+        one(hub
+            .create("DAG".into(), "d1".into(), None, None, Some(vec!["DAG-2".into()]), None)
+            .await)
+        .await;
+        // The create that would become DAG-2, blocked_by DAG-1, closes the loop.
+        let ev = one(hub
+            .create("DAG".into(), "d2".into(), None, None, Some(vec!["DAG-1".into()]), None)
+            .await)
+        .await;
+        match ev {
+            TicketsEvent::Error { message } => assert!(message.contains("cycle"), "{message}"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+        // Nothing was stored.
+        assert!(matches!(
+            one(hub.get("DAG-2".into()).await).await,
+            TicketsEvent::NotFound { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_longer_cycles() {
+        let hub = hub();
+        one(hub
+            .create("DAG".into(), "p1".into(), None, None, Some(vec!["DAG-3".into()]), None)
+            .await)
+        .await;
+        one(hub
+            .create("DAG".into(), "p2".into(), None, None, Some(vec!["DAG-1".into()]), None)
+            .await)
+        .await;
+        // Would become DAG-3: DAG-3 -> DAG-2 -> DAG-1 -> DAG-3.
+        let ev = one(hub
+            .create("DAG".into(), "p3".into(), None, None, Some(vec!["DAG-2".into()]), None)
+            .await)
+        .await;
+        assert!(matches!(ev, TicketsEvent::Error { .. }), "got {ev:?}");
+        assert!(matches!(
+            one(hub.get("DAG-3".into()).await).await,
+            TicketsEvent::NotFound { .. }
+        ));
     }
 
     #[tokio::test]

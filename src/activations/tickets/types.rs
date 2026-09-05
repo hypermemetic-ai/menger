@@ -15,12 +15,23 @@ pub enum TicketsEvent {
     },
     /// A ticket was created (yielded by `create`, and by `watch` on every creation).
     Created { ticket: Ticket },
-    /// One ticket, as it exists now (yielded by `get` and per-row by `list`).
+    /// One ticket, as it exists now (yielded by `get`, and per-row by
+    /// `list` and `ready_set`).
     Ticket { ticket: Ticket },
     /// A ticket's status changed (yielded by `set_status`, and by `watch`).
     StatusChanged { ticket: Ticket, previous: Status },
+    /// An existing ticket's `unlocks` gained `added`: a newly created
+    /// ticket named it in `blocked_by` (yielded by `watch`). Carries the
+    /// full updated ticket so a watch-only client stays coherent.
+    UnlocksChanged { ticket: Ticket, added: String },
+    /// One resolved blocker of the queried ticket, at its current status
+    /// (yielded per-entry by `blockers`).
+    Blocker { ticket: Ticket },
+    /// A blocker id that names no existing ticket — a dangling forward
+    /// reference (yielded per-entry by `blockers`).
+    DanglingBlocker { id: String },
     /// Lookup miss.
     NotFound { id: String },
-    /// In-band error (bad enum value, invalid epic, …).
+    /// In-band error (bad enum value, invalid epic, blocked_by cycle, …).
     Error { message: String },
 }

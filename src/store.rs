@@ -10,7 +10,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::RwLock;
 use tokio::sync::broadcast;
@@ -125,14 +125,29 @@ pub struct Ticket {
 pub enum Change {
     Created { ticket: Ticket },
     StatusChanged { ticket: Ticket, previous: Status },
+    /// An existing ticket's `unlocks` gained `added` because a newly
+    /// created ticket named it in `blocked_by`. Carries the full updated
+    /// ticket so watch-only clients stay coherent.
+    UnlocksChanged { ticket: Ticket, added: String },
 }
 
 impl Change {
     pub fn ticket(&self) -> &Ticket {
         match self {
-            Self::Created { ticket } | Self::StatusChanged { ticket, .. } => ticket,
+            Self::Created { ticket }
+            | Self::StatusChanged { ticket, .. }
+            | Self::UnlocksChanged { ticket, .. } => ticket,
         }
     }
+}
+
+/// One entry of a ticket's `blocked_by`, resolved against current state.
+#[derive(Debug, Clone)]
+pub enum BlockerRef {
+    /// The blocker exists; carries it at its current status.
+    Resolved(Ticket),
+    /// The id names no existing ticket (a dangling forward reference).
+    Dangling(String),
 }
 
 pub struct NewTicket {
@@ -148,6 +163,9 @@ pub struct NewTicket {
 pub enum StoreError {
     NotFound(String),
     InvalidEpic(String),
+    /// Creating `id` with the requested `blocked_by` would close a cycle;
+    /// `path` is the blocked_by chain from `id` back to `id`.
+    Cycle { id: String, path: Vec<String> },
 }
 
 impl std::fmt::Display for StoreError {
@@ -158,8 +176,48 @@ impl std::fmt::Display for StoreError {
                 f,
                 "invalid epic '{e}' (expected a short alphanumeric prefix like MNG)"
             ),
+            Self::Cycle { id, path } => write!(
+                f,
+                "creating '{id}' would close a blocked_by cycle: {id} -> {}",
+                path.join(" -> ")
+            ),
         }
     }
+}
+
+/// Walks `blocked_by` edges from the proposed blockers through existing
+/// tickets; if the allocated `new_id` is reachable (self-reference
+/// included), returns the blocked_by chain that closes the cycle.
+/// Dangling ids other than `new_id` terminate their branch.
+fn find_cycle(
+    tickets: &HashMap<String, Ticket>,
+    new_id: &str,
+    blocked_by: &[String],
+) -> Option<Vec<String>> {
+    let mut stack: Vec<Vec<String>> = blocked_by.iter().map(|b| vec![b.clone()]).collect();
+    let mut visited: HashSet<String> = HashSet::new();
+    while let Some(path) = stack.pop() {
+        let last = path.last().expect("paths start non-empty");
+        if last == new_id {
+            return Some(path);
+        }
+        if !visited.insert(last.clone()) {
+            continue;
+        }
+        if let Some(t) = tickets.get(last) {
+            for b in &t.blocked_by {
+                let mut next = path.clone();
+                next.push(b.clone());
+                stack.push(next);
+            }
+        }
+    }
+    None
+}
+
+/// A blocker satisfies the ready-set rule when it is done with.
+fn satisfied(status: Status) -> bool {
+    matches!(status, Status::Complete | Status::Superseded)
 }
 
 pub struct Store {
@@ -183,6 +241,13 @@ impl Store {
     }
 
     /// Allocates the next `EPIC-N` id and inserts the ticket.
+    ///
+    /// DAG maintenance happens here: a create whose allocated id would
+    /// close a `blocked_by` cycle (self-reference included) is rejected
+    /// and stores nothing; otherwise the new id is appended to each
+    /// existing blocker's `unlocks`, and any existing tickets whose
+    /// `blocked_by` already named the allocated id (dangling forward
+    /// references) become the newborn's `unlocks` from birth.
     pub fn create(&self, new: NewTicket) -> Result<Ticket, StoreError> {
         let epic = new.epic.trim().to_ascii_uppercase();
         if epic.is_empty() || !epic.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -198,8 +263,24 @@ impl Store {
             .max()
             .unwrap_or(0)
             + 1;
+        let id = format!("{epic}-{seq}");
+
+        if let Some(path) = find_cycle(&tickets, &id, &new.blocked_by) {
+            return Err(StoreError::Cycle { id, path });
+        }
+
+        // Dangling forward references to this id resolve now: their
+        // owners are the newborn's `unlocks` from birth.
+        let mut referrers: Vec<(String, u32, String)> = tickets
+            .values()
+            .filter(|t| t.blocked_by.iter().any(|b| b == &id))
+            .map(|t| (t.epic.clone(), t.seq, t.id.clone()))
+            .collect();
+        referrers.sort();
+        let unlocks: Vec<String> = referrers.into_iter().map(|(_, _, rid)| rid).collect();
+
         let ticket = Ticket {
-            id: format!("{epic}-{seq}"),
+            id: id.clone(),
             epic,
             seq,
             title: new.title,
@@ -207,16 +288,35 @@ impl Store {
             ticket_type: new.ticket_type,
             severity: new.severity,
             blocked_by: new.blocked_by,
-            unlocks: Vec::new(),
+            unlocks,
             body: new.body,
             created_unix: now,
             updated_unix: now,
         };
+
+        // Symmetry: each existing blocker gains the new id in `unlocks`.
+        let mut unlocks_changes = Vec::new();
+        for blocker_id in &ticket.blocked_by {
+            if let Some(blocker) = tickets.get_mut(blocker_id) {
+                if !blocker.unlocks.contains(&id) {
+                    blocker.unlocks.push(id.clone());
+                    blocker.updated_unix = now;
+                    unlocks_changes.push(Change::UnlocksChanged {
+                        ticket: blocker.clone(),
+                        added: id.clone(),
+                    });
+                }
+            }
+        }
+
         tickets.insert(ticket.id.clone(), ticket.clone());
         drop(tickets);
         let _ = self.tx.send(Change::Created {
             ticket: ticket.clone(),
         });
+        for change in unlocks_changes {
+            let _ = self.tx.send(change);
+        }
         Ok(ticket)
     }
 
@@ -259,6 +359,47 @@ impl Store {
         drop(tickets);
         let _ = self.tx.send(change.clone());
         Ok(change)
+    }
+
+    /// Tickets that can start now: status `Ready` and every `blocked_by`
+    /// entry resolves to a ticket whose status is `Complete` or
+    /// `Superseded`. A dangling blocker (id naming no existing ticket)
+    /// keeps its ticket out. The epic filter applies to membership;
+    /// blockers resolve globally. Ordered by (epic, seq).
+    pub fn ready_set(&self, epic: Option<&str>) -> Vec<Ticket> {
+        let epic = epic.map(str::to_ascii_uppercase);
+        let tickets = self.tickets.read().expect("store lock poisoned");
+        let mut out: Vec<Ticket> = tickets
+            .values()
+            .filter(|t| epic.as_deref().is_none_or(|e| t.epic == e))
+            .filter(|t| t.status == Status::Ready)
+            .filter(|t| {
+                t.blocked_by
+                    .iter()
+                    .all(|b| tickets.get(b).is_some_and(|bt| satisfied(bt.status)))
+            })
+            .cloned()
+            .collect();
+        drop(tickets);
+        out.sort_by(|a, b| a.epic.cmp(&b.epic).then(a.seq.cmp(&b.seq)));
+        out
+    }
+
+    /// One ticket's `blocked_by`, each entry resolved to the current
+    /// ticket or marked dangling, in `blocked_by` order.
+    pub fn blockers(&self, id: &str) -> Result<Vec<BlockerRef>, StoreError> {
+        let tickets = self.tickets.read().expect("store lock poisoned");
+        let ticket = tickets
+            .get(id)
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+        Ok(ticket
+            .blocked_by
+            .iter()
+            .map(|b| match tickets.get(b) {
+                Some(t) => BlockerRef::Resolved(t.clone()),
+                None => BlockerRef::Dangling(b.clone()),
+            })
+            .collect())
     }
 
     pub fn count(&self) -> usize {

@@ -63,6 +63,20 @@ fn content(item: Value) -> Value {
     item["content"].clone()
 }
 
+/// Drains a finite call: collects every `data` item's content until `done`.
+async fn collect(mut sub: Subscription<Value>) -> Vec<Value> {
+    let mut out = Vec::new();
+    while let Some(item) = sub.next().await {
+        let item = item.unwrap();
+        match item["type"].as_str() {
+            Some("done") => return out,
+            Some("data") => out.push(item["content"].clone()),
+            other => panic!("unexpected stream item type {other:?}: {item}"),
+        }
+    }
+    panic!("stream ended without a done item");
+}
+
 #[tokio::test]
 async fn health_create_list_watch_over_the_wire() {
     let port = start_server().await;
@@ -130,6 +144,167 @@ async fn in_band_errors_cross_the_wire() {
     let ev = content(sub.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "error");
     assert!(ev["message"].as_str().unwrap().contains("wibble"));
+}
+
+/// A watch-only client's local mirror: every mutation event carries the
+/// full affected ticket, so applying it is one upsert.
+fn apply(mirror: &mut std::collections::HashMap<String, Value>, ev: &Value) {
+    match ev["type"].as_str() {
+        Some("created") | Some("status_changed") | Some("unlocks_changed") => {
+            let ticket = ev["ticket"].clone();
+            let id = ticket["id"].as_str().expect("ticket id").to_string();
+            mirror.insert(id, ticket);
+        }
+        other => panic!("unexpected watch event {other:?}: {ev}"),
+    }
+}
+
+/// The client-side ready-set computation: Ready, and every blocked_by id
+/// resolves in the mirror to a Complete or Superseded ticket.
+fn local_ready(mirror: &std::collections::HashMap<String, Value>) -> Vec<String> {
+    let mut ids: Vec<String> = mirror
+        .values()
+        .filter(|t| t["status"] == "Ready")
+        .filter(|t| {
+            t["blocked_by"].as_array().expect("blocked_by").iter().all(|b| {
+                mirror
+                    .get(b.as_str().expect("blocker id"))
+                    .is_some_and(|bt| bt["status"] == "Complete" || bt["status"] == "Superseded")
+            })
+        })
+        .map(|t| t["id"].as_str().expect("id").to_string())
+        .collect();
+    ids.sort();
+    ids
+}
+
+fn ready_ids(events: Vec<Value>) -> Vec<String> {
+    let mut ids: Vec<String> = events
+        .into_iter()
+        .map(|ev| {
+            assert_eq!(ev["type"], "ticket", "got {ev}");
+            ev["ticket"]["id"].as_str().expect("id").to_string()
+        })
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Acceptance 1 + 2: the ready set gates on blockers, and a client that
+/// listed once and then only watched computes the same ready sets as the
+/// server, without re-calling list.
+#[tokio::test]
+async fn ready_set_over_the_wire_is_watch_derivable() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let mut mirror = std::collections::HashMap::new();
+
+    // A exists before the client arrives.
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "RS", "title": "A"})).await).await;
+    assert_eq!(evs[0]["type"], "created");
+
+    // The client fetches the full set once...
+    for ev in collect(call(&client, "tickets.list", json!({})).await).await {
+        assert_eq!(ev["type"], "ticket");
+        let ticket = ev["ticket"].clone();
+        mirror.insert(ticket["id"].as_str().unwrap().to_string(), ticket);
+    }
+    assert_eq!(mirror.len(), 1);
+
+    // ...then consumes only watch events.
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+
+    // create B blocked_by [A]; promote both to Ready.
+    collect(call(&client, "tickets.create",
+        json!({"epic": "RS", "title": "B", "blocked_by": ["RS-1"]})).await).await;
+    collect(call(&client, "tickets.set_status", json!({"id": "RS-1", "status": "Ready"})).await).await;
+    collect(call(&client, "tickets.set_status", json!({"id": "RS-2", "status": "Ready"})).await).await;
+
+    // Watch delivered: created(RS-2), unlocks_changed(RS-1), 2x status_changed.
+    for _ in 0..4 {
+        let ev = content(watch.next().await.unwrap().unwrap());
+        apply(&mut mirror, &ev);
+    }
+    assert_eq!(mirror["RS-1"]["unlocks"], json!(["RS-2"]));
+
+    // Checkpoint 1: A is ready, B is not — server and mirror agree.
+    let server = ready_ids(collect(call(&client, "tickets.ready_set", json!({})).await).await);
+    assert_eq!(server, vec!["RS-1"]);
+    assert_eq!(server, local_ready(&mirror));
+
+    // A completes; B unblocks.
+    collect(call(&client, "tickets.set_status", json!({"id": "RS-1", "status": "Complete"})).await).await;
+    let ev = content(watch.next().await.unwrap().unwrap());
+    apply(&mut mirror, &ev);
+
+    let server = ready_ids(collect(call(&client, "tickets.ready_set", json!({})).await).await);
+    assert_eq!(server, vec!["RS-2"]);
+    assert_eq!(server, local_ready(&mirror));
+}
+
+/// Acceptance 3: a dangling blocker keeps a Ready ticket out of the ready
+/// set, and the blockers query marks the id as dangling — a distinct
+/// event category, not prose.
+#[tokio::test]
+async fn dangling_blocker_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+
+    collect(call(&client, "tickets.create",
+        json!({"epic": "DG", "title": "C", "blocked_by": ["DG-99"]})).await).await;
+    collect(call(&client, "tickets.set_status", json!({"id": "DG-1", "status": "Ready"})).await).await;
+
+    let ready = collect(call(&client, "tickets.ready_set", json!({})).await).await;
+    assert!(ready.is_empty(), "DG-1 must not be ready: {ready:?}");
+
+    let evs = collect(call(&client, "tickets.blockers", json!({"id": "DG-1"})).await).await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["type"], "dangling_blocker");
+    assert_eq!(evs[0]["id"], "DG-99");
+}
+
+/// Acceptance 4: a dangling forward reference resolves at the referenced
+/// ticket's birth — the newborn carries its referrer in `unlocks`.
+#[tokio::test]
+async fn forward_reference_resolves_at_birth_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+
+    collect(call(&client, "tickets.create",
+        json!({"epic": "FW", "title": "D-1", "blocked_by": ["FW-2"]})).await).await;
+
+    let evs = collect(call(&client, "tickets.create",
+        json!({"epic": "FW", "title": "becomes D-2"})).await).await;
+    assert_eq!(evs[0]["type"], "created");
+    assert_eq!(evs[0]["ticket"]["id"], "FW-2");
+    assert_eq!(evs[0]["ticket"]["unlocks"], json!(["FW-1"]));
+
+    let evs = collect(call(&client, "tickets.get", json!({"id": "FW-2"})).await).await;
+    assert_eq!(evs[0]["type"], "ticket");
+    assert_eq!(evs[0]["ticket"]["unlocks"], json!(["FW-1"]));
+}
+
+/// Acceptance 5: the create whose allocated id would close a blocked_by
+/// cycle errors in-band and stores nothing.
+#[tokio::test]
+async fn cycle_create_errors_in_band_and_stores_nothing() {
+    let port = start_server().await;
+    let client = connect(port).await;
+
+    // CY-1 blocked_by the not-yet-existing CY-2.
+    collect(call(&client, "tickets.create",
+        json!({"epic": "CY", "title": "one", "blocked_by": ["CY-2"]})).await).await;
+
+    // The create that would become CY-2, blocked_by CY-1, closes the loop.
+    let evs = collect(call(&client, "tickets.create",
+        json!({"epic": "CY", "title": "loop", "blocked_by": ["CY-1"]})).await).await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["type"], "error");
+    assert!(evs[0]["message"].as_str().unwrap().contains("cycle"), "{}", evs[0]);
+
+    // Nothing was stored under the would-be id.
+    let evs = collect(call(&client, "tickets.get", json!({"id": "CY-2"})).await).await;
+    assert_eq!(evs[0]["type"], "not_found");
 }
 
 #[tokio::test]
