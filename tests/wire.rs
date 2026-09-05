@@ -17,13 +17,17 @@ async fn free_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
-async fn start_server() -> u16 {
+/// Starts a server whose database lives at `db_path`. The caller owns the
+/// location's lifetime; `keep` is dropped (cleaning up) when the test's
+/// runtime tears the server task down.
+async fn start_server_at(db_path: std::path::PathBuf, keep: Option<tempfile::TempDir>) -> u16 {
     let port = free_port().await;
-    let hub = build_rpc().await;
+    let hub = build_rpc(&db_path).await.expect("open database");
     let conv = |arc: Arc<DynamicHub>| {
         DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"))
     };
     tokio::spawn(async move {
+        let _keep = keep;
         TransportServer::builder(hub, conv)
             .with_websocket(port)
             .build()
@@ -34,6 +38,14 @@ async fn start_server() -> u16 {
             .expect("serve");
     });
     port
+}
+
+/// Starts a server on an isolated, throwaway database location — servers
+/// in this binary run concurrently and must never share storage.
+async fn start_server() -> u16 {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
+    let db_path = dir.path().join("tickets.db");
+    start_server_at(db_path, Some(dir)).await
 }
 
 async fn connect(port: u16) -> WsClient {
@@ -158,4 +170,152 @@ async fn shell_serves_the_page() {
     assert!(text.starts_with("HTTP/1.0 200") || text.starts_with("HTTP/1.1 200"));
     assert!(text.contains("<main id=\"main\">"));
     assert!(text.contains("menger.call"), "shell speaks the envelope");
+}
+
+/// MNG-2 criterion 5: reads are cache-first, observed black-box — after
+/// the database location vanishes mid-run, `get` and `list` still answer
+/// with full data, and a write answers in-band (never a crash or hang).
+#[tokio::test]
+async fn reads_survive_db_location_unavailable() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
+    let db_dir = dir.path().join("db");
+    std::fs::create_dir_all(&db_dir).unwrap();
+    let port = start_server_at(db_dir.join("tickets.db"), None).await;
+    let client = connect(port).await;
+
+    // Seed one ticket while the database is healthy.
+    let mut sub = call(
+        &client,
+        "tickets.create",
+        json!({
+            "epic": "CACHE",
+            "title": "survives the outage",
+            "severity": "High",
+            "body": "reads never touch storage"
+        }),
+    )
+    .await;
+    let ev = content(sub.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "created");
+    let created = ev["ticket"].clone();
+
+    // Make the database location unavailable.
+    std::fs::rename(&db_dir, dir.path().join("gone")).unwrap();
+
+    // Reads still answer, with the full ticket, from the cache.
+    let mut sub = call(&client, "tickets.get", json!({"id": "CACHE-1"})).await;
+    let ev = content(sub.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "ticket");
+    assert_eq!(ev["ticket"], created, "get returns full data from the cache");
+
+    let mut sub = call(&client, "tickets.list", json!({})).await;
+    let ev = content(sub.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "ticket");
+    assert_eq!(ev["ticket"], created, "list returns full data from the cache");
+
+    // A write during the outage answers in-band: acknowledged only if the
+    // engine still made it durable, otherwise an error event — no crash.
+    let mut sub = call(
+        &client,
+        "tickets.create",
+        json!({"epic": "CACHE", "title": "written during the outage"}),
+    )
+    .await;
+    let ev = content(sub.next().await.unwrap().unwrap());
+    assert!(
+        ev["type"] == "created" || ev["type"] == "error",
+        "write answered in-band, got {ev}"
+    );
+
+    // And reads keep working after the write attempt.
+    let mut sub = call(&client, "tickets.get", json!({"id": "CACHE-1"})).await;
+    let ev = content(sub.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "ticket");
+    assert_eq!(ev["ticket"]["title"], "survives the outage");
+}
+
+/// MNG-2 criterion 7: under a mutation stream with an open `watch`, many
+/// concurrent list/get/health calls all complete, and the watcher sees
+/// every acknowledged change in order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_reads_complete_under_mutation_stream() {
+    const MUTATIONS: usize = 15;
+
+    let port = start_server().await;
+    let writer = connect(port).await;
+    let watcher = connect(port).await;
+    let mut watch = call(&watcher, "tickets.watch", json!({})).await;
+
+    // Guarantee at least one ticket before the readers start.
+    let mut sub = call(
+        &writer,
+        "tickets.create",
+        json!({"epic": "LOAD", "title": "t1"}),
+    )
+    .await;
+    assert_eq!(content(sub.next().await.unwrap().unwrap())["type"], "created");
+
+    // Mutation stream: create + status flip, back to back.
+    let mutations = tokio::spawn(async move {
+        for i in 2..=MUTATIONS {
+            let mut sub = call(
+                &writer,
+                "tickets.create",
+                json!({"epic": "LOAD", "title": format!("t{i}")}),
+            )
+            .await;
+            let ev = content(sub.next().await.unwrap().unwrap());
+            assert_eq!(ev["type"], "created");
+            let id = ev["ticket"]["id"].as_str().unwrap().to_string();
+            let mut sub = call(&writer, "tickets.set_status", json!({"id": id, "status": "Ready"}))
+                .await;
+            let ev = content(sub.next().await.unwrap().unwrap());
+            assert_eq!(ev["type"], "status_changed");
+        }
+    });
+
+    // Concurrent readers on their own connections.
+    let mut readers = Vec::new();
+    for _ in 0..8 {
+        readers.push(tokio::spawn(async move {
+            let client = connect(port).await;
+            for _ in 0..10 {
+                let mut sub = call(&client, "tickets.list", json!({"epic": "LOAD"})).await;
+                let ev = content(sub.next().await.unwrap().unwrap());
+                assert_eq!(ev["type"], "ticket");
+
+                let mut sub = call(&client, "tickets.get", json!({"id": "LOAD-1"})).await;
+                let ev = content(sub.next().await.unwrap().unwrap());
+                assert_eq!(ev["type"], "ticket");
+                assert_eq!(ev["ticket"]["id"], "LOAD-1");
+
+                let mut sub = call(&client, "tickets.health", json!({})).await;
+                let ev = content(sub.next().await.unwrap().unwrap());
+                assert_eq!(ev["type"], "health");
+            }
+        }));
+    }
+
+    tokio::time::timeout(Duration::from_secs(60), async move {
+        mutations.await.expect("mutation stream completed");
+        for r in readers {
+            r.await.expect("reader completed");
+        }
+        // The watcher saw every acknowledged change, creates in seq order.
+        let mut next_seq = 1u64;
+        for _ in 0..(2 * MUTATIONS - 1) {
+            let ev = content(watch.next().await.unwrap().unwrap());
+            match ev["type"].as_str().unwrap() {
+                "created" => {
+                    assert_eq!(ev["ticket"]["seq"], next_seq);
+                    next_seq += 1;
+                }
+                "status_changed" => {}
+                other => panic!("unexpected watch event {other}"),
+            }
+        }
+        assert_eq!(next_seq, MUTATIONS as u64 + 1);
+    })
+    .await
+    .expect("concurrency smoke finished in time");
 }

@@ -1,7 +1,8 @@
 use clap::Parser;
-use menger::{build_rpc, shell};
+use menger::{build_rpc, default_db_path, shell};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::TransportServer;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
@@ -23,6 +24,11 @@ struct Args {
     /// Disable the web shell
     #[arg(long)]
     no_shell: bool,
+
+    /// Database file (the system of record). Defaults to a per-user data
+    /// directory; a fresh location starts empty.
+    #[arg(long, env = "MENGER_DB_PATH", value_name = "PATH")]
+    db_path: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -41,7 +47,8 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let hub = build_rpc().await;
+    let db_path = args.db_path.unwrap_or_else(default_db_path);
+    let hub = build_rpc(&db_path).await?;
 
     let activations = hub.list_activations_info();
     tracing::info!("Activations ({}):", activations.len());

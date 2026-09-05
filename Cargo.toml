@@ -38,9 +38,16 @@ clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 chrono = "0.4"
 
+# MNG-2: embedded system of record behind the cache (in-process, no server),
+# and the per-user default data directory (ecosystem precedent: hyperforge).
+rusqlite = { version = "0.37", features = ["bundled"] }
+dirs = "6"
+
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 # Wire-level tests speak the same protocol as web/index.html.
 jsonrpsee = { version = "0.26", features = ["server", "macros", "ws-client"] }
+# Hermetic tests: every server gets its own isolated database location.
+tempfile = "3"
