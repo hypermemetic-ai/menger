@@ -27,6 +27,21 @@
   #conn.reconnecting { color: var(--dead); }
   main { padding: 1rem 1.25rem; max-width: 72rem; margin: 0 auto; }
   #health { color: var(--dim); font-size: .8rem; margin-bottom: 1rem; }
+  #error {
+    display: flex; align-items: baseline; gap: 1rem;
+    background: #2a1518; color: #e8a9a9; border: 1px solid #6b2f35;
+    padding: .5rem .75rem; margin-bottom: 1rem; font-size: .85rem;
+  }
+  #error button {
+    margin-left: auto; background: none; border: 1px solid #6b2f35;
+    color: inherit; font: inherit; font-size: .8rem;
+    padding: 0 .5rem; cursor: pointer;
+  }
+  select.status {
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 3px;
+    font: inherit; font-size: .85rem; padding: .1rem .3rem;
+  }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
   th { color: var(--dim); font-weight: 500; font-size: .8rem; }

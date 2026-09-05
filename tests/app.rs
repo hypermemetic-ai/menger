@@ -48,50 +48,71 @@ impl Drop for Server {
 /// Spawns the binary with shell + (optionally) REST on free ports, the
 /// app dist pointed at `app_dist` (hermetic — never the checkout's real
 /// frontend/dist, whose built-ness must not sway a test), and waits for
-/// the shell listener.
+/// every listener.
+///
+/// Free ports are picked by bind-and-release, so two concurrently
+/// starting tests can race for the same port; the loser exits at bind —
+/// and because the shell listener starts before the WS/REST binds, it
+/// can die *after* the shell port already answered. So: wait for shell
+/// AND REST, confirm the child is still alive, and on any startup death
+/// retry from scratch with fresh ports.
 async fn spawn_server(app_dist: &Path, rest: bool) -> Server {
-    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let ws_port = free_port().await;
-    let shell_port = free_port().await;
-    let rest_port = free_port().await;
-    let db: PathBuf = dir.path().join("tickets.db");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_menger"));
-    cmd.arg("--port")
-        .arg(ws_port.to_string())
-        .arg("--shell-port")
-        .arg(shell_port.to_string())
-        .arg("--app-dist")
-        .arg(app_dist)
-        .arg("--db-path")
-        .arg(&db)
-        .env_remove("MENGER_DB_PATH")
-        .env_remove("MENGER_APP_DIST")
-        .env_remove("RUST_LOG")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if rest {
-        cmd.arg("--rest-port").arg(rest_port.to_string());
-    } else {
-        cmd.arg("--no-rest");
-    }
-    let child = cmd.spawn().expect("spawn menger");
-
-    let server = Server {
-        child,
-        shell_port,
-        _dir: dir,
-    };
-    for _ in 0..100 {
-        if TcpStream::connect(("127.0.0.1", server.shell_port))
-            .await
-            .is_ok()
-        {
-            return server;
+    for attempt in 0..3 {
+        let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+        let ws_port = free_port().await;
+        let shell_port = free_port().await;
+        let rest_port = free_port().await;
+        let db: PathBuf = dir.path().join("tickets.db");
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_menger"));
+        cmd.arg("--port")
+            .arg(ws_port.to_string())
+            .arg("--shell-port")
+            .arg(shell_port.to_string())
+            .arg("--app-dist")
+            .arg(app_dist)
+            .arg("--db-path")
+            .arg(&db)
+            .env_remove("MENGER_DB_PATH")
+            .env_remove("MENGER_APP_DIST")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if rest {
+            cmd.arg("--rest-port").arg(rest_port.to_string());
+        } else {
+            cmd.arg("--no-rest");
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let child = cmd.spawn().expect("spawn menger");
+
+        let mut server = Server {
+            child,
+            shell_port,
+            _dir: dir,
+        };
+        for _ in 0..100 {
+            if server.child.try_wait().expect("try_wait").is_some() {
+                break; // died at startup (port race) — retry with fresh ports
+            }
+            let shell_up = TcpStream::connect(("127.0.0.1", server.shell_port))
+                .await
+                .is_ok();
+            let rest_up = !rest || TcpStream::connect(("127.0.0.1", rest_port)).await.is_ok();
+            if shell_up && rest_up {
+                // The WS bind has no probe of its own; give a failed one
+                // a beat to take the process down before trusting it.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                if server.child.try_wait().expect("try_wait").is_none() {
+                    return server;
+                }
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        drop(server); // kills a still-live child that never got healthy
+        eprintln!("menger startup attempt {attempt} failed; retrying with fresh ports");
     }
-    panic!("shell listener never came up on {}", server.shell_port);
+    panic!("menger failed to start after 3 attempts");
 }
 
 async fn connect(port: u16) -> http1::SendRequest<Full<Bytes>> {
@@ -296,6 +317,128 @@ async fn rest_proxy_streams_watch_sse() {
     let event: Value = serde_json::from_str(payload).expect("SSE data is JSON");
     assert_eq!(event["content"]["type"], "created");
     assert_eq!(event["content"]["ticket"]["id"], "PRX-1");
+}
+
+/// MFE-3's data plane, end to end through the proxy: `set_status`
+/// round-trips (the board's per-row control) and the change is broadcast
+/// to an already-open `watch` stream as `status_changed` — how one
+/// window's edit reaches every other open client.
+#[tokio::test]
+async fn rest_proxy_set_status_round_trips_and_watch_broadcasts_it() {
+    let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let s = spawn_server(empty.path(), true).await;
+
+    let (status, _, body) = fetch(
+        s.shell_port,
+        Method::POST,
+        "/rest/tickets/create",
+        &json!({"epic": "PRX", "title": "status via proxy"}).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+
+    // Watch opened before the mutation, like a second browser window.
+    let mut sender = connect(s.shell_port).await;
+    let resp = sender
+        .send_request(request(
+            s.shell_port,
+            Method::POST,
+            "/rest/tickets/watch",
+            "{}",
+        ))
+        .await
+        .expect("open watch through proxy");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut watch_body = resp.into_body();
+
+    let (status, _, body) = fetch(
+        s.shell_port,
+        Method::POST,
+        "/rest/tickets/set_status",
+        &json!({"id": "PRX-1", "status": "Ready"}).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let v: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["data"][0]["type"], "status_changed");
+    assert_eq!(v["data"][0]["ticket"]["status"], "Ready");
+    assert_eq!(v["data"][0]["previous"], "Pending");
+
+    let sse = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut buf = String::new();
+        loop {
+            let frame = watch_body
+                .frame()
+                .await
+                .expect("watch stream stays open")
+                .expect("clean frame");
+            if let Ok(data) = frame.into_data() {
+                buf.push_str(std::str::from_utf8(&data).expect("utf-8 SSE"));
+                if buf.contains("status_changed") && buf.rfind("\n\n").is_some() {
+                    return buf;
+                }
+            }
+        }
+    })
+    .await
+    .expect("status_changed reaches the open watch within 5s");
+    let payload = sse
+        .lines()
+        .find_map(|l| l.strip_prefix("data: "))
+        .expect("SSE data line");
+    let event: Value = serde_json::from_str(payload).expect("SSE data is JSON");
+    assert_eq!(event["content"]["type"], "status_changed");
+    assert_eq!(event["content"]["ticket"]["id"], "PRX-1");
+    assert_eq!(event["content"]["ticket"]["status"], "Ready");
+}
+
+/// The server stays the validator through the proxy: a status outside
+/// the closed vocabulary comes back as an in-band `error` event inside a
+/// 2xx — the exact shape the app's error banner consumes — and the
+/// ticket is left unchanged.
+#[tokio::test]
+async fn rest_proxy_passes_in_band_error_for_bad_status() {
+    let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let s = spawn_server(empty.path(), true).await;
+
+    let (status, _, _) = fetch(
+        s.shell_port,
+        Method::POST,
+        "/rest/tickets/create",
+        &json!({"epic": "PRX", "title": "rejects bad status"}).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _, body) = fetch(
+        s.shell_port,
+        Method::POST,
+        "/rest/tickets/set_status",
+        &json!({"id": "PRX-1", "status": "Bogus"}).to_string(),
+    )
+    .await;
+    assert!(status.is_success(), "in-band error rides a 2xx, got {status}");
+    let v: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["data"][0]["type"], "error", "got {v}");
+    assert!(
+        v["data"][0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            // The server normalizes case before validating, and reports
+            // the normalized value.
+            .contains("unknown status 'bogus'"),
+        "error names the offending value, got {v}"
+    );
+
+    let (_, _, body) = fetch(
+        s.shell_port,
+        Method::POST,
+        "/rest/tickets/get",
+        &json!({"id": "PRX-1"}).to_string(),
+    )
+    .await;
+    let v: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["data"][0]["ticket"]["status"], "Pending", "unchanged");
 }
 
 /// --no-rest: the proxy has no upstream and says so — a deliberate 503,

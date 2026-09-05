@@ -122,10 +122,13 @@ Phase one of the backend epic is complete — see
 live in SQLite behind the service-wide cache (MNG-2); the DAG answers
 ready-set/blockers queries with cycle rejection at create (MNG-4); REST +
 SSE serve on :4457 via plexus-transport 0.2.3 (MNG-8 — consumed as a
-git-tag patch until it's published to crates.io). The Leptos scaffold is
-live at `/app/` (MFE-2). Parked as Idea: MNG-5/6 (schema-derivation and
-framework theses). Next: the frontend board (`plans/MFE/`), and the
-HelixDB graph-store epic (`plans/HLX/`, spike-gated).
+git-tag patch until it's published to crates.io). The Leptos app at
+`/app/` is the live board (MFE-3): every ticket as a row with a per-row
+status control, pushed over SSE — read-and-status only, no creation
+form by design (tickets are created by agents/CLI/API). Parked as Idea:
+MNG-5/6 (schema-derivation and framework theses). Next: the default
+page swap and the ready-set view (`plans/MFE/`), and the HelixDB
+graph-store epic (`plans/HLX/`, spike-gated).
 
 ## History
 
