@@ -34,8 +34,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1.1", features = ["derive"] }
 
-# Day-one web shell (static page over the Plexus WebSocket).
+# Day-one web shell (static page over the Plexus WebSocket). MFE-2 adds
+# the /app static serving and the same-origin /rest reverse proxy (the
+# REST port emits no CORS headers, so the browser app must stay
+# same-origin); hyper/hyper-util are the proxy's streaming HTTP client.
 axum = "0.8"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
 
 clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
@@ -54,12 +60,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 jsonrpsee = { version = "0.26", features = ["server", "macros", "ws-client"] }
 # Hermetic tests: every server gets its own isolated database location.
 tempfile = "3"
-# REST-level tests (tests/rest.rs) speak plain HTTP/SSE to the spawned
-# binary. All three are already in the dependency graph via axum and the
-# http-gateway feature, so this costs no extra compilation of substance.
-hyper = { version = "1", features = ["client", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
-http-body-util = "0.1"
+# REST-level tests (tests/rest.rs, tests/app.rs) speak plain HTTP/SSE to
+# the spawned binary via hyper/hyper-util/http-body-util — all moved to
+# [dependencies] with MFE-2 (the shell's /rest proxy client).
 
 # MNG-8: the REST bridge shipped broken in every published plexus-transport
 # (0.2.2 http-gateway never compiled; 0.3.0 is byte-identical — see

@@ -325,7 +325,16 @@ async fn shell_serves_the_page() {
 
     let shell_port = free_port().await;
     tokio::spawn(async move {
-        let _ = menger::shell::serve(shell_port, 4455).await;
+        // Same call, MFE-2 signature: config struct instead of two ports.
+        // No REST upstream and an empty app dist — this test only cares
+        // that the vanilla page at `/` still serves, unchanged.
+        let _ = menger::shell::serve(menger::shell::ShellConfig {
+            port: shell_port,
+            ws_port: 4455,
+            rest_port: None,
+            app_dist: std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")),
+        })
+        .await;
     });
 
     let mut resp = Vec::new();

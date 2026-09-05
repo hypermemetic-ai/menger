@@ -13,13 +13,64 @@ subscription loop is the seed of a Plexus-native reactive web framework
 ## Run
 
 ```sh
-cargo run                     # WebSocket :4455, web shell http://127.0.0.1:4456/
+cargo run                     # WebSocket :4455, web shell http://127.0.0.1:4456/,
+                              # REST :4457, Leptos app http://127.0.0.1:4456/app/
 cargo run -- --stdio          # MCP-compatible stdio mode
 cargo test
 ```
 
 Open the shell in two browser windows; create a ticket or flip a status in
 one and watch the other update. No polling — the server pushes.
+
+## Frontend (the Leptos app)
+
+The MFE epic's browser client lives in `frontend/` — a **separate cargo
+unit** (Leptos 0.8, CSR only, built with trunk). The server never needs
+it to compile: `cargo build` / `cargo test` work with no wasm toolchain
+installed, and `http://127.0.0.1:4456/app/` answers a plain "frontend
+not built" page (HTTP 200 with build instructions) until you build it.
+
+One-time toolchain (steps that worked on this machine):
+
+```sh
+rustup target add wasm32-unknown-unknown
+# trunk, prebuilt via cargo-binstall — preferred here because
+# `cargo install trunk --locked` fails to compile on GCC 16
+# (libdeflate-sys 1.23 uses the removed `evex512` target attribute):
+curl -L --proto '=https' --tlsv1.2 -sSf \
+  https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+cargo binstall -y trunk
+```
+
+Build and run:
+
+```sh
+cd frontend && trunk build --release   # production build -> frontend/dist/
+cargo run                              # serves it at http://127.0.0.1:4456/app/
+```
+
+Dev loop: keep `cargo run` up and run `cd frontend && trunk watch` — it
+rebuilds `dist/` on every source change; reload the browser to pick it
+up (the server reads `dist/` from disk per request, no restart needed).
+`--app-dist DIR` / `MENGER_APP_DIST` point the server at a `dist`
+elsewhere.
+
+Data plane (MFE-1 pins: REST for calls, SSE for `watch`; the view layer
+owns no routing):
+
+- The REST port (:4457) emits **no CORS headers**, so the app never
+  calls it cross-origin. Instead the shell server hosts a same-origin
+  reverse proxy: `/rest/{*}` on :4456 forwards verbatim to :4457. The
+  REST surface stays the contract; the proxy adds no data path — its one
+  liberty is prepending an ignorable SSE comment line (`:`) to
+  `text/event-stream` responses, because Firefox does not resolve a
+  `fetch()` until the first body bytes arrive and `watch` sends no
+  preamble of its own.
+- `tickets.watch` streams SSE **over POST**, which browser `EventSource`
+  (GET-only) cannot consume. The app uses the MFE-2 pinned fallback:
+  `fetch` + ReadableStream, parsing `event:`/`data:` frames by hand
+  (`frontend/src/net.rs`), with a ~1 s reconnect-and-resync loop — a
+  server restart returns the page to live on its own.
 
 ## Surface
 
@@ -56,11 +107,13 @@ src/
   main.rs              CLI args, transports, spawns the shell
   builder.rs           build_rpc() → Arc<DynamicHub> ("menger")
   store.rs             domain types + in-memory store + change broadcast
-  shell.rs             serves web/index.html (axum, embedded at compile time)
+  shell.rs             / (embedded vanilla page), /app/ (Leptos dist from
+                       disk), /rest/* (same-origin proxy to the REST port)
   activations/
     tickets/           types.rs (events) + activation.rs (#[plexus_macros::activation])
 web/index.html         the day-one reactive shell
-plans/MNG/             the epic: persistence, plans/ interop, DAG queries, framework
+frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/)
+plans/MNG/             the backend epic; plans/MFE/ the frontend epic
 ```
 
 ## Status

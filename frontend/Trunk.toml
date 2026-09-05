@@ -1,0 +1,6 @@
+# The app is served by menger at /app/ (src/shell.rs serves this crate's
+# dist/ from disk), so every generated asset URL must carry that prefix.
+[build]
+target = "index.html"
+dist = "dist"
+public_url = "/app/"

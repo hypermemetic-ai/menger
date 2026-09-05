@@ -1,0 +1,43 @@
+# MFE-2: the Leptos CSR app. Deliberately its OWN cargo unit — the empty
+# [workspace] table below detaches it from any enclosing workspace lookup,
+# and nothing in the server package references it, so `cargo build` /
+# `cargo test` of menger never need the wasm toolchain. Built with trunk
+# (see README "Frontend"); the server serves frontend/dist at /app/.
+
+[package]
+name = "menger-app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "menger's Leptos CSR frontend — consumes the REST + SSE surface like any other client"
+
+[workspace]
+
+[dependencies]
+# Owner-pinned: Leptos, CSR only — no ssr/hydrate/server-fn/router features.
+leptos = { version = "0.8", features = ["csr"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+# Only what the fetch + ReadableStream SSE client (src/net.rs) touches.
+web-sys = { version = "0.3", features = [
+  "Window",
+  "Headers",
+  "Request",
+  "RequestInit",
+  "Response",
+  "ReadableStream",
+  "ReadableStreamDefaultReader",
+] }
+
+console_error_panic_hook = "0.1"
+
+[profile.release]
+# WASM payload matters (MFE-2 records it for MFE-6); favor size.
+opt-level = "z"
+lto = true
+codegen-units = 1

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>menger — app</title>
+<link data-trunk rel="rust" />
+<style>
+  /* Same visual family as web/index.html so the two shells read as one system. */
+  :root {
+    --bg: #101014; --panel: #17171d; --ink: #d8d8e0; --dim: #7a7a88;
+    --line: #26262e; --live: #5dbb63; --dead: #c05555; --accent: #8ab4f8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 1rem;
+    padding: .75rem 1.25rem; border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
+  header .tag { color: var(--dim); font-size: .8rem; }
+  #conn { color: var(--dim); font-size: .8rem; margin-left: auto; }
+  #conn.live { color: var(--live); }
+  #conn.reconnecting { color: var(--dead); }
+  main { padding: 1rem 1.25rem; max-width: 72rem; margin: 0 auto; }
+  #health { color: var(--dim); font-size: .8rem; margin-bottom: 1rem; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; font-size: .8rem; }
+  td.id { color: var(--accent); white-space: nowrap; }
+  td.status { white-space: nowrap; }
+</style>
+</head>
+<body></body>
+</html>

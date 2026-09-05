@@ -26,6 +26,12 @@ struct Args {
     #[arg(long)]
     no_rest: bool,
 
+    /// Directory holding the built Leptos app (frontend/dist), served at
+    /// /app/ on the shell port. Missing output degrades to a "frontend
+    /// not built" page, never an error.
+    #[arg(long, env = "MENGER_APP_DIST", value_name = "DIR")]
+    app_dist: Option<PathBuf>,
+
     /// Run in stdio mode (MCP-compatible); implies no web shell
     #[arg(long)]
     stdio: bool,
@@ -45,8 +51,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let filter = if args.stdio {
-        tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "warn".into())
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into())
     } else {
         tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| "info,menger=debug".into())
@@ -92,14 +97,22 @@ async fn main() -> anyhow::Result<()> {
                         .with_server_name("menger".into())
                         .with_server_version(env!("CARGO_PKG_VERSION").into()),
                 )
-                .with_mcp_flat_schemas(hub.list_plugin_schemas())   // registers /rest/tickets/*
-                .with_mcp_route_fn(route_fn);                        // dispatches via hub.route()
+                .with_mcp_flat_schemas(hub.list_plugin_schemas()) // registers /rest/tickets/*
+                .with_mcp_route_fn(route_fn); // dispatches via hub.route()
             tracing::info!("REST:      http://127.0.0.1:{}/rest", args.rest_port);
         }
         if !args.no_shell {
-            let (shell_port, ws_port) = (args.shell_port, args.port);
+            let cfg = shell::ShellConfig {
+                port: args.shell_port,
+                ws_port: args.port,
+                // MFE-2: /rest on the shell port reverse-proxies to the
+                // REST port (same-origin for the browser app; the REST
+                // transport emits no CORS headers).
+                rest_port: (!args.no_rest).then_some(args.rest_port),
+                app_dist: args.app_dist.unwrap_or_else(shell::default_app_dist),
+            };
             tokio::spawn(async move {
-                if let Err(e) = shell::serve(shell_port, ws_port).await {
+                if let Err(e) = shell::serve(cfg).await {
                     tracing::error!("shell server exited: {e}");
                 }
             });
