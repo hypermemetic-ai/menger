@@ -26,9 +26,11 @@
 //!   keys) and inside a `[role=menu]` (AGS-16's ticket menu owns its
 //!   own arrows/Enter/Escape).
 //!
-//! Not implemented here, deliberately: "Menu key / Shift+F10 opens the
-//! context menu on the focused ticket" — a one-line hook that belongs to
-//! AGS-16's menu, to be added when the two land together.
+//! "Menu key / Shift+F10 opens the context menu on the focused ticket" —
+//! AGS-18's one-line follow-up — landed with AGS-20 where it belongs, in
+//! AGS-16's menu module (src/menu.rs); the focus this module owns is what
+//! it opens on, and [`remember_focus`] / [`restore_focus`] are what hand
+//! it back.
 
 use std::cell::{Cell, RefCell};
 
@@ -172,7 +174,13 @@ thread_local! {
     static FOCUS_BEFORE_OVERLAY: RefCell<Option<web_sys::HtmlElement>> = const { RefCell::new(None) };
 }
 
-fn remember_focus() {
+/// Remember where focus is, so [`restore_focus`] can hand it back when
+/// whatever took it goes away. Shared by the overlays and (AGS-20) the
+/// keyboard-opened ticket menu: the two are mutually exclusive by
+/// construction — the global map stands down inside `[role=menu]`, and
+/// the menu's own opener stands down inside `[role=dialog]` — so one slot
+/// is enough.
+pub(crate) fn remember_focus() {
     let el = net::window()
         .document()
         .and_then(|d| d.active_element())
@@ -180,10 +188,10 @@ fn remember_focus() {
     FOCUS_BEFORE_OVERLAY.with(|c| *c.borrow_mut() = el);
 }
 
-/// Hand focus back, a tick later — the dialog has to leave the DOM first,
-/// or the browser's own "focus fell out of a removed subtree" fixup
-/// lands on `<body>` after us.
-fn restore_focus() {
+/// Hand focus back, a tick later — the dialog (or menu) has to leave the
+/// DOM first, or the browser's own "focus fell out of a removed subtree"
+/// fixup lands on `<body>` after us. A no-op when nothing was remembered.
+pub(crate) fn restore_focus() {
     let el = FOCUS_BEFORE_OVERLAY.with(|c| c.borrow_mut().take());
     spawn_local(async move {
         net::sleep_ms(0).await;
