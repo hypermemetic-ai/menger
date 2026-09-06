@@ -196,6 +196,83 @@ pub struct PageQuery<'a> {
     pub limit: Option<u32>,
 }
 
+/// MNG-9: what a page walk keeps. `All` is not "a predicate that always
+/// says yes": it is the evidence that nothing needs testing, which is
+/// what lets the walk count what remains without touching a ticket.
+enum Filter<'a> {
+    All,
+    By(&'a dyn Fn(&Ticket) -> bool),
+}
+
+/// MNG-9: the stretch of the sorted index a page is cut from — the two
+/// things that are *positions* rather than predicates.
+///
+/// `after` is a lower bound, exclusive. An `epic` is one too: because the
+/// order is `(epic, seq)`, an epic's tickets are contiguous, so filtering
+/// by epic is bounding the walk rather than testing every ticket in the
+/// store — which is what keeps a per-epic page O(the epic) instead of
+/// O(everything).
+struct Span {
+    start: std::ops::Bound<OrderKey>,
+    end: std::ops::Bound<OrderKey>,
+    /// The cursor this span was cut with, kept so an empty page can still
+    /// say where to resume.
+    cursor: Option<String>,
+    /// The cursor sits at or past the end of the span: nothing can match.
+    empty: bool,
+}
+
+impl Span {
+    fn of(cache: &Cache, after: Option<&str>, epic: Option<&str>) -> Result<Self, StoreError> {
+        use std::ops::Bound::{Excluded, Included, Unbounded};
+        let (mut start, end) = match epic {
+            None => (Unbounded, Unbounded),
+            Some(e) => (
+                Included(OrderKey {
+                    epic: e.to_string(),
+                    seq: 0,
+                }),
+                Included(OrderKey {
+                    epic: e.to_string(),
+                    seq: u32::MAX,
+                }),
+            ),
+        };
+        let mut empty = false;
+        if let Some(id) = after {
+            let cursor = cache
+                .by_id
+                .get(id)
+                .ok_or_else(|| StoreError::CursorNotFound(id.to_string()))?;
+            let key = OrderKey::of(cursor);
+            match (&start, &end) {
+                // The cursor is at or past the epic's last ticket.
+                (_, Included(last)) if key >= *last => empty = true,
+                // Below the epic's first: the epic's bound already covers it.
+                (Included(first), _) if key < *first => {}
+                _ => start = Excluded(key),
+            }
+        }
+        Ok(Self {
+            start,
+            end,
+            cursor: after.map(str::to_string),
+            empty,
+        })
+    }
+
+    /// The index entries in this span, or `None` when there are none.
+    fn range<'c>(
+        &self,
+        cache: &'c Cache,
+    ) -> Option<std::collections::btree_map::Range<'c, OrderKey, String>> {
+        if self.empty {
+            return None;
+        }
+        Some(cache.order.range((self.start.clone(), self.end.clone())))
+    }
+}
+
 /// MNG-9: one page of the store's order, and where the walk stands.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Page {
@@ -725,12 +802,19 @@ impl Store {
         let epic = q.epic.map(str::to_ascii_uppercase);
         let parent = q.parent.map(str::to_ascii_uppercase);
         let after = q.after.map(str::to_ascii_uppercase);
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let span = Span::of(&cache, after.as_deref(), epic.as_deref())?;
+        // With nothing left to test, counting what remains is a walk of
+        // the index alone — no ticket is touched. The epic is already
+        // spent: it bounded the span rather than filtering inside it.
+        if q.status.is_none() && parent.is_none() {
+            return Ok(Self::walk_cache(&cache, span, q.limit, Filter::All));
+        }
         let keep = |t: &Ticket| {
-            epic.as_deref().is_none_or(|e| t.epic == e)
-                && q.status.is_none_or(|s| t.status == s)
+            q.status.is_none_or(|s| t.status == s)
                 && parent.as_deref().is_none_or(|p| t.parent.as_deref() == Some(p))
         };
-        self.walk(after.as_deref(), q.limit, keep)
+        Ok(Self::walk_cache(&cache, span, q.limit, Filter::By(&keep)))
     }
 
     /// MNG-9: one page of the ready set — the [`Store::ready_set`]
@@ -745,78 +829,56 @@ impl Store {
         let epic = epic.map(str::to_ascii_uppercase);
         let after = after.map(str::to_ascii_uppercase);
         let cache = self.tickets.read().expect("store lock poisoned");
+        let span = Span::of(&cache, after.as_deref(), epic.as_deref())?;
         let keep = |t: &Ticket| {
-            epic.as_deref().is_none_or(|e| t.epic == e)
-                && t.status == Status::Ready
+            t.status == Status::Ready
                 && t.blocked_by
                     .iter()
                     .all(|b| cache.by_id.get(b).is_some_and(|bt| satisfied(bt.status)))
         };
-        Self::walk_cache(&cache, after.as_deref(), limit, keep)
+        Ok(Self::walk_cache(&cache, span, limit, Filter::By(&keep)))
     }
 
-    /// The one walk both page methods run: the sorted index from the
-    /// cursor, `limit` matches cloned into the page, then the rest of the
-    /// range counted (the count is what `remaining` costs — O(what is
-    /// left) rather than O(1); acceptable at the magnitudes measured, and
-    /// the price of an exact number under a filter).
-    fn walk(
-        &self,
-        after: Option<&str>,
-        limit: Option<u32>,
-        keep: impl Fn(&Ticket) -> bool,
-    ) -> Result<Page, StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        Self::walk_cache(&cache, after, limit, keep)
-    }
-
-    fn walk_cache(
-        cache: &Cache,
-        after: Option<&str>,
-        limit: Option<u32>,
-        keep: impl Fn(&Ticket) -> bool,
-    ) -> Result<Page, StoreError> {
-        let start = match after {
-            None => std::ops::Bound::Unbounded,
-            Some(id) => {
-                let cursor = cache
-                    .by_id
-                    .get(id)
-                    .ok_or_else(|| StoreError::CursorNotFound(id.to_string()))?;
-                std::ops::Bound::Excluded(OrderKey::of(cursor))
-            }
-        };
-        let mut rest = cache
-            .order
-            .range((start, std::ops::Bound::Unbounded))
-            .map(|(_, id)| &cache.by_id[id])
-            .filter(|t| keep(t));
-
+    /// The one walk both page methods run: the span of the index, `limit`
+    /// matches cloned into the page, then the rest of the span counted —
+    /// because `remaining` is an exact number, not an estimate. With no
+    /// predicate that count is a walk of the index and nothing else;
+    /// under one, each remaining ticket has to be looked at to be
+    /// counted — the O(what is left) the ticket's Risks section names and
+    /// accepts, now bounded by the epic's span when there is one.
+    fn walk_cache(cache: &Cache, span: Span, limit: Option<u32>, filter: Filter<'_>) -> Page {
+        let take = limit.map_or(usize::MAX, |n| n as usize);
         let mut tickets = Vec::new();
-        match limit {
-            None => tickets.extend(rest.by_ref().cloned()),
-            Some(n) => {
-                tickets.reserve(n as usize);
-                tickets.extend(rest.by_ref().take(n as usize).cloned());
-            }
+        if let Some(n) = limit {
+            tickets.reserve(n as usize);
         }
-        let remaining = rest.count() as u64;
+        let remaining = match (span.range(cache), filter) {
+            (None, _) => 0,
+            (Some(range), Filter::All) => {
+                let mut it = range;
+                tickets.extend(it.by_ref().take(take).map(|(_, id)| cache.by_id[id].clone()));
+                it.count()
+            }
+            (Some(range), Filter::By(keep)) => {
+                let mut it = range.map(|(_, id)| &cache.by_id[id]).filter(|t| keep(t));
+                tickets.extend(it.by_ref().take(take).cloned());
+                it.count()
+            }
+        } as u64;
+
         let next = if remaining == 0 {
             None
         } else {
             // The page's last id, or — for the degenerate empty page
             // (`limit: 0`) — the cursor it was cut with: either way, where
             // the next page resumes.
-            tickets
-                .last()
-                .map(|t| t.id.clone())
-                .or_else(|| after.map(str::to_string))
+            tickets.last().map(|t| t.id.clone()).or(span.cursor)
         };
-        Ok(Page {
+        Page {
             tickets,
             next,
             remaining,
-        })
+        }
     }
 
     /// Changes the status, write-through: durable in the database before
@@ -1786,6 +1848,53 @@ mod tests {
             }
             other => panic!("expected CursorNotFound, got {other:?}"),
         }
+    }
+
+    /// MNG-9: an epic is a *position*, not a predicate — `(epic, seq)`
+    /// puts an epic's tickets in one contiguous stretch of the index, so
+    /// an epic-filtered page is bounded by that stretch. The cursor can
+    /// sit below it, inside it, or past it; all three answer correctly.
+    #[tokio::test]
+    async fn an_epic_filter_bounds_the_walk_wherever_the_cursor_sits() {
+        let store = Store::new();
+        for epic in ["AA", "MM", "ZZ"] {
+            for _ in 0..3 {
+                store.create(new_ticket(epic, "t")).await.unwrap();
+            }
+        }
+        let epic_page = |after: Option<&'static str>, limit| {
+            store.page(PageQuery {
+                epic: Some("MM"),
+                after,
+                limit,
+                ..PageQuery::default()
+            })
+        };
+
+        // Cursor below the epic: the epic's own lower bound stands.
+        let page = epic_page(Some("AA-2"), Some(2)).unwrap();
+        assert_eq!(ids(&page), ["MM-1", "MM-2"]);
+        assert_eq!((page.next.as_deref(), page.remaining), (Some("MM-2"), 1));
+
+        // Cursor inside the epic: it wins.
+        let page = epic_page(Some("MM-2"), None).unwrap();
+        assert_eq!(ids(&page), ["MM-3"]);
+        assert_eq!((page.next, page.remaining), (None, 0));
+
+        // Cursor past the epic: nothing is left, and nothing from ZZ leaks.
+        let page = epic_page(Some("ZZ-1"), None).unwrap();
+        assert!(page.tickets.is_empty());
+        assert_eq!((page.next, page.remaining), (None, 0));
+
+        // And the whole epic, uncursored, is still just the epic.
+        let page = epic_page(None, None).unwrap();
+        assert_eq!(ids(&page), ["MM-1", "MM-2", "MM-3"]);
+
+        // A cursor that names nothing still fails, epic or no epic.
+        assert!(matches!(
+            epic_page(Some("QQ-1"), None),
+            Err(StoreError::CursorNotFound(_))
+        ));
     }
 
     /// MNG-9: a ticket created above a walk's cursor is visited by the
