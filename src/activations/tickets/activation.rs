@@ -7,7 +7,9 @@
 #![allow(clippy::too_many_arguments)]
 
 use super::types::TicketsEvent;
-use crate::store::{BlockerRef, Change, Kind, NewTicket, Severity, Status, Store, StoreError};
+use crate::store::{
+    BlockerRef, Change, Kind, NewTicket, Page, PageQuery, Severity, Status, Store, StoreError,
+};
 use async_stream::stream;
 use futures::Stream;
 use std::sync::Arc;
@@ -21,6 +23,40 @@ impl Tickets {
     pub fn new(store: Arc<Store>) -> Self {
         Self { store }
     }
+}
+
+/// MNG-9: one page of the store, as the events that carry it — a row per
+/// ticket (`summary` decides which shape) and then exactly one `page`
+/// event, which is what tells a client whether to ask for more. A failed
+/// cursor is the one in-band `error` instead, with no page event: nothing
+/// was walked, so there is nowhere to resume from.
+fn page_events(
+    page: Result<Page, StoreError>,
+    summary: Option<bool>,
+) -> Box<dyn Iterator<Item = TicketsEvent> + Send> {
+    let page = match page {
+        Ok(page) => page,
+        Err(e) => {
+            return Box::new(std::iter::once(TicketsEvent::Error {
+                message: e.to_string(),
+            }))
+        }
+    };
+    let rows: Box<dyn Iterator<Item = TicketsEvent> + Send> = if summary.unwrap_or(false) {
+        Box::new(page.tickets.into_iter().map(|ticket| TicketsEvent::Summary {
+            summary: ticket.into(),
+        }))
+    } else {
+        Box::new(
+            page.tickets
+                .into_iter()
+                .map(|ticket| TicketsEvent::Ticket { ticket }),
+        )
+    };
+    Box::new(rows.chain(std::iter::once(TicketsEvent::Page {
+        next: page.next,
+        remaining: page.remaining,
+    })))
 }
 
 fn change_event(change: Change) -> TicketsEvent {
@@ -131,14 +167,26 @@ impl Tickets {
         }
     }
 
-    /// Yields one `Ticket` event per match, ordered by (epic, seq). The
+    /// Yields one row event per match, ordered by (epic, seq), then
+    /// exactly one `page` event saying where the walk stands. The
     /// `parent` filter (AGS-19) yields exactly that ticket's children.
+    ///
+    /// MNG-9 adds the page: `after` is the exclusive cursor (a ticket id
+    /// — the order is total and unique, so an id is a position), `limit`
+    /// caps the page, and `summary` swaps the `ticket` rows for `summary`
+    /// rows that carry every field but the body. Without them the call is
+    /// what it always was — every match, with bodies — followed by
+    /// `page { next: null, remaining: 0 }`. An `after` naming no ticket
+    /// is one in-band `error` and nothing else.
     #[plexus_macros::method(
-        description = "List tickets, optionally filtered by epic, status and/or parent",
+        description = "List tickets, optionally filtered by epic, status and/or parent; paged with after + limit",
         params(
             epic = "Epic prefix filter (optional)",
             status = "Status filter: Pending | Ready | Blocked | Complete | Idea | Epic | Superseded (optional)",
-            parent = "Only this ticket's children, e.g. PERF-3 (optional)"
+            parent = "Only this ticket's children, e.g. PERF-3 (optional)",
+            after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
+            limit = "At most this many tickets; the page event carries the next cursor (optional)",
+            summary = "Yield summary rows (every field but the body) instead of full tickets (optional)"
         )
     )]
     pub async fn list(
@@ -146,6 +194,9 @@ impl Tickets {
         epic: Option<String>,
         status: Option<String>,
         parent: Option<String>,
+        after: Option<String>,
+        limit: Option<u32>,
+        summary: Option<bool>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
@@ -157,8 +208,15 @@ impl Tickets {
                     return;
                 }
             };
-            for ticket in store.list(epic.as_deref(), status, parent.as_deref()) {
-                yield TicketsEvent::Ticket { ticket };
+            let page = store.page(PageQuery {
+                epic: epic.as_deref(),
+                status,
+                parent: parent.as_deref(),
+                after: after.as_deref(),
+                limit,
+            });
+            for ev in page_events(page, summary) {
+                yield ev;
             }
         }
     }
@@ -193,24 +251,34 @@ impl Tickets {
         }
     }
 
-    /// The DAG query: which tickets can start now? Yields one `Ticket`
-    /// event per member of the ready set — status `Ready` and every
+    /// The DAG query: which tickets can start now? Yields one row event
+    /// per member of the ready set — status `Ready` and every
     /// `blocked_by` entry `Complete` or `Superseded` — ordered by
-    /// (epic, seq). A dangling blocker keeps its ticket out (use
-    /// `blockers` to see which ids dangle). The epic filter applies to
-    /// membership; blockers resolve globally.
+    /// (epic, seq), then one `page` event. A dangling blocker keeps its
+    /// ticket out (use `blockers` to see which ids dangle). The epic
+    /// filter applies to membership; blockers resolve globally.
+    /// `after` / `limit` / `summary` page it exactly as `list` (MNG-9).
     #[plexus_macros::method(
         description = "Tickets that can start now: Ready, with every blocker Complete or Superseded",
-        params(epic = "Only tickets in this epic (optional; blockers still resolve globally)")
+        params(
+            epic = "Only tickets in this epic (optional; blockers still resolve globally)",
+            after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
+            limit = "At most this many tickets; the page event carries the next cursor (optional)",
+            summary = "Yield summary rows (every field but the body) instead of full tickets (optional)"
+        )
     )]
     pub async fn ready_set(
         &self,
         epic: Option<String>,
+        after: Option<String>,
+        limit: Option<u32>,
+        summary: Option<bool>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
-            for ticket in store.ready_set(epic.as_deref()) {
-                yield TicketsEvent::Ticket { ticket };
+            let page = store.ready_page(epic.as_deref(), after.as_deref(), limit);
+            for ev in page_events(page, summary) {
+                yield ev;
             }
         }
     }
@@ -375,14 +443,10 @@ mod tests {
         one(hub.create("MNG".into(), "b".into(), None, None, None, None, None).await).await;
         one(hub.set_status("MNG-1".into(), "Ready".into()).await).await;
 
-        let ready: Vec<_> = Box::pin(hub.list(None, Some("Ready".into()), None).await)
-            .collect()
-            .await;
-        assert_eq!(ready.len(), 1);
-        match &ready[0] {
-            TicketsEvent::Ticket { ticket } => assert_eq!(ticket.id, "MNG-1"),
-            other => panic!("expected Ticket, got {other:?}"),
-        }
+        let (ids, page) =
+            ids_and_page(hub.list(None, Some("Ready".into()), None, None, None, None).await).await;
+        assert_eq!(ids, vec!["MNG-1"]);
+        assert_eq!(page, Some((None, 0)), "one match, nothing beyond it");
     }
 
     #[tokio::test]
@@ -416,15 +480,33 @@ mod tests {
         }
     }
 
-    /// Ids of a stream of `Ticket` events, in order.
+    /// Ids of a `list` / `ready_set` stream, in order — asserting the
+    /// MNG-9 shape on the way through: rows, then exactly one closing
+    /// `page` event.
     async fn ticket_ids(s: impl Stream<Item = TicketsEvent> + Send + 'static) -> Vec<String> {
-        Box::pin(s)
-            .map(|ev| match ev {
-                TicketsEvent::Ticket { ticket } => ticket.id,
-                other => panic!("expected Ticket, got {other:?}"),
-            })
-            .collect()
-            .await
+        let (ids, page) = ids_and_page(s).await;
+        assert!(page.is_some(), "every list/ready_set call ends with a page");
+        ids
+    }
+
+    /// The same, keeping the page event: `(ids, Some((next, remaining)))`.
+    #[allow(clippy::type_complexity)]
+    async fn ids_and_page(
+        s: impl Stream<Item = TicketsEvent> + Send + 'static,
+    ) -> (Vec<String>, Option<(Option<String>, u64)>) {
+        let evs: Vec<TicketsEvent> = Box::pin(s).collect().await;
+        let mut ids = Vec::new();
+        let mut page = None;
+        for ev in evs {
+            assert!(page.is_none(), "the page event is last: {ev:?}");
+            match ev {
+                TicketsEvent::Ticket { ticket } => ids.push(ticket.id),
+                TicketsEvent::Summary { summary } => ids.push(summary.id),
+                TicketsEvent::Page { next, remaining } => page = Some((next, remaining)),
+                other => panic!("expected a row or the page, got {other:?}"),
+            }
+        }
+        (ids, page)
     }
 
     #[tokio::test]
@@ -438,10 +520,10 @@ mod tests {
         one(hub.set_status("DAG-1".into(), "Ready".into()).await).await;
         one(hub.set_status("DAG-2".into(), "Ready".into()).await).await;
 
-        assert_eq!(ticket_ids(hub.ready_set(None).await).await, vec!["DAG-1"]);
+        assert_eq!(ticket_ids(hub.ready_set(None, None, None, None).await).await, vec!["DAG-1"]);
 
         one(hub.set_status("DAG-1".into(), "Complete".into()).await).await;
-        assert_eq!(ticket_ids(hub.ready_set(None).await).await, vec!["DAG-2"]);
+        assert_eq!(ticket_ids(hub.ready_set(None, None, None, None).await).await, vec!["DAG-2"]);
     }
 
     #[tokio::test]
@@ -458,11 +540,11 @@ mod tests {
         one(hub.set_status("TWO-1".into(), "Ready".into()).await).await;
 
         assert_eq!(
-            ticket_ids(hub.ready_set(None).await).await,
+            ticket_ids(hub.ready_set(None, None, None, None).await).await,
             vec!["ONE-2", "TWO-1"]
         );
         assert_eq!(
-            ticket_ids(hub.ready_set(Some("one".into())).await).await,
+            ticket_ids(hub.ready_set(Some("one".into()), None, None, None).await).await,
             vec!["ONE-2"]
         );
     }
@@ -476,7 +558,7 @@ mod tests {
         .await;
         one(hub.set_status("DAG-1".into(), "Ready".into()).await).await;
 
-        assert!(ticket_ids(hub.ready_set(None).await).await.is_empty());
+        assert!(ticket_ids(hub.ready_set(None, None, None, None).await).await.is_empty());
 
         let evs: Vec<_> = Box::pin(hub.blockers("DAG-1".into()).await).collect().await;
         assert_eq!(evs.len(), 1);
@@ -674,17 +756,111 @@ mod tests {
         }
 
         assert_eq!(
-            ticket_ids(hub.list(None, None, Some("LP-1".into())).await).await,
+            ticket_ids(hub.list(None, None, Some("LP-1".into()), None, None, None).await).await,
             vec!["LP-3", "ZZ-1"]
         );
-        assert!(ticket_ids(hub.list(None, None, Some("LP-2".into())).await)
+        assert!(ticket_ids(hub.list(None, None, Some("LP-2".into()), None, None, None).await)
             .await
             .is_empty());
         assert_eq!(
-            ticket_ids(hub.list(None, None, None).await).await.len(),
+            ticket_ids(hub.list(None, None, None, None, None, None).await).await.len(),
             4,
             "unfiltered list is unchanged"
         );
+    }
+
+    /// MNG-9: `summary: true` swaps the row shape — every field of the
+    /// ticket except the body, and the serialized row carries no `body`
+    /// key at all (what a board renders; the body arrives via `get`).
+    #[tokio::test]
+    async fn summary_rows_carry_every_field_but_the_body() {
+        let hub = hub();
+        one(hub
+            .create(
+                "SUM".into(),
+                "with a body".into(),
+                Some("spike".into()),
+                Some("High".into()),
+                None,
+                Some("## Problem\n\nthe weight of a list".into()),
+                None,
+            )
+            .await)
+        .await;
+
+        let evs: Vec<_> = Box::pin(hub.list(None, None, None, None, None, Some(true)).await)
+            .collect()
+            .await;
+        assert_eq!(evs.len(), 2, "one row, one page: {evs:?}");
+        let row = serde_json::to_value(&evs[0]).unwrap();
+        assert_eq!(row["type"], "summary");
+        let summary = &row["summary"];
+        assert!(summary.get("body").is_none(), "no body on a summary: {summary}");
+        assert_eq!(summary["id"], "SUM-1");
+        assert_eq!(summary["kind"], "spike");
+        assert_eq!(summary["severity"], "High");
+        assert!(summary["parent"].is_null(), "an absent parent is null, not missing");
+        assert_eq!(summary["children"], serde_json::json!([]));
+
+        // The full ticket still carries it, unchanged.
+        let evs: Vec<_> = Box::pin(hub.list(None, None, None, None, None, None).await)
+            .collect()
+            .await;
+        let row = serde_json::to_value(&evs[0]).unwrap();
+        assert_eq!(row["type"], "ticket");
+        assert!(row["ticket"]["body"].as_str().unwrap().contains("the weight of a list"));
+    }
+
+    /// MNG-9: `after` naming no ticket is one in-band error naming it,
+    /// and nothing else — no rows, no page (there is nowhere to resume).
+    #[tokio::test]
+    async fn an_after_that_names_no_ticket_is_one_in_band_error() {
+        let hub = hub();
+        one(hub.create("CUR".into(), "a".into(), None, None, None, None, None).await).await;
+
+        for evs in [
+            Box::pin(hub.list(None, None, None, Some("ZZZ-9".into()), None, None).await)
+                .collect::<Vec<_>>()
+                .await,
+            Box::pin(hub.ready_set(None, Some("ZZZ-9".into()), None, None).await)
+                .collect::<Vec<_>>()
+                .await,
+        ] {
+            assert_eq!(evs.len(), 1, "one event, no page: {evs:?}");
+            match &evs[0] {
+                TicketsEvent::Error { message } => {
+                    assert_eq!(message, "after: no ticket ZZZ-9");
+                }
+                other => panic!("expected Error, got {other:?}"),
+            }
+        }
+    }
+
+    /// MNG-9: `ready_set` takes the same three params, and its page event
+    /// counts the ready set — not the store.
+    #[tokio::test]
+    async fn ready_set_takes_the_same_page_params() {
+        let hub = hub();
+        for _ in 0..3 {
+            one(hub.create("RS".into(), "r".into(), None, None, None, None, None).await).await;
+        }
+        one(hub.create("RS".into(), "still pending".into(), None, None, None, None, None).await).await;
+        for id in ["RS-1", "RS-2", "RS-3"] {
+            one(hub.set_status(id.into(), "Ready".into()).await).await;
+        }
+
+        let (ids, page) = ids_and_page(hub.ready_set(None, None, Some(2), Some(true)).await).await;
+        assert_eq!(ids, vec!["RS-1", "RS-2"]);
+        assert_eq!(
+            page,
+            Some((Some("RS-2".into()), 1)),
+            "one ready ticket left, not two store rows"
+        );
+
+        let (ids, page) =
+            ids_and_page(hub.ready_set(None, Some("RS-2".into()), Some(2), Some(true)).await).await;
+        assert_eq!(ids, vec!["RS-3"]);
+        assert_eq!(page, Some((None, 0)));
     }
 
     #[tokio::test]

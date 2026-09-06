@@ -127,14 +127,20 @@ async fn one(client: &WsClient, method: &str, params: Value) -> Value {
     item["content"].clone()
 }
 
-/// Drains a finite call: collects every `data` item's content until `done`.
+/// Drains a finite `list` / `ready_set` call: every row event, with
+/// MNG-9's trailing `page` item split off (and asserted present — every
+/// such call ends with exactly one).
 async fn drain(client: &WsClient, method: &str, params: Value) -> Vec<Value> {
     let mut sub = call(client, method, params).await;
     let mut out = Vec::new();
     while let Some(item) = sub.next().await {
         let item = item.expect("clean item");
         match item["type"].as_str() {
-            Some("done") => return out,
+            Some("done") => {
+                let page = out.pop().unwrap_or(Value::Null);
+                assert_eq!(page["type"], "page", "the last item is the page: {page}");
+                return out;
+            }
             Some("data") => out.push(item["content"].clone()),
             other => panic!("unexpected stream item type {other:?}: {item}"),
         }

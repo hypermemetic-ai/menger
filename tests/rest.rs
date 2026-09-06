@@ -151,13 +151,20 @@ async fn create_via_rest_returns_ticket_and_list_includes_it() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let ids: Vec<&str> = body["data"]
-        .as_array()
-        .expect("data array")
+    let data = body["data"].as_array().expect("data array");
+    let ids: Vec<&str> = data
         .iter()
+        .filter(|ev| ev["type"] == "ticket")
         .map(|ev| ev["ticket"]["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, vec!["RST-1"], "list includes the created ticket");
+    // MNG-9: the gateway collects the trailing page item into the same
+    // array as any other event — no transport-level paging, just data.
+    assert_eq!(
+        data.last().expect("at least one event")["type"],
+        "page",
+        "the page item rides in the array: {body}"
+    );
 }
 
 /// Criterion 2: an SSE consumer on the watch endpoint, opened BEFORE the

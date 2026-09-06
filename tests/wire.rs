@@ -75,6 +75,24 @@ fn content(item: Value) -> Value {
     item["content"].clone()
 }
 
+/// MNG-9: a finite `list` / `ready_set` call, split the way the contract
+/// reads it — the row events, then the one trailing `page` item.
+async fn paged(sub: Subscription<Value>) -> (Vec<Value>, Value) {
+    let mut evs = collect(sub).await;
+    let page = evs.pop().expect("a list always ends with the page item");
+    assert_eq!(page["type"], "page", "the last item is the page: {page}");
+    assert!(
+        !evs.iter().any(|e| e["type"] == "page"),
+        "exactly one page item: {evs:?}"
+    );
+    (evs, page)
+}
+
+/// The rows of a finite list call, page item asserted and dropped.
+async fn rows(sub: Subscription<Value>) -> Vec<Value> {
+    paged(sub).await.0
+}
+
 /// Drains a finite call: collects every `data` item's content until `done`.
 async fn collect(mut sub: Subscription<Value>) -> Vec<Value> {
     let mut out = Vec::new();
@@ -219,7 +237,7 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
     assert_eq!(evs[0]["type"], "created");
 
     // The client fetches the full set once...
-    for ev in collect(call(&client, "tickets.list", json!({})).await).await {
+    for ev in rows(call(&client, "tickets.list", json!({})).await).await {
         assert_eq!(ev["type"], "ticket");
         let ticket = ev["ticket"].clone();
         mirror.insert(ticket["id"].as_str().unwrap().to_string(), ticket);
@@ -243,7 +261,7 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
     assert_eq!(mirror["RS-1"]["unlocks"], json!(["RS-2"]));
 
     // Checkpoint 1: A is ready, B is not — server and mirror agree.
-    let server = ready_ids(collect(call(&client, "tickets.ready_set", json!({})).await).await);
+    let server = ready_ids(rows(call(&client, "tickets.ready_set", json!({})).await).await);
     assert_eq!(server, vec!["RS-1"]);
     assert_eq!(server, local_ready(&mirror));
 
@@ -252,7 +270,7 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
     let ev = content(watch.next().await.unwrap().unwrap());
     apply(&mut mirror, &ev);
 
-    let server = ready_ids(collect(call(&client, "tickets.ready_set", json!({})).await).await);
+    let server = ready_ids(rows(call(&client, "tickets.ready_set", json!({})).await).await);
     assert_eq!(server, vec!["RS-2"]);
     assert_eq!(server, local_ready(&mirror));
 }
@@ -269,7 +287,7 @@ async fn dangling_blocker_over_the_wire() {
         json!({"epic": "DG", "title": "C", "blocked_by": ["DG-99"]})).await).await;
     collect(call(&client, "tickets.set_status", json!({"id": "DG-1", "status": "Ready"})).await).await;
 
-    let ready = collect(call(&client, "tickets.ready_set", json!({})).await).await;
+    let ready = rows(call(&client, "tickets.ready_set", json!({})).await).await;
     assert!(ready.is_empty(), "DG-1 must not be ready: {ready:?}");
 
     let evs = collect(call(&client, "tickets.blockers", json!({"id": "DG-1"})).await).await;
@@ -413,18 +431,139 @@ async fn parent_children_and_the_parent_filter_over_the_wire() {
             .collect()
     };
     assert_eq!(
-        ids(collect(call(&client, "tickets.list", json!({"parent": "PA-1"})).await).await),
+        ids(rows(call(&client, "tickets.list", json!({"parent": "PA-1"})).await).await),
         vec!["PA-2", "PC-1"]
     );
     assert_eq!(
-        ids(collect(call(&client, "tickets.list", json!({"parent": "PA-4"})).await).await),
+        ids(rows(call(&client, "tickets.list", json!({"parent": "PA-4"})).await).await),
         Vec::<String>::new()
     );
     assert_eq!(
-        ids(collect(call(&client, "tickets.list", json!({})).await).await).len(),
+        ids(rows(call(&client, "tickets.list", json!({})).await).await).len(),
         6,
         "the unfiltered list is unchanged"
     );
+}
+
+/// MNG-9 acceptance 1, 3, 4 and 6 over the real wire: a `summary` +
+/// `limit` call yields summary rows (no body) and closes with
+/// `page { next, remaining }`; walking `after = next` visits every id
+/// exactly once in (epic, seq) order; `list {}` is what it always was
+/// plus `page { next: null, remaining: 0 }`; an `after` naming no ticket
+/// is one error and done; `ready_set` takes the same three params.
+#[tokio::test]
+async fn list_pages_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+
+    // Two epics, ten tickets: PGA-1..7 then PGZ-1..3 in the store's order.
+    for (epic, n) in [("PGA", 7), ("PGZ", 3)] {
+        for i in 1..=n {
+            collect(call(&client, "tickets.create",
+                json!({"epic": epic, "title": format!("{epic} {i}"), "body": "## Problem\n\nbodies are the weight"})).await).await;
+        }
+    }
+
+    // Acceptance 1 + 6: the page's shape.
+    let (evs, page) = paged(call(&client, "tickets.list", json!({"summary": true, "limit": 4})).await).await;
+    assert_eq!(evs.len(), 4, "limit is honoured");
+    assert_eq!(evs[0]["type"], "summary");
+    let row = &evs[0]["summary"];
+    assert_eq!(row["id"], "PGA-1");
+    assert_eq!(row["epic"], "PGA");
+    assert_eq!(row["seq"], 1);
+    assert_eq!(row["status"], "Pending");
+    assert_eq!(row["kind"], "build");
+    assert!(row["severity"].is_null());
+    assert!(row["parent"].is_null());
+    assert_eq!(row["children"], json!([]));
+    assert!(row.get("body").is_none(), "a summary carries no body: {row}");
+    assert_eq!(page, json!({"type": "page", "next": "PGA-4", "remaining": 6}));
+
+    // Acceptance 2's shape: walk to the end, every id once, in order.
+    let mut walked: Vec<String> = Vec::new();
+    let mut after = json!(null);
+    loop {
+        let params = json!({"summary": true, "limit": 4, "after": after});
+        let (evs, page) = paged(call(&client, "tickets.list", params).await).await;
+        walked.extend(evs.iter().map(|e| e["summary"]["id"].as_str().unwrap().to_string()));
+        assert_eq!(page["remaining"], (10 - walked.len()) as u64);
+        if page["next"].is_null() {
+            break;
+        }
+        assert_eq!(page["next"], *walked.last().unwrap());
+        after = page["next"].clone();
+    }
+    assert_eq!(
+        walked,
+        ["PGA-1", "PGA-2", "PGA-3", "PGA-4", "PGA-5", "PGA-6", "PGA-7", "PGZ-1", "PGZ-2", "PGZ-3"]
+    );
+
+    // Acceptance 3: `list {}` unchanged apart from the trailing page.
+    let (evs, page) = paged(call(&client, "tickets.list", json!({})).await).await;
+    assert_eq!(evs.len(), 10);
+    assert_eq!(evs[0]["type"], "ticket");
+    assert!(evs[0]["ticket"]["body"].as_str().unwrap().contains("bodies are the weight"));
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
+
+    // Acceptance 4: a cursor naming no ticket.
+    let evs = collect(call(&client, "tickets.list", json!({"after": "ZZZ-9"})).await).await;
+    assert_eq!(evs.len(), 1, "one error and done, nothing else: {evs:?}");
+    assert_eq!(evs[0], json!({"type": "error", "message": "after: no ticket ZZZ-9"}));
+
+    // Acceptance 6: ready_set takes the same params (and pages its own set).
+    for id in ["PGA-1", "PGA-2", "PGZ-1"] {
+        collect(call(&client, "tickets.set_status", json!({"id": id, "status": "Ready"})).await).await;
+    }
+    let (evs, page) =
+        paged(call(&client, "tickets.ready_set", json!({"summary": true, "limit": 2})).await).await;
+    assert_eq!(
+        evs.iter().map(|e| e["summary"]["id"].as_str().unwrap()).collect::<Vec<_>>(),
+        ["PGA-1", "PGA-2"]
+    );
+    assert_eq!(page, json!({"type": "page", "next": "PGA-2", "remaining": 1}));
+    let (evs, page) =
+        paged(call(&client, "tickets.ready_set", json!({"after": "PGA-2"})).await).await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["ticket"]["id"], "PGZ-1", "no summary asked for, so full tickets");
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
+}
+
+/// MNG-9 acceptance 5: the cursor is a position in the store's live
+/// order, not a snapshot — a ticket born above a stalled walk's cursor is
+/// visited by that walk; one born below it never is, which is exactly
+/// what the `watch` opened first is for.
+#[tokio::test]
+async fn a_walk_sees_births_above_its_cursor_and_watch_carries_the_rest() {
+    let port = start_server().await;
+    let client = connect(port).await;
+
+    for i in 1..=4 {
+        collect(call(&client, "tickets.create", json!({"epic": "MID", "title": format!("m{i}")})).await).await;
+    }
+
+    // The app's order: watch first, then walk.
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    let (evs, page) = paged(call(&client, "tickets.list", json!({"summary": true, "limit": 2})).await).await;
+    assert_eq!(evs.len(), 2);
+    assert_eq!(page["next"], "MID-2");
+
+    // Mid-walk: one above the cursor (MID-5), one below it (AAA-1).
+    collect(call(&client, "tickets.create", json!({"epic": "MID", "title": "born above"})).await).await;
+    collect(call(&client, "tickets.create", json!({"epic": "AAA", "title": "born below"})).await).await;
+
+    let (evs, page) = paged(call(&client, "tickets.list",
+        json!({"summary": true, "after": page["next"]})).await).await;
+    let ids: Vec<&str> = evs.iter().map(|e| e["summary"]["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["MID-3", "MID-4", "MID-5"], "MID-5 joined the walk");
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
+
+    // AAA-1 sorts below the cursor, so only watch carries it.
+    let mut pushed = Vec::new();
+    for _ in 0..2 {
+        pushed.push(content(watch.next().await.unwrap().unwrap())["ticket"]["id"].as_str().unwrap().to_string());
+    }
+    assert_eq!(pushed, ["MID-5", "AAA-1"]);
 }
 
 #[tokio::test]

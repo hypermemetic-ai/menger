@@ -16,11 +16,15 @@
 //! an output of), `children` is the mirror the store maintains, and a
 //! database written before AGS-19 gains both columns — with typed parents
 //! backfilled from body frontmatter — durably, once, on first open.
+//! MNG-9 adds the cache's second half: a sorted [`OrderKey`] index beside
+//! the id map, so the store's total order costs nothing to walk and a
+//! page (`after` + `limit`) is a range scan rather than a sort of
+//! everything.
 
 use rusqlite::Connection;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
@@ -154,6 +158,57 @@ pub struct Ticket {
     pub updated_unix: i64,
 }
 
+/// MNG-9: the store's total order over tickets — `(epic, seq)`, which the
+/// schema keeps unique (`UNIQUE (epic, seq)`). Every list has been in this
+/// order since MNG-2; naming it makes it a *cursor* as well: because it is
+/// total and unique, a ticket id names one position in it, so "the next
+/// `limit` tickets after this id" needs no state beyond the id itself.
+/// Derived `Ord` is epic-then-seq, byte-lexicographic on the epic — the
+/// same comparison `list` sorted with before the index existed.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OrderKey {
+    pub epic: String,
+    pub seq: u32,
+}
+
+impl OrderKey {
+    fn of(ticket: &Ticket) -> Self {
+        Self {
+            epic: ticket.epic.clone(),
+            seq: ticket.seq,
+        }
+    }
+}
+
+/// MNG-9: what one page of the store's order is cut with. `after` is the
+/// exclusive cursor (a ticket id); `limit` caps the page; the three
+/// filters are the ones `list` has always had, and they compose with the
+/// cursor — `remaining` counts under the same filters.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PageQuery<'a> {
+    pub epic: Option<&'a str>,
+    pub status: Option<Status>,
+    pub parent: Option<&'a str>,
+    /// The id the page starts strictly after. `None` starts at the top.
+    pub after: Option<&'a str>,
+    /// At most this many tickets. `None` is "every match" — what `list`
+    /// answered before MNG-9, and still does.
+    pub limit: Option<u32>,
+}
+
+/// MNG-9: one page of the store's order, and where the walk stands.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Page {
+    /// The page itself, in `(epic, seq)` order.
+    pub tickets: Vec<Ticket>,
+    /// The cursor for the next page — the last id on this page, or the
+    /// cursor this page was cut with when the page came back empty.
+    /// `None` means the walk is over: nothing matches beyond this page.
+    pub next: Option<String>,
+    /// How many further tickets match the same filters beyond this page.
+    pub remaining: u64,
+}
+
 /// A mutation, broadcast to every `watch` subscriber. (Internal — the
 /// wire form is `TicketsEvent`, same `type` tag; `kind` is a ticket's.)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -250,6 +305,10 @@ pub enum StoreError {
     /// `existing` tickets without `SeedSpec::into_existing`. Nothing was
     /// generated or written.
     SeedRefused { existing: usize },
+    /// MNG-9: the `after` cursor names no ticket, so there is no position
+    /// to resume from. Distinct from `NotFound`: the miss is the cursor,
+    /// not the thing asked for, and the message says so.
+    CursorNotFound(String),
 }
 
 impl std::fmt::Display for StoreError {
@@ -282,6 +341,7 @@ impl std::fmt::Display for StoreError {
                 "refusing to seed synthetic tickets: the store already holds {existing} ticket(s) \
                  and seeding into an existing database was not explicitly allowed"
             ),
+            Self::CursorNotFound(id) => write!(f, "after: no ticket {id}"),
         }
     }
 }
@@ -347,10 +407,44 @@ fn satisfied(status: Status) -> bool {
     matches!(status, Status::Complete | Status::Superseded)
 }
 
+/// The cache's two halves, under one lock (MNG-9). `by_id` answers every
+/// point read; `order` is the sorted `(epic, seq)` index every ordered
+/// read walks — so `list` no longer clones-then-sorts the whole store to
+/// answer, and a page after a cursor is a range scan. One lock over both
+/// is the point: a reader can never see the index and the map disagree.
+struct Cache {
+    by_id: HashMap<String, Ticket>,
+    order: BTreeMap<OrderKey, String>,
+}
+
+impl Cache {
+    /// Builds the index from a loaded id map (startup).
+    fn new(by_id: HashMap<String, Ticket>) -> Self {
+        let order = by_id
+            .values()
+            .map(|t| (OrderKey::of(t), t.id.clone()))
+            .collect();
+        Self { by_id, order }
+    }
+
+    /// Inserts or replaces one ticket, keeping the index in step. A
+    /// ticket's `(epic, seq)` is fixed at birth — no operation re-epics or
+    /// re-numbers one — so replacing an existing ticket rewrites the same
+    /// index entry, and the index cannot drift from the map.
+    fn insert(&mut self, ticket: Ticket) {
+        self.order.insert(OrderKey::of(&ticket), ticket.id.clone());
+        self.by_id.insert(ticket.id.clone(), ticket);
+    }
+
+    fn len(&self) -> usize {
+        self.by_id.len()
+    }
+}
+
 pub struct Store {
     /// The cache. Every read in the process is answered from here; the
     /// lock is synchronous and never held across an await.
-    tickets: RwLock<HashMap<String, Ticket>>,
+    tickets: RwLock<Cache>,
     tx: broadcast::Sender<Change>,
     /// The system of record. Private to this module — nothing else in the
     /// application holds a database handle. Only touched off-runtime, via
@@ -410,7 +504,7 @@ impl Store {
         let tickets = db::load_all(&conn)?;
         let (tx, _) = broadcast::channel(256);
         Ok(Self {
-            tickets: RwLock::new(tickets),
+            tickets: RwLock::new(Cache::new(tickets)),
             tx,
             db: Arc::new(StdMutex::new(conn)),
             write_serial: AsyncMutex::new(()),
@@ -474,7 +568,8 @@ impl Store {
         // race-free (writers are serialized). This read phase computes
         // everything and mutates nothing: a rejection leaves no trace.
         let (ticket, touched, unlocks_added) = {
-            let tickets = self.tickets.read().expect("store lock poisoned");
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let tickets = &cache.by_id;
             let seq = tickets
                 .values()
                 .filter(|t| t.epic == epic)
@@ -484,7 +579,7 @@ impl Store {
                 + 1;
             let id = format!("{epic}-{seq}");
 
-            if let Some(path) = find_cycle(&tickets, &id, &new.blocked_by) {
+            if let Some(path) = find_cycle(tickets, &id, &new.blocked_by) {
                 return Err(StoreError::Cycle { id, path });
             }
             if let Some(p) = &parent {
@@ -494,7 +589,7 @@ impl Store {
                         parent: p.clone(),
                     });
                 }
-                if let Some(path) = find_parent_cycle(&tickets, &id, p) {
+                if let Some(path) = find_parent_cycle(tickets, &id, p) {
                     return Err(StoreError::ParentCycle { id, path });
                 }
             }
@@ -565,10 +660,10 @@ impl Store {
 
         {
             let mut tickets = self.tickets.write().expect("store lock poisoned");
-            for (id, updated) in &touched {
-                tickets.insert(id.clone(), updated.clone());
+            for updated in touched.values() {
+                tickets.insert(updated.clone());
             }
-            tickets.insert(ticket.id.clone(), ticket.clone());
+            tickets.insert(ticket.clone());
         }
         let _ = self.tx.send(Change::Created {
             ticket: ticket.clone(),
@@ -592,32 +687,136 @@ impl Store {
         self.tickets
             .read()
             .expect("store lock poisoned")
+            .by_id
             .get(id)
             .cloned()
     }
 
     /// Tickets ordered by (epic, seq), optionally filtered. The `parent`
-    /// filter (AGS-19) selects exactly that ticket's children.
+    /// filter (AGS-19) selects exactly that ticket's children. The
+    /// unpaged shape, kept: [`Store::page`] is the same walk with a
+    /// cursor and a limit (MNG-9).
     pub fn list(
         &self,
         epic: Option<&str>,
         status: Option<Status>,
         parent: Option<&str>,
     ) -> Vec<Ticket> {
+        self.page(PageQuery {
+            epic,
+            status,
+            parent,
+            ..PageQuery::default()
+        })
+        // Only an `after` cursor can fail, and there is none here.
+        .expect("an uncursored page cannot fail")
+        .tickets
+    }
+
+    /// MNG-9: one page of the store's order — at most `limit` tickets
+    /// strictly after the `after` cursor, under the same filters `list`
+    /// has always taken, plus how many further tickets match.
+    ///
+    /// The walk is over the cache's sorted index, so the cost is the page
+    /// (plus the count of what remains), not a clone-and-sort of every
+    /// ticket. `after` naming no ticket is [`StoreError::CursorNotFound`]:
+    /// a cursor into nothing is a caller error, not an empty page.
+    pub fn page(&self, q: PageQuery<'_>) -> Result<Page, StoreError> {
+        let epic = q.epic.map(str::to_ascii_uppercase);
+        let parent = q.parent.map(str::to_ascii_uppercase);
+        let after = q.after.map(str::to_ascii_uppercase);
+        let keep = |t: &Ticket| {
+            epic.as_deref().is_none_or(|e| t.epic == e)
+                && q.status.is_none_or(|s| t.status == s)
+                && parent.as_deref().is_none_or(|p| t.parent.as_deref() == Some(p))
+        };
+        self.walk(after.as_deref(), q.limit, keep)
+    }
+
+    /// MNG-9: one page of the ready set — the [`Store::ready_set`]
+    /// membership rule, cut with the same cursor and limit as
+    /// [`Store::page`].
+    pub fn ready_page(
+        &self,
+        epic: Option<&str>,
+        after: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Page, StoreError> {
         let epic = epic.map(str::to_ascii_uppercase);
-        let parent = parent.map(str::to_ascii_uppercase);
-        let mut out: Vec<Ticket> = self
-            .tickets
-            .read()
-            .expect("store lock poisoned")
-            .values()
-            .filter(|t| epic.as_deref().is_none_or(|e| t.epic == e))
-            .filter(|t| status.is_none_or(|s| t.status == s))
-            .filter(|t| parent.as_deref().is_none_or(|p| t.parent.as_deref() == Some(p)))
-            .cloned()
-            .collect();
-        out.sort_by(|a, b| a.epic.cmp(&b.epic).then(a.seq.cmp(&b.seq)));
-        out
+        let after = after.map(str::to_ascii_uppercase);
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let keep = |t: &Ticket| {
+            epic.as_deref().is_none_or(|e| t.epic == e)
+                && t.status == Status::Ready
+                && t.blocked_by
+                    .iter()
+                    .all(|b| cache.by_id.get(b).is_some_and(|bt| satisfied(bt.status)))
+        };
+        Self::walk_cache(&cache, after.as_deref(), limit, keep)
+    }
+
+    /// The one walk both page methods run: the sorted index from the
+    /// cursor, `limit` matches cloned into the page, then the rest of the
+    /// range counted (the count is what `remaining` costs — O(what is
+    /// left) rather than O(1); acceptable at the magnitudes measured, and
+    /// the price of an exact number under a filter).
+    fn walk(
+        &self,
+        after: Option<&str>,
+        limit: Option<u32>,
+        keep: impl Fn(&Ticket) -> bool,
+    ) -> Result<Page, StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        Self::walk_cache(&cache, after, limit, keep)
+    }
+
+    fn walk_cache(
+        cache: &Cache,
+        after: Option<&str>,
+        limit: Option<u32>,
+        keep: impl Fn(&Ticket) -> bool,
+    ) -> Result<Page, StoreError> {
+        let start = match after {
+            None => std::ops::Bound::Unbounded,
+            Some(id) => {
+                let cursor = cache
+                    .by_id
+                    .get(id)
+                    .ok_or_else(|| StoreError::CursorNotFound(id.to_string()))?;
+                std::ops::Bound::Excluded(OrderKey::of(cursor))
+            }
+        };
+        let mut rest = cache
+            .order
+            .range((start, std::ops::Bound::Unbounded))
+            .map(|(_, id)| &cache.by_id[id])
+            .filter(|t| keep(t));
+
+        let mut tickets = Vec::new();
+        match limit {
+            None => tickets.extend(rest.by_ref().cloned()),
+            Some(n) => {
+                tickets.reserve(n as usize);
+                tickets.extend(rest.by_ref().take(n as usize).cloned());
+            }
+        }
+        let remaining = rest.count() as u64;
+        let next = if remaining == 0 {
+            None
+        } else {
+            // The page's last id, or — for the degenerate empty page
+            // (`limit: 0`) — the cursor it was cut with: either way, where
+            // the next page resumes.
+            tickets
+                .last()
+                .map(|t| t.id.clone())
+                .or_else(|| after.map(str::to_string))
+        };
+        Ok(Page {
+            tickets,
+            next,
+            remaining,
+        })
     }
 
     /// Changes the status, write-through: durable in the database before
@@ -635,7 +834,7 @@ impl Store {
         self.tickets
             .write()
             .expect("store lock poisoned")
-            .insert(ticket.id.clone(), ticket.clone());
+            .insert(ticket.clone());
         let change = Change::StatusChanged { ticket, previous };
         let _ = self.tx.send(change.clone());
         Ok(change)
@@ -647,28 +846,16 @@ impl Store {
     /// keeps its ticket out. The epic filter applies to membership;
     /// blockers resolve globally. Ordered by (epic, seq).
     pub fn ready_set(&self, epic: Option<&str>) -> Vec<Ticket> {
-        let epic = epic.map(str::to_ascii_uppercase);
-        let tickets = self.tickets.read().expect("store lock poisoned");
-        let mut out: Vec<Ticket> = tickets
-            .values()
-            .filter(|t| epic.as_deref().is_none_or(|e| t.epic == e))
-            .filter(|t| t.status == Status::Ready)
-            .filter(|t| {
-                t.blocked_by
-                    .iter()
-                    .all(|b| tickets.get(b).is_some_and(|bt| satisfied(bt.status)))
-            })
-            .cloned()
-            .collect();
-        drop(tickets);
-        out.sort_by(|a, b| a.epic.cmp(&b.epic).then(a.seq.cmp(&b.seq)));
-        out
+        self.ready_page(epic, None, None)
+            .expect("an uncursored page cannot fail")
+            .tickets
     }
 
     /// One ticket's `blocked_by`, each entry resolved to the current
     /// ticket or marked dangling, in `blocked_by` order.
     pub fn blockers(&self, id: &str) -> Result<Vec<BlockerRef>, StoreError> {
-        let tickets = self.tickets.read().expect("store lock poisoned");
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let tickets = &cache.by_id;
         let ticket = tickets
             .get(id)
             .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
@@ -716,14 +903,14 @@ impl Store {
         let started = std::time::Instant::now();
 
         let next_seq: HashMap<String, u32> = {
-            let tickets = self.tickets.read().expect("store lock poisoned");
-            if !tickets.is_empty() && !spec.into_existing {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            if cache.len() > 0 && !spec.into_existing {
                 return Err(StoreError::SeedRefused {
-                    existing: tickets.len(),
+                    existing: cache.len(),
                 });
             }
             let mut max: HashMap<String, u32> = HashMap::new();
-            for t in tickets.values() {
+            for t in cache.by_id.values() {
                 let e = max.entry(t.epic.clone()).or_insert(0);
                 *e = (*e).max(t.seq);
             }
@@ -756,9 +943,9 @@ impl Store {
 
         {
             let mut tickets = self.tickets.write().expect("store lock poisoned");
-            tickets.reserve(generated.len());
+            tickets.by_id.reserve(generated.len());
             for t in generated {
-                tickets.insert(t.id.clone(), t);
+                tickets.insert(t);
             }
         }
         Ok(SeedReport {
@@ -1499,6 +1686,166 @@ mod tests {
             parent: Some(parent.into()),
             ..new_ticket(epic, title)
         }
+    }
+
+    fn ids(page: &Page) -> Vec<&str> {
+        page.tickets.iter().map(|t| t.id.as_str()).collect()
+    }
+
+    /// MNG-9: the sorted index is the order `list` always had — walking it
+    /// in pages of one, from no cursor to a null `next`, visits every
+    /// ticket exactly once, in `(epic, seq)` order, and `remaining` counts
+    /// down exactly. Ids are created out of order on purpose, and one epic
+    /// passes 9 so the difference between numeric `seq` and a string
+    /// compare on the id shows (`A-10` must follow `A-9`, not `A-1`).
+    #[tokio::test]
+    async fn the_index_pages_the_whole_store_in_order_exactly_once() {
+        let store = Store::new();
+        for _ in 0..11 {
+            store.create(new_ticket("A", "a")).await.unwrap();
+        }
+        store.create(new_ticket("B", "b")).await.unwrap();
+        store.create(new_ticket("AB", "ab")).await.unwrap();
+
+        let all: Vec<String> = store.list(None, None, None).iter().map(|t| t.id.clone()).collect();
+        assert_eq!(
+            all,
+            ["A-1", "A-2", "A-3", "A-4", "A-5", "A-6", "A-7", "A-8", "A-9", "A-10", "A-11",
+             "AB-1", "B-1"],
+            "seq is numeric (A-10 after A-9), epic is lexicographic"
+        );
+
+        let mut walked: Vec<String> = Vec::new();
+        let mut after: Option<String> = None;
+        loop {
+            let page = store
+                .page(PageQuery {
+                    after: after.as_deref(),
+                    limit: Some(1),
+                    ..PageQuery::default()
+                })
+                .unwrap();
+            assert_eq!(page.remaining as usize, all.len() - walked.len() - page.tickets.len());
+            walked.extend(page.tickets.iter().map(|t| t.id.clone()));
+            match page.next {
+                Some(next) => {
+                    assert_eq!(Some(&next), walked.last(), "the cursor is the last row");
+                    after = Some(next);
+                }
+                None => break,
+            }
+        }
+        assert_eq!(walked, all, "one page at a time == the whole list, in order");
+    }
+
+    /// MNG-9: `after` composes with the filters, `remaining` counts under
+    /// them, and a cursor naming no ticket is the cursor error (not an
+    /// empty page) — the message the wire shows.
+    #[tokio::test]
+    async fn a_page_composes_with_filters_and_a_bad_cursor_is_an_error() {
+        let store = Store::new();
+        for i in 0..6 {
+            let id = store.create(new_ticket("PG", "p")).await.unwrap().id;
+            if i % 2 == 0 {
+                store.set_status(&id, Status::Ready).await.unwrap();
+            }
+        }
+        store.create(new_ticket("ZZ", "z")).await.unwrap();
+
+        let page = store
+            .page(PageQuery {
+                status: Some(Status::Ready),
+                after: Some("pg-1"),
+                limit: Some(1),
+                ..PageQuery::default()
+            })
+            .unwrap();
+        assert_eq!(ids(&page), ["PG-3"], "the cursor is case-insensitive, like every id");
+        assert_eq!((page.next.as_deref(), page.remaining), (Some("PG-3"), 1));
+
+        let page = store
+            .page(PageQuery {
+                epic: Some("PG"),
+                after: Some("PG-6"),
+                ..PageQuery::default()
+            })
+            .unwrap();
+        assert!(page.tickets.is_empty(), "ZZ-1 is past the epic filter");
+        assert_eq!((page.next, page.remaining), (None, 0));
+
+        match store.page(PageQuery {
+            after: Some("ZZZ-9"),
+            ..PageQuery::default()
+        }) {
+            Err(StoreError::CursorNotFound(id)) => {
+                assert_eq!(id, "ZZZ-9");
+                assert_eq!(
+                    StoreError::CursorNotFound(id).to_string(),
+                    "after: no ticket ZZZ-9"
+                );
+            }
+            other => panic!("expected CursorNotFound, got {other:?}"),
+        }
+    }
+
+    /// MNG-9: a ticket created above a walk's cursor is visited by the
+    /// walk (the index is live — the cursor is a position in the order,
+    /// not a snapshot); one below it is not, which is what `watch` is for.
+    #[tokio::test]
+    async fn a_ticket_born_above_the_cursor_is_still_walked() {
+        let store = Store::new();
+        for _ in 0..3 {
+            store.create(new_ticket("MID", "m")).await.unwrap();
+        }
+        store.create(new_ticket("AAA", "below")).await.unwrap();
+
+        let first = store
+            .page(PageQuery {
+                limit: Some(2),
+                ..PageQuery::default()
+            })
+            .unwrap();
+        assert_eq!(ids(&first), ["AAA-1", "MID-1"]);
+
+        // Mid-walk: one above the cursor (MID-4), one below it (AAA-2).
+        store.create(new_ticket("MID", "above")).await.unwrap();
+        store.create(new_ticket("AAA", "below again")).await.unwrap();
+
+        let rest = store
+            .page(PageQuery {
+                after: first.next.as_deref(),
+                ..PageQuery::default()
+            })
+            .unwrap();
+        assert_eq!(ids(&rest), ["MID-2", "MID-3", "MID-4"], "MID-4 joins the walk");
+        assert_eq!((rest.next, rest.remaining), (None, 0));
+    }
+
+    /// MNG-9: `ready_set` pages the same way, on the ready-set membership
+    /// rule — blocked and non-Ready tickets are not in the order it walks.
+    #[tokio::test]
+    async fn the_ready_set_pages_on_its_own_membership() {
+        let store = Store::new();
+        for _ in 0..4 {
+            let id = store.create(new_ticket("RD", "r")).await.unwrap().id;
+            store.set_status(&id, Status::Ready).await.unwrap();
+        }
+        store
+            .create(NewTicket {
+                blocked_by: vec!["RD-1".into()],
+                ..new_ticket("RD", "blocked")
+            })
+            .await
+            .unwrap();
+        store.set_status("RD-5", Status::Ready).await.unwrap();
+
+        let page = store.ready_page(None, None, Some(2)).unwrap();
+        assert_eq!(ids(&page), ["RD-1", "RD-2"]);
+        assert_eq!((page.next.as_deref(), page.remaining), (Some("RD-2"), 2));
+
+        let page = store.ready_page(None, page.next.as_deref(), Some(2)).unwrap();
+        assert_eq!(ids(&page), ["RD-3", "RD-4"], "RD-5 is blocked by RD-1");
+        assert_eq!((page.next, page.remaining), (None, 0));
     }
 
     /// The store's schema as it was before AGS-13 (`ticket_type`), so a

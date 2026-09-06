@@ -146,9 +146,20 @@ ticket is logged and left empty, never fatal.
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
 | `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the five is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason |
 | `tickets.get { id }` | `ticket` or `not_found` |
-| `tickets.list { epic?, status?, parent? }` | one `ticket` per match, ordered (epic, seq); `parent` yields exactly that ticket's children |
+| `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page — `after` naming no ticket is one in-band `error` |
+| `tickets.ready_set { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete or Superseded), ordered (epic, seq), then one `page { next, remaining }` |
 | `tickets.set_status { id, status }` | `status_changed { ticket, previous }` |
 | `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `unlocks_changed` / `children_changed` |
+
+Paging (MNG-9). `(epic, seq)` is a total order the schema keeps unique, so
+a ticket id is a cursor: a client that renders opens `watch` first, then
+walks `list { summary: true, limit: 200 }`, passing the previous page's
+`page.next` as the next call's `after`, until `next` is `null`. Each page
+is `≤ limit` rows and one `page { next, remaining }`; `remaining` counts
+what is left under the same filters. A client that wants everything with
+bodies calls `list {}` exactly as before and ignores the trailing `page`.
+The body is ~70 % of a row, and only the ticket page shows one — it comes
+from `get`.
 
 Via synapse (once on PATH — 4455 is inside the `_self scan` range):
 
