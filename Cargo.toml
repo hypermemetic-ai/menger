@@ -1,3 +1,11 @@
+[workspace]
+# MFE-9: `tickets-api` is the ticket vocabulary both halves of menger share
+# (the server here, the browser app in frontend/). A workspace member so
+# `cargo test --workspace` covers its wire-casing guards; `frontend/` stays
+# out of it — its empty [workspace] table detaches it, so `cargo build` here
+# still never needs the wasm toolchain.
+members = [".", "tickets-api"]
+
 [package]
 name = "menger"
 version = "0.5.0"
@@ -14,6 +22,12 @@ name = "menger"
 path = "src/main.rs"
 
 [dependencies]
+# MFE-9: the ticket vocabulary, shared with the browser app (frontend/)
+# so a renamed field is a wasm compile error, not a blank cell. Default
+# features: the types only — the `client` feature (the generated Plexus
+# client, plexus 0.6) is the frontend's, and stays out of this graph.
+menger-tickets-api = { path = "tickets-api" }
+
 plexus-core = "0.5"
 plexus-macros = "0.5"
 # Slim: default features off drops the rmcp/MCP stack; http-gateway enables

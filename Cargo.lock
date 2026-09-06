@@ -1188,8 +1188,9 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jsonrpsee",
+ "menger-tickets-api",
  "plexus-core",
- "plexus-macros",
+ "plexus-macros 0.5.5",
  "plexus-transport",
  "rusqlite",
  "schemars",
@@ -1200,6 +1201,17 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "menger-tickets-api"
+version = "0.5.0"
+dependencies = [
+ "plexus-client",
+ "plexus-macros 0.6.0",
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1345,6 +1357,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "plexus-client"
+version = "0.6.0"
+dependencies = [
+ "futures-core",
+ "futures-util",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "plexus-core"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1361,7 +1383,7 @@ dependencies = [
  "http",
  "jsonrpsee",
  "plexus-auth-core",
- "plexus-macros",
+ "plexus-macros 0.5.5",
  "rmcp",
  "schemars",
  "serde",
@@ -1378,6 +1400,17 @@ name = "plexus-macros"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f64b29e6d196e089448e4ca136a84e2a86ff701a5f64c67099d6dadceefb4ee1"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "uuid",
+]
+
+[[package]]
+name = "plexus-macros"
+version = "0.6.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

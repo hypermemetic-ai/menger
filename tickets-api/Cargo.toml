@@ -1,0 +1,53 @@
+# MFE-9: the tickets vocabulary, once, for both halves of menger.
+#
+# The server (`menger`) and the browser app (`menger-app`) used to declare
+# `Ticket`, `Status`, `Kind`, `Severity` and the event enum separately — the
+# frontend's copy hand-written in `frontend/src/main.rs`, kept in step by
+# hand. This crate is the single declaration both consume, so a renamed
+# field is a compile error in the browser rather than a silent blank cell.
+#
+# Two dependency profiles, one crate:
+#
+#   menger (server)   default features  -> serde + schemars, nothing else
+#   menger-app (wasm) features=["client"] -> + the generated Plexus client
+#
+# `client` is off by default deliberately: the server needs the types, not
+# the client, and leaving it off keeps plexus-macros / plexus-client out of
+# the server's dependency graph entirely (it is still on the published
+# plexus 0.5 line — see the MFE-9 divergence notes).
+[package]
+name = "menger-tickets-api"
+version = "0.5.0"
+edition = "2021"
+license = "MIT"
+description = "menger's ticket vocabulary and its Plexus RPC client — one declaration, shared by the server and the browser"
+publish = false
+
+[features]
+default = []
+
+# Emit `MengerTicketsClient<T>` beside the types (plexus-macros' `client`
+# flag). The browser app turns this on; the server does not.
+client = ["dep:plexus-macros", "dep:plexus-client"]
+
+# Named by the activation's `server_cfg`, and never enabled anywhere. It is
+# what keeps the server half of the macro expansion — and the declaration
+# bodies, which are `unreachable!()` — out of every build. The real server
+# implementation lives in `menger/src/activations/tickets/activation.rs`;
+# collapsing the two into one `impl` is the promoted MFE-11 build, which
+# needs menger on the plexus 0.6 line.
+server = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+schemars = { version = "1.1", features = ["derive"] }
+
+# The 0.6 dev line, by worktree path (the plexus 0.6 crates are unpublished;
+# `plexus-client` is `default-features = false` here — the browser app adds
+# the `ws-web` backend itself).
+plexus-macros = { path = "../../plexus-macros-macro-6", optional = true }
+plexus-client = { path = "../../plexus-macros-macro-6/plexus-client", optional = true }
+
+[dev-dependencies]
+# The wire-casing tests below assert what serde writes.
+serde_json = "1"

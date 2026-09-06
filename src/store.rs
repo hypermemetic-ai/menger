@@ -27,137 +27,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use tokio::sync::broadcast;
 use tokio::sync::Mutex as AsyncMutex;
 
-/// Lifecycle status. Serialized with frontmatter casing (`Pending`, `Ready`, …)
-/// so a ticket round-trips into a plans/ file unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum Status {
-    Pending,
-    Ready,
-    Blocked,
-    Complete,
-    Idea,
-    Epic,
-    Superseded,
-}
-
-impl FromStr for Status {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "pending" => Ok(Self::Pending),
-            "ready" => Ok(Self::Ready),
-            "blocked" => Ok(Self::Blocked),
-            "complete" => Ok(Self::Complete),
-            "idea" => Ok(Self::Idea),
-            "epic" => Ok(Self::Epic),
-            "superseded" => Ok(Self::Superseded),
-            other => Err(format!(
-                "unknown status '{other}' (expected Pending, Ready, Blocked, Complete, Idea, Epic, or Superseded)"
-            )),
-        }
-    }
-}
-
-/// What shape of work a ticket is (AGS-13): the owner's closed five-value
-/// set, one vocabulary owning the slot. Serialized lowercase (`kind:
-/// build`) on the wire and in the store.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Kind {
-    /// A container that decomposes into children; done only when they
-    /// are. Its acceptance is the operator's gate.
-    Scope,
-    /// Carries out a defined procedure (verify, run, migrate, release)
-    /// without producing new capability.
-    Execution,
-    /// Produces new capability; gated on acceptance criteria.
-    Build,
-    /// A defect or missing piece discovered in shipped behavior (rim's
-    /// "bug").
-    Gap,
-    /// A binary investigation that answers a question.
-    Spike,
-}
-
-impl Kind {
-    /// The phrase every "unknown kind" error ends with — the five, named.
-    pub const EXPECTED: &'static str = "scope, execution, build, gap, or spike";
-}
-
-impl FromStr for Kind {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "scope" => Ok(Self::Scope),
-            "execution" => Ok(Self::Execution),
-            "build" => Ok(Self::Build),
-            "gap" => Ok(Self::Gap),
-            "spike" => Ok(Self::Spike),
-            other => Err(format!(
-                "unknown kind '{other}' (expected {})",
-                Kind::EXPECTED
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum Severity {
-    Critical,
-    High,
-    Medium,
-    Low,
-}
-
-impl FromStr for Severity {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "critical" => Ok(Self::Critical),
-            "high" => Ok(Self::High),
-            "medium" => Ok(Self::Medium),
-            "low" => Ok(Self::Low),
-            other => Err(format!(
-                "unknown severity '{other}' (expected Critical, High, Medium, or Low)"
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct Ticket {
-    /// `EPIC-N`, allocated by the store.
-    pub id: String,
-    /// Epic prefix, uppercase (e.g. `MNG`).
-    pub epic: String,
-    /// Sequence number within the epic (the `N` in `EPIC-N`).
-    pub seq: u32,
-    pub title: String,
-    pub status: Status,
-    pub kind: Kind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub severity: Option<Severity>,
-    /// Ticket ids that must complete before this one starts.
-    pub blocked_by: Vec<String>,
-    /// Ticket ids that can start once this one completes.
-    pub unlocks: Vec<String>,
-    /// AGS-19: the ticket this one is an output of, if any. Any epic; the
-    /// parent must exist at creation and the chain is acyclic.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
-    /// AGS-19: the tickets whose `parent` is this one — derived and kept
-    /// by the store (as `unlocks` is from `blocked_by`), in birth order.
-    pub children: Vec<String>,
-    /// Markdown body (Problem / Required behavior / Acceptance criteria …).
-    pub body: String,
-    pub created_unix: i64,
-    pub updated_unix: i64,
-}
+/// MFE-9: the ticket vocabulary itself now lives in `menger-tickets-api`
+/// so the browser app can consume the same declarations instead of a
+/// hand-written mirror of the JSON they arrive as. Re-exported here
+/// unchanged — every `crate::store::Status` in the server still resolves,
+/// and the store remains the only thing that *writes* them.
+pub use menger_tickets_api::types::{Kind, Severity, Status, Ticket};
 
 /// MNG-9: the store's total order over tickets — `(epic, seq)`, which the
 /// schema keeps unique (`UNIQUE (epic, seq)`). Every list has been in this
