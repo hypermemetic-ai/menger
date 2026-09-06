@@ -47,3 +47,5 @@ cargo test         # unit tests + wire tests (tests/wire.rs speaks the real prot
   no build step, keep it that way (MNG-5 hardens this into a contract).
 - Wire protocol notes (envelope, `menger.call` subscription) are in
   README.md — `tests/wire.rs` is the executable reference.
+- Delegation (owner, 2026-09-06): implementation subagents run on Opus 5
+  (`model: opus`); worktree isolation; one commit per ticket.
