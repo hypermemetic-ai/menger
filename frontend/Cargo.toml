@@ -44,7 +44,8 @@ js-sys = "0.3"
 # events it listens for, DomRect to clamp itself into the viewport,
 # Navigator for the clipboard (reached via Reflect — web-sys's Clipboard
 # binding is unstable-gated), and the two form elements its copy
-# fallbacks use.
+# fallbacks use. AGS-17's theme adds MediaQueryList (the
+# prefers-color-scheme query and its change event).
 web-sys = { version = "0.3", features = [
   "Window",
   "Headers",
@@ -72,6 +73,7 @@ web-sys = { version = "0.3", features = [
   "Navigator",
   "HtmlTextAreaElement",
   "HtmlInputElement",
+  "MediaQueryList",
 ] }
 
 console_error_panic_hook = "0.1"

@@ -38,6 +38,12 @@
 //! ticket carries `data-ticket-id`; one document-level listener turns a
 //! right-click on any of them into the same menu (Open / Open in new tab
 //! / Copy code / Set status ▸), mounted once by the App.
+//!
+//! AGS-17: light and dark mode (src/theme.rs). index.html's palette is
+//! two value sets under one set of token names; a header toggle cycles
+//! system → light → dark by stamping `data-theme` on the root, persisted
+//! client-side, and every view re-colors through the tokens with no
+//! re-render — only the drawn mermaid diagrams are redrawn.
 
 mod md;
 mod menu;
@@ -45,6 +51,7 @@ mod nav;
 
 mod mermaid;
 mod net;
+mod theme;
 
 use leptos::prelude::*;
 use serde::Deserialize;
@@ -750,6 +757,8 @@ fn App() -> impl IntoView {
                         }}
                     </span>
                     <span id="conn" class=move || conn_view().0>{move || conn_view().1}</span>
+                    // AGS-17: the theme toggle (system → light → dark).
+                    <theme::Toggle />
                 </header>
                 <main>
                     <div id="health">{health_view}</div>
@@ -798,7 +807,8 @@ mod tests {
     /// AGS-15: every status in the closed vocabulary has a row in
     /// index.html's status table (a bg and an fg), and the class the
     /// views put on a chip names exactly that row. A new status without
-    /// a row would paint as plain text; this fails first.
+    /// a row would paint as plain text; this fails first. AGS-17: and a
+    /// row in the dark table, under both dark mechanisms.
     #[test]
     fn every_status_has_a_row_in_the_status_table() {
         let css = app_css();
@@ -806,16 +816,30 @@ mod tests {
             let class = st_class(s);
             let row = class.strip_prefix("st ").unwrap();
             assert_eq!(row, format!("st-{}", s.to_lowercase()));
-            let line = css
-                .lines()
-                .find(|l| l.trim_start().starts_with(&format!(".{row} ")))
-                .unwrap_or_else(|| panic!("no status-table row for {s} (.{row})"));
-            assert!(
-                line.contains("--st-bg: #") && line.contains("--st-fg: #"),
-                "{s}: {line}"
-            );
+            for prefix in ["", &format!("{DARK_ATTR} "), &format!("{DARK_MEDIA} ")] {
+                let line = css
+                    .lines()
+                    .find(|l| l.trim_start().starts_with(&format!("{prefix}.{row} ")))
+                    .unwrap_or_else(|| panic!("no status-table row for {s} ({prefix}.{row})"));
+                assert!(
+                    line.contains("--st-bg: #") && line.contains("--st-fg: #"),
+                    "{s}: {line}"
+                );
+            }
         }
         assert_eq!(st_class("Blocked"), "st st-blocked");
+        let scan = scan(&css);
+        let want: std::collections::BTreeSet<String> =
+            STATUSES.iter().map(|s| s.to_ascii_lowercase()).collect();
+        for (table, rows) in [
+            ("light", &scan.st_light),
+            ("dark (attribute)", &scan.st_dark_attr),
+            ("dark (media)", &scan.st_dark_media),
+        ] {
+            let got: std::collections::BTreeSet<String> = rows.iter().map(|r| r.0.clone()).collect();
+            assert_eq!(got, want, "the {table} status table names exactly the vocabulary");
+            assert_eq!(rows.len(), STATUSES.len(), "the {table} status table: one row per status");
+        }
     }
 
     /// True if `line` holds a color literal: `#` + 3/4/6/8 hex digits as a
@@ -854,42 +878,225 @@ mod tests {
             .any(|w| named.contains(&w))
     }
 
-    /// AGS-15 criterion 4, pinned: color literals live only in the `:root`
-    /// token block and the status table's rows. Every other rule paints
-    /// through `var(--…)` — the layer AGS-10 takes over.
-    #[test]
-    fn colors_live_only_in_the_token_block_and_the_status_table() {
-        let css = app_css();
-        let mut in_root = false;
-        let mut root_literals = 0;
-        let mut table_rows = 0;
-        let mut strays = Vec::new();
+    /// The two dark selectors (AGS-17): the attribute the toggle stamps,
+    /// and the media-query guard that a stored "light" opts out of.
+    const DARK_ATTR: &str = ":root[data-theme=\"dark\"]";
+    const DARK_MEDIA: &str = ":root:not([data-theme=\"light\"])";
+    const MEDIA_DARK: &str = "@media (prefers-color-scheme: dark) {";
+
+    /// The stylesheet, sorted into the places a color may be named — the
+    /// light `:root` block, the two dark blocks, the light status table,
+    /// the dark status table (under both mechanisms) — and everything
+    /// else that names one (`strays`). Status rows are `(status, body)`;
+    /// block declarations are kept verbatim (trimmed) so the two dark
+    /// copies can be compared line by line.
+    #[derive(Default, Debug)]
+    struct Scan {
+        light: Vec<String>,
+        dark_attr: Vec<String>,
+        dark_media: Vec<String>,
+        st_light: Vec<(String, String)>,
+        st_dark_attr: Vec<(String, String)>,
+        st_dark_media: Vec<(String, String)>,
+        strays: Vec<String>,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Block {
+        None,
+        Light,
+        DarkAttr,
+        DarkMedia,
+    }
+
+    /// A status row's `(status, normalized body)` from what follows `.st-`.
+    fn status_row(rest: &str) -> (String, String) {
+        let name = rest.split(|c: char| c == ' ' || c == '{').next().unwrap_or_default();
+        let body = rest[name.len()..].split_whitespace().collect::<Vec<_>>().join(" ");
+        (name.to_string(), body)
+    }
+
+    fn scan(css: &str) -> Scan {
+        let mut out = Scan::default();
+        let mut block = Block::None;
+        let mut in_media = false;
         for line in css.lines() {
             let t = line.trim();
-            if t.starts_with(":root {") {
-                in_root = true;
-                continue;
-            }
-            if in_root {
+            if block != Block::None {
                 if t == "}" {
-                    in_root = false;
-                } else if has_color_literal(t) {
-                    root_literals += 1;
+                    block = Block::None;
+                } else {
+                    match block {
+                        Block::Light => out.light.push(t.to_string()),
+                        Block::DarkAttr => out.dark_attr.push(t.to_string()),
+                        Block::DarkMedia => out.dark_media.push(t.to_string()),
+                        Block::None => unreachable!(),
+                    }
                 }
                 continue;
             }
-            if t.starts_with(".st-") {
-                assert!(has_color_literal(t), "status-table row without colors: {t}");
-                table_rows += 1;
+            if t == MEDIA_DARK {
+                assert!(!in_media, "nested prefers-color-scheme media blocks");
+                in_media = true;
+                continue;
+            }
+            if in_media && t == "}" {
+                in_media = false;
+                continue;
+            }
+            if t == ":root {" {
+                block = Block::Light;
+                continue;
+            }
+            if t == format!("{DARK_ATTR} {{") {
+                assert!(!in_media, "the attribute block must not sit inside the media query");
+                block = Block::DarkAttr;
+                continue;
+            }
+            if t == format!("{DARK_MEDIA} {{") {
+                assert!(in_media, "the guarded block must sit inside the media query: {t}");
+                block = Block::DarkMedia;
+                continue;
+            }
+            if let Some(rest) = t.strip_prefix(".st-") {
+                out.st_light.push(status_row(rest));
+                continue;
+            }
+            if let Some(rest) = t.strip_prefix(DARK_ATTR).and_then(|r| r.strip_prefix(" .st-")) {
+                assert!(!in_media, "{t}");
+                out.st_dark_attr.push(status_row(rest));
+                continue;
+            }
+            if let Some(rest) = t.strip_prefix(DARK_MEDIA).and_then(|r| r.strip_prefix(" .st-")) {
+                assert!(in_media, "the guarded status rows must sit inside the media query: {t}");
+                out.st_dark_media.push(status_row(rest));
                 continue;
             }
             if has_color_literal(t) {
-                strays.push(t.to_string());
+                out.strays.push(t.to_string());
             }
         }
-        assert!(root_literals >= 10, "the token block holds the palette ({root_literals} lines)");
-        assert_eq!(table_rows, STATUSES.len(), "one table row per status");
-        assert!(strays.is_empty(), "color literals outside the token block / status table:\n{}", strays.join("\n"));
+        assert_eq!(block, Block::None, "unterminated block");
+        assert!(!in_media, "unterminated media query");
+        out
+    }
+
+    /// A block's declarations as `(property, value)`, comments stripped
+    /// (a comment may span lines, and may say "black").
+    fn declarations(block: &[String]) -> Vec<(String, String)> {
+        let mut text = block.join("\n");
+        while let Some(start) = text.find("/*") {
+            let end = text[start..].find("*/").map(|e| start + e + 2).unwrap_or(text.len());
+            text.replace_range(start..end, " ");
+        }
+        text.split(';')
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(|d| {
+                let (name, value) = d.split_once(':').unwrap_or_else(|| panic!("not a declaration: {d}"));
+                (name.trim().to_string(), value.trim().to_string())
+            })
+            .collect()
+    }
+
+    /// The names of a block's color tokens (custom properties whose value
+    /// holds a color literal) — the set the themes must agree on.
+    fn color_tokens(block: &[String]) -> std::collections::BTreeSet<String> {
+        declarations(block)
+            .into_iter()
+            .filter(|(name, value)| name.starts_with("--") && has_color_literal(value))
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// AGS-15 criterion 4, evolved by AGS-17: color literals live only in
+    /// the light `:root` block, the two dark blocks, and the two status
+    /// tables (the dark one under both mechanisms). Every other rule
+    /// paints through `var(--…)`.
+    #[test]
+    fn colors_live_only_in_the_theme_blocks_and_the_status_tables() {
+        let scan = scan(&app_css());
+        let light_literals = scan.light.iter().filter(|l| has_color_literal(l)).count();
+        assert!(light_literals >= 10, "the light block holds the palette ({light_literals} lines)");
+        for (dark, name) in [(&scan.dark_attr, "attribute"), (&scan.dark_media, "media")] {
+            let n = dark.iter().filter(|l| has_color_literal(l)).count();
+            assert!(n >= 10, "the dark ({name}) block holds the palette ({n} lines)");
+        }
+        for (rows, table) in [(&scan.st_light, "light"), (&scan.st_dark_attr, "dark attribute"), (&scan.st_dark_media, "dark media")] {
+            assert_eq!(rows.len(), STATUSES.len(), "one {table} table row per status");
+            for (status, body) in rows {
+                assert!(has_color_literal(body), "{table} status-table row without colors: {status} {body}");
+            }
+        }
+        assert!(
+            scan.strays.is_empty(),
+            "color literals outside the theme blocks / status tables:\n{}",
+            scan.strays.join("\n")
+        );
+    }
+
+    /// AGS-17: the dark blocks define every color token the light block
+    /// defines and nothing else — a token defined in one theme only is a
+    /// bug (it would paint the wrong theme's value, or nothing). The type
+    /// tokens (`--mono`, `--sans`) are theme-invariant and live once, in
+    /// the light block; a dark block may set `color-scheme` (form
+    /// controls, scrollbars) and no other plain property.
+    #[test]
+    fn dark_blocks_define_exactly_the_light_blocks_color_tokens() {
+        let scan = scan(&app_css());
+        let light = color_tokens(&scan.light);
+        assert!(light.contains("--bg") && light.contains("--ink") && light.contains("--shadow"), "{light:?}");
+        for (dark, name) in [(&scan.dark_attr, "attribute"), (&scan.dark_media, "media")] {
+            assert_eq!(color_tokens(dark), light, "dark ({name}) block's color tokens vs the light block's");
+            for (prop, value) in declarations(dark) {
+                if prop.starts_with("--") {
+                    assert!(has_color_literal(&value), "dark ({name}) token without a color: {prop}: {value}");
+                } else {
+                    assert_eq!((prop.as_str(), value.as_str()), ("color-scheme", "dark"), "dark ({name}) block: unexpected declaration");
+                }
+            }
+        }
+    }
+
+    /// AGS-17: the two dark mechanisms — the media query (guarded) and the
+    /// stamped attribute — carry the same values, token for token and
+    /// status for status, so the toggle and the system preference paint
+    /// one dark, not two.
+    #[test]
+    fn both_dark_mechanisms_carry_identical_values() {
+        let scan = scan(&app_css());
+        assert_eq!(declarations(&scan.dark_attr), declarations(&scan.dark_media), "dark token blocks differ");
+        assert_eq!(scan.st_dark_attr, scan.st_dark_media, "dark status tables differ");
+        assert_eq!(scan.st_dark_attr.len(), STATUSES.len());
+    }
+
+    /// The guard is live: a literal planted anywhere outside the allowed
+    /// blocks is reported — in a component rule, as a named color, as
+    /// `rgb()`, and inside the media query but outside the guarded block
+    /// — and a token added to one dark block only breaks the set equality.
+    #[test]
+    fn literal_guard_catches_a_planted_stray() {
+        let css = app_css();
+        assert!(scan(&css).strays.is_empty(), "precondition: the real stylesheet is clean");
+        let plants = [
+            "  #nav .row.sel { background: #cfe2f7; }",
+            "  header h1 { color: black; }",
+            "  td.id { color: rgb(0, 102, 204); }",
+        ];
+        for plant in plants {
+            let planted = format!("{css}\n{plant}\n");
+            let strays = scan(&planted).strays;
+            assert_eq!(strays, vec![plant.trim().to_string()], "planted: {plant}");
+        }
+        // Inside the media query, but not in the guarded block: still a stray.
+        let planted = css.replacen(MEDIA_DARK, &format!("{MEDIA_DARK}\n    body {{ background: #000; }}"), 1);
+        assert_eq!(scan(&planted).strays, vec!["body { background: #000; }".to_string()]);
+        // A token in one dark block only: the set equality fails.
+        let planted = css.replacen(&format!("{DARK_ATTR} {{"), &format!("{DARK_ATTR} {{\n    --only-here: #123456;"), 1);
+        let s = scan(&planted);
+        assert!(s.strays.is_empty(), "a token inside a dark block is not a stray");
+        assert_ne!(color_tokens(&s.dark_attr), color_tokens(&s.light));
+        assert_ne!(declarations(&s.dark_attr), declarations(&s.dark_media));
     }
 
     #[test]
