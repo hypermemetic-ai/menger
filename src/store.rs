@@ -184,6 +184,34 @@ pub struct NewTicket {
     pub body: String,
 }
 
+/// PERF-2: a request to bulk-seed synthetic tickets through the cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeedSpec {
+    /// How many tickets to generate.
+    pub count: usize,
+    /// The RNG seed: the same value generates the same tickets, so a
+    /// magnitude is reproducible run to run.
+    pub seed: u64,
+    /// Seed even though the store already holds tickets. Off by default:
+    /// seeding is for fresh (measurement) databases, and adding a million
+    /// synthetic rows to someone's real one must be an explicit choice.
+    /// When on, ids continue after the existing per-epic maxima exactly
+    /// as `create` would allocate them.
+    pub into_existing: bool,
+}
+
+/// What a seed run did, for the startup log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeedReport {
+    pub count: usize,
+    pub epics: usize,
+    /// Total `blocked_by` entries (each mirrored by one `unlocks` entry).
+    pub edges: usize,
+    pub generate: std::time::Duration,
+    pub persist: std::time::Duration,
+    pub elapsed: std::time::Duration,
+}
+
 #[derive(Debug)]
 pub enum StoreError {
     NotFound(String),
@@ -193,6 +221,10 @@ pub enum StoreError {
     Cycle { id: String, path: Vec<String> },
     /// The write could not be made durable; nothing was acknowledged.
     Db(String),
+    /// PERF-2: a seed was requested into a store that already holds
+    /// `existing` tickets without `SeedSpec::into_existing`. Nothing was
+    /// generated or written.
+    SeedRefused { existing: usize },
 }
 
 impl std::fmt::Display for StoreError {
@@ -209,6 +241,11 @@ impl std::fmt::Display for StoreError {
                 path.join(" -> ")
             ),
             Self::Db(msg) => write!(f, "database error: {msg}"),
+            Self::SeedRefused { existing } => write!(
+                f,
+                "refusing to seed synthetic tickets: the store already holds {existing} ticket(s) \
+                 and seeding into an existing database was not explicitly allowed"
+            ),
         }
     }
 }
@@ -531,6 +568,393 @@ impl Store {
     pub fn subscribe(&self) -> broadcast::Receiver<Change> {
         self.tx.subscribe()
     }
+
+    /// PERF-2: bulk-seeds `spec.count` synthetic tickets, through this
+    /// layer and nothing else. The tickets are generated in memory first
+    /// (ids allocated the way `create` allocates them — max existing seq
+    /// per epic, plus one — every `blocked_by` edge pointing at an
+    /// already-generated ticket so the DAG is acyclic by construction,
+    /// and each mirrored in its blocker's `unlocks`), then written
+    /// through to the database in a few large transactions (one fsync
+    /// per ~50k rows, never one per row), and only then inserted into
+    /// the cache. Deterministic given `spec.seed`.
+    ///
+    /// Refuses a store that already holds tickets unless
+    /// `spec.into_existing` — nothing is generated or written then.
+    /// Nothing is broadcast: seeding runs before the server serves, so
+    /// there is no subscriber to tell, and a million `Created` events
+    /// would only lag the channel. Blocking I/O: call from a blocking
+    /// context (the builder wraps it in `spawn_blocking`).
+    pub fn seed_synthetic(&self, spec: SeedSpec) -> Result<SeedReport, StoreError> {
+        // Mutations stay serialized even here: a concurrent writer means
+        // this was called while serving, which it must not be.
+        let _serial = self
+            .write_serial
+            .try_lock()
+            .map_err(|_| StoreError::Db("seed requested while another write is in flight".into()))?;
+        let started = std::time::Instant::now();
+
+        let next_seq: HashMap<String, u32> = {
+            let tickets = self.tickets.read().expect("store lock poisoned");
+            if !tickets.is_empty() && !spec.into_existing {
+                return Err(StoreError::SeedRefused {
+                    existing: tickets.len(),
+                });
+            }
+            let mut max: HashMap<String, u32> = HashMap::new();
+            for t in tickets.values() {
+                let e = max.entry(t.epic.clone()).or_insert(0);
+                *e = (*e).max(t.seq);
+            }
+            max
+        };
+
+        let generated = synthetic::generate(spec, &next_seq);
+        let generate = started.elapsed();
+        let epics = {
+            let mut seen: HashSet<&str> = HashSet::new();
+            generated.iter().for_each(|t| {
+                seen.insert(t.epic.as_str());
+            });
+            seen.len()
+        };
+        let edges: usize = generated.iter().map(|t| t.blocked_by.len()).sum();
+
+        let persist_started = std::time::Instant::now();
+        {
+            let mut conn = self.db.lock().expect("db lock poisoned");
+            for chunk in generated.chunks(synthetic::ROWS_PER_TRANSACTION) {
+                let tx = conn
+                    .transaction()
+                    .map_err(|e| StoreError::Db(e.to_string()))?;
+                db::insert_many(&tx, chunk).map_err(|e| StoreError::Db(e.to_string()))?;
+                tx.commit().map_err(|e| StoreError::Db(e.to_string()))?;
+            }
+        }
+        let persist = persist_started.elapsed();
+
+        {
+            let mut tickets = self.tickets.write().expect("store lock poisoned");
+            tickets.reserve(generated.len());
+            for t in generated {
+                tickets.insert(t.id.clone(), t);
+            }
+        }
+        Ok(SeedReport {
+            count: spec.count,
+            epics,
+            edges,
+            generate,
+            persist,
+            elapsed: started.elapsed(),
+        })
+    }
+}
+
+/// PERF-2: the synthetic ticket generator. Private to the store: the
+/// shape it produces mirrors what `create` + `set_status` would have
+/// built one call at a time, so every invariant the DAG queries rely on
+/// (ids, `blocked_by` -> `unlocks` symmetry, acyclicity) holds by
+/// construction rather than by checking.
+mod synthetic {
+    use super::{Kind, SeedSpec, Severity, Status, Ticket};
+    use std::collections::{HashMap, HashSet};
+
+    /// Rows per write transaction: a few fsyncs for a million rows, and a
+    /// WAL that gets checkpointed between chunks instead of growing to
+    /// the size of the whole seed.
+    pub(super) const ROWS_PER_TRANSACTION: usize = 50_000;
+
+    /// SplitMix64 — tiny, well-distributed, and dependency-free; the
+    /// point is reproducibility, not cryptography.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            debug_assert!(n > 0);
+            (self.next_u64() % n as u64) as usize
+        }
+        fn unit(&mut self) -> f64 {
+            (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+        }
+        fn chance(&mut self, percent: u32) -> bool {
+            self.below(100) < percent as usize
+        }
+        fn pick<'a, T>(&mut self, xs: &'a [T]) -> &'a T {
+            &xs[self.below(xs.len())]
+        }
+        fn weighted<T: Copy>(&mut self, table: &[(T, u32)]) -> T {
+            let total: u32 = table.iter().map(|(_, w)| w).sum();
+            let mut roll = self.below(total as usize) as u32;
+            for (v, w) in table {
+                if roll < *w {
+                    return *v;
+                }
+                roll -= w;
+            }
+            table[table.len() - 1].0
+        }
+    }
+
+    // A realistic mix (weights are percentages of non-root tickets).
+    const STATUSES: [(Status, u32); 7] = [
+        (Status::Pending, 28),
+        (Status::Ready, 18),
+        (Status::Blocked, 8),
+        (Status::Complete, 34),
+        (Status::Idea, 6),
+        (Status::Superseded, 4),
+        (Status::Epic, 2),
+    ];
+    const KINDS: [(Kind, u32); 5] = [
+        (Kind::Scope, 4),
+        (Kind::Execution, 14),
+        (Kind::Build, 52),
+        (Kind::Gap, 16),
+        (Kind::Spike, 14),
+    ];
+    const SEVERITIES: [(Option<Severity>, u32); 5] = [
+        (None, 40),
+        (Some(Severity::Medium), 24),
+        (Some(Severity::High), 16),
+        (Some(Severity::Low), 14),
+        (Some(Severity::Critical), 6),
+    ];
+
+    const VERBS: [&str; 20] = [
+        "Migrate", "Harden", "Wire", "Measure", "Split", "Cache", "Index", "Paginate",
+        "Stream", "Validate", "Restyle", "Document", "Refuse", "Retry", "Bound", "Persist",
+        "Render", "Resolve", "Throttle", "Audit",
+    ];
+    const OBJECTS: [&str; 20] = [
+        "the watch stream", "id allocation", "the nav tree", "the board render",
+        "startup load", "the REST bridge", "cycle detection", "the ticket page",
+        "unlocks symmetry", "the seed path", "SSE reconnects", "the list payload",
+        "the status control", "epic rollups", "the proxy preamble", "frontmatter folding",
+        "diagram mounting", "the write-serial lock", "WAL checkpoints", "the health probe",
+    ];
+    const QUALIFIERS: [&str; 8] = [
+        "under load", "at scale", "for the shell", "before serving",
+        "on reconnect", "per epic", "without fsync", "in one transaction",
+    ];
+    const PROBLEMS: [&str; 6] = [
+        "Today this path does the work one row at a time, which is fine at ten and hopeless at a million.",
+        "The current behavior is correct but unobservable: nothing logs how long it took or how much it moved.",
+        "A client that opens this before the snapshot lands can miss an event; the gap is small but real.",
+        "The shape is right and the cost is wrong — every call re-derives what the previous call already knew.",
+        "Two readers disagree about the order, and the tie-break lives in a comment nobody reads.",
+        "The failure mode is a silent hang rather than a clear refusal, so the operator learns nothing.",
+    ];
+    const BEHAVIORS: [&str; 8] = [
+        "One call, one transaction, one log line with count and elapsed time.",
+        "Reads stay on the cache; nothing on this path touches storage.",
+        "A refusal names the offending row and leaves the file untouched.",
+        "The same input twice produces byte-identical output.",
+        "Timeouts are recorded as failures, never as hangs.",
+        "The wire surface does not grow; no new method, no new field.",
+        "Every edge added is mirrored on the other side before the commit.",
+        "The startup log reports what was loaded and how long it took.",
+    ];
+    const CRITERIA: [&str; 6] = [
+        "`cargo test` passes with the new cases included.",
+        "A sampled check agrees with the query's answer on a seeded store.",
+        "The log line carries the count and the elapsed milliseconds.",
+        "A second open of the same file finds the same rows.",
+        "The measurement completes inside its budget at the target magnitude.",
+        "The operator can reproduce the run from the recorded seed value.",
+    ];
+
+    /// Number of epics for `count` tickets: a few for a hundred, a couple
+    /// of hundred for a million — a Zipf-weighted spread below, so the
+    /// biggest epic is a real stress for "expand the largest group".
+    fn epic_count(count: usize) -> usize {
+        let k = (count as f64).powf(0.4).ceil() as usize;
+        k.clamp(3, 300).min(count.max(1))
+    }
+
+    /// Pronounceable 3–4 letter uppercase codes (consonant/vowel
+    /// alternation), unique within the run.
+    fn epic_code(rng: &mut Rng, taken: &HashSet<String>) -> String {
+        const C: &[u8] = b"BCDFGHKLMNPRSTVZ";
+        const V: &[u8] = b"AEIOU";
+        loop {
+            let len = 3 + rng.below(2);
+            let code: String = (0..len)
+                .map(|i| {
+                    let set = if i % 2 == 0 { C } else { V };
+                    set[rng.below(set.len())] as char
+                })
+                .collect();
+            if !taken.contains(&code) {
+                return code;
+            }
+        }
+    }
+
+    fn title(rng: &mut Rng) -> String {
+        let mut t = format!("{} {}", rng.pick(&VERBS), rng.pick(&OBJECTS));
+        if rng.chance(40) {
+            t.push(' ');
+            t.push_str(rng.pick(&QUALIFIERS));
+        }
+        t
+    }
+
+    /// A short markdown body in the house shape (Problem / Required
+    /// behavior / Acceptance criteria), ~400–600 bytes.
+    fn body(rng: &mut Rng, id: &str, blocked_by: &[String]) -> String {
+        let mut b = String::with_capacity(640);
+        b.push_str("## Problem\n\n");
+        b.push_str(rng.pick(&PROBLEMS));
+        if let Some(first) = blocked_by.first() {
+            b.push_str(&format!(" Blocked on {first} until it lands."));
+        }
+        b.push_str("\n\n## Required behavior\n\n");
+        let n = 2 + rng.below(2);
+        for _ in 0..n {
+            b.push_str("- ");
+            b.push_str(rng.pick(&BEHAVIORS));
+            b.push('\n');
+        }
+        b.push_str("\n## Acceptance criteria\n\n");
+        let n = 2 + rng.below(2);
+        for i in 0..n {
+            b.push_str(&format!("{}. {}\n", i + 1, rng.pick(&CRITERIA)));
+        }
+        b.push_str(&format!("\n_{id}: synthetic (PERF-2)._\n"));
+        b
+    }
+
+    /// Generates `spec.count` tickets in creation order. `next_seq` is the
+    /// per-epic maximum sequence already in the store (empty for a fresh
+    /// one): a generated epic that collides with an existing one
+    /// continues its numbering, as `create` would.
+    pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> Vec<Ticket> {
+        let mut rng = Rng(spec.seed ^ 0x5EED_0000_0000_0000);
+        let count = spec.count;
+        let mut out: Vec<Ticket> = Vec::with_capacity(count);
+        if count == 0 {
+            return out;
+        }
+
+        // Epics: Zipf-weighted (the biggest holds ~1/H(K) of everything).
+        let k = epic_count(count);
+        let mut codes: Vec<String> = Vec::with_capacity(k);
+        let mut taken: HashSet<String> = HashSet::new();
+        for _ in 0..k {
+            let c = epic_code(&mut rng, &taken);
+            taken.insert(c.clone());
+            codes.push(c);
+        }
+        let mut cumulative: Vec<f64> = Vec::with_capacity(k);
+        let mut acc = 0.0;
+        for i in 0..k {
+            acc += 1.0 / (i as f64 + 1.0);
+            cumulative.push(acc);
+        }
+        let pick_epic = |rng: &mut Rng| -> usize {
+            let r = rng.unit() * acc;
+            cumulative.partition_point(|c| *c <= r).min(k - 1)
+        };
+
+        let mut seq: Vec<u32> = codes
+            .iter()
+            .map(|c| existing_max.get(c).copied().unwrap_or(0))
+            .collect();
+        // Per-epic creation-order index lists (for local blocker choice).
+        let mut members: Vec<Vec<usize>> = vec![Vec::new(); k];
+        let mut index: HashMap<String, usize> = HashMap::with_capacity(count);
+
+        const BASE_UNIX: i64 = 1_750_000_000; // 2025-06-15T13:20Z
+        const STEP: i64 = 60;
+
+        for i in 0..count {
+            let e = pick_epic(&mut rng);
+            seq[e] += 1;
+            let epic = codes[e].clone();
+            let id = format!("{epic}-{}", seq[e]);
+            let root = members[e].is_empty();
+
+            let (kind, status, severity, title_s) = if root {
+                (
+                    Kind::Scope,
+                    Status::Epic,
+                    None,
+                    format!("{epic}: {}", title(&mut rng).to_lowercase()),
+                )
+            } else {
+                (
+                    rng.weighted(&KINDS),
+                    rng.weighted(&STATUSES),
+                    rng.weighted(&SEVERITIES),
+                    title(&mut rng),
+                )
+            };
+
+            // A modest fraction carries blockers: mostly recent siblings
+            // in the same epic, sometimes anything created earlier
+            // anywhere. Always earlier in creation order — acyclic.
+            let mut blocked_by: Vec<String> = Vec::new();
+            if !root && rng.chance(25) {
+                let want = 1 + usize::from(rng.chance(30)) + usize::from(rng.chance(10));
+                for _ in 0..want {
+                    let candidate = if rng.chance(90) {
+                        let mine = &members[e];
+                        let window = mine.len().min(40);
+                        mine.get(mine.len() - window + rng.below(window)).copied()
+                    } else if i > 0 {
+                        Some(rng.below(i))
+                    } else {
+                        None
+                    };
+                    if let Some(c) = candidate {
+                        let bid = out[c].id.clone();
+                        if !blocked_by.contains(&bid) {
+                            blocked_by.push(bid);
+                        }
+                    }
+                }
+            }
+
+            let created = BASE_UNIX + i as i64 * STEP;
+            let updated = if status == Status::Pending {
+                created
+            } else {
+                created + rng.below(30 * 86_400) as i64
+            };
+            let body_s = body(&mut rng, &id, &blocked_by);
+
+            for bid in &blocked_by {
+                let bi = index[bid];
+                out[bi].unlocks.push(id.clone());
+                out[bi].updated_unix = out[bi].updated_unix.max(created);
+            }
+            members[e].push(i);
+            index.insert(id.clone(), i);
+            out.push(Ticket {
+                id,
+                epic,
+                seq: seq[e],
+                title: title_s,
+                status,
+                kind,
+                severity,
+                blocked_by,
+                unlocks: Vec::new(),
+                body: body_s,
+                created_unix: created,
+                updated_unix: updated,
+            });
+        }
+        out
+    }
 }
 
 /// SQL for the system of record. Private: the rest of the application
@@ -701,6 +1125,36 @@ mod db {
                 t.updated_unix,
             ],
         )?;
+        Ok(())
+    }
+
+    /// PERF-2: inserts many fresh rows inside the caller's transaction
+    /// through one prepared statement. Plain INSERT (no upsert): seeded
+    /// ids are allocated above existing maxima, so a conflict here would
+    /// be a generator bug and must surface, not overwrite.
+    pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Result<()> {
+        let mut stmt = conn.prepare_cached(
+            "INSERT INTO tickets
+                 (id, epic, seq, title, status, kind, severity,
+                  blocked_by, unlocks, body, created_unix, updated_unix)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        )?;
+        for t in tickets {
+            stmt.execute(params![
+                t.id,
+                t.epic,
+                t.seq,
+                t.title,
+                enum_str(&t.status),
+                enum_str(&t.kind),
+                t.severity.as_ref().map(enum_str),
+                serde_json::to_string(&t.blocked_by).expect("serialize ids"),
+                serde_json::to_string(&t.unlocks).expect("serialize ids"),
+                t.body,
+                t.created_unix,
+                t.updated_unix,
+            ])?;
+        }
         Ok(())
     }
 
@@ -956,6 +1410,219 @@ mod tests {
         let store = Store::open(&dir.path().join("brand-new.db")).unwrap();
         assert_eq!(store.count(), 0);
         assert!(store.create(new_ticket("NEW", "works")).await.is_ok());
+    }
+
+    // ---- PERF-2: synthetic seeding -------------------------------------
+
+    fn spec(count: usize, seed: u64) -> SeedSpec {
+        SeedSpec {
+            count,
+            seed,
+            into_existing: false,
+        }
+    }
+
+    /// Iterative DFS over `blocked_by`, reporting the first back edge.
+    fn has_cycle(tickets: &HashMap<String, Ticket>) -> Option<String> {
+        // 0 = unvisited, 1 = on the stack, 2 = done.
+        let mut color: HashMap<&str, u8> = HashMap::with_capacity(tickets.len());
+        for start in tickets.keys() {
+            if color.get(start.as_str()).copied().unwrap_or(0) != 0 {
+                continue;
+            }
+            let mut stack: Vec<(&str, usize)> = vec![(start.as_str(), 0)];
+            color.insert(start.as_str(), 1);
+            while let Some((id, next)) = stack.pop() {
+                let edges = &tickets[id].blocked_by;
+                if next < edges.len() {
+                    stack.push((id, next + 1));
+                    let b = edges[next].as_str();
+                    match color.get(b).copied().unwrap_or(0) {
+                        0 => {
+                            if tickets.contains_key(b) {
+                                color.insert(b, 1);
+                                stack.push((b, 0));
+                            }
+                        }
+                        1 => return Some(format!("{id} -> {b}")),
+                        _ => {}
+                    }
+                } else {
+                    color.insert(id, 2);
+                }
+            }
+        }
+        None
+    }
+
+    /// PERF-2 criterion 1 at the store level, on 10⁴: the count, a
+    /// realistic spread (several epics, every status and kind present),
+    /// a modest fraction with blockers, and the DAG invariants — no
+    /// dangling blocker, `unlocks` mirrors every `blocked_by` exactly,
+    /// no cycle — plus `ready_set` and `blockers` answering correctly
+    /// against an independent computation. And it all persisted: a
+    /// reopen of the file loads the same tickets.
+    #[tokio::test]
+    async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("seeded.db");
+        let store = Store::open(&path).unwrap();
+        let report = store.seed_synthetic(spec(10_000, 42)).unwrap();
+        assert_eq!(report.count, 10_000);
+        assert_eq!(store.count(), 10_000);
+        assert!(report.epics >= 10, "several epics, got {}", report.epics);
+        assert!(report.edges > 0);
+
+        let all = store.list(None, None);
+        assert_eq!(all.len(), 10_000);
+        let by_id: HashMap<String, Ticket> = all.iter().map(|t| (t.id.clone(), t.clone())).collect();
+
+        // Shape: every status and kind occurs; ids are EPIC-N with N
+        // contiguous per epic from 1.
+        for s in [
+            Status::Pending,
+            Status::Ready,
+            Status::Blocked,
+            Status::Complete,
+            Status::Idea,
+            Status::Epic,
+            Status::Superseded,
+        ] {
+            assert!(all.iter().any(|t| t.status == s), "status {s:?} present");
+        }
+        for k in [Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike] {
+            assert!(all.iter().any(|t| t.kind == k), "kind {k:?} present");
+        }
+        let mut per_epic: HashMap<&str, Vec<u32>> = HashMap::new();
+        for t in &all {
+            assert_eq!(t.id, format!("{}-{}", t.epic, t.seq));
+            per_epic.entry(t.epic.as_str()).or_default().push(t.seq);
+        }
+        assert_eq!(per_epic.len(), report.epics);
+        for (epic, mut seqs) in per_epic {
+            seqs.sort_unstable();
+            assert_eq!(seqs, (1..=seqs.len() as u32).collect::<Vec<_>>(), "{epic} ids contiguous");
+        }
+        let with_blockers = all.iter().filter(|t| !t.blocked_by.is_empty()).count();
+        assert!(
+            with_blockers * 100 / all.len() >= 10 && with_blockers * 100 / all.len() <= 40,
+            "a modest fraction carries blockers, got {with_blockers}/10000"
+        );
+        assert!(all.iter().all(|t| !t.body.is_empty() && t.body.starts_with("## Problem")));
+
+        // DAG invariants.
+        let mut edges = 0;
+        for t in &all {
+            for b in &t.blocked_by {
+                let blocker = by_id.get(b).unwrap_or_else(|| panic!("{}: dangling blocker {b}", t.id));
+                assert!(blocker.unlocks.contains(&t.id), "{b}.unlocks lacks {}", t.id);
+                edges += 1;
+            }
+            for u in &t.unlocks {
+                let dependent = by_id.get(u).unwrap_or_else(|| panic!("{}: unlocks names {u}", t.id));
+                assert!(dependent.blocked_by.contains(&t.id), "{u}.blocked_by lacks {}", t.id);
+            }
+        }
+        assert_eq!(edges, report.edges);
+        assert_eq!(has_cycle(&by_id), None);
+
+        // ready_set against an independent computation over `list`.
+        let expected: Vec<String> = all
+            .iter()
+            .filter(|t| t.status == Status::Ready)
+            .filter(|t| t.blocked_by.iter().all(|b| satisfied(by_id[b].status)))
+            .map(|t| t.id.clone())
+            .collect();
+        let got: Vec<String> = store.ready_set(None).into_iter().map(|t| t.id).collect();
+        assert!(!got.is_empty());
+        assert_eq!(got, expected);
+        // ...and it is doing real work: some Ready tickets are held back.
+        assert!(
+            all.iter().filter(|t| t.status == Status::Ready).count() > got.len(),
+            "some Ready tickets have unsatisfied blockers"
+        );
+
+        // blockers on a sampled ticket with several blockers.
+        let sample = all.iter().filter(|t| t.blocked_by.len() >= 2).nth(7).expect("a multi-blocker ticket");
+        let refs = store.blockers(&sample.id).unwrap();
+        assert_eq!(refs.len(), sample.blocked_by.len());
+        for (r, b) in refs.iter().zip(&sample.blocked_by) {
+            match r {
+                BlockerRef::Resolved(t) => assert_eq!(&t.id, b),
+                BlockerRef::Dangling(d) => panic!("{}: {d} dangling", sample.id),
+            }
+        }
+
+        // Persisted: a reopen finds the same tickets (write-through happened).
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.count(), 10_000);
+        assert_eq!(reopened.list(None, None), all);
+    }
+
+    /// Criterion 4: the same seed value produces byte-identical tickets;
+    /// a different one produces different tickets.
+    #[test]
+    fn seed_is_deterministic_per_seed_value() {
+        let a = Store::new();
+        let b = Store::new();
+        let c = Store::new();
+        a.seed_synthetic(spec(500, 7)).unwrap();
+        b.seed_synthetic(spec(500, 7)).unwrap();
+        c.seed_synthetic(spec(500, 8)).unwrap();
+        let la = a.list(None, None);
+        assert_eq!(la, b.list(None, None));
+        assert_ne!(la, c.list(None, None));
+        assert_eq!(serde_json::to_string(&la).unwrap(), serde_json::to_string(&b.list(None, None)).unwrap());
+    }
+
+    /// Criterion 3: a store that already holds tickets refuses the seed
+    /// (nothing written) unless explicitly allowed — and then ids
+    /// continue after the existing maxima, never colliding.
+    #[tokio::test]
+    async fn seed_refuses_an_existing_store_unless_allowed_then_continues_ids() {
+        let store = Store::new();
+        store.create(new_ticket("REAL", "already here")).await.unwrap();
+
+        let err = store.seed_synthetic(spec(100, 1)).unwrap_err();
+        assert!(matches!(err, StoreError::SeedRefused { existing: 1 }), "{err}");
+        assert!(err.to_string().contains("already holds 1 ticket"), "{err}");
+        assert_eq!(store.count(), 1, "nothing was written");
+
+        let allowed = SeedSpec {
+            into_existing: true,
+            ..spec(100, 1)
+        };
+        store.seed_synthetic(allowed).unwrap();
+        assert_eq!(store.count(), 101);
+        // Seeding the same spec again regenerates the same epics: the
+        // second batch must continue their numbering (the normal
+        // allocation), which the UNIQUE (epic, seq) constraint would
+        // otherwise reject.
+        store.seed_synthetic(allowed).unwrap();
+        assert_eq!(store.count(), 201);
+        let all = store.list(None, None);
+        let mut ids: Vec<&str> = all.iter().map(|t| t.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), 201);
+        assert!(store.get("REAL-1").is_some());
+        // The normal write path still works afterwards.
+        let next = store.create(new_ticket("REAL", "after the seed")).await.unwrap();
+        assert_eq!(next.id, "REAL-2");
+    }
+
+    #[test]
+    fn seed_of_zero_is_a_no_op_and_small_counts_work() {
+        let store = Store::new();
+        let r = store.seed_synthetic(spec(0, 1)).unwrap();
+        assert_eq!((r.count, r.epics, r.edges), (0, 0, 0));
+        assert_eq!(store.count(), 0);
+        for n in [1, 2, 3, 10] {
+            let s = Store::new();
+            s.seed_synthetic(spec(n, 1)).unwrap();
+            assert_eq!(s.count(), n);
+        }
     }
 
     #[tokio::test]
