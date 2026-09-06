@@ -99,12 +99,12 @@ console_error_panic_hook = "0.1"
 # stylesheet guards, md.rs, nav.rs, keys.rs) — `ws-web` is a
 # `compile_error!` off wasm32, on purpose.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-plexus-client = { path = "../../plexus-macros-macro-6/plexus-client", features = [
+plexus-client = { path = "../../plexus-macros/plexus-client", features = [
   "ws-web",
 ] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-plexus-client = { path = "../../plexus-macros-macro-6/plexus-client", features = [
+plexus-client = { path = "../../plexus-macros/plexus-client", features = [
   "ws-native",
 ] }
 

@@ -126,8 +126,8 @@ async fn main() -> anyhow::Result<()> {
                         .with_server_name("menger".into())
                         .with_server_version(env!("CARGO_PKG_VERSION").into()),
                 )
-                .with_mcp_flat_schemas(hub.list_plugin_schemas()) // registers /rest/tickets/*
-                .with_mcp_route_fn(route_fn); // dispatches via hub.route()
+                .with_flat_schemas(hub.list_plugin_schemas()) // registers /rest/tickets/*
+                .with_route_fn(route_fn); // dispatches via hub.route()
             tracing::info!("REST:      http://127.0.0.1:{}/rest", args.rest_port);
         }
         if !args.no_shell {

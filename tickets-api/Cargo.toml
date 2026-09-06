@@ -42,11 +42,11 @@ server = []
 serde = { version = "1", features = ["derive"] }
 schemars = { version = "1.1", features = ["derive"] }
 
-# The 0.6 dev line, by worktree path (the plexus 0.6 crates are unpublished;
-# `plexus-client` is `default-features = false` here — the browser app adds
-# the `ws-web` backend itself).
-plexus-macros = { path = "../../plexus-macros-macro-6", optional = true }
-plexus-client = { path = "../../plexus-macros-macro-6/plexus-client", optional = true }
+# The 0.6 line, by sibling path (unpublished — MFE-10; the same checkouts
+# the server uses). `plexus-client` is `default-features = false` here —
+# the browser app adds the `ws-web` backend itself.
+plexus-macros = { path = "../../plexus-macros", optional = true }
+plexus-client = { path = "../../plexus-macros/plexus-client", optional = true }
 
 [dev-dependencies]
 # The wire-casing tests below assert what serde writes.

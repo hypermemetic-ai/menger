@@ -28,12 +28,18 @@ path = "src/main.rs"
 # client, plexus 0.6) is the frontend's, and stays out of this graph.
 menger-tickets-api = { path = "tickets-api" }
 
-plexus-core = "0.5"
-plexus-macros = "0.5"
-# Slim: default features off drops the rmcp/MCP stack; http-gateway enables
-# the REST + SSE bridge (MNG-8). Note rmcp still arrives via plexus-core —
-# out of scope here, see plans/MNG/artifacts/MNG-8-result.md.
-plexus-transport = { version = "0.2", default-features = false, features = ["http-gateway"] }
+# MFE-10: the plexus 0.6 line — plexus-core 0.6.0, plexus-macros 0.6.0
+# (the `client` / `server_cfg` activation flags, MACRO-4) and
+# plexus-transport 0.5.0 (the REST bridge fixes ported to HEAD, pinned to
+# core 0.6). None of it is published: the three come from the sibling
+# checkouts on `main`, which reference each other the same way, so the
+# graph resolves exactly one of each. Publishing or tagging the line
+# (MACRO-8) turns these into version requirements again.
+plexus-core = { path = "../plexus-core" }
+plexus-macros = { path = "../plexus-macros" }
+# Slim: default features off keeps the rmcp/MCP stack out (default-off as
+# of 0.5.0 anyway); http-gateway enables the REST + SSE bridge (MNG-8).
+plexus-transport = { path = "../plexus-transport", default-features = false, features = ["http-gateway"] }
 
 tokio = { version = "1", features = ["full"] }
 async-stream = "0.3"
@@ -78,10 +84,6 @@ tempfile = "3"
 # the spawned binary via hyper/hyper-util/http-body-util — all moved to
 # [dependencies] with MFE-2 (the shell's /rest proxy client).
 
-# MNG-8: the REST bridge shipped broken in every published plexus-transport
-# (0.2.2 http-gateway never compiled; 0.3.0 is byte-identical — see
-# plans/MNG/artifacts/MNG-8-result.md). The repaired 0.2.3 is tagged on the
-# public repo but not published to crates.io, so the 0.2 requirement above
-# is satisfied from the git tag instead.
-[patch.crates-io]
-plexus-transport = { git = "https://github.com/hypermemetic-ai/plexus-transport.git", tag = "plexus-transport-v0.2.3" }
+# MNG-8's `[patch.crates-io]` on the plexus-transport-v0.2.3 tag went with
+# MFE-10: the REST bridge fixes it carried are on plexus-transport `main`
+# (0.5.0), consumed by path above.
