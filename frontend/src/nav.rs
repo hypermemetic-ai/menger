@@ -29,13 +29,43 @@
 //! one column of monospace text while every row shows what shape of work
 //! it is; the row carries `data-kind` and a `title` for the reader who
 //! wants the word.
+//!
+//! AGS-18: the tree is a real WAI-ARIA tree — `tree` / `treeitem` /
+//! `group` with `aria-expanded` / `aria-selected` (levels come from the
+//! `aria-owns` structure: leptos 0.8 has no `aria-level` attribute), a
+//! roving tabindex (exactly one row is the tab stop), and [`tree_keydown`]
+//! for the pattern's key map: Up/Down (j/k) move, Right/Left (l/h) open a
+//! group or step between group and child, Enter opens the focused ticket,
+//! Home/End jump. Selection still belongs to the route — the *focused*
+//! row and the *selected* row are two different things, and the palette
+//! paints them differently.
 
 use std::collections::BTreeSet;
 
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{net, st_class, Route, Row};
+use crate::{keys, net, st_class, Route, Row};
+
+/// Every treeitem in the nav, in document order (group rows and leaves).
+fn tree_items() -> Vec<web_sys::HtmlElement> {
+    keys::query_all("#nav .tree [role=treeitem]")
+}
+
+/// The rows a keystroke can reach: the tree minus the children of
+/// collapsed groups (collapse is `display: none`, so "rendered" is the
+/// whole test).
+fn visible_items() -> Vec<web_sys::HtmlElement> {
+    tree_items().into_iter().filter(keys::is_visible).collect()
+}
+
+/// Seed the tree's tab stop after a render: the selected row when it is
+/// on screen, else the first row — so Tab from a cold load lands in the
+/// nav at the ticket the page is showing.
+fn ensure_tree_tab_stop() {
+    keys::ensure_tab_stop("#nav .tree [role=treeitem]", Some("#nav .tree .row.sel"));
+}
 
 const EXPANDED_KEY: &str = "menger.nav.expanded";
 const HIDDEN_KEY: &str = "menger.nav.hidden";
@@ -111,6 +141,136 @@ fn scroll_selected_into_view() {
     }
 }
 
+/// The WAI-ARIA tree key map (AGS-18), one handler on the tree itself —
+/// keystrokes arrive here having bubbled from whichever row has focus,
+/// so there is no per-row listener and no second notion of "current".
+///
+/// Up/Down (j/k) walk the visible rows; Right (l) opens a closed group or
+/// steps into an open one; Left (h) closes an open group or steps out to
+/// a leaf's group row; Enter opens the focused ticket (or toggles a
+/// group); Home/End jump. Everything else — `/`, `?`, `g h` — is left to
+/// bubble to the global listener.
+fn tree_keydown(ev: web_sys::KeyboardEvent, expanded: RwSignal<BTreeSet<String>>) {
+    if ev.default_prevented() || ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+        return;
+    }
+    let key = ev.key();
+    // `g h` first, so the sequence still reaches the board from inside
+    // the tree, where `h` otherwise means "collapse".
+    if keys::consume_go_prefix(&key) {
+        ev.prevent_default();
+        ev.stop_propagation();
+        return;
+    }
+    let Some(target) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else {
+        return;
+    };
+    let Ok(Some(current)) = target.closest("[role=treeitem]") else {
+        return;
+    };
+    // Rove over every treeitem (a row hidden by a collapse must not keep
+    // the tab stop), but walk only the visible ones.
+    let all = tree_items();
+    let items = visible_items();
+    let Some(cur) = items.iter().position(|el| el.is_same_node(Some(&current))) else {
+        return;
+    };
+    // A leaf is a ticket row (it carries the id); anything else in the
+    // tree is a group row.
+    let leaf_id = current.get_attribute("data-nav-id");
+    let group = current
+        .closest(".group")
+        .ok()
+        .flatten()
+        .and_then(|g| g.get_attribute("data-group"));
+    let open = current.get_attribute("aria-expanded").as_deref() == Some("true");
+    let toggle = |g: Option<String>| {
+        if let Some(g) = g {
+            expanded.update(|e| {
+                if !e.remove(&g) {
+                    e.insert(g);
+                }
+            });
+        }
+    };
+
+    let handled = match key.as_str() {
+        "ArrowDown" | "j" => {
+            if cur + 1 < items.len() {
+                keys::focus_and_rove(&all, &items[cur + 1]);
+            }
+            true
+        }
+        "ArrowUp" | "k" => {
+            if cur > 0 {
+                keys::focus_and_rove(&all, &items[cur - 1]);
+            }
+            true
+        }
+        "Home" => {
+            keys::focus_and_rove(&all, &items[0]);
+            true
+        }
+        "End" => {
+            let last = items.len() - 1;
+            keys::focus_and_rove(&all, &items[last]);
+            true
+        }
+        // Open a closed group in place; step into an open one. On a leaf
+        // there is nowhere further in — the pattern says do nothing.
+        "ArrowRight" | "l" => {
+            if leaf_id.is_none() {
+                if !open {
+                    toggle(group);
+                } else if cur + 1 < items.len() {
+                    keys::focus_and_rove(&all, &items[cur + 1]);
+                }
+            }
+            true
+        }
+        // Close an open group in place; from a leaf, step out to its
+        // group row (which is where a second Left then closes it).
+        "ArrowLeft" | "h" => {
+            match leaf_id {
+                None => {
+                    if open {
+                        toggle(group);
+                    }
+                }
+                // The group row is a sibling of the .kids wrapper, so it
+                // is reached through the group, not by closest().
+                Some(_) => {
+                    if let Some(row) = current
+                        .closest(".group")
+                        .ok()
+                        .flatten()
+                        .and_then(|g| g.query_selector(".grouprow").ok().flatten())
+                        .and_then(|r| r.dyn_into::<web_sys::HtmlElement>().ok())
+                    {
+                        keys::focus_and_rove(&all, &row);
+                    }
+                }
+            }
+            true
+        }
+        "Enter" => {
+            match &leaf_id {
+                // The row is a real <a href>, so the browser would
+                // navigate anyway; doing it here keeps one code path (and
+                // one history entry) for every way a ticket is opened.
+                Some(id) => crate::navigate_to_ticket(id),
+                None => toggle(group),
+            }
+            true
+        }
+        _ => false,
+    };
+    if handled {
+        ev.prevent_default();
+        ev.stop_propagation();
+    }
+}
+
 /// The left panel: brand header + the tree. Always mounted; the App hides
 /// it with a class so its DOM (and every row's identity) survives a
 /// hide/reveal.
@@ -166,6 +326,20 @@ pub(crate) fn Nav(
         });
     });
 
+    // AGS-18: keep exactly one row as the tree's tab stop as the forest
+    // changes shape (rows arrive, a group opens, the route moves). The
+    // work is a DOM read plus at most two attribute writes, a tick after
+    // the render that changed things.
+    Effect::new(move |_| {
+        rows.with(|v| v.len());
+        expanded.with(|e| e.len());
+        let _ = route.get();
+        spawn_local(async {
+            net::sleep_ms(0).await;
+            ensure_tree_tab_stop();
+        });
+    });
+
     view! {
         <aside id="nav" class="nav">
             <div class="brand">
@@ -180,7 +354,12 @@ pub(crate) fn Nav(
                 </button>
             </div>
             <div class="tree-scroll">
-                <div class="tree" role="tree">
+                <div
+                    class="tree"
+                    role="tree"
+                    aria-label="tickets"
+                    on:keydown=move |ev| tree_keydown(ev, expanded)
+                >
                     <For
                         each=move || groups.get()
                         key=|g| g.clone()
@@ -251,12 +430,19 @@ fn group_view(
         }
     };
 
+    // AGS-18: the wrapper is scaffolding, not a node of the tree; the
+    // group row owns its children through `aria-owns`, so the a11y tree
+    // is `tree > treeitem > group > treeitem` while the DOM keeps the
+    // flat shape the CSS (and AGS-12's collapse-is-a-class) needs.
+    let kids_id = format!("nav-kids-{g}");
     view! {
-        <div class="group" data-group=g.clone() class:collapsed=move || !open.get()>
+        <div class="group" role="none" data-group=g.clone() class:collapsed=move || !open.get()>
             <div
                 class="row grouprow"
                 role="treeitem"
+                tabindex="-1"
                 aria-expanded=move || open.get().to_string()
+                aria-owns=kids_id.clone()
                 on:click=toggle
             >
                 <span class="prefix">{move || if last_group.get() { "└── " } else { "├── " }}</span>
@@ -264,7 +450,7 @@ fn group_view(
                 <span class="code">{g.clone()}</span>
                 <span class="tag roll">{rollup}</span>
             </div>
-            <div class="kids" role="group">
+            <div class="kids" role="group" id=kids_id>
                 <For
                     each=kids
                     key=|r| r.id.clone()
@@ -311,6 +497,7 @@ fn leaf_view(
             class="row leaf"
             class:sel=move || sel.get()
             role="treeitem"
+            tabindex="-1"
             aria-selected=move || sel.get().to_string()
             data-nav-id=id.clone()
             data-kind=kind

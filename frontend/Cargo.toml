@@ -40,7 +40,9 @@ js-sys = "0.3"
 # Location for the hash, Element for closest()), and the mermaid mounter
 # (AGS-14: Document/Node/NodeList to inject the script and walk
 # placeholders, HtmlElement for onload/onerror, CssStyleDeclaration to
-# read the palette's background) touch.
+# read the palette's background) touch. AGS-18 adds the keyboard layer's
+# KeyboardEvent plus the two elements it focuses (the palette's input,
+# the cheat sheet's close button).
 web-sys = { version = "0.3", features = [
   "Window",
   "Headers",
@@ -62,6 +64,9 @@ web-sys = { version = "0.3", features = [
   "HtmlDivElement",
   "HtmlHeadElement",
   "CssStyleDeclaration",
+  "KeyboardEvent",
+  "HtmlInputElement",
+  "HtmlButtonElement",
 ] }
 
 console_error_panic_hook = "0.1"

@@ -39,6 +39,11 @@
        families */
     --live: #256b1a;
     --err-bg: #fdecec; --err-fg: #a23; --err-line: #f3c5c5;
+    /* AGS-18: the keyboard layer's two surfaces — the dimmed page behind
+       an overlay, and the lift under a dialog. (The focus ring itself is
+       --accent; it needs no token of its own.) */
+    --scrim: rgba(31, 35, 40, .34);
+    --shadow: rgba(31, 35, 40, .22);
     /* AGS-13 kind glyphs keep their per-kind tint (scope gold · build
        blue · execution green · gap red · spike purple), re-expressed as
        the light palette's inks so each reads on --panel. */
@@ -233,6 +238,71 @@
   #nav .leaf[data-kind="execution"] .toggle.kind { color: var(--kind-execution); }
   #nav .leaf[data-kind="gap"] .toggle.kind { color: var(--kind-gap); }
   #nav .leaf[data-kind="spike"] .toggle.kind { color: var(--kind-spike); }
+  /* AGS-18: the keyboard layer. Focus is visible wherever it can land —
+     a 2px accent ring, deliberately unlike the selected row (which is a
+     --row-sel tint with an inset accent bar), so "where I am" and "what
+     is open" never read as the same thing. */
+  #nav .row:focus, tbody#board tr:focus, #palette-input:focus, #cheats .close:focus {
+    outline: 2px solid var(--accent); outline-offset: -2px;
+  }
+  #nav .row:focus { border-radius: 2px; }
+  /* The two overlays (jump palette, cheat sheet). */
+  .overlay {
+    position: fixed; inset: 0; z-index: 40; background: var(--scrim);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 12vh 1rem 1rem;
+  }
+  .dialog {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 12px 40px var(--shadow); max-width: 100%; overflow: hidden;
+  }
+  #palette { width: 44rem; display: flex; flex-direction: column; max-height: 68vh; }
+  #palette-input {
+    font: inherit; font-size: .9rem; padding: .55rem .8rem;
+    background: var(--bg); color: var(--ink);
+    border: 0; border-bottom: 1px solid var(--line); border-radius: 0;
+  }
+  #palette-list { list-style: none; margin: 0; padding: .25rem 0; overflow: auto; flex: 1; min-height: 0; }
+  #palette-list li {
+    display: flex; align-items: center; gap: 6px; padding: .1rem .8rem;
+    font-size: 12.5px; line-height: 1.55; white-space: nowrap; cursor: pointer;
+  }
+  #palette-list li:hover { background: var(--hover); }
+  #palette-list li.hi { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
+  #palette-list li .code {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: var(--chip-fg);
+    background: var(--chip-bg); border: 1px solid var(--chip-line); border-radius: 5px;
+    padding: 0 5px;
+  }
+  /* Layout only — the status chip's face comes from the status table. */
+  #palette-list li .tag {
+    flex: none; margin-left: auto; width: 6.5em; text-align: center; box-sizing: border-box;
+    font-size: 10px; padding: 0 5px; border-radius: 6px;
+  }
+  #palette-list li .label { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  #palette-list li.empty, #palette .hint { color: var(--muted); font-size: .75rem; }
+  #palette-list li.empty { padding: .3rem .8rem; cursor: default; }
+  #palette .hint { padding: .35rem .8rem; border-top: 1px solid var(--line); }
+  #cheats { width: 32rem; padding: .9rem 1.1rem 1rem; }
+  #cheats h2 { font-size: .95rem; margin: 0 0 .7rem; }
+  #cheats dl {
+    margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: .3rem .9rem;
+    font-size: .85rem;
+  }
+  #cheats dt, #cheats dd { margin: 0; }
+  #cheats dd { color: var(--muted); }
+  #cheats kbd {
+    font-family: var(--mono); font-size: 11px; color: var(--chip-fg);
+    background: var(--chip-bg); border: 1px solid var(--chip-line);
+    border-radius: 5px; padding: 0 5px;
+  }
+  #cheats .close {
+    margin-top: .9rem; font: inherit; font-size: .8rem; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+    border-radius: 4px; padding: .1rem .5rem;
+  }
+  #cheats .close:hover { color: var(--accent); border-color: var(--accent); }
+
   /* AGS-14: mermaid placeholders → diagrams. The renderer picks its
      theme from body's computed background (light → mermaid `default`). */
   .md .mermaid {

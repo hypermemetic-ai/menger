@@ -34,6 +34,14 @@
 //! renderer (served by menger, fetched only when a body has a fence) and
 //! draws in strict mode, painting failures inline.
 
+//! AGS-18: the app is drivable from the keyboard alone (src/keys.rs): the
+//! nav is a WAI-ARIA tree with a roving tabindex, board rows take focus
+//! and open on Enter, `/` (or Ctrl/⌘+K) opens a jump palette and `?` a
+//! cheat sheet — both `role="dialog"` overlays that trap Tab and give
+//! focus back. Mouse behavior is untouched; the keyboard is an addition,
+//! not a mode.
+
+mod keys;
 mod md;
 mod nav;
 
@@ -300,7 +308,7 @@ fn use_route() -> RwSignal<Route> {
     route
 }
 
-fn navigate_to_ticket(id: &str) {
+pub(crate) fn navigate_to_ticket(id: &str) {
     let _ = net::window().location().set_hash(&format!("/ticket/{id}"));
 }
 
@@ -325,6 +333,17 @@ fn fmt_unix(unix: i64) -> String {
 /// the ticket page.
 #[component]
 fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl IntoView {
+    // AGS-18: rows are focusable (roving tabindex — every row renders
+    // with -1 and exactly one is promoted to 0), so j/k move a real focus
+    // and Enter opens what is focused. The status <select> keeps its own
+    // place in the tab order, after the row.
+    Effect::new(move |_| {
+        rows.with(|v| v.len());
+        spawn_local(async {
+            net::sleep_ms(0).await;
+            keys::ensure_board_tab_stop();
+        });
+    });
     view! {
         <table>
             <thead>
@@ -347,6 +366,7 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                         view! {
                             <tr
                                 data-ticket-id=row.id.clone()
+                                tabindex="-1"
                                 on:click=move |ev| {
                                     // The select (and its options) keep their own
                                     // behavior; the id link handles itself.
@@ -710,6 +730,12 @@ fn App() -> impl IntoView {
     let nav_hidden = RwSignal::new(nav::load_hidden());
     Effect::new(move |_| nav::save_hidden(nav_hidden.get()));
 
+    // AGS-18: one window-level key listener for the app's lifetime, and
+    // the overlay it opens. Both are additive — every existing pointer
+    // path is untouched.
+    let overlay = RwSignal::new(keys::Overlay::None);
+    keys::install(overlay);
+
     view! {
         <div id="app" class:nonav=move || nav_hidden.get()>
             <nav::Nav rows route hidden=nav_hidden />
@@ -751,6 +777,7 @@ fn App() -> impl IntoView {
                     }}
                 </main>
             </div>
+            <keys::Overlays rows overlay />
         </div>
     }
 }
@@ -871,6 +898,38 @@ mod tests {
         assert!(root_literals >= 10, "the token block holds the palette ({root_literals} lines)");
         assert_eq!(table_rows, STATUSES.len(), "one table row per status");
         assert!(strays.is_empty(), "color literals outside the token block / status table:\n{}", strays.join("\n"));
+    }
+
+    /// AGS-18: focus is painted wherever a key can put it — the nav
+    /// tree's rows, the board's rows, the palette's input — and it is
+    /// painted as a *ring*, from the token layer. The selected row keeps
+    /// its own idiom (a `--row-sel` tint with an inset accent bar), so
+    /// "where I am" and "what is open" cannot collapse into one look.
+    #[test]
+    fn focus_is_a_token_ring_and_not_the_selected_row_s_tint() {
+        let css = app_css();
+        let lines: Vec<&str> = css.lines().map(str::trim).collect();
+        let start = lines
+            .iter()
+            .position(|l| l.starts_with("#nav .row:focus,"))
+            .expect("no focus rule for the nav and board rows");
+        let block: String = lines[start..]
+            .iter()
+            .take_while(|l| !l.starts_with('}'))
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for reachable in ["#nav .row:focus", "tbody#board tr:focus", "#palette-input:focus"] {
+            assert!(block.contains(reachable), "{reachable} has no focus ring: {block}");
+        }
+        assert!(block.contains("outline:") && block.contains("var(--accent)"), "{block}");
+        // A ring, not a fill: the selected row is the one with a tint.
+        assert!(!block.contains("background"), "focus paints a background: {block}");
+        let sel = lines
+            .iter()
+            .find(|l| l.starts_with("#nav .row.sel {"))
+            .expect("no selected-row rule");
+        assert!(sel.contains("var(--row-sel)") && sel.contains("inset"), "{sel}");
     }
 
     #[test]
