@@ -29,7 +29,7 @@ use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
-use crate::{mermaid, net};
+use crate::{dom, mermaid};
 
 /// The localStorage key; the value is `"light"` or `"dark"`, and the key
 /// is absent for the system default. index.html's pre-paint script reads
@@ -112,7 +112,7 @@ impl Theme {
 /// localStorage, or None where it is unavailable (private mode, blocked
 /// site data): the choice is then "not remembered" — the try/catch.
 fn storage() -> Option<web_sys::Storage> {
-    net::window().local_storage().ok().flatten()
+    dom::window().local_storage().ok().flatten()
 }
 
 pub(crate) fn load() -> Theme {
@@ -131,7 +131,7 @@ pub(crate) fn save(t: Theme) {
 /// Stamp (or clear) `data-theme` on `<html>`. This is the whole switch:
 /// the CSS does the rest.
 pub(crate) fn apply(t: Theme) {
-    let Some(root) = net::window().document().and_then(|d| d.document_element()) else {
+    let Some(root) = dom::window().document().and_then(|d| d.document_element()) else {
         return;
     };
     let _ = match t.as_value() {
@@ -141,7 +141,7 @@ pub(crate) fn apply(t: Theme) {
 }
 
 fn media() -> Option<web_sys::MediaQueryList> {
-    net::window().match_media(MEDIA).ok().flatten()
+    dom::window().match_media(MEDIA).ok().flatten()
 }
 
 fn system_prefers_dark() -> bool {

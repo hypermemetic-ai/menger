@@ -9,7 +9,7 @@ name = "menger-app"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "menger's Leptos CSR frontend — consumes the REST + SSE surface like any other client"
+description = "menger's Leptos CSR frontend — on the streamed Plexus RPC client over one WebSocket"
 
 [workspace]
 
@@ -17,7 +17,19 @@ description = "menger's Leptos CSR frontend — consumes the REST + SSE surface 
 # Owner-pinned: Leptos, CSR only — no ssr/hydrate/server-fn/router features.
 leptos = { version = "0.8", features = ["csr"] }
 
-serde = { version = "1", features = ["derive"] }
+# MFE-9: the app's data plane. `menger-tickets-api` is menger's OWN
+# declaration of the ticket vocabulary and of the `tickets` activation —
+# the same crate the server depends on — so a row is the server's
+# `TicketSummary`, not a mirror of its JSON, and a renamed field fails this
+# build. `client` emits `MengerTicketsClient<T>`; `plexus-client`'s `ws-web`
+# is the browser WebSocket backend (MACRO-6). Neither drags plexus-core,
+# tokio or jsonrpsee into the wasm — that is what the crate split buys.
+menger-tickets-api = { path = "../tickets-api", features = ["client"] }
+futures = { version = "0.3", default-features = false, features = ["std"] }
+
+# AGS-14 only: the config object handed to the vendored mermaid renderer
+# across the JS boundary (src/mermaid.rs). No wire data is a `Value` any
+# more — the client's typed events replaced all of it.
 serde_json = "1"
 
 # MFE-7: ticket bodies as markdown. Sanitization is done in the event
@@ -32,8 +44,11 @@ pulldown-cmark-escape = "0.11"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-# Only what the fetch + ReadableStream SSE client (src/net.rs), the
-# board's status control, the hash router / click-through (MFE-7:
+# MFE-9: net.rs's fetch + ReadableStream surface (Headers, Request,
+# RequestInit, Response, ReadableStream, ReadableStreamDefaultReader) is
+# gone with net.rs — the WebSocket bindings the data plane needs are
+# plexus-client's own, declared there.
+# Only what the board's status control, the hash router / click-through (MFE-7:
 # Location for the hash, Element for closest()), and the left nav
 # (AGS-12: Storage for persisted collapse/hide, Document + the
 # ScrollIntoView pair to reveal the selected row) touch.
@@ -51,13 +66,9 @@ js-sys = "0.3"
 # the cheat sheet's close button).
 web-sys = { version = "0.3", features = [
   "Window",
-  "Headers",
-  "Request",
-  "RequestInit",
-  "Response",
-  "ReadableStream",
-  "ReadableStreamDefaultReader",
   "HtmlSelectElement",
+  # MFE-9: the WS port menger's shell stamps into the app's index.html.
+  "HtmlMetaElement",
   "Location",
   "Element",
   "Document",
@@ -81,6 +92,21 @@ web-sys = { version = "0.3", features = [
 ] }
 
 console_error_panic_hook = "0.1"
+
+# The WebSocket backend is picked by target, and `WsTransport` is one type
+# either way (MACRO-6). wasm32 is the app; the host build exists so
+# `cargo test` can compile and run the crate's native tests (the AGS-15/17
+# stylesheet guards, md.rs, nav.rs, keys.rs) — `ws-web` is a
+# `compile_error!` off wasm32, on purpose.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+plexus-client = { path = "../../plexus-macros-macro-6/plexus-client", features = [
+  "ws-web",
+] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+plexus-client = { path = "../../plexus-macros-macro-6/plexus-client", features = [
+  "ws-native",
+] }
 
 [profile.release]
 # WASM payload matters (MFE-2 records it for MFE-6); favor size.

@@ -90,7 +90,7 @@ pub fn mount(root: &Element) {
 /// stays `done`: no blank, no layout jump); a diagram still pending or
 /// mid-render is left to its own pass. Nothing here can throw.
 pub fn rerender_all() {
-    let Some(doc) = crate::net::window().document() else {
+    let Some(doc) = crate::dom::window().document() else {
         return;
     };
     let selector = format!(".{MERMAID_CLASS}[data-state=\"done\"][data-src]");
@@ -135,7 +135,7 @@ fn draw(el: Element, src: String) {
 /// The inline failure state: the message above the source, which stays.
 fn paint_error(el: &Element, msg: &str) {
     let _ = el.set_attribute("data-state", "error");
-    let Some(doc) = crate::net::window().document() else {
+    let Some(doc) = crate::dom::window().document() else {
         return;
     };
     if let Ok(p) = doc.create_element("p") {
@@ -169,7 +169,7 @@ async fn render_svg(src: String) -> Result<String, String> {
 
 /// The `mermaid` global once the bundle has run; `None` until then.
 fn mermaid_global() -> Option<Object> {
-    let v = Reflect::get(crate::net::window().as_ref(), &"mermaid".into()).ok()?;
+    let v = Reflect::get(crate::dom::window().as_ref(), &"mermaid".into()).ok()?;
     v.is_object().then(|| v.unchecked_into())
 }
 
@@ -198,7 +198,7 @@ async fn ensure_loaded() -> Result<Object, String> {
 /// closures to keep alive.
 fn inject_script() -> Promise {
     Promise::new(&mut |resolve, reject| {
-        let Some(doc) = crate::net::window().document() else {
+        let Some(doc) = crate::dom::window().document() else {
             let _ = reject.call1(&JsValue::NULL, &"no document".into());
             return;
         };
@@ -288,7 +288,7 @@ pub fn config_json(theme: &str) -> serde_json::Value {
 
 /// The page's computed body background, e.g. `rgb(16, 16, 20)`.
 fn body_background() -> String {
-    let window = crate::net::window();
+    let window = crate::dom::window();
     window
         .document()
         .and_then(|d| d.body())

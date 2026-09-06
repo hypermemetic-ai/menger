@@ -49,7 +49,8 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use crate::{keys, net, request_set_status, st_class, Row, STATUSES};
+use crate::{dom, keys, session, st_class, Row};
+use menger_tickets_api::Status;
 
 /// The menu's DOM id — the one element the document-level listeners
 /// test containment against.
@@ -114,7 +115,7 @@ pub(crate) fn step(current: Option<usize>, len: usize, key: &str) -> Option<usiz
 }
 
 fn document() -> web_sys::Document {
-    net::window().document().expect("document")
+    dom::window().document().expect("document")
 }
 
 fn menu_element() -> Option<web_sys::Element> {
@@ -142,7 +143,7 @@ fn focus(el: &web_sys::HtmlElement) {
 /// changes (the status list opening).
 fn place(el: &web_sys::HtmlElement, x: f64, y: f64) {
     let rect = el.get_bounding_client_rect();
-    let win = net::window();
+    let win = dom::window();
     let dim = |v: Result<JsValue, JsValue>| v.ok().and_then(|v| v.as_f64()).unwrap_or(f64::INFINITY);
     let (vw, vh) = (dim(win.inner_width()), dim(win.inner_height()));
     let (left, top) = clamp(x, y, rect.width(), rect.height(), vw, vh);
@@ -191,7 +192,7 @@ fn focused_ticket() -> Option<(String, f64, f64)> {
 /// Escape / outside mousedown / scroll / route change.
 fn install_listeners(target: RwSignal<Option<Target>>) {
     let doc = document();
-    let win = net::window();
+    let win = dom::window();
 
     let on_context = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
         let hit = ev
@@ -275,7 +276,7 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
 /// through `Reflect`: web-sys's `Clipboard` binding is behind its
 /// unstable-APIs cfg, and this is one call.
 fn clipboard_write(text: &str) -> Option<js_sys::Promise> {
-    let nav = net::window().navigator();
+    let nav = dom::window().navigator();
     let clip = Reflect::get(&nav, &"clipboard".into()).ok()?;
     if clip.is_undefined() || clip.is_null() {
         return None;
@@ -339,7 +340,7 @@ fn show_toast(toast: RwSignal<Option<Toast>>, gen: StoredValue<u32>, t: Toast) {
     let ms = if t.manual.is_some() { TOAST_MANUAL_MS } else { TOAST_MS };
     toast.set(Some(t));
     spawn_local(async move {
-        net::sleep_ms(ms).await;
+        dom::sleep_ms(ms).await;
         if gen.get_value() == g {
             toast.set(None);
         }
@@ -384,7 +385,7 @@ fn menu_view(
     };
     // Live through the row's signal: a status change arriving over watch
     // while the menu is open moves the mark.
-    let status = Memo::new(move |_| ticket.get().map(|s| s.with(|x| x.status.clone())).unwrap_or_default());
+    let status = Memo::new(move |_| ticket.get().map(|s| s.with(|x| x.status)));
     let title = move || ticket.get().map(|s| s.with(|x| x.title.clone())).unwrap_or_default();
     let sub = RwSignal::new(false);
     let root = NodeRef::<leptos::html::Div>::new();
@@ -420,7 +421,7 @@ fn menu_view(
                 // The list mounts on the next render tick; focus its
                 // first row once it exists.
                 spawn_local(async move {
-                    net::sleep_ms(0).await;
+                    dom::sleep_ms(0).await;
                     let first = root
                         .get_untracked()
                         .and_then(|el| items(&el).into_iter().find(|i| i.get_attribute("role").as_deref() == Some("menuitemradio")));
@@ -469,27 +470,28 @@ fn menu_view(
         let id = id.clone();
         move || {
             let id = id.clone();
-            STATUSES
-                .iter()
+            // MFE-9: the closed vocabulary from the type that owns it, so
+            // the chips and what `set_status` sends cannot disagree.
+            Status::ALL
+                .into_iter()
                 .map(|s| {
-                    let s = *s;
                     let id = id.clone();
-                    let current = move || status.get() == s;
+                    let current = move || status.get() == Some(s);
                     view! {
                         <button
                             class="item"
                             role="menuitemradio"
                             aria-checked=move || current().to_string()
-                            data-status=s
+                            data-status=s.as_str()
                             on:click=move |_| {
                                 if !current() {
-                                    request_set_status(id.clone(), s.to_string(), last_error, || {});
+                                    session::request_set_status(id.clone(), s, last_error, || {});
                                 }
                                 close();
                             }
                         >
                             <span class="mark" aria-hidden="true">{move || if current() { "✓" } else { "" }}</span>
-                            <span class=st_class(s)>{s}</span>
+                            <span class=st_class(s.as_str())>{s.as_str()}</span>
                         </button>
                     }
                 })
@@ -511,7 +513,9 @@ fn menu_view(
         >
             <div class="h">
                 <span class="code">{id.clone()}</span>
-                <span class=move || format!("tag {}", st_class(&status.get()))>{move || status.get()}</span>
+                <span class=move || {
+                    format!("tag {}", st_class(status.get().map_or("", |s| s.as_str())))
+                }>{move || status.get().map(|s| s.to_string()).unwrap_or_default()}</span>
                 <span class="title">{title}</span>
             </div>
             <a class="item" role="menuitem" href=href.clone() on:click=move |_| close()>"Open"</a>

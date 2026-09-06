@@ -53,6 +53,12 @@ pub fn default_app_dist() -> PathBuf {
 
 struct ShellState {
     rest_port: Option<u16>,
+    /// MFE-9: the app talks to the Plexus WebSocket directly, and a page
+    /// served from disk cannot know which port that is. Substituted into
+    /// the app's `index.html` on the way out, exactly as the vanilla shell
+    /// has always had it substituted into `web/index.html` — one
+    /// convention, not two.
+    ws_port: u16,
     app_dist: PathBuf,
     client: ProxyClient,
 }
@@ -61,6 +67,7 @@ pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
     let html = include_str!("../web/index.html").replace("{{WS_PORT}}", &cfg.ws_port.to_string());
     let state = Arc::new(ShellState {
         rest_port: cfg.rest_port,
+        ws_port: cfg.ws_port,
         app_dist: cfg.app_dist,
         client: hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
             .build_http(),
@@ -96,17 +103,17 @@ fn not_built() -> Response {
 }
 
 async fn app_index(State(st): State<Arc<ShellState>>) -> Response {
-    serve_dist_file(&st.app_dist, "index.html").await
+    serve_dist_file(&st.app_dist, "index.html", st.ws_port).await
 }
 
 async fn app_asset(
     State(st): State<Arc<ShellState>>,
     AxumPath(path): AxumPath<String>,
 ) -> Response {
-    serve_dist_file(&st.app_dist, &path).await
+    serve_dist_file(&st.app_dist, &path, st.ws_port).await
 }
 
-async fn serve_dist_file(dist: &std::path::Path, rel: &str) -> Response {
+async fn serve_dist_file(dist: &std::path::Path, rel: &str, ws_port: u16) -> Response {
     // No traversal: the wildcard must stay inside dist.
     if rel.split(['/', '\\']).any(|c| c == "..") || rel.contains('\0') {
         return (StatusCode::BAD_REQUEST, "bad path").into_response();
@@ -125,6 +132,17 @@ async fn serve_dist_file(dist: &std::path::Path, rel: &str) -> Response {
             // pins that the mermaid bundle is fetched only by pages that
             // hold a diagram.
             tracing::debug!("app asset served: /app/{rel} ({} bytes)", bytes.len());
+            // MFE-9: the entrypoint carries the WebSocket port. The app's
+            // index.html declares it as `{{WS_PORT}}` (see
+            // frontend/index.html); every other asset is served byte-exact.
+            let bytes = if rel == "index.html" {
+                match String::from_utf8(bytes) {
+                    Ok(text) => text.replace("{{WS_PORT}}", &ws_port.to_string()).into_bytes(),
+                    Err(e) => e.into_bytes(),
+                }
+            } else {
+                bytes
+            };
             let mime = match rel.rsplit('.').next() {
                 Some("html") => "text/html; charset=utf-8",
                 Some("js") => "text/javascript",

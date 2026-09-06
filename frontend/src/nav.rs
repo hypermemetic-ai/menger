@@ -61,7 +61,8 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{keys, net, st_class, Route, Row};
+use crate::{dom, keys, st_class, Route, Row};
+use menger_tickets_api::Status;
 
 /// Every treeitem in the nav, in document order (group rows and leaves).
 fn tree_items() -> Vec<web_sys::HtmlElement> {
@@ -88,7 +89,7 @@ const HIDDEN_KEY: &str = "menger.nav.hidden";
 /// localStorage, or None where it is unavailable (private mode, blocked
 /// site data). Every persistence call degrades to "not remembered".
 fn storage() -> Option<web_sys::Storage> {
-    net::window().local_storage().ok().flatten()
+    dom::window().local_storage().ok().flatten()
 }
 
 fn load_expanded() -> BTreeSet<String> {
@@ -394,7 +395,7 @@ pub(crate) fn plan(facts: &[Facts]) -> Plan {
 /// already visible). Called a tick after a route change so the `.sel`
 /// class has been applied.
 fn scroll_selected_into_view() {
-    let Some(doc) = net::window().document() else { return };
+    let Some(doc) = dom::window().document() else { return };
     if let Ok(Some(el)) = doc.query_selector("#nav .row.sel") {
         let opts = web_sys::ScrollIntoViewOptions::new();
         opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
@@ -560,7 +561,7 @@ pub(crate) fn Nav(
             v.iter()
                 .map(|r| {
                     let (kind, parent) =
-                        r.ticket.with_untracked(|t| (t.kind.clone(), t.parent.clone()));
+                        r.ticket.with_untracked(|t| (t.kind.to_string(), t.parent.clone()));
                     Facts {
                         id: r.id.clone(),
                         epic: r.epic.clone(),
@@ -620,7 +621,7 @@ pub(crate) fn Nav(
             expanded.update(|e| e.extend(missing));
         }
         spawn_local(async {
-            net::sleep_ms(0).await;
+            dom::sleep_ms(0).await;
             scroll_selected_into_view();
         });
     });
@@ -634,7 +635,7 @@ pub(crate) fn Nav(
         expanded.with(|e| e.len());
         let _ = route.get();
         spawn_local(async {
-            net::sleep_ms(0).await;
+            dom::sleep_ms(0).await;
             ensure_tree_tab_stop();
         });
     });
@@ -816,7 +817,7 @@ fn group_row(
                 let (mut done, mut total) = (0usize, 0usize);
                 for r in v.iter().filter(|r| ids.contains(&r.id)) {
                     total += 1;
-                    if r.ticket.with(|t| t.status == "Complete") {
+                    if r.ticket.with(|t| t.status == Status::Complete) {
                         done += 1;
                     }
                 }
@@ -874,8 +875,8 @@ fn leaf_row(
         Memo::new(move |_| route.with(|rt| matches!(rt, Route::Ticket(x) if *x == id)))
     };
     let href = format!("#/ticket/{id}");
-    let tag_class = move || format!("tag {}", ticket.with(|t| st_class(&t.status)));
-    let kind = move || ticket.with(|t| t.kind.clone());
+    let tag_class = move || format!("tag {}", ticket.with(|t| st_class(t.status.as_str())));
+    let kind = move || ticket.with(|t| t.kind.to_string());
 
     view! {
         <a
@@ -906,7 +907,7 @@ fn leaf_row(
             <span class="toggle kind" title=kind>{move || kind_glyph(&kind())}</span>
             <span class="code">{id.clone()}</span>
             <span class="label">{move || ticket.with(|t| t.title.clone())}</span>
-            <span class=tag_class>{move || ticket.with(|t| t.status.clone())}</span>
+            <span class=tag_class>{move || ticket.with(|t| t.status.to_string())}</span>
         </a>
     }
     .into_any()

@@ -39,7 +39,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{navigate_to_ticket, net, st_class, Row};
+use crate::{dom, navigate_to_ticket, st_class, Row};
 
 /// How long a `g` stays armed as the first key of a `g …` sequence.
 const GO_WINDOW_MS: f64 = 1500.0;
@@ -101,7 +101,7 @@ fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
 
 /// Every element matching `selector`, in document order.
 pub(crate) fn query_all(selector: &str) -> Vec<web_sys::HtmlElement> {
-    let Some(doc) = net::window().document() else {
+    let Some(doc) = dom::window().document() else {
         return Vec::new();
     };
     let Ok(list) = doc.query_selector_all(selector) else {
@@ -181,7 +181,7 @@ thread_local! {
 /// the menu's own opener stands down inside `[role=dialog]` — so one slot
 /// is enough.
 pub(crate) fn remember_focus() {
-    let el = net::window()
+    let el = dom::window()
         .document()
         .and_then(|d| d.active_element())
         .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok());
@@ -194,7 +194,7 @@ pub(crate) fn remember_focus() {
 pub(crate) fn restore_focus() {
     let el = FOCUS_BEFORE_OVERLAY.with(|c| c.borrow_mut().take());
     spawn_local(async move {
-        net::sleep_ms(0).await;
+        dom::sleep_ms(0).await;
         if let Some(el) = el {
             focus_row(&el);
         }
@@ -233,7 +233,7 @@ pub(crate) fn consume_go_prefix(key: &str) -> bool {
         }
         "h" if armed => {
             GO_ARMED_AT.with(|c| c.set(f64::NEG_INFINITY));
-            let _ = net::window().location().set_hash("/");
+            let _ = dom::window().location().set_hash("/");
             true
         }
         _ => {
@@ -251,7 +251,7 @@ pub(crate) fn install(overlay: RwSignal<Overlay>) {
     let cb = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
         global_keydown(&ev, overlay);
     });
-    net::window()
+    dom::window()
         .add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref())
         .expect("keydown listener");
     cb.forget(); // lives as long as the app
@@ -381,7 +381,7 @@ pub(crate) fn ensure_board_tab_stop() {
 /// cycles through the dialog's own focusable elements and never reaches
 /// the page behind it.
 fn trap_tab(shift: bool) {
-    let Some(doc) = net::window().document() else { return };
+    let Some(doc) = dom::window().document() else { return };
     let Ok(Some(dialog)) = doc.query_selector("[role=dialog]") else {
         return;
     };
@@ -557,8 +557,8 @@ fn Palette(rows: RwSignal<Vec<Row>>, overlay: RwSignal<Overlay>) -> impl IntoVie
                                             {move || ticket.with(|t| t.title.clone())}
                                         </span>
                                         <span class=move || {
-                                            format!("tag {}", ticket.with(|t| st_class(&t.status)))
-                                        }>{move || ticket.with(|t| t.status.clone())}</span>
+                                            format!("tag {}", ticket.with(|t| st_class(t.status.as_str())))
+                                        }>{move || ticket.with(|t| t.status.to_string())}</span>
                                     </li>
                                 }
                             })

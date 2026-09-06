@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>menger — app</title>
+<!-- MFE-9: the app's data plane is the Plexus WebSocket, not the REST
+     bridge, and a page served from disk cannot know which port that is.
+     menger's shell substitutes the placeholder when it serves this file
+     (src/shell.rs), the same way it always has for web/index.html; served
+     by anything else, the app falls back to menger's default WS port. -->
+<meta name="menger-ws-port" content="{{WS_PORT}}">
 <link data-trunk rel="rust" />
 <!-- AGS-14: the vendored mermaid bundle rides into dist/vendor/ as a served
      file only. Deliberately NOT a <script> here: src/mermaid.rs injects one

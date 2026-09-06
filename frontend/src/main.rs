@@ -60,34 +60,46 @@
 //! focus back. Mouse behavior is untouched; the keyboard is an addition,
 //! not a mode.
 
+//! MFE-9: the app is on the socket. `net.rs` — the REST client and its
+//! hand-parsed SSE — is gone; `session.rs` holds one `WsTransport` for the
+//! app's lifetime and drives it with the client menger's own activation
+//! declarations generate (`menger-tickets-api`). A row is the server's
+//! `TicketSummary`, not a mirror of its JSON: rename a field on the server
+//! and this crate stops compiling. The board paints page by page as
+//! MNG-9's `list { summary, limit, after }` walk lands, so the browser
+//! never waits for — or renders — a body it is not showing.
+
+mod dom;
 mod keys;
 mod md;
 mod menu;
 mod nav;
 
 mod mermaid;
-mod net;
+mod session;
 mod theme;
 
 use leptos::prelude::*;
-use serde::Deserialize;
-use serde_json::json;
+use menger_tickets_api::{Status, TicketSummary};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-/// The closed status vocabulary (src/store.rs `Status`) — the legal UI
-/// choices. The server remains the validator; anything else it receives
-/// comes back as an in-band `error` event.
-pub(crate) const STATUSES: [&str; 7] = [
-    "Pending",
-    "Ready",
-    "Blocked",
-    "Complete",
-    "Idea",
-    "Epic",
-    "Superseded",
-];
+/// The closed status vocabulary, from the type that owns it
+/// (`menger_tickets_api::Status::ALL`) rather than from a literal list the
+/// server could out-grow. The server remains the validator; anything else
+/// it receives comes back as an in-band `error` event.
+pub(crate) const STATUSES: [&str; Status::ALL.len()] = statuses();
+
+const fn statuses() -> [&'static str; Status::ALL.len()] {
+    let mut out = [""; Status::ALL.len()];
+    let mut i = 0;
+    while i < Status::ALL.len() {
+        out[i] = Status::ALL[i].as_str();
+        i += 1;
+    }
+    out
+}
 
 /// AGS-15: the classes that make an element wear a status as color —
 /// `st` (the paint rule) plus `st-<status>` (a row of index.html's status
@@ -99,49 +111,19 @@ pub(crate) fn st_class(status: &str) -> String {
     format!("st st-{}", status.to_ascii_lowercase())
 }
 
-/// Mirror of the server's ticket JSON (src/store.rs). Enums arrive as
-/// plain strings so unknown future variants degrade to text, not panics.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-pub(crate) struct Ticket {
-    id: String,
-    epic: String,
-    seq: u32,
-    pub(crate) title: String,
-    pub(crate) status: String,
-    /// AGS-13: scope | execution | build | gap | spike.
-    pub(crate) kind: String,
-    #[serde(default)]
-    severity: Option<String>,
-    #[serde(default)]
-    blocked_by: Vec<String>,
-    #[serde(default)]
-    unlocks: Vec<String>,
-    /// AGS-19/20: the ticket this one is an output of (any epic). The
-    /// server omits it when unset, and it is immutable for a ticket's
-    /// lifetime — there is no re-parent — which is what lets the nav's
-    /// forest be a memo over the row *list* (src/nav.rs).
-    #[serde(default)]
-    pub(crate) parent: Option<String>,
-    /// AGS-19/20: the tickets whose `parent` is this one, in birth order,
-    /// derived by the server and kept live by `children_changed`.
-    #[serde(default)]
-    pub(crate) children: Vec<String>,
-    /// Markdown body — rendered on the ticket page (MFE-7).
-    #[serde(default)]
-    body: String,
-    #[serde(default)]
-    created_unix: i64,
-    updated_unix: i64,
-}
-
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-struct Health {
-    version: String,
-    ticket_count: u64,
+/// What the header's health line shows. Not a wire type and not a mirror
+/// of one: it is *destructured out of* `TicketsEvent::Health`, so a
+/// renamed field on the server is a compile error here rather than a blank
+/// dock — which is what the old hand-written `#[derive(Deserialize)]
+/// struct Health` could not give.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Dock {
+    pub(crate) version: String,
+    pub(crate) ticket_count: u64,
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Conn {
+pub(crate) enum Conn {
     Connecting,
     Live,
     Reconnecting,
@@ -155,7 +137,10 @@ pub(crate) struct Row {
     pub(crate) id: String,
     pub(crate) epic: String,
     pub(crate) seq: u32,
-    pub(crate) ticket: RwSignal<Ticket>,
+    /// MFE-9: a row is the server's `TicketSummary` — every ticket field
+    /// except the body, which no row shows. The one body the app holds is
+    /// the open ticket page's, fetched by `get`.
+    pub(crate) ticket: RwSignal<TicketSummary>,
 }
 
 /// Fine-grained upsert. An existing ticket updates its row's inner
@@ -163,7 +148,7 @@ pub(crate) struct Row {
 /// and every other row's DOM survives untouched. A new ticket inserts at
 /// its (epic, seq) position, which is stable because those fields never
 /// change.
-fn upsert(rows: RwSignal<Vec<Row>>, t: Ticket) {
+pub(crate) fn upsert(rows: RwSignal<Vec<Row>>, t: TicketSummary) {
     let existing = rows.with_untracked(|v| v.iter().find(|r| r.id == t.id).map(|r| r.ticket));
     match existing {
         Some(sig) => {
@@ -182,130 +167,6 @@ fn upsert(rows: RwSignal<Vec<Row>>, t: Ticket) {
             v.insert(pos, row);
         }),
     }
-}
-
-/// Reconcile a full `list` snapshot into the rows without rebuilding
-/// them: upsert every ticket, drop rows the snapshot no longer contains
-/// (nothing deletes tickets today, but a reconnect must converge on the
-/// server's truth regardless). Unchanged rows keep their DOM even across
-/// a reconnect.
-fn reconcile(rows: RwSignal<Vec<Row>>, snapshot: Vec<Ticket>) {
-    let keep: std::collections::HashSet<String> = snapshot.iter().map(|t| t.id.clone()).collect();
-    let stale = rows.with_untracked(|v| v.iter().any(|r| !keep.contains(&r.id)));
-    if stale {
-        rows.update(|v| v.retain(|r| keep.contains(&r.id)));
-    }
-    for t in snapshot {
-        upsert(rows, t);
-    }
-}
-
-fn parse_ticket(ev: &serde_json::Value) -> Option<Ticket> {
-    serde_json::from_value(ev.get("ticket")?.clone()).ok()
-}
-
-/// First in-band failure in a unary response's events, as a message.
-/// `error` and `not_found` both mean "the call did not do what was
-/// asked" — the server is the validator and this is how it says no.
-fn first_error(events: &[serde_json::Value]) -> Option<String> {
-    events.iter().find_map(|e| {
-        match e.get("type").and_then(|t| t.as_str()) {
-            Some("error") => Some(
-                e.get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("unknown error")
-                    .to_string(),
-            ),
-            Some("not_found") => Some(format!(
-                "{}: not found",
-                e.get("id").and_then(|i| i.as_str()).unwrap_or("?")
-            )),
-            _ => None,
-        }
-    })
-}
-
-/// One connected session: subscribe first (so nothing created between
-/// list and watch is missed — events are idempotent upserts by id), then
-/// snapshot via unary calls, then pump the stream until it dies. Err ends
-/// the session; the caller loop reconnects. In-band errors on the app's
-/// own snapshot calls surface through `last_error`.
-async fn session(
-    rows: RwSignal<Vec<Row>>,
-    health: RwSignal<Option<Health>>,
-    conn: RwSignal<Conn>,
-    last_error: RwSignal<Option<String>>,
-) -> Result<(), String> {
-    let mut watch = net::open_watch(&json!({})).await?;
-
-    let health_events = net::call("health", &json!({})).await?;
-    if let Some(msg) = first_error(&health_events) {
-        last_error.set(Some(format!("health: {msg}")));
-    }
-    if let Some(h) = health_events
-        .first()
-        .and_then(|e| serde_json::from_value::<Health>(e.clone()).ok())
-    {
-        health.set(Some(h));
-    }
-
-    let list_events = net::call("list", &json!({})).await?;
-    if let Some(msg) = first_error(&list_events) {
-        last_error.set(Some(format!("list: {msg}")));
-    }
-    reconcile(rows, list_events.iter().filter_map(parse_ticket).collect());
-    conn.set(Conn::Live);
-
-    loop {
-        let ev = watch.next_event().await?;
-        match ev.get("type").and_then(|t| t.as_str()) {
-            // Every mutation event carries the full updated ticket —
-            // AGS-19's `children_changed` carries the full *parent*, which
-            // is how a page and a nav that never re-fetch learn that a
-            // child was born (AGS-20).
-            Some("created") | Some("status_changed") | Some("unlocks_changed")
-            | Some("children_changed") => {
-                if let Some(t) = parse_ticket(&ev) {
-                    let created = ev["type"] == "created";
-                    upsert(rows, t);
-                    if created {
-                        health.update(|h| {
-                            if let Some(h) = h {
-                                h.ticket_count += 1;
-                            }
-                        });
-                    }
-                }
-            }
-            _ => {} // future event kinds: ignore, stay live
-        }
-    }
-}
-
-/// The app's one mutation: `set_status`, fired from a row's select or
-/// the ticket menu (AGS-16) — one call path. The caller's control is left
-/// showing the user's choice while the call is in flight; the
-/// authoritative update arrives back through `watch`. Any failure —
-/// transport-level or an in-band `error`/`not_found` event — surfaces in
-/// the banner and runs `on_failure` (the board snaps its select back to
-/// the last server-confirmed status; the menu has nothing to revert —
-/// its chips follow the server).
-pub(crate) fn request_set_status(
-    id: String,
-    chosen: String,
-    last_error: RwSignal<Option<String>>,
-    on_failure: impl FnOnce() + 'static,
-) {
-    spawn_local(async move {
-        let failure = match net::call("set_status", &json!({"id": id, "status": chosen})).await {
-            Ok(events) => first_error(&events),
-            Err(e) => Some(e),
-        };
-        if let Some(msg) = failure {
-            last_error.set(Some(format!("set_status {id} -> {chosen}: {msg}")));
-            on_failure();
-        }
-    });
 }
 
 // ---------------------------------------------------------------------
@@ -328,7 +189,7 @@ fn parse_route(hash: &str) -> Route {
 }
 
 fn current_route() -> Route {
-    parse_route(&net::window().location().hash().unwrap_or_default())
+    parse_route(&dom::window().location().hash().unwrap_or_default())
 }
 
 /// The route as a signal: seeded from the URL (deep links / cold loads),
@@ -337,7 +198,7 @@ fn current_route() -> Route {
 fn use_route() -> RwSignal<Route> {
     let route = RwSignal::new(current_route());
     let cb = Closure::<dyn FnMut()>::new(move || route.set(current_route()));
-    net::window()
+    dom::window()
         .add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref())
         .expect("hashchange listener");
     cb.forget(); // lives as long as the app
@@ -345,7 +206,7 @@ fn use_route() -> RwSignal<Route> {
 }
 
 pub(crate) fn navigate_to_ticket(id: &str) {
-    let _ = net::window().location().set_hash(&format!("/ticket/{id}"));
+    let _ = dom::window().location().set_hash(&format!("/ticket/{id}"));
 }
 
 /// Unix seconds, human-readable: "2026-09-05T12:34:56Z (1788690896)".
@@ -376,7 +237,7 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
     Effect::new(move |_| {
         rows.with(|v| v.len());
         spawn_local(async {
-            net::sleep_ms(0).await;
+            dom::sleep_ms(0).await;
             keys::ensure_board_tab_stop();
         });
     });
@@ -438,13 +299,13 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                                     }}
                                 </td>
                                 <td>{move || ticket.with(|t| t.title.clone())}</td>
-                                <td class="kind">{move || ticket.with(|t| t.kind.clone())}</td>
+                                <td class="kind">{move || ticket.with(|t| t.kind.to_string())}</td>
                                 <td class="status">
                                     <select
                                         // The control is the chip: it wears the
                                         // server-confirmed status's color (AGS-15).
-                                        class=move || format!("status {}", ticket.with(|t| st_class(&t.status)))
-                                        prop:value=move || ticket.with(|t| t.status.clone())
+                                        class=move || format!("status {}", ticket.with(|t| st_class(t.status.as_str())))
+                                        prop:value=move || ticket.with(|t| t.status.as_str())
                                         on:change=move |ev| {
                                             let Some(sel) = ev
                                                 .target()
@@ -452,11 +313,18 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                                             else {
                                                 return;
                                             };
-                                            let chosen = sel.value();
-                                            let current = ticket.with_untracked(|t| t.status.clone());
+                                            let current = ticket.with_untracked(|t| t.status);
+                                            // The control only ever offers the closed
+                                            // vocabulary, so a value it cannot parse is
+                                            // a browser doing something we did not ask
+                                            // for — leave the ticket alone.
+                                            let Ok(chosen) = sel.value().parse::<Status>() else {
+                                                sel.set_value(current.as_str());
+                                                return;
+                                            };
                                             if chosen != current {
-                                                request_set_status(id.clone(), chosen, last_error, move || {
-                                                    sel.set_value(&current)
+                                                session::request_set_status(id.clone(), chosen, last_error, move || {
+                                                    sel.set_value(current.as_str())
                                                 });
                                             }
                                         }
@@ -469,7 +337,7 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                                                     <option
                                                         value=s
                                                         class=st_class(s)
-                                                        selected=move || ticket.with(|t| t.status == s)
+                                                        selected=move || ticket.with(|t| t.status.as_str() == s)
                                                     >
                                                         {s}
                                                     </option>
@@ -478,7 +346,7 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                                             .collect_view()}
                                     </select>
                                 </td>
-                                <td>{move || ticket.with(|t| t.severity.clone().unwrap_or_default())}</td>
+                                <td>{move || ticket.with(|t| t.severity.map(|s| s.to_string()).unwrap_or_default())}</td>
                                 <td>{move || ticket.with(|t| t.blocked_by.join(" "))}</td>
                             </tr>
                         }
@@ -517,8 +385,8 @@ fn dag_entry(
                     let href = format!("#/ticket/{id}");
                     view! {
                         <a href=href>{id.clone()}</a>
-                        <span class=move || format!("bstatus {}", t.with(|x| st_class(&x.status)))>
-                            {move || t.with(|x| x.status.clone())}
+                        <span class=move || format!("bstatus {}", t.with(|x| st_class(x.status.as_str())))>
+                            {move || t.with(|x| x.status.to_string())}
                         </span>
                         <span class="btitle">{move || t.with(|x| x.title.clone())}</span>
                     }
@@ -567,11 +435,11 @@ fn ancestors(rows: RwSignal<Vec<Row>>, id: &str) -> Vec<String> {
 /// text without rebuilding those sections (an open frontmatter fold
 /// survives a live update).
 fn ticket_view(
-    ticket: RwSignal<Ticket>,
+    ticket: RwSignal<TicketSummary>,
+    body_raw: RwSignal<Option<String>>,
     rows: RwSignal<Vec<Row>>,
     blockers_loaded: RwSignal<bool>,
 ) -> impl IntoView {
-    let body_raw = Memo::new(move |_| ticket.with(|t| t.body.clone()));
     let blocked_by = Memo::new(move |_| ticket.with(|t| t.blocked_by.clone()));
     let unlocks_ids = Memo::new(move |_| ticket.with(|t| t.unlocks.clone()));
     // AGS-20: the ticket's own decomposition. `children` is the server's
@@ -630,7 +498,12 @@ fn ticket_view(
         }
     };
     let body = move || {
-        let raw = body_raw.get();
+        // MFE-9: the body is not a row field — it arrives with this page's
+        // own `get` and lives here. `None` is "not fetched yet"; an empty
+        // string is a ticket that genuinely has no body.
+        let Some(raw) = body_raw.get() else {
+            return view! { <p class="loading">"loading body…"</p> }.into_any();
+        };
         if raw.trim().is_empty() {
             return view! { <p class="none">"(no body)"</p> }.into_any();
         }
@@ -673,14 +546,14 @@ fn ticket_view(
             <dl class="meta">
                 <div>
                     <dt>"status"</dt>
-                    <dd id="t-status" class=move || format!("status {}", ticket.with(|t| st_class(&t.status)))>
-                        {move || ticket.with(|t| t.status.clone())}
+                    <dd id="t-status" class=move || format!("status {}", ticket.with(|t| st_class(t.status.as_str())))>
+                        {move || ticket.with(|t| t.status.to_string())}
                     </dd>
                 </div>
-                <div><dt>"kind"</dt><dd id="t-kind" class="kind">{move || ticket.with(|t| t.kind.clone())}</dd></div>
+                <div><dt>"kind"</dt><dd id="t-kind" class="kind">{move || ticket.with(|t| t.kind.to_string())}</dd></div>
                 <div>
                     <dt>"severity"</dt>
-                    <dd>{move || ticket.with(|t| t.severity.clone().unwrap_or_else(|| "—".into()))}</dd>
+                    <dd>{move || ticket.with(|t| t.severity.map_or_else(|| "—".to_string(), |s| s.to_string()))}</dd>
                 </div>
                 // AGS-20: the ticket this one is an output of, as a link
                 // (the crumb above walks the whole chain).
@@ -732,55 +605,34 @@ fn ticket_view(
 fn TicketPage(
     id: String,
     rows: RwSignal<Vec<Row>>,
+    /// MFE-9: the socket's generation counter. It ticks the moment a
+    /// connection is up — *before* the board's page walk finishes — so a
+    /// cold deep link still renders from two point queries without waiting
+    /// for the whole board, which is the one browser path PERF-4 found
+    /// flat from 10^2 to 10^6. It ticks again on every reconnect, which is
+    /// what re-fetches an open page's body after the server comes back.
+    socket: RwSignal<u32>,
     last_error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let not_found = RwSignal::new(false);
     let blockers_loaded = RwSignal::new(false);
+    // The one body the app holds. `None` until `get` answers.
+    let body = RwSignal::new(None::<String>);
 
     {
         let id = id.clone();
-        spawn_local(async move {
-            match net::call("get", &json!({ "id": id })).await {
-                Ok(events) => {
-                    for ev in &events {
-                        match ev.get("type").and_then(|t| t.as_str()) {
-                            Some("ticket") => {
-                                if let Some(t) = parse_ticket(ev) {
-                                    upsert(rows, t);
-                                }
-                            }
-                            Some("not_found") => not_found.set(true),
-                            Some("error") => {
-                                let msg = ev
-                                    .get("message")
-                                    .and_then(|m| m.as_str())
-                                    .unwrap_or("unknown error");
-                                last_error.set(Some(format!("get {id}: {msg}")));
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(e) => last_error.set(Some(format!("get {id}: {e}"))),
+        Effect::new(move |_| {
+            if socket.get() == 0 {
+                return; // no connection yet; this effect re-runs when there is one
             }
-            // Resolve blockers (the DAG position). Resolved blockers
-            // upsert into the shared store — their statuses render live
-            // from it; an id the call did not resolve renders as
-            // dangling once the flag below is set. `not_found` here is
-            // the same fact `get` already surfaced.
-            match net::call("blockers", &json!({ "id": id })).await {
-                Ok(events) => {
-                    for ev in &events {
-                        if ev.get("type").and_then(|t| t.as_str()) == Some("blocker") {
-                            if let Some(t) = parse_ticket(ev) {
-                                upsert(rows, t);
-                            }
-                        }
-                    }
-                }
-                Err(e) => last_error.set(Some(format!("blockers {id}: {e}"))),
-            }
-            blockers_loaded.set(true);
+            session::load_ticket(
+                id.clone(),
+                rows,
+                body,
+                not_found,
+                blockers_loaded,
+                last_error,
+            );
         });
     }
 
@@ -813,7 +665,7 @@ fn TicketPage(
         <div id="ticket-page">
             <p class="crumbs"><a href="#/">"← board"</a>{crumbs}</p>
             {move || match ticket.get() {
-                Some(t) => ticket_view(t, rows, blockers_loaded).into_any(),
+                Some(t) => ticket_view(t, body, rows, blockers_loaded).into_any(),
                 None if not_found.get() => {
                     let id = id_view.clone();
                     view! {
@@ -839,34 +691,26 @@ fn TicketPage(
 #[component]
 fn App() -> impl IntoView {
     let rows = RwSignal::new(Vec::<Row>::new());
-    let health = RwSignal::new(None::<Health>);
+    let dock = RwSignal::new(None::<Dock>);
     let conn = RwSignal::new(Conn::Connecting);
+    let socket = RwSignal::new(0u32);
     let last_error = RwSignal::new(None::<String>);
     let route = use_route();
 
-    // The whole data plane lives in this one task; ~1s retry keeps a
-    // server restart to a few seconds of "reconnecting…" (MFE-2 criterion 3).
-    // It runs regardless of route — the ticket page's liveness is this
-    // same stream.
-    spawn_local(async move {
-        loop {
-            let err = session(rows, health, conn, last_error)
-                .await
-                .expect_err("session loop only returns on error");
-            leptos::logging::log!("session ended: {err}; reconnecting");
-            conn.set(Conn::Reconnecting);
-            net::sleep_ms(1000).await;
-        }
-    });
+    // MFE-9: the whole data plane is one task holding one WebSocket
+    // (session.rs) — `watch` first, then MNG-9's summary pages walked with
+    // `after = next`, then live. ~1s retry keeps a server restart to a few
+    // seconds of "reconnecting…" (MFE-2 criterion 3). It runs regardless of
+    // route: the ticket page's liveness is this same stream.
+    session::drive(rows, dock, conn, socket, last_error);
 
     let conn_view = move || match conn.get() {
         Conn::Connecting => ("", "connecting…"),
-        Conn::Live => ("live", "live · SSE"),
+        Conn::Live => ("live", "live · WS"),
         Conn::Reconnecting => ("reconnecting", "reconnecting…"),
     };
     let health_view = move || {
-        health
-            .get()
+        dock.get()
             .map(|h| format!("menger v{} · {} tickets", h.version, h.ticket_count))
     };
 
@@ -921,7 +765,9 @@ fn App() -> impl IntoView {
                     }}
                     {move || match route.get() {
                         Route::Board => view! { <Board rows last_error /> }.into_any(),
-                        Route::Ticket(id) => view! { <TicketPage id rows last_error /> }.into_any(),
+                        Route::Ticket(id) => {
+                            view! { <TicketPage id rows socket last_error /> }.into_any()
+                        }
                     }}
                 </main>
             </div>
