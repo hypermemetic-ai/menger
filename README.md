@@ -127,14 +127,28 @@ server opens it — `epic→scope`, `implementation→build`, `analysis→spike`
 `checkpoint→execution`, `spike→spike`; any other legacy value refuses the
 open, naming the row.
 
+A ticket's outputs are tickets (AGS-19): every ticket carries an optional
+**`parent`** — the ticket it is an output of, in any epic — and a
+server-derived **`children`**, the mirror the store keeps as it keeps
+`unlocks` from `blocked_by`. The parent must exist at creation and the
+chain is acyclic (a ticket cannot be its own ancestor; there is no
+re-parent method, so the check at create is the whole story); a
+nonexistent or cyclic parent is an in-band `error` naming the reason. A
+child's birth updates its parent, and `watch` carries that as
+`children_changed` with the full parent ticket, so a watch-only client
+stays coherent. A database written before AGS-19 gains both columns on
+first open, durably, with typed parents backfilled from each body's
+frontmatter `parent: <id>` — one log line per ticket; an id that names no
+ticket is logged and left empty, never fatal.
+
 | method | yields |
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
-| `tickets.create { epic, title, kind?, severity?, blocked_by?, body? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the five is an in-band `error` naming them |
+| `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the five is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason |
 | `tickets.get { id }` | `ticket` or `not_found` |
-| `tickets.list { epic?, status? }` | one `ticket` per match, ordered (epic, seq) |
+| `tickets.list { epic?, status?, parent? }` | one `ticket` per match, ordered (epic, seq); `parent` yields exactly that ticket's children |
 | `tickets.set_status { id, status }` | `status_changed { ticket, previous }` |
-| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` |
+| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `unlocks_changed` / `children_changed` |
 
 Via synapse (once on PATH — 4455 is inside the `_self scan` range):
 

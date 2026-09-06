@@ -386,6 +386,122 @@ async fn legacy_database_migrates_on_first_open_and_survives_sigkill() {
     assert_eq!(stored, ["scope", "build", "spike", "execution", "spike", "build"]);
 }
 
+/// AGS-19 criterion 3, black-box: `tests/fixtures/pre-ags19.db` was
+/// written by the pre-AGS-19 binary (no `parent` column) and holds bodies
+/// whose frontmatter carries `parent:` — one resolvable pair, a
+/// three-deep chain, one naming a ticket that does not exist, and one
+/// body with no frontmatter at all. On first open the server backfills
+/// the typed parents durably, logging one line per ticket; the
+/// unresolvable one is logged and left empty, never fatal. After SIGKILL
+/// and a restart the parents are still there and no second migration
+/// runs.
+#[tokio::test]
+async fn pre_ags19_database_backfills_parents_on_first_open_and_survives_sigkill() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pre-ags19.db"),
+        &db,
+    )
+    .unwrap();
+
+    // The fixture predates the column entirely.
+    let cols: Vec<String> = rusqlite::Connection::open(&db)
+        .unwrap()
+        .prepare("PRAGMA table_info(tickets)")
+        .unwrap()
+        .query_map([], |r| r.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(!cols.contains(&"parent".into()), "{cols:?}");
+
+    // id, backfilled parent, children.
+    let expected: [(&str, Value, Value); 5] = [
+        ("PRE-1", Value::Null, json!(["PRE-2"])),
+        ("PRE-2", json!("PRE-1"), json!(["PRE-4"])),
+        ("PRE-3", Value::Null, json!([])), // frontmatter names PRE-99
+        ("PRE-4", json!("PRE-2"), json!([])),
+        ("PRE-5", Value::Null, json!([])), // no frontmatter at all
+    ];
+    let check = |tickets: &[Value], when: &str| {
+        assert_eq!(tickets.len(), expected.len(), "{when}: {tickets:?}");
+        for (t, (id, parent, children)) in tickets.iter().zip(&expected) {
+            let t = &t["ticket"];
+            assert_eq!(t["id"], *id, "{when}");
+            assert_eq!(t["parent"], *parent, "{when}: {id} parent");
+            assert_eq!(t["children"], *children, "{when}: {id} children");
+        }
+    };
+
+    // Run 1: first open of the pre-AGS-19 database.
+    let s1 = spawn_server(Some(&db), &[], dir.path(), "parent1").await;
+    let c1 = connect(s1.port).await;
+    let log = s1.startup_output();
+    assert!(
+        log.contains("PRE-2.parent = PRE-1 (from body frontmatter)"),
+        "one log line per backfilled ticket, got:\n{log}"
+    );
+    assert!(
+        log.contains("PRE-4.parent = PRE-2 (from body frontmatter)"),
+        "got:\n{log}"
+    );
+    assert!(
+        log.contains("PRE-3 names parent 'PRE-99'") && log.contains("left empty"),
+        "the unresolvable one is logged and left empty, got:\n{log}"
+    );
+    assert!(
+        log.contains("backfilling 2 typed parent(s)"),
+        "the summary counts them, got:\n{log}"
+    );
+    check(&drain(&c1, "tickets.list", json!({})).await, "after first open");
+
+    // The relationship answers queries immediately: PRE-1 > PRE-2 > PRE-4.
+    let ev = one(&c1, "tickets.get", json!({"id": "PRE-4"})).await;
+    assert_eq!(ev["ticket"]["parent"], "PRE-2");
+    let kids = drain(&c1, "tickets.list", json!({"parent": "PRE-1"})).await;
+    assert_eq!(kids.len(), 1);
+    assert_eq!(kids[0]["ticket"]["id"], "PRE-2");
+    // The body is the raw record, untouched by the migration.
+    assert!(
+        ev["ticket"]["body"].as_str().unwrap().contains("parent: PRE-2"),
+        "{}",
+        ev["ticket"]["body"]
+    );
+
+    drop(c1);
+    s1.kill9();
+
+    // Run 2: the backfill was durable and does not run again.
+    let s2 = spawn_server(Some(&db), &[], dir.path(), "parent2").await;
+    let c2 = connect(s2.port).await;
+    let log = s2.startup_output();
+    assert!(!log.contains("from body frontmatter"), "no second migration:\n{log}");
+    assert!(!log.contains("AGS-19:"), "no second migration:\n{log}");
+    assert!(log.contains("loaded 5 tickets"), "got:\n{log}");
+    check(&drain(&c2, "tickets.list", json!({})).await, "after SIGKILL + restart");
+
+    // And the system of record itself.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let stored: Vec<(String, Option<String>, String)> = conn
+        .prepare("SELECT id, parent, children FROM tickets ORDER BY epic, seq")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        stored,
+        vec![
+            ("PRE-1".to_string(), None, "[\"PRE-2\"]".to_string()),
+            ("PRE-2".to_string(), Some("PRE-1".into()), "[\"PRE-4\"]".to_string()),
+            ("PRE-3".to_string(), None, "[]".to_string()),
+            ("PRE-4".to_string(), Some("PRE-2".into()), "[]".to_string()),
+            ("PRE-5".to_string(), None, "[]".to_string()),
+        ]
+    );
+}
+
 /// AGS-13: a legacy value the pinned mapping does not cover refuses the
 /// open — the process exits non-zero naming the row — and the database
 /// is left untouched for a human to fix.
