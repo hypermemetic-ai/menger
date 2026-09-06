@@ -69,7 +69,8 @@ pub(crate) struct Ticket {
     seq: u32,
     pub(crate) title: String,
     pub(crate) status: String,
-    ticket_type: String,
+    /// AGS-13: scope | execution | build | gap | spike.
+    pub(crate) kind: String,
     #[serde(default)]
     severity: Option<String>,
     #[serde(default)]
@@ -318,7 +319,7 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
         <table>
             <thead>
                 <tr>
-                    <th>"id"</th><th>"title"</th><th>"type"</th>
+                    <th>"id"</th><th>"title"</th><th>"kind"</th>
                     <th>"status"</th><th>"severity"</th><th>"blocked by"</th>
                 </tr>
             </thead>
@@ -353,7 +354,7 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                                     <a href=format!("#/ticket/{href_id}")>{row.id.clone()}</a>
                                 </td>
                                 <td>{move || ticket.with(|t| t.title.clone())}</td>
-                                <td>{move || ticket.with(|t| t.ticket_type.clone())}</td>
+                                <td class="kind">{move || ticket.with(|t| t.kind.clone())}</td>
                                 <td class="status">
                                     <select
                                         class="status"
@@ -533,7 +534,7 @@ fn ticket_view(
                     <dt>"status"</dt>
                     <dd id="t-status" class="status">{move || ticket.with(|t| t.status.clone())}</dd>
                 </div>
-                <div><dt>"type"</dt><dd>{move || ticket.with(|t| t.ticket_type.clone())}</dd></div>
+                <div><dt>"kind"</dt><dd id="t-kind" class="kind">{move || ticket.with(|t| t.kind.clone())}</dd></div>
                 <div>
                     <dt>"severity"</dt>
                     <dd>{move || ticket.with(|t| t.severity.clone().unwrap_or_else(|| "—".into()))}</dd>

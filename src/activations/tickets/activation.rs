@@ -1,7 +1,7 @@
 //! Plexus RPC surface for tickets.
 
 use super::types::TicketsEvent;
-use crate::store::{BlockerRef, Change, NewTicket, Severity, Status, Store, StoreError, TicketType};
+use crate::store::{BlockerRef, Change, Kind, NewTicket, Severity, Status, Store, StoreError};
 use async_stream::stream;
 use futures::Stream;
 use std::sync::Arc;
@@ -48,14 +48,16 @@ impl Tickets {
     }
 
     /// Creates a ticket in an epic. The store allocates the next `EPIC-N`
-    /// id; status starts at `Pending` (only a human promotes to `Ready`).
-    /// Yields exactly one event: `Created` or `Error`.
+    /// id; status starts at `Pending` (only a human promotes to `Ready`);
+    /// `kind` defaults to `build`, and one outside the five yields the
+    /// in-band error naming them. Yields exactly one event: `Created` or
+    /// `Error`.
     #[plexus_macros::method(
         description = "Create a ticket; allocates the next EPIC-N id, status starts Pending",
         params(
             epic = "Epic prefix, e.g. MNG (case-insensitive, stored uppercase)",
             title = "Short description",
-            ticket_type = "implementation | analysis | spike | epic | checkpoint (default: implementation)",
+            kind = "scope | execution | build | gap | spike (default: build)",
             severity = "Critical | High | Medium | Low (optional)",
             blocked_by = "Ticket ids that must complete first (optional)",
             body = "Markdown body (optional)"
@@ -65,16 +67,16 @@ impl Tickets {
         &self,
         epic: String,
         title: String,
-        ticket_type: Option<String>,
+        kind: Option<String>,
         severity: Option<String>,
         blocked_by: Option<Vec<String>>,
         body: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
-            let ticket_type = match ticket_type.as_deref().map(str::parse::<TicketType>) {
-                None => TicketType::Implementation,
-                Some(Ok(t)) => t,
+            let kind = match kind.as_deref().map(str::parse::<Kind>) {
+                None => Kind::Build,
+                Some(Ok(k)) => k,
                 Some(Err(e)) => {
                     yield TicketsEvent::Error { message: e };
                     return;
@@ -91,7 +93,7 @@ impl Tickets {
             match store.create(NewTicket {
                 epic,
                 title,
-                ticket_type,
+                kind,
                 severity,
                 blocked_by: blocked_by.unwrap_or_default(),
                 body: body.unwrap_or_default(),
@@ -301,15 +303,40 @@ mod tests {
         }
     }
 
+    /// AGS-13 criterion 2: no kind → `build`; `gap` is accepted; a kind
+    /// outside the five (`bug` — rim's name for gap) is the in-band error
+    /// that names all five, and nothing is created.
     #[tokio::test]
-    async fn create_rejects_unknown_ticket_type() {
+    async fn create_defaults_kind_to_build_accepts_gap_and_rejects_unknown_naming_the_five() {
         let hub = hub();
+        match one(hub.create("MNG".into(), "no kind".into(), None, None, None, None).await).await {
+            TicketsEvent::Created { ticket } => assert_eq!(ticket.kind, Kind::Build),
+            other => panic!("expected Created, got {other:?}"),
+        }
+        match one(hub.create("MNG".into(), "a gap".into(), Some("gap".into()), None, None, None).await)
+            .await
+        {
+            TicketsEvent::Created { ticket } => assert_eq!(ticket.kind, Kind::Gap),
+            other => panic!("expected Created, got {other:?}"),
+        }
         let ev = one(
-            hub.create("MNG".into(), "x".into(), Some("wibble".into()), None, None, None)
+            hub.create("MNG".into(), "x".into(), Some("bug".into()), None, None, None)
                 .await,
         )
         .await;
-        assert!(matches!(ev, TicketsEvent::Error { .. }), "got {ev:?}");
+        match ev {
+            TicketsEvent::Error { message } => {
+                assert!(message.contains("'bug'"), "{message}");
+                for name in ["scope", "execution", "build", "gap", "spike"] {
+                    assert!(message.contains(name), "names {name}: {message}");
+                }
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(matches!(
+            one(hub.get("MNG-3".into()).await).await,
+            TicketsEvent::NotFound { .. }
+        ));
     }
 
     #[tokio::test]

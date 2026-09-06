@@ -92,12 +92,20 @@ owns no routing):
 
 menger is DB-first: the database is the system of record, and the service
 is CRUD over tickets plus a live subscription. One activation so far,
-`tickets` (statuses and types use the house ticketing vocabulary):
+`tickets`. Statuses use the house ticketing vocabulary; every ticket also
+carries a **kind** — `scope | execution | build | gap | spike` (AGS-13, the
+owner's closed set: a scope decomposes into children, a build produces
+capability, an execution carries out a procedure, a gap is a defect in
+shipped behavior, a spike answers a question). A database written before
+AGS-13 (`ticket_type`) is migrated in place, durably, the first time the
+server opens it — `epic→scope`, `implementation→build`, `analysis→spike`,
+`checkpoint→execution`, `spike→spike`; any other legacy value refuses the
+open, naming the row.
 
 | method | yields |
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
-| `tickets.create { epic, title, ticket_type?, severity?, blocked_by?, body? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending` |
+| `tickets.create { epic, title, kind?, severity?, blocked_by?, body? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the five is an in-band `error` naming them |
 | `tickets.get { id }` | `ticket` or `not_found` |
 | `tickets.list { epic?, status? }` | one `ticket` per match, ordered (epic, seq) |
 | `tickets.set_status { id, status }` | `status_changed { ticket, previous }` |

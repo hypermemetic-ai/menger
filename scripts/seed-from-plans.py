@@ -13,6 +13,28 @@ import argparse, glob, json, os, re, sys, urllib.request
 
 EPIC_ORDER = ["MNG", "MFE", "HLX", "AGS"]  # cross-epic blocked_by refs point backward in this order
 
+# AGS-13: a file's frontmatter `type:` (the house ticketing vocabulary) maps
+# onto the server's kind — the same pinned table the store's migration uses.
+# Anything else is a hard stop, not a guess.
+KIND_OF = {
+    "epic": "scope",
+    "implementation": "build",
+    "analysis": "spike",
+    "checkpoint": "execution",
+    "spike": "spike",
+}
+KINDS = ("scope", "execution", "build", "gap", "spike")
+
+
+def kind_of(file_type, path):
+    if file_type in KINDS:  # a file already speaking kinds passes through
+        return file_type
+    try:
+        return KIND_OF[file_type]
+    except KeyError:
+        sys.exit(f"{path}: frontmatter type {file_type!r} has no kind mapping "
+                 f"(legacy {', '.join(KIND_OF)}; kinds {', '.join(KINDS)})")
+
 
 def rest(base, method, params):
     req = urllib.request.Request(
@@ -66,7 +88,7 @@ def main():
                 continue
             if n not in files:
                 # Hold the seq so later ids match their files.
-                params = {"epic": epic, "title": f"(deleted from plans; seq placeholder)", "ticket_type": "implementation"}
+                params = {"epic": epic, "title": f"(deleted from plans; seq placeholder)", "kind": "build"}
                 status = "Superseded"
                 print(f"gap    {tid} -> Superseded placeholder")
             else:
@@ -77,7 +99,7 @@ def main():
                 params = {
                     "epic": epic,
                     "title": fm.get("title", tid),
-                    "ticket_type": fm.get("type", "implementation"),
+                    "kind": kind_of(fm.get("type", "implementation"), files[n]),
                     "body": text,
                 }
                 if fm.get("severity"):
@@ -85,7 +107,7 @@ def main():
                 if fm.get("blocked_by"):
                     params["blocked_by"] = fm["blocked_by"]
                 status = fm.get("status", "Pending")
-                print(f"create {tid} [{params['ticket_type']:14}] {status:10} {params['title'][:60]}")
+                print(f"create {tid} [{params['kind']:9}] {status:10} {params['title'][:60]}")
             if a.dry_run:
                 continue
             ev = rest(a.rest, "create", params)[0]
