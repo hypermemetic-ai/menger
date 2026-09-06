@@ -21,6 +21,31 @@ cargo test
 Open the shell in two browser windows; create a ticket or flip a status in
 one and watch the other update. No polling — the server pushes.
 
+### Synthetic seeding (PERF-2)
+
+For measurement, not for real data: `--seed-synthetic N` (env
+`MENGER_SEED_SYNTHETIC`) bulk-seeds N synthetic tickets into the database
+before serving — through the store's cache layer, in a few large
+transactions rather than one fsync per row — and then serves them like
+any other tickets. The shape is realistic (several Zipf-sized epics, ids
+allocated the normal way, every status and kind, a short markdown body,
+about a quarter of the tickets carrying valid acyclic `blocked_by` edges
+with `unlocks` mirrored), and deterministic: the same `--seed-value`
+(`MENGER_SEED_VALUE`, default 1) produces byte-identical tickets. The
+startup log carries the count and the elapsed time. A database that
+already holds tickets **refuses** the seed and the server exits; pass
+`--seed-into-existing` (`MENGER_SEED_INTO_EXISTING=1`) to add anyway,
+with ids continuing after the existing ones. No new RPC method: the wire
+surface is unchanged.
+
+```sh
+cargo run --release -- --db-path /tmp/scratch.db --seed-synthetic 100000 \
+    --port 4470 --shell-port 4471 --rest-port 4472
+```
+
+The magnitude ladder in `perf/` (PERF-3) drives this option per
+magnitude on temp databases and ephemeral ports.
+
 ## Frontend (the Leptos app)
 
 The MFE epic's browser client lives in `frontend/` — a **separate cargo

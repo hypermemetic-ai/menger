@@ -1,5 +1,6 @@
 use clap::Parser;
-use menger::{build_rpc, default_db_path, shell};
+use menger::store::SeedSpec;
+use menger::{build_rpc_with, default_db_path, shell};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::{RestHttpConfig, RouteFn, TransportServer};
 use std::path::PathBuf;
@@ -44,6 +45,29 @@ struct Args {
     /// directory; a fresh location starts empty.
     #[arg(long, env = "MENGER_DB_PATH", value_name = "PATH")]
     db_path: Option<PathBuf>,
+
+    /// PERF-2: seed N synthetic tickets into the database before serving
+    /// (bulk — a few transactions, no per-row fsync; deterministic per
+    /// --seed-value). Refuses a database that already holds tickets
+    /// unless --seed-into-existing.
+    #[arg(long, env = "MENGER_SEED_SYNTHETIC", value_name = "N")]
+    seed_synthetic: Option<usize>,
+
+    /// RNG seed for --seed-synthetic: the same value reproduces the same
+    /// tickets.
+    #[arg(long, env = "MENGER_SEED_VALUE", default_value = "1", value_name = "U64")]
+    seed_value: u64,
+
+    /// Let --seed-synthetic add to a database that already holds tickets
+    /// (ids continue after the existing ones). As an env var, 1/true/yes
+    /// enable it.
+    #[arg(
+        long,
+        env = "MENGER_SEED_INTO_EXISTING",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
+    seed_into_existing: bool,
 }
 
 #[tokio::main]
@@ -62,7 +86,12 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let db_path = args.db_path.unwrap_or_else(default_db_path);
-    let hub = build_rpc(&db_path).await?;
+    let seed = args.seed_synthetic.map(|count| SeedSpec {
+        count,
+        seed: args.seed_value,
+        into_existing: args.seed_into_existing,
+    });
+    let hub = build_rpc_with(&db_path, seed).await?;
 
     let activations = hub.list_activations_info();
     tracing::info!("Activations ({}):", activations.len());

@@ -1,0 +1,78 @@
+# perf/ — the magnitude ladder (PERF-3)
+
+A self-contained Node + Playwright package, deliberately **not** part of
+`cargo build` / `cargo test`. One command seeds 10², 10³, 10⁴, 10⁵ and
+10⁶ synthetic tickets (PERF-2's `--seed-synthetic`) into temp databases,
+measures every user-visible path against a release `menger` on ephemeral
+ports, and writes `plans/PERF/artifacts/MAGNITUDE-<date>.md` with the raw
+JSON and screenshots beside it.
+
+```sh
+cd perf
+npm install                       # playwright, pinned in package-lock.json
+npx playwright install chromium   # the browser (into ~/.cache/ms-playwright)
+
+npm run smoke                     # 10^2, one run, to perf/out/smoke — must pass
+node magnitude.mjs                # the full ladder (report to plans/PERF/artifacts)
+node magnitude.mjs --magnitudes 4 # one magnitude (merges into the same report)
+node magnitude.mjs --help
+```
+
+Options: `--magnitudes 2,3,4` · `--runs N` (override the schedule
+5/5/3/2/1) · `--date YYYY-MM-DD` (report name) · `--out DIR` ·
+`--tmp DIR` (temp databases; default `target/perf-tmp`, on disk — not
+tmpfs) · `--timeout-scale X` · `--no-build` · `--keep-db` · `--headed`.
+
+## What it measures, per magnitude
+
+Server: seed time (as logged by the server), startup load-into-cache
+time (a restart on the seeded file, after a WAL checkpoint — what a
+clean close does), RSS after load / after `list` / after the browser /
+peak; REST latencies for `health`, `list` (plus payload bytes and event
+count — streamed, never held in memory), `get`, `ready_set`, `blockers`;
+create → `watch` push latency over SSE.
+
+Browser (Playwright chromium, fresh context per run): app load → "live";
+every nav shortcode visible; the board's rows all in the DOM (plus DOM
+node count and JS heap); expanding the largest nav group; opening the
+ticket page from the board and as a cold deep link; a curl-created
+ticket appearing live in both the board and the nav.
+
+Every measurement runs under its own budget (`budgetMs` in
+`magnitude.mjs`, scaled by magnitude) and is recorded as a **FAIL** row
+with the reason when it exceeds it — the breaking point is the finding,
+and nothing hangs. ≥ 3 runs per measurement at the small magnitudes;
+medians in the report, every run in the raw JSON.
+
+The production server (ports 4455–4457) and `~/.local/share/menger/` are
+never touched: ports come from the kernel (`listen(0)`), databases live
+under `--tmp`, and the harness refuses a `--tmp` under the data dir.
+
+## Report layout
+
+`plans/PERF/artifacts/MAGNITUDE-<date>.md` — machine specs, the ladder
+at a glance, a scaling table (median ratio per ×10 in N, first failing
+magnitude), one table per magnitude, then the analysis sections. The
+tables are regenerated from `raw/1e<m>.json`; the analysis ("Degradation
+curve", "Recommendations") is authored in `perf/notes.md` and included
+verbatim, so a re-run keeps it.
+
+## Toolchain notes (what worked on this machine, 2026-09-06)
+
+No Node on PATH and no version manager. Installed Node LTS from the
+official tarball, no root:
+
+```sh
+V=v24.20.0
+cd ~/.local
+curl -sSLO https://nodejs.org/dist/$V/node-$V-linux-x64.tar.xz
+curl -sSL https://nodejs.org/dist/$V/SHASUMS256.txt | grep " node-$V-linux-x64.tar.xz$" | sha256sum -c
+tar -xJf node-$V-linux-x64.tar.xz && ln -sfn ~/.local/node-$V-linux-x64 ~/.local/node
+for b in node npm npx corepack; do ln -sfn ~/.local/node/bin/$b ~/.local/bin/$b; done
+```
+
+Playwright 1.63.0's bundled chromium (153.0.8010.12) launched headless
+without any extra system libraries on Bazzite 44 (Fedora Kinoite base);
+`npx playwright install-deps` was not needed. Node 24's built-in
+`node:sqlite` does the post-seed WAL checkpoint (falls back to the
+`sqlite3` CLI, then to none — recorded in the raw JSON either way).

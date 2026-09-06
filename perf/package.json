@@ -1,0 +1,15 @@
+{
+  "name": "menger-perf",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PERF-3: the magnitude ladder — seeds 10^2..10^6 tickets into temp databases, measures server + browser paths with Playwright, writes the report",
+  "type": "module",
+  "scripts": {
+    "magnitude": "node magnitude.mjs",
+    "smoke": "node magnitude.mjs --smoke"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}
