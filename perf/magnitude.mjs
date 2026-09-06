@@ -41,6 +41,10 @@ import { chromium } from "playwright";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 
+/// MNG-9: the page size the paged walk uses — the ticket's own number,
+/// and the one MFE-9's board is specified against.
+const PAGE_LIMIT = 200;
+
 function parseArgs(argv) {
   const o = {
     magnitudes: [2, 3, 4, 5, 6],
@@ -403,6 +407,69 @@ function wsList(port, params, timeoutMs, scan) {
   });
 }
 
+/// MNG-9: the same set walked in pages over one WebSocket — what a
+/// client that *renders* does. `tickets.list {summary, limit, after}`,
+/// repeatedly, passing the previous page's `page.next` as the next
+/// `after` until it is null. Summary rows carry no body, so this is both
+/// the paging cost and the body's weight, against `wsList` as the
+/// control. Reports the whole walk: bytes, rows, pages, the first item's
+/// latency, and the slowest single page (the number a UI feels).
+function wsListPaged(port, limit, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const t0 = now();
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    let bytes = 0, events = 0, pages = 0, first = null, id = 0;
+    let pageStart = 0, maxPage = 0;
+    const ids = new Set();
+    let lastRemaining = null;
+    const fail = (e) => {
+      try { ws.close(); } catch { /* ignore */ }
+      reject(e instanceof Error ? e : new Error(String(e)));
+    };
+    const timer = setTimeout(() => fail(new MeasureTimeout(timeoutMs)), timeoutMs);
+    const ask = (after) => {
+      id++;
+      pageStart = now();
+      const params = { summary: true, limit };
+      if (after) params.after = after;
+      ws.send(JSON.stringify({ jsonrpc: "2.0", id, method: "menger.call", params: { method: "tickets.list", params } }));
+    };
+    ws.onerror = () => fail(new Error("websocket error"));
+    ws.onopen = () => ask(null);
+    ws.onmessage = (m) => {
+      const text = typeof m.data === "string" ? m.data : String(m.data);
+      bytes += text.length;
+      let msg;
+      try { msg = JSON.parse(text); } catch { return; }
+      if (msg.error) return fail(new Error(`ws error: ${JSON.stringify(msg.error).slice(0, 160)}`));
+      const item = msg.params?.result;
+      if (!item) return;
+      if (item.type === "data") {
+        if (first == null) first = +(now() - t0).toFixed(1);
+        const ev = item.content;
+        if (ev.type === "summary") {
+          events++;
+          ids.add(ev.summary.id);
+          if (ev.summary.body !== undefined) return fail(new Error("a summary row carried a body"));
+        } else if (ev.type === "page") {
+          pages++;
+          maxPage = Math.max(maxPage, now() - pageStart);
+          lastRemaining = ev.remaining;
+          if (ev.next) { ask(ev.next); } else {
+            clearTimeout(timer);
+            ws.close();
+            resolve({ bytes, events, pages, ttfb_ms: first, max_page_ms: +maxPage.toFixed(1), distinct: ids.size, remaining: lastRemaining });
+          }
+        } else if (ev.type === "error") {
+          return fail(new Error(`in-band error: ${ev.message}`));
+        }
+      } else if (item.type === "error") {
+        fail(new Error(`stream error: ${JSON.stringify(item).slice(0, 160)}`));
+      }
+    };
+  });
+}
+
 /// An open `tickets.watch` SSE stream (direct REST port, no proxy).
 class Watch {
   constructor() {
@@ -641,14 +708,18 @@ async function runMagnitude(m, opts, browser) {
     // largest nav group) and a ticket with several blockers — come from
     // scanning a streamed list. The gateway serializes keys
     // alphabetically, so a ticket reads `"blocked_by":[…],"body":"…",
-    // "created_unix":…,"epic":"X","id":"X-N",…`.
+    // "children":[…],"created_unix":…,"epic":"X","id":"X-N",…`. (The
+    // `children` array is AGS-19's, added after this harness was written:
+    // without it in the pattern the blockers sample never matched and the
+    // `REST blockers` row failed as "no multi-blocker sample" — found by
+    // MNG-9's re-run, fixed here.)
     const epicCounts = new Map();
     const multi = [];
     let scanned = false;
     const scanner = (carry, text) => {
       for (const mm of newMatches(/"epic":"([A-Z]+)"/g, carry, text)) epicCounts.set(mm[1], (epicCounts.get(mm[1]) || 0) + 1);
       if (multi.length < 20) {
-        for (const mm of newMatches(/"blocked_by":\["([^\]]*)"\],"body":"(?:[^"\\]|\\.)*","created_unix":\d+,"epic":"[A-Z]+","id":"([A-Z]+-\d+)"/g, carry, text)) {
+        for (const mm of newMatches(/"blocked_by":\["([^\]]*)"\],"body":"(?:[^"\\]|\\.)*","children":\[[^\]]*\],"created_unix":\d+,"epic":"[A-Z]+","id":"([A-Z]+-\d+)"/g, carry, text)) {
           const blockers = mm[1].split('","');
           if (blockers.length >= 2 && !multi.some((x) => x.id === mm[2])) multi.push({ id: mm[2], blockers });
         }
@@ -661,7 +732,9 @@ async function runMagnitude(m, opts, browser) {
     for (let i = 0; i < runs; i++) {
       const r = await measure("ws_list", B("rest"), async () => {
         const out = await wsList(server.ws, {}, B("rest"), scanOnce(scanner));
-        if (out.events !== N) throw new Error(`ws list streamed ${out.events} items, expected ${N}`);
+        // MNG-9: N tickets plus the one trailing `page` event.
+        if (out.events !== N + 1) throw new Error(`ws list streamed ${out.events} items, expected ${N + 1}`);
+        out.events = N;
         return out;
       });
       if (r.status === "ok") scanned = true;
@@ -670,11 +743,26 @@ async function runMagnitude(m, opts, browser) {
       log(`ws list ${i + 1}/${runs}: ${r.status} ${fmtMs(r.ms)}${r.bytes ? ` ${fmtBytes(r.bytes)}` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
     }
 
+    // MNG-9: the same set, paged and body-less — what a renderer walks.
+    for (let i = 0; i < runs; i++) {
+      const r = await measure("ws_list_paged", B("rest"), async () => {
+        const out = await wsListPaged(server.ws, PAGE_LIMIT, B("rest"));
+        if (out.distinct !== N) throw new Error(`paged walk visited ${fmtInt(out.distinct)} distinct ids, expected ${fmtInt(N)}`);
+        if (out.events !== N) throw new Error(`paged walk streamed ${fmtInt(out.events)} rows, expected ${fmtInt(N)}`);
+        if (out.remaining !== 0) throw new Error(`last page reported ${out.remaining} remaining`);
+        return out;
+      });
+      rows("ws_list_paged").push(r);
+      log(`ws list paged ${i + 1}/${runs}: ${r.status} ${fmtMs(r.ms)}${r.bytes ? ` ${fmtBytes(r.bytes)}` : ""}${r.pages ? ` in ${fmtInt(r.pages)} pages, worst ${fmtMs(r.max_page_ms)}` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
+    }
+
     // list over REST: latency + payload bytes (streamed, counted).
     for (let i = 0; i < runs; i++) {
       const r = await measure("rest_list", B("rest"), async () => {
         const out = await restStream(server.restUrl("list"), {}, B("rest"), scanOnce(scanner));
-        if (out.events !== N) throw new Error(`list returned ${out.events} events, expected ${N}`);
+        // MNG-9: N tickets plus the one trailing `page` event.
+        if (out.events !== N + 1) throw new Error(`list returned ${out.events} events, expected ${N + 1}`);
+        out.events = N;
         return out;
       });
       if (r.status === "ok") scanned = true;
@@ -701,7 +789,9 @@ async function runMagnitude(m, opts, browser) {
       }));
       rows("rest_ready_set").push(await measure("rest_ready_set", B("rest"), async () => {
         const out = await restStream(server.restUrl("ready_set"), {}, B("rest"));
-        if (out.events === 0) throw new Error("ready_set empty");
+        // MNG-9: the ready set plus the one trailing `page` event.
+        if (out.events <= 1) throw new Error("ready_set empty");
+        out.events -= 1;
         return out;
       }));
       rows("rest_blockers").push(await measure("rest_blockers", B("rest"), async () => {
@@ -928,6 +1018,7 @@ const MEASUREMENTS = [
   { key: "startup_load", label: "startup load into cache (logged)", extra: ["wall_to_live_ms", "rss_after_load_bytes"] },
   { key: "rest_health", label: "REST health", extra: ["bytes"] },
   { key: "ws_list", label: "WS list, streamed (control)", extra: ["bytes", "events", "ttfb_ms"] },
+  { key: "ws_list_paged", label: `WS list, paged (${PAGE_LIMIT})`, extra: ["bytes", "events", "ttfb_ms", "pages", "max_page_ms"] },
   { key: "rest_list", label: "REST list (all tickets)", extra: ["bytes", "events", "ttfb_ms"] },
   { key: "rest_get", label: "REST get", extra: ["bytes"] },
   { key: "rest_ready_set", label: "REST ready_set", extra: ["bytes", "events"] },
@@ -955,6 +1046,7 @@ function detail(key, s) {
   if (s.bytes != null) bits.push(`payload ${fmtBytes(s.bytes)}`);
   if (s.events != null) bits.push(`${fmtInt(s.events)} events`);
   if (s.ttfb_ms != null) bits.push(`first byte ${fmtMs(s.ttfb_ms)}`);
+  if (s.pages != null) bits.push(`${fmtInt(s.pages)} pages, worst page ${fmtMs(s.max_page_ms)}`);
   if (s.epics != null) bits.push(`${s.epics} epics, ${fmtInt(s.edges)} edges`);
   if (s.generate_ms != null) bits.push(`generate ${fmtMs(s.generate_ms)} + persist ${fmtMs(s.persist_ms)}`);
   if (s.wall_to_live_ms != null) bits.push(`wall to liveness ${fmtMs(s.wall_to_live_ms)}`);

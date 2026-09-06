@@ -32,6 +32,22 @@ peak; REST latencies for `health`, `list` (plus payload bytes and event
 count — streamed, never held in memory), `get`, `ready_set`, `blockers`;
 create → `watch` push latency over SSE.
 
+Two WebSocket `list` rows, the same set two ways (MNG-9):
+
+- **WS list, streamed (control)** — `list {}`: every ticket, bodies and
+  all, one notification each. The store's cost with no envelope to
+  collect.
+- **WS list, paged (200)** — the walk a client that *renders* does:
+  `list { summary: true, limit: 200 }`, then the same call again with
+  `after` = the previous page's `page.next`, until `next` is null. The
+  row reports the whole walk (bytes, rows, pages) plus the slowest single
+  page — the number a UI actually feels — and the harness asserts the
+  walk visited every id exactly once and that no summary row carried a
+  body. Against the control it prices both the paging and the body.
+
+Every `list` / `ready_set` response now ends with one `page` event, so
+the event counts here are the tickets, with that item subtracted.
+
 Browser (Playwright chromium, fresh context per run): app load → "live";
 every nav shortcode visible; the board's rows all in the DOM (plus DOM
 node count and JS heap); expanding the largest nav group; opening the

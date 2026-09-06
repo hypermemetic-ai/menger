@@ -16,10 +16,11 @@
 //! an output of), `children` is the mirror the store maintains, and a
 //! database written before AGS-19 gains both columns — with typed parents
 //! backfilled from body frontmatter — durably, once, on first open.
-//! MNG-9 adds the cache's second half: a sorted [`OrderKey`] index beside
-//! the id map, so the store's total order costs nothing to walk and a
-//! page (`after` + `limit`) is a range scan rather than a sort of
-//! everything.
+//! MNG-9 names the store's total order — [`OrderKey`], `(epic, seq)` —
+//! and holds the cache in it: the tickets live in a sorted map, and a
+//! hash map says where an id sits in it. So the order costs nothing to
+//! walk, an id is a cursor, and a page (`after` + `limit`) is a range
+//! scan rather than a sort of everything.
 
 use rusqlite::Connection;
 use schemars::JsonSchema;
@@ -197,8 +198,10 @@ pub struct PageQuery<'a> {
 }
 
 /// MNG-9: what a page walk keeps. `All` is not "a predicate that always
-/// says yes": it is the evidence that nothing needs testing, which is
-/// what lets the walk count what remains without touching a ticket.
+/// says yes": it is the evidence that there is nothing left to test —
+/// the filters that *can* be answered by position (the epic, the cursor)
+/// having already been spent on the [`Span`] — so counting what remains
+/// costs the walk and not a test per ticket.
 enum Filter<'a> {
     All,
     By(&'a dyn Fn(&Ticket) -> bool),
@@ -503,16 +506,22 @@ struct Cache {
 }
 
 impl Cache {
-    /// Builds the cache from the tickets loaded at startup.
+    /// Builds the cache from the tickets loaded at startup. Collected,
+    /// not inserted one at a time: `BTreeMap`'s `FromIterator` sorts once
+    /// and bulk-builds the tree instead of rebalancing n times. Holding
+    /// the cache in the store's order costs this once per start — 350 ms
+    /// to ~545 ms at 100,000 tickets, measured — and every ordered read
+    /// after it is a walk of what is already sorted.
     fn new(loaded: HashMap<String, Ticket>) -> Self {
-        let mut cache = Self {
-            order: BTreeMap::new(),
-            at: HashMap::with_capacity(loaded.len()),
-        };
-        for (_, ticket) in loaded {
-            cache.insert(ticket);
-        }
-        cache
+        let order: BTreeMap<OrderKey, Ticket> = loaded
+            .into_values()
+            .map(|t| (OrderKey::of(&t), t))
+            .collect();
+        let at = order
+            .values()
+            .map(|t| (t.id.clone(), OrderKey::of(t)))
+            .collect();
+        Self { order, at }
     }
 
     /// Inserts or replaces one ticket. A ticket's `(epic, seq)` is fixed
@@ -815,7 +824,7 @@ impl Store {
     /// strictly after the `after` cursor, under the same filters `list`
     /// has always taken, plus how many further tickets match.
     ///
-    /// The walk is over the cache's sorted index, so the cost is the page
+    /// The walk is over the cache's sorted half, so the cost is the page
     /// (plus the count of what remains), not a clone-and-sort of every
     /// ticket. `after` naming no ticket is [`StoreError::CursorNotFound`]:
     /// a cursor into nothing is a caller error, not an empty page.
@@ -825,9 +834,9 @@ impl Store {
         let after = q.after.map(str::to_ascii_uppercase);
         let cache = self.tickets.read().expect("store lock poisoned");
         let span = Span::of(&cache, after.as_deref(), epic.as_deref())?;
-        // With nothing left to test, counting what remains is a walk of
-        // the index alone — no ticket is touched. The epic is already
-        // spent: it bounded the span rather than filtering inside it.
+        // The epic is already spent — it bounded the span rather than
+        // filtering inside it — so with no status or parent asked for,
+        // there is nothing left to test on the way through.
         if q.status.is_none() && parent.is_none() {
             return Ok(Self::walk_cache(&cache, span, q.limit, Filter::All));
         }
@@ -860,13 +869,12 @@ impl Store {
         Ok(Self::walk_cache(&cache, span, limit, Filter::By(&keep)))
     }
 
-    /// The one walk both page methods run: the span of the index, `limit`
-    /// matches cloned into the page, then the rest of the span counted —
-    /// because `remaining` is an exact number, not an estimate. With no
-    /// predicate that count is a walk of the index and nothing else;
-    /// under one, each remaining ticket has to be looked at to be
-    /// counted — the O(what is left) the ticket's Risks section names and
-    /// accepts, now bounded by the epic's span when there is one.
+    /// The one walk both page methods run: the span, `limit` matches
+    /// cloned into the page, then the rest of the span counted — because
+    /// `remaining` is an exact number, not an estimate. That count is the
+    /// O(what is left) the ticket's Risks section names and accepts;
+    /// what keeps it cheap is that the span is already the right stretch
+    /// of the order and its tickets are already in hand.
     fn walk_cache(cache: &Cache, span: Span, limit: Option<u32>, filter: Filter<'_>) -> Page {
         let take = limit.map_or(usize::MAX, |n| n as usize);
         let mut tickets = Vec::new();
