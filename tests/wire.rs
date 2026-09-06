@@ -162,7 +162,10 @@ async fn in_band_errors_cross_the_wire() {
 /// full affected ticket, so applying it is one upsert.
 fn apply(mirror: &mut std::collections::HashMap<String, Value>, ev: &Value) {
     match ev["type"].as_str() {
-        Some("created") | Some("status_changed") | Some("unlocks_changed") => {
+        Some("created")
+        | Some("status_changed")
+        | Some("unlocks_changed")
+        | Some("children_changed") => {
             let ticket = ev["ticket"].clone();
             let id = ticket["id"].as_str().expect("ticket id").to_string();
             mirror.insert(id, ticket);
@@ -317,6 +320,111 @@ async fn cycle_create_errors_in_band_and_stores_nothing() {
     // Nothing was stored under the would-be id.
     let evs = collect(call(&client, "tickets.get", json!({"id": "CY-2"})).await).await;
     assert_eq!(evs[0]["type"], "not_found");
+}
+
+/// AGS-19 acceptance 1, 2 and 4 over the real wire: a child names its
+/// parent at create, `get` shows both halves, the watch-only mirror sees
+/// the parent's update as `children_changed` carrying the full ticket, a
+/// nonexistent parent is an in-band error naming the reason, a 3-deep
+/// chain (crossing epics) reads back, and `list {parent}` returns exactly
+/// that ticket's children.
+#[tokio::test]
+async fn parent_children_and_the_parent_filter_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let mut mirror = std::collections::HashMap::new();
+
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "PA", "title": "P"})).await).await;
+    assert_eq!(evs[0]["type"], "created");
+    assert_eq!(evs[0]["ticket"]["children"], json!([]), "born childless");
+    assert!(evs[0]["ticket"]["parent"].is_null(), "and parentless");
+    mirror.insert("PA-1".to_string(), evs[0]["ticket"].clone());
+
+    // A watch-only client from here on.
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+
+    // Acceptance 2, first half: a parent that names no ticket.
+    let evs = collect(call(&client, "tickets.create",
+        json!({"epic": "PA", "title": "orphan", "parent": "PA-99"})).await).await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["type"], "error");
+    let message = evs[0]["message"].as_str().unwrap();
+    assert!(message.contains("PA-99"), "names the parent: {message}");
+    assert!(message.contains("must exist"), "names the reason: {message}");
+    let evs = collect(call(&client, "tickets.get", json!({"id": "PA-2"})).await).await;
+    assert_eq!(evs[0]["type"], "not_found", "nothing was stored");
+
+    // Acceptance 1: C is born as P's child.
+    let evs = collect(call(&client, "tickets.create",
+        json!({"epic": "PA", "title": "C", "kind": "execution", "parent": "PA-1"})).await).await;
+    assert_eq!(evs[0]["type"], "created");
+    assert_eq!(evs[0]["ticket"]["id"], "PA-2");
+    assert_eq!(evs[0]["ticket"]["parent"], "PA-1");
+
+    // The watcher saw the birth and the parent's update, full ticket.
+    for _ in 0..2 {
+        let ev = content(watch.next().await.unwrap().unwrap());
+        if ev["type"] == "children_changed" {
+            assert_eq!(ev["ticket"]["id"], "PA-1");
+            assert_eq!(ev["added"], "PA-2");
+            assert_eq!(ev["ticket"]["children"], json!(["PA-2"]));
+            assert_eq!(ev["ticket"]["title"], "P", "the full parent, not a delta");
+        }
+        apply(&mut mirror, &ev);
+    }
+    assert_eq!(mirror["PA-1"]["children"], json!(["PA-2"]),
+        "a watch-only client's mirror stays coherent");
+
+    // Both ends agree when asked directly.
+    let evs = collect(call(&client, "tickets.get", json!({"id": "PA-1"})).await).await;
+    assert_eq!(evs[0]["ticket"]["children"], json!(["PA-2"]));
+    let evs = collect(call(&client, "tickets.get", json!({"id": "PA-2"})).await).await;
+    assert_eq!(evs[0]["ticket"]["parent"], "PA-1");
+
+    // Acceptance 2, second half: three deep, the middle link in another
+    // epic. (Self-ancestry needs no test: the id is allocated by the very
+    // create that would name it, so it cannot exist yet, and no
+    // re-parent method exists.)
+    collect(call(&client, "tickets.create",
+        json!({"epic": "PB", "title": "grandchild", "parent": "PA-2"})).await).await;
+    collect(call(&client, "tickets.create",
+        json!({"epic": "PA", "title": "great-grandchild", "parent": "PB-1"})).await).await;
+    let chain = ["PA-1", "PA-2", "PB-1", "PA-3"];
+    for (child, parent) in chain.iter().skip(1).zip(chain.iter()) {
+        let evs = collect(call(&client, "tickets.get", json!({"id": child})).await).await;
+        assert_eq!(evs[0]["ticket"]["parent"], *parent, "{child}");
+        let evs = collect(call(&client, "tickets.get", json!({"id": parent})).await).await;
+        assert_eq!(evs[0]["ticket"]["children"], json!([child]), "{parent}");
+    }
+    let evs = collect(call(&client, "tickets.get", json!({"id": "PA-3"})).await).await;
+    assert_eq!(evs[0]["ticket"]["children"], json!([]), "the leaf has none");
+
+    // Acceptance 4: exactly the children, and nothing else.
+    collect(call(&client, "tickets.create",
+        json!({"epic": "PA", "title": "second child of P"})).await).await; // PA-4, no parent
+    collect(call(&client, "tickets.create",
+        json!({"epic": "PC", "title": "cross-epic child of P", "parent": "PA-1"})).await).await;
+    let ids = |evs: Vec<Value>| -> Vec<String> {
+        evs.into_iter()
+            .map(|ev| {
+                assert_eq!(ev["type"], "ticket", "got {ev}");
+                ev["ticket"]["id"].as_str().unwrap().to_string()
+            })
+            .collect()
+    };
+    assert_eq!(
+        ids(collect(call(&client, "tickets.list", json!({"parent": "PA-1"})).await).await),
+        vec!["PA-2", "PC-1"]
+    );
+    assert_eq!(
+        ids(collect(call(&client, "tickets.list", json!({"parent": "PA-4"})).await).await),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        ids(collect(call(&client, "tickets.list", json!({})).await).await).len(),
+        6,
+        "the unfiltered list is unchanged"
+    );
 }
 
 #[tokio::test]

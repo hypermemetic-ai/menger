@@ -24,6 +24,10 @@ pub enum TicketsEvent {
     /// ticket named it in `blocked_by` (yielded by `watch`). Carries the
     /// full updated ticket so a watch-only client stays coherent.
     UnlocksChanged { ticket: Ticket, added: String },
+    /// AGS-19: an existing ticket's `children` gained `added` — a child
+    /// was born naming it as `parent` (yielded by `watch`). Carries the
+    /// full updated parent so a watch-only client stays coherent.
+    ChildrenChanged { ticket: Ticket, added: String },
     /// One resolved blocker of the queried ticket, at its current status
     /// (yielded per-entry by `blockers`).
     Blocker { ticket: Ticket },

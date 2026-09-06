@@ -5,7 +5,8 @@ NOT a sync and NOT a storage backend (the owner rejected plans/-directory
 integration): this reads the files once and creates tickets over REST so
 the allocated ids match the file ids exactly. Idempotent — existing ids
 are skipped. Seq gaps (a deleted file) get a Superseded placeholder so
-later ids still line up.
+later ids still line up. A file's `parent:` frontmatter (AGS-19) becomes
+the create param, so the parent tree is seeded with the tickets.
 
   ./scripts/seed-from-plans.py [--rest http://127.0.0.1:4457] [--dry-run]
 """
@@ -106,8 +107,14 @@ def main():
                     params["severity"] = fm["severity"]
                 if fm.get("blocked_by"):
                     params["blocked_by"] = fm["blocked_by"]
+                # AGS-19: a file's `parent:` is the create param. The
+                # parent must already exist, which EPIC_ORDER (and seq
+                # order within an epic) guarantees for backward refs.
+                if fm.get("parent"):
+                    params["parent"] = fm["parent"]
                 status = fm.get("status", "Pending")
-                print(f"create {tid} [{params['kind']:9}] {status:10} {params['title'][:60]}")
+                parent = f" parent:{params['parent']}" if params.get("parent") else ""
+                print(f"create {tid} [{params['kind']:9}] {status:10} {params['title'][:60]}{parent}")
             if a.dry_run:
                 continue
             ev = rest(a.rest, "create", params)[0]

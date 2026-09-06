@@ -12,6 +12,10 @@
 //! The status vocabulary matches the house ticketing convention; the kind
 //! vocabulary is the owner's closed five (AGS-13), and a database written
 //! before AGS-13 is migrated to it, durably, the first time it is opened.
+//! AGS-19 adds parenthood: a ticket may name a `parent` (the ticket it is
+//! an output of), `children` is the mirror the store maintains, and a
+//! database written before AGS-19 gains both columns — with typed parents
+//! backfilled from body frontmatter — durably, once, on first open.
 
 use rusqlite::Connection;
 use schemars::JsonSchema;
@@ -137,6 +141,13 @@ pub struct Ticket {
     pub blocked_by: Vec<String>,
     /// Ticket ids that can start once this one completes.
     pub unlocks: Vec<String>,
+    /// AGS-19: the ticket this one is an output of, if any. Any epic; the
+    /// parent must exist at creation and the chain is acyclic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// AGS-19: the tickets whose `parent` is this one — derived and kept
+    /// by the store (as `unlocks` is from `blocked_by`), in birth order.
+    pub children: Vec<String>,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
     pub body: String,
     pub created_unix: i64,
@@ -154,6 +165,10 @@ pub enum Change {
     /// created ticket named it in `blocked_by`. Carries the full updated
     /// ticket so watch-only clients stay coherent.
     UnlocksChanged { ticket: Ticket, added: String },
+    /// AGS-19: an existing ticket's `children` gained `added` — a child
+    /// was born naming it as `parent`. Same discipline as
+    /// `UnlocksChanged`: the full updated parent rides along.
+    ChildrenChanged { ticket: Ticket, added: String },
 }
 
 impl Change {
@@ -161,7 +176,8 @@ impl Change {
         match self {
             Self::Created { ticket }
             | Self::StatusChanged { ticket, .. }
-            | Self::UnlocksChanged { ticket, .. } => ticket,
+            | Self::UnlocksChanged { ticket, .. }
+            | Self::ChildrenChanged { ticket, .. } => ticket,
         }
     }
 }
@@ -181,6 +197,9 @@ pub struct NewTicket {
     pub kind: Kind,
     pub severity: Option<Severity>,
     pub blocked_by: Vec<String>,
+    /// AGS-19: the ticket this one is an output of. Must already exist
+    /// (any epic) and must not make the newborn its own ancestor.
+    pub parent: Option<String>,
     pub body: String,
 }
 
@@ -219,6 +238,12 @@ pub enum StoreError {
     /// Creating `id` with the requested `blocked_by` would close a cycle;
     /// `path` is the blocked_by chain from `id` back to `id`.
     Cycle { id: String, path: Vec<String> },
+    /// AGS-19: the requested `parent` names no existing ticket. Nothing
+    /// was stored and the id stays unallocated.
+    ParentNotFound { id: String, parent: String },
+    /// AGS-19: the requested parent chain would make `id` its own
+    /// ancestor; `path` is the chain from the parent back to `id`.
+    ParentCycle { id: String, path: Vec<String> },
     /// The write could not be made durable; nothing was acknowledged.
     Db(String),
     /// PERF-2: a seed was requested into a store that already holds
@@ -238,6 +263,17 @@ impl std::fmt::Display for StoreError {
             Self::Cycle { id, path } => write!(
                 f,
                 "creating '{id}' would close a blocked_by cycle: {id} -> {}",
+                path.join(" -> ")
+            ),
+            Self::ParentNotFound { id, parent } => write!(
+                f,
+                "no ticket with id '{parent}': a parent must exist before its child \
+                 (nothing was created for '{id}')"
+            ),
+            Self::ParentCycle { id, path } => write!(
+                f,
+                "creating '{id}' would make it its own ancestor: parent chain \
+                 {id} -> {}",
                 path.join(" -> ")
             ),
             Self::Db(msg) => write!(f, "database error: {msg}"),
@@ -278,6 +314,32 @@ fn find_cycle(
         }
     }
     None
+}
+
+/// AGS-19: walks the parent chain upward from `parent`; if the allocated
+/// `new_id` is reachable (naming itself included), returns the chain from
+/// `parent` up to `new_id` — the ticket would be its own ancestor. A
+/// chain that leaves the store (a parent with no parent) or revisits a
+/// ticket terminates; the walk cannot loop.
+fn find_parent_cycle(
+    tickets: &HashMap<String, Ticket>,
+    new_id: &str,
+    parent: &str,
+) -> Option<Vec<String>> {
+    let mut path = vec![parent.to_string()];
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut current = parent.to_string();
+    loop {
+        if current == new_id {
+            return Some(path);
+        }
+        if !seen.insert(current.clone()) {
+            return None;
+        }
+        let next = tickets.get(&current).and_then(|t| t.parent.clone())?;
+        path.push(next.clone());
+        current = next;
+    }
 }
 
 /// A blocker satisfies the ready-set rule when it is done with.
@@ -340,6 +402,11 @@ impl Store {
         // durably — before anything is loaded. An unmappable row refuses
         // the open (loudly, nothing changed) rather than loading a guess.
         db::migrate_legacy_ticket_type(&mut conn)?;
+        // A database written before AGS-19 gains `parent`/`children` here,
+        // once, durably — with typed parents backfilled from body
+        // frontmatter. Never fatal: an unresolvable one is logged and
+        // left empty.
+        db::migrate_add_parenthood(&mut conn)?;
         let tickets = db::load_all(&conn)?;
         let (tx, _) = broadcast::channel(256);
         Ok(Self {
@@ -378,15 +445,27 @@ impl Store {
     /// Otherwise the new id is appended to each existing blocker's
     /// `unlocks`, and any existing tickets whose `blocked_by` already
     /// named the allocated id (dangling forward references) become the
-    /// newborn's `unlocks` from birth. The newborn and every updated
-    /// blocker commit in one transaction; broadcasts (`Created`, then one
-    /// `UnlocksChanged` per blocker) follow the commit, in
-    /// acknowledgment order.
+    /// newborn's `unlocks` from birth.
+    ///
+    /// Parenthood (AGS-19) is maintained the same way: a `parent` that
+    /// names no ticket, or one that would make the newborn its own
+    /// ancestor, is rejected before anything persists; otherwise the new
+    /// id is appended to the parent's `children`. A ticket that is both
+    /// parent and blocker is updated once, carrying both edges.
+    ///
+    /// The newborn and every updated ticket commit in one transaction;
+    /// broadcasts follow the commit in acknowledgment order: `Created`,
+    /// then `ChildrenChanged` for the parent, then one `UnlocksChanged`
+    /// per blocker.
     pub async fn create(&self, new: NewTicket) -> Result<Ticket, StoreError> {
         let epic = new.epic.trim().to_ascii_uppercase();
         if epic.is_empty() || !epic.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(StoreError::InvalidEpic(new.epic));
         }
+        let parent = new
+            .parent
+            .map(|p| p.trim().to_ascii_uppercase())
+            .filter(|p| !p.is_empty());
 
         let _serial = self.write_serial.lock().await;
         // Under the write-serial lock the cache mirrors the database
@@ -394,7 +473,7 @@ impl Store {
         // across restarts (the cache was loaded from the database) and
         // race-free (writers are serialized). This read phase computes
         // everything and mutates nothing: a rejection leaves no trace.
-        let (ticket, updated_blockers) = {
+        let (ticket, touched, unlocks_added) = {
             let tickets = self.tickets.read().expect("store lock poisoned");
             let seq = tickets
                 .values()
@@ -407,6 +486,17 @@ impl Store {
 
             if let Some(path) = find_cycle(&tickets, &id, &new.blocked_by) {
                 return Err(StoreError::Cycle { id, path });
+            }
+            if let Some(p) = &parent {
+                if !tickets.contains_key(p) {
+                    return Err(StoreError::ParentNotFound {
+                        id,
+                        parent: p.clone(),
+                    });
+                }
+                if let Some(path) = find_parent_cycle(&tickets, &id, p) {
+                    return Err(StoreError::ParentCycle { id, path });
+                }
             }
 
             // Dangling forward references to this id resolve now: their
@@ -430,45 +520,68 @@ impl Store {
                 severity: new.severity,
                 blocked_by: new.blocked_by,
                 unlocks,
+                parent: parent.clone(),
+                children: Vec::new(),
                 body: new.body,
                 created_unix: now,
                 updated_unix: now,
             };
 
-            // Symmetry: each existing blocker gains the new id in
-            // `unlocks`. Updated clones only — the cache changes after
-            // the database commit.
-            let mut updated_blockers = Vec::new();
-            for blocker_id in &ticket.blocked_by {
-                if let Some(blocker) = tickets.get(blocker_id) {
-                    if !blocker.unlocks.contains(&id) {
-                        let mut updated = blocker.clone();
-                        updated.unlocks.push(id.clone());
-                        updated.updated_unix = now;
-                        updated_blockers.push(updated);
-                    }
-                }
+            // Symmetry, in one place: every existing ticket this create
+            // touches is cloned once and updated in place, so a ticket
+            // that is both the parent and a blocker carries both edges
+            // into the commit. Updated clones only — the cache changes
+            // after the database commit.
+            let mut touched: HashMap<String, Ticket> = HashMap::new();
+            if let Some(parent_id) = &parent {
+                let mut updated = tickets[parent_id].clone();
+                updated.children.push(id.clone());
+                updated.updated_unix = now;
+                touched.insert(parent_id.clone(), updated);
             }
-            (ticket, updated_blockers)
+            let mut unlocks_added: Vec<String> = Vec::new();
+            for blocker_id in &ticket.blocked_by {
+                let mirrored = touched
+                    .get(blocker_id)
+                    .or_else(|| tickets.get(blocker_id))
+                    .map(|b| b.unlocks.contains(&id));
+                // None: a dangling blocker — nothing exists to update.
+                if mirrored != Some(false) {
+                    continue;
+                }
+                let updated = touched
+                    .entry(blocker_id.clone())
+                    .or_insert_with(|| tickets[blocker_id].clone());
+                updated.unlocks.push(id.clone());
+                updated.updated_unix = now;
+                unlocks_added.push(blocker_id.clone());
+            }
+            (ticket, touched, unlocks_added)
         };
 
-        let mut batch = updated_blockers.clone();
+        let mut batch: Vec<Ticket> = touched.values().cloned().collect();
         batch.push(ticket.clone());
         self.persist(batch).await?;
 
         {
             let mut tickets = self.tickets.write().expect("store lock poisoned");
-            for blocker in &updated_blockers {
-                tickets.insert(blocker.id.clone(), blocker.clone());
+            for (id, updated) in &touched {
+                tickets.insert(id.clone(), updated.clone());
             }
             tickets.insert(ticket.id.clone(), ticket.clone());
         }
         let _ = self.tx.send(Change::Created {
             ticket: ticket.clone(),
         });
-        for blocker in updated_blockers {
+        if let Some(parent_id) = &parent {
+            let _ = self.tx.send(Change::ChildrenChanged {
+                ticket: touched[parent_id].clone(),
+                added: ticket.id.clone(),
+            });
+        }
+        for blocker_id in unlocks_added {
             let _ = self.tx.send(Change::UnlocksChanged {
-                ticket: blocker,
+                ticket: touched[&blocker_id].clone(),
                 added: ticket.id.clone(),
             });
         }
@@ -483,9 +596,16 @@ impl Store {
             .cloned()
     }
 
-    /// Tickets ordered by (epic, seq), optionally filtered.
-    pub fn list(&self, epic: Option<&str>, status: Option<Status>) -> Vec<Ticket> {
+    /// Tickets ordered by (epic, seq), optionally filtered. The `parent`
+    /// filter (AGS-19) selects exactly that ticket's children.
+    pub fn list(
+        &self,
+        epic: Option<&str>,
+        status: Option<Status>,
+        parent: Option<&str>,
+    ) -> Vec<Ticket> {
         let epic = epic.map(str::to_ascii_uppercase);
+        let parent = parent.map(str::to_ascii_uppercase);
         let mut out: Vec<Ticket> = self
             .tickets
             .read()
@@ -493,6 +613,7 @@ impl Store {
             .values()
             .filter(|t| epic.as_deref().is_none_or(|e| t.epic == e))
             .filter(|t| status.is_none_or(|s| t.status == s))
+            .filter(|t| parent.as_deref().is_none_or(|p| t.parent.as_deref() == Some(p)))
             .cloned()
             .collect();
         out.sort_by(|a, b| a.epic.cmp(&b.epic).then(a.seq.cmp(&b.seq)));
@@ -948,6 +1069,10 @@ mod synthetic {
                 severity,
                 blocked_by,
                 unlocks: Vec::new(),
+                // PERF-2 measures the DAG, not the parent tree: synthetic
+                // tickets are all roots (AGS-19 leaves the shape alone).
+                parent: None,
+                children: Vec::new(),
                 body: body_s,
                 created_unix: created,
                 updated_unix: updated,
@@ -963,7 +1088,7 @@ mod db {
     use super::Ticket;
     use rusqlite::types::Type;
     use rusqlite::{params, Connection};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::str::FromStr;
 
     pub(super) const SCHEMA: &str = "
@@ -977,6 +1102,8 @@ mod db {
             severity     TEXT,
             blocked_by   TEXT NOT NULL,
             unlocks      TEXT NOT NULL,
+            parent       TEXT,
+            children     TEXT NOT NULL DEFAULT '[]',
             body         TEXT NOT NULL,
             created_unix INTEGER NOT NULL,
             updated_unix INTEGER NOT NULL,
@@ -1065,6 +1192,149 @@ mod db {
         Ok(rows.len())
     }
 
+    /// AGS-19: the `parent:` line of a body's YAML frontmatter, if the
+    /// body opens with a frontmatter block and carries one. The body is
+    /// the raw record (AGS-2 decides canonicality); this reads it, never
+    /// writes it.
+    pub(super) fn frontmatter_parent(body: &str) -> Option<String> {
+        let mut lines = body.lines();
+        if lines.next()?.trim_end() != "---" {
+            return None;
+        }
+        for line in lines {
+            let line = line.trim_end();
+            if line == "---" {
+                break;
+            }
+            if let Some(value) = line.strip_prefix("parent:") {
+                let value = value.trim().trim_matches('"').trim();
+                if value.is_empty() || value == "[]" || value == "null" {
+                    return None;
+                }
+                return Some(value.to_ascii_uppercase());
+            }
+        }
+        None
+    }
+
+    /// Ticket ids in (epic, seq) order — the order `create` would have
+    /// appended them in, so a backfilled `children` list reads like a
+    /// grown one. An id that is not `EPIC-N` sorts last, by name.
+    fn by_epic_seq(id: &str) -> (String, u32, String) {
+        match id.rsplit_once('-').and_then(|(e, n)| {
+            n.parse::<u32>().ok().map(|n| (e.to_string(), n))
+        }) {
+            Some((epic, seq)) => (epic, seq, id.to_string()),
+            None => (id.to_string(), u32::MAX, id.to_string()),
+        }
+    }
+
+    /// True if making `parent` the parent of `child` would close a loop
+    /// in `edges` (child -> parent), `child == parent` included.
+    fn parent_edge_loops(edges: &HashMap<String, String>, child: &str, parent: &str) -> bool {
+        let mut current = parent;
+        for _ in 0..=edges.len() {
+            if current == child {
+                return true;
+            }
+            match edges.get(current) {
+                Some(next) => current = next,
+                None => return false,
+            }
+        }
+        true
+    }
+
+    /// One-shot, durable migration of a pre-AGS-19 database (AGS-19).
+    ///
+    /// If the `tickets` table has no `parent` column, this adds `parent`
+    /// and `children` and backfills the typed parent from each body's
+    /// frontmatter `parent: <id>`, in one transaction: an id that names
+    /// an existing ticket is written through (and mirrored in that
+    /// ticket's `children`), logged per ticket; one that resolves to
+    /// nothing — or that would make a ticket its own ancestor — is
+    /// logged and left empty. Never fatal: an unresolvable reference is a
+    /// dangling note in prose, not a corrupt store, and a later create
+    /// can still establish the relationship.
+    ///
+    /// Committed before the cache loads, so a restart (or a SIGKILL right
+    /// after) finds the typed parents in the file; the column check above
+    /// makes every later open a no-op, which also keeps startup off the
+    /// bodies of a million synthetic rows. Returns how many parents were
+    /// backfilled (0: nothing to migrate).
+    pub(super) fn migrate_add_parenthood(conn: &mut Connection) -> anyhow::Result<usize> {
+        if has_column(conn, "tickets", "parent")? {
+            return Ok(0);
+        }
+        let tx = conn.transaction()?;
+        tx.execute("ALTER TABLE tickets ADD COLUMN parent TEXT", [])?;
+        tx.execute(
+            "ALTER TABLE tickets ADD COLUMN children TEXT NOT NULL DEFAULT '[]'",
+            [],
+        )?;
+
+        let rows: Vec<(String, String)> = {
+            let mut stmt = tx.prepare("SELECT id, body FROM tickets")?;
+            let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let known: HashSet<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
+        let mut proposed: Vec<(String, String)> = rows
+            .iter()
+            .filter_map(|(id, body)| frontmatter_parent(body).map(|p| (id.clone(), p)))
+            .collect();
+        proposed.sort_by_key(|(id, _)| by_epic_seq(id));
+
+        let mut edges: HashMap<String, String> = HashMap::new();
+        for (id, parent) in proposed {
+            if !known.contains(parent.as_str()) {
+                tracing::warn!(
+                    "AGS-19 migration: {id} names parent '{parent}' in its frontmatter, \
+                     which is not a ticket — left empty"
+                );
+                continue;
+            }
+            if parent_edge_loops(&edges, &id, &parent) {
+                tracing::warn!(
+                    "AGS-19 migration: {id} -> parent '{parent}' would make a ticket its own \
+                     ancestor — left empty"
+                );
+                continue;
+            }
+            tracing::info!("AGS-19 migration: {id}.parent = {parent} (from body frontmatter)");
+            edges.insert(id, parent);
+        }
+
+        let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (child, parent) in &edges {
+            children.entry(parent.as_str()).or_default().push(child);
+        }
+        for (child, parent) in &edges {
+            tx.execute(
+                "UPDATE tickets SET parent = ?1 WHERE id = ?2",
+                params![parent, child],
+            )?;
+        }
+        for (parent, mut kids) in children {
+            kids.sort_by_key(|id| by_epic_seq(id));
+            tx.execute(
+                "UPDATE tickets SET children = ?1 WHERE id = ?2",
+                params![
+                    serde_json::to_string(&kids).expect("serialize ids"),
+                    parent
+                ],
+            )?;
+        }
+        tx.commit()?;
+        tracing::info!(
+            "AGS-19: added parent/children to {} tickets, backfilling {} typed parent(s) \
+             from body frontmatter, durably",
+            rows.len(),
+            edges.len()
+        );
+        Ok(edges.len())
+    }
+
     /// Serializes a unit enum to its serde string form (`Pending`,
     /// `build`, `Critical`) — the same casing the wire uses, and what the
     /// `FromStr` impls parse back.
@@ -1096,8 +1366,9 @@ mod db {
         conn.execute(
             "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
-                  blocked_by, unlocks, body, created_unix, updated_unix)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                  blocked_by, unlocks, parent, children, body,
+                  created_unix, updated_unix)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT (id) DO UPDATE SET
                  epic = excluded.epic,
                  seq = excluded.seq,
@@ -1107,6 +1378,8 @@ mod db {
                  severity = excluded.severity,
                  blocked_by = excluded.blocked_by,
                  unlocks = excluded.unlocks,
+                 parent = excluded.parent,
+                 children = excluded.children,
                  body = excluded.body,
                  created_unix = excluded.created_unix,
                  updated_unix = excluded.updated_unix",
@@ -1120,6 +1393,8 @@ mod db {
                 t.severity.as_ref().map(enum_str),
                 serde_json::to_string(&t.blocked_by).expect("serialize ids"),
                 serde_json::to_string(&t.unlocks).expect("serialize ids"),
+                t.parent,
+                serde_json::to_string(&t.children).expect("serialize ids"),
                 t.body,
                 t.created_unix,
                 t.updated_unix,
@@ -1136,8 +1411,9 @@ mod db {
         let mut stmt = conn.prepare_cached(
             "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
-                  blocked_by, unlocks, body, created_unix, updated_unix)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                  blocked_by, unlocks, parent, children, body,
+                  created_unix, updated_unix)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         )?;
         for t in tickets {
             stmt.execute(params![
@@ -1150,6 +1426,8 @@ mod db {
                 t.severity.as_ref().map(enum_str),
                 serde_json::to_string(&t.blocked_by).expect("serialize ids"),
                 serde_json::to_string(&t.unlocks).expect("serialize ids"),
+                t.parent,
+                serde_json::to_string(&t.children).expect("serialize ids"),
                 t.body,
                 t.created_unix,
                 t.updated_unix,
@@ -1161,7 +1439,8 @@ mod db {
     pub(super) fn load_all(conn: &Connection) -> anyhow::Result<HashMap<String, Ticket>> {
         let mut stmt = conn.prepare(
             "SELECT id, epic, seq, title, status, kind, severity,
-                    blocked_by, unlocks, body, created_unix, updated_unix
+                    blocked_by, unlocks, body, created_unix, updated_unix,
+                    parent, children
              FROM tickets",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -1182,6 +1461,11 @@ mod db {
                 body: row.get(9)?,
                 created_unix: row.get(10)?,
                 updated_unix: row.get(11)?,
+                parent: row.get::<_, Option<String>>(12)?,
+                children: parse_ids(
+                    13,
+                    row.get::<_, Option<String>>(13)?.as_deref().unwrap_or("[]"),
+                )?,
             })
         })?;
         let mut out = HashMap::new();
@@ -1204,7 +1488,16 @@ mod tests {
             kind: Kind::Build,
             severity: None,
             blocked_by: Vec::new(),
+            parent: None,
             body: String::new(),
+        }
+    }
+
+    /// `new_ticket`, filed as an output of `parent`.
+    fn child_of(epic: &str, title: &str, parent: &str) -> NewTicket {
+        NewTicket {
+            parent: Some(parent.into()),
+            ..new_ticket(epic, title)
         }
     }
 
@@ -1356,6 +1649,328 @@ mod tests {
         assert_eq!(tt, "implementation", "the good row was not rewritten either");
     }
 
+    // ---- AGS-19: parenthood --------------------------------------------
+
+    /// The store's schema as it was before AGS-19 (no `parent`, no
+    /// `children`), so a test can build "a database created before this
+    /// ticket" by hand — the black-box counterpart is
+    /// `tests/fixtures/pre-ags19.db`, written by the pre-AGS-19 binary.
+    const PRE_AGS19_SCHEMA: &str = "
+        CREATE TABLE tickets (
+            id           TEXT PRIMARY KEY,
+            epic         TEXT NOT NULL,
+            seq          INTEGER NOT NULL,
+            title        TEXT NOT NULL,
+            status       TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            severity     TEXT,
+            blocked_by   TEXT NOT NULL,
+            unlocks      TEXT NOT NULL,
+            body         TEXT NOT NULL,
+            created_unix INTEGER NOT NULL,
+            updated_unix INTEGER NOT NULL,
+            UNIQUE (epic, seq)
+        );
+    ";
+
+    /// Writes a pre-AGS-19 database at `path`, epic `OLD`, one row per
+    /// `(seq, frontmatter parent)` — `None` writes a body with no
+    /// frontmatter at all.
+    fn write_pre_ags19_db(path: &Path, rows: &[(u32, Option<&str>)]) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(PRE_AGS19_SCHEMA).unwrap();
+        for (seq, parent) in rows {
+            let body = match parent {
+                Some(p) => format!(
+                    "---\nid: OLD-{seq}\ntitle: \"old {seq}\"\nstatus: Ready\nparent: {p}\n---\n\nbody"
+                ),
+                None => format!("no frontmatter, just prose for OLD-{seq}"),
+            };
+            conn.execute(
+                "INSERT INTO tickets VALUES (?1, 'OLD', ?2, ?3, 'Pending', 'build', NULL, '[]', '[]', ?4, 1, 1)",
+                rusqlite::params![format!("OLD-{seq}"), seq, format!("old {seq}"), body],
+            )
+            .unwrap();
+        }
+    }
+
+    /// Acceptance 1 at the store level: a child names its parent, the
+    /// parent gains it in `children`, a subscriber sees the parent's
+    /// change as `ChildrenChanged` carrying the full ticket, and both
+    /// edges are durable.
+    #[tokio::test]
+    async fn a_childs_birth_updates_its_parent_and_is_broadcast() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("family.db");
+        let store = Store::open(&path).unwrap();
+        let parent = store.create(new_ticket("FAM", "the parent")).await.unwrap();
+        assert_eq!(parent.parent, None);
+        assert!(parent.children.is_empty());
+
+        let mut rx = store.subscribe();
+        let child = store
+            .create(child_of("FAM", "the output", "FAM-1"))
+            .await
+            .unwrap();
+        assert_eq!(child.parent.as_deref(), Some("FAM-1"));
+        assert!(child.children.is_empty());
+
+        match rx.recv().await.unwrap() {
+            Change::Created { ticket } => assert_eq!(ticket.id, "FAM-2"),
+            other => panic!("expected Created, got {other:?}"),
+        }
+        match rx.recv().await.unwrap() {
+            Change::ChildrenChanged { ticket, added } => {
+                assert_eq!(ticket.id, "FAM-1");
+                assert_eq!(added, "FAM-2");
+                // The full ticket, not just the delta.
+                assert_eq!(ticket.children, vec!["FAM-2"]);
+                assert_eq!(ticket.title, "the parent");
+                assert_eq!(ticket.status, Status::Pending);
+            }
+            other => panic!("expected ChildrenChanged, got {other:?}"),
+        }
+        assert_eq!(store.get("FAM-1").unwrap().children, vec!["FAM-2"]);
+
+        // Durable: a reopen finds both halves of the edge.
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.get("FAM-1").unwrap().children, vec!["FAM-2"]);
+        assert_eq!(store.get("FAM-2").unwrap().parent.as_deref(), Some("FAM-1"));
+    }
+
+    /// Acceptance 2 at the store level: a parent that names no ticket is
+    /// refused with the reason and nothing is stored; self-ancestry is
+    /// impossible by construction (the allocated id cannot already be an
+    /// ancestor, and there is no re-parent method), and a 3-deep chain —
+    /// crossing epics — reads back correctly.
+    #[tokio::test]
+    async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
+        let store = Store::new();
+        let err = store
+            .create(child_of("CHAIN", "orphan", "CHAIN-9"))
+            .await
+            .unwrap_err();
+        match &err {
+            StoreError::ParentNotFound { id, parent } => {
+                assert_eq!(id, "CHAIN-1");
+                assert_eq!(parent, "CHAIN-9");
+            }
+            other => panic!("expected ParentNotFound, got {other:?}"),
+        }
+        assert!(err.to_string().contains("CHAIN-9"), "{err}");
+        assert!(err.to_string().contains("must exist"), "{err}");
+        assert_eq!(store.count(), 0, "nothing was created");
+        // The id stays unallocated: the next create takes CHAIN-1.
+        assert_eq!(
+            store.create(new_ticket("CHAIN", "root")).await.unwrap().id,
+            "CHAIN-1"
+        );
+
+        // A ticket cannot name itself: the id is allocated by this very
+        // create, so it cannot exist yet — the store refuses it as a
+        // missing parent, before any cycle can be formed.
+        let err = store
+            .create(child_of("CHAIN", "myself", "CHAIN-2"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::ParentNotFound { .. }),
+            "self-parenthood is impossible by construction, got {err:?}"
+        );
+
+        // Three deep, the middle link in another epic.
+        store
+            .create(child_of("OTHER", "middle", "CHAIN-1"))
+            .await
+            .unwrap();
+        store
+            .create(child_of("CHAIN", "leaf", "OTHER-1"))
+            .await
+            .unwrap();
+        assert_eq!(store.get("CHAIN-1").unwrap().parent, None);
+        assert_eq!(store.get("CHAIN-1").unwrap().children, vec!["OTHER-1"]);
+        assert_eq!(store.get("OTHER-1").unwrap().parent.as_deref(), Some("CHAIN-1"));
+        assert_eq!(store.get("OTHER-1").unwrap().children, vec!["CHAIN-2"]);
+        assert_eq!(store.get("CHAIN-2").unwrap().parent.as_deref(), Some("OTHER-1"));
+        assert!(store.get("CHAIN-2").unwrap().children.is_empty());
+
+        // And the guard itself: an ancestry walk that would come back
+        // around is caught before anything persists.
+        let mut tickets: HashMap<String, Ticket> = HashMap::new();
+        for t in store.list(None, None, None) {
+            tickets.insert(t.id.clone(), t);
+        }
+        assert_eq!(
+            find_parent_cycle(&tickets, "CHAIN-1", "CHAIN-2"),
+            Some(vec!["CHAIN-2".into(), "OTHER-1".into(), "CHAIN-1".into()]),
+            "a chain that reaches the ticket itself is a cycle"
+        );
+        assert_eq!(find_parent_cycle(&tickets, "CHAIN-3", "CHAIN-2"), None);
+    }
+
+    /// A ticket that is both the parent and a blocker of the newborn is
+    /// updated once and carries both edges — the two events that follow
+    /// both show the fully updated ticket (PERF-4 is exactly this shape).
+    #[tokio::test]
+    async fn a_parent_that_is_also_a_blocker_gets_both_edges() {
+        let store = Store::new();
+        store.create(new_ticket("BOTH", "the parent")).await.unwrap();
+        let mut rx = store.subscribe();
+        let child = store
+            .create(NewTicket {
+                blocked_by: vec!["BOTH-1".into()],
+                ..child_of("BOTH", "report", "BOTH-1")
+            })
+            .await
+            .unwrap();
+        assert_eq!(child.parent.as_deref(), Some("BOTH-1"));
+        assert_eq!(child.blocked_by, vec!["BOTH-1"]);
+
+        let parent = store.get("BOTH-1").unwrap();
+        assert_eq!(parent.children, vec!["BOTH-2"]);
+        assert_eq!(parent.unlocks, vec!["BOTH-2"], "neither edge overwrote the other");
+
+        assert!(matches!(rx.recv().await.unwrap(), Change::Created { .. }));
+        match rx.recv().await.unwrap() {
+            Change::ChildrenChanged { ticket, .. } => assert_eq!(ticket, parent),
+            other => panic!("expected ChildrenChanged, got {other:?}"),
+        }
+        match rx.recv().await.unwrap() {
+            Change::UnlocksChanged { ticket, .. } => assert_eq!(ticket, parent),
+            other => panic!("expected UnlocksChanged, got {other:?}"),
+        }
+    }
+
+    /// Acceptance 4 at the store level: `list` filtered by parent returns
+    /// exactly that ticket's children, ordered (epic, seq), and composes
+    /// with the other filters.
+    #[tokio::test]
+    async fn list_filters_by_parent() {
+        let store = Store::new();
+        store.create(new_ticket("LP", "parent")).await.unwrap();
+        store.create(new_ticket("LP", "unrelated")).await.unwrap();
+        store.create(child_of("LP", "child a", "LP-1")).await.unwrap();
+        store.create(child_of("ZZ", "child b", "LP-1")).await.unwrap();
+        store.create(child_of("LP", "grandchild", "LP-3")).await.unwrap();
+        store.set_status("LP-3", Status::Ready).await.unwrap();
+
+        let ids = |ts: Vec<Ticket>| ts.into_iter().map(|t| t.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(store.list(None, None, Some("LP-1"))),
+            vec!["LP-3", "ZZ-1"],
+            "exactly LP-1's children, ordered (epic, seq)"
+        );
+        assert_eq!(ids(store.list(None, None, Some("lp-1"))), vec!["LP-3", "ZZ-1"]);
+        assert_eq!(ids(store.list(None, None, Some("LP-3"))), vec!["LP-4"]);
+        assert!(store.list(None, None, Some("LP-2")).is_empty(), "no children");
+        assert!(store.list(None, None, Some("NOPE-1")).is_empty());
+        // Composes with the existing filters.
+        assert_eq!(ids(store.list(Some("LP"), None, Some("LP-1"))), vec!["LP-3"]);
+        assert_eq!(
+            ids(store.list(None, Some(Status::Ready), Some("LP-1"))),
+            vec!["LP-3"]
+        );
+        assert_eq!(store.list(None, None, None).len(), 5, "unfiltered is unchanged");
+    }
+
+    /// Acceptance 3 at the store level: a pre-AGS-19 database gains the
+    /// columns and its typed parents on first open, from body
+    /// frontmatter — resolvable ones written through (and mirrored in
+    /// `children`), an unresolvable one left empty, a frontmatter cycle
+    /// refused, a body without frontmatter untouched — and the rewrite is
+    /// durable, once. Nothing about it is fatal.
+    #[tokio::test]
+    async fn pre_ags19_database_backfills_typed_parents_from_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        write_pre_ags19_db(
+            &path,
+            &[
+                (1, None),            // no frontmatter at all
+                (2, Some("OLD-1")),   // resolvable
+                (3, Some("OLD-99")),  // names nothing: left empty
+                (4, Some("OLD-2")),   // resolvable, three deep
+                (5, Some("OLD-6")),   // a two-cycle with OLD-6 …
+                (6, Some("OLD-5")),   // … one half of which is refused
+            ],
+        );
+        assert!(!columns(&path).contains(&"parent".to_string()));
+
+        {
+            let store = Store::open(&path).unwrap();
+            assert_eq!(store.count(), 6);
+            let p = |id: &str| store.get(id).unwrap().parent;
+            assert_eq!(p("OLD-1"), None);
+            assert_eq!(p("OLD-2").as_deref(), Some("OLD-1"));
+            assert_eq!(p("OLD-3"), None, "an unresolvable parent is left empty");
+            assert_eq!(p("OLD-4").as_deref(), Some("OLD-2"));
+            // The chain is acyclic: the first half of the OLD-5/OLD-6
+            // pair is taken, the half that would close it is refused.
+            assert_eq!(p("OLD-5").as_deref(), Some("OLD-6"));
+            assert_eq!(p("OLD-6"), None);
+            // …and `children` mirrors every accepted edge.
+            assert_eq!(store.get("OLD-1").unwrap().children, vec!["OLD-2"]);
+            assert_eq!(store.get("OLD-2").unwrap().children, vec!["OLD-4"]);
+            assert_eq!(store.get("OLD-6").unwrap().children, vec!["OLD-5"]);
+            assert!(store.get("OLD-3").unwrap().children.is_empty());
+            // The body is the raw record, untouched by the migration.
+            assert!(store.get("OLD-3").unwrap().body.contains("parent: OLD-99"));
+        }
+
+        // The file itself carries the typed parents now.
+        let cols = columns(&path);
+        assert!(cols.contains(&"parent".to_string()), "{cols:?}");
+        assert!(cols.contains(&"children".to_string()), "{cols:?}");
+        {
+            let conn = Connection::open(&path).unwrap();
+            let raw: Vec<(String, Option<String>)> = conn
+                .prepare("SELECT id, parent FROM tickets ORDER BY seq")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(
+                raw,
+                vec![
+                    ("OLD-1".into(), None),
+                    ("OLD-2".into(), Some("OLD-1".into())),
+                    ("OLD-3".into(), None),
+                    ("OLD-4".into(), Some("OLD-2".into())),
+                    ("OLD-5".into(), Some("OLD-6".into())),
+                    ("OLD-6".into(), None),
+                ]
+            );
+        }
+
+        // Second open: nothing to migrate, same parents, still writable —
+        // and the newborn's own parent goes through the normal path.
+        let store = Store::open(&path).unwrap();
+        assert_eq!(db::migrate_add_parenthood(&mut Connection::open(&path).unwrap()).unwrap(), 0);
+        assert_eq!(store.get("OLD-4").unwrap().parent.as_deref(), Some("OLD-2"));
+        let next = store.create(child_of("OLD", "born after", "OLD-4")).await.unwrap();
+        assert_eq!(next.id, "OLD-7");
+        assert_eq!(next.parent.as_deref(), Some("OLD-4"));
+        assert_eq!(store.get("OLD-4").unwrap().children, vec!["OLD-7"]);
+    }
+
+    /// The frontmatter reader: only a leading block counts, only the
+    /// `parent:` key, and anything empty means "no parent".
+    #[test]
+    fn frontmatter_parent_reads_only_a_leading_block() {
+        let p = db::frontmatter_parent;
+        assert_eq!(p("---\nid: A-1\nparent: B-2\n---\n\nbody"), Some("B-2".into()));
+        assert_eq!(p("---\nparent: \"B-2\"\n---\n"), Some("B-2".into()));
+        assert_eq!(p("---\nparent: b-2\n---\n"), Some("B-2".into()));
+        assert_eq!(p("---\nid: A-1\n---\n\nparent: B-2 in the prose"), None);
+        assert_eq!(p("no frontmatter\nparent: B-2\n"), None);
+        assert_eq!(p("---\nparent:\n---\n"), None);
+        assert_eq!(p("---\nparent: []\n---\n"), None);
+        assert_eq!(p("---\nblocked_by: [B-2]\n---\n"), None);
+        assert_eq!(p(""), None);
+    }
+
     #[test]
     fn unknown_kind_error_names_the_five() {
         let err = "bug".parse::<Kind>().unwrap_err();
@@ -1371,7 +1986,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tickets.db");
 
-        let after_flip = {
+        let (after_flip, child) = {
             let store = Store::open(&path).unwrap();
             store
                 .create(NewTicket {
@@ -1380,28 +1995,40 @@ mod tests {
                     kind: Kind::Gap,
                     severity: Some(Severity::Critical),
                     blocked_by: vec!["RT-0".into(), "X-9".into()],
+                    parent: None,
                     body: "## Problem\n\nlines\nand more".into(),
                 })
                 .await
                 .unwrap();
-            match store.set_status("RT-1", Status::Ready).await.unwrap() {
+            // AGS-19: the parent edge and its mirror ride the same path.
+            let child = store
+                .create(child_of("RT", "its output", "RT-1"))
+                .await
+                .unwrap();
+            let parent = match store.set_status("RT-1", Status::Ready).await.unwrap() {
                 Change::StatusChanged { ticket, previous } => {
                     assert_eq!(previous, Status::Pending);
                     ticket
                 }
                 other => panic!("expected StatusChanged, got {other:?}"),
-            }
+            };
+            assert_eq!(parent.children, vec!["RT-2"]);
+            (parent, child)
         };
 
         // Restart: same location, everything identical.
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.count(), 1);
+        assert_eq!(store.count(), 2);
         assert_eq!(store.get("RT-1").unwrap(), after_flip);
+        assert_eq!(store.get("RT-2").unwrap(), child);
+        assert_eq!(store.get("RT-2").unwrap().parent.as_deref(), Some("RT-1"));
 
         // Id allocation continues from the persisted max, not from 1.
         let next = store.create(new_ticket("RT", "second")).await.unwrap();
-        assert_eq!(next.id, "RT-2");
-        assert_eq!(next.seq, 2);
+        assert_eq!(next.id, "RT-3");
+        assert_eq!(next.seq, 3);
+        assert_eq!(next.parent, None);
+        assert!(next.children.is_empty());
     }
 
     #[tokio::test]
@@ -1473,7 +2100,7 @@ mod tests {
         assert!(report.epics >= 10, "several epics, got {}", report.epics);
         assert!(report.edges > 0);
 
-        let all = store.list(None, None);
+        let all = store.list(None, None, None);
         assert_eq!(all.len(), 10_000);
         let by_id: HashMap<String, Ticket> = all.iter().map(|t| (t.id.clone(), t.clone())).collect();
 
@@ -1557,7 +2184,7 @@ mod tests {
         drop(store);
         let reopened = Store::open(&path).unwrap();
         assert_eq!(reopened.count(), 10_000);
-        assert_eq!(reopened.list(None, None), all);
+        assert_eq!(reopened.list(None, None, None), all);
     }
 
     /// Criterion 4: the same seed value produces byte-identical tickets;
@@ -1570,10 +2197,10 @@ mod tests {
         a.seed_synthetic(spec(500, 7)).unwrap();
         b.seed_synthetic(spec(500, 7)).unwrap();
         c.seed_synthetic(spec(500, 8)).unwrap();
-        let la = a.list(None, None);
-        assert_eq!(la, b.list(None, None));
-        assert_ne!(la, c.list(None, None));
-        assert_eq!(serde_json::to_string(&la).unwrap(), serde_json::to_string(&b.list(None, None)).unwrap());
+        let la = a.list(None, None, None);
+        assert_eq!(la, b.list(None, None, None));
+        assert_ne!(la, c.list(None, None, None));
+        assert_eq!(serde_json::to_string(&la).unwrap(), serde_json::to_string(&b.list(None, None, None)).unwrap());
     }
 
     /// Criterion 3: a store that already holds tickets refuses the seed
@@ -1601,7 +2228,7 @@ mod tests {
         // otherwise reject.
         store.seed_synthetic(allowed).unwrap();
         assert_eq!(store.count(), 201);
-        let all = store.list(None, None);
+        let all = store.list(None, None, None);
         let mut ids: Vec<&str> = all.iter().map(|t| t.id.as_str()).collect();
         ids.sort_unstable();
         ids.dedup();

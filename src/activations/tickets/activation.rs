@@ -1,4 +1,10 @@
 //! Plexus RPC surface for tickets.
+//!
+//! `create` names one optional parameter per ticket field (AGS-19 added
+//! `parent`) — that is the wire surface talking, here and in the wrapper
+//! the activation macro generates, not a call signature asking to become
+//! a struct.
+#![allow(clippy::too_many_arguments)]
 
 use super::types::TicketsEvent;
 use crate::store::{BlockerRef, Change, Kind, NewTicket, Severity, Status, Store, StoreError};
@@ -24,6 +30,7 @@ fn change_event(change: Change) -> TicketsEvent {
             TicketsEvent::StatusChanged { ticket, previous }
         }
         Change::UnlocksChanged { ticket, added } => TicketsEvent::UnlocksChanged { ticket, added },
+        Change::ChildrenChanged { ticket, added } => TicketsEvent::ChildrenChanged { ticket, added },
     }
 }
 
@@ -50,8 +57,10 @@ impl Tickets {
     /// Creates a ticket in an epic. The store allocates the next `EPIC-N`
     /// id; status starts at `Pending` (only a human promotes to `Ready`);
     /// `kind` defaults to `build`, and one outside the five yields the
-    /// in-band error naming them. Yields exactly one event: `Created` or
-    /// `Error`.
+    /// in-band error naming them. `parent` (AGS-19) files the ticket as an
+    /// output of an existing ticket in any epic; one that names no ticket,
+    /// or that would make the newborn its own ancestor, is an in-band error
+    /// naming the reason. Yields exactly one event: `Created` or `Error`.
     #[plexus_macros::method(
         description = "Create a ticket; allocates the next EPIC-N id, status starts Pending",
         params(
@@ -60,7 +69,8 @@ impl Tickets {
             kind = "scope | execution | build | gap | spike (default: build)",
             severity = "Critical | High | Medium | Low (optional)",
             blocked_by = "Ticket ids that must complete first (optional)",
-            body = "Markdown body (optional)"
+            body = "Markdown body (optional)",
+            parent = "Id of the ticket this one is an output of; any epic, must exist (optional)"
         )
     )]
     pub async fn create(
@@ -71,6 +81,7 @@ impl Tickets {
         severity: Option<String>,
         blocked_by: Option<Vec<String>>,
         body: Option<String>,
+        parent: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
@@ -96,6 +107,7 @@ impl Tickets {
                 kind,
                 severity,
                 blocked_by: blocked_by.unwrap_or_default(),
+                parent,
                 body: body.unwrap_or_default(),
             }).await {
                 Ok(ticket) => yield TicketsEvent::Created { ticket },
@@ -119,18 +131,21 @@ impl Tickets {
         }
     }
 
-    /// Yields one `Ticket` event per match, ordered by (epic, seq).
+    /// Yields one `Ticket` event per match, ordered by (epic, seq). The
+    /// `parent` filter (AGS-19) yields exactly that ticket's children.
     #[plexus_macros::method(
-        description = "List tickets, optionally filtered by epic and/or status",
+        description = "List tickets, optionally filtered by epic, status and/or parent",
         params(
             epic = "Epic prefix filter (optional)",
-            status = "Status filter: Pending | Ready | Blocked | Complete | Idea | Epic | Superseded (optional)"
+            status = "Status filter: Pending | Ready | Blocked | Complete | Idea | Epic | Superseded (optional)",
+            parent = "Only this ticket's children, e.g. PERF-3 (optional)"
         )
     )]
     pub async fn list(
         &self,
         epic: Option<String>,
         status: Option<String>,
+        parent: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
@@ -142,7 +157,7 @@ impl Tickets {
                     return;
                 }
             };
-            for ticket in store.list(epic.as_deref(), status) {
+            for ticket in store.list(epic.as_deref(), status, parent.as_deref()) {
                 yield TicketsEvent::Ticket { ticket };
             }
         }
@@ -229,16 +244,16 @@ impl Tickets {
         }
     }
 
-    /// The reactive primitive: an open-ended stream of every mutation,
-    /// as `Created` / `StatusChanged` / `UnlocksChanged` events. Runs
-    /// until the client disconnects. Every event carries the full
-    /// affected ticket, so a client that listed once and then only
-    /// watches can compute the ready set itself. A slow consumer that
+    /// The reactive primitive: an open-ended stream of every mutation, as
+    /// `Created` / `StatusChanged` / `UnlocksChanged` / `ChildrenChanged`
+    /// events. Runs until the client disconnects. Every event carries the
+    /// full affected ticket, so a client that listed once and then only
+    /// watches can compute the ready set — and the parent tree — itself. A slow consumer that
     /// lags the broadcast buffer skips the missed changes and keeps
     /// receiving from the current position.
     #[plexus_macros::method(
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / UnlocksChanged), until disconnect",
+        description = "Subscribe to ticket changes (Created / StatusChanged / UnlocksChanged / ChildrenChanged), until disconnect",
         params(epic = "Only changes in this epic (optional)")
     )]
     pub async fn watch(
@@ -288,7 +303,7 @@ mod tests {
     #[tokio::test]
     async fn create_allocates_sequential_ids() {
         let hub = hub();
-        let ev = one(hub.create("mng".into(), "first".into(), None, None, None, None).await).await;
+        let ev = one(hub.create("mng".into(), "first".into(), None, None, None, None, None).await).await;
         match ev {
             TicketsEvent::Created { ticket } => {
                 assert_eq!(ticket.id, "MNG-1");
@@ -296,7 +311,7 @@ mod tests {
             }
             other => panic!("expected Created, got {other:?}"),
         }
-        let ev = one(hub.create("MNG".into(), "second".into(), None, None, None, None).await).await;
+        let ev = one(hub.create("MNG".into(), "second".into(), None, None, None, None, None).await).await;
         match ev {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "MNG-2"),
             other => panic!("expected Created, got {other:?}"),
@@ -309,18 +324,18 @@ mod tests {
     #[tokio::test]
     async fn create_defaults_kind_to_build_accepts_gap_and_rejects_unknown_naming_the_five() {
         let hub = hub();
-        match one(hub.create("MNG".into(), "no kind".into(), None, None, None, None).await).await {
+        match one(hub.create("MNG".into(), "no kind".into(), None, None, None, None, None).await).await {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.kind, Kind::Build),
             other => panic!("expected Created, got {other:?}"),
         }
-        match one(hub.create("MNG".into(), "a gap".into(), Some("gap".into()), None, None, None).await)
+        match one(hub.create("MNG".into(), "a gap".into(), Some("gap".into()), None, None, None, None).await)
             .await
         {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.kind, Kind::Gap),
             other => panic!("expected Created, got {other:?}"),
         }
         let ev = one(
-            hub.create("MNG".into(), "x".into(), Some("bug".into()), None, None, None)
+            hub.create("MNG".into(), "x".into(), Some("bug".into()), None, None, None, None)
                 .await,
         )
         .await;
@@ -342,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn get_distinguishes_found_from_missing() {
         let hub = hub();
-        one(hub.create("MNG".into(), "x".into(), None, None, None, None).await).await;
+        one(hub.create("MNG".into(), "x".into(), None, None, None, None, None).await).await;
         assert!(matches!(
             one(hub.get("MNG-1".into()).await).await,
             TicketsEvent::Ticket { .. }
@@ -356,11 +371,11 @@ mod tests {
     #[tokio::test]
     async fn list_filters_by_status() {
         let hub = hub();
-        one(hub.create("MNG".into(), "a".into(), None, None, None, None).await).await;
-        one(hub.create("MNG".into(), "b".into(), None, None, None, None).await).await;
+        one(hub.create("MNG".into(), "a".into(), None, None, None, None, None).await).await;
+        one(hub.create("MNG".into(), "b".into(), None, None, None, None, None).await).await;
         one(hub.set_status("MNG-1".into(), "Ready".into()).await).await;
 
-        let ready: Vec<_> = Box::pin(hub.list(None, Some("Ready".into())).await)
+        let ready: Vec<_> = Box::pin(hub.list(None, Some("Ready".into()), None).await)
             .collect()
             .await;
         assert_eq!(ready.len(), 1);
@@ -373,7 +388,7 @@ mod tests {
     #[tokio::test]
     async fn set_status_reports_previous() {
         let hub = hub();
-        one(hub.create("MNG".into(), "a".into(), None, None, None, None).await).await;
+        one(hub.create("MNG".into(), "a".into(), None, None, None, None, None).await).await;
         match one(hub.set_status("MNG-1".into(), "ready".into()).await).await {
             TicketsEvent::StatusChanged { ticket, previous } => {
                 assert_eq!(ticket.status, Status::Ready);
@@ -388,7 +403,7 @@ mod tests {
         let hub = hub();
         let mut watch = Box::pin(hub.watch(None).await);
 
-        one(hub.create("MNG".into(), "a".into(), None, None, None, None).await).await;
+        one(hub.create("MNG".into(), "a".into(), None, None, None, None, None).await).await;
         match watch.next().await.expect("change") {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "MNG-1"),
             other => panic!("expected Created, got {other:?}"),
@@ -415,9 +430,9 @@ mod tests {
     #[tokio::test]
     async fn ready_set_gates_on_blockers() {
         let hub = hub();
-        one(hub.create("DAG".into(), "a".into(), None, None, None, None).await).await;
+        one(hub.create("DAG".into(), "a".into(), None, None, None, None, None).await).await;
         one(hub
-            .create("DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None)
+            .create("DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None)
             .await)
         .await;
         one(hub.set_status("DAG-1".into(), "Ready".into()).await).await;
@@ -432,12 +447,12 @@ mod tests {
     #[tokio::test]
     async fn ready_set_accepts_superseded_blockers_and_filters_by_epic() {
         let hub = hub();
-        one(hub.create("ONE".into(), "a".into(), None, None, None, None).await).await;
+        one(hub.create("ONE".into(), "a".into(), None, None, None, None, None).await).await;
         one(hub
-            .create("ONE".into(), "b".into(), None, None, Some(vec!["ONE-1".into()]), None)
+            .create("ONE".into(), "b".into(), None, None, Some(vec!["ONE-1".into()]), None, None)
             .await)
         .await;
-        one(hub.create("TWO".into(), "c".into(), None, None, None, None).await).await;
+        one(hub.create("TWO".into(), "c".into(), None, None, None, None, None).await).await;
         one(hub.set_status("ONE-1".into(), "Superseded".into()).await).await;
         one(hub.set_status("ONE-2".into(), "Ready".into()).await).await;
         one(hub.set_status("TWO-1".into(), "Ready".into()).await).await;
@@ -456,7 +471,7 @@ mod tests {
     async fn dangling_blocker_excludes_from_ready_set_and_is_marked() {
         let hub = hub();
         one(hub
-            .create("DAG".into(), "c".into(), None, None, Some(vec!["DAG-99".into()]), None)
+            .create("DAG".into(), "c".into(), None, None, Some(vec!["DAG-99".into()]), None, None)
             .await)
         .await;
         one(hub.set_status("DAG-1".into(), "Ready".into()).await).await;
@@ -474,8 +489,8 @@ mod tests {
     #[tokio::test]
     async fn blockers_resolve_to_current_statuses_in_order() {
         let hub = hub();
-        one(hub.create("DAG".into(), "a".into(), None, None, None, None).await).await;
-        one(hub.create("DAG".into(), "b".into(), None, None, None, None).await).await;
+        one(hub.create("DAG".into(), "a".into(), None, None, None, None, None).await).await;
+        one(hub.create("DAG".into(), "b".into(), None, None, None, None, None).await).await;
         one(hub
             .create(
                 "DAG".into(),
@@ -483,7 +498,7 @@ mod tests {
                 None,
                 None,
                 Some(vec!["DAG-1".into(), "DAG-2".into(), "DAG-99".into()]),
-                None,
+                None, None,
             )
             .await)
         .await;
@@ -519,11 +534,11 @@ mod tests {
     #[tokio::test]
     async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
         let hub = hub();
-        one(hub.create("DAG".into(), "a".into(), None, None, None, None).await).await;
+        one(hub.create("DAG".into(), "a".into(), None, None, None, None, None).await).await;
         let mut watch = Box::pin(hub.watch(None).await);
 
         one(hub
-            .create("DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None)
+            .create("DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None)
             .await)
         .await;
 
@@ -546,15 +561,141 @@ mod tests {
         }
     }
 
+    /// AGS-19 acceptance 1: a child's birth is visible from both ends —
+    /// `get C` shows the parent, `get P` shows the child — and a watcher
+    /// sees the parent's update as `children_changed` with the full
+    /// ticket, the same discipline `unlocks_changed` follows.
+    #[tokio::test]
+    async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
+        let hub = hub();
+        one(hub.create("FAM".into(), "P".into(), None, None, None, None, None).await).await;
+        let mut watch = Box::pin(hub.watch(None).await);
+
+        match one(
+            hub.create(
+                "FAM".into(),
+                "C".into(),
+                Some("execution".into()),
+                None,
+                None,
+                None,
+                Some("fam-1".into()),
+            )
+            .await,
+        )
+        .await
+        {
+            TicketsEvent::Created { ticket } => {
+                assert_eq!(ticket.id, "FAM-2");
+                assert_eq!(ticket.parent.as_deref(), Some("FAM-1"), "case-insensitive");
+                assert!(ticket.children.is_empty());
+            }
+            other => panic!("expected Created, got {other:?}"),
+        }
+
+        match watch.next().await.expect("change") {
+            TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "FAM-2"),
+            other => panic!("expected Created, got {other:?}"),
+        }
+        match watch.next().await.expect("change") {
+            TicketsEvent::ChildrenChanged { ticket, added } => {
+                assert_eq!(ticket.id, "FAM-1");
+                assert_eq!(added, "FAM-2");
+                assert_eq!(ticket.children, vec!["FAM-2"]);
+                assert_eq!(ticket.title, "P", "the full parent rides along");
+            }
+            other => panic!("expected ChildrenChanged, got {other:?}"),
+        }
+
+        match one(hub.get("FAM-1".into()).await).await {
+            TicketsEvent::Ticket { ticket } => {
+                assert_eq!(ticket.children, vec!["FAM-2"]);
+                assert_eq!(ticket.parent, None);
+            }
+            other => panic!("expected Ticket, got {other:?}"),
+        }
+        match one(hub.get("FAM-2".into()).await).await {
+            TicketsEvent::Ticket { ticket } => assert_eq!(ticket.parent.as_deref(), Some("FAM-1")),
+            other => panic!("expected Ticket, got {other:?}"),
+        }
+    }
+
+    /// AGS-19 acceptance 2: a parent that names no ticket is an in-band
+    /// error naming the reason, and nothing is created.
+    #[tokio::test]
+    async fn create_rejects_a_nonexistent_parent_in_band() {
+        let hub = hub();
+        let ev = one(
+            hub.create(
+                "ORPH".into(),
+                "no such parent".into(),
+                None,
+                None,
+                None,
+                None,
+                Some("ORPH-9".into()),
+            )
+            .await,
+        )
+        .await;
+        match ev {
+            TicketsEvent::Error { message } => {
+                assert!(message.contains("ORPH-9"), "names the parent: {message}");
+                assert!(message.contains("must exist"), "names the reason: {message}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(matches!(
+            one(hub.get("ORPH-1".into()).await).await,
+            TicketsEvent::NotFound { .. }
+        ));
+    }
+
+    /// AGS-19 acceptance 4: `list {parent: P}` yields exactly P's
+    /// children, in (epic, seq) order.
+    #[tokio::test]
+    async fn list_filters_by_parent() {
+        let hub = hub();
+        one(hub.create("LP".into(), "P".into(), None, None, None, None, None).await).await;
+        one(hub.create("LP".into(), "unrelated".into(), None, None, None, None, None).await).await;
+        for (epic, title) in [("LP", "child a"), ("ZZ", "child b")] {
+            one(hub
+                .create(
+                    epic.into(),
+                    title.into(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("LP-1".into()),
+                )
+                .await)
+            .await;
+        }
+
+        assert_eq!(
+            ticket_ids(hub.list(None, None, Some("LP-1".into())).await).await,
+            vec!["LP-3", "ZZ-1"]
+        );
+        assert!(ticket_ids(hub.list(None, None, Some("LP-2".into())).await)
+            .await
+            .is_empty());
+        assert_eq!(
+            ticket_ids(hub.list(None, None, None).await).await.len(),
+            4,
+            "unfiltered list is unchanged"
+        );
+    }
+
     #[tokio::test]
     async fn dangling_forward_reference_resolves_at_birth() {
         let hub = hub();
         one(hub
-            .create("DAG".into(), "d1".into(), None, None, Some(vec!["DAG-2".into()]), None)
+            .create("DAG".into(), "d1".into(), None, None, Some(vec!["DAG-2".into()]), None, None)
             .await)
         .await;
         // The ticket that becomes DAG-2 has DAG-1 in unlocks from birth.
-        match one(hub.create("DAG".into(), "d2".into(), None, None, None, None).await).await {
+        match one(hub.create("DAG".into(), "d2".into(), None, None, None, None, None).await).await {
             TicketsEvent::Created { ticket } => {
                 assert_eq!(ticket.id, "DAG-2");
                 assert_eq!(ticket.unlocks, vec!["DAG-1"]);
@@ -572,7 +713,7 @@ mod tests {
         let hub = hub();
         // First create in the epic allocates DAG-1; naming it is a self-cycle.
         let ev = one(hub
-            .create("DAG".into(), "me".into(), None, None, Some(vec!["DAG-1".into()]), None)
+            .create("DAG".into(), "me".into(), None, None, Some(vec!["DAG-1".into()]), None, None)
             .await)
         .await;
         match ev {
@@ -590,12 +731,12 @@ mod tests {
         let hub = hub();
         // DAG-1 blocked_by the not-yet-existing DAG-2.
         one(hub
-            .create("DAG".into(), "d1".into(), None, None, Some(vec!["DAG-2".into()]), None)
+            .create("DAG".into(), "d1".into(), None, None, Some(vec!["DAG-2".into()]), None, None)
             .await)
         .await;
         // The create that would become DAG-2, blocked_by DAG-1, closes the loop.
         let ev = one(hub
-            .create("DAG".into(), "d2".into(), None, None, Some(vec!["DAG-1".into()]), None)
+            .create("DAG".into(), "d2".into(), None, None, Some(vec!["DAG-1".into()]), None, None)
             .await)
         .await;
         match ev {
@@ -613,16 +754,16 @@ mod tests {
     async fn create_rejects_longer_cycles() {
         let hub = hub();
         one(hub
-            .create("DAG".into(), "p1".into(), None, None, Some(vec!["DAG-3".into()]), None)
+            .create("DAG".into(), "p1".into(), None, None, Some(vec!["DAG-3".into()]), None, None)
             .await)
         .await;
         one(hub
-            .create("DAG".into(), "p2".into(), None, None, Some(vec!["DAG-1".into()]), None)
+            .create("DAG".into(), "p2".into(), None, None, Some(vec!["DAG-1".into()]), None, None)
             .await)
         .await;
         // Would become DAG-3: DAG-3 -> DAG-2 -> DAG-1 -> DAG-3.
         let ev = one(hub
-            .create("DAG".into(), "p3".into(), None, None, Some(vec!["DAG-2".into()]), None)
+            .create("DAG".into(), "p3".into(), None, None, Some(vec!["DAG-2".into()]), None, None)
             .await)
         .await;
         assert!(matches!(ev, TicketsEvent::Error { .. }), "got {ev:?}");
@@ -637,8 +778,8 @@ mod tests {
         let hub = hub();
         let mut watch = Box::pin(hub.watch(Some("mng".into())).await);
 
-        one(hub.create("OTHER".into(), "x".into(), None, None, None, None).await).await;
-        one(hub.create("MNG".into(), "y".into(), None, None, None, None).await).await;
+        one(hub.create("OTHER".into(), "x".into(), None, None, None, None, None).await).await;
+        one(hub.create("MNG".into(), "y".into(), None, None, None, None, None).await).await;
 
         match watch.next().await.expect("change") {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.epic, "MNG"),
