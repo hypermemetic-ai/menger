@@ -50,7 +50,7 @@
 //! The one body the app shows is the open ticket page's, fetched by `get`
 //! and held by that page, never in the row store.
 
-use crate::{dom, upsert, Conn, Dock, Row};
+use crate::{dom, upsert, upsert_page, Conn, Dock, Row};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::{MengerTicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
@@ -176,13 +176,20 @@ async fn session(
     // 3. The page walk. Every page paints as it lands.
     let mut seen: HashSet<String> = HashSet::new();
     let mut after: Option<String> = None;
+    let mut pending: Vec<TicketSummary> = Vec::with_capacity(PAGE_LIMIT as usize);
+    let mut painted = 0usize;
     loop {
         let mut page = client.list(None, None, None, after.take(), Some(PAGE_LIMIT), Some(true));
+        // Each summary is its own WebSocket notification, so the rows are
+        // gathered rather than merged one at a time: a per-row merge
+        // notifies the row list 10,000 times, and each notification
+        // re-diffs the board and rebuilds the nav's forest over every row
+        // held so far. See `upsert_page`.
         while let Some(ev) = page.next().await {
             match ev.map_err(|e| describe(&e))? {
                 ClientEvent::Data(TicketsEvent::Summary { summary }) => {
                     seen.insert(summary.id.clone());
-                    upsert(rows, summary);
+                    pending.push(summary);
                 }
                 ClientEvent::Data(TicketsEvent::Page { next, .. }) => after = next,
                 ClientEvent::Data(TicketsEvent::Error { message }) => {
@@ -190,6 +197,18 @@ async fn session(
                 }
                 _ => {}
             }
+        }
+        // Paint when the pending rows would at least double what is on
+        // screen — and always at the end of the walk. One page still
+        // paints one page while the board is small (the first is on screen
+        // in under 300 ms at 10^4), and the walk stays O(n) overall
+        // instead of O(pages x n): painting every page costs a full
+        // re-diff of everything already painted, which at 10^4 is 8.2 s of
+        // work against 2.3 s for the same rows painted once. Measured, in
+        // plans/MFE/artifacts/MFE-9-numbers.js.
+        if pending.len() >= painted.max(PAGE_LIMIT as usize) || after.is_none() {
+            painted += pending.len();
+            upsert_page(rows, std::mem::take(&mut pending));
         }
         if after.is_none() {
             break;

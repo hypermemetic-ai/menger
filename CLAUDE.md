@@ -19,6 +19,23 @@ cargo test         # unit tests + wire tests (tests/wire.rs speaks the real prot
   `../hypermemetic-runs`, which are the reference apps for the macro API
   (`#[plexus_macros::activation]` + `#[plexus_macros::method]`,
   `crate_path = "plexus_core"`).
+- The ticket vocabulary lives ONCE, in `tickets-api/`
+  (`menger-tickets-api`): `Ticket`, `Status`, `Kind`, `Severity`,
+  `TicketSummary`, `TicketsEvent`. `src/store.rs` and the tickets
+  activation re-export them, so `crate::store::Status` still resolves;
+  the browser app depends on the same crate, which is what makes a
+  renamed server field a wasm compile error rather than a blank cell
+  (MFE-9). Don't re-declare a wire type in `frontend/src`.
+- The browser app's data plane is the Plexus WebSocket, not the REST
+  bridge (MFE-9): one `WsTransport` for the app's lifetime, the typed
+  client from `tickets-api`'s `client` feature, `watch` opened before
+  MNG-9's `list` page walk. The REST bridge and the `/rest` proxy stay
+  for curl, scripts and non-Rust clients. `frontend/src` must contain no
+  `/rest/`, no hand-parsed SSE, and no `serde_json::Value` on a wire path.
+  The `client` feature path-depends on the **plexus 0.6** worktrees
+  (`../plexus-macros-macro-6`), which the server is deliberately NOT on —
+  MFE-10 is the bump, MFE-11 collapses the two activation declarations
+  into one.
 - Every RPC method returns `impl Stream<Item = TicketsEvent> + Send + 'static`;
   event enums use `#[serde(tag = "type", rename_all = "snake_case")]` with an
   in-band `Error { message }` variant.

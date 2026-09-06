@@ -143,13 +143,42 @@ pub(crate) struct Row {
     pub(crate) ticket: RwSignal<TicketSummary>,
 }
 
-/// Fine-grained upsert. An existing ticket updates its row's inner
-/// signal in place — the list signal never fires, `<For>` never re-runs,
-/// and every other row's DOM survives untouched. A new ticket inserts at
-/// its (epic, seq) position, which is stable because those fields never
-/// change.
+impl Row {
+    fn of(t: TicketSummary) -> Self {
+        Self {
+            id: t.id.clone(),
+            epic: t.epic.clone(),
+            seq: t.seq,
+            ticket: RwSignal::new(t),
+        }
+    }
+
+    /// The row's position in the store's total order — MNG-9's
+    /// `(epic, seq)`, which the schema keeps unique. Immutable for a
+    /// ticket's lifetime, which is what makes the list a sorted vector a
+    /// binary search can address.
+    fn key(&self) -> (&str, u32) {
+        (self.epic.as_str(), self.seq)
+    }
+}
+
+fn key_of(t: &TicketSummary) -> (&str, u32) {
+    (t.epic.as_str(), t.seq)
+}
+
+/// Fine-grained upsert of one ticket. An existing ticket updates its row's
+/// inner signal in place — the list signal never fires, `<For>` never
+/// re-runs, and every other row's DOM survives untouched. A new ticket
+/// inserts at its `(epic, seq)` position, found by binary search over the
+/// order the store already keeps.
+///
+/// This is the `watch` path: one event, one ticket. The board's initial
+/// walk uses [`upsert_page`] instead — see why there.
 pub(crate) fn upsert(rows: RwSignal<Vec<Row>>, t: TicketSummary) {
-    let existing = rows.with_untracked(|v| v.iter().find(|r| r.id == t.id).map(|r| r.ticket));
+    let existing = rows.with_untracked(|v| {
+        let pos = v.partition_point(|r| r.key() < key_of(&t));
+        v.get(pos).filter(|r| r.id == t.id).map(|r| r.ticket)
+    });
     match existing {
         Some(sig) => {
             if sig.with_untracked(|old| *old != t) {
@@ -157,16 +186,64 @@ pub(crate) fn upsert(rows: RwSignal<Vec<Row>>, t: TicketSummary) {
             }
         }
         None => rows.update(|v| {
-            let pos = v.partition_point(|r| (r.epic.as_str(), r.seq) < (t.epic.as_str(), t.seq));
-            let row = Row {
-                id: t.id.clone(),
-                epic: t.epic.clone(),
-                seq: t.seq,
-                ticket: RwSignal::new(t),
-            };
-            v.insert(pos, row);
+            let pos = v.partition_point(|r| r.key() < key_of(&t));
+            v.insert(pos, Row::of(t));
         }),
     }
+}
+
+/// MFE-9: one page of MNG-9's walk, merged in **one** list update.
+///
+/// Why this exists rather than a loop over [`upsert`]: each summary
+/// arrives as its own WebSocket notification, so a per-row insert would
+/// notify the list signal 10,000 times, and each notification re-diffs the
+/// board's `<For>` and recomputes the nav's forest memo over every row
+/// held so far. That is quadratic with an enormous constant — measured at
+/// `--seed-synthetic 10000`, the tab stopped answering entirely. Batching
+/// the page makes it one notification per page: 20 re-diffs at 10^4
+/// instead of 10,000.
+///
+/// Rows already present still update through their own inner signals and
+/// never touch the list — the property AGS-20's DOM identity rests on. The
+/// new ones are merged with the existing order in one pass (both sides are
+/// sorted by `(epic, seq)`: the store's walk is in that order and the list
+/// is kept in it).
+pub(crate) fn upsert_page(rows: RwSignal<Vec<Row>>, page: Vec<TicketSummary>) {
+    if page.is_empty() {
+        return;
+    }
+    let mut fresh: Vec<TicketSummary> = Vec::new();
+    rows.with_untracked(|v| {
+        for t in page {
+            let pos = v.partition_point(|r| r.key() < key_of(&t));
+            match v.get(pos) {
+                Some(r) if r.id == t.id => {
+                    if r.ticket.with_untracked(|old| *old != t) {
+                        r.ticket.set(t);
+                    }
+                }
+                _ => fresh.push(t),
+            }
+        }
+    });
+    if fresh.is_empty() {
+        return;
+    }
+    rows.update(|v| {
+        let mut merged: Vec<Row> = Vec::with_capacity(v.len() + fresh.len());
+        let mut incoming = std::mem::take(&mut fresh).into_iter().peekable();
+        for row in v.drain(..) {
+            while incoming
+                .peek()
+                .is_some_and(|t| key_of(t) < (row.epic.as_str(), row.seq))
+            {
+                merged.push(Row::of(incoming.next().expect("peeked")));
+            }
+            merged.push(row);
+        }
+        merged.extend(incoming.map(Row::of));
+        *v = merged;
+    });
 }
 
 // ---------------------------------------------------------------------

@@ -7,7 +7,9 @@ A plan is a program whose leaves are prose.
 is visible the day it is written. What's new is *how* the frontend stays
 current: 0.04 polled `/rev`; 0.05 subscribes. The same typed event streams
 that answer RPC calls push every mutation to the browser as it happens —
-over WebSocket for the vanilla page, over REST + SSE for the Leptos app.
+over one WebSocket, for the vanilla page and for the Leptos app alike
+(MFE-9). The REST + SSE bridge stays for curl, scripts and non-Rust
+clients; the app does not use it.
 
 ## Run
 
@@ -108,10 +110,18 @@ owns no routing):
   `fetch()` until the first body bytes arrive and `watch` sends no
   preamble of its own.
 - `tickets.watch` streams SSE **over POST**, which browser `EventSource`
-  (GET-only) cannot consume. The app uses the MFE-2 pinned fallback:
-  `fetch` + ReadableStream, parsing `event:`/`data:` frames by hand
-  (`frontend/src/net.rs`), with a ~1 s reconnect-and-resync loop — a
-  server restart returns the page to live on its own.
+  (GET-only) cannot consume — the reason the app was written against
+  `fetch` + ReadableStream up to MFE-8. It no longer is: since **MFE-9**
+  the app's whole data plane is one `WsTransport` on :4455 speaking
+  `menger.call`, driven by the client menger's own activation
+  declarations generate (`tickets-api`, the crate the server and the
+  browser share). It opens `watch` first, then walks
+  `list { summary: true, limit: 500 }` with `after = next` (MNG-9),
+  painting as pages land, and reconnects on a ~1 s loop — a server
+  restart returns the page to live on its own, with rows keeping their
+  DOM identity. The port comes from `<meta name="menger-ws-port">`, which
+  the shell substitutes when it serves `/app/`, exactly as it always has
+  for `web/index.html`.
 
 ## Surface
 
@@ -184,7 +194,9 @@ src/
   shell.rs             / (embedded vanilla page), /app/ (Leptos dist from
                        disk), /rest/* (same-origin proxy to the REST port)
   activations/
-    tickets/           types.rs (events) + activation.rs (#[plexus_macros::activation])
+    tickets/           activation.rs (#[plexus_macros::activation]); types.rs re-exports the shared ones
+tickets-api/           the ticket vocabulary + the typed Plexus client, shared by
+                       the server (default features) and the app (features = ["client"])
 web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/)
 plans/MNG/             the backend epic; plans/MFE/ the frontend epic
