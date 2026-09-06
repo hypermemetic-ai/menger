@@ -33,8 +33,14 @@
 //! page hands it to src/mermaid.rs, which lazily loads the vendored
 //! renderer (served by menger, fetched only when a body has a fence) and
 //! draws in strict mode, painting failures inline.
+//!
+//! AGS-16: the ticket menu (src/menu.rs). Every element that renders a
+//! ticket carries `data-ticket-id`; one document-level listener turns a
+//! right-click on any of them into the same menu (Open / Open in new tab
+//! / Copy code / Set status ▸), mounted once by the App.
 
 mod md;
+mod menu;
 mod nav;
 
 mod mermaid;
@@ -50,7 +56,7 @@ use wasm_bindgen_futures::spawn_local;
 /// The closed status vocabulary (src/store.rs `Status`) — the legal UI
 /// choices. The server remains the validator; anything else it receives
 /// comes back as an in-band `error` event.
-const STATUSES: [&str; 7] = [
+pub(crate) const STATUSES: [&str; 7] = [
     "Pending",
     "Ready",
     "Blocked",
@@ -239,18 +245,19 @@ async fn session(
     }
 }
 
-/// The app's one mutation: `set_status`, fired from a row's select. The
-/// select is left showing the user's choice while the call is in flight;
-/// the authoritative update arrives back through `watch`. Any failure —
+/// The app's one mutation: `set_status`, fired from a row's select or
+/// the ticket menu (AGS-16) — one call path. The caller's control is left
+/// showing the user's choice while the call is in flight; the
+/// authoritative update arrives back through `watch`. Any failure —
 /// transport-level or an in-band `error`/`not_found` event — surfaces in
-/// the banner and snaps the select back to the last server-confirmed
-/// status.
-fn request_set_status(
+/// the banner and runs `on_failure` (the board snaps its select back to
+/// the last server-confirmed status; the menu has nothing to revert —
+/// its chips follow the server).
+pub(crate) fn request_set_status(
     id: String,
     chosen: String,
-    revert_to: String,
-    sel: web_sys::HtmlSelectElement,
     last_error: RwSignal<Option<String>>,
+    on_failure: impl FnOnce() + 'static,
 ) {
     spawn_local(async move {
         let failure = match net::call("set_status", &json!({"id": id, "status": chosen})).await {
@@ -259,7 +266,7 @@ fn request_set_status(
         };
         if let Some(msg) = failure {
             last_error.set(Some(format!("set_status {id} -> {chosen}: {msg}")));
-            sel.set_value(&revert_to);
+            on_failure();
         }
     });
 }
@@ -381,7 +388,9 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                                             let chosen = sel.value();
                                             let current = ticket.with_untracked(|t| t.status.clone());
                                             if chosen != current {
-                                                request_set_status(id.clone(), chosen, current, sel, last_error);
+                                                request_set_status(id.clone(), chosen, last_error, move || {
+                                                    sel.set_value(&current)
+                                                });
                                             }
                                         }
                                     >
@@ -419,7 +428,9 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
 /// the id is a dangling forward reference — visually distinct, unlinked;
 /// until then (and for unlocks entries the snapshot hasn't carried yet)
 /// a plain link. A `created` watch event upserts the store, so a
-/// dangling entry resolves live while the page is open.
+/// dangling entry resolves live while the page is open. The entry carries
+/// `data-ticket-id` (the AGS-16 menu's attachment) exactly while it names
+/// a ticket — a dangling reference is not one.
 fn dag_entry(
     id: String,
     rows: RwSignal<Vec<Row>>,
@@ -429,9 +440,11 @@ fn dag_entry(
         let id = id.clone();
         Memo::new(move |_| rows.with(|v| v.iter().find(|r| r.id == id).map(|r| r.ticket)))
     };
+    let dangling = move || found.get().is_none() && dangling_when.is_some_and(|loaded| loaded.get());
     let attr_id = id.clone();
+    let menu_id = id.clone();
     view! {
-        <li data-dag-id=attr_id>
+        <li data-dag-id=attr_id data-ticket-id=move || (!dangling()).then(|| menu_id.clone())>
             {move || match found.get() {
                 Some(t) => {
                     let href = format!("#/ticket/{id}");
@@ -444,7 +457,7 @@ fn dag_entry(
                     }
                         .into_any()
                 }
-                None if dangling_when.is_some_and(|loaded| loaded.get()) => {
+                None if dangling() => {
                     view! {
                         <span class="dangling">{id.clone()}" (dangling — no such ticket yet)"</span>
                     }
@@ -538,9 +551,12 @@ fn ticket_view(
             .into_any()
     };
 
+    // The id never changes for a row's lifetime (see `Row`), so the
+    // header's menu attachment is static.
+    let header_id = ticket.with_untracked(|t| t.id.clone());
     view! {
         <article class="ticket">
-            <h2>
+            <h2 data-ticket-id=header_id>
                 <span class="id">{move || ticket.with(|t| t.id.clone())}</span>
                 {move || ticket.with(|t| t.title.clone())}
             </h2>
@@ -751,6 +767,9 @@ fn App() -> impl IntoView {
                     }}
                 </main>
             </div>
+            // AGS-16: mounted once, outside every ticket element, so a
+            // right-click inside the menu itself never re-targets it.
+            <menu::TicketMenu rows last_error />
         </div>
     }
 }
