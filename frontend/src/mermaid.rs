@@ -27,6 +27,13 @@
 //! fails to load) becomes an inline message above the still-visible
 //! source, and only that placeholder changes. A body streamed in
 //! half-written (AGS-7) rides the same path.
+//!
+//! AGS-17: a drawn diagram is the one thing the theme tokens cannot
+//! re-color, so the source stays on the placeholder (`data-src`) and
+//! [`rerender_all`] draws every finished diagram again when the painted
+//! mode changes — each lands in the mermaid theme matching the new
+//! background. A drawing generation per placeholder (`data-gen`) makes
+//! two quick toggles safe: only the newest draw may land.
 
 use crate::md::MERMAID_CLASS;
 use js_sys::{Function, Object, Promise, Reflect};
@@ -47,6 +54,10 @@ thread_local! {
     /// `mermaid.render` wants a unique id per call (it is the temp
     /// element's id while drawing, and the SVG's id after).
     static NEXT_ID: Cell<u32> = Cell::new(0);
+    /// AGS-17: the drawing generation — bumped per draw and stamped on
+    /// the placeholder, so a draw that finishes after a newer one began
+    /// on the same node leaves it alone.
+    static NEXT_GEN: Cell<u32> = Cell::new(0);
 }
 
 /// Render every pending placeholder under `root`. Idempotent: a node is
@@ -64,19 +75,61 @@ pub fn mount(root: &Element) {
             continue;
         };
         // The placeholder's text IS the source: entities decoded by the
-        // browser, exactly what md.rs escaped.
+        // browser, exactly what md.rs escaped. It stays on the node for
+        // a later redraw (AGS-17) once the SVG has replaced it.
         let src = el.text_content().unwrap_or_default();
+        let _ = el.set_attribute("data-src", &src);
         let _ = el.set_attribute("data-state", "rendering");
-        spawn_local(async move {
-            match render_svg(src).await {
-                Ok(svg) => {
-                    el.set_inner_html(&svg);
-                    let _ = el.set_attribute("data-state", "done");
-                }
-                Err(msg) => paint_error(&el, &msg),
-            }
-        });
+        draw(el, src);
     }
+}
+
+/// AGS-17: draw every finished diagram in the document again, against
+/// the background painted *now* — called when the effective theme
+/// changes. The old SVG stays in place until the new one lands (the state
+/// stays `done`: no blank, no layout jump); a diagram still pending or
+/// mid-render is left to its own pass. Nothing here can throw.
+pub fn rerender_all() {
+    let Some(doc) = crate::net::window().document() else {
+        return;
+    };
+    let selector = format!(".{MERMAID_CLASS}[data-state=\"done\"][data-src]");
+    let Ok(nodes) = doc.query_selector_all(&selector) else {
+        return;
+    };
+    for i in 0..nodes.length() {
+        let Some(el) = nodes.get(i).and_then(|n| n.dyn_into::<Element>().ok()) else {
+            continue;
+        };
+        let Some(src) = el.get_attribute("data-src") else {
+            continue;
+        };
+        draw(el, src);
+    }
+}
+
+/// One asynchronous draw of `src` into `el`: claim a generation, render,
+/// and land the result only if no newer draw has claimed the node since.
+fn draw(el: Element, src: String) {
+    let gen = NEXT_GEN.with(|g| {
+        let v = g.get().wrapping_add(1);
+        g.set(v);
+        v
+    });
+    let _ = el.set_attribute("data-gen", &gen.to_string());
+    spawn_local(async move {
+        let result = render_svg(src).await;
+        if el.get_attribute("data-gen").as_deref() != Some(gen.to_string().as_str()) {
+            return; // superseded by a newer draw of this node
+        }
+        match result {
+            Ok(svg) => {
+                el.set_inner_html(&svg);
+                let _ = el.set_attribute("data-state", "done");
+            }
+            Err(msg) => paint_error(&el, &msg),
+        }
+    });
 }
 
 /// The inline failure state: the message above the source, which stays.
@@ -393,8 +446,9 @@ mod tests {
 
     #[test]
     fn theme_follows_the_painted_background() {
-        assert_eq!(theme_for_background("rgb(251, 251, 249)"), "default"); // --bg (AGS-15, #fbfbf9)
-        assert_eq!(theme_for_background("rgb(16, 16, 20)"), "dark"); // the pre-AGS-15 dark --bg
+        assert_eq!(theme_for_background("rgb(251, 251, 249)"), "default"); // light --bg (AGS-15, #fbfbf9)
+        assert_eq!(theme_for_background("rgb(16, 16, 20)"), "dark"); // dark --bg (AGS-17, #101014; the vanilla page's too)
+        assert_eq!(theme_for_background("rgb(23, 23, 29)"), "dark"); // dark --panel (#17171d)
         assert_eq!(theme_for_background("rgb(255, 255, 255)"), "default");
         assert_eq!(theme_for_background("rgba(250, 250, 250, 1)"), "default");
         assert_eq!(theme_for_background("rgb(0 0 0)"), "dark");

@@ -9,6 +9,10 @@
      file only. Deliberately NOT a <script> here: src/mermaid.rs injects one
      the first time a rendered body holds a mermaid fence. -->
 <link data-trunk rel="copy-file" href="vendor/mermaid/mermaid-11.17.2.min.js" data-target-path="vendor" />
+<!-- AGS-17: stamp a stored theme choice before first paint, so a reload
+     never flashes the system theme; src/theme.rs owns the key and
+     re-applies it once mounted (a native test pins the two agree). -->
+<script>try{var t=localStorage.getItem("menger.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <style>
   /* AGS-15: manifest's color system (../manifest/app/src/styles.css :root,
      status.ts). Every color the app paints is named exactly once, in the
@@ -18,6 +22,9 @@
      a component rule. The vanilla page (web/index.html) keeps its own
      dark palette; it is legacy and shares nothing here. */
   :root {
+    /* AGS-17: native controls and scrollbars follow the theme; the dark
+       blocks below say `dark`. Not a color — the literal guard ignores it. */
+    color-scheme: light;
     /* surfaces + text */
     --bg: #fbfbf9;        /* page */
     --panel: #f4f3ee;     /* nav column, meta card, code blocks, frames */
@@ -70,6 +77,62 @@
     background: var(--st-bg); color: var(--st-fg); border-color: transparent;
     font-weight: var(--st-weight, inherit); text-decoration: var(--st-deco, none);
   }
+  /* AGS-17: dark — the same token names, the second value set; nothing
+     below the theme layers changes. Three states: no `data-theme` on the
+     root follows the system (`prefers-color-scheme`); an explicit
+     `data-theme="light"` / `"dark"` — stamped by src/theme.rs, cycled by
+     the header toggle, persisted — wins in either direction. So the dark
+     values are stated twice: under the media query, guarded so a stored
+     "light" opts out, and under the attribute. A native test holds the
+     two copies identical and their token set equal to the light block's
+     (a color defined in one theme only is a bug). The palette is the
+     house dark set — the day-one vanilla page's bg / panel / ink / muted
+     / line / accent / live / err — with the rest derived from it; the
+     dark status table is dark tinted bg + light fg (weight and
+     decoration stay the light table's: they are not colors), and every
+     chip pair and ink on bg/panel clears 4.5:1 (AGS-17 result). */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #101014; --panel: #17171d; --card: #1e1e26;
+      --ink: #d8d8e0; --muted: #7a7a88; --line: #26262e;
+      --accent: #8ab4f8; --hover: #1f1f28; --row-sel: #1f2d44; --sel: #1b2431;
+      --chip-bg: #1e2430; --chip-fg: #aab7c8; --chip-line: #2c3442;
+      --tree-line: #3a3a46;
+      --live: #5dbb63;
+      --err-bg: #2b1517; --err-fg: #e89393; --err-line: #5a2626;
+      --kind-scope: #e3c56a; --kind-build: #8ab4f8; --kind-execution: #5dbb63;
+      --kind-gap: #e89393; --kind-spike: #c7abf2;
+      --shadow: #0008;
+    }
+    :root:not([data-theme="light"]) .st-pending    { --st-bg: #3a3115; --st-fg: #e8cf7a; }
+    :root:not([data-theme="light"]) .st-ready      { --st-bg: #1b2e46; --st-fg: #a3c6ee; }
+    :root:not([data-theme="light"]) .st-blocked    { --st-bg: #3d1a1c; --st-fg: #f09a9a; }
+    :root:not([data-theme="light"]) .st-complete   { --st-bg: #16341f; --st-fg: #8fd39a; }
+    :root:not([data-theme="light"]) .st-idea       { --st-bg: #2b2721; --st-fg: #c9b99a; }
+    :root:not([data-theme="light"]) .st-epic       { --st-bg: #2e2143; --st-fg: #cdb4f2; }
+    :root:not([data-theme="light"]) .st-superseded { --st-bg: #3b2224; --st-fg: #dea3a3; }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #101014; --panel: #17171d; --card: #1e1e26;
+    --ink: #d8d8e0; --muted: #7a7a88; --line: #26262e;
+    --accent: #8ab4f8; --hover: #1f1f28; --row-sel: #1f2d44; --sel: #1b2431;
+    --chip-bg: #1e2430; --chip-fg: #aab7c8; --chip-line: #2c3442;
+    --tree-line: #3a3a46;
+    --live: #5dbb63;
+    --err-bg: #2b1517; --err-fg: #e89393; --err-line: #5a2626;
+    --kind-scope: #e3c56a; --kind-build: #8ab4f8; --kind-execution: #5dbb63;
+    --kind-gap: #e89393; --kind-spike: #c7abf2;
+    --shadow: #0008;
+  }
+  :root[data-theme="dark"] .st-pending    { --st-bg: #3a3115; --st-fg: #e8cf7a; }
+  :root[data-theme="dark"] .st-ready      { --st-bg: #1b2e46; --st-fg: #a3c6ee; }
+  :root[data-theme="dark"] .st-blocked    { --st-bg: #3d1a1c; --st-fg: #f09a9a; }
+  :root[data-theme="dark"] .st-complete   { --st-bg: #16341f; --st-fg: #8fd39a; }
+  :root[data-theme="dark"] .st-idea       { --st-bg: #2b2721; --st-fg: #c9b99a; }
+  :root[data-theme="dark"] .st-epic       { --st-bg: #2e2143; --st-fg: #cdb4f2; }
+  :root[data-theme="dark"] .st-superseded { --st-bg: #3b2224; --st-fg: #dea3a3; }
 
   * { box-sizing: border-box; }
   body {
@@ -85,6 +148,14 @@
   #conn { color: var(--muted); font-size: .8rem; margin-left: auto; }
   #conn.live { color: var(--live); }
   #conn.reconnecting { color: var(--err-fg); }
+  /* AGS-17: the theme toggle — a header control in the nav-reveal's
+     idiom; its text names the current choice (system / light / dark). */
+  header .theme {
+    background: var(--bg); border: 1px solid var(--line); color: var(--muted);
+    font: inherit; font-size: 11px; line-height: 1.3; padding: 0 6px;
+    border-radius: 4px; cursor: pointer; white-space: nowrap;
+  }
+  header .theme:hover { color: var(--accent); border-color: var(--accent); }
   main { padding: 1rem 1.25rem; max-width: 72rem; margin: 0 auto; }
   #health { color: var(--muted); font-size: .8rem; margin-bottom: 1rem; }
   #error {
