@@ -44,6 +44,9 @@
        the light palette's inks so each reads on --panel. */
     --kind-scope: #7a5d00; --kind-build: #0066cc; --kind-execution: #256b1a;
     --kind-gap: #a23; --kind-spike: #5b3a8c;
+    /* AGS-16: the drop shadow under floating chrome (the ticket menu, the
+       copy toast) — manifest's menu shadow, 20% black. */
+    --shadow: #0003;
     /* type */
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -209,7 +212,7 @@
   #nav .prefix { color: var(--tree-line); white-space: pre; user-select: none; }
   #nav .toggle { width: 1ch; color: var(--muted); }
   #nav .toggle.clickable { cursor: pointer; }
-  #nav .code {
+  #nav .code, #tmenu .code, #toast .code {
     font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: var(--chip-fg);
     background: var(--chip-bg); border: 1px solid var(--chip-line); border-radius: 5px;
     padding: 0 5px; white-space: nowrap;
@@ -246,6 +249,51 @@
   .md .mermaid .mermaid-error {
     color: var(--err-fg); margin: 0 0 .6rem; white-space: pre-wrap; font-size: .85rem;
   }
+  /* AGS-16: the ticket menu — manifest's menu idiom on the palette's
+     tokens: a bordered, shadowed card at the cursor; items are real
+     links/buttons whose hover and keyboard focus paint the same way. The
+     status list opens inline under "Set status"; each row shows the
+     status as its chip, the current one marked. */
+  #tmenu {
+    position: fixed; z-index: 1000; min-width: 230px; max-width: 360px;
+    max-height: calc(100vh - 8px); overflow: auto; padding: 4px;
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; box-shadow: 0 10px 30px var(--shadow);
+    font: 12.5px/1.5 var(--mono); user-select: none; outline: none;
+  }
+  #tmenu .h {
+    display: flex; align-items: baseline; gap: 6px; padding: 4px 10px 6px;
+    border-bottom: 1px solid var(--line); margin-bottom: 4px; white-space: nowrap;
+  }
+  #tmenu .h .title { overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  #tmenu .h .tag { flex: none; font-size: 10px; padding: 0 5px; border-radius: 6px; }
+  #tmenu .item {
+    display: block; width: 100%; text-align: left; padding: 4px 10px;
+    border: 0; border-radius: 5px; background: transparent; color: var(--ink);
+    cursor: pointer; font: inherit; text-decoration: none; white-space: nowrap;
+  }
+  #tmenu .item:hover, #tmenu .item:focus { background: var(--hover); color: var(--accent); outline: none; }
+  #tmenu .item .arrow { color: var(--muted); }
+  #tmenu .sub { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+  #tmenu .sub .item { padding-left: 14px; }
+  #tmenu .sub .mark { display: inline-block; width: 1.4em; color: var(--live); }
+  #tmenu .sub .st { padding: 0 5px; border-radius: 6px; font-size: 11px; }
+  /* The copy confirmation. The manual fallback shows the id selected in
+     a field; the banner idiom's left edge marks it as a notice. */
+  #toast {
+    position: fixed; right: 16px; bottom: 16px; z-index: 1001;
+    display: flex; align-items: baseline; gap: .6rem;
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-left: 4px solid var(--live); border-radius: 6px;
+    padding: .45rem .7rem; font-size: .85rem; box-shadow: 0 8px 24px var(--shadow);
+  }
+  #toast.manual { border-left-color: var(--err-fg); }
+  #toast input.code { font-family: var(--mono); font-size: .85rem; width: 7em; outline: none; }
+  #toast button {
+    background: none; border: 1px solid var(--line); color: var(--muted);
+    font: inherit; font-size: .8rem; border-radius: 4px; padding: 0 .5rem; cursor: pointer;
+  }
+  #toast button:hover { color: var(--accent); border-color: var(--accent); }
 </style>
 </head>
 <body></body>

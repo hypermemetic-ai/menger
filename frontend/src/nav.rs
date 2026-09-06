@@ -277,7 +277,8 @@ fn group_view(
 
 /// One ticket row: a real link (middle-click / copy-link friendly) whose
 /// title and status tag render through the row's inner signal. Selected
-/// iff the route is this ticket's page.
+/// iff the route is this ticket's page. Carries `data-ticket-id`, the
+/// AGS-16 menu's attachment (a right-click anywhere on the row opens it).
 fn leaf_view(
     r: Row,
     last_id: Memo<Option<String>>,
@@ -313,6 +314,7 @@ fn leaf_view(
             role="treeitem"
             aria-selected=move || sel.get().to_string()
             data-nav-id=id.clone()
+            data-ticket-id=id.clone()
             data-kind=kind
             href=href
         >

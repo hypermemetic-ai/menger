@@ -40,7 +40,11 @@ js-sys = "0.3"
 # Location for the hash, Element for closest()), and the mermaid mounter
 # (AGS-14: Document/Node/NodeList to inject the script and walk
 # placeholders, HtmlElement for onload/onerror, CssStyleDeclaration to
-# read the palette's background) touch.
+# read the palette's background) touch. AGS-16's ticket menu adds the
+# events it listens for, DomRect to clamp itself into the viewport,
+# Navigator for the clipboard (reached via Reflect — web-sys's Clipboard
+# binding is unstable-gated), and the two form elements its copy
+# fallbacks use.
 web-sys = { version = "0.3", features = [
   "Window",
   "Headers",
@@ -62,6 +66,12 @@ web-sys = { version = "0.3", features = [
   "HtmlDivElement",
   "HtmlHeadElement",
   "CssStyleDeclaration",
+  "MouseEvent",
+  "KeyboardEvent",
+  "DomRect",
+  "Navigator",
+  "HtmlTextAreaElement",
+  "HtmlInputElement",
 ] }
 
 console_error_panic_hook = "0.1"
