@@ -237,8 +237,10 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
     collect(call(&client, "tickets.set_status", json!({"id": "RS-1", "status": "Ready"})).await).await;
     collect(call(&client, "tickets.set_status", json!({"id": "RS-2", "status": "Ready"})).await).await;
 
-    // Watch delivered: created(RS-2), unlocks_changed(RS-1), 2x status_changed.
-    for _ in 0..4 {
+    // Watch delivered: created(RS-2), children_changed(RS-1) — RS-2 named
+    // no parent and hangs under the root (MNG-14) — unlocks_changed(RS-1),
+    // 2x status_changed.
+    for _ in 0..5 {
         let ev = content(watch.next().await.unwrap().unwrap());
         apply(&mut mirror, &ev);
     }
@@ -384,26 +386,32 @@ async fn parent_children_and_the_parent_filter_over_the_wire() {
     assert_eq!(evs[0]["ticket"]["parent"], "PA-1");
 
     // Acceptance 2, second half: three deep, the middle link in another
-    // epic. (Self-ancestry needs no test: the id is allocated by the very
-    // create that would name it, so it cannot exist yet, and no
-    // re-parent method exists.)
+    // epic — PB's scope root hangs under PA-2 (a sub-shortcode); PB's own
+    // tickets stay inside PB (MNG-14). (Self-ancestry at create needs no
+    // test: the id is allocated by the very create that would name it.)
     collect(call(&client, "tickets.create",
         json!({"epic": "PB", "title": "grandchild", "kind": "scope", "parent": "PA-2"})).await).await;
+    let evs = collect(call(&client, "tickets.create",
+        json!({"epic": "PA", "title": "escapes", "parent": "PB-1"})).await).await;
+    assert_eq!(evs[0]["type"], "error", "a non-root's parent must be in its shortcode");
+    assert!(evs[0]["message"].as_str().unwrap().contains("outside"), "{}", evs[0]);
     collect(call(&client, "tickets.create",
-        json!({"epic": "PA", "title": "great-grandchild", "parent": "PB-1"})).await).await;
-    let chain = ["PA-1", "PA-2", "PB-1", "PA-3"];
+        json!({"epic": "PB", "title": "great-grandchild", "parent": "PB-1"})).await).await;
+    let chain = ["PA-1", "PA-2", "PB-1", "PB-2"];
     for (child, parent) in chain.iter().skip(1).zip(chain.iter()) {
         let evs = collect(call(&client, "tickets.get", json!({"id": child})).await).await;
         assert_eq!(evs[0]["ticket"]["parent"], *parent, "{child}");
         let evs = collect(call(&client, "tickets.get", json!({"id": parent})).await).await;
         assert_eq!(evs[0]["ticket"]["children"], json!([child]), "{parent}");
     }
-    let evs = collect(call(&client, "tickets.get", json!({"id": "PA-3"})).await).await;
+    let evs = collect(call(&client, "tickets.get", json!({"id": "PB-2"})).await).await;
     assert_eq!(evs[0]["ticket"]["children"], json!([]), "the leaf has none");
 
-    // Acceptance 4: exactly the children, and nothing else.
-    collect(call(&client, "tickets.create",
-        json!({"epic": "PA", "title": "second child of P"})).await).await; // PA-4, no parent
+    // Acceptance 4: exactly the children, and nothing else. PA-3 names no
+    // parent and so hangs under PA's root (MNG-14).
+    let evs = collect(call(&client, "tickets.create",
+        json!({"epic": "PA", "title": "second child of P"})).await).await; // PA-3
+    assert_eq!(evs[0]["ticket"]["parent"], "PA-1", "defaulted to the shortcode root");
     collect(call(&client, "tickets.create",
         json!({"epic": "PC", "title": "cross-epic child of P", "kind": "scope", "parent": "PA-1"})).await).await;
     let ids = |evs: Vec<Value>| -> Vec<String> {
@@ -416,10 +424,10 @@ async fn parent_children_and_the_parent_filter_over_the_wire() {
     };
     assert_eq!(
         ids(collect(call(&client, "tickets.list", json!({"parent": "PA-1"})).await).await),
-        vec!["PA-2", "PC-1"]
+        vec!["PA-2", "PA-3", "PC-1"]
     );
     assert_eq!(
-        ids(collect(call(&client, "tickets.list", json!({"parent": "PA-4"})).await).await),
+        ids(collect(call(&client, "tickets.list", json!({"parent": "PA-3"})).await).await),
         Vec::<String>::new()
     );
     assert_eq!(
@@ -597,14 +605,18 @@ async fn concurrent_reads_complete_under_mutation_stream() {
             r.await.expect("reader completed");
         }
         // The watcher saw every acknowledged change, creates in seq order.
+        // Each create after the root also updates the root's `children`
+        // (MNG-14), so: 1 + (MUTATIONS - 1) × (created, children_changed,
+        // status_changed).
         let mut next_seq = 1u64;
-        for _ in 0..(2 * MUTATIONS - 1) {
+        for _ in 0..(3 * MUTATIONS - 2) {
             let ev = content(watch.next().await.unwrap().unwrap());
             match ev["type"].as_str().unwrap() {
                 "created" => {
                     assert_eq!(ev["ticket"]["seq"], next_seq);
                     next_seq += 1;
                 }
+                "children_changed" => assert_eq!(ev["ticket"]["id"], "LOAD-1"),
                 "status_changed" => {}
                 other => panic!("unexpected watch event {other}"),
             }
@@ -615,13 +627,15 @@ async fn concurrent_reads_complete_under_mutation_stream() {
     .expect("concurrency smoke finished in time");
 }
 
-/// MNG-12 over the real wire: the first ticket of a prefix must be a
-/// scope (in-band error, nothing allocated); `set_parent` adopts a
-/// parentless ticket and the watch-only mirror sees the child
-/// (`parent_changed`) and the parent (`children_changed`) as full
-/// tickets; `list {parent}` agrees; the guards cross as in-band errors.
+/// MNG-12/14 over the real wire: the first ticket of a prefix must be a
+/// scope (in-band error, nothing allocated); a ticket naming no parent
+/// hangs under the shortcode root; `set_parent` moves a ticket and the
+/// watch-only mirror sees the child (`parent_changed`) and both parents
+/// (`children_changed`, `child_removed`) as full tickets; `list {parent}`
+/// agrees; the guards — ancestry, outside the shortcode, missing — cross
+/// as in-band errors, and a shortcode's root may be hosted elsewhere.
 #[tokio::test]
-async fn scope_first_and_set_parent_over_the_wire() {
+async fn scope_first_default_parent_and_set_parent_over_the_wire() {
     let port = start_server().await;
     let client = connect(port).await;
 
@@ -636,44 +650,69 @@ async fn scope_first_and_set_parent_over_the_wire() {
     let evs = collect(call(&client, "tickets.create",
         json!({"epic": "SC", "title": "root", "kind": "scope"})).await).await;
     assert_eq!(evs[0]["ticket"]["id"], "SC-1");
-    let evs = collect(call(&client, "tickets.create", json!({"epic": "SC", "title": "loose"})).await).await;
+    assert!(evs[0]["ticket"]["parent"].is_null(), "the root is top-level");
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "SC", "title": "a"})).await).await;
     assert_eq!(evs[0]["ticket"]["id"], "SC-2");
-    assert!(evs[0]["ticket"]["parent"].is_null());
+    assert_eq!(evs[0]["ticket"]["parent"], "SC-1", "no parent named: the shortcode root");
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "SC", "title": "b"})).await).await;
+    assert_eq!(evs[0]["ticket"]["id"], "SC-3");
+    assert_eq!(evs[0]["ticket"]["parent"], "SC-1");
+    // Another shortcode, hosted under SC-1 through its root.
+    let evs = collect(call(&client, "tickets.create",
+        json!({"epic": "SD", "title": "sub", "kind": "scope", "parent": "SC-1"})).await).await;
+    assert_eq!(evs[0]["ticket"]["parent"], "SC-1", "a root may hang under another shortcode");
+    let evs = collect(call(&client, "tickets.create",
+        json!({"epic": "SD", "title": "escapes", "parent": "SC-2"})).await).await;
+    assert_eq!(evs[0]["type"], "error");
+    assert!(evs[0]["message"].as_str().unwrap().contains("outside"), "{}", evs[0]);
 
     let mut mirror = std::collections::HashMap::new();
-    for ev in collect(call(&client, "tickets.list", json!({"epic": "SC"})).await).await {
+    for ev in collect(call(&client, "tickets.list", json!({})).await).await {
         mirror.insert(ev["ticket"]["id"].as_str().unwrap().to_string(), ev["ticket"].clone());
     }
+    assert_eq!(mirror["SC-1"]["children"], json!(["SC-2", "SC-3", "SD-1"]));
     let mut watch = call(&client, "tickets.watch", json!({})).await;
 
     let evs = collect(call(&client, "tickets.set_parent",
-        json!({"id": "SC-2", "parent": "SC-1"})).await).await;
+        json!({"id": "SC-3", "parent": "SC-2"})).await).await;
     assert_eq!(evs.len(), 1);
     assert_eq!(evs[0]["type"], "parent_changed");
-    assert_eq!(evs[0]["ticket"]["id"], "SC-2");
-    assert_eq!(evs[0]["ticket"]["parent"], "SC-1");
-    assert!(evs[0]["previous"].is_null());
+    assert_eq!(evs[0]["ticket"]["id"], "SC-3");
+    assert_eq!(evs[0]["ticket"]["parent"], "SC-2");
+    assert_eq!(evs[0]["previous"], "SC-1");
 
-    for _ in 0..2 {
+    for _ in 0..3 {
         let ev = content(watch.next().await.unwrap().unwrap());
-        if ev["type"] == "children_changed" {
-            assert_eq!(ev["ticket"]["id"], "SC-1");
-            assert_eq!(ev["added"], "SC-2");
-            assert_eq!(ev["ticket"]["title"], "root", "the full parent, not a delta");
+        match ev["type"].as_str().unwrap() {
+            "children_changed" => {
+                assert_eq!(ev["ticket"]["id"], "SC-2");
+                assert_eq!(ev["added"], "SC-3");
+                assert_eq!(ev["ticket"]["title"], "a", "the full parent, not a delta");
+            }
+            "child_removed" => {
+                assert_eq!(ev["ticket"]["id"], "SC-1");
+                assert_eq!(ev["removed"], "SC-3");
+            }
+            _ => {}
         }
         apply(&mut mirror, &ev);
     }
-    assert_eq!(mirror["SC-2"]["parent"], "SC-1");
-    assert_eq!(mirror["SC-1"]["children"], json!(["SC-2"]));
+    assert_eq!(mirror["SC-3"]["parent"], "SC-2");
+    assert_eq!(mirror["SC-2"]["children"], json!(["SC-3"]));
+    assert_eq!(mirror["SC-1"]["children"], json!(["SC-2", "SD-1"]));
 
-    let evs = collect(call(&client, "tickets.list", json!({"parent": "SC-1"})).await).await;
+    let evs = collect(call(&client, "tickets.list", json!({"parent": "SC-2"})).await).await;
     assert_eq!(evs.len(), 1);
-    assert_eq!(evs[0]["ticket"]["id"], "SC-2");
+    assert_eq!(evs[0]["ticket"]["id"], "SC-3");
 
     let evs = collect(call(&client, "tickets.set_parent",
-        json!({"id": "SC-1", "parent": "SC-2"})).await).await;
+        json!({"id": "SC-1", "parent": "SC-3"})).await).await;
     assert_eq!(evs[0]["type"], "error");
     assert!(evs[0]["message"].as_str().unwrap().contains("own ancestor"), "{}", evs[0]);
+    let evs = collect(call(&client, "tickets.set_parent",
+        json!({"id": "SC-2", "parent": "SD-1"})).await).await;
+    assert_eq!(evs[0]["type"], "error");
+    assert!(evs[0]["message"].as_str().unwrap().contains("outside"), "{}", evs[0]);
     let evs = collect(call(&client, "tickets.set_parent",
         json!({"id": "SC-7", "parent": "SC-1"})).await).await;
     assert_eq!(evs[0]["type"], "not_found");

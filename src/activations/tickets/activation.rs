@@ -64,7 +64,10 @@ impl Tickets {
     /// in-band error naming them. `parent` (AGS-19) files the ticket as an
     /// output of an existing ticket in any epic; one that names no ticket,
     /// or that would make the newborn its own ancestor, is an in-band error
-    /// naming the reason. Every shortcode starts with a scope (MNG-12):
+    /// naming the reason. MNG-14: omitted, `parent` defaults to the
+    /// shortcode's scope root; given, it must be inside the same shortcode
+    /// — except for the scope root itself, whose parent is the shortcode
+    /// it hangs under. Every shortcode starts with a scope (MNG-12):
     /// the first ticket of a prefix must be `kind: scope`, and anything
     /// else is an in-band error naming the rule, with nothing allocated.
     /// Yields exactly one event: `Created` or `Error`.
@@ -77,7 +80,7 @@ impl Tickets {
             severity = "Critical | High | Medium | Low (optional)",
             blocked_by = "Ticket ids that must complete first (optional)",
             body = "Markdown body (optional)",
-            parent = "Id of the ticket this one is an output of; any epic, must exist (optional)"
+            parent = "Id of the ticket this one is an output of; must exist and be in the same shortcode (default: the shortcode's scope root). The shortcode's own scope root may name a ticket in another shortcode: the one it hangs under"
         )
     )]
     pub async fn create(
@@ -586,6 +589,17 @@ mod tests {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "DAG-2"),
             other => panic!("expected Created, got {other:?}"),
         }
+        // MNG-14: DAG-2 named no parent, so it hangs under the root — which
+        // is also its blocker: one updated ticket, both edges, two events.
+        match watch.next().await.expect("change") {
+            TicketsEvent::ChildrenChanged { ticket, added } => {
+                assert_eq!(ticket.id, "DAG-1");
+                assert_eq!(ticket.children, vec!["DAG-2"]);
+                assert_eq!(ticket.unlocks, vec!["DAG-2"], "both edges on the one ticket");
+                assert_eq!(added, "DAG-2");
+            }
+            other => panic!("expected ChildrenChanged, got {other:?}"),
+        }
         match watch.next().await.expect("change") {
             TicketsEvent::UnlocksChanged { ticket, added } => {
                 assert_eq!(ticket.id, "DAG-1");
@@ -714,9 +728,10 @@ mod tests {
             .await;
         }
 
+        // MNG-14: "unrelated" (LP-2) named no parent and hangs under the root.
         assert_eq!(
             ticket_ids(hub.list(None, None, Some("LP-1".into())).await).await,
-            vec!["LP-3", "ZZ-1"]
+            vec!["LP-2", "LP-3", "ZZ-1"]
         );
         assert!(ticket_ids(hub.list(None, None, Some("LP-2".into())).await)
             .await
@@ -827,31 +842,42 @@ mod tests {
             other => panic!("expected Created, got {other:?}"),
         }
     }
-    /// MNG-12: `set_parent` over the activation — `ParentChanged` on
-    /// success, `NotFound` for a missing child, in-band errors for a
-    /// missing parent and for ancestry; `watch` carries the parent's side.
+    /// MNG-12/14: `set_parent` over the activation — `ParentChanged` on a
+    /// move, `NotFound` for a missing child, in-band errors for a missing
+    /// parent, a parent outside the shortcode, and ancestry; `watch`
+    /// carries both parents' sides.
     #[tokio::test]
     async fn set_parent_yields_parent_changed_and_maps_errors_in_band() {
         let hub = hub();
         one(hub.create("SP".into(), "root".into(), Some("scope".into()), None, None, None, None).await).await;
-        one(hub.create("SP".into(), "loose".into(), None, None, None, None, None).await).await;
+        one(hub.create("SP".into(), "a".into(), None, None, None, None, None).await).await; // SP-2 → SP-1
+        one(hub.create("SP".into(), "b".into(), None, None, None, None, None).await).await; // SP-3 → SP-1
+        one(hub.create("OT".into(), "other".into(), Some("scope".into()), None, None, None, None).await).await;
         let mut watch = Box::pin(hub.watch(None).await);
 
-        match one(hub.set_parent("sp-2".into(), "sp-1".into()).await).await {
+        match one(hub.set_parent("sp-3".into(), "sp-2".into()).await).await {
             TicketsEvent::ParentChanged { ticket, previous } => {
-                assert_eq!(ticket.id, "SP-2");
-                assert_eq!(ticket.parent.as_deref(), Some("SP-1"));
-                assert_eq!(previous, None);
+                assert_eq!(ticket.id, "SP-3");
+                assert_eq!(ticket.parent.as_deref(), Some("SP-2"));
+                assert_eq!(previous.as_deref(), Some("SP-1"));
             }
             other => panic!("expected ParentChanged, got {other:?}"),
         }
         assert!(matches!(watch.next().await, Some(TicketsEvent::ParentChanged { .. })));
         match watch.next().await {
             Some(TicketsEvent::ChildrenChanged { ticket, added }) => {
-                assert_eq!(ticket.id, "SP-1");
-                assert_eq!(added, "SP-2");
+                assert_eq!(ticket.id, "SP-2");
+                assert_eq!(added, "SP-3");
             }
             other => panic!("expected ChildrenChanged, got {other:?}"),
+        }
+        match watch.next().await {
+            Some(TicketsEvent::ChildRemoved { ticket, removed }) => {
+                assert_eq!(ticket.id, "SP-1");
+                assert_eq!(removed, "SP-3");
+                assert_eq!(ticket.children, vec!["SP-2"]);
+            }
+            other => panic!("expected ChildRemoved, got {other:?}"),
         }
 
         assert!(matches!(
@@ -864,9 +890,20 @@ mod tests {
             }
             other => panic!("expected Error, got {other:?}"),
         }
-        match one(hub.set_parent("SP-1".into(), "SP-2".into()).await).await {
+        match one(hub.set_parent("SP-2".into(), "OT-1".into()).await).await {
+            TicketsEvent::Error { message } => {
+                assert!(message.contains("OT-1") && message.contains("outside"), "{message}")
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        match one(hub.set_parent("SP-1".into(), "SP-3".into()).await).await {
             TicketsEvent::Error { message } => assert!(message.contains("own ancestor"), "{message}"),
             other => panic!("expected Error, got {other:?}"),
+        }
+        // The root may be hosted by another shortcode.
+        match one(hub.set_parent("SP-1".into(), "OT-1".into()).await).await {
+            TicketsEvent::ParentChanged { ticket, .. } => assert_eq!(ticket.parent.as_deref(), Some("OT-1")),
+            other => panic!("expected ParentChanged, got {other:?}"),
         }
     }
 
