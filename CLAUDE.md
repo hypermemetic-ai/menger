@@ -42,16 +42,21 @@ cargo test         # unit tests + wire tests (tests/wire.rs speaks the real prot
 - Planning: `plans/MNG/` per the ticketing skill. Tickets are `Pending`
   until the human promotes them to `Ready`; implementation does not begin
   on `Pending` tickets.
-- Workers move their ticket across the SDLC (owner, 2026-09-06). A
-  ticket worker flips `Ready → Coding` when it starts, `Coding → In
-  Review` in the commit that finishes the work (the commit message ends
-  `— In Review`, not `— Complete`), and the **merge** flips `In Review →
-  Complete`, so the merge hash is the completion hash. Each flip is the
-  ticket's frontmatter in the worktree plus `tickets.set_status` on the
-  running server, so the board shows where the work is. Until SDLC-7
-  lands the two states in the server's `Status` enum, write them in
-  frontmatter only — `set_status` rejects them today — and the merge
-  still sets `Complete`.
+- Ticketing follows **ought** (`../ought`, the house methodology — its
+  `ticketing/`, `building/`, `methodology/` skills). Its lifecycle is
+  `Pending → Ready → active → in review → done` (+ `archived`, always
+  with a pointer). Workers move their ticket across it (owner,
+  2026-09-06): mark `active` the moment work starts (so no leaf is
+  double-claimed) and record the branch on the ticket; flip to `in
+  review` in the commit that finishes the work — gate green, committed,
+  change linked (the commit message ends `— in review`); the **merge**
+  (the pipeline) lands it to `done`, so the merge hash is the completion
+  hash. Each flip is the ticket's frontmatter in the worktree plus
+  `tickets.set_status` on the running server, so the board shows where
+  the work is. Until SDLC-7 lands the two worker states in the server's
+  `Status` enum, write them in frontmatter only — `set_status` rejects
+  them today — and the merge still sets `Complete` (menger's current
+  name for `done`; SDLC-2 reconciles the vocabulary with ought's).
 - `web/index.html` is dependency-free and embedded via `include_str!` —
   no build step, keep it that way (MNG-5 hardens this into a contract).
 - Wire protocol notes (envelope, `menger.call` subscription) are in
