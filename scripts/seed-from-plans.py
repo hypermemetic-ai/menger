@@ -12,7 +12,7 @@ the create param, so the parent tree is seeded with the tickets.
 """
 import argparse, glob, json, os, re, sys, urllib.request
 
-EPIC_ORDER = ["MNG", "MFE", "HLX", "AGS", "PERF", "SDLC", "PLEXUS", "TRANSPORT"]  # cross-epic blocked_by/parent refs point backward in this order
+EPIC_ORDER = ["MNG", "MFE", "HLX", "AGS", "PERF", "SDLC", "PLEXUS", "TRANSPORT", "MACRO"]  # cross-epic blocked_by/parent refs point backward in this order
 
 # AGS-13: a file's frontmatter `type:` (the house ticketing vocabulary) maps
 # onto the server's kind — the same pinned table the store's migration uses.
