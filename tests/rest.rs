@@ -131,6 +131,7 @@ async fn create_via_rest_returns_ticket_and_list_includes_it() {
         &json!({
             "epic": "RST",
             "title": "born over HTTP",
+            "kind": "scope",
             "severity": "High",
             "body": "## Problem\n\ncreated by tests/rest.rs"
         })
@@ -201,7 +202,7 @@ async fn watch_sse_streams_created_event_promptly() {
     let (status, body) = post(
         s.rest_port,
         "/rest/tickets/create",
-        &json!({"epic": "RST", "title": "watched"}).to_string(),
+        &json!({"epic": "RST", "title": "watched", "kind": "scope"}).to_string(),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create failed: {body}");
@@ -275,7 +276,7 @@ async fn in_band_error_event_is_distinguishable_in_2xx() {
     let (status, body) = post(
         s.rest_port,
         "/rest/tickets/create",
-        &json!({"epic": "RST", "title": "target"}).to_string(),
+        &json!({"epic": "RST", "title": "target", "kind": "scope"}).to_string(),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "create failed: {body}");

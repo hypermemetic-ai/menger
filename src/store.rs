@@ -183,6 +183,16 @@ pub enum Change {
     /// was born naming it as `parent`. Same discipline as
     /// `UnlocksChanged`: the full updated parent rides along.
     ChildrenChanged { ticket: Ticket, added: String },
+    /// MNG-12: a ticket's `parent` was set after birth (`set_parent`);
+    /// `previous` is the parent it had, if any. Carries the full child.
+    ParentChanged {
+        ticket: Ticket,
+        previous: Option<String>,
+    },
+    /// MNG-12: an existing ticket's `children` lost `removed` — that
+    /// child was re-parented elsewhere. The full updated ex-parent rides
+    /// along, as with `ChildrenChanged`.
+    ChildRemoved { ticket: Ticket, removed: String },
 }
 
 impl Change {
@@ -191,7 +201,9 @@ impl Change {
             Self::Created { ticket }
             | Self::StatusChanged { ticket, .. }
             | Self::UnlocksChanged { ticket, .. }
-            | Self::ChildrenChanged { ticket, .. } => ticket,
+            | Self::ChildrenChanged { ticket, .. }
+            | Self::ParentChanged { ticket, .. }
+            | Self::ChildRemoved { ticket, .. } => ticket,
         }
     }
 }
@@ -258,6 +270,14 @@ pub enum StoreError {
     /// AGS-19: the requested parent chain would make `id` its own
     /// ancestor; `path` is the chain from the parent back to `id`.
     ParentCycle { id: String, path: Vec<String> },
+    /// MNG-12: every shortcode starts with a scope. The first ticket of a
+    /// prefix that has none yet must be `kind: scope`; `kind` is what was
+    /// asked for instead. Nothing was stored and no id was allocated.
+    FirstMustBeScope { epic: String, kind: Kind },
+    /// MNG-14: a ticket's parent must be inside its own shortcode; only a
+    /// shortcode's scope root may hang under another shortcode (its host).
+    /// Nothing changed.
+    ParentOutsideShortcode { id: String, parent: String },
     /// The write could not be made durable; nothing was acknowledged.
     Db(String),
     /// PERF-2: a seed was requested into a store that already holds
@@ -286,13 +306,24 @@ impl std::fmt::Display for StoreError {
             Self::ParentNotFound { id, parent } => write!(
                 f,
                 "no ticket with id '{parent}': a parent must exist before its child \
-                 (nothing was created for '{id}')"
+                 (nothing changed for '{id}')"
             ),
             Self::ParentCycle { id, path } => write!(
                 f,
-                "creating '{id}' would make it its own ancestor: parent chain \
-                 {id} -> {}",
+                "'{id}' would become its own ancestor: parent chain {id} -> {}",
                 path.join(" -> ")
+            ),
+            Self::FirstMustBeScope { epic, kind } => write!(
+                f,
+                "every shortcode starts with a scope: '{epic}' has no tickets yet, so its \
+                 first ticket must be kind 'scope' (got '{}'); create the scope root first",
+                db::enum_str(kind)
+            ),
+            Self::ParentOutsideShortcode { id, parent } => write!(
+                f,
+                "'{parent}' is outside the shortcode of '{id}': a ticket's parent must be in \
+                 its own shortcode — only a shortcode's scope root may hang under another \
+                 shortcode (nothing changed for '{id}')"
             ),
             Self::Db(msg) => write!(f, "database error: {msg}"),
             Self::SeedRefused { existing } => write!(
@@ -359,6 +390,18 @@ fn find_parent_cycle(
         path.push(next.clone());
         current = next;
     }
+}
+
+/// MNG-12/14: a shortcode's root is its lowest-seq `scope` ticket — the
+/// first ticket of every prefix created since MNG-12, and whatever scope
+/// came first in a prefix older than that (DEMO's is DEMO-4). `None` only
+/// for a legacy prefix that never had a scope.
+fn shortcode_root<'a>(tickets: &'a Cache, epic: &str) -> Option<&'a Ticket> {
+    // The cache is ordered by (epic, seq), so the prefix's tickets are one
+    // contiguous range and the first scope met is the lowest-seq one.
+    let lo = OrderKey { epic: epic.to_string(), seq: 0 };
+    let hi = OrderKey { epic: epic.to_string(), seq: u32::MAX };
+    tickets.order.range(lo..=hi).map(|(_, t)| t).find(|t| t.kind == Kind::Scope)
 }
 
 /// A blocker satisfies the ready-set rule when it is done with.
@@ -541,7 +584,7 @@ impl Store {
         if epic.is_empty() || !epic.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(StoreError::InvalidEpic(new.epic));
         }
-        let parent = new
+        let requested_parent = new
             .parent
             .map(|p| p.trim().to_ascii_uppercase())
             .filter(|p| !p.is_empty());
@@ -564,20 +607,47 @@ impl Store {
                 + 1;
             let id = format!("{epic}-{seq}");
 
+            // MNG-12: every shortcode starts with a scope. `seq == 1` is
+            // exactly "this prefix has no tickets yet" (ids are never
+            // reused), so the newborn would be the shortcode's root.
+            if seq == 1 && new.kind != Kind::Scope {
+                return Err(StoreError::FirstMustBeScope {
+                    epic,
+                    kind: new.kind,
+                });
+            }
+
             if let Some(path) = find_cycle(tickets, &id, &new.blocked_by) {
                 return Err(StoreError::Cycle { id, path });
             }
-            if let Some(p) = &parent {
-                if tickets.get(p).is_none() {
-                    return Err(StoreError::ParentNotFound {
-                        id,
-                        parent: p.clone(),
-                    });
+            // MNG-14 (owner, 2026-09-06): a parent named must exist; a
+            // non-root's parent must be inside its own shortcode, and when
+            // omitted it defaults to the shortcode's scope root. The root
+            // itself (seq == 1) is the exception: its parent, if any, is
+            // the shortcode it hangs under — a sub-shortcode — in any
+            // prefix; omitted, it stays a top-level root.
+            let parent = match (&requested_parent, seq) {
+                (Some(p), _) => {
+                    let Some(pt) = tickets.get(p) else {
+                        return Err(StoreError::ParentNotFound {
+                            id,
+                            parent: p.clone(),
+                        });
+                    };
+                    if seq > 1 && pt.epic != epic {
+                        return Err(StoreError::ParentOutsideShortcode {
+                            id,
+                            parent: p.clone(),
+                        });
+                    }
+                    if let Some(path) = find_parent_cycle(tickets, &id, p) {
+                        return Err(StoreError::ParentCycle { id, path });
+                    }
+                    Some(p.clone())
                 }
-                if let Some(path) = find_parent_cycle(tickets, &id, p) {
-                    return Err(StoreError::ParentCycle { id, path });
-                }
-            }
+                (None, 1) => None,
+                (None, _) => shortcode_root(tickets, &epic).map(|r| r.id.clone()),
+            };
 
             // Dangling forward references to this id resolve now: their
             // owners are the newborn's `unlocks` from birth.
@@ -655,7 +725,7 @@ impl Store {
         let _ = self.tx.send(Change::Created {
             ticket: ticket.clone(),
         });
-        if let Some(parent_id) = &parent {
+        if let Some(parent_id) = &ticket.parent {
             let _ = self.tx.send(Change::ChildrenChanged {
                 ticket: touched[parent_id].clone(),
                 added: ticket.id.clone(),
@@ -807,6 +877,97 @@ impl Store {
             .insert(ticket.clone());
         let change = Change::StatusChanged { ticket, previous };
         let _ = self.tx.send(change.clone());
+        Ok(change)
+    }
+
+    /// MNG-12: files an existing ticket as an output of `parent` — the
+    /// verb AGS-19 left out, for adopting a ticket born parentless or
+    /// moving one. Same guards as `create`: the parent must exist, a
+    /// non-root's parent must be inside its own shortcode (MNG-14; the
+    /// shortcode's scope root may be hosted anywhere), and the chain must
+    /// stay acyclic (naming itself included); a rejection changes
+    /// nothing. The child, the new parent (`children` gains the
+    /// id) and the previous parent, if any (`children` loses it), commit
+    /// in one transaction; then the cache; then, in order,
+    /// `ParentChanged` (the child), `ChildrenChanged` (the new parent)
+    /// and `ChildRemoved` (the old one). Setting the parent a ticket
+    /// already has writes nothing and emits nothing: the returned
+    /// `ParentChanged` then shows `previous == Some(parent)`.
+    pub async fn set_parent(&self, id: &str, parent: &str) -> Result<Change, StoreError> {
+        let id = id.trim().to_ascii_uppercase();
+        let parent = parent.trim().to_ascii_uppercase();
+        let _serial = self.write_serial.lock().await;
+        let (child, new_parent, old_parent, previous) = {
+            let tickets = self.tickets.read().expect("store lock poisoned");
+            let mut child = tickets
+                .get(&id)
+                .ok_or_else(|| StoreError::NotFound(id.clone()))?
+                .clone();
+            let Some(parent_ticket) = tickets.get(&parent) else {
+                return Err(StoreError::ParentNotFound { id, parent });
+            };
+            if child.parent.as_deref() == Some(parent.as_str()) {
+                return Ok(Change::ParentChanged {
+                    ticket: child,
+                    previous: Some(parent),
+                });
+            }
+            // MNG-14: only the shortcode's scope root may hang under
+            // another shortcode; everything else stays inside its own.
+            let is_root = shortcode_root(&tickets, &child.epic).is_some_and(|r| r.id == child.id);
+            if !is_root && parent_ticket.epic != child.epic {
+                return Err(StoreError::ParentOutsideShortcode { id, parent });
+            }
+            if let Some(path) = find_parent_cycle(&tickets, &id, &parent) {
+                return Err(StoreError::ParentCycle { id, path });
+            }
+            let now = chrono::Utc::now().timestamp();
+            let previous = child.parent.take();
+            child.parent = Some(parent.clone());
+            child.updated_unix = now;
+
+            let mut new_parent = parent_ticket.clone();
+            new_parent.children.push(id.clone());
+            new_parent.updated_unix = now;
+
+            // A previous parent that names no ticket (a hand-edited
+            // database) has nothing to update; the child's edge still moves.
+            let old_parent = previous.as_deref().and_then(|p| tickets.get(p)).map(|t| {
+                let mut t = t.clone();
+                t.children.retain(|c| c != &id);
+                t.updated_unix = now;
+                t
+            });
+            (child, new_parent, old_parent, previous)
+        };
+
+        let mut batch = vec![child.clone(), new_parent.clone()];
+        batch.extend(old_parent.iter().cloned());
+        self.persist(batch).await?;
+
+        {
+            let mut tickets = self.tickets.write().expect("store lock poisoned");
+            tickets.insert(child.clone());
+            tickets.insert(new_parent.clone());
+            if let Some(old) = &old_parent {
+                tickets.insert(old.clone());
+            }
+        }
+        let change = Change::ParentChanged {
+            ticket: child,
+            previous,
+        };
+        let _ = self.tx.send(change.clone());
+        let _ = self.tx.send(Change::ChildrenChanged {
+            ticket: new_parent,
+            added: id.clone(),
+        });
+        if let Some(old) = old_parent {
+            let _ = self.tx.send(Change::ChildRemoved {
+                ticket: old,
+                removed: id,
+            });
+        }
         Ok(change)
     }
 
@@ -1213,6 +1374,16 @@ mod synthetic {
                 out[bi].unlocks.push(id.clone());
                 out[bi].updated_unix = out[bi].updated_unix.max(created);
             }
+            // MNG-14: the shape `create` would give it — every non-root
+            // hangs under its epic's scope root, mirrored in `children`.
+            let parent = if root {
+                None
+            } else {
+                let ri = members[e][0];
+                out[ri].children.push(id.clone());
+                out[ri].updated_unix = out[ri].updated_unix.max(created);
+                Some(out[ri].id.clone())
+            };
             members[e].push(i);
             index.insert(id.clone(), i);
             out.push(Ticket {
@@ -1225,9 +1396,7 @@ mod synthetic {
                 severity,
                 blocked_by,
                 unlocks: Vec::new(),
-                // PERF-2 measures the DAG, not the parent tree: synthetic
-                // tickets are all roots (AGS-19 leaves the shape alone).
-                parent: None,
+                parent,
                 children: Vec::new(),
                 body: body_s,
                 created_unix: created,
@@ -1494,7 +1663,7 @@ mod db {
     /// Serializes a unit enum to its serde string form (`Pending`,
     /// `build`, `Critical`) — the same casing the wire uses, and what the
     /// `FromStr` impls parse back.
-    fn enum_str<T: serde::Serialize>(v: &T) -> String {
+    pub(super) fn enum_str<T: serde::Serialize>(v: &T) -> String {
         match serde_json::to_value(v) {
             Ok(serde_json::Value::String(s)) => s,
             other => unreachable!("unit enum must serialize to a string, got {other:?}"),
@@ -1649,6 +1818,15 @@ mod tests {
         }
     }
 
+    /// `new_ticket` as a shortcode's scope root — every prefix starts
+    /// with one (MNG-12).
+    fn scope(epic: &str, title: &str) -> NewTicket {
+        NewTicket {
+            kind: Kind::Scope,
+            ..new_ticket(epic, title)
+        }
+    }
+
     /// `new_ticket`, filed as an output of `parent`.
     fn child_of(epic: &str, title: &str, parent: &str) -> NewTicket {
         NewTicket {
@@ -1670,11 +1848,12 @@ mod tests {
     #[tokio::test]
     async fn the_index_pages_the_whole_store_in_order_exactly_once() {
         let store = Store::new();
-        for _ in 0..11 {
+        store.create(scope("A", "a")).await.unwrap(); // MNG-12: the root first
+        for _ in 0..10 {
             store.create(new_ticket("A", "a")).await.unwrap();
         }
-        store.create(new_ticket("B", "b")).await.unwrap();
-        store.create(new_ticket("AB", "ab")).await.unwrap();
+        store.create(scope("B", "b")).await.unwrap();
+        store.create(scope("AB", "ab")).await.unwrap();
 
         let all: Vec<String> = store.list(None, None, None).iter().map(|t| t.id.clone()).collect();
         assert_eq!(
@@ -1714,12 +1893,13 @@ mod tests {
     async fn a_page_composes_with_filters_and_a_bad_cursor_is_an_error() {
         let store = Store::new();
         for i in 0..6 {
-            let id = store.create(new_ticket("PG", "p")).await.unwrap().id;
+            let nt = if i == 0 { scope("PG", "p") } else { new_ticket("PG", "p") };
+            let id = store.create(nt).await.unwrap().id;
             if i % 2 == 0 {
                 store.set_status(&id, Status::Ready).await.unwrap();
             }
         }
-        store.create(new_ticket("ZZ", "z")).await.unwrap();
+        store.create(scope("ZZ", "z")).await.unwrap();
 
         let page = store
             .page(PageQuery {
@@ -1765,7 +1945,8 @@ mod tests {
     async fn an_epic_filter_bounds_the_walk_wherever_the_cursor_sits() {
         let store = Store::new();
         for epic in ["AA", "MM", "ZZ"] {
-            for _ in 0..3 {
+            store.create(scope(epic, "t")).await.unwrap();
+            for _ in 0..2 {
                 store.create(new_ticket(epic, "t")).await.unwrap();
             }
         }
@@ -1810,10 +1991,11 @@ mod tests {
     #[tokio::test]
     async fn a_ticket_born_above_the_cursor_is_still_walked() {
         let store = Store::new();
-        for _ in 0..3 {
+        store.create(scope("MID", "m")).await.unwrap();
+        for _ in 0..2 {
             store.create(new_ticket("MID", "m")).await.unwrap();
         }
-        store.create(new_ticket("AAA", "below")).await.unwrap();
+        store.create(scope("AAA", "below")).await.unwrap();
 
         let first = store
             .page(PageQuery {
@@ -1842,8 +2024,9 @@ mod tests {
     #[tokio::test]
     async fn the_ready_set_pages_on_its_own_membership() {
         let store = Store::new();
-        for _ in 0..4 {
-            let id = store.create(new_ticket("RD", "r")).await.unwrap().id;
+        for i in 0..4 {
+            let nt = if i == 0 { scope("RD", "r") } else { new_ticket("RD", "r") };
+            let id = store.create(nt).await.unwrap().id;
             store.set_status(&id, Status::Ready).await.unwrap();
         }
         store
@@ -2066,7 +2249,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("family.db");
         let store = Store::open(&path).unwrap();
-        let parent = store.create(new_ticket("FAM", "the parent")).await.unwrap();
+        let parent = store.create(scope("FAM", "the parent")).await.unwrap();
         assert_eq!(parent.parent, None);
         assert!(parent.children.is_empty());
 
@@ -2110,29 +2293,28 @@ mod tests {
     #[tokio::test]
     async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
         let store = Store::new();
+        // MNG-12: the shortcode's scope root comes first, so the orphan
+        // would be CHAIN-2.
+        store.create(scope("CHAIN", "root")).await.unwrap();
         let err = store
             .create(child_of("CHAIN", "orphan", "CHAIN-9"))
             .await
             .unwrap_err();
         match &err {
             StoreError::ParentNotFound { id, parent } => {
-                assert_eq!(id, "CHAIN-1");
+                assert_eq!(id, "CHAIN-2");
                 assert_eq!(parent, "CHAIN-9");
             }
             other => panic!("expected ParentNotFound, got {other:?}"),
         }
         assert!(err.to_string().contains("CHAIN-9"), "{err}");
         assert!(err.to_string().contains("must exist"), "{err}");
-        assert_eq!(store.count(), 0, "nothing was created");
-        // The id stays unallocated: the next create takes CHAIN-1.
-        assert_eq!(
-            store.create(new_ticket("CHAIN", "root")).await.unwrap().id,
-            "CHAIN-1"
-        );
+        assert_eq!(store.count(), 1, "nothing was created");
 
         // A ticket cannot name itself: the id is allocated by this very
         // create, so it cannot exist yet — the store refuses it as a
-        // missing parent, before any cycle can be formed.
+        // missing parent, before any cycle can be formed. The id stays
+        // unallocated: the next successful create still takes CHAIN-2.
         let err = store
             .create(child_of("CHAIN", "myself", "CHAIN-2"))
             .await
@@ -2142,21 +2324,35 @@ mod tests {
             "self-parenthood is impossible by construction, got {err:?}"
         );
 
-        // Three deep, the middle link in another epic.
+        // Three deep, the middle link in another epic (its scope root).
         store
-            .create(child_of("OTHER", "middle", "CHAIN-1"))
+            .create(NewTicket {
+                kind: Kind::Scope,
+                ..child_of("OTHER", "middle", "CHAIN-1")
+            })
             .await
             .unwrap();
-        store
+        // MNG-14: a non-root stays inside its shortcode — the leaf under
+        // OTHER-1 is OTHER-2, and a CHAIN ticket naming OTHER-1 is refused.
+        let err = store
             .create(child_of("CHAIN", "leaf", "OTHER-1"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StoreError::ParentOutsideShortcode { .. }),
+            "cross-shortcode parent on a non-root, got {err:?}"
+        );
+        assert!(err.to_string().contains("OTHER-1") && err.to_string().contains("outside"), "{err}");
+        store
+            .create(child_of("OTHER", "leaf", "OTHER-1"))
             .await
             .unwrap();
         assert_eq!(store.get("CHAIN-1").unwrap().parent, None);
         assert_eq!(store.get("CHAIN-1").unwrap().children, vec!["OTHER-1"]);
         assert_eq!(store.get("OTHER-1").unwrap().parent.as_deref(), Some("CHAIN-1"));
-        assert_eq!(store.get("OTHER-1").unwrap().children, vec!["CHAIN-2"]);
-        assert_eq!(store.get("CHAIN-2").unwrap().parent.as_deref(), Some("OTHER-1"));
-        assert!(store.get("CHAIN-2").unwrap().children.is_empty());
+        assert_eq!(store.get("OTHER-1").unwrap().children, vec!["OTHER-2"]);
+        assert_eq!(store.get("OTHER-2").unwrap().parent.as_deref(), Some("OTHER-1"));
+        assert!(store.get("OTHER-2").unwrap().children.is_empty());
 
         // And the guard itself: an ancestry walk that would come back
         // around is caught before anything persists.
@@ -2168,11 +2364,11 @@ mod tests {
                 .collect(),
         );
         assert_eq!(
-            find_parent_cycle(&tickets, "CHAIN-1", "CHAIN-2"),
-            Some(vec!["CHAIN-2".into(), "OTHER-1".into(), "CHAIN-1".into()]),
+            find_parent_cycle(&tickets, "CHAIN-1", "OTHER-2"),
+            Some(vec!["OTHER-2".into(), "OTHER-1".into(), "CHAIN-1".into()]),
             "a chain that reaches the ticket itself is a cycle"
         );
-        assert_eq!(find_parent_cycle(&tickets, "CHAIN-3", "CHAIN-2"), None);
+        assert_eq!(find_parent_cycle(&tickets, "CHAIN-3", "OTHER-2"), None);
     }
 
     /// A ticket that is both the parent and a blocker of the newborn is
@@ -2181,7 +2377,7 @@ mod tests {
     #[tokio::test]
     async fn a_parent_that_is_also_a_blocker_gets_both_edges() {
         let store = Store::new();
-        store.create(new_ticket("BOTH", "the parent")).await.unwrap();
+        store.create(scope("BOTH", "the parent")).await.unwrap();
         let mut rx = store.subscribe();
         let child = store
             .create(NewTicket {
@@ -2214,25 +2410,33 @@ mod tests {
     #[tokio::test]
     async fn list_filters_by_parent() {
         let store = Store::new();
-        store.create(new_ticket("LP", "parent")).await.unwrap();
+        store.create(scope("LP", "parent")).await.unwrap();
         store.create(new_ticket("LP", "unrelated")).await.unwrap();
         store.create(child_of("LP", "child a", "LP-1")).await.unwrap();
-        store.create(child_of("ZZ", "child b", "LP-1")).await.unwrap();
+        store
+            .create(NewTicket {
+                kind: Kind::Scope,
+                ..child_of("ZZ", "child b", "LP-1")
+            })
+            .await
+            .unwrap();
         store.create(child_of("LP", "grandchild", "LP-3")).await.unwrap();
         store.set_status("LP-3", Status::Ready).await.unwrap();
 
+        // MNG-14: "unrelated" (LP-2) named no parent, so it defaulted to
+        // the shortcode root and is LP-1's child too.
         let ids = |ts: Vec<Ticket>| ts.into_iter().map(|t| t.id).collect::<Vec<_>>();
         assert_eq!(
             ids(store.list(None, None, Some("LP-1"))),
-            vec!["LP-3", "ZZ-1"],
+            vec!["LP-2", "LP-3", "ZZ-1"],
             "exactly LP-1's children, ordered (epic, seq)"
         );
-        assert_eq!(ids(store.list(None, None, Some("lp-1"))), vec!["LP-3", "ZZ-1"]);
+        assert_eq!(ids(store.list(None, None, Some("lp-1"))), vec!["LP-2", "LP-3", "ZZ-1"]);
         assert_eq!(ids(store.list(None, None, Some("LP-3"))), vec!["LP-4"]);
         assert!(store.list(None, None, Some("LP-2")).is_empty(), "no children");
         assert!(store.list(None, None, Some("NOPE-1")).is_empty());
         // Composes with the existing filters.
-        assert_eq!(ids(store.list(Some("LP"), None, Some("LP-1"))), vec!["LP-3"]);
+        assert_eq!(ids(store.list(Some("LP"), None, Some("LP-1"))), vec!["LP-2", "LP-3"]);
         assert_eq!(
             ids(store.list(None, Some(Status::Ready), Some("LP-1"))),
             vec!["LP-3"]
@@ -2358,7 +2562,7 @@ mod tests {
                 .create(NewTicket {
                     epic: "rt".into(),
                     title: "first — ünïcode ✓".into(),
-                    kind: Kind::Gap,
+                    kind: Kind::Scope,
                     severity: Some(Severity::Critical),
                     blocked_by: vec!["RT-0".into(), "X-9".into()],
                     parent: None,
@@ -2393,7 +2597,7 @@ mod tests {
         let next = store.create(new_ticket("RT", "second")).await.unwrap();
         assert_eq!(next.id, "RT-3");
         assert_eq!(next.seq, 3);
-        assert_eq!(next.parent, None);
+        assert_eq!(next.parent.as_deref(), Some("RT-1"), "MNG-14: defaulted to the root");
         assert!(next.children.is_empty());
     }
 
@@ -2402,7 +2606,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("brand-new.db")).unwrap();
         assert_eq!(store.count(), 0);
-        assert!(store.create(new_ticket("NEW", "works")).await.is_ok());
+        assert!(store.create(scope("NEW", "works")).await.is_ok());
     }
 
     // ---- PERF-2: synthetic seeding -------------------------------------
@@ -2575,7 +2779,7 @@ mod tests {
     #[tokio::test]
     async fn seed_refuses_an_existing_store_unless_allowed_then_continues_ids() {
         let store = Store::new();
-        store.create(new_ticket("REAL", "already here")).await.unwrap();
+        store.create(scope("REAL", "already here")).await.unwrap();
 
         let err = store.seed_synthetic(spec(100, 1)).unwrap_err();
         assert!(matches!(err, StoreError::SeedRefused { existing: 1 }), "{err}");
@@ -2621,6 +2825,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_creates_never_collide_on_ids() {
         let store = Arc::new(Store::new());
+        store.create(scope("RACE", "root")).await.unwrap();
         let mut handles = Vec::new();
         for i in 0..16 {
             let store = store.clone();
@@ -2640,4 +2845,204 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), 16, "every concurrent create got a unique id");
     }
+    // ---- MNG-12: every shortcode starts with a scope; set_parent --------
+
+    /// MNG-12 criterion 1: the first ticket of a prefix must be a scope —
+    /// anything else is refused naming the rule and nothing is allocated;
+    /// once the root exists, any kind follows and, naming no parent,
+    /// hangs under the root (MNG-14).
+    #[tokio::test]
+    async fn first_ticket_of_a_shortcode_must_be_a_scope() {
+        let store = Store::new();
+        let err = store.create(new_ticket("FRESH", "a build first")).await.unwrap_err();
+        match &err {
+            StoreError::FirstMustBeScope { epic, kind } => {
+                assert_eq!(epic, "FRESH");
+                assert_eq!(*kind, Kind::Build);
+            }
+            other => panic!("expected FirstMustBeScope, got {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(msg.contains("FRESH") && msg.contains("scope") && msg.contains("build"), "{msg}");
+        assert_eq!(store.count(), 0, "nothing was created");
+
+        let root = store.create(scope("fresh", "the root")).await.unwrap();
+        assert_eq!(root.id, "FRESH-1", "the refused create allocated nothing");
+        assert_eq!(root.kind, Kind::Scope);
+        let next = store.create(new_ticket("FRESH", "a build second")).await.unwrap();
+        assert_eq!(next.id, "FRESH-2");
+        assert_eq!(next.kind, Kind::Build);
+        assert_eq!(next.parent.as_deref(), Some("FRESH-1"), "defaults to the shortcode root");
+        assert_eq!(store.get("FRESH-1").unwrap().children, vec!["FRESH-2"]);
+    }
+
+    /// MNG-14: a parent named must be inside the ticket's own shortcode;
+    /// the shortcode's scope root is the exception — its parent is the
+    /// shortcode it hangs under, in any prefix (a sub-shortcode).
+    #[tokio::test]
+    async fn a_parent_stays_inside_the_shortcode_except_for_the_root() {
+        let store = Store::new();
+        store.create(scope("HOST", "the host")).await.unwrap();
+        // A new shortcode's root may hang under HOST-1 …
+        let sub = store
+            .create(NewTicket {
+                kind: Kind::Scope,
+                ..child_of("SUB", "a sub-shortcode", "HOST-1")
+            })
+            .await
+            .unwrap();
+        assert_eq!(sub.parent.as_deref(), Some("HOST-1"));
+        // … but its non-root tickets may not.
+        let err = store.create(child_of("SUB", "escapes", "HOST-1")).await.unwrap_err();
+        match &err {
+            StoreError::ParentOutsideShortcode { id, parent } => {
+                assert_eq!(id, "SUB-2");
+                assert_eq!(parent, "HOST-1");
+            }
+            other => panic!("expected ParentOutsideShortcode, got {other:?}"),
+        }
+        assert_eq!(store.count(), 2, "nothing was created");
+        // Nor be moved out afterwards; the root can be re-hosted.
+        store.create(new_ticket("SUB", "inside")).await.unwrap(); // SUB-2 → SUB-1
+        assert!(matches!(
+            store.set_parent("SUB-2", "HOST-1").await.unwrap_err(),
+            StoreError::ParentOutsideShortcode { .. }
+        ));
+        store.create(scope("HOST2", "another host")).await.unwrap();
+        store.set_parent("SUB-1", "HOST2-1").await.unwrap();
+        assert_eq!(store.get("SUB-1").unwrap().parent.as_deref(), Some("HOST2-1"));
+        assert_eq!(store.get("HOST-1").unwrap().children, Vec::<String>::new());
+        assert_eq!(store.get("HOST2-1").unwrap().children, vec!["SUB-1"]);
+    }
+
+    /// MNG-12 criterion 2: `set_parent` moves a ticket — the child, the
+    /// new parent and the old parent move together, the three events carry
+    /// full tickets, the edge survives a reopen, and repeating it is a
+    /// no-op. (Adopting a *parentless* non-root is the MNG-12 backfill's
+    /// case; since MNG-14 none is born that way.)
+    #[tokio::test]
+    async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("move.db");
+        let store = Store::open(&path).unwrap();
+        store.create(scope("AD", "the root")).await.unwrap(); // AD-1
+        store.create(new_ticket("AD", "a")).await.unwrap(); // AD-2 → AD-1
+        store.create(new_ticket("AD", "b")).await.unwrap(); // AD-3 → AD-1
+        assert_eq!(store.get("AD-1").unwrap().children, vec!["AD-2", "AD-3"]);
+        let mut rx = store.subscribe();
+
+        match store.set_parent("ad-3", "ad-2").await.unwrap() {
+            Change::ParentChanged { ticket, previous } => {
+                assert_eq!(ticket.id, "AD-3");
+                assert_eq!(ticket.parent.as_deref(), Some("AD-2"));
+                assert_eq!(previous.as_deref(), Some("AD-1"));
+            }
+            other => panic!("expected ParentChanged, got {other:?}"),
+        }
+        match rx.recv().await.unwrap() {
+            Change::ParentChanged { ticket, .. } => {
+                assert_eq!(ticket.parent.as_deref(), Some("AD-2"))
+            }
+            other => panic!("expected ParentChanged, got {other:?}"),
+        }
+        match rx.recv().await.unwrap() {
+            Change::ChildrenChanged { ticket, added } => {
+                assert_eq!(ticket.id, "AD-2");
+                assert_eq!(added, "AD-3");
+                assert_eq!(ticket.children, vec!["AD-3"]);
+                assert_eq!(ticket.title, "a", "the full parent, not a delta");
+            }
+            other => panic!("expected ChildrenChanged, got {other:?}"),
+        }
+        match rx.recv().await.unwrap() {
+            Change::ChildRemoved { ticket, removed } => {
+                assert_eq!(ticket.id, "AD-1");
+                assert_eq!(removed, "AD-3");
+                assert_eq!(ticket.children, vec!["AD-2"], "the full ex-parent");
+            }
+            other => panic!("expected ChildRemoved, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err());
+
+        // Idempotent: the parent it already has writes and emits nothing.
+        match store.set_parent("AD-3", "AD-2").await.unwrap() {
+            Change::ParentChanged { previous, .. } => assert_eq!(previous.as_deref(), Some("AD-2")),
+            other => panic!("expected ParentChanged, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "a no-op emits nothing");
+
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.get("AD-3").unwrap().parent.as_deref(), Some("AD-2"));
+        assert_eq!(store.get("AD-2").unwrap().children, vec!["AD-3"]);
+        assert_eq!(store.get("AD-1").unwrap().children, vec!["AD-2"]);
+    }
+
+    /// MNG-12 criterion 3: the guards, and a move. A missing child, a
+    /// parent that names no ticket, and any chain that comes back around
+    /// (itself included) are refused with nothing changed; moving a child
+    /// removes it from the old parent and says so.
+    #[tokio::test]
+    async fn set_parent_guards_ancestry_and_a_move_removes_from_the_old_parent() {
+        let store = Store::new();
+        store.create(scope("MV", "root")).await.unwrap(); // MV-1
+        store.create(child_of("MV", "a", "MV-1")).await.unwrap(); // MV-2
+        store.create(child_of("MV", "b", "MV-2")).await.unwrap(); // MV-3
+        store.create(new_ticket("MV", "loose")).await.unwrap(); // MV-4 → MV-1 (MNG-14)
+
+        assert!(matches!(
+            store.set_parent("MV-9", "MV-1").await.unwrap_err(),
+            StoreError::NotFound(_)
+        ));
+        match store.set_parent("MV-4", "MV-9").await.unwrap_err() {
+            StoreError::ParentNotFound { id, parent } => {
+                assert_eq!(id, "MV-4");
+                assert_eq!(parent, "MV-9");
+            }
+            other => panic!("expected ParentNotFound, got {other:?}"),
+        }
+        match store.set_parent("MV-2", "MV-2").await.unwrap_err() {
+            StoreError::ParentCycle { id, path } => {
+                assert_eq!(id, "MV-2");
+                assert_eq!(path, vec!["MV-2"]);
+            }
+            other => panic!("expected ParentCycle, got {other:?}"),
+        }
+        match store.set_parent("MV-1", "MV-3").await.unwrap_err() {
+            StoreError::ParentCycle { id, path } => {
+                assert_eq!(id, "MV-1");
+                assert_eq!(path, vec!["MV-3", "MV-2", "MV-1"]);
+                let msg = StoreError::ParentCycle { id, path }.to_string();
+                assert!(msg.contains("own ancestor") && msg.contains("MV-3 -> MV-2 -> MV-1"), "{msg}");
+            }
+            other => panic!("expected ParentCycle, got {other:?}"),
+        }
+        assert_eq!(store.get("MV-1").unwrap().parent, None, "nothing changed");
+        assert_eq!(store.get("MV-2").unwrap().children, vec!["MV-3"]);
+
+        // The move: MV-3 from under MV-2 to under MV-1.
+        let mut rx = store.subscribe();
+        store.set_parent("MV-3", "MV-1").await.unwrap();
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            Change::ParentChanged { previous: Some(p), .. } if p == "MV-2"
+        ));
+        match rx.recv().await.unwrap() {
+            Change::ChildrenChanged { ticket, added } => {
+                assert_eq!((ticket.id.as_str(), added.as_str()), ("MV-1", "MV-3"));
+                assert_eq!(ticket.children, vec!["MV-2", "MV-4", "MV-3"]);
+            }
+            other => panic!("expected ChildrenChanged, got {other:?}"),
+        }
+        match rx.recv().await.unwrap() {
+            Change::ChildRemoved { ticket, removed } => {
+                assert_eq!((ticket.id.as_str(), removed.as_str()), ("MV-2", "MV-3"));
+                assert!(ticket.children.is_empty(), "the full ex-parent");
+            }
+            other => panic!("expected ChildRemoved, got {other:?}"),
+        }
+        assert_eq!(store.get("MV-3").unwrap().parent.as_deref(), Some("MV-1"));
+        assert_eq!(store.get("MV-2").unwrap().children, Vec::<String>::new());
+    }
+
 }
