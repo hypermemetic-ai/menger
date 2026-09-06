@@ -107,7 +107,7 @@ async fn health_create_list_watch_over_the_wire() {
     let mut sub = call(
         &client,
         "tickets.create",
-        json!({"epic": "WIRE", "title": "first over the wire"}),
+        json!({"epic": "WIRE", "title": "first over the wire", "kind": "scope"}),
     )
     .await;
     let ev = content(sub.next().await.unwrap().unwrap());
@@ -165,7 +165,9 @@ fn apply(mirror: &mut std::collections::HashMap<String, Value>, ev: &Value) {
         Some("created")
         | Some("status_changed")
         | Some("unlocks_changed")
-        | Some("children_changed") => {
+        | Some("children_changed")
+        | Some("parent_changed")
+        | Some("child_removed") => {
             let ticket = ev["ticket"].clone();
             let id = ticket["id"].as_str().expect("ticket id").to_string();
             mirror.insert(id, ticket);
@@ -215,7 +217,7 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
     let mut mirror = std::collections::HashMap::new();
 
     // A exists before the client arrives.
-    let evs = collect(call(&client, "tickets.create", json!({"epic": "RS", "title": "A"})).await).await;
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "RS", "title": "A", "kind": "scope"})).await).await;
     assert_eq!(evs[0]["type"], "created");
 
     // The client fetches the full set once...
@@ -266,7 +268,7 @@ async fn dangling_blocker_over_the_wire() {
     let client = connect(port).await;
 
     collect(call(&client, "tickets.create",
-        json!({"epic": "DG", "title": "C", "blocked_by": ["DG-99"]})).await).await;
+        json!({"epic": "DG", "title": "C", "kind": "scope", "blocked_by": ["DG-99"]})).await).await;
     collect(call(&client, "tickets.set_status", json!({"id": "DG-1", "status": "Ready"})).await).await;
 
     let ready = collect(call(&client, "tickets.ready_set", json!({})).await).await;
@@ -286,7 +288,7 @@ async fn forward_reference_resolves_at_birth_over_the_wire() {
     let client = connect(port).await;
 
     collect(call(&client, "tickets.create",
-        json!({"epic": "FW", "title": "D-1", "blocked_by": ["FW-2"]})).await).await;
+        json!({"epic": "FW", "title": "D-1", "kind": "scope", "blocked_by": ["FW-2"]})).await).await;
 
     let evs = collect(call(&client, "tickets.create",
         json!({"epic": "FW", "title": "becomes D-2"})).await).await;
@@ -308,7 +310,7 @@ async fn cycle_create_errors_in_band_and_stores_nothing() {
 
     // CY-1 blocked_by the not-yet-existing CY-2.
     collect(call(&client, "tickets.create",
-        json!({"epic": "CY", "title": "one", "blocked_by": ["CY-2"]})).await).await;
+        json!({"epic": "CY", "title": "one", "kind": "scope", "blocked_by": ["CY-2"]})).await).await;
 
     // The create that would become CY-2, blocked_by CY-1, closes the loop.
     let evs = collect(call(&client, "tickets.create",
@@ -334,7 +336,7 @@ async fn parent_children_and_the_parent_filter_over_the_wire() {
     let client = connect(port).await;
     let mut mirror = std::collections::HashMap::new();
 
-    let evs = collect(call(&client, "tickets.create", json!({"epic": "PA", "title": "P"})).await).await;
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "PA", "title": "P", "kind": "scope"})).await).await;
     assert_eq!(evs[0]["type"], "created");
     assert_eq!(evs[0]["ticket"]["children"], json!([]), "born childless");
     assert!(evs[0]["ticket"]["parent"].is_null(), "and parentless");
@@ -386,7 +388,7 @@ async fn parent_children_and_the_parent_filter_over_the_wire() {
     // create that would name it, so it cannot exist yet, and no
     // re-parent method exists.)
     collect(call(&client, "tickets.create",
-        json!({"epic": "PB", "title": "grandchild", "parent": "PA-2"})).await).await;
+        json!({"epic": "PB", "title": "grandchild", "kind": "scope", "parent": "PA-2"})).await).await;
     collect(call(&client, "tickets.create",
         json!({"epic": "PA", "title": "great-grandchild", "parent": "PB-1"})).await).await;
     let chain = ["PA-1", "PA-2", "PB-1", "PA-3"];
@@ -403,7 +405,7 @@ async fn parent_children_and_the_parent_filter_over_the_wire() {
     collect(call(&client, "tickets.create",
         json!({"epic": "PA", "title": "second child of P"})).await).await; // PA-4, no parent
     collect(call(&client, "tickets.create",
-        json!({"epic": "PC", "title": "cross-epic child of P", "parent": "PA-1"})).await).await;
+        json!({"epic": "PC", "title": "cross-epic child of P", "kind": "scope", "parent": "PA-1"})).await).await;
     let ids = |evs: Vec<Value>| -> Vec<String> {
         evs.into_iter()
             .map(|ev| {
@@ -482,6 +484,7 @@ async fn reads_survive_db_location_unavailable() {
         json!({
             "epic": "CACHE",
             "title": "survives the outage",
+            "kind": "scope",
             "severity": "High",
             "body": "reads never touch storage"
         }),
@@ -542,7 +545,7 @@ async fn concurrent_reads_complete_under_mutation_stream() {
     let mut sub = call(
         &writer,
         "tickets.create",
-        json!({"epic": "LOAD", "title": "t1"}),
+        json!({"epic": "LOAD", "title": "t1", "kind": "scope"}),
     )
     .await;
     assert_eq!(content(sub.next().await.unwrap().unwrap())["type"], "created");
@@ -610,4 +613,68 @@ async fn concurrent_reads_complete_under_mutation_stream() {
     })
     .await
     .expect("concurrency smoke finished in time");
+}
+
+/// MNG-12 over the real wire: the first ticket of a prefix must be a
+/// scope (in-band error, nothing allocated); `set_parent` adopts a
+/// parentless ticket and the watch-only mirror sees the child
+/// (`parent_changed`) and the parent (`children_changed`) as full
+/// tickets; `list {parent}` agrees; the guards cross as in-band errors.
+#[tokio::test]
+async fn scope_first_and_set_parent_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "SC", "title": "a build first"})).await).await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["type"], "error");
+    let message = evs[0]["message"].as_str().unwrap();
+    assert!(message.contains("SC") && message.contains("scope"), "names the rule: {message}");
+    let evs = collect(call(&client, "tickets.get", json!({"id": "SC-1"})).await).await;
+    assert_eq!(evs[0]["type"], "not_found", "nothing was allocated");
+
+    let evs = collect(call(&client, "tickets.create",
+        json!({"epic": "SC", "title": "root", "kind": "scope"})).await).await;
+    assert_eq!(evs[0]["ticket"]["id"], "SC-1");
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "SC", "title": "loose"})).await).await;
+    assert_eq!(evs[0]["ticket"]["id"], "SC-2");
+    assert!(evs[0]["ticket"]["parent"].is_null());
+
+    let mut mirror = std::collections::HashMap::new();
+    for ev in collect(call(&client, "tickets.list", json!({"epic": "SC"})).await).await {
+        mirror.insert(ev["ticket"]["id"].as_str().unwrap().to_string(), ev["ticket"].clone());
+    }
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+
+    let evs = collect(call(&client, "tickets.set_parent",
+        json!({"id": "SC-2", "parent": "SC-1"})).await).await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["type"], "parent_changed");
+    assert_eq!(evs[0]["ticket"]["id"], "SC-2");
+    assert_eq!(evs[0]["ticket"]["parent"], "SC-1");
+    assert!(evs[0]["previous"].is_null());
+
+    for _ in 0..2 {
+        let ev = content(watch.next().await.unwrap().unwrap());
+        if ev["type"] == "children_changed" {
+            assert_eq!(ev["ticket"]["id"], "SC-1");
+            assert_eq!(ev["added"], "SC-2");
+            assert_eq!(ev["ticket"]["title"], "root", "the full parent, not a delta");
+        }
+        apply(&mut mirror, &ev);
+    }
+    assert_eq!(mirror["SC-2"]["parent"], "SC-1");
+    assert_eq!(mirror["SC-1"]["children"], json!(["SC-2"]));
+
+    let evs = collect(call(&client, "tickets.list", json!({"parent": "SC-1"})).await).await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["ticket"]["id"], "SC-2");
+
+    let evs = collect(call(&client, "tickets.set_parent",
+        json!({"id": "SC-1", "parent": "SC-2"})).await).await;
+    assert_eq!(evs[0]["type"], "error");
+    assert!(evs[0]["message"].as_str().unwrap().contains("own ancestor"), "{}", evs[0]);
+    let evs = collect(call(&client, "tickets.set_parent",
+        json!({"id": "SC-7", "parent": "SC-1"})).await).await;
+    assert_eq!(evs[0]["type"], "not_found");
 }

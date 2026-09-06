@@ -267,7 +267,7 @@ async fn rest_proxy_round_trips_unary_calls() {
         s.shell_port,
         Method::POST,
         "/rest/tickets/create",
-        &json!({"epic": "PRX", "title": "born through the proxy"}).to_string(),
+        &json!({"epic": "PRX", "title": "born through the proxy", "kind": "scope"}).to_string(),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
@@ -315,7 +315,7 @@ async fn rest_proxy_streams_watch_sse() {
         s.shell_port,
         Method::POST,
         "/rest/tickets/create",
-        &json!({"epic": "PRX", "title": "watched through the proxy"}).to_string(),
+        &json!({"epic": "PRX", "title": "watched through the proxy", "kind": "scope"}).to_string(),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
@@ -370,7 +370,7 @@ async fn rest_proxy_set_status_round_trips_and_watch_broadcasts_it() {
         s.shell_port,
         Method::POST,
         "/rest/tickets/create",
-        &json!({"epic": "PRX", "title": "status via proxy"}).to_string(),
+        &json!({"epic": "PRX", "title": "status via proxy", "kind": "scope"}).to_string(),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
@@ -443,7 +443,7 @@ async fn rest_proxy_passes_in_band_error_for_bad_status() {
         s.shell_port,
         Method::POST,
         "/rest/tickets/create",
-        &json!({"epic": "PRX", "title": "rejects bad status"}).to_string(),
+        &json!({"epic": "PRX", "title": "rejects bad status", "kind": "scope"}).to_string(),
     )
     .await;
     assert_eq!(status, StatusCode::OK);

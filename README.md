@@ -144,11 +144,12 @@ ticket is logged and left empty, never fatal.
 | method | yields |
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
-| `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the five is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason |
+| `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the five is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12): the first ticket of a prefix must be `kind: scope`, anything else is an in-band `error` naming the rule and nothing is allocated |
 | `tickets.get { id }` | `ticket` or `not_found` |
 | `tickets.list { epic?, status?, parent? }` | one `ticket` per match, ordered (epic, seq); `parent` yields exactly that ticket's children |
 | `tickets.set_status { id, status }` | `status_changed { ticket, previous }` |
-| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `unlocks_changed` / `children_changed` |
+| `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's `parent`, the new parent's `children` and the old parent's `children` (if any) move in one transaction; the same guards as `create` (`not_found`, must exist, no self-ancestry — in-band `error` with the chain); the parent it already has is a no-op |
+| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` |
 
 Via synapse (once on PATH — 4455 is inside the `_self scan` range):
 

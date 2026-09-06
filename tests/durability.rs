@@ -160,7 +160,7 @@ async fn acknowledged_mutations_survive_sigkill() {
         json!({
             "epic": "DUR",
             "title": "first — survives ✓",
-            "kind": "spike",
+            "kind": "scope",
             "severity": "Critical",
             "blocked_by": ["DUR-0"],
             "body": "## Problem\n\nmultiline body"
@@ -169,7 +169,7 @@ async fn acknowledged_mutations_survive_sigkill() {
     .await;
     assert_eq!(ev["type"], "created");
     assert_eq!(ev["ticket"]["id"], "DUR-1");
-    assert_eq!(ev["ticket"]["kind"], "spike");
+    assert_eq!(ev["ticket"]["kind"], "scope");
 
     let ev = one(
         &c1,
@@ -247,7 +247,7 @@ async fn dag_edges_survive_sigkill() {
     let s1 = spawn_server(Some(&db), &[], dir.path(), "dag1").await;
     let c1 = connect(s1.port).await;
 
-    let ev = one(&c1, "tickets.create", json!({"epic": "EDGE", "title": "A"})).await;
+    let ev = one(&c1, "tickets.create", json!({"epic": "EDGE", "title": "A", "kind": "scope"})).await;
     assert_eq!(ev["ticket"]["id"], "EDGE-1");
     let ev = one(
         &c1,
@@ -557,7 +557,7 @@ async fn fresh_location_starts_empty_and_writable() {
     assert_eq!(ev["type"], "health");
     assert_eq!(ev["ticket_count"], 0);
 
-    let ev = one(&c, "tickets.create", json!({"epic": "NEW", "title": "works"})).await;
+    let ev = one(&c, "tickets.create", json!({"epic": "NEW", "title": "works", "kind": "scope"})).await;
     assert_eq!(ev["type"], "created");
     assert_eq!(ev["ticket"]["id"], "NEW-1");
 
@@ -593,6 +593,6 @@ async fn default_location_is_under_the_user_data_dir() {
     );
     assert!(expected.exists(), "database created under the data dir");
 
-    let ev = one(&c, "tickets.create", json!({"epic": "DFL", "title": "lands in the default db"})).await;
+    let ev = one(&c, "tickets.create", json!({"epic": "DFL", "title": "lands in the default db", "kind": "scope"})).await;
     assert_eq!(ev["type"], "created");
 }

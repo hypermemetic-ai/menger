@@ -824,7 +824,7 @@ async function runMagnitude(m, opts, browser) {
           await page.evaluate(() => { location.hash = "#/"; });
           await page.waitForSelector("tbody#board", { timeout: B("browser"), state: "attached" });
           const t0 = now();
-          const { tool, body } = await createViaCurl(server, { epic: "PROBE", title: `live probe ${label} run ${i + 1}`, kind: "gap" });
+          const { tool, body } = await createViaCurl(server, { epic: "PROBE", title: `live probe ${label} run ${i + 1}`, kind: i === 0 ? "scope" : "gap" });
           const id = body?.data?.[0]?.ticket?.id;
           if (!id) throw new Error(`create failed: ${JSON.stringify(body).slice(0, 160)}`);
           const tCreated = now();
@@ -880,7 +880,7 @@ async function runMagnitude(m, opts, browser) {
         rows("create_watch_push").push(await measure("create_watch_push", B("push"), async () => {
           if (!watch) throw new Error("watch stream not open");
           const t0 = now();
-          const created = await restJson(server.restUrl("create"), { epic: "PROBE", title: `push probe ${label} ${i + 1}` }, B("push"));
+          const created = await restJson(server.restUrl("create"), { epic: "PROBE", title: `push probe ${label} ${i + 1}`, kind: i === 0 ? "scope" : "build" }, B("push"));
           const id = created?.data?.[0]?.ticket?.id;
           if (!id) throw new Error(`create failed: ${JSON.stringify(created).slice(0, 160)}`);
           const tAck = now();

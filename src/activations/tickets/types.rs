@@ -28,6 +28,17 @@ pub enum TicketsEvent {
     /// was born naming it as `parent` (yielded by `watch`). Carries the
     /// full updated parent so a watch-only client stays coherent.
     ChildrenChanged { ticket: Ticket, added: String },
+    /// MNG-12: a ticket's `parent` was set after birth (yielded by
+    /// `set_parent`, and by `watch`); `previous` is the parent it had, if
+    /// any. Carries the full child.
+    ParentChanged {
+        ticket: Ticket,
+        previous: Option<String>,
+    },
+    /// MNG-12: an existing ticket's `children` lost `removed` — that
+    /// child was re-parented elsewhere (yielded by `watch`). Carries the
+    /// full updated ex-parent.
+    ChildRemoved { ticket: Ticket, removed: String },
     /// One resolved blocker of the queried ticket, at its current status
     /// (yielded per-entry by `blockers`).
     Blocker { ticket: Ticket },
