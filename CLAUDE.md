@@ -34,6 +34,11 @@ cargo test         # unit tests + wire tests (tests/wire.rs speaks the real prot
   across an await, no I/O on the read path); writes go through the cache
   write-through to the database. Don't hand any other module a database
   handle.
+- A ticket's outputs are tickets (owner, 2026-09-06): a report, spike
+  result, checkpoint, or evaluation memo is filed as a CHILD ticket of
+  the ticket that generated it (`parent:` in frontmatter; typed once
+  AGS-19 lands), not as a file under `plans/*/artifacts/`. Files there
+  are history and attachments (raw data, screenshots) only.
 - Planning: `plans/MNG/` per the ticketing skill. Tickets are `Pending`
   until the human promotes them to `Ready`; implementation does not begin
   on `Pending` tickets. Status flips to `Complete` in the implementing
