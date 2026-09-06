@@ -14,6 +14,13 @@
 //! (plain page text keeps it). A future surface joins by carrying the
 //! attribute; nothing else needs to know the menu exists.
 //!
+//! AGS-20 adds the keyboard's door to the same menu (AGS-18's one-line
+//! follow-up): **Menu** / **Shift+F10** opens it on
+//! `document.activeElement.closest('[data-ticket-id], [data-nav-id]')` —
+//! the focused ticket, wherever it is — positioned at that element's rect
+//! instead of a cursor, and focus goes back to that row when the menu
+//! closes.
+//!
 //! Exactly one menu by construction: the open state is a single
 //! `Option<Target>` signal, so a second right-click replaces the target
 //! (a fresh subtree at the new cursor) — it can never add one. Escape,
@@ -42,7 +49,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use crate::{net, request_set_status, st_class, Row, STATUSES};
+use crate::{keys, net, request_set_status, st_class, Row, STATUSES};
 
 /// The menu's DOM id — the one element the document-level listeners
 /// test containment against.
@@ -144,9 +151,44 @@ fn place(el: &web_sys::HtmlElement, x: f64, y: f64) {
     let _ = style.set_property("top", &format!("{top}px"));
 }
 
+/// Close the menu, handing focus back where it was if the menu was opened
+/// from the keyboard (AGS-20). Every close path goes through here, so
+/// Escape, an outside click, a scroll, a route change and choosing an item
+/// all end the same way.
+fn close_menu(target: RwSignal<Option<Target>>) {
+    if target.with_untracked(Option::is_none) {
+        return;
+    }
+    target.set(None);
+    keys::restore_focus();
+}
+
+/// The focused ticket and where its row sits — AGS-18's follow-up: the
+/// keyboard's own way to ask for this menu. `data-ticket-id` is the menu's
+/// attachment everywhere; `data-nav-id` is accepted too so a nav row that
+/// ever loses the former still answers. Nothing inside an overlay dialog
+/// counts (those own their keys), and the menu opens at the element's
+/// rect rather than a cursor that does not exist.
+fn focused_ticket() -> Option<(String, f64, f64)> {
+    let active = document().active_element()?;
+    if active.closest("[role=dialog]").ok().flatten().is_some() {
+        return None;
+    }
+    let host = active
+        .closest("[data-ticket-id], [data-nav-id]")
+        .ok()
+        .flatten()?;
+    let id = host
+        .get_attribute("data-ticket-id")
+        .or_else(|| host.get_attribute("data-nav-id"))?;
+    let rect = host.get_bounding_client_rect();
+    Some((id, rect.left(), rect.bottom()))
+}
+
 /// The document-level listeners, installed once for the app's lifetime
 /// (the component is mounted once): open on a right-click over a ticket
-/// element, close on Escape / outside mousedown / scroll / route change.
+/// element — or on Menu / Shift+F10 over the focused one — and close on
+/// Escape / outside mousedown / scroll / route change.
 fn install_listeners(target: RwSignal<Option<Target>>) {
     let doc = document();
     let win = net::window();
@@ -176,7 +218,7 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
                 .is_some_and(|n| m.contains(Some(&n)))
         });
         if !inside {
-            target.set(None);
+            close_menu(target);
         }
     });
     // Capture phase: no element can swallow the mousedown before this
@@ -189,8 +231,22 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
     on_down.forget();
 
     let on_key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Escape" && target.with_untracked(Option::is_some) {
-            target.set(None);
+        let key = ev.key();
+        if key == "Escape" {
+            close_menu(target);
+            return;
+        }
+        // AGS-18's follow-up (AGS-20): the keyboard opens this menu on
+        // whatever ticket has focus, at that row's rect. `preventDefault`
+        // is what stops the engine from also firing its own `contextmenu`
+        // for the same keystroke and re-opening us at its coordinates.
+        if key == "ContextMenu" || (key == "F10" && ev.shift_key()) {
+            if let Some((id, x, y)) = focused_ticket() {
+                ev.prevent_default();
+                ev.stop_propagation();
+                keys::remember_focus();
+                target.set(Some(Target { id, x, y }));
+            }
         }
     });
     let _ = doc.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
@@ -198,11 +254,7 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
 
     // `scroll` does not bubble; capturing on the document sees every
     // scrolling box (the content column, the nav's tree) at once.
-    let on_scroll = Closure::<dyn FnMut()>::new(move || {
-        if target.with_untracked(Option::is_some) {
-            target.set(None);
-        }
-    });
+    let on_scroll = Closure::<dyn FnMut()>::new(move || close_menu(target));
     let _ = doc.add_event_listener_with_callback_and_bool(
         "scroll",
         on_scroll.as_ref().unchecked_ref(),
@@ -210,11 +262,7 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
     );
     on_scroll.forget();
 
-    let on_route = Closure::<dyn FnMut()>::new(move || {
-        if target.with_untracked(Option::is_some) {
-            target.set(None);
-        }
-    });
+    let on_route = Closure::<dyn FnMut()>::new(move || close_menu(target));
     let _ = win.add_event_listener_with_callback("hashchange", on_route.as_ref().unchecked_ref());
     on_route.forget();
 }
@@ -340,7 +388,7 @@ fn menu_view(
     let title = move || ticket.get().map(|s| s.with(|x| x.title.clone())).unwrap_or_default();
     let sub = RwSignal::new(false);
     let root = NodeRef::<leptos::html::Div>::new();
-    let close = move || target.set(None);
+    let close = move || close_menu(target);
     let href = format!("#/ticket/{id}");
 
     // Place once mounted, focus the menu so the arrow keys work at once,

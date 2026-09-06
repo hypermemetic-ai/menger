@@ -45,6 +45,14 @@
 //! client-side, and every view re-colors through the tokens with no
 //! re-render — only the drawn mermaid diagrams are redrawn.
 
+//! AGS-20: children are visible. A ticket carries `parent`/`children`
+//! (AGS-19's model); the nav nests a ticket's children under its row at
+//! any depth, across epics, with sub-shortcode epics nesting under their
+//! parent scope (src/nav.rs); the ticket page grows a parent crumb and a
+//! `children` list beneath the DAG; a board row marks that it decomposes.
+//! Nothing new is fetched — `children_changed` rides the same watch
+//! stream, so a child born anywhere appears nested without a reload.
+//!
 //! AGS-18: the app is drivable from the keyboard alone (src/keys.rs): the
 //! nav is a WAI-ARIA tree with a roving tabindex, board rows take focus
 //! and open on Enter, `/` (or Ctrl/⌘+K) opens a jump palette and `?` a
@@ -108,6 +116,16 @@ pub(crate) struct Ticket {
     blocked_by: Vec<String>,
     #[serde(default)]
     unlocks: Vec<String>,
+    /// AGS-19/20: the ticket this one is an output of (any epic). The
+    /// server omits it when unset, and it is immutable for a ticket's
+    /// lifetime — there is no re-parent — which is what lets the nav's
+    /// forest be a memo over the row *list* (src/nav.rs).
+    #[serde(default)]
+    pub(crate) parent: Option<String>,
+    /// AGS-19/20: the tickets whose `parent` is this one, in birth order,
+    /// derived by the server and kept live by `children_changed`.
+    #[serde(default)]
+    pub(crate) children: Vec<String>,
     /// Markdown body — rendered on the ticket page (MFE-7).
     #[serde(default)]
     body: String,
@@ -241,8 +259,12 @@ async fn session(
     loop {
         let ev = watch.next_event().await?;
         match ev.get("type").and_then(|t| t.as_str()) {
-            // Every mutation event carries the full updated ticket.
-            Some("created") | Some("status_changed") | Some("unlocks_changed") => {
+            // Every mutation event carries the full updated ticket —
+            // AGS-19's `children_changed` carries the full *parent*, which
+            // is how a page and a nav that never re-fetch learn that a
+            // child was born (AGS-20).
+            Some("created") | Some("status_changed") | Some("unlocks_changed")
+            | Some("children_changed") => {
                 if let Some(t) = parse_ticket(&ev) {
                     let created = ev["type"] == "created";
                     upsert(rows, t);
@@ -396,6 +418,24 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                             >
                                 <td class="id">
                                     <a href=format!("#/ticket/{href_id}")>{row.id.clone()}</a>
+                                    // AGS-20: no `parent` column — just the
+                                    // mark that this row decomposes, and how
+                                    // far (the nav is where the tree is).
+                                    {move || {
+                                        ticket
+                                            .with(|t| {
+                                                let n = t.children.len();
+                                                (n > 0)
+                                                    .then(|| {
+                                                        let word = if n == 1 { "child" } else { "children" };
+                                                        view! {
+                                                            <span class="haskids" title=format!("{n} {word}")>
+                                                                {format!("▸{n}")}
+                                                            </span>
+                                                        }
+                                                    })
+                                            })
+                                    }}
                                 </td>
                                 <td>{move || ticket.with(|t| t.title.clone())}</td>
                                 <td class="kind">{move || ticket.with(|t| t.kind.clone())}</td>
@@ -499,6 +539,27 @@ fn dag_entry(
     }
 }
 
+/// A ticket's ancestors, root first, from the row store (AGS-20). Stops
+/// at the first id the store does not hold — a deep link can be on screen
+/// before the snapshot lands — and at a repeat, so a hand-edited parent
+/// cycle cannot spin the crumb.
+fn ancestors(rows: RwSignal<Vec<Row>>, id: &str) -> Vec<String> {
+    let mut chain: Vec<String> = Vec::new();
+    let mut cur = id.to_string();
+    rows.with(|v| {
+        while let Some(row) = v.iter().find(|r| r.id == cur) {
+            let Some(p) = row.ticket.with(|t| t.parent.clone()) else { break };
+            if p == id || chain.contains(&p) {
+                break;
+            }
+            chain.push(p.clone());
+            cur = p;
+        }
+    });
+    chain.reverse();
+    chain
+}
+
 /// The full ticket render: every wire-exposed field. The body is
 /// markdown, sanitized in md.rs; a leading YAML frontmatter block is
 /// collapsed behind a <details>, never painted raw. Body/blockers/
@@ -513,6 +574,12 @@ fn ticket_view(
     let body_raw = Memo::new(move |_| ticket.with(|t| t.body.clone()));
     let blocked_by = Memo::new(move |_| ticket.with(|t| t.blocked_by.clone()));
     let unlocks_ids = Memo::new(move |_| ticket.with(|t| t.unlocks.clone()));
+    // AGS-20: the ticket's own decomposition. `children` is the server's
+    // derived list, so a child born anywhere arrives over `watch`
+    // (`children_changed` carries this whole parent) and the list grows
+    // with no re-fetch.
+    let children_ids = Memo::new(move |_| ticket.with(|t| t.children.clone()));
+    let parent_id = Memo::new(move |_| ticket.with(|t| t.parent.clone()));
 
     let blockers = move || {
         let ids = blocked_by.get();
@@ -540,6 +607,22 @@ fn ticket_view(
                     {ids
                         .into_iter()
                         .map(|uid| dag_entry(uid, rows, None))
+                        .collect_view()}
+                </ul>
+            }
+                .into_any()
+        }
+    };
+    let children = move || {
+        let ids = children_ids.get();
+        if ids.is_empty() {
+            view! { <p class="none">"none"</p> }.into_any()
+        } else {
+            view! {
+                <ul id="children">
+                    {ids
+                        .into_iter()
+                        .map(|cid| dag_entry(cid, rows, None))
                         .collect_view()}
                 </ul>
             }
@@ -599,6 +682,21 @@ fn ticket_view(
                     <dt>"severity"</dt>
                     <dd>{move || ticket.with(|t| t.severity.clone().unwrap_or_else(|| "—".into()))}</dd>
                 </div>
+                // AGS-20: the ticket this one is an output of, as a link
+                // (the crumb above walks the whole chain).
+                <div>
+                    <dt>"parent"</dt>
+                    <dd id="t-parent">
+                        {move || match parent_id.get() {
+                            Some(p) => {
+                                let (href, code) = (format!("#/ticket/{p}"), p.clone());
+                                view! { <a class="crumb" data-ticket-id=p href=href>{code}</a> }
+                                    .into_any()
+                            }
+                            None => view! { "—" }.into_any(),
+                        }}
+                    </dd>
+                </div>
                 <div><dt>"epic"</dt><dd>{move || ticket.with(|t| t.epic.clone())}</dd></div>
                 <div><dt>"seq"</dt><dd>{move || ticket.with(|t| t.seq)}</dd></div>
                 <div><dt>"created"</dt><dd>{move || ticket.with(|t| fmt_unix(t.created_unix))}</dd></div>
@@ -609,6 +707,12 @@ fn ticket_view(
                 {blockers}
                 <h3>"unlocks"</h3>
                 {unlocks}
+            </section>
+            // AGS-20: decomposition, beneath the DAG — the DAG is what
+            // this ticket waits on and frees; this is what it is made of.
+            <section class="dag kidsec">
+                <h3>"children"</h3>
+                {children}
             </section>
             <section class="bodysec">
                 <h3>"body"</h3>
@@ -685,10 +789,29 @@ fn TicketPage(
         Memo::new(move |_| rows.with(|v| v.iter().find(|r| r.id == id).map(|r| r.ticket)))
     };
 
+    // AGS-20: the crumb is the ancestor chain — the decomposition read
+    // downward, root first — resolved through the same row store, so a
+    // parent that arrives later fills itself in.
+    let crumbs = {
+        let id = id.clone();
+        move || {
+            ancestors(rows, &id)
+                .into_iter()
+                .map(|a| {
+                    let (href, code) = (format!("#/ticket/{a}"), a.clone());
+                    view! {
+                        <span class="sep" aria-hidden="true">" / "</span>
+                        <a class="crumb" data-ticket-id=a href=href>{code}</a>
+                    }
+                })
+                .collect_view()
+        }
+    };
+
     let id_view = id.clone();
     view! {
         <div id="ticket-page">
-            <p class="crumbs"><a href="#/">"← board"</a></p>
+            <p class="crumbs"><a href="#/">"← board"</a>{crumbs}</p>
             {move || match ticket.get() {
                 Some(t) => ticket_view(t, rows, blockers_loaded).into_any(),
                 None if not_found.get() => {

@@ -188,6 +188,11 @@
   th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 500; font-size: .8rem; }
   td.id { color: var(--accent); white-space: nowrap; }
+  /* AGS-20: a board row that decomposes says so (no parent column). */
+  td.id .haskids {
+    margin-left: .35rem; font-size: 10.5px; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
   td.status { white-space: nowrap; }
 
   /* MFE-7: universal click-through + the ticket page. */
@@ -199,6 +204,11 @@
   #ticket-page .crumbs { margin: 0 0 .75rem; }
   #ticket-page .crumbs a { color: var(--muted); text-decoration: none; }
   #ticket-page .crumbs a:hover { color: var(--accent); }
+  /* AGS-20: the ancestor chain, root first, after the board crumb. */
+  #ticket-page .crumbs .sep { color: var(--muted); }
+  #ticket-page .crumbs .crumb, dd#t-parent .crumb { font-family: var(--mono); font-size: 12.5px; }
+  dd#t-parent .crumb { color: var(--accent); text-decoration: none; }
+  dd#t-parent .crumb:hover { text-decoration: underline; }
   article.ticket h2 { font-size: 1.05rem; margin: .25rem 0 1rem; }
   article.ticket h2 .id { color: var(--accent); margin-right: .6rem; }
   dl.meta {
@@ -213,10 +223,10 @@
   section.dag h3, section.bodysec h3 {
     font-size: .8rem; color: var(--muted); font-weight: 500; margin: 1.1rem 0 .35rem;
   }
-  #blockers, #unlocks { list-style: none; margin: 0; padding: 0; }
-  #blockers li, #unlocks li { padding: .15rem 0; }
-  #blockers a, #unlocks a { color: var(--accent); text-decoration: none; }
-  #blockers a:hover, #unlocks a:hover { text-decoration: underline; }
+  #blockers, #unlocks, #children { list-style: none; margin: 0; padding: 0; }
+  #blockers li, #unlocks li, #children li { padding: .15rem 0; }
+  #blockers a, #unlocks a, #children a { color: var(--accent); text-decoration: none; }
+  #blockers a:hover, #unlocks a:hover, #children a:hover { text-decoration: underline; }
   .bstatus {
     margin-left: .6rem; padding: 0 .4rem; font-size: .8rem;
     border: 1px solid var(--line); border-radius: 6px;
@@ -304,7 +314,10 @@
     border: 1px solid var(--line); color: var(--muted); background: var(--card);
   }
   #nav .tag.roll { font-variant-numeric: tabular-nums; color: var(--chip-fg); background: var(--chip-bg); }
-  #nav .group.collapsed .kids { display: none; }
+  /* AGS-20: the tree nests. Collapse hides a node's OWN kids container
+     (the child combinator), so a collapsed ancestor hides everything
+     beneath it without any node losing its DOM. */
+  #nav .node.collapsed > .kids { display: none; }
   /* AGS-13: kinds. The board and the ticket page spell the word; the nav
      marks each leaf with its kind's glyph, tinted per kind. */
   td.kind, dd.kind { color: var(--muted); }
