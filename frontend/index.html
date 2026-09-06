@@ -214,9 +214,12 @@
     background: var(--chip-bg); border: 1px solid var(--chip-line); border-radius: 5px;
     padding: 0 5px; white-space: nowrap;
   }
-  #nav .label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  #nav .label { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  /* Chips sit in their own right-hand column: the label absorbs the
+     slack, and a fixed chip width keeps every chip's left edge aligned. */
   #nav .tag {
-    flex: none; font-size: 10px; padding: 0 5px; border-radius: 6px;
+    flex: none; margin-left: auto; width: 6.5em; text-align: center; box-sizing: border-box;
+    font-size: 10px; padding: 0 5px; border-radius: 6px;
     border: 1px solid var(--line); color: var(--muted); background: var(--card);
   }
   #nav .tag.roll { font-variant-numeric: tabular-nums; color: var(--chip-fg); background: var(--chip-bg); }
