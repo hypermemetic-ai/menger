@@ -240,11 +240,11 @@ impl Span {
         };
         let mut empty = false;
         if let Some(id) = after {
-            let cursor = cache
-                .by_id
+            let key = cache
+                .at
                 .get(id)
+                .cloned()
                 .ok_or_else(|| StoreError::CursorNotFound(id.to_string()))?;
-            let key = OrderKey::of(cursor);
             match (&start, &end) {
                 // The cursor is at or past the epic's last ticket.
                 (_, Included(last)) if key >= *last => empty = true,
@@ -261,11 +261,11 @@ impl Span {
         })
     }
 
-    /// The index entries in this span, or `None` when there are none.
+    /// The tickets in this span, in order, or `None` when there are none.
     fn range<'c>(
         &self,
         cache: &'c Cache,
-    ) -> Option<std::collections::btree_map::Range<'c, OrderKey, String>> {
+    ) -> Option<std::collections::btree_map::Range<'c, OrderKey, Ticket>> {
         if self.empty {
             return None;
         }
@@ -428,7 +428,7 @@ impl std::fmt::Display for StoreError {
 /// included), returns the blocked_by chain that closes the cycle.
 /// Dangling ids other than `new_id` terminate their branch.
 fn find_cycle(
-    tickets: &HashMap<String, Ticket>,
+    tickets: &Cache,
     new_id: &str,
     blocked_by: &[String],
 ) -> Option<Vec<String>> {
@@ -459,7 +459,7 @@ fn find_cycle(
 /// chain that leaves the store (a parent with no parent) or revisits a
 /// ticket terminates; the walk cannot loop.
 fn find_parent_cycle(
-    tickets: &HashMap<String, Ticket>,
+    tickets: &Cache,
     new_id: &str,
     parent: &str,
 ) -> Option<Vec<String>> {
@@ -484,37 +484,57 @@ fn satisfied(status: Status) -> bool {
     matches!(status, Status::Complete | Status::Superseded)
 }
 
-/// The cache's two halves, under one lock (MNG-9). `by_id` answers every
-/// point read; `order` is the sorted `(epic, seq)` index every ordered
-/// read walks — so `list` no longer clones-then-sorts the whole store to
-/// answer, and a page after a cursor is a range scan. One lock over both
-/// is the point: a reader can never see the index and the map disagree.
+/// The cache, under one lock (MNG-9). The tickets live in `order` — the
+/// sorted `(epic, seq)` map — and `at` says where an id sits in it, so:
+///
+/// - an **ordered** read (`list`, `ready_set`, any page) is a range walk
+///   over tickets that are already in order and already in hand: no sort,
+///   and no lookup per ticket. That last part is what a paging index is
+///   for; an index of *ids* would put a random hash lookup between the
+///   walk and every ticket it has to look at.
+/// - a **point** read (`get`, a blocker) is `at` then `order`: a hash
+///   lookup and a 17-deep descent at 100,000 tickets, both flat in N.
+///
+/// One lock over both halves is the point: a reader can never see the two
+/// disagree.
 struct Cache {
-    by_id: HashMap<String, Ticket>,
-    order: BTreeMap<OrderKey, String>,
+    order: BTreeMap<OrderKey, Ticket>,
+    at: HashMap<String, OrderKey>,
 }
 
 impl Cache {
-    /// Builds the index from a loaded id map (startup).
-    fn new(by_id: HashMap<String, Ticket>) -> Self {
-        let order = by_id
-            .values()
-            .map(|t| (OrderKey::of(t), t.id.clone()))
-            .collect();
-        Self { by_id, order }
+    /// Builds the cache from the tickets loaded at startup.
+    fn new(loaded: HashMap<String, Ticket>) -> Self {
+        let mut cache = Self {
+            order: BTreeMap::new(),
+            at: HashMap::with_capacity(loaded.len()),
+        };
+        for (_, ticket) in loaded {
+            cache.insert(ticket);
+        }
+        cache
     }
 
-    /// Inserts or replaces one ticket, keeping the index in step. A
-    /// ticket's `(epic, seq)` is fixed at birth — no operation re-epics or
-    /// re-numbers one — so replacing an existing ticket rewrites the same
-    /// index entry, and the index cannot drift from the map.
+    /// Inserts or replaces one ticket. A ticket's `(epic, seq)` is fixed
+    /// at birth — no operation re-epics or re-numbers one — so replacing
+    /// an existing ticket rewrites the same entry, and the two halves
+    /// cannot drift apart.
     fn insert(&mut self, ticket: Ticket) {
-        self.order.insert(OrderKey::of(&ticket), ticket.id.clone());
-        self.by_id.insert(ticket.id.clone(), ticket);
+        let key = OrderKey::of(&ticket);
+        self.at.insert(ticket.id.clone(), key.clone());
+        self.order.insert(key, ticket);
+    }
+
+    fn get(&self, id: &str) -> Option<&Ticket> {
+        self.order.get(self.at.get(id)?)
     }
 
     fn len(&self) -> usize {
-        self.by_id.len()
+        self.at.len()
+    }
+
+    fn tickets(&self) -> impl Iterator<Item = &Ticket> {
+        self.order.values()
     }
 }
 
@@ -646,9 +666,9 @@ impl Store {
         // everything and mutates nothing: a rejection leaves no trace.
         let (ticket, touched, unlocks_added) = {
             let cache = self.tickets.read().expect("store lock poisoned");
-            let tickets = &cache.by_id;
+            let tickets = &cache;
             let seq = tickets
-                .values()
+                .tickets()
                 .filter(|t| t.epic == epic)
                 .map(|t| t.seq)
                 .max()
@@ -660,7 +680,7 @@ impl Store {
                 return Err(StoreError::Cycle { id, path });
             }
             if let Some(p) = &parent {
-                if !tickets.contains_key(p) {
+                if tickets.get(p).is_none() {
                     return Err(StoreError::ParentNotFound {
                         id,
                         parent: p.clone(),
@@ -674,7 +694,7 @@ impl Store {
             // Dangling forward references to this id resolve now: their
             // owners are the newborn's `unlocks` from birth.
             let mut referrers: Vec<(String, u32, String)> = tickets
-                .values()
+                .tickets()
                 .filter(|t| t.blocked_by.iter().any(|b| b == &id))
                 .map(|t| (t.epic.clone(), t.seq, t.id.clone()))
                 .collect();
@@ -706,7 +726,7 @@ impl Store {
             // after the database commit.
             let mut touched: HashMap<String, Ticket> = HashMap::new();
             if let Some(parent_id) = &parent {
-                let mut updated = tickets[parent_id].clone();
+                let mut updated = tickets.get(parent_id).expect("parent checked above").clone();
                 updated.children.push(id.clone());
                 updated.updated_unix = now;
                 touched.insert(parent_id.clone(), updated);
@@ -723,7 +743,9 @@ impl Store {
                 }
                 let updated = touched
                     .entry(blocker_id.clone())
-                    .or_insert_with(|| tickets[blocker_id].clone());
+                    .or_insert_with(|| {
+                        tickets.get(blocker_id).expect("blocker resolved above").clone()
+                    });
                 updated.unlocks.push(id.clone());
                 updated.updated_unix = now;
                 unlocks_added.push(blocker_id.clone());
@@ -764,7 +786,6 @@ impl Store {
         self.tickets
             .read()
             .expect("store lock poisoned")
-            .by_id
             .get(id)
             .cloned()
     }
@@ -834,7 +855,7 @@ impl Store {
             t.status == Status::Ready
                 && t.blocked_by
                     .iter()
-                    .all(|b| cache.by_id.get(b).is_some_and(|bt| satisfied(bt.status)))
+                    .all(|b| cache.get(b).is_some_and(|bt| satisfied(bt.status)))
         };
         Ok(Self::walk_cache(&cache, span, limit, Filter::By(&keep)))
     }
@@ -856,11 +877,11 @@ impl Store {
             (None, _) => 0,
             (Some(range), Filter::All) => {
                 let mut it = range;
-                tickets.extend(it.by_ref().take(take).map(|(_, id)| cache.by_id[id].clone()));
+                tickets.extend(it.by_ref().take(take).map(|(_, t)| t.clone()));
                 it.count()
             }
             (Some(range), Filter::By(keep)) => {
-                let mut it = range.map(|(_, id)| &cache.by_id[id]).filter(|t| keep(t));
+                let mut it = range.map(|(_, t)| t).filter(|t| keep(t));
                 tickets.extend(it.by_ref().take(take).cloned());
                 it.count()
             }
@@ -917,14 +938,13 @@ impl Store {
     /// ticket or marked dangling, in `blocked_by` order.
     pub fn blockers(&self, id: &str) -> Result<Vec<BlockerRef>, StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        let tickets = &cache.by_id;
-        let ticket = tickets
+        let ticket = cache
             .get(id)
             .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
         Ok(ticket
             .blocked_by
             .iter()
-            .map(|b| match tickets.get(b) {
+            .map(|b| match cache.get(b) {
                 Some(t) => BlockerRef::Resolved(t.clone()),
                 None => BlockerRef::Dangling(b.clone()),
             })
@@ -972,7 +992,7 @@ impl Store {
                 });
             }
             let mut max: HashMap<String, u32> = HashMap::new();
-            for t in cache.by_id.values() {
+            for t in cache.tickets() {
                 let e = max.entry(t.epic.clone()).or_insert(0);
                 *e = (*e).max(t.seq);
             }
@@ -1005,7 +1025,7 @@ impl Store {
 
         {
             let mut tickets = self.tickets.write().expect("store lock poisoned");
-            tickets.by_id.reserve(generated.len());
+            tickets.at.reserve(generated.len());
             for t in generated {
                 tickets.insert(t);
             }
@@ -2253,10 +2273,13 @@ mod tests {
 
         // And the guard itself: an ancestry walk that would come back
         // around is caught before anything persists.
-        let mut tickets: HashMap<String, Ticket> = HashMap::new();
-        for t in store.list(None, None, None) {
-            tickets.insert(t.id.clone(), t);
-        }
+        let tickets = Cache::new(
+            store
+                .list(None, None, None)
+                .into_iter()
+                .map(|t| (t.id.clone(), t))
+                .collect(),
+        );
         assert_eq!(
             find_parent_cycle(&tickets, "CHAIN-1", "CHAIN-2"),
             Some(vec!["CHAIN-2".into(), "OTHER-1".into(), "CHAIN-1".into()]),
