@@ -57,8 +57,8 @@
     <input id="epic" placeholder="EPIC" value="MNG" required>
     <input id="title" placeholder="title" required>
     <select id="ttype">
-      <option>implementation</option><option>analysis</option>
-      <option>spike</option><option>epic</option><option>checkpoint</option>
+      <option>build</option><option>scope</option><option>execution</option>
+      <option>gap</option><option>spike</option>
     </select>
     <button>create</button>
   </form>
@@ -101,7 +101,7 @@ function render() {
       const href = `/app/#/ticket/${t.id}`;
       return `<tr${flash}><td class="id"><a href="${href}">${t.id}</a></td>` +
              `<td><a href="${href}">${esc(t.title)}</a></td>` +
-             `<td>${t.ticket_type}</td><td class="status">` +
+             `<td>${t.kind}</td><td class="status">` +
              `<select data-id="${t.id}">${opts}</select></td></tr>`;
     });
   document.getElementById("board").innerHTML = rows.join("");
@@ -147,7 +147,7 @@ document.getElementById("create").addEventListener("submit", (e) => {
   call("tickets.create", {
     epic: document.getElementById("epic").value,
     title: document.getElementById("title").value,
-    ticket_type: document.getElementById("ttype").value,
+    kind: document.getElementById("ttype").value,
   }, onItem);
   document.getElementById("title").value = "";
 });

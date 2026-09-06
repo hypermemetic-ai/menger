@@ -23,9 +23,11 @@ cargo test         # unit tests + wire tests (tests/wire.rs speaks the real prot
   event enums use `#[serde(tag = "type", rename_all = "snake_case")]` with an
   in-band `Error { message }` variant.
 - menger is DB-first: the database is the system of record — no plans/
-  directory integration, no file-based ticket store. The status/type
-  vocabulary matches `skills/skills/ticketing/SKILL.md` (`Pending`,
-  `implementation`); don't invent a second vocabulary.
+  directory integration, no file-based ticket store. The status
+  vocabulary matches `skills/skills/ticketing/SKILL.md` (`Pending`, …);
+  the kind vocabulary is the owner's closed five (AGS-13): `scope`,
+  `execution`, `build`, `gap`, `spike`. Don't invent a second vocabulary
+  for either.
 - Architecture (owner-pinned): a service-wide in-memory cache
   (`src/store.rs`) is the ONLY interface the application has to tickets.
   Reads hit the cache, never storage; reads are async-safe (no lock
