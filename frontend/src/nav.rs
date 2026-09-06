@@ -35,7 +35,7 @@ use std::collections::BTreeSet;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{net, Route, Row};
+use crate::{net, st_class, Route, Row};
 
 const EXPANDED_KEY: &str = "menger.nav.expanded";
 const HIDDEN_KEY: &str = "menger.nav.hidden";
@@ -303,7 +303,7 @@ fn leaf_view(
         }
     };
     let href = format!("#/ticket/{id}");
-    let tag_class = move || format!("tag st st-{}", ticket.with(|t| t.status.to_lowercase()));
+    let tag_class = move || format!("tag {}", ticket.with(|t| st_class(&t.status)));
     let kind = move || ticket.with(|t| t.kind.clone());
 
     view! {
