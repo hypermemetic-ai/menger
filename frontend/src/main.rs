@@ -60,6 +60,16 @@ const STATUSES: [&str; 7] = [
     "Superseded",
 ];
 
+/// AGS-15: the classes that make an element wear a status as color —
+/// `st` (the paint rule) plus `st-<status>` (a row of index.html's status
+/// table). Every place a status appears (nav tag, board control, ticket
+/// page, blockers pills) puts these on the element that shows the word,
+/// so the word stays present and the color is the table's. A status
+/// outside the table paints nothing extra and stays legible text.
+pub(crate) fn st_class(status: &str) -> String {
+    format!("st st-{}", status.to_ascii_lowercase())
+}
+
 /// Mirror of the server's ticket JSON (src/store.rs). Enums arrive as
 /// plain strings so unknown future variants degrade to text, not panics.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -357,7 +367,9 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                                 <td class="kind">{move || ticket.with(|t| t.kind.clone())}</td>
                                 <td class="status">
                                     <select
-                                        class="status"
+                                        // The control is the chip: it wears the
+                                        // server-confirmed status's color (AGS-15).
+                                        class=move || format!("status {}", ticket.with(|t| st_class(&t.status)))
                                         prop:value=move || ticket.with(|t| t.status.clone())
                                         on:change=move |ev| {
                                             let Some(sel) = ev
@@ -380,6 +392,7 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                                                 view! {
                                                     <option
                                                         value=s
+                                                        class=st_class(s)
                                                         selected=move || ticket.with(|t| t.status == s)
                                                     >
                                                         {s}
@@ -424,7 +437,9 @@ fn dag_entry(
                     let href = format!("#/ticket/{id}");
                     view! {
                         <a href=href>{id.clone()}</a>
-                        <span class="bstatus">{move || t.with(|x| x.status.clone())}</span>
+                        <span class=move || format!("bstatus {}", t.with(|x| st_class(&x.status)))>
+                            {move || t.with(|x| x.status.clone())}
+                        </span>
                         <span class="btitle">{move || t.with(|x| x.title.clone())}</span>
                     }
                         .into_any()
@@ -532,7 +547,9 @@ fn ticket_view(
             <dl class="meta">
                 <div>
                     <dt>"status"</dt>
-                    <dd id="t-status" class="status">{move || ticket.with(|t| t.status.clone())}</dd>
+                    <dd id="t-status" class=move || format!("status {}", ticket.with(|t| st_class(&t.status)))>
+                        {move || ticket.with(|t| t.status.clone())}
+                    </dd>
                 </div>
                 <div><dt>"kind"</dt><dd id="t-kind" class="kind">{move || ticket.with(|t| t.kind.clone())}</dd></div>
                 <div>
@@ -741,4 +758,133 @@ fn App() -> impl IntoView {
 fn main() {
     console_error_panic_hook::set_once();
     leptos::mount::mount_to_body(App);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{st_class, STATUSES};
+
+    fn index_html() -> String {
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/index.html")).unwrap()
+    }
+
+    /// The app's stylesheet: what sits between the shell's <style> tags.
+    fn app_css() -> String {
+        let html = index_html();
+        let start = html.find("<style>").expect("<style>") + "<style>".len();
+        let end = html.find("</style>").expect("</style>");
+        html[start..end].to_string()
+    }
+
+    /// AGS-15: every status in the closed vocabulary has a row in
+    /// index.html's status table (a bg and an fg), and the class the
+    /// views put on a chip names exactly that row. A new status without
+    /// a row would paint as plain text; this fails first.
+    #[test]
+    fn every_status_has_a_row_in_the_status_table() {
+        let css = app_css();
+        for s in STATUSES {
+            let class = st_class(s);
+            let row = class.strip_prefix("st ").unwrap();
+            assert_eq!(row, format!("st-{}", s.to_lowercase()));
+            let line = css
+                .lines()
+                .find(|l| l.trim_start().starts_with(&format!(".{row} ")))
+                .unwrap_or_else(|| panic!("no status-table row for {s} (.{row})"));
+            assert!(
+                line.contains("--st-bg: #") && line.contains("--st-fg: #"),
+                "{s}: {line}"
+            );
+        }
+        assert_eq!(st_class("Blocked"), "st st-blocked");
+    }
+
+    /// True if `line` holds a color literal: `#` + 3/4/6/8 hex digits as a
+    /// whole token (an id selector like `#board` or `#error` is not one —
+    /// its letters are not all hex, or it runs on into more word
+    /// characters), an `rgb(`/`rgba(`/`hsl(` function, or a named color.
+    fn has_color_literal(line: &str) -> bool {
+        let bytes = line.as_bytes();
+        for (i, &b) in bytes.iter().enumerate() {
+            if b != b'#' {
+                continue;
+            }
+            let run = bytes[i + 1..]
+                .iter()
+                .take_while(|c| c.is_ascii_hexdigit())
+                .count();
+            let next = bytes.get(i + 1 + run).copied();
+            let ends_token = !next.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_');
+            if matches!(run, 3 | 4 | 6 | 8) && ends_token {
+                return true;
+            }
+        }
+        let lower = line.to_ascii_lowercase();
+        if ["rgb(", "rgba(", "hsl(", "hsla(", "color("].iter().any(|f| lower.contains(f)) {
+            return true;
+        }
+        // The named colors a scaffold reaches for; `transparent`, `inherit`,
+        // `none`, and `currentColor` are not palette choices.
+        let named = [
+            "white", "black", "red", "green", "blue", "gray", "grey", "yellow", "orange",
+            "purple", "pink", "silver", "navy", "teal", "maroon", "olive", "lime", "aqua",
+        ];
+        // A hyphen is part of the word: `white-space` names no color.
+        lower
+            .split(|c: char| !(c.is_ascii_alphabetic() || c == '-'))
+            .any(|w| named.contains(&w))
+    }
+
+    /// AGS-15 criterion 4, pinned: color literals live only in the `:root`
+    /// token block and the status table's rows. Every other rule paints
+    /// through `var(--…)` — the layer AGS-10 takes over.
+    #[test]
+    fn colors_live_only_in_the_token_block_and_the_status_table() {
+        let css = app_css();
+        let mut in_root = false;
+        let mut root_literals = 0;
+        let mut table_rows = 0;
+        let mut strays = Vec::new();
+        for line in css.lines() {
+            let t = line.trim();
+            if t.starts_with(":root {") {
+                in_root = true;
+                continue;
+            }
+            if in_root {
+                if t == "}" {
+                    in_root = false;
+                } else if has_color_literal(t) {
+                    root_literals += 1;
+                }
+                continue;
+            }
+            if t.starts_with(".st-") {
+                assert!(has_color_literal(t), "status-table row without colors: {t}");
+                table_rows += 1;
+                continue;
+            }
+            if has_color_literal(t) {
+                strays.push(t.to_string());
+            }
+        }
+        assert!(root_literals >= 10, "the token block holds the palette ({root_literals} lines)");
+        assert_eq!(table_rows, STATUSES.len(), "one table row per status");
+        assert!(strays.is_empty(), "color literals outside the token block / status table:\n{}", strays.join("\n"));
+    }
+
+    #[test]
+    fn color_literal_scanner_knows_ids_from_hex() {
+        assert!(has_color_literal("  --bg: #fbfbf9;"));
+        assert!(has_color_literal("  .st-blocked { --st-bg: #fdecec; --st-fg: #a23; }"));
+        assert!(has_color_literal("  a { color: rgb(1, 2, 3); }"));
+        assert!(has_color_literal("  a { background: #fff; }"));
+        assert!(has_color_literal("  a { color: white; }"));
+        assert!(!has_color_literal("  #error button { color: inherit; }"));
+        assert!(!has_color_literal("  td.id { color: var(--accent); white-space: nowrap; }"));
+        assert!(!has_color_literal("  tbody#board tr:hover td { background: var(--hover); }"));
+        assert!(!has_color_literal("  #app.nonav #nav { display: none; }"));
+        assert!(!has_color_literal("  .st { border-color: transparent; }"));
+        assert!(!has_color_literal("  #blockers a, #unlocks a { color: var(--accent); }"));
+    }
 }

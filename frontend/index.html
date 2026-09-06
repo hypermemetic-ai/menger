@@ -10,56 +10,113 @@
      the first time a rendered body holds a mermaid fence. -->
 <link data-trunk rel="copy-file" href="vendor/mermaid/mermaid-11.17.2.min.js" data-target-path="vendor" />
 <style>
-  /* Same visual family as web/index.html so the two shells read as one system. */
+  /* AGS-15: manifest's color system (../manifest/app/src/styles.css :root,
+     status.ts). Every color the app paints is named exactly once, in the
+     two blocks that follow — the token block and the status table. The
+     component rules below reference tokens only (criterion 4 greps for
+     it); AGS-10 rebinds this layer to its theme tokens without touching
+     a component rule. The vanilla page (web/index.html) keeps its own
+     dark palette; it is legacy and shares nothing here. */
   :root {
-    --bg: #101014; --panel: #17171d; --ink: #d8d8e0; --dim: #7a7a88;
-    --line: #26262e; --live: #5dbb63; --dead: #c05555; --accent: #8ab4f8;
+    /* surfaces + text */
+    --bg: #fbfbf9;        /* page */
+    --panel: #f4f3ee;     /* nav column, meta card, code blocks, frames */
+    --card: #fff;         /* neutral tag / control face */
+    --ink: #1f2328;       /* body text */
+    --muted: #8a8f98;     /* labels, hints, secondary text */
+    --line: #e3e1d8;      /* hairlines */
+    /* interaction */
+    --accent: #0066cc;    /* links, ids, the selected row's bar */
+    --hover: #ecebe4;     /* row hover (nav + board) */
+    --row-sel: #cfe2f7;   /* the selected nav row */
+    --sel: #e7eef7;       /* manifest's list-"on" tint; reserved for AGS-10 */
+    /* the code chip (nav shortcode / ticket id) and the done/total rollup */
+    --chip-bg: #eef2f6; --chip-fg: #5b6b7b; --chip-line: #dde3ea;
+    /* the tree's connector glyphs */
+    --tree-line: #c4c2b6;
+    /* liveness + failure (the error banner, dangling refs, not-found,
+       a mermaid frame in its error state) — manifest's done / blocked
+       families */
+    --live: #256b1a;
+    --err-bg: #fdecec; --err-fg: #a23; --err-line: #f3c5c5;
+    /* AGS-13 kind glyphs keep their per-kind tint (scope gold · build
+       blue · execution green · gap red · spike purple), re-expressed as
+       the light palette's inks so each reads on --panel. */
+    --kind-scope: #7a5d00; --kind-build: #0066cc; --kind-execution: #256b1a;
+    --kind-gap: #a23; --kind-spike: #5b3a8c;
+    /* type */
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
+  /* The status table (pinned, AGS-15): a chip wears its status as color.
+     One row per status in the closed vocabulary — bg / fg, plus weight
+     (Blocked is bold) and decoration (Superseded is struck through). The
+     single paint rule after it is what every host applies wherever a
+     status appears (nav tag, board control, ticket page, blockers pills);
+     the word stays in the chip. The extra selectors in the paint rule
+     only out-rank the hosts' own base rules (`#nav .tag`,
+     `select.status { font: inherit }`); they name no color. */
+  .st-pending    { --st-bg: #f3e8c8; --st-fg: #7a5d00; }
+  .st-ready      { --st-bg: #e3ecf7; --st-fg: #2b5b8c; }
+  .st-blocked    { --st-bg: #fdecec; --st-fg: #a23;    --st-weight: 600; }
+  .st-complete   { --st-bg: #cfe9c9; --st-fg: #256b1a; }
+  .st-idea       { --st-bg: #efe9e0; --st-fg: #72644c; } /* fg darkened from manifest's parked #8a7a5c (3.47:1) to clear AA */
+  .st-epic       { --st-bg: #e6dcf5; --st-fg: #5b3a8c; }
+  .st-superseded { --st-bg: #f3d9d9; --st-fg: #aa2222; --st-deco: line-through; }
+  .st, #nav .tag.st, select.status.st {
+    background: var(--st-bg); color: var(--st-fg); border-color: transparent;
+    font-weight: var(--st-weight, inherit); text-decoration: var(--st-deco, none);
+  }
+
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
-    font: 14px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace;
+    font: 14px/1.5 var(--mono);
   }
   header {
     display: flex; align-items: baseline; gap: 1rem;
     padding: .75rem 1.25rem; border-bottom: 1px solid var(--line);
   }
   header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
-  header .tag { color: var(--dim); font-size: .8rem; }
-  #conn { color: var(--dim); font-size: .8rem; margin-left: auto; }
+  header .tag { color: var(--muted); font-size: .8rem; }
+  #conn { color: var(--muted); font-size: .8rem; margin-left: auto; }
   #conn.live { color: var(--live); }
-  #conn.reconnecting { color: var(--dead); }
+  #conn.reconnecting { color: var(--err-fg); }
   main { padding: 1rem 1.25rem; max-width: 72rem; margin: 0 auto; }
-  #health { color: var(--dim); font-size: .8rem; margin-bottom: 1rem; }
+  #health { color: var(--muted); font-size: .8rem; margin-bottom: 1rem; }
   #error {
     display: flex; align-items: baseline; gap: 1rem;
-    background: #2a1518; color: #e8a9a9; border: 1px solid #6b2f35;
+    background: var(--err-bg); color: var(--err-fg); border: 1px solid var(--err-line);
+    border-left-width: 4px; border-radius: 6px;
     padding: .5rem .75rem; margin-bottom: 1rem; font-size: .85rem;
   }
   #error button {
-    margin-left: auto; background: none; border: 1px solid #6b2f35;
-    color: inherit; font: inherit; font-size: .8rem;
+    margin-left: auto; background: none; border: 1px solid var(--err-line);
+    color: inherit; font: inherit; font-size: .8rem; border-radius: 4px;
     padding: 0 .5rem; cursor: pointer;
   }
+  /* The board's status control is the chip: it wears the row's status
+     (class st-<status>, kept in step with the ticket) and lists the
+     vocabulary in each option's own colors. */
   select.status {
-    background: var(--panel); color: var(--ink);
-    border: 1px solid var(--line); border-radius: 3px;
+    background: var(--card); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px;
     font: inherit; font-size: .85rem; padding: .1rem .3rem;
   }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
-  th { color: var(--dim); font-weight: 500; font-size: .8rem; }
+  th { color: var(--muted); font-weight: 500; font-size: .8rem; }
   td.id { color: var(--accent); white-space: nowrap; }
   td.status { white-space: nowrap; }
 
   /* MFE-7: universal click-through + the ticket page. */
   header h1 a { color: inherit; text-decoration: none; }
   tbody#board tr { cursor: pointer; }
-  tbody#board tr:hover td { background: #1a1a22; }
+  tbody#board tr:hover td { background: var(--hover); }
   td.id a { color: inherit; text-decoration: none; }
   td.id a:hover { text-decoration: underline; }
   #ticket-page .crumbs { margin: 0 0 .75rem; }
-  #ticket-page .crumbs a { color: var(--dim); text-decoration: none; }
+  #ticket-page .crumbs a { color: var(--muted); text-decoration: none; }
   #ticket-page .crumbs a:hover { color: var(--accent); }
   article.ticket h2 { font-size: 1.05rem; margin: .25rem 0 1rem; }
   article.ticket h2 .id { color: var(--accent); margin-right: .6rem; }
@@ -69,10 +126,11 @@
     border: 1px solid var(--line); border-radius: 4px;
   }
   dl.meta div { display: flex; gap: .5rem; }
-  dl.meta dt { color: var(--dim); }
+  dl.meta dt { color: var(--muted); }
   dl.meta dd { margin: 0; }
+  dd.status { padding: 0 .4rem; border: 1px solid var(--line); border-radius: 6px; }
   section.dag h3, section.bodysec h3 {
-    font-size: .8rem; color: var(--dim); font-weight: 500; margin: 1.1rem 0 .35rem;
+    font-size: .8rem; color: var(--muted); font-weight: 500; margin: 1.1rem 0 .35rem;
   }
   #blockers, #unlocks { list-style: none; margin: 0; padding: 0; }
   #blockers li, #unlocks li { padding: .15rem 0; }
@@ -80,41 +138,44 @@
   #blockers a:hover, #unlocks a:hover { text-decoration: underline; }
   .bstatus {
     margin-left: .6rem; padding: 0 .4rem; font-size: .8rem;
-    border: 1px solid var(--line); border-radius: 3px;
+    border: 1px solid var(--line); border-radius: 6px;
   }
-  .btitle { margin-left: .6rem; color: var(--dim); }
-  .dangling { color: var(--dead); }
-  .none, .loading { color: var(--dim); }
-  #notfound h2 { color: var(--dead); font-size: 1.05rem; }
+  .btitle { margin-left: .6rem; color: var(--muted); }
+  .dangling { color: var(--err-fg); }
+  .none, .loading { color: var(--muted); }
+  #notfound h2 { color: var(--err-fg); font-size: 1.05rem; }
   details.frontmatter { margin: 0 0 .75rem; }
-  details.frontmatter summary { cursor: pointer; color: var(--dim); font-size: .8rem; }
+  details.frontmatter summary { cursor: pointer; color: var(--muted); font-size: .8rem; }
   details.frontmatter pre {
     background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
     padding: .6rem .8rem; overflow-x: auto; margin: .35rem 0 0;
   }
-  .md { line-height: 1.6; max-width: 56rem; }
+  /* Prose is sans, code stays mono — manifest's split. */
+  .md { line-height: 1.6; max-width: 56rem; font-family: var(--sans); }
   .md h1 { font-size: 1.1rem; margin: 1.1rem 0 .4rem; }
   .md h2, .md h3, .md h4 { font-size: 1rem; margin: 1.1rem 0 .4rem; }
   .md code {
+    font-family: var(--mono); font-size: .92em;
     background: var(--panel); border: 1px solid var(--line);
     border-radius: 3px; padding: 0 .25rem;
   }
   .md pre {
+    font-family: var(--mono);
     background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
     padding: .6rem .8rem; overflow-x: auto;
   }
-  .md pre code { border: 0; padding: 0; background: none; }
+  .md pre code { border: 0; padding: 0; background: none; font-size: inherit; }
   .md a { color: var(--accent); }
   .md blockquote {
     border-left: 3px solid var(--line); margin: .5rem 0;
-    padding: 0 .8rem; color: var(--dim);
+    padding: 0 .8rem; color: var(--muted);
   }
   .md table { width: auto; }
   .md th, .md td { border: 1px solid var(--line); padding: .25rem .5rem; }
 
-  /* AGS-12: the persistent left nav — manifest's sidebar pattern in this
-     palette. A full-height two-column grid: the nav column collapses
-     (and the content reflows) when the nav is hidden. */
+  /* AGS-12: the persistent left nav — manifest's sidebar pattern. A
+     full-height two-column grid: the nav column collapses (and the
+     content reflows) when the nav is hidden. */
   #app { display: grid; grid-template-columns: 360px minmax(0, 1fr); height: 100vh; }
   #app.nonav { grid-template-columns: minmax(0, 1fr); }
   #app.nonav #nav { display: none; }
@@ -127,65 +188,60 @@
     display: flex; align-items: baseline; gap: .4rem;
     padding: 12px 14px; font-weight: 600; border-bottom: 1px solid var(--line);
   }
-  #nav .brand .muted { color: var(--dim); font-weight: 400; }
+  #nav .brand .muted { color: var(--muted); font-weight: 400; }
   #nav .nav-hide, header .nav-reveal {
-    background: none; border: 1px solid var(--line); color: var(--dim);
+    background: var(--bg); border: 1px solid var(--line); color: var(--muted);
     font: inherit; font-size: 11px; line-height: 1.3; padding: 0 6px;
     border-radius: 4px; cursor: pointer;
   }
   #nav .nav-hide { margin-left: auto; }
-  #nav .nav-hide:hover, header .nav-reveal:hover { color: var(--ink); border-color: var(--accent); }
+  #nav .nav-hide:hover, header .nav-reveal:hover { color: var(--accent); border-color: var(--accent); }
   #nav .tree-scroll { flex: 1; overflow: auto; min-height: 0; }
-  #nav .tree { padding: 6px 0; font-size: 12.5px; line-height: 1.55; white-space: nowrap; }
+  #nav .tree { padding: 6px 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; white-space: nowrap; }
   #nav .row {
     display: flex; align-items: center; gap: 4px; padding: 0 10px;
     cursor: pointer; color: var(--ink); text-decoration: none;
   }
-  #nav .row:hover { background: #1e1e26; }
-  #nav .row.sel { background: #1f2a3d; box-shadow: inset 3px 0 0 var(--accent); border-radius: 2px; }
+  #nav .row:hover { background: var(--hover); }
+  #nav .row.sel { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); border-radius: 2px; }
   #nav .row.sel .label { font-weight: 600; }
-  #nav .row.sel .code { color: var(--accent); border-color: #3a4a66; }
-  #nav .prefix { color: #3a3a46; white-space: pre; user-select: none; }
-  #nav .toggle { width: 1ch; color: var(--dim); }
+  #nav .row.sel .code { color: var(--accent); }
+  #nav .prefix { color: var(--tree-line); white-space: pre; user-select: none; }
+  #nav .toggle { width: 1ch; color: var(--muted); }
   #nav .toggle.clickable { cursor: pointer; }
   #nav .code {
-    font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: #9aa4b8;
-    background: #1e2029; border: 1px solid #2c2e3a; border-radius: 5px;
+    font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: var(--chip-fg);
+    background: var(--chip-bg); border: 1px solid var(--chip-line); border-radius: 5px;
     padding: 0 5px; white-space: nowrap;
   }
   #nav .label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   #nav .tag {
     flex: none; font-size: 10px; padding: 0 5px; border-radius: 6px;
-    border: 1px solid var(--line); color: var(--dim); background: var(--bg);
+    border: 1px solid var(--line); color: var(--muted); background: var(--card);
   }
-  #nav .tag.roll { font-variant-numeric: tabular-nums; }
-  #nav .tag.st-ready { color: var(--accent); border-color: #2f4a70; }
-  #nav .tag.st-blocked { color: #e8a9a9; border-color: #6b2f35; }
-  #nav .tag.st-complete { color: var(--live); border-color: #2f5a34; }
-  #nav .tag.st-idea { color: #c9a6f0; border-color: #4a3560; }
-  #nav .tag.st-epic { color: #e0b96a; border-color: #5d4a22; }
-  #nav .tag.st-superseded { text-decoration: line-through; }
+  #nav .tag.roll { font-variant-numeric: tabular-nums; color: var(--chip-fg); background: var(--chip-bg); }
   #nav .group.collapsed .kids { display: none; }
   /* AGS-13: kinds. The board and the ticket page spell the word; the nav
      marks each leaf with its kind's glyph, tinted per kind. */
-  td.kind, dd.kind { color: var(--dim); }
-  #nav .toggle.kind { color: #9aa4b8; }
-  #nav .leaf[data-kind="scope"] .toggle.kind { color: #e0b96a; }
-  #nav .leaf[data-kind="build"] .toggle.kind { color: var(--accent); }
-  #nav .leaf[data-kind="execution"] .toggle.kind { color: var(--live); }
-  #nav .leaf[data-kind="gap"] .toggle.kind { color: #e8a9a9; }
-  #nav .leaf[data-kind="spike"] .toggle.kind { color: #c9a6f0; }
-  /* AGS-14: mermaid placeholders → diagrams. Palette tokens only. */
+  td.kind, dd.kind { color: var(--muted); }
+  #nav .toggle.kind { color: var(--muted); }
+  #nav .leaf[data-kind="scope"] .toggle.kind { color: var(--kind-scope); }
+  #nav .leaf[data-kind="build"] .toggle.kind { color: var(--kind-build); }
+  #nav .leaf[data-kind="execution"] .toggle.kind { color: var(--kind-execution); }
+  #nav .leaf[data-kind="gap"] .toggle.kind { color: var(--kind-gap); }
+  #nav .leaf[data-kind="spike"] .toggle.kind { color: var(--kind-spike); }
+  /* AGS-14: mermaid placeholders → diagrams. The renderer picks its
+     theme from body's computed background (light → mermaid `default`). */
   .md .mermaid {
     background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
     padding: .6rem .8rem; margin: .5rem 0; overflow-x: auto;
   }
   .md .mermaid pre { margin: 0; padding: 0; background: none; border: 0; }
-  .md .mermaid[data-state="rendering"] pre { color: var(--dim); }
+  .md .mermaid[data-state="rendering"] pre { color: var(--muted); }
   .md .mermaid[data-state="done"] svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
-  .md .mermaid[data-state="error"] { border-color: var(--dead); }
+  .md .mermaid[data-state="error"] { border-color: var(--err-fg); }
   .md .mermaid .mermaid-error {
-    color: var(--dead); margin: 0 0 .6rem; white-space: pre-wrap; font-size: .85rem;
+    color: var(--err-fg); margin: 0 0 .6rem; white-space: pre-wrap; font-size: .85rem;
   }
 </style>
 </head>

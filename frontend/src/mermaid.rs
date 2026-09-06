@@ -393,7 +393,8 @@ mod tests {
 
     #[test]
     fn theme_follows_the_painted_background() {
-        assert_eq!(theme_for_background("rgb(16, 16, 20)"), "dark"); // the current --bg
+        assert_eq!(theme_for_background("rgb(251, 251, 249)"), "default"); // --bg (AGS-15, #fbfbf9)
+        assert_eq!(theme_for_background("rgb(16, 16, 20)"), "dark"); // the pre-AGS-15 dark --bg
         assert_eq!(theme_for_background("rgb(255, 255, 255)"), "default");
         assert_eq!(theme_for_background("rgba(250, 250, 250, 1)"), "default");
         assert_eq!(theme_for_background("rgb(0 0 0)"), "dark");
