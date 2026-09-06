@@ -41,8 +41,17 @@ cargo test         # unit tests + wire tests (tests/wire.rs speaks the real prot
   are history and attachments (raw data, screenshots) only.
 - Planning: `plans/MNG/` per the ticketing skill. Tickets are `Pending`
   until the human promotes them to `Ready`; implementation does not begin
-  on `Pending` tickets. Status flips to `Complete` in the implementing
-  commit.
+  on `Pending` tickets.
+- Workers move their ticket across the SDLC (owner, 2026-09-06). A
+  ticket worker flips `Ready → Coding` when it starts, `Coding → In
+  Review` in the commit that finishes the work (the commit message ends
+  `— In Review`, not `— Complete`), and the **merge** flips `In Review →
+  Complete`, so the merge hash is the completion hash. Each flip is the
+  ticket's frontmatter in the worktree plus `tickets.set_status` on the
+  running server, so the board shows where the work is. Until SDLC-7
+  lands the two states in the server's `Status` enum, write them in
+  frontmatter only — `set_status` rejects them today — and the merge
+  still sets `Complete`.
 - `web/index.html` is dependency-free and embedded via `include_str!` —
   no build step, keep it that way (MNG-5 hardens this into a contract).
 - Wire protocol notes (envelope, `menger.call` subscription) are in
