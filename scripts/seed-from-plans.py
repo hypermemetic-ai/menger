@@ -11,7 +11,7 @@ later ids still line up.
 """
 import argparse, glob, json, os, re, sys, urllib.request
 
-EPIC_ORDER = ["MNG", "MFE", "HLX", "AGS"]  # cross-epic blocked_by refs point backward in this order
+EPIC_ORDER = ["MNG", "MFE", "HLX", "AGS", "PERF", "SDLC"]  # cross-epic blocked_by refs point backward in this order
 
 # AGS-13: a file's frontmatter `type:` (the house ticketing vocabulary) maps
 # onto the server's kind — the same pinned table the store's migration uses.
