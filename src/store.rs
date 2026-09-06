@@ -9,7 +9,9 @@
 //! and writes go through write-through — durable in the database before
 //! the cache is updated, the event emitted, and `watch` subscribers
 //! notified. Nothing outside this module holds a database handle.
-//! Status/type vocabulary matches the house ticketing convention.
+//! The status vocabulary matches the house ticketing convention; the kind
+//! vocabulary is the owner's closed five (AGS-13), and a database written
+//! before AGS-13 is migrated to it, durably, the first time it is opened.
 
 use rusqlite::Connection;
 use schemars::JsonSchema;
@@ -52,28 +54,44 @@ impl FromStr for Status {
     }
 }
 
-/// Unit of work. Frontmatter uses lowercase (`type: implementation`).
+/// What shape of work a ticket is (AGS-13): the owner's closed five-value
+/// set, one vocabulary owning the slot. Serialized lowercase (`kind:
+/// build`) on the wire and in the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum TicketType {
-    Implementation,
-    Analysis,
+pub enum Kind {
+    /// A container that decomposes into children; done only when they
+    /// are. Its acceptance is the operator's gate.
+    Scope,
+    /// Carries out a defined procedure (verify, run, migrate, release)
+    /// without producing new capability.
+    Execution,
+    /// Produces new capability; gated on acceptance criteria.
+    Build,
+    /// A defect or missing piece discovered in shipped behavior (rim's
+    /// "bug").
+    Gap,
+    /// A binary investigation that answers a question.
     Spike,
-    Epic,
-    Checkpoint,
 }
 
-impl FromStr for TicketType {
+impl Kind {
+    /// The phrase every "unknown kind" error ends with — the five, named.
+    pub const EXPECTED: &'static str = "scope, execution, build, gap, or spike";
+}
+
+impl FromStr for Kind {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "implementation" => Ok(Self::Implementation),
-            "analysis" => Ok(Self::Analysis),
+            "scope" => Ok(Self::Scope),
+            "execution" => Ok(Self::Execution),
+            "build" => Ok(Self::Build),
+            "gap" => Ok(Self::Gap),
             "spike" => Ok(Self::Spike),
-            "epic" => Ok(Self::Epic),
-            "checkpoint" => Ok(Self::Checkpoint),
             other => Err(format!(
-                "unknown ticket type '{other}' (expected implementation, analysis, spike, epic, or checkpoint)"
+                "unknown kind '{other}' (expected {})",
+                Kind::EXPECTED
             )),
         }
     }
@@ -112,7 +130,7 @@ pub struct Ticket {
     pub seq: u32,
     pub title: String,
     pub status: Status,
-    pub ticket_type: TicketType,
+    pub kind: Kind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub severity: Option<Severity>,
     /// Ticket ids that must complete before this one starts.
@@ -125,9 +143,10 @@ pub struct Ticket {
     pub updated_unix: i64,
 }
 
-/// A mutation, broadcast to every `watch` subscriber.
+/// A mutation, broadcast to every `watch` subscriber. (Internal — the
+/// wire form is `TicketsEvent`, same `type` tag; `kind` is a ticket's.)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Change {
     Created { ticket: Ticket },
     StatusChanged { ticket: Ticket, previous: Status },
@@ -159,7 +178,7 @@ pub enum BlockerRef {
 pub struct NewTicket {
     pub epic: String,
     pub title: String,
-    pub ticket_type: TicketType,
+    pub kind: Kind,
     pub severity: Option<Severity>,
     pub blocked_by: Vec<String>,
     pub body: String,
@@ -278,8 +297,12 @@ impl Store {
         Self::with_connection(conn)
     }
 
-    fn with_connection(conn: Connection) -> anyhow::Result<Self> {
+    fn with_connection(mut conn: Connection) -> anyhow::Result<Self> {
         conn.execute_batch(db::SCHEMA)?;
+        // A database written before AGS-13 is rewritten to kinds here, once,
+        // durably — before anything is loaded. An unmappable row refuses
+        // the open (loudly, nothing changed) rather than loading a guess.
+        db::migrate_legacy_ticket_type(&mut conn)?;
         let tickets = db::load_all(&conn)?;
         let (tx, _) = broadcast::channel(256);
         Ok(Self {
@@ -366,7 +389,7 @@ impl Store {
                 seq,
                 title: new.title,
                 status: Status::Pending,
-                ticket_type: new.ticket_type,
+                kind: new.kind,
                 severity: new.severity,
                 blocked_by: new.blocked_by,
                 unlocks,
@@ -526,7 +549,7 @@ mod db {
             seq          INTEGER NOT NULL,
             title        TEXT NOT NULL,
             status       TEXT NOT NULL,
-            ticket_type  TEXT NOT NULL,
+            kind         TEXT NOT NULL,
             severity     TEXT,
             blocked_by   TEXT NOT NULL,
             unlocks      TEXT NOT NULL,
@@ -537,9 +560,90 @@ mod db {
         );
     ";
 
+    /// The pre-AGS-13 column, and its vocabulary mapped onto kinds (the
+    /// pinned migration). This is the only place the legacy vocabulary
+    /// survives: it exists to be read once and rewritten, never written.
+    const LEGACY_COLUMN: &str = "ticket_type";
+
+    fn legacy_kind(ticket_type: &str) -> Option<&'static str> {
+        match ticket_type {
+            "epic" => Some("scope"),
+            "implementation" => Some("build"),
+            "analysis" => Some("spike"),
+            "checkpoint" => Some("execution"),
+            "spike" => Some("spike"),
+            _ => None,
+        }
+    }
+
+    pub(super) fn has_column(
+        conn: &Connection,
+        table: &str,
+        column: &str,
+    ) -> rusqlite::Result<bool> {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let names = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        for name in names {
+            if name? == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// One-shot, durable migration of a pre-AGS-13 database. If the
+    /// `tickets` table still carries `ticket_type`, every row is checked
+    /// against the pinned mapping first — one unmappable value refuses
+    /// the open, naming the rows, with nothing changed — then, in a single
+    /// transaction, the column is renamed to `kind` and each row's value
+    /// is rewritten. Committed before the cache loads, so a restart (or a
+    /// SIGKILL right after) finds kinds in the file, never the old
+    /// values, and the check above is a no-op from then on. Returns how
+    /// many rows were rewritten (0: nothing to migrate).
+    pub(super) fn migrate_legacy_ticket_type(conn: &mut Connection) -> anyhow::Result<usize> {
+        if !has_column(conn, "tickets", LEGACY_COLUMN)? {
+            return Ok(0);
+        }
+        let tx = conn.transaction()?;
+        let rows: Vec<(String, String)> = {
+            let mut stmt = tx.prepare(&format!("SELECT id, {LEGACY_COLUMN} FROM tickets"))?;
+            let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let unmappable: Vec<String> = rows
+            .iter()
+            .filter(|(_, tt)| legacy_kind(tt).is_none())
+            .map(|(id, tt)| format!("{id} ({LEGACY_COLUMN} '{tt}')"))
+            .collect();
+        if !unmappable.is_empty() {
+            anyhow::bail!(
+                "refusing to open: {} ticket(s) carry a legacy {LEGACY_COLUMN} outside the pinned \
+                 kind mapping (epic->scope, implementation->build, analysis->spike, \
+                 checkpoint->execution, spike->spike): {}. Nothing was changed; fix those rows \
+                 and reopen.",
+                unmappable.len(),
+                unmappable.join(", ")
+            );
+        }
+        tx.execute(
+            &format!("ALTER TABLE tickets RENAME COLUMN {LEGACY_COLUMN} TO kind"),
+            [],
+        )?;
+        for (id, tt) in &rows {
+            let kind = legacy_kind(tt).expect("checked above");
+            tx.execute("UPDATE tickets SET kind = ?1 WHERE id = ?2", params![kind, id])?;
+        }
+        tx.commit()?;
+        tracing::info!(
+            "migrated {} tickets: {LEGACY_COLUMN} -> kind (AGS-13), durably",
+            rows.len()
+        );
+        Ok(rows.len())
+    }
+
     /// Serializes a unit enum to its serde string form (`Pending`,
-    /// `implementation`, `Critical`) — the same casing the wire uses, and
-    /// what the `FromStr` impls parse back.
+    /// `build`, `Critical`) — the same casing the wire uses, and what the
+    /// `FromStr` impls parse back.
     fn enum_str<T: serde::Serialize>(v: &T) -> String {
         match serde_json::to_value(v) {
             Ok(serde_json::Value::String(s)) => s,
@@ -567,7 +671,7 @@ mod db {
     pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
         conn.execute(
             "INSERT INTO tickets
-                 (id, epic, seq, title, status, ticket_type, severity,
+                 (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, body, created_unix, updated_unix)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT (id) DO UPDATE SET
@@ -575,7 +679,7 @@ mod db {
                  seq = excluded.seq,
                  title = excluded.title,
                  status = excluded.status,
-                 ticket_type = excluded.ticket_type,
+                 kind = excluded.kind,
                  severity = excluded.severity,
                  blocked_by = excluded.blocked_by,
                  unlocks = excluded.unlocks,
@@ -588,7 +692,7 @@ mod db {
                 t.seq,
                 t.title,
                 enum_str(&t.status),
-                enum_str(&t.ticket_type),
+                enum_str(&t.kind),
                 t.severity.as_ref().map(enum_str),
                 serde_json::to_string(&t.blocked_by).expect("serialize ids"),
                 serde_json::to_string(&t.unlocks).expect("serialize ids"),
@@ -602,7 +706,7 @@ mod db {
 
     pub(super) fn load_all(conn: &Connection) -> anyhow::Result<HashMap<String, Ticket>> {
         let mut stmt = conn.prepare(
-            "SELECT id, epic, seq, title, status, ticket_type, severity,
+            "SELECT id, epic, seq, title, status, kind, severity,
                     blocked_by, unlocks, body, created_unix, updated_unix
              FROM tickets",
         )?;
@@ -613,7 +717,7 @@ mod db {
                 seq: row.get(2)?,
                 title: row.get(3)?,
                 status: parse_col(4, &row.get::<_, String>(4)?)?,
-                ticket_type: parse_col(5, &row.get::<_, String>(5)?)?,
+                kind: parse_col(5, &row.get::<_, String>(5)?)?,
                 severity: row
                     .get::<_, Option<String>>(6)?
                     .as_deref()
@@ -643,11 +747,169 @@ mod tests {
         NewTicket {
             epic: epic.into(),
             title: title.into(),
-            ticket_type: TicketType::Implementation,
+            kind: Kind::Build,
             severity: None,
             blocked_by: Vec::new(),
             body: String::new(),
         }
+    }
+
+    /// The store's schema as it was before AGS-13 (`ticket_type`), so a
+    /// test can build "a database created before this ticket" by hand.
+    const LEGACY_SCHEMA: &str = "
+        CREATE TABLE tickets (
+            id           TEXT PRIMARY KEY,
+            epic         TEXT NOT NULL,
+            seq          INTEGER NOT NULL,
+            title        TEXT NOT NULL,
+            status       TEXT NOT NULL,
+            ticket_type  TEXT NOT NULL,
+            severity     TEXT,
+            blocked_by   TEXT NOT NULL,
+            unlocks      TEXT NOT NULL,
+            body         TEXT NOT NULL,
+            created_unix INTEGER NOT NULL,
+            updated_unix INTEGER NOT NULL,
+            UNIQUE (epic, seq)
+        );
+    ";
+
+    /// Writes a pre-AGS-13 database at `path` holding one row per
+    /// `(seq, ticket_type)` in `rows`, epic `LEG`, bodies with frontmatter.
+    fn write_legacy_db(path: &Path, rows: &[(u32, &str)]) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(LEGACY_SCHEMA).unwrap();
+        for (seq, tt) in rows {
+            conn.execute(
+                "INSERT INTO tickets VALUES (?1, 'LEG', ?2, ?3, 'Pending', ?4, NULL, '[]', '[]', ?5, 1, 1)",
+                rusqlite::params![
+                    format!("LEG-{seq}"),
+                    seq,
+                    format!("legacy {tt}"),
+                    tt,
+                    format!("---\nid: LEG-{seq}\ntype: {tt}\n---\n\nbody"),
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    fn columns(path: &Path) -> Vec<String> {
+        let conn = Connection::open(path).unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(tickets)").unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// AGS-13 criterion 1 at the store level: every legacy value maps per
+    /// the pinned table, the rows are rewritten in the file (not remapped
+    /// per load), and the body's frontmatter is left exactly as it was.
+    #[tokio::test]
+    async fn legacy_ticket_type_migrates_durably_on_first_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.db");
+        write_legacy_db(
+            &path,
+            &[
+                (1, "epic"),
+                (2, "implementation"),
+                (3, "analysis"),
+                (4, "checkpoint"),
+                (5, "spike"),
+            ],
+        );
+        assert!(columns(&path).contains(&"ticket_type".to_string()));
+
+        let expected = [
+            ("LEG-1", Kind::Scope),
+            ("LEG-2", Kind::Build),
+            ("LEG-3", Kind::Spike),
+            ("LEG-4", Kind::Execution),
+            ("LEG-5", Kind::Spike),
+        ];
+        {
+            let store = Store::open(&path).unwrap();
+            assert_eq!(store.count(), 5);
+            for (id, kind) in expected {
+                let t = store.get(id).unwrap();
+                assert_eq!(t.kind, kind, "{id}");
+                assert!(t.body.contains("type: "), "{id}: frontmatter untouched");
+            }
+        }
+
+        // The file itself now speaks kinds: column renamed, values rewritten.
+        let cols = columns(&path);
+        assert!(cols.contains(&"kind".to_string()), "{cols:?}");
+        assert!(!cols.contains(&"ticket_type".to_string()), "{cols:?}");
+        {
+            let conn = Connection::open(&path).unwrap();
+            let raw: Vec<(String, String)> = conn
+                .prepare("SELECT id, kind FROM tickets ORDER BY seq")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(
+                raw,
+                vec![
+                    ("LEG-1".into(), "scope".into()),
+                    ("LEG-2".into(), "build".into()),
+                    ("LEG-3".into(), "spike".into()),
+                    ("LEG-4".into(), "execution".into()),
+                    ("LEG-5".into(), "spike".into()),
+                ]
+            );
+            assert!(!db::has_column(&conn, "tickets", "ticket_type").unwrap());
+        }
+
+        // Second open: nothing to migrate, same kinds, still writable.
+        let store = Store::open(&path).unwrap();
+        for (id, kind) in expected {
+            assert_eq!(store.get(id).unwrap().kind, kind, "{id} after reopen");
+        }
+        let next = store.create(new_ticket("LEG", "born after the migration")).await.unwrap();
+        assert_eq!(next.id, "LEG-6");
+        assert_eq!(next.kind, Kind::Build);
+    }
+
+    /// A legacy value outside the pinned mapping refuses the open,
+    /// naming the row, and leaves the database exactly as it was.
+    #[test]
+    fn legacy_value_outside_the_mapping_fails_the_open_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("odd.db");
+        write_legacy_db(&path, &[(1, "implementation"), (2, "wibble")]);
+
+        let err = match Store::open(&path) {
+            Ok(_) => panic!("an unmappable legacy value must refuse the open"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("LEG-2"), "names the row: {err}");
+        assert!(err.contains("'wibble'"), "names the value: {err}");
+        assert!(err.contains("implementation->build"), "shows the mapping: {err}");
+
+        // Untouched: the legacy column and both values are still there.
+        let cols = columns(&path);
+        assert!(cols.contains(&"ticket_type".to_string()), "{cols:?}");
+        assert!(!cols.contains(&"kind".to_string()), "{cols:?}");
+        let conn = Connection::open(&path).unwrap();
+        let tt: String = conn
+            .query_row("SELECT ticket_type FROM tickets WHERE id = 'LEG-1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tt, "implementation", "the good row was not rewritten either");
+    }
+
+    #[test]
+    fn unknown_kind_error_names_the_five() {
+        let err = "bug".parse::<Kind>().unwrap_err();
+        for name in ["scope", "execution", "build", "gap", "spike"] {
+            assert!(err.contains(name), "{err}");
+        }
+        assert!(err.contains("'bug'"), "{err}");
+        assert_eq!("GAP".parse::<Kind>(), Ok(Kind::Gap), "case-insensitive");
     }
 
     #[tokio::test]
@@ -661,7 +923,7 @@ mod tests {
                 .create(NewTicket {
                     epic: "rt".into(),
                     title: "first — ünïcode ✓".into(),
-                    ticket_type: TicketType::Analysis,
+                    kind: Kind::Gap,
                     severity: Some(Severity::Critical),
                     blocked_by: vec!["RT-0".into(), "X-9".into()],
                     body: "## Problem\n\nlines\nand more".into(),

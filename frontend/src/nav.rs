@@ -20,9 +20,15 @@
 //! persists alongside.
 //!
 //! Grouping is deliberately trivial and isolated in [`group_of`]: today a
-//! ticket's group is its epic code. AGS-2 (kinds / parent hierarchy)
-//! re-roots the forest by replacing that function and the `groups` memo
-//! — nothing else here knows what a group is.
+//! ticket's group is its epic code. AGS-2 (parent hierarchy) re-roots the
+//! forest by replacing that function and the `groups` memo — nothing else
+//! here knows what a group is.
+//!
+//! AGS-13: each leaf's marker (the slot a group row uses for its ▸/▾
+//! toggle) is its kind's glyph — see [`kind_glyph`] — so the tree stays
+//! one column of monospace text while every row shows what shape of work
+//! it is; the row carries `data-kind` and a `title` for the reader who
+//! wants the word.
 
 use std::collections::BTreeSet;
 
@@ -76,6 +82,21 @@ pub(crate) fn save_hidden(hidden: bool) {
 /// ticket's parent row is its epic.
 fn group_of(row: &Row) -> &str {
     &row.epic
+}
+
+/// One glyph per kind (AGS-13), for the leaf's marker slot. Anything
+/// outside the five — the server's vocabulary may grow before this
+/// table does — degrades to the neutral dot the slot showed before, never
+/// to a blank.
+pub(crate) fn kind_glyph(kind: &str) -> &'static str {
+    match kind {
+        "scope" => "◆",
+        "execution" => "▶",
+        "build" => "■",
+        "gap" => "○",
+        "spike" => "△",
+        _ => "·",
+    }
 }
 
 /// Bring the selected row into view (block: nearest — no jump if it is
@@ -283,6 +304,7 @@ fn leaf_view(
     };
     let href = format!("#/ticket/{id}");
     let tag_class = move || format!("tag st st-{}", ticket.with(|t| t.status.to_lowercase()));
+    let kind = move || ticket.with(|t| t.kind.clone());
 
     view! {
         <a
@@ -291,13 +313,35 @@ fn leaf_view(
             role="treeitem"
             aria-selected=move || sel.get().to_string()
             data-nav-id=id.clone()
+            data-kind=kind
             href=href
         >
             <span class="prefix">{prefix}</span>
-            <span class="toggle">"·"</span>
+            <span class="toggle kind" title=kind>{move || kind_glyph(&kind())}</span>
             <span class="code">{id.clone()}</span>
             <span class="label">{move || ticket.with(|t| t.title.clone())}</span>
             <span class=tag_class>{move || ticket.with(|t| t.status.clone())}</span>
         </a>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kind_glyph;
+
+    /// The five kinds each get their own glyph; the neutral dot is
+    /// reserved for whatever the table does not know.
+    #[test]
+    fn every_kind_has_a_distinct_glyph_and_unknown_is_the_neutral_dot() {
+        let kinds = ["scope", "execution", "build", "gap", "spike"];
+        let glyphs: std::collections::BTreeSet<&str> = kinds.iter().map(|k| kind_glyph(k)).collect();
+        assert_eq!(glyphs.len(), kinds.len(), "distinct: {glyphs:?}");
+        assert!(!glyphs.contains("·"));
+        assert_eq!(kind_glyph("bug"), "·");
+        assert_eq!(kind_glyph(""), "·");
+        // One character each: the marker slot is 1ch wide.
+        for k in kinds {
+            assert_eq!(kind_glyph(k).chars().count(), 1, "{k}");
+        }
     }
 }

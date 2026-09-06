@@ -166,6 +166,15 @@
   #nav .tag.st-epic { color: #e0b96a; border-color: #5d4a22; }
   #nav .tag.st-superseded { text-decoration: line-through; }
   #nav .group.collapsed .kids { display: none; }
+  /* AGS-13: kinds. The board and the ticket page spell the word; the nav
+     marks each leaf with its kind's glyph, tinted per kind. */
+  td.kind, dd.kind { color: var(--dim); }
+  #nav .toggle.kind { color: #9aa4b8; }
+  #nav .leaf[data-kind="scope"] .toggle.kind { color: #e0b96a; }
+  #nav .leaf[data-kind="build"] .toggle.kind { color: var(--accent); }
+  #nav .leaf[data-kind="execution"] .toggle.kind { color: var(--live); }
+  #nav .leaf[data-kind="gap"] .toggle.kind { color: #e8a9a9; }
+  #nav .leaf[data-kind="spike"] .toggle.kind { color: #c9a6f0; }
   /* AGS-14: mermaid placeholders → diagrams. Palette tokens only. */
   .md .mermaid {
     background: var(--panel); border: 1px solid var(--line); border-radius: 4px;

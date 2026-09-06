@@ -36,6 +36,19 @@ impl Server {
     fn startup_output(&self) -> String {
         std::fs::read_to_string(&self.stderr_path).expect("read server stderr")
     }
+
+    /// Waits (bounded) for the process to exit on its own — for a server
+    /// that must refuse to start — returning its exit status and stderr.
+    fn wait_exit(mut self, within: Duration) -> (std::process::ExitStatus, String) {
+        let deadline = std::time::Instant::now() + within;
+        loop {
+            if let Some(status) = self.child.try_wait().expect("try_wait") {
+                return (status, self.startup_output());
+            }
+            assert!(std::time::Instant::now() < deadline, "server did not exit within {within:?}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
 impl Drop for Server {
@@ -147,7 +160,7 @@ async fn acknowledged_mutations_survive_sigkill() {
         json!({
             "epic": "DUR",
             "title": "first — survives ✓",
-            "ticket_type": "analysis",
+            "kind": "spike",
             "severity": "Critical",
             "blocked_by": ["DUR-0"],
             "body": "## Problem\n\nmultiline body"
@@ -156,6 +169,7 @@ async fn acknowledged_mutations_survive_sigkill() {
     .await;
     assert_eq!(ev["type"], "created");
     assert_eq!(ev["ticket"]["id"], "DUR-1");
+    assert_eq!(ev["ticket"]["kind"], "spike");
 
     let ev = one(
         &c1,
@@ -278,6 +292,140 @@ async fn dag_edges_survive_sigkill() {
     let ready = drain(&c2, "tickets.ready_set", json!({"epic": "EDGE"})).await;
     assert_eq!(ready.len(), 1, "completing A unblocks B, got {ready:?}");
     assert_eq!(ready[0]["ticket"]["id"], "EDGE-2");
+}
+
+/// AGS-13 criterion 1, black-box: `tests/fixtures/pre-ags13.db` was
+/// written by the pre-AGS-13 binary (schema column `ticket_type`) and
+/// holds every legacy value — epic, implementation, analysis, checkpoint,
+/// spike — plus a default-typed row, DAG edges, and three statuses. On
+/// first open the server migrates it durably: `list` shows the pinned
+/// kinds and no `ticket_type`; after SIGKILL and a restart the kinds are
+/// still there, the file's column is `kind`, and no second migration ran.
+#[tokio::test]
+async fn legacy_database_migrates_on_first_open_and_survives_sigkill() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pre-ags13.db"),
+        &db,
+    )
+    .unwrap();
+
+    let expected = [
+        ("LEG-1", "scope"),     // epic
+        ("LEG-2", "build"),     // implementation
+        ("LEG-3", "spike"),     // analysis
+        ("LEG-4", "execution"), // checkpoint
+        ("LEG-5", "spike"),     // spike
+        ("OLD-1", "build"),     // the old default
+    ];
+    let check = |tickets: &[Value], when: &str| {
+        assert_eq!(tickets.len(), expected.len(), "{when}: {tickets:?}");
+        for (t, (id, kind)) in tickets.iter().zip(expected) {
+            assert_eq!(t["ticket"]["id"], id, "{when}");
+            assert_eq!(t["ticket"]["kind"], kind, "{when}: {id}");
+            assert!(
+                t["ticket"].get("ticket_type").is_none(),
+                "{when}: {id} still carries ticket_type: {t}"
+            );
+        }
+    };
+
+    // Run 1: first open of the old database.
+    let s1 = spawn_server(Some(&db), &[], dir.path(), "legacy1").await;
+    let c1 = connect(s1.port).await;
+    let log = s1.startup_output();
+    assert!(
+        log.contains("migrated 6 tickets: ticket_type -> kind"),
+        "startup reports the migration, got:\n{log}"
+    );
+    let tickets = drain(&c1, "tickets.list", json!({})).await;
+    check(&tickets, "after first open");
+    // Everything else survived the rewrite: statuses, DAG edges, bodies.
+    assert_eq!(tickets[0]["ticket"]["status"], "Epic");
+    assert_eq!(tickets[1]["ticket"]["status"], "Ready");
+    assert_eq!(tickets[1]["ticket"]["unlocks"], json!(["LEG-4"]));
+    assert_eq!(tickets[3]["ticket"]["blocked_by"], json!(["LEG-2", "LEG-3"]));
+    assert!(
+        tickets[0]["ticket"]["body"].as_str().unwrap().contains("type: epic"),
+        "body frontmatter is the raw record, untouched: {}",
+        tickets[0]["ticket"]["body"]
+    );
+
+    drop(c1);
+    s1.kill9();
+
+    // Run 2: the migration was durable — the file holds kinds now.
+    let s2 = spawn_server(Some(&db), &[], dir.path(), "legacy2").await;
+    let c2 = connect(s2.port).await;
+    let log = s2.startup_output();
+    assert!(!log.contains("migrated"), "no second migration, got:\n{log}");
+    assert!(log.contains("loaded 6 tickets"), "got:\n{log}");
+    check(&drain(&c2, "tickets.list", json!({})).await, "after SIGKILL + restart");
+    let ev = one(&c2, "tickets.get", json!({"id": "LEG-4"})).await;
+    assert_eq!(ev["ticket"]["kind"], "execution");
+
+    // And the system of record itself: column `kind`, no `ticket_type`.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(tickets)")
+        .unwrap()
+        .query_map([], |r| r.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(cols.contains(&"kind".into()), "{cols:?}");
+    assert!(!cols.contains(&"ticket_type".into()), "{cols:?}");
+    let stored: Vec<String> = conn
+        .prepare("SELECT kind FROM tickets ORDER BY epic, seq")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(stored, ["scope", "build", "spike", "execution", "spike", "build"]);
+}
+
+/// AGS-13: a legacy value the pinned mapping does not cover refuses the
+/// open — the process exits non-zero naming the row — and the database
+/// is left untouched for a human to fix.
+#[tokio::test]
+async fn legacy_database_with_unmappable_value_refuses_to_start() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pre-ags13.db"),
+        &db,
+    )
+    .unwrap();
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE tickets SET ticket_type = 'wibble' WHERE id = 'LEG-3'",
+            [],
+        )
+        .unwrap();
+    }
+
+    let s = spawn_server(Some(&db), &[], dir.path(), "unmappable").await;
+    let (status, log) = s.wait_exit(Duration::from_secs(10));
+    assert!(!status.success(), "must refuse to start, got {status}");
+    assert!(log.contains("LEG-3"), "names the row:\n{log}");
+    assert!(log.contains("'wibble'"), "names the value:\n{log}");
+
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(tickets)")
+        .unwrap()
+        .query_map([], |r| r.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(cols.contains(&"ticket_type".into()), "untouched: {cols:?}");
+    let still: String = conn
+        .query_row("SELECT ticket_type FROM tickets WHERE id = 'LEG-1'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(still, "epic", "no row was rewritten");
 }
 
 /// Criterion 3: a fresh, empty location is an empty store, not an error.
