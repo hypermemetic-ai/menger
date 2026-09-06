@@ -14,7 +14,7 @@
 //!   menger-tickets-api            the server's own declarations
 //!        │  #[activation(client)]
 //!        ▼
-//!   MengerTicketsClient<Rc<WsTransport>>       typed calls, typed events
+//!   TicketsClient<Rc<WsTransport>>       typed calls, typed events
 //!        │  plexus_client::decode
 //!        ▼
 //!   WsTransport (ws-web)          ONE socket, every call multiplexed
@@ -53,7 +53,7 @@
 use crate::{dom, upsert, upsert_page, Conn, Dock, Row};
 use futures::StreamExt;
 use leptos::prelude::*;
-use menger_tickets_api::{MengerTicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
+use menger_tickets_api::{TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
 use plexus_client::{ClientEvent, WsTransport};
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -76,7 +76,7 @@ const HUB: &str = "menger";
 const RETRY_MS: i32 = 1000;
 
 /// The typed client, over the app's one shared connection.
-pub(crate) type Client = MengerTicketsClient<Rc<WsTransport>>;
+pub(crate) type Client = TicketsClient<Rc<WsTransport>>;
 
 thread_local! {
     /// The app's single transport, for its lifetime — replaced (never
@@ -96,7 +96,7 @@ thread_local! {
 pub(crate) fn client() -> Option<Client> {
     TRANSPORT
         .with(|t| t.borrow().clone())
-        .map(MengerTicketsClient::new)
+        .map(TicketsClient::new)
 }
 
 /// Renders a failed call for the banner. The two layers stay distinct:
@@ -150,7 +150,7 @@ async fn session(
     // open ticket page needs only two point queries and must not wait for
     // the board.
     socket.update(|g| *g += 1);
-    let client = MengerTicketsClient::new(transport);
+    let client = TicketsClient::new(transport);
 
     // 1. `watch` first — subscribed eagerly, so a ticket born during the
     //    walk below arrives even if the walk has already passed its

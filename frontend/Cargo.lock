@@ -980,6 +980,7 @@ dependencies = [
 name = "menger-tickets-api"
 version = "0.5.0"
 dependencies = [
+ "futures",
  "plexus-client",
  "plexus-macros",
  "schemars",

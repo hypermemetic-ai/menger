@@ -22,10 +22,10 @@ name = "menger"
 path = "src/main.rs"
 
 [dependencies]
-# MFE-9: the ticket vocabulary, shared with the browser app (frontend/)
-# so a renamed field is a wasm compile error, not a blank cell. Default
-# features: the types only — the `client` feature (the generated Plexus
-# client, plexus 0.6) is the frontend's, and stays out of this graph.
+# MFE-9/MFE-11: the tickets activation — vocabulary, store, the activation
+# and its generated client, from one declaration — shared with the browser
+# app (frontend/), which takes it with `default-features = false`. Default
+# features here: `server`, the real thing.
 menger-tickets-api = { path = "tickets-api" }
 
 # MFE-10: the plexus 0.6 line — plexus-core 0.6.0, plexus-macros 0.6.0
@@ -36,23 +36,12 @@ menger-tickets-api = { path = "tickets-api" }
 # graph resolves exactly one of each. Publishing or tagging the line
 # (MACRO-8) turns these into version requirements again.
 plexus-core = { path = "../plexus-core" }
-plexus-macros = { path = "../plexus-macros" }
 # Slim: default features off keeps the rmcp/MCP stack out (default-off as
 # of 0.5.0 anyway); http-gateway enables the REST + SSE bridge (MNG-8).
 plexus-transport = { path = "../plexus-transport", default-features = false, features = ["http-gateway"] }
 
 tokio = { version = "1", features = ["full"] }
-async-stream = "0.3"
 futures = "0.3"
-
-# Brought in transitively by the plexus_macros::activation expansion.
-async-trait = "0.1"
-uuid = { version = "1.6", features = ["v4", "serde"] }
-jsonrpsee = { version = "0.26", features = ["server", "macros"] }
-
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-schemars = { version = "1.1", features = ["derive"] }
 
 # Day-one web shell (static page over the Plexus WebSocket). MFE-2 adds
 # the /app static serving and the same-origin /rest reverse proxy (the
@@ -65,11 +54,9 @@ http-body-util = "0.1"
 
 clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
-chrono = "0.4"
 
-# MNG-2: embedded system of record behind the cache (in-process, no server),
-# and the per-user default data directory (ecosystem precedent: hyperforge).
-rusqlite = { version = "0.37", features = ["bundled"] }
+# The per-user default data directory (ecosystem precedent: hyperforge);
+# the store itself (rusqlite behind the cache, MNG-2) lives in tickets-api.
 dirs = "6"
 
 tracing = "0.1"
@@ -78,6 +65,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 [dev-dependencies]
 # Wire-level tests speak the same protocol as web/index.html.
 jsonrpsee = { version = "0.26", features = ["server", "macros", "ws-client"] }
+serde_json = "1"
+# MFE-11: tests/wire_client.rs drives the generated TicketsClient over the
+# native WebSocket transport against the in-process server.
+plexus-client = { path = "../plexus-macros/plexus-client", features = ["ws-native"] }
+# tests/durability.rs inspects the database file directly.
+rusqlite = { version = "0.37", features = ["bundled"] }
 # Hermetic tests: every server gets its own isolated database location.
 tempfile = "3"
 # REST-level tests (tests/rest.rs, tests/app.rs) speak plain HTTP/SSE to

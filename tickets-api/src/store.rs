@@ -36,7 +36,7 @@ use tokio::sync::Mutex as AsyncMutex;
 /// hand-written mirror of the JSON they arrive as. Re-exported here
 /// unchanged — every `crate::store::Status` in the server still resolves,
 /// and the store remains the only thing that *writes* them.
-pub use menger_tickets_api::types::{Kind, Severity, Status, Ticket};
+pub use crate::types::{Kind, Severity, Status, Ticket};
 
 /// MNG-9: the store's total order over tickets — `(epic, seq)`, which the
 /// schema keeps unique (`UNIQUE (epic, seq)`). Every list has been in this

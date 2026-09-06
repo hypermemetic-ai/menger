@@ -1,5 +1,5 @@
-use crate::activations::Tickets;
-use crate::store::{SeedSpec, Store, StoreError};
+use menger_tickets_api::Tickets;
+use menger_tickets_api::store::{SeedSpec, Store, StoreError};
 use plexus_core::plexus::DynamicHub;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

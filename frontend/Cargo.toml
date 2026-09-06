@@ -21,10 +21,10 @@ leptos = { version = "0.8", features = ["csr"] }
 # declaration of the ticket vocabulary and of the `tickets` activation —
 # the same crate the server depends on — so a row is the server's
 # `TicketSummary`, not a mirror of its JSON, and a renamed field fails this
-# build. `client` emits `MengerTicketsClient<T>`; `plexus-client`'s `ws-web`
+# build. the crate emits `TicketsClient<T>` from the activation's own impl; `plexus-client`'s `ws-web`
 # is the browser WebSocket backend (MACRO-6). Neither drags plexus-core,
 # tokio or jsonrpsee into the wasm — that is what the crate split buys.
-menger-tickets-api = { path = "../tickets-api", features = ["client"] }
+menger-tickets-api = { path = "../tickets-api", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std"] }
 
 # AGS-14 only: the config object handed to the vendored mermaid renderer

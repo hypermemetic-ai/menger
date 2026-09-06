@@ -1,4 +1,17 @@
-//! Plexus RPC surface for tickets.
+//! Plexus RPC surface for tickets — **the one declaration** (MFE-11).
+//!
+//! This `impl` is both halves of menger's `tickets` activation:
+//!
+//! | build | what the macro emits from it |
+//! |---|---|
+//! | `server` (default; the menger binary) | the `Activation` impl, dispatch, the schema, these bodies |
+//! | `default-features = false` (the browser app, wasm32) | `TicketsClient<T>` — one typed method per `#[method]`, over the activation's own types |
+//!
+//! `client` asks for the client; `server_cfg` puts the server half of the
+//! expansion — this impl block included — behind the `server` feature, and
+//! the author's own server-only items (the struct, its store, the imports)
+//! sit behind the same `cfg`. There is no second declaration anywhere: a
+//! changed parameter here fails the browser build.
 //!
 //! `create` names one optional parameter per ticket field (AGS-19 added
 //! `parent`) — that is the wire surface talking, here and in the wrapper
@@ -6,19 +19,26 @@
 //! a struct.
 #![allow(clippy::too_many_arguments)]
 
-use super::types::TicketsEvent;
+use crate::types::TicketsEvent;
+#[cfg(feature = "server")]
 use crate::store::{
     BlockerRef, Change, Kind, NewTicket, Page, PageQuery, Severity, Status, Store, StoreError,
 };
+#[cfg(feature = "server")]
 use async_stream::stream;
+#[cfg(feature = "server")]
 use futures::Stream;
+#[cfg(feature = "server")]
 use std::sync::Arc;
 
+/// The activation. Server-only: it holds the store.
+#[cfg(feature = "server")]
 #[derive(Clone)]
 pub struct Tickets {
     store: Arc<Store>,
 }
 
+#[cfg(feature = "server")]
 impl Tickets {
     pub fn new(store: Arc<Store>) -> Self {
         Self { store }
@@ -30,6 +50,7 @@ impl Tickets {
 /// event, which is what tells a client whether to ask for more. A failed
 /// cursor is the one in-band `error` instead, with no page event: nothing
 /// was walked, so there is nowhere to resume from.
+#[cfg(feature = "server")]
 fn page_events(
     page: Result<Page, StoreError>,
     summary: Option<bool>,
@@ -59,6 +80,7 @@ fn page_events(
     })))
 }
 
+#[cfg(feature = "server")]
 fn change_event(change: Change) -> TicketsEvent {
     match change {
         Change::Created { ticket } => TicketsEvent::Created { ticket },
@@ -74,9 +96,14 @@ fn change_event(change: Change) -> TicketsEvent {
     }
 }
 
+// The attribute is NOT `#[cfg]`-gated: it has to run in the client-only
+// build too, or there would be no client. `server_cfg` tells it to put the
+// server half — this impl block included — behind the feature.
 #[plexus_macros::activation(
     namespace = "tickets",
     description = "Plans as data — create, query, and watch the work DAG",
+    client,
+    server_cfg = "feature = \"server\"",
     crate_path = "plexus_core"
 )]
 impl Tickets {
@@ -386,7 +413,7 @@ impl Tickets {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use super::*;
     use futures::StreamExt;
