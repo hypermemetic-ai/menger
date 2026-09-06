@@ -112,3 +112,83 @@ produced one decade later.
 
 Everything above is measured, not tuned: the server and app under test
 are `0ad2c58` unchanged.
+
+## What MNG-9 changed (re-run, `c9b58bf`)
+
+Everything above is the ladder at `0ad2c58`, before paging. This section
+is the same ladder re-run after MNG-9 gave `list` and `ready_set` a
+cursor (`after`), a `limit`, body-less `summary` rows and a closing
+`page { next, remaining }` event, and moved the cache into the store's
+own `(epic, seq)` order. It reads against those tables, not beside them:
+the machine is the same but the session is not, so compare shapes and
+the A/B pairs quoted below, which were measured master-against-branch on
+one database, alternating, the same minute.
+
+**The new row: WS list, paged (200).** The walk a client that renders
+does — `list {summary: true, limit: 200}`, then the same call with
+`after` = the previous page's `next`, until `next` is null.
+
+| | 10² | 10³ | 10⁴ | 10⁵ |
+|---|---:|---:|---:|---:|
+| pages | 1 | 5 | 50 | 500 |
+| whole walk | 3.6 ms | 12.5 ms | 107 ms | 1.06 s |
+| **worst single page** | 1.9 ms | 2.6 ms | 2.8 ms | **6.1 ms** |
+| first row | 1.6 ms | 1.9 ms | 1.6 ms | **2.2 ms** |
+| bytes | 50.5 KiB | 496 KiB | 4.97 MiB | 49.8 MiB |
+| the same set streamed whole | 4.2 ms · 0.10 MiB | 12.7 ms · 0.99 MiB | 71 ms · 9.89 MiB | 688 ms · 99.1 MiB |
+
+Two things move and one does not. **Latency stops scaling**: the first
+row lands in ~2 ms and the worst page in 6.1 ms at 100,000, against a
+92 ms first item for the streamed control at the same magnitude — a
+renderer now paints its first screen in constant time whatever N is,
+which is the whole point of the ticket. **The bytes halve** — 49.8 MiB
+against 99.1 MiB — because a summary row is a ticket without its body,
+and no board shows a body. What does *not* improve is the whole walk:
+1.06 s against 688 ms, because 500 round trips cost 500 round trips. A
+client that genuinely wants every row with bodies should still ask for
+them in one call; a client that renders wants the first page, and gets
+it 40× sooner.
+
+**The store's order is now the cache's shape.** `list`/`ready_set` used
+to clone every matching ticket and sort; the tickets now live in a
+`BTreeMap<(epic, seq), Ticket>` with a hash map from id to position, so
+an ordered read is a range walk over what is already sorted and already
+in hand, and a page is a range scan from a cursor. Measured A/B at
+100,000 (first item after the subscribe reply, medians of 7, three
+alternating rounds):
+
+| call | master | MNG-9 |
+|---|---:|---:|
+| `list {}` (everything, bodies) | 158 / 177 / 177 ms | 75 / 96 / 139 ms |
+| `list {epic: MAP}` (19,195 rows) | 28 / 34 / 29 ms | 16 / 19 / 20 ms |
+| `ready_set {}` (14,652 rows) | 26 / 29 / 28 ms | 25 / 31 / 28 ms |
+
+An epic filter is a *position*, not a predicate — `(epic, seq)` puts an
+epic's tickets in one contiguous stretch — so it bounds the walk instead
+of testing every ticket in the store. What still costs O(what is left)
+is an exact `remaining` under a status/parent filter or the ready-set
+rule: `ready_set {summary, limit: 200}` answers its first row in 13 ms
+at 100,000 (13 ms of counting the 14,649 that remain). That number is
+pinned here as the accepted price of an exact count.
+
+The order costs once per start: loading 100,000 tickets into the cache
+went 347 / 349 / 347 ms (master) to 553 / 524 / 563 ms in the same A/B —
+the sort and the tree build — and resident memory 116 → 124 MiB. It is
+paid before the server serves.
+
+**The REST cliff moved down by one ticket.** Every `list`/`ready_set`
+response now ends with one `page` item, and plexus-transport 0.2.3's
+unary handler collects a stream into one array capped at 10,000 items
+(TRANSPORT-2). So the magnitude at which a unary REST `list` returns
+**413** is now exactly 10,000 tickets rather than 10,001: at 10⁴ the
+`REST list` row and every browser row fail here where the 0ad2c58 run
+had one browser run in three succeed. This is the cap, not the store —
+the same 10⁴ set streams over the WebSocket in 71 ms, and pages in 50
+pages of 2.8 ms — and it is the reason MFE-9 moves the app onto the
+socket and onto these pages rather than raising a buffer.
+
+Browser rows are otherwise unchanged in shape: the app still lists
+everything and renders everything, because MNG-9 is the server half.
+10² and 10³ stay comfortable, 10⁴ is now the wall, and the flat ~140 ms
+cold deep link (`get` + `blockers`, two point queries) still proves the
+model the rest of the app has yet to adopt.
