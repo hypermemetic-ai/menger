@@ -174,6 +174,10 @@ async fn app_url_without_build_output_says_not_built() {
             text.contains("trunk build"),
             "{path}: tells the reader how to fix it"
         );
+        assert!(
+            text.contains("/vanilla"),
+            "{path}: points at the page that does work"
+        );
     }
     let (status, _, _) = fetch(s.shell_port, Method::GET, "/app/missing.js", "").await;
     assert_eq!(
@@ -494,22 +498,65 @@ async fn rest_proxy_without_rest_is_clear_503() {
     );
 }
 
-/// Criterion 5: the vanilla page still loads on the same listener, WS
-/// port injected, untouched by the /app and /rest additions.
+/// MFE-2 criterion 5 + MFE-4 acceptance 2: the vanilla page still loads
+/// on the same listener, WS port injected, untouched by the /app and
+/// /rest additions — at its own URL, and at the root when there is no app
+/// build to serve there. The binary alone always serves something live.
 #[tokio::test]
-async fn vanilla_page_still_served_at_root() {
+async fn vanilla_page_is_served_at_its_url_and_is_the_rootless_root() {
     let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let s = spawn_server(empty.path(), true).await;
 
-    let (status, ctype, body) = fetch(s.shell_port, Method::GET, "/", "").await;
+    for path in ["/vanilla", "/"] {
+        let (status, ctype, body) = fetch(s.shell_port, Method::GET, path, "").await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert!(ctype.starts_with("text/html"), "{path}: got {ctype}");
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("<h1>menger</h1>"), "{path}: vanilla shell markup");
+        assert!(
+            !text.contains("{{WS_PORT}}"),
+            "{path}: WS port placeholder is substituted"
+        );
+        assert!(text.contains("new WebSocket"), "{path}: still the WS client");
+        assert!(
+            !text.contains("frontend not built"),
+            "{path}: the root degrades to a working page, not to the notice"
+        );
+    }
+}
+
+/// MFE-4 acceptance 1: with a build on disk the root **is** the app, and
+/// the vanilla page is still whole at its own URL. The app's own root
+/// (`/app/`) keeps serving it too — it is the asset prefix
+/// (`Trunk.toml`'s `public_url`) and the deep-link prefix MFE-1 pinned,
+/// so both URLs must answer with the same entrypoint.
+#[tokio::test]
+async fn the_root_is_the_app_when_it_is_built() {
+    let dist = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    std::fs::write(
+        dist.path().join("index.html"),
+        "<html><meta name=\"menger-ws-port\" content=\"{{WS_PORT}}\">menger app stub</html>",
+    )
+    .unwrap();
+    let s = spawn_server(dist.path(), true).await;
+
+    for path in ["/", "/app/"] {
+        let (status, ctype, body) = fetch(s.shell_port, Method::GET, path, "").await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert!(ctype.starts_with("text/html"), "{path}: got {ctype}");
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("menger app stub"), "{path}: the app, got:\n{text}");
+        assert!(
+            !text.contains("{{WS_PORT}}"),
+            "{path}: MFE-9's WS port is substituted at the root too"
+        );
+    }
+
+    // …and the day-one page has not been stranded by the swap.
+    let (status, _, body) = fetch(s.shell_port, Method::GET, "/vanilla", "").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(ctype.starts_with("text/html"));
     let text = String::from_utf8_lossy(&body);
     assert!(text.contains("<h1>menger</h1>"), "vanilla shell markup");
-    assert!(
-        !text.contains("{{WS_PORT}}"),
-        "WS port placeholder is substituted"
-    );
     assert!(text.contains("new WebSocket"), "still the WS client");
 }
 
@@ -522,7 +569,7 @@ async fn vanilla_page_rows_link_to_app_ticket_pages() {
     let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let s = spawn_server(empty.path(), true).await;
 
-    let (status, _, body) = fetch(s.shell_port, Method::GET, "/", "").await;
+    let (status, _, body) = fetch(s.shell_port, Method::GET, "/vanilla", "").await;
     assert_eq!(status, StatusCode::OK);
     let text = String::from_utf8_lossy(&body);
     assert!(

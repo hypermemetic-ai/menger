@@ -1,18 +1,30 @@
 //! Day-one web shell, plus (MFE-2) the Leptos app and its data plane.
 //!
 //! menger's rule (since 0.04): frontend and backend are online from the
-//! first commit, so every noun is visible the day it is written. Three
+//! first commit, so every noun is visible the day it is written. Four
 //! surfaces share this one listener:
 //!
-//! - `/` — the vanilla page, embedded at compile time, speaking the
-//!   Plexus wire protocol over WebSocket. Unchanged since day one.
+//! - `/` — **the Leptos app** (MFE-4). It is the frontend; a browser
+//!   pointed at the server gets it without being told a path. When there
+//!   is no build output the root *degrades to the vanilla page* rather
+//!   than to an error — the day-one property is that the binary alone
+//!   always serves something live, and that is what keeps it true.
+//! - `/vanilla` — the day-one page, embedded at compile time, speaking
+//!   the Plexus wire protocol over WebSocket. Unchanged since day one
+//!   and fully functional; it moved off `/` with MFE-4 and stays until an
+//!   epic retires it.
 //! - `/app/` — the Leptos CSR app (MFE-2), served **from disk** out of
-//!   `frontend/dist`. The frontend is deliberately not part of this
+//!   `frontend/dist`. Still the app's own root: it is where its assets
+//!   live (`Trunk.toml`'s `public_url`, so a built `index.html` names
+//!   `/app/…` whichever URL served it) and it is the deep-link prefix
+//!   MFE-1 pinned (`/app/#/ticket/{id}`), which the vanilla page's rows
+//!   still link to. The frontend is deliberately not part of this
 //!   crate's build: assets are an input to *serving*, so `cargo build`
 //!   and `cargo test` never need the wasm toolchain. When the output is
-//!   missing the URL answers with a plain "frontend not built" page
+//!   missing **this** URL answers with a plain "frontend not built" page
 //!   (HTTP 200 — a deliberate state with build instructions, not an
-//!   error), never a crash or a 500.
+//!   error), never a crash or a 500; the root is the one that degrades
+//!   to something usable instead.
 //! - `/rest/{*}` — a same-origin reverse proxy to the local REST port.
 //!   The REST transport emits no CORS headers (verified against
 //!   plexus-transport 0.2.3 src/http/), so a browser page from this
@@ -53,6 +65,9 @@ pub fn default_app_dist() -> PathBuf {
 
 struct ShellState {
     rest_port: Option<u16>,
+    /// The day-one page, WS port already substituted. Served at
+    /// `/vanilla`, and at `/` when there is no app build (MFE-4).
+    vanilla: String,
     /// MFE-9: the app talks to the Plexus WebSocket directly, and a page
     /// served from disk cannot know which port that is. Substituted into
     /// the app's `index.html` on the way out, exactly as the vanilla shell
@@ -64,24 +79,26 @@ struct ShellState {
 }
 
 pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
-    let html = include_str!("../web/index.html").replace("{{WS_PORT}}", &cfg.ws_port.to_string());
     let state = Arc::new(ShellState {
         rest_port: cfg.rest_port,
+        vanilla: include_str!("../web/index.html")
+            .replace("{{WS_PORT}}", &cfg.ws_port.to_string()),
         ws_port: cfg.ws_port,
         app_dist: cfg.app_dist,
         client: hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
             .build_http(),
     });
     let app = Router::new()
-        .route("/", get(move || std::future::ready(Html(html.clone()))))
+        .route("/", get(root_index))
+        .route("/vanilla", get(vanilla))
         .route("/app", get(app_index))
         .route("/app/", get(app_index))
         .route("/app/{*path}", get(app_asset))
         .route("/rest/{*path}", any(proxy_rest))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", cfg.port)).await?;
-    tracing::info!("Shell:     http://127.0.0.1:{}/", cfg.port);
-    tracing::info!("App:       http://127.0.0.1:{}/app/", cfg.port);
+    tracing::info!("App:       http://127.0.0.1:{}/", cfg.port);
+    tracing::info!("Vanilla:   http://127.0.0.1:{}/vanilla", cfg.port);
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -97,13 +114,47 @@ fn not_built() -> Response {
         "<p>The Leptos app's build output is missing. Build it once:</p>",
         "<pre>cd frontend && trunk build --release</pre>",
         "<p>then reload. Toolchain setup is in README.md → Frontend. ",
-        "The server itself is fine — the vanilla shell is at <a href=\"/\">/</a>.</p>",
+        "The server itself is fine — the vanilla shell is at ",
+        "<a href=\"/vanilla\">/vanilla</a>, and <a href=\"/\">/</a> serves it ",
+        "until this build exists.</p>",
     ))
     .into_response()
 }
 
+/// The app's entrypoint with the WebSocket port substituted, or `None`
+/// when `frontend/dist` holds no build. Separate from [`serve_dist_file`]
+/// because the two callers differ on what "missing" means: `/app/` says
+/// so (MFE-2), `/` falls back to the vanilla page (MFE-4).
+async fn app_entrypoint(dist: &std::path::Path, ws_port: u16) -> Option<String> {
+    let bytes = tokio::fs::read(dist.join("index.html")).await.ok()?;
+    // MFE-9: the entrypoint carries the WebSocket port. The app's
+    // index.html declares it as `{{WS_PORT}}` (see frontend/index.html);
+    // every other asset is served byte-exact.
+    Some(String::from_utf8(bytes).ok()?.replace("{{WS_PORT}}", &ws_port.to_string()))
+}
+
+/// MFE-4: the root is the app. No build output on disk is not an error
+/// here — it is the day-one page, which needs no build and works.
+async fn root_index(State(st): State<Arc<ShellState>>) -> Response {
+    match app_entrypoint(&st.app_dist, st.ws_port).await {
+        Some(html) => Html(html).into_response(),
+        None => {
+            tracing::debug!("no app build at {:?}: / degrades to the vanilla page", st.app_dist);
+            Html(st.vanilla.clone()).into_response()
+        }
+    }
+}
+
+/// The day-one page, wherever the app stands.
+async fn vanilla(State(st): State<Arc<ShellState>>) -> Response {
+    Html(st.vanilla.clone()).into_response()
+}
+
 async fn app_index(State(st): State<Arc<ShellState>>) -> Response {
-    serve_dist_file(&st.app_dist, "index.html", st.ws_port).await
+    match app_entrypoint(&st.app_dist, st.ws_port).await {
+        Some(html) => Html(html).into_response(),
+        None => not_built(),
+    }
 }
 
 async fn app_asset(

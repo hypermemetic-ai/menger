@@ -14,13 +14,19 @@ clients; the app does not use it.
 ## Run
 
 ```sh
-cargo run                     # WebSocket :4455, web shell http://127.0.0.1:4456/,
-                              # REST :4457, Leptos app http://127.0.0.1:4456/app/
+cargo run                     # the app http://127.0.0.1:4456/, WebSocket :4455,
+                              # REST :4457, day-one page /vanilla
 cargo run -- --stdio          # MCP-compatible stdio mode
 cargo test
 ```
 
-Open the shell in two browser windows; create a ticket or flip a status in
+`http://127.0.0.1:4456/` is the Leptos app (MFE-4). Until you build the
+frontend it serves the day-one vanilla page instead — the binary alone
+always serves something live — and that page keeps its own URL,
+`/vanilla`, once the app is built. `/app/` is the app's asset root and
+the deep-link prefix (`/app/#/ticket/MNG-1`); it serves the app too.
+
+Open the app in two browser windows; create a ticket or flip a status in
 one and watch the other update. No polling — the server pushes.
 
 ### Synthetic seeding (PERF-2)
@@ -53,8 +59,9 @@ magnitude on temp databases and ephemeral ports.
 The MFE epic's browser client lives in `frontend/` — a **separate cargo
 unit** (Leptos 0.8, CSR only, built with trunk). The server never needs
 it to compile: `cargo build` / `cargo test` work with no wasm toolchain
-installed, and `http://127.0.0.1:4456/app/` answers a plain "frontend
-not built" page (HTTP 200 with build instructions) until you build it.
+installed. Until you build it, `/` serves the vanilla page and
+`http://127.0.0.1:4456/app/` answers a plain "frontend not built" page
+(HTTP 200 with build instructions, never a 500).
 
 One-time toolchain (steps that worked on this machine):
 
@@ -72,7 +79,7 @@ Build and run:
 
 ```sh
 cd frontend && trunk build --release   # production build -> frontend/dist/
-cargo run                              # serves it at http://127.0.0.1:4456/app/
+cargo run                              # serves it at http://127.0.0.1:4456/
 ```
 
 Dev loop: keep `cargo run` up and run `cd frontend && trunk watch` — it
@@ -120,8 +127,8 @@ owns no routing):
   painting as pages land, and reconnects on a ~1 s loop — a server
   restart returns the page to live on its own, with rows keeping their
   DOM identity. The port comes from `<meta name="menger-ws-port">`, which
-  the shell substitutes when it serves `/app/`, exactly as it always has
-  for `web/index.html`.
+  the shell substitutes wherever it serves the app's entrypoint (`/` and
+  `/app/`), exactly as it always has for `web/index.html`.
 
 ## Surface
 
@@ -191,13 +198,17 @@ events arrive as `result` notifications carrying `PlexusStreamItem`s.
 src/
   main.rs              CLI args, transports, spawns the shell
   builder.rs           build_rpc() → Arc<DynamicHub> ("menger")
+  shell.rs             / (the Leptos app, degrading to the vanilla page when
+                       unbuilt), /vanilla (the embedded day-one page), /app/
+                       (the app + its assets from disk), /rest/* (same-origin
+                       proxy to the REST port)
+tickets-api/           the ticket vocabulary, the `tickets` activation and the
+                       typed Plexus client it emits — ONE declaration, shared by
+                       the server (default features: `server`) and the app
+                       (default-features = false, wasm32)
+  types.rs             Ticket · Status · Kind · Severity · TicketSummary · TicketsEvent
   store.rs             the service-wide cache (SQLite system of record behind it)
-  shell.rs             / (embedded vanilla page), /app/ (Leptos dist from
-                       disk), /rest/* (same-origin proxy to the REST port)
-  activations/
-    tickets/           activation.rs (#[plexus_macros::activation]); types.rs re-exports the shared ones
-tickets-api/           the ticket vocabulary + the typed Plexus client, shared by
-                       the server (default features) and the app (features = ["client"])
+  activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/)
 plans/MNG/             the backend epic; plans/MFE/ the frontend epic

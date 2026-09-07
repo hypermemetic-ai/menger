@@ -8,34 +8,39 @@ online from the first commit — every noun visible the day it is written.
 ## Commands
 
 ```sh
-cargo run          # WS :4455, shell http://127.0.0.1:4456/
+cargo run          # WS :4455, the app http://127.0.0.1:4456/ (day-one page: /vanilla)
 cargo test         # unit tests + wire tests (tests/wire.rs speaks the real protocol)
 ```
 
 ## Conventions
 
-- Plexus crates come from crates.io (`plexus-core`/`plexus-macros` 0.5,
-  `plexus-transport` 0.2) — same pins as `../hypermemetic-whoami` and
-  `../hypermemetic-runs`, which are the reference apps for the macro API
+- Plexus crates come from the **0.6 line by sibling path** (MFE-10):
+  `../plexus-core` 0.6.0, `../plexus-macros` 0.6.0, `../plexus-transport`
+  0.5.0, all on `main`, referencing each other the same way so the graph
+  resolves one of each. The line is unpublished and untagged — MACRO-8 is
+  that release — so a clone of menger alone does not build; the sibling
+  checkouts must be beside it. Same macro API as before
   (`#[plexus_macros::activation]` + `#[plexus_macros::method]`,
   `crate_path = "plexus_core"`).
-- The ticket vocabulary lives ONCE, in `tickets-api/`
-  (`menger-tickets-api`): `Ticket`, `Status`, `Kind`, `Severity`,
-  `TicketSummary`, `TicketsEvent`. `src/store.rs` and the tickets
-  activation re-export them, so `crate::store::Status` still resolves;
-  the browser app depends on the same crate, which is what makes a
-  renamed server field a wasm compile error rather than a blank cell
-  (MFE-9). Don't re-declare a wire type in `frontend/src`.
+- The `tickets` activation lives ONCE, in `tickets-api/`
+  (`menger-tickets-api`, MFE-11): the vocabulary (`Ticket`, `Status`,
+  `Kind`, `Severity`, `TicketSummary`, `TicketsEvent`), the store, and
+  `activation.rs`'s `#[activation(client, server_cfg = "feature =
+  \"server\"")]`. The server takes the crate with `server` (default);
+  the browser app takes it with `default-features = false` and gets the
+  emitted `TicketsClient<T>` over wasm-safe crates. `menger::store`
+  re-exports the store, so `crate::store::Status` still resolves. A
+  renamed field OR parameter is a wasm compile error — there is no second
+  declaration. Don't re-declare a wire type or a method signature
+  anywhere else.
 - The browser app's data plane is the Plexus WebSocket, not the REST
   bridge (MFE-9): one `WsTransport` for the app's lifetime, the typed
   client from `tickets-api`'s `client` feature, `watch` opened before
   MNG-9's `list` page walk. The REST bridge and the `/rest` proxy stay
   for curl, scripts and non-Rust clients. `frontend/src` must contain no
   `/rest/`, no hand-parsed SSE, and no `serde_json::Value` on a wire path.
-  The `client` feature path-depends on the **plexus 0.6** worktrees
-  (`../plexus-macros-macro-6`), which the server is deliberately NOT on —
-  MFE-10 is the bump, MFE-11 collapses the two activation declarations
-  into one.
+  Both halves are on the plexus 0.6 line (MFE-10), and the client the app
+  uses is emitted from the server's own activation (MFE-11).
 - Every RPC method returns `impl Stream<Item = TicketsEvent> + Send + 'static`;
   event enums use `#[serde(tag = "type", rename_all = "snake_case")]` with an
   in-band `Error { message }` variant.
@@ -76,6 +81,8 @@ cargo test         # unit tests + wire tests (tests/wire.rs speaks the real prot
   name for `done`; SDLC-2 reconciles the vocabulary with ought's).
 - `web/index.html` is dependency-free and embedded via `include_str!` —
   no build step, keep it that way (MNG-5 hardens this into a contract).
+  Since MFE-4 it is served at `/vanilla`; `/` is the Leptos app, and
+  falls back to this page when `frontend/dist` holds no build.
 - Wire protocol notes (envelope, `menger.call` subscription) are in
   README.md — `tests/wire.rs` is the executable reference.
 - Delegation (owner, 2026-09-06): implementation subagents run on Opus 5
