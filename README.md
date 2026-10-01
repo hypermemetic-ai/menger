@@ -36,9 +36,10 @@ For measurement, not for real data: `--seed-synthetic N` (env
 before serving — through the store's cache layer, in a few large
 transactions rather than one fsync per row — and then serves them like
 any other tickets. The shape is realistic (several Zipf-sized epics, ids
-allocated the normal way, every status and kind, a short markdown body,
-about a quarter of the tickets carrying valid acyclic `blocked_by` edges
-with `unlocks` mirrored), and deterministic: the same `--seed-value`
+allocated the normal way, every kind and every status but the two worker
+states — SDLC-7 left the generator, and so every seeded store, as it was —
+a short markdown body, about a quarter of the tickets carrying valid
+acyclic `blocked_by` edges with `unlocks` mirrored), and deterministic: the same `--seed-value`
 (`MENGER_SEED_VALUE`, default 1) produces byte-identical tickets. The
 startup log carries the count and the elapsed time. A database that
 already holds tickets **refuses** the seed and the server exits; pass
@@ -156,6 +157,23 @@ server opens it — `epic→scope`, `implementation→build`, `analysis→spike`
 `checkpoint→execution`, `spike→spike`; any other legacy value refuses the
 open, naming the row.
 
+The statuses are nine (SDLC-7): `Pending`, `Ready`, **`Coding`**, **`In
+Review`**, `Blocked`, `Complete`, `Idea`, `Epic`, `Superseded`. The two
+in bold are the **worker states**: a worker flips its ticket `Ready →
+Coding` with `set_status` the moment it starts (so no leaf is claimed
+twice) and `Coding → In Review` in the commit that finishes the work —
+gate green, committed, the message ending `— in review`; the merge sets
+`Complete`. `In Review` is spelled with its space on the wire and in the
+database. `set_status` and `list { status }` read any status
+case-insensitively, and the worker states leniently — `in review`,
+`in_review`, `in-review`, `inreview`, and `active` (the house
+methodology's word) for `Coding` — but write only the canonical spelling.
+No transition is gated (SDLC-4), and neither worker state is ready or
+done: the ready set is still `Ready`, a blocker is still satisfied only by
+`Complete` or `Superseded`, and a roll-up's `done` still counts
+`Complete`. Stored as text, so a database written before them opens
+unchanged — nothing to migrate.
+
 A ticket's outputs are tickets (AGS-19): every ticket carries an optional
 **`parent`** — the ticket it is an output of, in any epic — and a
 server-derived **`children`**, the mirror the store keeps as it keeps
@@ -178,7 +196,7 @@ ticket is logged and left empty, never fatal.
 | `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page — `after` naming no ticket is one in-band `error` |
 | `tickets.ready_set { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete or Superseded), ordered (epic, seq), then one `page { next, remaining }` |
 | `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
-| `tickets.set_status { id, status }` | `status_changed { ticket, previous }` |
+| `tickets.set_status { id, status }` | `status_changed { ticket, previous }` — any of the nine, from any status (SDLC-7: the worker states `Coding` and `In Review` included); one outside them is an in-band `error` naming the nine |
 | `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's `parent`, the new parent's `children` and the old parent's `children` (if any) move in one transaction; the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, root, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only), `root` is the lowest-seq `scope`, `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
 | `tickets.extents {}` | one `extent { epic, last_seq }` per shortcode that holds a ticket, in shortcode order (the store's), then the stream's own `done` (SCALE-16) — where each shortcode ends: ids are allocated highest-plus-one and never deleted, so a shortcode holds `last_seq` tickets, row k of it is `EPIC-k`, and a position in the store's order becomes a `list { after }` cursor without a walk; every `last_seq` together sums to `health.ticket_count` (a hand-edited database with a hole still reports the highest sequence; `after` naming the missing id is `list`'s cursor error). Not a roll-up: the shortcode's own tickets only, and every shortcode has one whether or not the nav draws it a row. Read from the sequence `create` allocates from (SCALE-3), so the cost is the number of shortcodes; no `watch` event — `created` carries the shortcode's new `last_seq` as its `seq` |

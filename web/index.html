@@ -73,7 +73,7 @@
 // ("menger.call") per logical call; events arrive as "result"
 // notifications carrying PlexusStreamItem ({type: "data", content: ...}).
 const WS_PORT = "{{WS_PORT}}";
-const STATUSES = ["Pending", "Ready", "Blocked", "Complete", "Idea", "Epic", "Superseded"];
+const STATUSES = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded"];
 const ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
 let nextId = 1;
 const awaitingSubId = new Map(); // request id -> handler

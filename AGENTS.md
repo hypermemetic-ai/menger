@@ -123,12 +123,15 @@ derived from it or from the declaration that produces it. Pick by consumer:
   review` in the commit that finishes the work — gate green, committed,
   change linked (the commit message ends `— in review`); the **merge**
   (the pipeline) lands it to `done`, so the merge hash is the completion
-  hash. Each flip is the ticket's frontmatter in the worktree plus
-  `tickets.set_status` on the running server, so the board shows where
-  the work is. Until SDLC-7 lands the two worker states in the server's
-  `Status` enum, write them in frontmatter only — `set_status` rejects
-  them today — and the merge still sets `Complete` (menger's current
-  name for `done`; SDLC-2 reconciles the vocabulary with ought's).
+  hash. Each flip is `tickets.set_status` on the running server (and the
+  ticket's frontmatter, where the worktree carries one), so the board
+  shows where the work is. The server holds both worker states (SDLC-7)
+  under menger's names: set **`Coding`** when work starts and **`In
+  Review`** in the commit that finishes it. `set_status` also takes
+  ought's words — `active` is `Coding`, `in review` is `In Review` — and
+  stores the canonical spelling. The merge still sets `Complete`
+  (menger's current name for `done`; SDLC-2 reconciles the vocabulary
+  with ought's).
 - `web/index.html` is dependency-free and embedded via `include_str!` —
   no build step, keep it that way (MNG-5 hardens this into a contract).
   Since MFE-4 it is served at `/vanilla`; `/` is the Leptos app, and

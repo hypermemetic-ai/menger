@@ -226,7 +226,7 @@ impl Tickets {
         description = "List tickets, optionally filtered by epic, status and/or parent; paged with after + limit",
         params(
             epic = "Epic prefix filter (optional)",
-            status = "Status filter: Pending | Ready | Blocked | Complete | Idea | Epic | Superseded (optional)",
+            status = "Status filter: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded (optional)",
             parent = "Only this ticket's children, e.g. PERF-3 (optional)",
             after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
             limit = "At most this many tickets; the page event carries the next cursor (optional)",
@@ -266,11 +266,14 @@ impl Tickets {
     }
 
     /// Yields exactly one event: `StatusChanged`, `NotFound`, or `Error`.
+    /// SDLC-7: the vocabulary is nine — the worker states `Coding` and
+    /// `In Review` included — and the write is free: any status to any
+    /// other, nothing gated (SDLC-4 owns transitions).
     #[plexus_macros::method(
         description = "Set a ticket's status",
         params(
             id = "Ticket id, e.g. MNG-2",
-            status = "New status: Pending | Ready | Blocked | Complete | Idea | Epic | Superseded"
+            status = "New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded (case-insensitive; `active` is Coding)"
         )
     )]
     pub async fn set_status(
@@ -620,6 +623,38 @@ mod tests {
             }
             other => panic!("expected StatusChanged, got {other:?}"),
         }
+    }
+
+    /// SDLC-7 criterion 1, over the activation: `set_status` takes both
+    /// worker states — the canonical spelling and a hand-typed one —
+    /// answers `status_changed`, `get` returns `In Review` byte-exact on
+    /// the wire, and `list { status }` filters on each.
+    #[tokio::test]
+    async fn set_status_takes_the_worker_states_and_list_filters_on_them() {
+        let hub = hub();
+        one(hub.create("WK".into(), "root".into(), Some("scope".into()), None, None, None, None).await).await;
+        one(hub.create("WK".into(), "a".into(), None, None, None, None, None).await).await;
+        one(hub.create("WK".into(), "b".into(), None, None, None, None, None).await).await;
+
+        for (id, spelling, want, previous) in [
+            ("WK-2", "Coding", Status::Coding, Status::Pending),
+            ("WK-3", "active", Status::Coding, Status::Pending),
+            ("WK-3", "In Review", Status::InReview, Status::Coding),
+        ] {
+            match one(hub.set_status(id.into(), spelling.into()).await).await {
+                TicketsEvent::StatusChanged { ticket, previous: was } => {
+                    assert_eq!((ticket.id.as_str(), ticket.status, was), (id, want, previous), "{spelling}");
+                }
+                other => panic!("{spelling}: expected StatusChanged, got {other:?}"),
+            }
+        }
+        let wire = serde_json::to_value(one(hub.get("WK-3".into()).await).await).unwrap();
+        assert_eq!(wire["ticket"]["status"], "In Review");
+
+        let (ids, _) = ids_and_page(hub.list(None, Some("coding".into()), None, None, None, None).await).await;
+        assert_eq!(ids, ["WK-2"]);
+        let (ids, _) = ids_and_page(hub.list(None, Some("In Review".into()), None, None, None, None).await).await;
+        assert_eq!(ids, ["WK-3"]);
     }
 
     #[tokio::test]

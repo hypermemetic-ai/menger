@@ -25,12 +25,27 @@ use std::str::FromStr;
 
 /// Lifecycle status. Serialized with frontmatter casing (`Pending`, `Ready`, …)
 /// so a ticket round-trips into a plans/ file unchanged.
+///
+/// SDLC-7 adds the two **worker states**, the middle of rim's lifecycle
+/// under the house casing: a worker flips its ticket `Ready → Coding` the
+/// moment it starts (so no leaf is double-claimed) and `Coding → In Review`
+/// in the commit that finishes the work; the merge sets `Complete`. The
+/// interim answer, not the final vocabulary — SDLC-2 owns that, and must
+/// keep or explicitly map these two. `set_status` stays a free write: no
+/// transition is gated (SDLC-4).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
 )]
 pub enum Status {
     Pending,
     Ready,
+    /// SDLC-7: a worker has claimed the ticket and work is under way.
+    Coding,
+    /// SDLC-7: the work is committed, gate green, and waits on the merge.
+    /// The one status whose wire spelling is not its variant's name: it
+    /// carries a space on the wire and in frontmatter, as written.
+    #[serde(rename = "In Review")]
+    InReview,
     Blocked,
     Complete,
     Idea,
@@ -42,10 +57,13 @@ impl Status {
     /// The closed vocabulary, in the order a chooser should offer it. The
     /// browser app's status control renders exactly this — so a status
     /// added here appears in the UI without a second edit, and one removed
-    /// cannot linger in it.
-    pub const ALL: [Status; 7] = [
+    /// cannot linger in it. SDLC-7: the worker states sit where a ticket
+    /// passes through them, between `Ready` and `Complete`.
+    pub const ALL: [Status; 9] = [
         Status::Pending,
         Status::Ready,
+        Status::Coding,
+        Status::InReview,
         Status::Blocked,
         Status::Complete,
         Status::Idea,
@@ -58,6 +76,8 @@ impl Status {
         match self {
             Status::Pending => "Pending",
             Status::Ready => "Ready",
+            Status::Coding => "Coding",
+            Status::InReview => "In Review",
             Status::Blocked => "Blocked",
             Status::Complete => "Complete",
             Status::Idea => "Idea",
@@ -73,19 +93,30 @@ impl fmt::Display for Status {
     }
 }
 
+/// Case-insensitive, and lenient about the worker states (SDLC-7) — a
+/// worker types them by hand, so the drift the ticket's Risks name (`In
+/// review`, `in-review`, `in_review`) is accepted rather than refused, and
+/// so is `active`: the house methodology (and CLAUDE.md, which quotes it)
+/// calls the claimed state that, and a worker following it to the letter
+/// must not be refused. What is *written* is single-sourced in the enum:
+/// every spelling parses to one variant, which serializes as `Coding` or
+/// `In Review`.
 impl FromStr for Status {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "pending" => Ok(Self::Pending),
             "ready" => Ok(Self::Ready),
+            "coding" | "active" => Ok(Self::Coding),
+            "in review" | "in_review" | "in-review" | "inreview" => Ok(Self::InReview),
             "blocked" => Ok(Self::Blocked),
             "complete" => Ok(Self::Complete),
             "idea" => Ok(Self::Idea),
             "epic" => Ok(Self::Epic),
             "superseded" => Ok(Self::Superseded),
             other => Err(format!(
-                "unknown status '{other}' (expected Pending, Ready, Blocked, Complete, Idea, Epic, or Superseded)"
+                "unknown status '{other}' (expected Pending, Ready, Coding, In Review, Blocked, \
+                 Complete, Idea, Epic, or Superseded)"
             )),
         }
     }
@@ -415,6 +446,41 @@ mod tests {
                 "{s:?}"
             );
             assert_eq!(s.as_str().parse::<Status>().unwrap(), s);
+        }
+    }
+
+    /// SDLC-7 criterion 5: all nine round-trip — through serde both ways
+    /// (`In Review` with its space, byte-exact), through `FromStr` from the
+    /// wire spelling and from its lowercase — and the worker states parse
+    /// from every spelling a worker is likely to type, to the one variant
+    /// that writes them canonically. The refusal names all nine.
+    #[test]
+    fn the_nine_statuses_round_trip_and_the_worker_states_parse_leniently() {
+        assert_eq!(Status::ALL.len(), 9);
+        for s in Status::ALL {
+            let json = serde_json::to_string(&s).unwrap();
+            assert_eq!(json, format!("\"{}\"", s.as_str()), "{s:?}");
+            assert_eq!(serde_json::from_str::<Status>(&json).unwrap(), s, "{json}");
+            assert_eq!(s.as_str().to_lowercase().parse::<Status>().unwrap(), s, "{s:?}");
+            assert_eq!(s.to_string(), s.as_str());
+        }
+        assert_eq!(serde_json::to_string(&Status::InReview).unwrap(), "\"In Review\"");
+        for spelling in ["Coding", "coding", "CODING", "active", "Active"] {
+            assert_eq!(spelling.parse::<Status>(), Ok(Status::Coding), "{spelling}");
+        }
+        for spelling in [
+            "In Review", "in review", "In review", "IN REVIEW", "in_review", "IN_REVIEW",
+            "inreview", "InReview", "in-review",
+        ] {
+            assert_eq!(spelling.parse::<Status>(), Ok(Status::InReview), "{spelling}");
+        }
+        // serde is the strict reader: only the canonical spelling.
+        assert!(serde_json::from_str::<Status>("\"InReview\"").is_err());
+
+        let err = "review".parse::<Status>().unwrap_err();
+        assert!(err.contains("'review'"), "{err}");
+        for s in Status::ALL {
+            assert!(err.contains(s.as_str()), "names {s}: {err}");
         }
     }
 

@@ -1524,3 +1524,8 @@ mod tests_paging;
 /// code, and its pages to MNG-9's rules.
 #[cfg(test)]
 mod tests_find;
+
+/// SDLC-7: all nine statuses through the system of record, and what the
+/// two worker states are not (ready, done, a satisfied blocker).
+#[cfg(test)]
+mod tests_worker_states;

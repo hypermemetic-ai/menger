@@ -1,0 +1,159 @@
+[
+ {
+  "blocked_by": [],
+  "body": "---\nid: PRE-1\nstatus: Epic\n---\n\n## Problem\n\nünïcode ✓ and `code`\n",
+  "children": [
+   "PRE-2",
+   "PRE-3",
+   "PRE-4",
+   "PRE-6",
+   "PRE-7",
+   "PRESUB-1"
+  ],
+  "created_unix": 1790893829,
+  "epic": "PRE",
+  "id": "PRE-1",
+  "kind": "scope",
+  "seq": 1,
+  "severity": "High",
+  "status": "Epic",
+  "title": "pre-SDLC-7 fixture — every status",
+  "unlocks": [],
+  "updated_unix": 1790893829
+ },
+ {
+  "blocked_by": [],
+  "body": "plain body\nwith two lines",
+  "children": [],
+  "created_unix": 1790893829,
+  "epic": "PRE",
+  "id": "PRE-2",
+  "kind": "build",
+  "parent": "PRE-1",
+  "seq": 2,
+  "status": "Pending",
+  "title": "pending build",
+  "unlocks": [
+   "PRE-3",
+   "PRE-4"
+  ],
+  "updated_unix": 1790893829
+ },
+ {
+  "blocked_by": [
+   "PRE-2"
+  ],
+  "body": "",
+  "children": [
+   "PRE-5"
+  ],
+  "created_unix": 1790893829,
+  "epic": "PRE",
+  "id": "PRE-3",
+  "kind": "build",
+  "parent": "PRE-1",
+  "seq": 3,
+  "severity": "Low",
+  "status": "Ready",
+  "title": "ready, blocked by PRE-2",
+  "unlocks": [],
+  "updated_unix": 1790893829
+ },
+ {
+  "blocked_by": [
+   "PRE-2",
+   "PRE-99"
+  ],
+  "body": "",
+  "children": [],
+  "created_unix": 1790893829,
+  "epic": "PRE",
+  "id": "PRE-4",
+  "kind": "gap",
+  "parent": "PRE-1",
+  "seq": 4,
+  "severity": "Critical",
+  "status": "Blocked",
+  "title": "blocked gap",
+  "unlocks": [],
+  "updated_unix": 1790893829
+ },
+ {
+  "blocked_by": [],
+  "body": "",
+  "children": [],
+  "created_unix": 1790893829,
+  "epic": "PRE",
+  "id": "PRE-5",
+  "kind": "execution",
+  "parent": "PRE-3",
+  "seq": 5,
+  "status": "Complete",
+  "title": "complete execution",
+  "unlocks": [],
+  "updated_unix": 1790893829
+ },
+ {
+  "blocked_by": [],
+  "body": "",
+  "children": [],
+  "created_unix": 1790893829,
+  "epic": "PRE",
+  "id": "PRE-6",
+  "kind": "spike",
+  "parent": "PRE-1",
+  "seq": 6,
+  "status": "Idea",
+  "title": "idea spike",
+  "unlocks": [],
+  "updated_unix": 1790893829
+ },
+ {
+  "blocked_by": [],
+  "body": "",
+  "children": [],
+  "created_unix": 1790893829,
+  "epic": "PRE",
+  "id": "PRE-7",
+  "kind": "build",
+  "parent": "PRE-1",
+  "seq": 7,
+  "severity": "Medium",
+  "status": "Superseded",
+  "title": "superseded",
+  "unlocks": [],
+  "updated_unix": 1790893829
+ },
+ {
+  "blocked_by": [],
+  "body": "",
+  "children": [
+   "PRESUB-2"
+  ],
+  "created_unix": 1790893829,
+  "epic": "PRESUB",
+  "id": "PRESUB-1",
+  "kind": "scope",
+  "parent": "PRE-1",
+  "seq": 1,
+  "status": "Epic",
+  "title": "a sub-shortcode hosted under PRE-1",
+  "unlocks": [],
+  "updated_unix": 1790893829
+ },
+ {
+  "blocked_by": [],
+  "body": "",
+  "children": [],
+  "created_unix": 1790893829,
+  "epic": "PRESUB",
+  "id": "PRESUB-2",
+  "kind": "build",
+  "parent": "PRESUB-1",
+  "seq": 2,
+  "status": "Pending",
+  "title": "its pending child",
+  "unlocks": [],
+  "updated_unix": 1790893829
+ }
+]

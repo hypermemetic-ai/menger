@@ -89,6 +89,12 @@
 //! palette filters the store, and the menu reads its ticket from the store
 //! by id (src/keys.rs, src/menu.rs).
 
+//! SDLC-7: the vocabulary is nine — the worker states `Coding` and `In
+//! Review` joined it. Every chooser renders `Status::ALL`, so both appeared
+//! in the board's control and the menu's Set status with no edit here; what
+//! this crate adds is their rows in index.html's status table, light and
+//! dark, and a class name for the one status with a space ([`st_class`]).
+
 mod dom;
 mod keys;
 mod md;
@@ -127,8 +133,12 @@ const fn statuses() -> [&'static str; Status::ALL.len()] {
 /// page, blockers pills) puts these on the element that shows the word,
 /// so the word stays present and the color is the table's. A status
 /// outside the table paints nothing extra and stays legible text.
+///
+/// SDLC-7: `In Review` carries a space on the wire, and a space in a class
+/// attribute is two classes (`st-in`, `review`) — so the row is named with
+/// it hyphenated, `st-in-review`.
 pub(crate) fn st_class(status: &str) -> String {
-    format!("st st-{}", status.to_ascii_lowercase())
+    format!("st st-{}", status.to_ascii_lowercase().replace(' ', "-"))
 }
 
 /// What the header's health line shows. Not a wire type and not a mirror
@@ -1363,14 +1373,18 @@ mod tests {
     /// index.html's status table (a bg and an fg), and the class the
     /// views put on a chip names exactly that row. A new status without
     /// a row would paint as plain text; this fails first. AGS-17: and a
-    /// row in the dark table, under both dark mechanisms.
+    /// row in the dark table, under both dark mechanisms. SDLC-7: the row
+    /// is the status lowercased with its space hyphenated (`In Review` →
+    /// `st-in-review`), one class — never two.
     #[test]
     fn every_status_has_a_row_in_the_status_table() {
         let css = app_css();
+        let slug = |s: &str| s.to_lowercase().replace(' ', "-");
         for s in STATUSES {
             let class = st_class(s);
             let row = class.strip_prefix("st ").unwrap();
-            assert_eq!(row, format!("st-{}", s.to_lowercase()));
+            assert_eq!(row, format!("st-{}", slug(s)));
+            assert!(!row.contains(' '), "{s}: one class, not two");
             for prefix in ["", &format!("{DARK_ATTR} "), &format!("{DARK_MEDIA} ")] {
                 let line = css
                     .lines()
@@ -1383,9 +1397,9 @@ mod tests {
             }
         }
         assert_eq!(st_class("Blocked"), "st st-blocked");
+        assert_eq!(st_class("In Review"), "st st-in-review");
         let scan = scan(&css);
-        let want: std::collections::BTreeSet<String> =
-            STATUSES.iter().map(|s| s.to_ascii_lowercase()).collect();
+        let want: std::collections::BTreeSet<String> = STATUSES.iter().map(|s| slug(s)).collect();
         for (table, rows) in [
             ("light", &scan.st_light),
             ("dark (attribute)", &scan.st_dark_attr),

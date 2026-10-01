@@ -508,6 +508,72 @@ async fn pre_ags19_database_backfills_parents_on_first_open_and_survives_sigkill
     );
 }
 
+/// SDLC-7 criterion 3, black-box: `tests/fixtures/pre-sdlc7.db` was
+/// written by the binary at d773e73 — the last whose `Status` was the
+/// seven — with a ticket in each of the seven (and a sub-shortcode, DAG
+/// edges, a dangling blocker, severities, unicode and frontmatter in a
+/// body), and `pre-sdlc7.json` is that binary's own `list {}` of it.
+/// Statuses are stored as their wire text, so there is nothing to migrate:
+/// this binary answers the same nine tickets, field for field. Then the
+/// two worker states are written over two of them and survive SIGKILL.
+#[tokio::test]
+async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkill() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    std::fs::copy(fixtures.join("pre-sdlc7.db"), &db).unwrap();
+    let expected: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(fixtures.join("pre-sdlc7.json")).unwrap()).unwrap();
+    let statuses: Vec<&str> = expected.iter().map(|t| t["status"].as_str().unwrap()).collect();
+    for s in ["Pending", "Ready", "Blocked", "Complete", "Idea", "Epic", "Superseded"] {
+        assert!(statuses.contains(&s), "the fixture holds a {s} ticket: {statuses:?}");
+    }
+
+    let s1 = spawn_server(Some(&db), &[], dir.path(), "pre-sdlc7-1").await;
+    let c1 = connect(s1.port).await;
+    let tickets: Vec<Value> = drain(&c1, "tickets.list", json!({}))
+        .await
+        .into_iter()
+        .map(|ev| ev["ticket"].clone())
+        .collect();
+    assert_eq!(tickets, expected, "every ticket exactly as the seven-status binary answered it");
+    let log = s1.startup_output();
+    assert!(log.contains("loaded 9 tickets") && !log.contains("migrat"), "no migration ran:\n{log}");
+
+    for (id, status) in [("PRE-2", "Coding"), ("PRE-3", "In Review")] {
+        let ev = one(&c1, "tickets.set_status", json!({"id": id, "status": status})).await;
+        assert_eq!(ev["type"], "status_changed", "{id}: {ev}");
+        assert_eq!(ev["ticket"]["status"], status);
+    }
+    drop(c1);
+    s1.kill9();
+
+    let s2 = spawn_server(Some(&db), &[], dir.path(), "pre-sdlc7-2").await;
+    let c2 = connect(s2.port).await;
+    let after: Vec<Value> = drain(&c2, "tickets.list", json!({}))
+        .await
+        .into_iter()
+        .map(|ev| ev["ticket"].clone())
+        .collect();
+    assert_eq!(after.len(), expected.len());
+    for (got, was) in after.iter().zip(&expected) {
+        let id = got["id"].as_str().unwrap();
+        let mut want = was.clone();
+        match id {
+            "PRE-2" => want["status"] = json!("Coding"),
+            "PRE-3" => want["status"] = json!("In Review"),
+            _ => {
+                assert_eq!(got, was, "{id} untouched");
+                continue;
+            }
+        }
+        want["updated_unix"] = got["updated_unix"].clone();
+        assert_eq!(got, &want, "{id}: only the status (and its timestamp) moved");
+    }
+    let ev = one(&c2, "tickets.get", json!({"id": "PRE-3"})).await;
+    assert_eq!(ev["ticket"]["status"], "In Review", "byte-exact after SIGKILL + restart");
+}
+
 /// AGS-13: a legacy value the pinned mapping does not cover refuses the
 /// open — the process exits non-zero naming the row — and the database
 /// is left untouched for a human to fix.

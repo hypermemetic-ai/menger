@@ -76,9 +76,15 @@
      status appears (nav tag, board control, ticket page, blockers pills);
      the word stays in the chip. The extra selectors in the paint rule
      only out-rank the hosts' own base rules (`#nav .tag`,
-     `select.status { font: inherit }`); they name no color. */
+     `select.status { font: inherit }`); they name no color. SDLC-7 adds
+     the two worker states, each in a hue the table had not used, each
+     pair over 4.5:1 in both themes (Coding 5.78 light / 7.80 dark, In
+     Review 6.29 / 7.79). `In Review` is the one status with a space; its
+     row is `st-in-review` (st_class in src/main.rs hyphenates). */
   .st-pending    { --st-bg: #f3e8c8; --st-fg: #7a5d00; }
   .st-ready      { --st-bg: #e3ecf7; --st-fg: #2b5b8c; }
+  .st-coding     { --st-bg: #fde0c5; --st-fg: #8f3f00; }
+  .st-in-review  { --st-bg: #cdeef4; --st-fg: #0b5b6b; }
   .st-blocked    { --st-bg: #fdecec; --st-fg: #a23;    --st-weight: 600; }
   .st-complete   { --st-bg: #cfe9c9; --st-fg: #256b1a; }
   .st-idea       { --st-bg: #efe9e0; --st-fg: #72644c; } /* fg darkened from manifest's parked #8a7a5c (3.47:1) to clear AA */
@@ -119,6 +125,8 @@
     }
     :root:not([data-theme="light"]) .st-pending    { --st-bg: #3a3115; --st-fg: #e8cf7a; }
     :root:not([data-theme="light"]) .st-ready      { --st-bg: #1b2e46; --st-fg: #a3c6ee; }
+    :root:not([data-theme="light"]) .st-coding     { --st-bg: #3d2614; --st-fg: #f4b37c; }
+    :root:not([data-theme="light"]) .st-in-review  { --st-bg: #10343b; --st-fg: #85d2df; }
     :root:not([data-theme="light"]) .st-blocked    { --st-bg: #3d1a1c; --st-fg: #f09a9a; }
     :root:not([data-theme="light"]) .st-complete   { --st-bg: #16341f; --st-fg: #8fd39a; }
     :root:not([data-theme="light"]) .st-idea       { --st-bg: #2b2721; --st-fg: #c9b99a; }
@@ -141,6 +149,8 @@
   }
   :root[data-theme="dark"] .st-pending    { --st-bg: #3a3115; --st-fg: #e8cf7a; }
   :root[data-theme="dark"] .st-ready      { --st-bg: #1b2e46; --st-fg: #a3c6ee; }
+  :root[data-theme="dark"] .st-coding     { --st-bg: #3d2614; --st-fg: #f4b37c; }
+  :root[data-theme="dark"] .st-in-review  { --st-bg: #10343b; --st-fg: #85d2df; }
   :root[data-theme="dark"] .st-blocked    { --st-bg: #3d1a1c; --st-fg: #f09a9a; }
   :root[data-theme="dark"] .st-complete   { --st-bg: #16341f; --st-fg: #8fd39a; }
   :root[data-theme="dark"] .st-idea       { --st-bg: #2b2721; --st-fg: #c9b99a; }
