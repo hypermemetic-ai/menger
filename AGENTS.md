@@ -34,6 +34,12 @@ derived from it or from the declaration that produces it. Pick by consumer:
   JSON object (the way to send a multi-line `body`), `-n` shows the
   request without sending it, `-s` fetches the schema, `-i` emits the IR
   the code generators consume. 4455 is inside its `_self scan` range.
+  Options go **before** the backend name — after the path they are read
+  as a subcommand ("Method 'create' cannot have subcommands"):
+
+  ```sh
+  synapse -P 4455 -j -p '{"epic":"MNG","title":"…","body":"…"}' menger tickets create
+  ```
 - **The macro-emitted Rust client** — `TicketsClient<T>`, emitted by
   `#[plexus_macros::activation(client, …)]` from the activation's own
   `impl` in `tickets-api/` (MFE-11). Compile-time and Rust-only: the
