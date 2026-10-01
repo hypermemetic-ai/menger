@@ -65,6 +65,16 @@
 //! itself ([`plan`]) is untouched and still covers every ticket — it is
 //! what the rollups count, what the auto-expand walks, and why the tree's
 //! key map, which only ever walked the open rows, needs nothing new.
+//!
+//! MFE-17: **a parent can change.** MNG-12's `set_parent` files a ticket
+//! under another, or re-hosts a sub-shortcode's root under another
+//! shortcode's ticket; the forest was built on the stated assumption that
+//! it could not. The plan still reads `parent` untracked — a status change
+//! must never re-plan — and the session notifies the row list on
+//! `parent_changed`, so the plan re-runs on the move like on an insert: the
+//! leaf leaves its old parent's `<For>` and joins its new parent's, a
+//! re-hosted shortcode's group row moves under its new host, and every
+//! other node — its `expanded` key, its rows' DOM — stays as it was.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -155,10 +165,13 @@ pub(crate) fn kind_glyph(kind: &str) -> &'static str {
 // ---------------------------------------------------------------------
 // The forest (AGS-20) — pure, so it is the part a native test can pin.
 //
-// Everything the shape depends on is immutable for a ticket's lifetime
-// (`id`, `epic`, `seq`, `kind`, `parent` — the model has no re-parent and
-// no re-kind), which is why the plan can be a memo over the row *list*
-// and read those fields untracked.
+// Everything the shape depends on but `parent` is immutable for a
+// ticket's lifetime (`id`, `epic`, `seq`, `kind` — the model has no
+// re-kind), which is why the plan can be a memo over the row *list* and
+// read those fields untracked. MFE-17: `parent` changes — MNG-12's
+// `set_parent` — and the session tells the row list when one does, so the
+// plan re-runs on exactly the changes of shape: an insert, a removal, a
+// re-parent; never a status change.
 
 /// The facts one ticket contributes to the forest's shape.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -566,9 +579,9 @@ pub(crate) fn Nav(
     Effect::new(move |_| expanded.with(save_expanded));
 
     // The forest, recomputed only when the row *list* changes (an insert
-    // or a removal): `kind` and `parent` are immutable for a ticket's
-    // lifetime, so they are read untracked and a `status_changed` never
-    // re-runs this.
+    // or a removal) — or is told a parent changed (MFE-17: the session
+    // notifies the list on `parent_changed`). `kind` and `parent` are read
+    // untracked, so a `status_changed` never re-runs this.
     let plan: Memo<Plan> = Memo::new(move |_| {
         let facts = rows.with(|v| {
             v.iter()

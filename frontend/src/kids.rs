@@ -10,6 +10,10 @@
 //! the intended usage the ticket names. `child_count` decides whether
 //! there is anything to ask for, and how many are left.
 //!
+//! MFE-17: and each `removed` — a `set_parent` moves a child away, and the
+//! old parent's page lets it go (`child_removed`, which the app dropped
+//! until now).
+//!
 //! This is the list's state and the rules that move it — pure, so a
 //! native test can pin them. The fetching is `session::load_children`; the
 //! deltas reach it through `session`'s registry of open lists.
@@ -83,6 +87,15 @@ impl Kids {
         true
     }
 
+    /// MFE-17: `child_removed { removed }` for this parent — the child was
+    /// moved under another — leaves the list, if held. Returns whether the
+    /// list changed.
+    pub(crate) fn removed(&mut self, id: &str) -> bool {
+        let before = self.ids.len();
+        self.ids.retain(|x| x != id);
+        self.ids.len() != before
+    }
+
     /// How many children are not held yet, given the parent's count — what
     /// the "more" control offers. Zero once the list is whole.
     pub(crate) fn unshown(&self, child_count: u64) -> u64 {
@@ -108,6 +121,7 @@ mod tests {
     fn nothing_moves_before_the_first_page() {
         let mut k = Kids::default();
         assert!(!k.added("PAR-3"));
+        assert!(!k.removed("PAR-3"));
         assert_eq!(k, Kids::default());
         k.page(true, ids(&["PAR-2"]), None);
         assert!(k.loaded);
@@ -127,6 +141,21 @@ mod tests {
         assert!(k.added("AA-4"));
         assert!(!k.added("PAR-9"), "held already");
         assert_eq!(k.ids, ids(&["AA-4", "AAA-1", "PAR-3", "PAR-9", "PAR-10", "SUB-1", "ZED-1"]));
+    }
+
+    /// MFE-17: a child moved away leaves the list, once; one not held (past
+    /// the held pages, or never here) changes nothing — and moving it back
+    /// puts it at its place again.
+    #[test]
+    fn a_child_moved_away_leaves_the_list() {
+        let mut k = Kids::default();
+        k.page(true, ids(&["AAA-1", "PAR-3", "PAR-5", "SUB-1"]), None);
+        assert!(k.removed("PAR-3"));
+        assert!(!k.removed("PAR-3"));
+        assert!(!k.removed("NOPE-1"));
+        assert_eq!(k.ids, ids(&["AAA-1", "PAR-5", "SUB-1"]));
+        assert!(k.added("PAR-3"));
+        assert_eq!(k.ids, ids(&["AAA-1", "PAR-3", "PAR-5", "SUB-1"]));
     }
 
     /// A list held in part takes a child that falls inside what it holds

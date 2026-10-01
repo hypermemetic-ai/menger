@@ -117,6 +117,17 @@
 //! holds live from the deltas (src/kids.rs). The nav never read the list:
 //! its tree is every row's `parent` (src/nav.rs).
 
+//! MFE-17: the app follows a re-parent. `set_parent` (MNG-12) tells `watch`
+//! with `parent_changed` (the child, whole) and `child_removed` (the old
+//! parent's id and count), and the app used to drop both: after a move the
+//! nav showed the ticket where it had been, the old parent's page still
+//! listed it, and the child's crumb named the old parent — until a reload.
+//! Now the row store takes the child's new `parent` (the crumb and the
+//! page's parent field render through it), the nav re-plans its forest on
+//! the move (src/nav.rs), the old parent's open page lets the child go and
+//! the new parent's takes it (src/kids.rs), and the board's "decomposes"
+//! marks follow both counts. Nothing else on the board moves.
+
 mod dom;
 mod keys;
 mod kids;

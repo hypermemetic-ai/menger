@@ -42,6 +42,11 @@
 //!    which is the parent's id and new count: the count goes on the
 //!    parent's row, and the child onto any open page's list of the
 //!    parent's children ([`watch_children`]).
+//!    MFE-17: and a re-parent (`set_parent`, MNG-12), which the loop used
+//!    to drop: `parent_changed` upserts the moved child — its page's
+//!    crumb follows — and tells the nav its shape changed;
+//!    `child_removed` is the old parent's side, applied as
+//!    `children_changed` is.
 //!
 //! Ending the session (any error) drops the transport, which drops the
 //! socket; the caller sleeps and starts a new one. Rows are never cleared
@@ -327,6 +332,21 @@ async fn session(
             ClientEvent::Data(TicketsEvent::ChildrenChanged { id, added, child_count }) => {
                 set_child_count(rows, &id, child_count);
                 kids_of(&id, |k| k.added(&added));
+            }
+            // MFE-17: a ticket was filed under another parent. Its row
+            // takes the new `parent`; and since the nav reads the forest's
+            // shape off the row list, untracked (a status change must not
+            // re-plan it), the list is told — the one change of shape that
+            // is not an insert.
+            ClientEvent::Data(TicketsEvent::ParentChanged { ticket, .. }) => {
+                upsert(rows, TicketSummary::from(&ticket));
+                rows.notify();
+            }
+            // MFE-17: the old parent's side of that move — its count, and
+            // any open page's list of its children.
+            ClientEvent::Data(TicketsEvent::ChildRemoved { id, removed, child_count }) => {
+                set_child_count(rows, &id, child_count);
+                kids_of(&id, |k| k.removed(&removed));
             }
             // MNG-16: the row's title in place; the open page's body too.
             ClientEvent::Data(TicketsEvent::Amended { ticket, .. }) => {
