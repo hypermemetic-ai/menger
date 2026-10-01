@@ -188,7 +188,10 @@ a ticket id is a cursor: a client that renders opens `watch` first, then
 walks `list { summary: true, limit: 200 }`, passing the previous page's
 `page.next` as the next call's `after`, until `next` is `null`. Each page
 is `≤ limit` rows and one `page { next, remaining }`; `remaining` counts
-what is left under the same filters. A client that wants everything with
+what is left under the same filters — exactly, and, with no `status` or
+`parent` filter, without walking it: the store keeps each shortcode's
+count beside its sequence, so a page costs the page (SCALE-19; a
+`status`, `parent` or `ready_set` page still counts). A client that wants everything with
 bodies calls `list {}` exactly as before and ignores the trailing `page`.
 The body is ~70 % of a row, and only the ticket page shows one — it comes
 from `get`.
@@ -225,10 +228,13 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
     mod.rs             the Store: the cache, reads, the write-through path
     rollup.rs          the per-shortcode roll-ups it keeps (MNG-10)
     ids.rs             each shortcode's last sequence and the ids named before
-                       birth — what create reads instead of scanning (SCALE-3)
+                       birth — what create reads instead of scanning (SCALE-3);
+                       beside the sequence, how many tickets the shortcode
+                       holds — what page.remaining is computed from (SCALE-19)
     db.rs              the schema, upserts, the in-place migrations
     synthetic.rs       the --seed-synthetic generator (PERF-2)
     tests.rs           the store's unit tests
+    tests_paging.rs    page.remaining against a count, on every shape (SCALE-19)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell

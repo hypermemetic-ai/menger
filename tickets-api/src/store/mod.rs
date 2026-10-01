@@ -80,7 +80,9 @@ pub struct PageQuery<'a> {
 /// says yes": it is the evidence that there is nothing left to test —
 /// the filters that *can* be answered by position (the epic, the cursor)
 /// having already been spent on the [`Span`] — so counting what remains
-/// costs the walk and not a test per ticket.
+/// costs the walk and not a test per ticket. SCALE-19: and then not the
+/// walk either — with nothing to test, what remains is the span's length
+/// less the page, which the cache knows per shortcode ([`Span::len`]).
 enum Filter<'a> {
     All,
     By(&'a dyn Fn(&Ticket) -> bool),
@@ -152,6 +154,47 @@ impl Span {
             return None;
         }
         Some(cache.order.range((self.start.clone(), self.end.clone())))
+    }
+
+    /// SCALE-19: how many tickets this span holds, from what the cache
+    /// keeps about each shortcode ([`ids::Ids`]) rather than by walking
+    /// them — so an unfiltered page costs the page, not what is left
+    /// after it.
+    ///
+    /// A span is at most one cut shortcode and then whole ones: the
+    /// cursor's shortcode from the cursor on, and every shortcode after
+    /// it (or, for an epic, that one shortcode). A whole shortcode is its
+    /// kept count. The cut one is `last − seq` when its sequences are
+    /// dense — every one the server made — and is counted, by walking
+    /// the rest of that shortcode, when a hand edit left a hole in it.
+    /// The value is the walk's either way.
+    fn len(&self, cache: &Cache) -> u64 {
+        use std::ops::Bound::{Excluded, Included, Unbounded};
+        if self.empty {
+            return 0;
+        }
+        let rest_of_run = |key: &OrderKey| {
+            cache.ids.after_in_run(key).unwrap_or_else(|| {
+                let end = OrderKey {
+                    epic: key.epic.clone(),
+                    seq: u32::MAX,
+                };
+                cache.order.range((Excluded(key), Included(&end))).count() as u64
+            })
+        };
+        match (&self.start, &self.end) {
+            // The whole store.
+            (Unbounded, Unbounded) => cache.len() as u64,
+            // After a cursor, to the end of the store.
+            (Excluded(key), Unbounded) => rest_of_run(key) + cache.ids.held_after(&key.epic),
+            // One epic, whole — the cursor below it, or none.
+            (Included(first), Included(_)) => cache.ids.held(&first.epic),
+            // One epic, after a cursor inside it.
+            (Excluded(key), Included(_)) => rest_of_run(key),
+            // No other shape is cut (`Span::of`); were one, the walk is
+            // still the answer.
+            _ => self.range(cache).map_or(0, |range| range.count() as u64),
+        }
     }
 }
 
@@ -963,7 +1006,8 @@ impl Store {
     /// has always taken, plus how many further tickets match.
     ///
     /// The walk is over the cache's sorted half, so the cost is the page
-    /// (plus the count of what remains), not a clone-and-sort of every
+    /// (plus the count of what remains — SCALE-19: arithmetic, with no
+    /// `status` or `parent` to test), not a clone-and-sort of every
     /// ticket. `after` naming no ticket is [`StoreError::CursorNotFound`]:
     /// a cursor into nothing is a caller error, not an empty page.
     pub fn page(&self, q: PageQuery<'_>) -> Result<Page, StoreError> {
@@ -1013,6 +1057,12 @@ impl Store {
     /// O(what is left) the ticket's Risks section names and accepts;
     /// what keeps it cheap is that the span is already the right stretch
     /// of the order and its tickets are already in hand.
+    ///
+    /// SCALE-19: except where nothing is filtered. There the page is the
+    /// span's first tickets, so what is left is the span's length less
+    /// the page — [`Span::len`], arithmetic over the shortcodes — and the
+    /// count, which made a paged walk of the store quadratic (15.7 s at
+    /// 10⁶), is not taken at all. A predicate still costs its walk.
     fn walk_cache(cache: &Cache, span: Span, limit: Option<u32>, filter: Filter<'_>) -> Page {
         let take = limit.map_or(usize::MAX, |n| n as usize);
         let mut tickets = Vec::new();
@@ -1022,16 +1072,16 @@ impl Store {
         let remaining = match (span.range(cache), filter) {
             (None, _) => 0,
             (Some(range), Filter::All) => {
-                let mut it = range;
-                tickets.extend(it.by_ref().take(take).map(|(_, t)| t.clone()));
-                it.count()
+                tickets.extend(range.take(take).map(|(_, t)| t.clone()));
+                // The page is a prefix of the span: it cannot be longer.
+                span.len(cache) - tickets.len() as u64
             }
             (Some(range), Filter::By(keep)) => {
                 let mut it = range.map(|(_, t)| t).filter(|t| keep(t));
                 tickets.extend(it.by_ref().take(take).cloned());
-                it.count()
+                it.count() as u64
             }
-        } as u64;
+        };
 
         let next = if remaining == 0 {
             None
@@ -1361,6 +1411,13 @@ mod rollup;
 /// in-place migrations) and after a seed, and kept by every birth through
 /// `create`. `set_parent` and `set_status` touch neither a sequence nor a
 /// `blocked_by`, so they leave it as it is.
+///
+/// SCALE-19: beside each shortcode's sequence, how many tickets it holds —
+/// kept by the same paths, so a shortcode is known to be *dense* (every
+/// sequence from 1 to its highest: all the server ever makes) by comparing
+/// two numbers. That is what lets `page.remaining` be arithmetic instead of
+/// a count of everything after the page; a shortcode a hand edit left a
+/// hole in is counted, as before, where a page cuts it.
 mod ids;
 
 /// PERF-2: the synthetic ticket generator. Private to the store: the
@@ -1376,3 +1433,8 @@ mod db;
 
 #[cfg(test)]
 mod tests;
+
+/// SCALE-19: `page.remaining` is arithmetic now; these prove it is the
+/// count, page for page, against MNG-9's rule applied to a plain list.
+#[cfg(test)]
+mod tests_paging;
