@@ -517,19 +517,20 @@ impl Rollups {
     }
 
     /// The tally of `t`'s tree from `t` down — `t` and every descendant
-    /// reached without leaving its shortcode — walking the store's
-    /// `children` mirror, each entry checked against the child's own
-    /// `parent`.
+    /// reached without leaving its shortcode — walking the cache's
+    /// children index (SCALE-4; it was the row's `children` mirror, each
+    /// entry checked against the child's own `parent` — the index is
+    /// built from that field, so there is nothing left to check), one
+    /// shortcode's slice of it per step.
     fn subtree<'a>(&self, rows: Rows<'a>, t: &'a Ticket) -> Tally {
         let mut tally = Tally::default();
         let mut stack = vec![t];
         while let Some(x) = stack.pop() {
             tally.shift(Tally::of(x), true);
-            stack.extend(x.children.iter().filter_map(|c| rows.get(c)).filter(|c| {
-                c.parent.as_deref() == Some(x.id.as_str())
-                    && c.epic == x.epic
-                    && !self.on_cycle.contains(c.id.as_str())
-            }));
+            stack.extend(
+                rows.children_in_shortcode(x)
+                    .filter(|c| !self.on_cycle.contains(c.id.as_str())),
+            );
         }
         tally
     }

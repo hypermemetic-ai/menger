@@ -85,13 +85,19 @@ It seeds N (`--seed-synthetic N`, seed value 1) into a fresh database under
 `target/perf-tmp` on kernel-chosen ports with the shell off, then over REST
 times 20 creates under `MAP-1` — the largest epic's root, which seed value
 1 generates at every N (23 % of the store at 10⁴, 16 % at 10⁶) — and 20
-under a new `TINY` root, and prints both medians, the size of the root's
-`get` and summary row, the largest `children_changed` event seen on
+under a new `TINY` root, and prints both medians and their ratio, the size
+of the root's `get` and summary row, the time of a page of the root's
+children (`list { parent, summary, limit: 200 }`, the first page and one
+90 % of the way down), the largest `children_changed` event seen on
 `watch`, and the server's RSS. The small parent isolates the store's size
 (SCALE-3's criterion: its median at 10⁶ within 2× of 10⁴); the large one
-adds the parent's `children` list, which every create under it clones,
-persists and broadcasts (SCALE-4). The database is deleted afterwards; the
-server log stays beside it.
+added the parent's `children` list, which every create under it cloned,
+persisted and broadcast — until SCALE-4 replaced it with `child_count`
+(its criterion: the two medians within 1.5× at 10⁶). The probe reads
+either row shape, so one command measures a binary from before and after:
+`MENGER_BIN=path` runs another binary, `LARGE_PARENT_PORTS=WS,REST` pins
+the ports. The database is deleted afterwards; the server log stays
+beside it.
 
 ## Report layout
 

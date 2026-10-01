@@ -38,6 +38,10 @@
 //! 4. **Live.** The dock reads `live · WS` and the loop pumps `watch`
 //!    forever; every mutation event carries the whole affected ticket, so
 //!    one upsert keeps board, nav and any open ticket page coherent.
+//!    SCALE-4: but for a parent's side of a birth, `children_changed`,
+//!    which is the parent's id and new count: the count goes on the
+//!    parent's row, and the child onto any open page's list of the
+//!    parent's children ([`watch_children`]).
 //!
 //! Ending the session (any error) drops the transport, which drops the
 //! socket; the caller sleeps and starts a new one. Rows are never cleared
@@ -69,6 +73,7 @@
 //! body signal to the session while it is mounted ([`hold_body`]), so the
 //! body still lives in exactly one place and the event needs no `get`.
 
+use crate::kids::Kids;
 use crate::{dom, row_index, upsert, upsert_page, Conn, Dock, Row};
 use futures::StreamExt;
 use leptos::prelude::*;
@@ -109,6 +114,12 @@ thread_local! {
     /// mounted — how an `amended` event reaches the one body the app holds.
     /// A `thread_local` for the same reason as `TRANSPORT`.
     static OPEN_BODY: RefCell<Option<(String, RwSignal<Option<String>>)>> = const { RefCell::new(None) };
+
+    /// SCALE-4: the children lists open ticket pages hold, by parent id —
+    /// what a parent's side of a birth or a move is applied to. A list,
+    /// not a map: there is one open page at a time, and two pages of one
+    /// parent would each want the delta.
+    static OPEN_KIDS: RefCell<Vec<(String, RwSignal<Kids>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// MNG-16: the ticket page lends the session its body for as long as it is
@@ -145,6 +156,54 @@ fn show_body(ticket: &Ticket) {
             .unwrap_or(false)
         {
             body.try_set(Some(ticket.body.clone()));
+        }
+    }
+}
+
+/// SCALE-4's page size for a ticket's children — the board walk's
+/// reasoning at a smaller scale: a page is one paint, and a parent of
+/// 163,530 children is shown a page at a time, with the rest one click
+/// (and one `list { parent, after }`) away.
+const KIDS_LIMIT: u32 = 200;
+
+/// SCALE-4: keep `kids` — an open page's list of `parent`'s children —
+/// live from `watch` until the page goes. Registered here, applied by the
+/// session loop, unregistered when the page's owner is cleaned up.
+pub(crate) fn watch_children(parent: String, kids: RwSignal<Kids>) {
+    OPEN_KIDS.with(|open| open.borrow_mut().push((parent, kids)));
+    on_cleanup(move || {
+        OPEN_KIDS.with(|open| open.borrow_mut().retain(|(_, k)| *k != kids));
+    });
+}
+
+/// Applies `change` to every open list of `parent`'s children.
+fn kids_of(parent: &str, change: impl Fn(&mut Kids) -> bool) {
+    let lists: Vec<RwSignal<Kids>> = OPEN_KIDS.with(|open| {
+        open.borrow()
+            .iter()
+            .filter(|(p, _)| p == parent)
+            .map(|(_, k)| *k)
+            .collect()
+    });
+    for kids in lists {
+        // `try_`: a page can be leaving while the event lands.
+        let moved = kids.try_with_untracked(|k| {
+            let mut k = k.clone();
+            change(&mut k).then_some(k)
+        });
+        if let Some(Some(next)) = moved {
+            kids.try_set(next);
+        }
+    }
+}
+
+/// SCALE-4: a parent's count moved — set it on its row, if the store holds
+/// it, in place (the list signal never fires).
+fn set_child_count(rows: RwSignal<Vec<Row>>, id: &str, count: u64) {
+    let sig = rows.with_untracked(|v| row_index(v, id).map(|i| v[i].ticket));
+    if let Some(sig) = sig {
+        if sig.with_untracked(|t| t.child_count != count) {
+            sig.update(|t| t.child_count = count);
         }
     }
 }
@@ -261,9 +320,14 @@ async fn session(
             }
             ClientEvent::Data(
                 TicketsEvent::StatusChanged { ticket, .. }
-                | TicketsEvent::UnlocksChanged { ticket, .. }
-                | TicketsEvent::ChildrenChanged { ticket, .. },
+                | TicketsEvent::UnlocksChanged { ticket, .. },
             ) => upsert(rows, TicketSummary::from(&ticket)),
+            // SCALE-4: the parent's id, the child and the new count — the
+            // child's own row arrived with its `created`.
+            ClientEvent::Data(TicketsEvent::ChildrenChanged { id, added, child_count }) => {
+                set_child_count(rows, &id, child_count);
+                kids_of(&id, |k| k.added(&added));
+            }
             // MNG-16: the row's title in place; the open page's body too.
             ClientEvent::Data(TicketsEvent::Amended { ticket, .. }) => {
                 show_body(&ticket);
@@ -279,6 +343,7 @@ async fn session(
                 leptos::logging::log!("watch lagged: {missed} change(s) missed; re-walking");
                 walk(&client, rows, dock, last_error).await?;
                 refetch_open_body(&client, rows, last_error).await;
+                refetch_open_children(rows, last_error);
             }
             // Future event kinds: ignore, stay live.
             _ => {}
@@ -485,6 +550,63 @@ pub(crate) fn load_ticket(
             Err(e) => last_error.set(Some(format!("blockers {id}: {}", describe(&e)))),
         }
         blockers_loaded.set(true);
+    });
+}
+
+/// SCALE-4 × SCALE-5: a `children_changed` or `child_removed` may be among
+/// the changes a `lagged` lost, and the walk does not carry a parent's
+/// list — so every open page's children are asked for again from their
+/// first page, which is what the page itself does on a reconnect.
+fn refetch_open_children(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) {
+    let open: Vec<(String, RwSignal<Kids>)> = OPEN_KIDS.with(|open| open.borrow().clone());
+    for (parent, kids) in open {
+        load_children(parent, None, rows, kids, last_error);
+    }
+}
+
+/// SCALE-4: one page of `id`'s children — the first (`after: None`, which
+/// replaces what the page held: it is asked on entry and again on every
+/// reconnect) or the next one after the cursor the last page handed back.
+/// The rows upsert into the shared store, so each child renders live
+/// through its own signal as before; the ids, in the store's order, go to
+/// the page's list. `list { parent }` costs the page at any size of parent
+/// (the server keeps an index of children), so this is one round trip
+/// whether the ticket has two children or 163,530.
+pub(crate) fn load_children(
+    id: String,
+    after: Option<String>,
+    rows: RwSignal<Vec<Row>>,
+    kids: RwSignal<Kids>,
+    last_error: RwSignal<Option<String>>,
+) {
+    spawn_local(async move {
+        let Some(client) = client() else {
+            return; // not connected yet: the page asks again when it is
+        };
+        let first = after.is_none();
+        match client
+            .list_all(None, None, Some(id.clone()), after, Some(KIDS_LIMIT), Some(true))
+            .await
+        {
+            Ok(events) => {
+                let mut page: Vec<TicketSummary> = Vec::new();
+                let mut next = None;
+                for ev in events {
+                    match ev {
+                        TicketsEvent::Summary { summary } => page.push(summary),
+                        TicketsEvent::Page { next: n, .. } => next = n,
+                        TicketsEvent::Error { message } => {
+                            last_error.set(Some(format!("children of {id}: {message}")))
+                        }
+                        _ => {}
+                    }
+                }
+                let ids: Vec<String> = page.iter().map(|t| t.id.clone()).collect();
+                upsert_page(rows, page);
+                kids.try_update(|k| k.page(first, ids, next));
+            }
+            Err(e) => last_error.set(Some(format!("children of {id}: {}", describe(&e)))),
+        }
     });
 }
 

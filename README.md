@@ -179,32 +179,48 @@ unchanged — nothing to migrate.
 
 A ticket's outputs are tickets (AGS-19): every ticket carries an optional
 **`parent`** — the ticket it is an output of, in any epic — and a
-server-derived **`children`**, the mirror the store keeps as it keeps
-`unlocks` from `blocked_by`. The parent must exist at creation and the
-chain is acyclic (a ticket cannot be its own ancestor; there is no
-re-parent method, so the check at create is the whole story); a
-nonexistent or cyclic parent is an in-band `error` naming the reason. A
-child's birth updates its parent, and `watch` carries that as
-`children_changed` with the full parent ticket, so a watch-only client
-stays coherent. A database written before AGS-19 gains both columns on
-first open, durably, with typed parents backfilled from each body's
-frontmatter `parent: <id>` — one log line per ticket; an id that names no
-ticket is logged and left empty, never fatal.
+server-derived **`child_count`**, how many tickets name it as their
+parent. The children themselves are read by page: `list { parent }`, in
+the store's `(epic, seq)` order (SCALE-4; until then a row carried
+`children`, every child id — under MNG-14 a shortcode root's list is its
+whole shortcode, 163,530 ids and 2 MB at 10⁶, rewritten, stored and
+broadcast on every birth). The parent must exist at creation and the
+chain is acyclic (a ticket cannot be its own ancestor); a nonexistent or
+cyclic parent is an in-band `error` naming the reason. A child's birth
+writes only the child — the parent's stored row is not touched — and
+`watch` carries the parent's side as `children_changed { id, added,
+child_count }`: the parent's id, the child, the new count. A database
+written before AGS-19 gains `parent` on first open, durably, with typed
+parents backfilled from each body's frontmatter `parent: <id>` — one log
+line per ticket; an id that names no ticket is logged and left empty,
+never fatal.
+
+A database written between AGS-19 and SCALE-4 still has the `children`
+column. On first open the server checks every list in it against the
+`parent` column (the edge both described; `children` was the mirror),
+logs each disagreement — none the server ever wrote — with `parent`
+standing, and drops the column (`ALTER TABLE … DROP COLUMN`, which
+rewrites every row once: 7.5 s at 10⁶, 4 → 11.5 s to the first `health`
+that one time), in one transaction, before anything loads. Every ticket's
+children are then the same set as its old list, in the store's order
+rather than the order they arrived in, and `child_count` its length. A
+restart finds no column and migrates nothing; a pre-SCALE-4 binary cannot
+open the migrated file.
 
 | method | yields |
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
 | `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the five is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12): the first ticket of a prefix must be `kind: scope`, anything else is an in-band `error` naming the rule and nothing is allocated; **`parent` defaults to the shortcode's scope root and must stay inside the shortcode** (MNG-14): omitted, a non-root hangs under its prefix's root; named, it must be in the same prefix, else an in-band `error` — the scope root itself is the exception, its parent (if any) is the shortcode it hangs under, a sub-shortcode |
 | `tickets.get { id }` | `ticket` or `not_found` |
-| `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page — `after` naming no ticket is one in-band `error` |
+| `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children — the one way to read them (SCALE-4), from an index the store keeps, so a page of a root's 163,530 children costs the page (1.3 ms at 10⁶ over REST, first page or deep) and its `remaining` is arithmetic; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page — `after` naming no ticket is one in-band `error` |
 | `tickets.ready_set { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete or Superseded), ordered (epic, seq), then one `page { next, remaining }` |
 | `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
 | `tickets.set_status { id, status }` | `status_changed { ticket, previous }` — any of the nine, from any status (SDLC-7: the worker states `Coding` and `In Review` included); one outside them is an in-band `error` naming the nine |
 | `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id |
-| `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's `parent`, the new parent's `children` and the old parent's `children` (if any) move in one transaction; the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
+| `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's row is written, and it leaves the old parent's children and joins the new one's (SCALE-4: neither parent's row is written; `watch` carries `children_changed` and `child_removed` with each parent's new `child_count`); the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, root, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only), `root` is the lowest-seq `scope`, `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
 | `tickets.extents {}` | one `extent { epic, last_seq }` per shortcode that holds a ticket, in shortcode order (the store's), then the stream's own `done` (SCALE-16) — where each shortcode ends: ids are allocated highest-plus-one and never deleted, so a shortcode holds `last_seq` tickets, row k of it is `EPIC-k`, and a position in the store's order becomes a `list { after }` cursor without a walk; every `last_seq` together sums to `health.ticket_count` (a hand-edited database with a hole still reports the highest sequence; `after` naming the missing id is `list`'s cursor error). Not a roll-up: the shortcode's own tickets only, and every shortcode has one whether or not the nav draws it a row. Read from the sequence `create` allocates from (SCALE-3), so the cost is the number of shortcodes; no `watch` event — `created` carries the shortcode's new `last_seq` as its `seq` |
-| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` — a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`); `epic` filters a group by its own shortcode; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
+| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`); `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
 
 Paging (MNG-9). `(epic, seq)` is a total order the schema keeps unique, so
 a ticket id is a cursor: a client that renders opens `watch` first, then
@@ -214,7 +230,8 @@ is `≤ limit` rows and one `page { next, remaining }`; `remaining` counts
 what is left under the same filters — exactly, and, with no `status` or
 `parent` filter, without walking it: the store keeps each shortcode's
 count beside its sequence, so a page costs the page (SCALE-19; a
-`status`, `parent` or `ready_set` page still counts). A client that wants everything with
+`parent` page counts from its index of children, SCALE-4; a `status` or
+`ready_set` page still counts). A client that wants everything with
 bodies calls `list {}` exactly as before and ignores the trailing `page`.
 The body is ~70 % of a row, and only the ticket page shows one — it comes
 from `get`.
@@ -262,6 +279,9 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        birth — what create reads instead of scanning (SCALE-3);
                        beside the sequence, how many tickets the shortcode
                        holds — what page.remaining is computed from (SCALE-19)
+    children.rs        each parent's children, from every ticket's parent, in
+                       the store's order — what list { parent } pages from and
+                       what child_count is (SCALE-4)
     db.rs              the schema, upserts, the in-place migrations
     synthetic.rs       the --seed-synthetic generator (PERF-2)
     tests.rs           the store's unit tests
@@ -269,6 +289,9 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
     tests_find.rs      find's rule against the palette's own tests and code
                        (read from frontend/src/keys.rs), its pages against
                        MNG-9's (SCALE-6)
+    tests_children.rs  the children index against a scan, child_count, pages of
+                       list { parent } against the old filter, the migration
+                       that drops `children` (SCALE-4)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell

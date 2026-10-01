@@ -16,7 +16,6 @@ pub(super) const SCHEMA: &str = "
             blocked_by   TEXT NOT NULL,
             unlocks      TEXT NOT NULL,
             parent       TEXT,
-            children     TEXT NOT NULL DEFAULT '[]',
             body         TEXT NOT NULL,
             created_unix INTEGER NOT NULL,
             updated_unix INTEGER NOT NULL,
@@ -130,9 +129,10 @@ pub(super) fn frontmatter_parent(body: &str) -> Option<String> {
     None
 }
 
-/// Ticket ids in (epic, seq) order — the order `create` would have
-/// appended them in, so a backfilled `children` list reads like a
-/// grown one. An id that is not `EPIC-N` sorts last, by name.
+/// Ticket ids in (epic, seq) order — the order the backfill considers
+/// them in, so of two frontmatter parents that would close a loop the
+/// earlier ticket's is the one kept. An id that is not `EPIC-N` sorts
+/// last, by name.
 fn by_epic_seq(id: &str) -> (String, u32, String) {
     match id.rsplit_once('-').and_then(|(e, n)| {
         n.parse::<u32>().ok().map(|n| (e.to_string(), n))
@@ -161,14 +161,16 @@ fn parent_edge_loops(edges: &HashMap<String, String>, child: &str, parent: &str)
 /// One-shot, durable migration of a pre-AGS-19 database (AGS-19).
 ///
 /// If the `tickets` table has no `parent` column, this adds `parent`
-/// and `children` and backfills the typed parent from each body's
-/// frontmatter `parent: <id>`, in one transaction: an id that names
-/// an existing ticket is written through (and mirrored in that
-/// ticket's `children`), logged per ticket; one that resolves to
+/// and backfills the typed parent from each body's frontmatter
+/// `parent: <id>`, in one transaction: an id that names an existing
+/// ticket is written through, logged per ticket; one that resolves to
 /// nothing — or that would make a ticket its own ancestor — is
 /// logged and left empty. Never fatal: an unresolvable reference is a
 /// dangling note in prose, not a corrupt store, and a later create
-/// can still establish the relationship.
+/// can still establish the relationship. (Until SCALE-4 it added a
+/// `children` column too, and mirrored each edge there; the cache
+/// derives children from `parent` now, so a database this migrates
+/// never has one.)
 ///
 /// Committed before the cache loads, so a restart (or a SIGKILL right
 /// after) finds the typed parents in the file; the column check above
@@ -181,10 +183,6 @@ pub(super) fn migrate_add_parenthood(conn: &mut Connection) -> anyhow::Result<us
     }
     let tx = conn.transaction()?;
     tx.execute("ALTER TABLE tickets ADD COLUMN parent TEXT", [])?;
-    tx.execute(
-        "ALTER TABLE tickets ADD COLUMN children TEXT NOT NULL DEFAULT '[]'",
-        [],
-    )?;
 
     let rows: Vec<(String, String)> = {
         let mut stmt = tx.prepare("SELECT id, body FROM tickets")?;
@@ -218,34 +216,132 @@ pub(super) fn migrate_add_parenthood(conn: &mut Connection) -> anyhow::Result<us
         edges.insert(id, parent);
     }
 
-    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (child, parent) in &edges {
-        children.entry(parent.as_str()).or_default().push(child);
-    }
     for (child, parent) in &edges {
         tx.execute(
             "UPDATE tickets SET parent = ?1 WHERE id = ?2",
             params![parent, child],
         )?;
     }
-    for (parent, mut kids) in children {
-        kids.sort_by_key(|id| by_epic_seq(id));
-        tx.execute(
-            "UPDATE tickets SET children = ?1 WHERE id = ?2",
-            params![
-                serde_json::to_string(&kids).expect("serialize ids"),
-                parent
-            ],
-        )?;
-    }
     tx.commit()?;
     tracing::info!(
-        "AGS-19: added parent/children to {} tickets, backfilling {} typed parent(s) \
+        "AGS-19: added parent to {} tickets, backfilling {} typed parent(s) \
              from body frontmatter, durably",
         rows.len(),
         edges.len()
     );
     Ok(edges.len())
+}
+
+/// The column SCALE-4 retires: AGS-19's `children`, a JSON list of every
+/// child id on the parent's row. It exists in a database to be read once,
+/// checked and dropped, never written.
+const CHILDREN_COLUMN: &str = "children";
+
+/// What [`migrate_drop_children`] found, for its caller and its log.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct DroppedChildren {
+    /// Rows whose list named at least one child.
+    pub lists: usize,
+    /// Child ids across those lists.
+    pub entries: usize,
+    /// Where a list and the `parent` column disagreed, each one logged:
+    /// a listed child whose `parent` is another ticket (or none), or a
+    /// ticket naming a parent whose list left it out. `parent` stands.
+    pub disagreements: usize,
+}
+
+/// One-shot, durable migration of a database written between AGS-19 and
+/// SCALE-4 (SCALE-4).
+///
+/// If the `tickets` table still has `children`, every non-empty list is
+/// read and checked against the `parent` column — the edge both ends
+/// described, of which `children` was the server-kept mirror — and then,
+/// in the same transaction, the column is dropped (`ALTER TABLE … DROP
+/// COLUMN`, which rewrites each row without it). So the row no longer
+/// holds a list, and no row can grow with its children again; the
+/// children are what the cache derives from `parent`, in the store's
+/// order. Every disagreement (none the server makes: `create` and
+/// `set_parent` moved both ends in one transaction) is logged per id, and
+/// `parent` stands — never fatal, as AGS-19's backfill is not. Committed
+/// before the cache loads, so a restart (or a SIGKILL right after) finds
+/// the column gone, and the column check makes every later open a no-op.
+pub(super) fn migrate_drop_children(conn: &mut Connection) -> anyhow::Result<DroppedChildren> {
+    if !has_column(conn, "tickets", CHILDREN_COLUMN)? {
+        return Ok(DroppedChildren::default());
+    }
+    let started = std::time::Instant::now();
+    let tx = conn.transaction()?;
+    let mut found = DroppedChildren::default();
+    {
+        // Every ticket's parent — the side that stands — and each list.
+        let mut parent_of: HashMap<String, Option<String>> = HashMap::new();
+        let mut listed: Vec<(String, Vec<String>)> = Vec::new();
+        let mut stmt = tx.prepare(&format!("SELECT id, parent, {CHILDREN_COLUMN} FROM tickets"))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            parent_of.insert(id.clone(), row.get(1)?);
+            let raw: Option<String> = row.get(2)?;
+            let kids = parse_ids(2, raw.as_deref().unwrap_or("[]"))?;
+            if !kids.is_empty() {
+                listed.push((id, kids));
+            }
+        }
+        let mut named: HashMap<&str, HashSet<&str>> = HashMap::new();
+        for (child, parent) in &parent_of {
+            if let Some(p) = parent {
+                named.entry(p.as_str()).or_default().insert(child.as_str());
+            }
+        }
+        let empty = HashSet::new();
+        for (parent, kids) in &listed {
+            found.lists += 1;
+            found.entries += kids.len();
+            let named_here = named.get(parent.as_str()).unwrap_or(&empty);
+            for kid in kids {
+                if !named_here.contains(kid.as_str()) {
+                    found.disagreements += 1;
+                    let actual = parent_of.get(kid).map(|p| p.as_deref().unwrap_or("no parent"));
+                    tracing::warn!(
+                        "SCALE-4 migration: {parent}'s children list named {kid}, whose parent is {} \
+                         — the parent column stands",
+                        actual.unwrap_or("not a ticket")
+                    );
+                }
+            }
+            let listed_here: HashSet<&str> = kids.iter().map(String::as_str).collect();
+            for kid in named_here.iter().filter(|k| !listed_here.contains(**k)) {
+                found.disagreements += 1;
+                tracing::warn!(
+                    "SCALE-4 migration: {kid} names {parent} as its parent, which its children \
+                     list left out — counted as its child"
+                );
+            }
+        }
+        let had_list: HashSet<&str> = listed.iter().map(|(p, _)| p.as_str()).collect();
+        for (parent, named_here) in &named {
+            // A parent that is no ticket (a hand edit) had no row to list them.
+            if !had_list.contains(parent) && parent_of.contains_key(*parent) {
+                found.disagreements += named_here.len();
+                tracing::warn!(
+                    "SCALE-4 migration: {} ticket(s) name {parent} as their parent, whose children \
+                     list was empty — counted as its children",
+                    named_here.len()
+                );
+            }
+        }
+    }
+    tx.execute(&format!("ALTER TABLE tickets DROP COLUMN {CHILDREN_COLUMN}"), [])?;
+    tx.commit()?;
+    tracing::info!(
+        "SCALE-4: dropped the {CHILDREN_COLUMN} column ({} list(s), {} child id(s), {} \
+         disagreement(s) with parent) in {:.1} ms, durably — children are derived from parent",
+        found.lists,
+        found.entries,
+        found.disagreements,
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    Ok(found)
 }
 
 /// Serializes a unit enum to its serde string form (`Pending`,
@@ -279,9 +375,9 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
-                  blocked_by, unlocks, parent, children, body,
+                  blocked_by, unlocks, parent, body,
                   created_unix, updated_unix)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT (id) DO UPDATE SET
                  epic = excluded.epic,
                  seq = excluded.seq,
@@ -292,7 +388,6 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
                  blocked_by = excluded.blocked_by,
                  unlocks = excluded.unlocks,
                  parent = excluded.parent,
-                 children = excluded.children,
                  body = excluded.body,
                  created_unix = excluded.created_unix,
                  updated_unix = excluded.updated_unix",
@@ -307,7 +402,6 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
             serde_json::to_string(&t.blocked_by).expect("serialize ids"),
             serde_json::to_string(&t.unlocks).expect("serialize ids"),
             t.parent,
-            serde_json::to_string(&t.children).expect("serialize ids"),
             t.body,
             t.created_unix,
             t.updated_unix,
@@ -324,9 +418,9 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Re
     let mut stmt = conn.prepare_cached(
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
-                  blocked_by, unlocks, parent, children, body,
+                  blocked_by, unlocks, parent, body,
                   created_unix, updated_unix)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     )?;
     for t in tickets {
         stmt.execute(params![
@@ -340,7 +434,6 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Re
             serde_json::to_string(&t.blocked_by).expect("serialize ids"),
             serde_json::to_string(&t.unlocks).expect("serialize ids"),
             t.parent,
-            serde_json::to_string(&t.children).expect("serialize ids"),
             t.body,
             t.created_unix,
             t.updated_unix,
@@ -353,7 +446,7 @@ pub(super) fn load_all(conn: &Connection) -> anyhow::Result<HashMap<String, Tick
     let mut stmt = conn.prepare(
         "SELECT id, epic, seq, title, status, kind, severity,
                     blocked_by, unlocks, body, created_unix, updated_unix,
-                    parent, children
+                    parent
              FROM tickets",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -375,10 +468,9 @@ pub(super) fn load_all(conn: &Connection) -> anyhow::Result<HashMap<String, Tick
             created_unix: row.get(10)?,
             updated_unix: row.get(11)?,
             parent: row.get::<_, Option<String>>(12)?,
-            children: parse_ids(
-                13,
-                row.get::<_, Option<String>>(13)?.as_deref().unwrap_or("[]"),
-            )?,
+            // SCALE-4: not stored — the cache counts each ticket's children
+            // from every other ticket's `parent` once all are loaded.
+            child_count: 0,
         })
     })?;
     let mut out = HashMap::new();

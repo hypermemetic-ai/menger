@@ -262,6 +262,13 @@
   #blockers li, #unlocks li, #children li { padding: .15rem 0; }
   #blockers a, #unlocks a, #children a { color: var(--accent); text-decoration: none; }
   #blockers a:hover, #unlocks a:hover, #children a:hover { text-decoration: underline; }
+  /* SCALE-4: a large parent's children come a page at a time. */
+  button.more {
+    margin: .35rem 0 0; padding: .1rem .5rem; font: inherit; font-size: .8rem;
+    color: var(--muted); background: transparent;
+    border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+  }
+  button.more:hover { color: var(--accent); border-color: var(--accent); }
   .bstatus {
     margin-left: .6rem; padding: 0 .4rem; font-size: .8rem;
     border: 1px solid var(--line); border-radius: 6px;

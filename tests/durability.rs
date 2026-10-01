@@ -422,13 +422,14 @@ async fn pre_ags19_database_backfills_parents_on_first_open_and_survives_sigkill
         .unwrap();
     assert!(!cols.contains(&"parent".into()), "{cols:?}");
 
-    // id, backfilled parent, children.
-    let expected: [(&str, Value, Value); 5] = [
-        ("PRE-1", Value::Null, json!(["PRE-2"])),
-        ("PRE-2", json!("PRE-1"), json!(["PRE-4"])),
-        ("PRE-3", Value::Null, json!([])), // frontmatter names PRE-99
-        ("PRE-4", json!("PRE-2"), json!([])),
-        ("PRE-5", Value::Null, json!([])), // no frontmatter at all
+    // id, backfilled parent, children (SCALE-4: counted on the row; the
+    // ids come from `list { parent }`, checked below).
+    let expected: [(&str, Value, u64); 5] = [
+        ("PRE-1", Value::Null, 1),
+        ("PRE-2", json!("PRE-1"), 1),
+        ("PRE-3", Value::Null, 0), // frontmatter names PRE-99
+        ("PRE-4", json!("PRE-2"), 0),
+        ("PRE-5", Value::Null, 0), // no frontmatter at all
     ];
     let check = |tickets: &[Value], when: &str| {
         assert_eq!(tickets.len(), expected.len(), "{when}: {tickets:?}");
@@ -436,7 +437,7 @@ async fn pre_ags19_database_backfills_parents_on_first_open_and_survives_sigkill
             let t = &t["ticket"];
             assert_eq!(t["id"], *id, "{when}");
             assert_eq!(t["parent"], *parent, "{when}: {id} parent");
-            assert_eq!(t["children"], *children, "{when}: {id} children");
+            assert_eq!(t["child_count"], *children, "{when}: {id} children");
         }
     };
 
@@ -487,25 +488,141 @@ async fn pre_ags19_database_backfills_parents_on_first_open_and_survives_sigkill
     assert!(log.contains("loaded 5 tickets"), "got:\n{log}");
     check(&drain(&c2, "tickets.list", json!({})).await, "after SIGKILL + restart");
 
-    // And the system of record itself.
+    let kids = drain(&c2, "tickets.list", json!({"parent": "PRE-2"})).await;
+    assert_eq!(kids.len(), 1);
+    assert_eq!(kids[0]["ticket"]["id"], "PRE-4");
+
+    // And the system of record itself — SCALE-4: the parents, and no list
+    // of children beside them.
     let conn = rusqlite::Connection::open(&db).unwrap();
-    let stored: Vec<(String, Option<String>, String)> = conn
-        .prepare("SELECT id, parent, children FROM tickets ORDER BY epic, seq")
+    let stored: Vec<(String, Option<String>)> = conn
+        .prepare("SELECT id, parent FROM tickets ORDER BY epic, seq")
         .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(
         stored,
         vec![
-            ("PRE-1".to_string(), None, "[\"PRE-2\"]".to_string()),
-            ("PRE-2".to_string(), Some("PRE-1".into()), "[\"PRE-4\"]".to_string()),
-            ("PRE-3".to_string(), None, "[]".to_string()),
-            ("PRE-4".to_string(), Some("PRE-2".into()), "[]".to_string()),
-            ("PRE-5".to_string(), None, "[]".to_string()),
+            ("PRE-1".to_string(), None),
+            ("PRE-2".to_string(), Some("PRE-1".into())),
+            ("PRE-3".to_string(), None),
+            ("PRE-4".to_string(), Some("PRE-2".into())),
+            ("PRE-5".to_string(), None),
         ]
     );
+    assert!(!columns(&conn).contains(&"children".to_string()));
+}
+
+fn columns(conn: &rusqlite::Connection) -> Vec<String> {
+    conn.prepare("PRAGMA table_info(tickets)")
+        .unwrap()
+        .query_map([], |r| r.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+/// SCALE-4 acceptance 3, black-box: `tests/fixtures/pre-scale4.db` was
+/// written by the binary at 9087ca7 — through its own API, so every list
+/// is one the server kept — and carries AGS-19's `children` column: a
+/// root; PAR-2 with children born under it from two hosted sub-shortcodes
+/// (SUB, and AAA, which sorts before PAR), born under it directly, and
+/// moved in by `set_parent` (its list reads SUB-1, AAA-1, PAR-5, PAR-3 —
+/// the order they arrived); a grandchild moved twice; statuses and an
+/// unlocks edge. On first open the server drops the column, durably, and
+/// logs it; every parent's children, by `list { parent }`, are its old
+/// list's — the same set, in the store's order — and its `child_count` the
+/// list's length. After SIGKILL and a restart the column is still gone,
+/// nothing migrates again, and the children are the same.
+#[tokio::test]
+async fn pre_scale4_database_drops_its_children_lists_on_first_open_and_survives_sigkill() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pre-scale4.db"),
+        &db,
+    )
+    .unwrap();
+
+    // What the old binary kept: each row's list, in the order it grew.
+    let lists: Vec<(String, Vec<String>)> = {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        assert!(columns(&conn).contains(&"children".to_string()), "the fixture predates SCALE-4");
+        let mut stmt = conn.prepare("SELECT id, children FROM tickets ORDER BY epic, seq").unwrap();
+        let lists = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .unwrap()
+            .map(|r| {
+                let (id, raw) = r.unwrap();
+                (id, serde_json::from_str(&raw).unwrap())
+            })
+            .collect();
+        lists
+    };
+    assert_eq!(
+        lists.iter().find(|(id, _)| id == "PAR-2").unwrap().1,
+        ["SUB-1", "AAA-1", "PAR-5", "PAR-3"],
+        "PAR-2's list grew in arrival order"
+    );
+
+    async fn check(client: &WsClient, lists: &[(String, Vec<String>)], when: &str) {
+        let order: Vec<String> = drain(client, "tickets.list", json!({}))
+            .await
+            .iter()
+            .map(|t| t["ticket"]["id"].as_str().unwrap().to_string())
+            .collect();
+        for (id, list) in lists {
+            let got: Vec<String> = drain(client, "tickets.list", json!({"parent": id}))
+                .await
+                .iter()
+                .map(|t| t["ticket"]["id"].as_str().unwrap().to_string())
+                .collect();
+            let mut want: Vec<String> = list.clone();
+            want.sort_by_key(|c| order.iter().position(|o| o == c).expect("a ticket"));
+            assert_eq!(got, want, "{when}: {id}'s children — its old list, in the store's order");
+            let ev = one(client, "tickets.get", json!({"id": id})).await;
+            assert_eq!(ev["ticket"]["child_count"], list.len(), "{when}: {id}");
+            assert!(ev["ticket"].get("children").is_none(), "{when}: {id}: {ev}");
+        }
+    }
+    async fn par2(client: &WsClient) -> Vec<String> {
+        drain(client, "tickets.list", json!({"parent": "PAR-2"}))
+            .await
+            .iter()
+            .map(|t| t["ticket"]["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    // Run 1: first open of the pre-SCALE-4 database.
+    let s1 = spawn_server(Some(&db), &[], dir.path(), "children1").await;
+    let c1 = connect(s1.port).await;
+    let log = s1.startup_output();
+    assert!(
+        log.contains("SCALE-4: dropped the children column (4 list(s), 8 child id(s), 0 disagreement(s)"),
+        "startup reports the migration, got:\n{log}"
+    );
+    check(&c1, &lists, "after first open").await;
+    assert_eq!(par2(&c1).await, ["AAA-1", "PAR-3", "PAR-5", "SUB-1"]);
+    // Still writable, and a birth under PAR-2 is counted, not listed.
+    let ev = one(&c1, "tickets.create", json!({"epic": "PAR", "title": "after", "parent": "PAR-2"})).await;
+    assert_eq!(ev["ticket"]["id"], "PAR-7");
+    drop(c1);
+    s1.kill9();
+
+    // Run 2: durable — no column, no second migration, the same children.
+    let s2 = spawn_server(Some(&db), &[], dir.path(), "children2").await;
+    let c2 = connect(s2.port).await;
+    let log = s2.startup_output();
+    assert!(!log.contains("SCALE-4: dropped"), "no second migration:\n{log}");
+    assert!(log.contains("loaded 10 tickets"), "got:\n{log}");
+    let mut lists = lists;
+    lists.iter_mut().find(|(id, _)| id == "PAR-2").unwrap().1.push("PAR-7".into());
+    lists.push(("PAR-7".into(), Vec::new()));
+    check(&c2, &lists, "after SIGKILL + restart").await;
+    assert_eq!(par2(&c2).await, ["AAA-1", "PAR-3", "PAR-5", "PAR-7", "SUB-1"]);
+    assert!(!columns(&rusqlite::Connection::open(&db).unwrap()).contains(&"children".to_string()));
 }
 
 /// SDLC-7 criterion 3, black-box: `tests/fixtures/pre-sdlc7.db` was
@@ -514,7 +631,8 @@ async fn pre_ags19_database_backfills_parents_on_first_open_and_survives_sigkill
 /// edges, a dangling blocker, severities, unicode and frontmatter in a
 /// body), and `pre-sdlc7.json` is that binary's own `list {}` of it.
 /// Statuses are stored as their wire text, so there is nothing to migrate:
-/// this binary answers the same nine tickets, field for field. Then the
+/// this binary answers the same nine tickets, field for field (but for
+/// SCALE-4's `children` → `child_count`, applied to the expectation). Then the
 /// two worker states are written over two of them and survive SIGKILL.
 #[tokio::test]
 async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkill() {
@@ -522,8 +640,14 @@ async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkil
     let db = dir.path().join("tickets.db");
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     std::fs::copy(fixtures.join("pre-sdlc7.db"), &db).unwrap();
-    let expected: Vec<Value> =
+    let mut expected: Vec<Value> =
         serde_json::from_str(&std::fs::read_to_string(fixtures.join("pre-sdlc7.json")).unwrap()).unwrap();
+    // SCALE-4: that binary answered each ticket's `children` as a list; a
+    // row carries their count now. Everything else is as it answered it.
+    for t in &mut expected {
+        let kids = t.as_object_mut().unwrap().remove("children").expect("the old shape lists children");
+        t["child_count"] = json!(kids.as_array().unwrap().len());
+    }
     let statuses: Vec<&str> = expected.iter().map(|t| t["status"].as_str().unwrap()).collect();
     for s in ["Pending", "Ready", "Blocked", "Complete", "Idea", "Epic", "Superseded"] {
         assert!(statuses.contains(&s), "the fixture holds a {s} ticket: {statuses:?}");
@@ -538,7 +662,10 @@ async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkil
         .collect();
     assert_eq!(tickets, expected, "every ticket exactly as the seven-status binary answered it");
     let log = s1.startup_output();
-    assert!(log.contains("loaded 9 tickets") && !log.contains("migrat"), "no migration ran:\n{log}");
+    // Nothing of SDLC-7's to migrate. The one migration a database of that
+    // age does meet is SCALE-4's (the `children` column goes), which says so.
+    let others: String = log.lines().filter(|l| !l.contains("SCALE-4")).collect::<Vec<_>>().join("\n");
+    assert!(log.contains("loaded 9 tickets") && !others.contains("migrat"), "no status migration ran:\n{log}");
 
     for (id, status) in [("PRE-2", "Coding"), ("PRE-3", "In Review")] {
         let ev = one(&c1, "tickets.set_status", json!({"id": id, "status": status})).await;

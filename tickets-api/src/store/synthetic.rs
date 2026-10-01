@@ -278,14 +278,13 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> V
             out[bi].updated_unix = out[bi].updated_unix.max(created);
         }
         // MNG-14: the shape `create` would give it — every non-root
-        // hangs under its epic's scope root, mirrored in `children`.
+        // hangs under its epic's scope root. SCALE-4: the root's row is
+        // not touched by the birth (the cache counts the children when the
+        // seed lands), as `create` leaves a parent's row alone.
         let parent = if root {
             None
         } else {
-            let ri = members[e][0];
-            out[ri].children.push(id.clone());
-            out[ri].updated_unix = out[ri].updated_unix.max(created);
-            Some(out[ri].id.clone())
+            Some(out[members[e][0]].id.clone())
         };
         members[e].push(i);
         index.insert(id.clone(), i);
@@ -300,7 +299,7 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> V
             blocked_by,
             unlocks: Vec::new(),
             parent,
-            children: Vec::new(),
+            child_count: 0,
             body: body_s,
             created_unix: created,
             updated_unix: updated,

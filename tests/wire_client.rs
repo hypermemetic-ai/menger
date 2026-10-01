@@ -90,9 +90,17 @@ fn apply(
         TicketsEvent::Created { ticket } => (ticket, "created"),
         TicketsEvent::StatusChanged { ticket, .. } => (ticket, "status_changed"),
         TicketsEvent::UnlocksChanged { ticket, .. } => (ticket, "unlocks_changed"),
-        TicketsEvent::ChildrenChanged { ticket, .. } => (ticket, "children_changed"),
         TicketsEvent::ParentChanged { ticket, .. } => (ticket, "parent_changed"),
-        TicketsEvent::ChildRemoved { ticket, .. } => (ticket, "child_removed"),
+        // SCALE-4: a parent's side is its id and new count — set on the
+        // row the mirror holds.
+        TicketsEvent::ChildrenChanged { id, child_count, .. } => {
+            mirror.entry(id.clone()).and_modify(|row| row.child_count = *child_count);
+            return "children_changed";
+        }
+        TicketsEvent::ChildRemoved { id, child_count, .. } => {
+            mirror.entry(id.clone()).and_modify(|row| row.child_count = *child_count);
+            return "child_removed";
+        }
         TicketsEvent::GroupChanged { group } => {
             groups.insert(group.epic.clone(), group.clone());
             return "group_changed";
@@ -215,7 +223,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     assert_eq!(ticket.status, Status::Pending);
     assert_eq!(ticket.seq, 1);
     assert!(ticket.parent.is_none(), "the root is top-level");
-    assert!(ticket.children.is_empty(), "and childless");
+    assert_eq!(ticket.child_count, 0, "and childless");
 
     // The rule itself, typed: a build first is the activation's own Error.
     match one(
@@ -334,9 +342,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     assert_eq!(third.parent.as_deref(), Some("PA-1"), "defaulted to the root");
 
     match one(client.get_all("PA-1".into()).await.expect("get PA-1")) {
-        TicketsEvent::Ticket { ticket } => {
-            assert_eq!(ticket.children, vec!["PA-2".to_string(), "PA-3".to_string()])
-        }
+        TicketsEvent::Ticket { ticket } => assert_eq!(ticket.child_count, 2),
         other => panic!("expected `ticket`, got {other:?}"),
     }
     let children = ids(rows(
@@ -361,7 +367,7 @@ async fn the_wire_assertions_through_the_generated_client() {
         other => panic!("expected `parent_changed`, got {other:?}"),
     }
     match one(client.get_all("PA-2".into()).await.expect("get PA-2")) {
-        TicketsEvent::Ticket { ticket } => assert_eq!(ticket.children, vec!["PA-3".to_string()]),
+        TicketsEvent::Ticket { ticket } => assert_eq!(ticket.child_count, 1),
         other => panic!("expected `ticket`, got {other:?}"),
     }
 
@@ -421,11 +427,11 @@ async fn the_wire_assertions_through_the_generated_client() {
     }
     assert_eq!(first_transition, Some(Status::Pending));
     assert_eq!(mirror["WIRE-1"].status, Status::Ready, "the watcher saw the promotion");
-    assert_eq!(mirror["PA-1"].children, vec!["PA-2".to_string()], "child_removed carried the full ex-parent");
-    assert_eq!(mirror["PA-2"].children, vec!["PA-3".to_string()], "children_changed carried the full parent");
+    assert_eq!(mirror["PA-1"].child_count, 1, "child_removed carried the ex-parent's count");
+    assert_eq!(mirror["PA-2"].child_count, 1, "children_changed carried the parent's count");
     assert_eq!(mirror["PA-3"].parent.as_deref(), Some("PA-2"), "parent_changed carried the full child");
     assert_eq!(mirror["RS-1"].unlocks, vec!["RS-2".to_string()], "unlocks_changed carried the full ticket");
-    assert_eq!(mirror["RS-1"].children, vec!["RS-2".to_string()], "RS-2 hangs under its root");
+    assert_eq!(mirror["RS-1"].child_count, 1, "RS-2 hangs under its root");
     assert_eq!(mirror["DG-1"].blocked_by, vec!["DG-99".to_string()]);
 
     // Server and watch-only mirror agree on the ready set, computed two ways.

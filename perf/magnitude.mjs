@@ -715,18 +715,18 @@ async function runMagnitude(m, opts, browser) {
     // largest nav group) and a ticket with several blockers — come from
     // scanning a streamed list. The gateway serializes keys
     // alphabetically, so a ticket reads `"blocked_by":[…],"body":"…",
-    // "children":[…],"created_unix":…,"epic":"X","id":"X-N",…`. (The
-    // `children` array is AGS-19's, added after this harness was written:
+    // "child_count":N,"created_unix":…,"epic":"X","id":"X-N",…`. (The
+    // `children` array was AGS-19's, added after this harness was written:
     // without it in the pattern the blockers sample never matched and the
     // `REST blockers` row failed as "no multi-blocker sample" — found by
-    // MNG-9's re-run, fixed here.)
+    // MNG-9's re-run, fixed here. SCALE-4 replaced it with `child_count`.)
     const epicCounts = new Map();
     const multi = [];
     let scanned = false;
     const scanner = (carry, text) => {
       for (const mm of newMatches(/"epic":"([A-Z]+)"/g, carry, text)) epicCounts.set(mm[1], (epicCounts.get(mm[1]) || 0) + 1);
       if (multi.length < 20) {
-        for (const mm of newMatches(/"blocked_by":\["([^\]]*)"\],"body":"(?:[^"\\]|\\.)*","children":\[[^\]]*\],"created_unix":\d+,"epic":"[A-Z]+","id":"([A-Z]+-\d+)"/g, carry, text)) {
+        for (const mm of newMatches(/"blocked_by":\["([^\]]*)"\],"body":"(?:[^"\\]|\\.)*","child_count":\d+,"created_unix":\d+,"epic":"[A-Z]+","id":"([A-Z]+-\d+)"/g, carry, text)) {
           const blockers = mm[1].split('","');
           if (blockers.length >= 2 && !multi.some((x) => x.id === mm[2])) multi.push({ id: mm[2], blockers });
         }

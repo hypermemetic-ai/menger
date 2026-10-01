@@ -248,9 +248,12 @@ pub struct Ticket {
     /// parent must exist at creation and the chain is acyclic.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
-    /// AGS-19: the tickets whose `parent` is this one — derived and kept
-    /// by the store (as `unlocks` is from `blocked_by`), in birth order.
-    pub children: Vec<String>,
+    /// SCALE-4: how many tickets name this one as their `parent` — derived
+    /// and kept by the store. It replaces AGS-19's `children`, the list of
+    /// every child id, which made a shortcode root's row (every ticket of
+    /// the shortcode hangs under it, MNG-14) as large as the shortcode. The
+    /// children themselves come by page: `list { parent }`.
+    pub child_count: u64,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
     pub body: String,
     pub created_unix: i64,
@@ -278,7 +281,7 @@ pub struct TicketSummary {
     pub kind: Kind,
     pub severity: Option<Severity>,
     pub parent: Option<String>,
-    pub children: Vec<String>,
+    pub child_count: u64,
     pub blocked_by: Vec<String>,
     pub unlocks: Vec<String>,
     pub created_unix: i64,
@@ -296,7 +299,7 @@ impl From<Ticket> for TicketSummary {
             kind: t.kind,
             severity: t.severity,
             parent: t.parent,
-            children: t.children,
+            child_count: t.child_count,
             blocked_by: t.blocked_by,
             unlocks: t.unlocks,
             created_unix: t.created_unix,
@@ -382,10 +385,18 @@ pub enum TicketsEvent {
     /// ticket named it in `blocked_by` (yielded by `watch`). Carries the
     /// full updated ticket so a watch-only client stays coherent.
     UnlocksChanged { ticket: Ticket, added: String },
-    /// AGS-19: an existing ticket's `children` gained `added` — a child
-    /// was born naming it as `parent` (yielded by `watch`). Carries the
-    /// full updated parent so a watch-only client stays coherent.
-    ChildrenChanged { ticket: Ticket, added: String },
+    /// AGS-19: the ticket `id` gained the child `added` — a child was born
+    /// naming it as `parent`, or was moved under it by `set_parent`
+    /// (yielded by `watch`). SCALE-4: the parent's id and its new
+    /// `child_count`, not the parent: the whole parent carried its whole
+    /// list of children, 2 MB under a root of 163,530. A client that
+    /// mirrors rows sets the count; one that shows the parent's children
+    /// adds `added` to what it holds.
+    ChildrenChanged {
+        id: String,
+        added: String,
+        child_count: u64,
+    },
     /// MNG-12: a ticket's `parent` was set after birth (yielded by
     /// `set_parent`, and by `watch`); `previous` is the parent it had, if
     /// any. Carries the full child.
@@ -393,10 +404,14 @@ pub enum TicketsEvent {
         ticket: Ticket,
         previous: Option<String>,
     },
-    /// MNG-12: an existing ticket's `children` lost `removed` — that
-    /// child was re-parented elsewhere (yielded by `watch`). Carries the
-    /// full updated ex-parent.
-    ChildRemoved { ticket: Ticket, removed: String },
+    /// MNG-12: the ticket `id` lost the child `removed` — that child was
+    /// re-parented elsewhere (yielded by `watch`). SCALE-4: the ex-parent's
+    /// id and its new `child_count`, as `ChildrenChanged`.
+    ChildRemoved {
+        id: String,
+        removed: String,
+        child_count: u64,
+    },
     /// SCALE-5: this `watch` fell more than the store's broadcast holds
     /// behind, and the channel dropped `missed` changes before it could
     /// read them (`missed` ≥ 1: the count the channel reports). Yielded
@@ -543,7 +558,7 @@ mod tests {
             blocked_by: vec!["SUM-2".into()],
             unlocks: vec!["SUM-3".into()],
             parent: Some("SUM-4".into()),
-            children: vec!["SUM-5".into()],
+            child_count: 1,
             body: "## Problem\n\nthe weight of a list".into(),
             created_unix: 1,
             updated_unix: 2,

@@ -108,8 +108,18 @@
 //! keep their DOM, the open page's body fetched again — and the dock stays
 //! `live` (src/session.rs).
 
+//! SCALE-4: a row no longer lists its children — it carries `child_count`,
+//! and `children_changed` is the parent's id, the child and the new count,
+//! not the whole parent (a root's list was every ticket of its shortcode:
+//! 2 MB at 10^6, on every birth). The board's "decomposes" mark reads the
+//! count; the ticket page asks for its children by page when it opens
+//! (`list { parent }`, 200 at a time, "more" for the next) and keeps what it
+//! holds live from the deltas (src/kids.rs). The nav never read the list:
+//! its tree is every row's `parent` (src/nav.rs).
+
 mod dom;
 mod keys;
+mod kids;
 mod md;
 mod menu;
 mod nav;
@@ -712,10 +722,11 @@ fn Board(
                                     // AGS-20: no `parent` column — just the
                                     // mark that this row decomposes, and how
                                     // far (the nav is where the tree is).
+                                    // SCALE-4: the count the row carries.
                                     {move || {
                                         ticket
                                             .with(|t| {
-                                                let n = t.children.len();
+                                                let n = t.child_count;
                                                 (n > 0)
                                                     .then(|| {
                                                         let word = if n == 1 { "child" } else { "children" };
@@ -805,9 +816,11 @@ fn dag_entry(
     rows: RwSignal<Vec<Row>>,
     dangling_when: Option<RwSignal<bool>>,
 ) -> impl IntoView {
+    // SCALE-4: found by its key, as MFE-12's nav leaves are — a page of
+    // children is up to 200 of these, and each re-runs on every insert.
     let found = {
         let id = id.clone();
-        Memo::new(move |_| rows.with(|v| v.iter().find(|r| r.id == id).map(|r| r.ticket)))
+        Memo::new(move |_| rows.with(|v| row_index(v, &id).map(|i| v[i].ticket)))
     };
     let dangling = move || found.get().is_none() && dangling_when.is_some_and(|loaded| loaded.get());
     let attr_id = id.clone();
@@ -873,14 +886,20 @@ fn ticket_view(
     body_raw: RwSignal<Option<String>>,
     rows: RwSignal<Vec<Row>>,
     blockers_loaded: RwSignal<bool>,
+    kids: RwSignal<kids::Kids>,
+    more: impl Fn() + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     let blocked_by = Memo::new(move |_| ticket.with(|t| t.blocked_by.clone()));
     let unlocks_ids = Memo::new(move |_| ticket.with(|t| t.unlocks.clone()));
-    // AGS-20: the ticket's own decomposition. `children` is the server's
-    // derived list, so a child born anywhere arrives over `watch`
-    // (`children_changed` carries this whole parent) and the list grows
-    // with no re-fetch.
-    let children_ids = Memo::new(move |_| ticket.with(|t| t.children.clone()));
+    // AGS-20: the ticket's own decomposition. SCALE-4: fetched by page
+    // when the page opens (`TicketPage`), and grown or shrunk in place by
+    // the deltas `watch` carries for this parent — a child born anywhere
+    // still appears with no re-fetch.
+    let children_ids = Memo::new(move |_| kids.with(|k| k.ids.clone()));
+    let unshown = Memo::new(move |_| {
+        let count = ticket.with(|t| t.child_count);
+        kids.with(|k| k.unshown(count))
+    });
     let parent_id = Memo::new(move |_| ticket.with(|t| t.parent.clone()));
 
     let blockers = move || {
@@ -918,7 +937,8 @@ fn ticket_view(
     let children = move || {
         let ids = children_ids.get();
         if ids.is_empty() {
-            view! { <p class="none">"none"</p> }.into_any()
+            let word = if kids.with(|k| k.loaded) { "none" } else { "loading…" };
+            view! { <p class="none">{word}</p> }.into_any()
         } else {
             view! {
                 <ul id="children">
@@ -930,6 +950,17 @@ fn ticket_view(
             }
                 .into_any()
         }
+    };
+    // The rest of a large parent's children, a page at a time.
+    let more_view = move || {
+        let n = unshown.get();
+        (n > 0).then(|| {
+            view! {
+                <button id="kids-more" class="more" on:click=move |_| more()>
+                    {format!("{n} more")}
+                </button>
+            }
+        })
     };
     let body = move || {
         // MFE-9: the body is not a row field — it arrives with this page's
@@ -1020,6 +1051,7 @@ fn ticket_view(
             <section class="dag kidsec">
                 <h3>"children"</h3>
                 {children}
+                {more_view}
             </section>
             <section class="bodysec">
                 <h3>"body"</h3>
@@ -1056,6 +1088,9 @@ fn TicketPage(
     // `amended` event for this ticket replaces the body without a `get`.
     session::hold_body(id.clone(), body);
     on_cleanup(move || session::release_body(body));
+    // SCALE-4: this ticket's children, by page, kept live by `watch`.
+    let kids = RwSignal::new(kids::Kids::default());
+    session::watch_children(id.clone(), kids);
 
     {
         let id = id.clone();
@@ -1071,8 +1106,17 @@ fn TicketPage(
                 blockers_loaded,
                 last_error,
             );
+            session::load_children(id.clone(), None, rows, kids, last_error);
         });
     }
+    let more = {
+        let id = StoredValue::new(id.clone());
+        move || {
+            if let Some(after) = kids.with_untracked(|k| k.next.clone()) {
+                session::load_children(id.get_value(), Some(after), rows, kids, last_error);
+            }
+        }
+    };
 
     let ticket = {
         let id = id.clone();
@@ -1103,7 +1147,7 @@ fn TicketPage(
         <div id="ticket-page">
             <p class="crumbs"><a href="#/">"← board"</a>{crumbs}</p>
             {move || match ticket.get() {
-                Some(t) => ticket_view(t, body, rows, blockers_loaded).into_any(),
+                Some(t) => ticket_view(t, body, rows, blockers_loaded, kids, more).into_any(),
                 None if not_found.get() => {
                     let id = id_view.clone();
                     view! {
@@ -1348,7 +1392,7 @@ mod tests {
             kind: menger_tickets_api::Kind::Build,
             severity: None,
             parent: None,
-            children: Vec::new(),
+            child_count: 0,
             blocked_by: Vec::new(),
             unlocks: Vec::new(),
             created_unix: 0,

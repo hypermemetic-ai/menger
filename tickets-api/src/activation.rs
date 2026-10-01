@@ -95,11 +95,31 @@ fn change_event(change: Change) -> TicketsEvent {
         }
         Change::Amended { ticket, changed } => TicketsEvent::Amended { ticket, changed },
         Change::UnlocksChanged { ticket, added } => TicketsEvent::UnlocksChanged { ticket, added },
-        Change::ChildrenChanged { ticket, added } => TicketsEvent::ChildrenChanged { ticket, added },
+        // SCALE-4: the parent's shortcode filtered `watch { epic }` on the
+        // way here; the wire carries the id and the count.
+        Change::ChildrenChanged {
+            id,
+            added,
+            child_count,
+            ..
+        } => TicketsEvent::ChildrenChanged {
+            id,
+            added,
+            child_count,
+        },
         Change::ParentChanged { ticket, previous } => {
             TicketsEvent::ParentChanged { ticket, previous }
         }
-        Change::ChildRemoved { ticket, removed } => TicketsEvent::ChildRemoved { ticket, removed },
+        Change::ChildRemoved {
+            id,
+            removed,
+            child_count,
+            ..
+        } => TicketsEvent::ChildRemoved {
+            id,
+            removed,
+            child_count,
+        },
         Change::GroupChanged { group } => TicketsEvent::GroupChanged { group },
     }
 }
@@ -214,7 +234,9 @@ impl Tickets {
 
     /// Yields one row event per match, ordered by (epic, seq), then
     /// exactly one `page` event saying where the walk stands. The
-    /// `parent` filter (AGS-19) yields exactly that ticket's children.
+    /// `parent` filter (AGS-19) yields exactly that ticket's children —
+    /// since SCALE-4 the one way to read them (a row carries only their
+    /// `child_count`), and a page of them costs the page.
     ///
     /// MNG-9 adds the page: `after` is the exclusive cursor (a ticket id
     /// — the order is total and unique, so an id is a position), `limit`
@@ -306,7 +328,7 @@ impl Tickets {
     /// in-band `Error` when the parent does not exist or the chain would
     /// make the ticket its own ancestor. `watch` also carries the parents'
     /// side: `ChildrenChanged` for the new parent and `ChildRemoved` for
-    /// the old one.
+    /// the old one — each the parent's id and new `child_count` (SCALE-4).
     #[plexus_macros::method(
         description = "Set a ticket's parent — the ticket it is an output of; adopts a parentless ticket or moves one",
         params(
@@ -524,6 +546,12 @@ impl Tickets {
     ///
     /// MNG-16: an `amend` that changed something is one `Amended`, and
     /// moves no group.
+    ///
+    /// SCALE-4: a parent's side of a birth or a move is the exception to
+    /// "the full ticket": `ChildrenChanged` / `ChildRemoved` carry the
+    /// parent's id, the child, and the parent's new `child_count` — the
+    /// child's own `Created` / `ParentChanged` already says where it
+    /// hangs. The `epic` filter applies to them by the parent's shortcode.
     #[plexus_macros::method(
         streaming,
         description = "Subscribe to ticket changes (Created / StatusChanged / Amended / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes",
@@ -998,11 +1026,12 @@ mod tests {
         }
         // MNG-14: DAG-2 named no parent, so it hangs under the root — which
         // is also its blocker: one updated ticket, both edges, two events.
+        // SCALE-4: the first is the parent's id and count; the second the
+        // whole ticket, carrying both edges.
         match watch.next().await.expect("change") {
-            TicketsEvent::ChildrenChanged { ticket, added } => {
-                assert_eq!(ticket.id, "DAG-1");
-                assert_eq!(ticket.children, vec!["DAG-2"]);
-                assert_eq!(ticket.unlocks, vec!["DAG-2"], "both edges on the one ticket");
+            TicketsEvent::ChildrenChanged { id, added, child_count } => {
+                assert_eq!(id, "DAG-1");
+                assert_eq!(child_count, 1);
                 assert_eq!(added, "DAG-2");
             }
             other => panic!("expected ChildrenChanged, got {other:?}"),
@@ -1011,6 +1040,7 @@ mod tests {
             TicketsEvent::UnlocksChanged { ticket, added } => {
                 assert_eq!(ticket.id, "DAG-1");
                 assert_eq!(ticket.unlocks, vec!["DAG-2"]);
+                assert_eq!(ticket.child_count, 1, "both edges on the one ticket");
                 assert_eq!(added, "DAG-2");
             }
             other => panic!("expected UnlocksChanged, got {other:?}"),
@@ -1023,9 +1053,9 @@ mod tests {
     }
 
     /// AGS-19 acceptance 1: a child's birth is visible from both ends —
-    /// `get C` shows the parent, `get P` shows the child — and a watcher
-    /// sees the parent's update as `children_changed` with the full
-    /// ticket, the same discipline `unlocks_changed` follows.
+    /// `get C` shows the parent, `get P` counts the child and `list
+    /// { parent: P }` names it (SCALE-4) — and a watcher sees the parent's
+    /// update as `children_changed`: its id, the child and its new count.
     #[tokio::test]
     async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
         let hub = hub();
@@ -1049,7 +1079,7 @@ mod tests {
             TicketsEvent::Created { ticket } => {
                 assert_eq!(ticket.id, "FAM-2");
                 assert_eq!(ticket.parent.as_deref(), Some("FAM-1"), "case-insensitive");
-                assert!(ticket.children.is_empty());
+                assert_eq!(ticket.child_count, 0);
             }
             other => panic!("expected Created, got {other:?}"),
         }
@@ -1059,22 +1089,35 @@ mod tests {
             other => panic!("expected Created, got {other:?}"),
         }
         match watch.next().await.expect("change") {
-            TicketsEvent::ChildrenChanged { ticket, added } => {
-                assert_eq!(ticket.id, "FAM-1");
+            TicketsEvent::ChildrenChanged { id, added, child_count } => {
+                assert_eq!(id, "FAM-1");
                 assert_eq!(added, "FAM-2");
-                assert_eq!(ticket.children, vec!["FAM-2"]);
-                assert_eq!(ticket.title, "P", "the full parent rides along");
+                assert_eq!(child_count, 1, "the count, not the parent");
             }
             other => panic!("expected ChildrenChanged, got {other:?}"),
         }
+        let wire = serde_json::to_value(TicketsEvent::ChildrenChanged {
+            id: "FAM-1".into(),
+            added: "FAM-2".into(),
+            child_count: 1,
+        })
+        .unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({"type": "children_changed", "id": "FAM-1", "added": "FAM-2", "child_count": 1})
+        );
 
         match one(hub.get("FAM-1".into()).await).await {
             TicketsEvent::Ticket { ticket } => {
-                assert_eq!(ticket.children, vec!["FAM-2"]);
+                assert_eq!(ticket.child_count, 1);
                 assert_eq!(ticket.parent, None);
             }
             other => panic!("expected Ticket, got {other:?}"),
         }
+        assert_eq!(
+            ticket_ids(hub.list(None, None, Some("FAM-1".into()), None, None, None).await).await,
+            vec!["FAM-2"]
+        );
         match one(hub.get("FAM-2".into()).await).await {
             TicketsEvent::Ticket { ticket } => assert_eq!(ticket.parent.as_deref(), Some("FAM-1")),
             other => panic!("expected Ticket, got {other:?}"),
@@ -1181,7 +1224,8 @@ mod tests {
         assert_eq!(summary["kind"], "scope");
         assert_eq!(summary["severity"], "High");
         assert!(summary["parent"].is_null(), "an absent parent is null, not missing");
-        assert_eq!(summary["children"], serde_json::json!([]));
+        assert_eq!(summary["child_count"], 0);
+        assert!(summary.get("children").is_none(), "SCALE-4: no list of children: {summary}");
 
         // The full ticket still carries it, unchanged.
         let evs: Vec<_> = Box::pin(hub.list(None, None, None, None, None, None).await)
@@ -1393,7 +1437,7 @@ mod tests {
     fn label(ev: &TicketsEvent) -> String {
         match ev {
             TicketsEvent::Created { ticket } => format!("created {}", ticket.id),
-            TicketsEvent::ChildrenChanged { ticket, added } => format!("children {} +{added}", ticket.id),
+            TicketsEvent::ChildrenChanged { id, added, .. } => format!("children {id} +{added}"),
             TicketsEvent::GroupChanged { group } => format!("group {} {}", group.epic, group.total),
             TicketsEvent::Lagged { missed } => format!("lagged {missed}"),
             other => format!("{other:?}"),
@@ -1476,17 +1520,18 @@ mod tests {
         }
         assert!(matches!(watch.next().await, Some(TicketsEvent::ParentChanged { .. })));
         match watch.next().await {
-            Some(TicketsEvent::ChildrenChanged { ticket, added }) => {
-                assert_eq!(ticket.id, "SP-2");
+            Some(TicketsEvent::ChildrenChanged { id, added, child_count }) => {
+                assert_eq!(id, "SP-2");
                 assert_eq!(added, "SP-3");
+                assert_eq!(child_count, 1);
             }
             other => panic!("expected ChildrenChanged, got {other:?}"),
         }
         match watch.next().await {
-            Some(TicketsEvent::ChildRemoved { ticket, removed }) => {
-                assert_eq!(ticket.id, "SP-1");
+            Some(TicketsEvent::ChildRemoved { id, removed, child_count }) => {
+                assert_eq!(id, "SP-1");
                 assert_eq!(removed, "SP-3");
-                assert_eq!(ticket.children, vec!["SP-2"]);
+                assert_eq!(child_count, 1, "SP-2 is left");
             }
             other => panic!("expected ChildRemoved, got {other:?}"),
         }

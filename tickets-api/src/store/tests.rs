@@ -1,4 +1,6 @@
 use super::*;
+// SCALE-4: a ticket's children are read by `list { parent }` now.
+use super::tests_children::children;
 
 fn new_ticket(epic: &str, title: &str) -> NewTicket {
     NewTicket {
@@ -435,9 +437,9 @@ fn write_pre_ags19_db(path: &Path, rows: &[(u32, Option<&str>)]) {
 }
 
 /// Acceptance 1 at the store level: a child names its parent, the
-/// parent gains it in `children`, a subscriber sees the parent's
-/// change as `ChildrenChanged` carrying the full ticket, and both
-/// edges are durable.
+/// parent gains it among its children, a subscriber sees the parent's
+/// change as `ChildrenChanged` (SCALE-4: its id and new count), and the
+/// edge is durable.
 #[tokio::test]
 async fn a_childs_birth_updates_its_parent_and_is_broadcast() {
     let dir = tempfile::tempdir().unwrap();
@@ -445,7 +447,7 @@ async fn a_childs_birth_updates_its_parent_and_is_broadcast() {
     let store = Store::open(&path).unwrap();
     let parent = store.create(scope("FAM", "the parent")).await.unwrap();
     assert_eq!(parent.parent, None);
-    assert!(parent.children.is_empty());
+    assert_eq!(parent.child_count, 0);
 
     let mut rx = store.subscribe();
     let child = store
@@ -453,29 +455,29 @@ async fn a_childs_birth_updates_its_parent_and_is_broadcast() {
         .await
         .unwrap();
     assert_eq!(child.parent.as_deref(), Some("FAM-1"));
-    assert!(child.children.is_empty());
+    assert_eq!(child.child_count, 0);
 
     match rx.recv().await.unwrap() {
         Change::Created { ticket } => assert_eq!(ticket.id, "FAM-2"),
         other => panic!("expected Created, got {other:?}"),
     }
     match rx.recv().await.unwrap() {
-        Change::ChildrenChanged { ticket, added } => {
-            assert_eq!(ticket.id, "FAM-1");
+        Change::ChildrenChanged { id, added, child_count, .. } => {
+            assert_eq!(id, "FAM-1");
             assert_eq!(added, "FAM-2");
-            // The full ticket, not just the delta.
-            assert_eq!(ticket.children, vec!["FAM-2"]);
-            assert_eq!(ticket.title, "the parent");
-            assert_eq!(ticket.status, Status::Pending);
+            // SCALE-4: the parent's id and count, not the parent.
+            assert_eq!(child_count, 1);
         }
         other => panic!("expected ChildrenChanged, got {other:?}"),
     }
-    assert_eq!(store.get("FAM-1").unwrap().children, vec!["FAM-2"]);
+    assert_eq!(children(&store, "FAM-1"), vec!["FAM-2"]);
+    assert_eq!(store.get("FAM-1").unwrap().child_count, 1);
 
-    // Durable: a reopen finds both halves of the edge.
+    // Durable: a reopen finds the edge, and counts it.
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get("FAM-1").unwrap().children, vec!["FAM-2"]);
+    assert_eq!(children(&store, "FAM-1"), vec!["FAM-2"]);
+    assert_eq!(store.get("FAM-1").unwrap().child_count, 1);
     assert_eq!(store.get("FAM-2").unwrap().parent.as_deref(), Some("FAM-1"));
 }
 
@@ -542,11 +544,11 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
         .await
         .unwrap();
     assert_eq!(store.get("CHAIN-1").unwrap().parent, None);
-    assert_eq!(store.get("CHAIN-1").unwrap().children, vec!["OTHER-1"]);
+    assert_eq!(children(&store, "CHAIN-1"), vec!["OTHER-1"]);
     assert_eq!(store.get("OTHER-1").unwrap().parent.as_deref(), Some("CHAIN-1"));
-    assert_eq!(store.get("OTHER-1").unwrap().children, vec!["OTHER-2"]);
+    assert_eq!(children(&store, "OTHER-1"), vec!["OTHER-2"]);
     assert_eq!(store.get("OTHER-2").unwrap().parent.as_deref(), Some("OTHER-1"));
-    assert!(store.get("OTHER-2").unwrap().children.is_empty());
+    assert!(children(&store, "OTHER-2").is_empty());
 
     // And the guard itself: an ancestry walk that would come back
     // around is caught before anything persists.
@@ -567,7 +569,8 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
 
 /// A ticket that is both the parent and a blocker of the newborn is
 /// updated once and carries both edges — the two events that follow
-/// both show the fully updated ticket (PERF-4 is exactly this shape).
+/// both show it as it now is (PERF-4 is exactly this shape): SCALE-4,
+/// `ChildrenChanged` its count, `UnlocksChanged` the whole ticket.
 #[tokio::test]
 async fn a_parent_that_is_also_a_blocker_gets_both_edges() {
     let store = Store::new();
@@ -584,12 +587,15 @@ async fn a_parent_that_is_also_a_blocker_gets_both_edges() {
     assert_eq!(child.blocked_by, vec!["BOTH-1"]);
 
     let parent = store.get("BOTH-1").unwrap();
-    assert_eq!(parent.children, vec!["BOTH-2"]);
+    assert_eq!(children(&store, "BOTH-1"), vec!["BOTH-2"]);
+    assert_eq!(parent.child_count, 1);
     assert_eq!(parent.unlocks, vec!["BOTH-2"], "neither edge overwrote the other");
 
     assert!(matches!(rx.recv().await.unwrap(), Change::Created { .. }));
     match rx.recv().await.unwrap() {
-        Change::ChildrenChanged { ticket, .. } => assert_eq!(ticket, parent),
+        Change::ChildrenChanged { id, child_count, .. } => {
+            assert_eq!((id.as_str(), child_count), ("BOTH-1", parent.child_count))
+        }
         other => panic!("expected ChildrenChanged, got {other:?}"),
     }
     match rx.recv().await.unwrap() {
@@ -640,8 +646,8 @@ async fn list_filters_by_parent() {
 
 /// Acceptance 3 at the store level: a pre-AGS-19 database gains the
 /// columns and its typed parents on first open, from body
-/// frontmatter — resolvable ones written through (and mirrored in
-/// `children`), an unresolvable one left empty, a frontmatter cycle
+/// frontmatter — resolvable ones written through (and, SCALE-4, read
+/// back as children), an unresolvable one left empty, a frontmatter cycle
 /// refused, a body without frontmatter untouched — and the rewrite is
 /// durable, once. Nothing about it is fatal.
 #[tokio::test]
@@ -673,11 +679,11 @@ async fn pre_ags19_database_backfills_typed_parents_from_frontmatter() {
         // pair is taken, the half that would close it is refused.
         assert_eq!(p("OLD-5").as_deref(), Some("OLD-6"));
         assert_eq!(p("OLD-6"), None);
-        // …and `children` mirrors every accepted edge.
-        assert_eq!(store.get("OLD-1").unwrap().children, vec!["OLD-2"]);
-        assert_eq!(store.get("OLD-2").unwrap().children, vec!["OLD-4"]);
-        assert_eq!(store.get("OLD-6").unwrap().children, vec!["OLD-5"]);
-        assert!(store.get("OLD-3").unwrap().children.is_empty());
+        // …and every accepted edge is a child of its parent.
+        assert_eq!(children(&store, "OLD-1"), vec!["OLD-2"]);
+        assert_eq!(children(&store, "OLD-2"), vec!["OLD-4"]);
+        assert_eq!(children(&store, "OLD-6"), vec!["OLD-5"]);
+        assert!(children(&store, "OLD-3").is_empty());
         // The body is the raw record, untouched by the migration.
         assert!(store.get("OLD-3").unwrap().body.contains("parent: OLD-99"));
     }
@@ -685,7 +691,9 @@ async fn pre_ags19_database_backfills_typed_parents_from_frontmatter() {
     // The file itself carries the typed parents now.
     let cols = columns(&path);
     assert!(cols.contains(&"parent".to_string()), "{cols:?}");
-    assert!(cols.contains(&"children".to_string()), "{cols:?}");
+    // SCALE-4: the backfill no longer adds a list for the edges to be
+    // mirrored in; the cache derives children from `parent`.
+    assert!(!cols.contains(&"children".to_string()), "{cols:?}");
     {
         let conn = Connection::open(&path).unwrap();
         let raw: Vec<(String, Option<String>)> = conn
@@ -716,7 +724,7 @@ async fn pre_ags19_database_backfills_typed_parents_from_frontmatter() {
     let next = store.create(child_of("OLD", "born after", "OLD-4")).await.unwrap();
     assert_eq!(next.id, "OLD-7");
     assert_eq!(next.parent.as_deref(), Some("OLD-4"));
-    assert_eq!(store.get("OLD-4").unwrap().children, vec!["OLD-7"]);
+    assert_eq!(children(&store, "OLD-4"), vec!["OLD-7"]);
 }
 
 /// The frontmatter reader: only a leading block counts, only the
@@ -776,7 +784,7 @@ async fn reopen_round_trips_every_field_and_continues_seq() {
             }
             other => panic!("expected StatusChanged, got {other:?}"),
         };
-        assert_eq!(parent.children, vec!["RT-2"]);
+        assert_eq!(parent.child_count, 1);
         (parent, child)
     };
 
@@ -792,7 +800,8 @@ async fn reopen_round_trips_every_field_and_continues_seq() {
     assert_eq!(next.id, "RT-3");
     assert_eq!(next.seq, 3);
     assert_eq!(next.parent.as_deref(), Some("RT-1"), "MNG-14: defaulted to the root");
-    assert!(next.children.is_empty());
+    assert_eq!(next.child_count, 0);
+    assert_eq!(children(&store, "RT-1"), vec!["RT-2", "RT-3"]);
 }
 
 #[tokio::test]
@@ -1067,7 +1076,7 @@ async fn first_ticket_of_a_shortcode_must_be_a_scope() {
     assert_eq!(next.id, "FRESH-2");
     assert_eq!(next.kind, Kind::Build);
     assert_eq!(next.parent.as_deref(), Some("FRESH-1"), "defaults to the shortcode root");
-    assert_eq!(store.get("FRESH-1").unwrap().children, vec!["FRESH-2"]);
+    assert_eq!(children(&store, "FRESH-1"), vec!["FRESH-2"]);
 }
 
 /// MNG-14: a parent named must be inside the ticket's own shortcode;
@@ -1105,14 +1114,14 @@ async fn a_parent_stays_inside_the_shortcode_except_for_the_root() {
     store.create(scope("HOST2", "another host")).await.unwrap();
     store.set_parent("SUB-1", "HOST2-1").await.unwrap();
     assert_eq!(store.get("SUB-1").unwrap().parent.as_deref(), Some("HOST2-1"));
-    assert_eq!(store.get("HOST-1").unwrap().children, Vec::<String>::new());
-    assert_eq!(store.get("HOST2-1").unwrap().children, vec!["SUB-1"]);
+    assert_eq!(children(&store, "HOST-1"), Vec::<String>::new());
+    assert_eq!(children(&store, "HOST2-1"), vec!["SUB-1"]);
 }
 
 /// MNG-12 criterion 2: `set_parent` moves a ticket — the child, the
 /// new parent and the old parent move together, the three events carry
-/// full tickets, the edge survives a reopen, and repeating it is a
-/// no-op. (Adopting a *parentless* non-root is the MNG-12 backfill's
+/// the child whole and each parent's id and count (SCALE-4), the edge
+/// survives a reopen, and repeating it is a no-op. (Adopting a *parentless* non-root is the MNG-12 backfill's
 /// case; since MNG-14 none is born that way.)
 #[tokio::test]
 async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
@@ -1122,7 +1131,7 @@ async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
     store.create(scope("AD", "the root")).await.unwrap(); // AD-1
     store.create(new_ticket("AD", "a")).await.unwrap(); // AD-2 → AD-1
     store.create(new_ticket("AD", "b")).await.unwrap(); // AD-3 → AD-1
-    assert_eq!(store.get("AD-1").unwrap().children, vec!["AD-2", "AD-3"]);
+    assert_eq!(children(&store, "AD-1"), vec!["AD-2", "AD-3"]);
     let mut rx = store.subscribe();
 
     match store.set_parent("ad-3", "ad-2").await.unwrap() {
@@ -1140,19 +1149,18 @@ async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
         other => panic!("expected ParentChanged, got {other:?}"),
     }
     match rx.recv().await.unwrap() {
-        Change::ChildrenChanged { ticket, added } => {
-            assert_eq!(ticket.id, "AD-2");
+        Change::ChildrenChanged { id, added, child_count, .. } => {
+            assert_eq!(id, "AD-2");
             assert_eq!(added, "AD-3");
-            assert_eq!(ticket.children, vec!["AD-3"]);
-            assert_eq!(ticket.title, "a", "the full parent, not a delta");
+            assert_eq!(child_count, 1, "the parent's id and count, not the parent");
         }
         other => panic!("expected ChildrenChanged, got {other:?}"),
     }
     match rx.recv().await.unwrap() {
-        Change::ChildRemoved { ticket, removed } => {
-            assert_eq!(ticket.id, "AD-1");
+        Change::ChildRemoved { id, removed, child_count, .. } => {
+            assert_eq!(id, "AD-1");
             assert_eq!(removed, "AD-3");
-            assert_eq!(ticket.children, vec!["AD-2"], "the full ex-parent");
+            assert_eq!(child_count, 1, "the ex-parent's id and count");
         }
         other => panic!("expected ChildRemoved, got {other:?}"),
     }
@@ -1168,8 +1176,8 @@ async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
     drop(store);
     let store = Store::open(&path).unwrap();
     assert_eq!(store.get("AD-3").unwrap().parent.as_deref(), Some("AD-2"));
-    assert_eq!(store.get("AD-2").unwrap().children, vec!["AD-3"]);
-    assert_eq!(store.get("AD-1").unwrap().children, vec!["AD-2"]);
+    assert_eq!(children(&store, "AD-2"), vec!["AD-3"]);
+    assert_eq!(children(&store, "AD-1"), vec!["AD-2"]);
 }
 
 /// MNG-12 criterion 3: the guards, and a move. A missing child, a
@@ -1212,7 +1220,7 @@ async fn set_parent_guards_ancestry_and_a_move_removes_from_the_old_parent() {
         other => panic!("expected ParentCycle, got {other:?}"),
     }
     assert_eq!(store.get("MV-1").unwrap().parent, None, "nothing changed");
-    assert_eq!(store.get("MV-2").unwrap().children, vec!["MV-3"]);
+    assert_eq!(children(&store, "MV-2"), vec!["MV-3"]);
 
     // The move: MV-3 from under MV-2 to under MV-1.
     let mut rx = store.subscribe();
@@ -1222,21 +1230,21 @@ async fn set_parent_guards_ancestry_and_a_move_removes_from_the_old_parent() {
         Change::ParentChanged { previous: Some(p), .. } if p == "MV-2"
     ));
     match rx.recv().await.unwrap() {
-        Change::ChildrenChanged { ticket, added } => {
-            assert_eq!((ticket.id.as_str(), added.as_str()), ("MV-1", "MV-3"));
-            assert_eq!(ticket.children, vec!["MV-2", "MV-4", "MV-3"]);
+        Change::ChildrenChanged { id, added, child_count, .. } => {
+            assert_eq!((id.as_str(), added.as_str(), child_count), ("MV-1", "MV-3", 3));
         }
         other => panic!("expected ChildrenChanged, got {other:?}"),
     }
     match rx.recv().await.unwrap() {
-        Change::ChildRemoved { ticket, removed } => {
-            assert_eq!((ticket.id.as_str(), removed.as_str()), ("MV-2", "MV-3"));
-            assert!(ticket.children.is_empty(), "the full ex-parent");
+        Change::ChildRemoved { id, removed, child_count, .. } => {
+            assert_eq!((id.as_str(), removed.as_str(), child_count), ("MV-2", "MV-3", 0));
         }
         other => panic!("expected ChildRemoved, got {other:?}"),
     }
     assert_eq!(store.get("MV-3").unwrap().parent.as_deref(), Some("MV-1"));
-    assert_eq!(store.get("MV-2").unwrap().children, Vec::<String>::new());
+    // SCALE-4: in the store's order, not the order they arrived in.
+    assert_eq!(children(&store, "MV-1"), vec!["MV-2", "MV-3", "MV-4"]);
+    assert_eq!(children(&store, "MV-2"), Vec::<String>::new());
 }
 
 // ---- MNG-10: the roll-ups are the nav's plan() -----------------------
@@ -1482,10 +1490,9 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
 }
 
 /// A database the server could not write today but must still load,
-/// written straight through the schema — `children` mirrored from
-/// `parent`, as the store keeps it.
+/// written straight through the schema.
 fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)]) {
-    let mut tickets: Vec<Ticket> = rows
+    let tickets: Vec<Ticket> = rows
         .iter()
         .map(|(id, kind, status, parent)| {
             let (epic, seq) = id.rsplit_once('-').unwrap();
@@ -1500,22 +1507,13 @@ fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)]) {
                 blocked_by: Vec::new(),
                 unlocks: Vec::new(),
                 parent: parent.map(Into::into),
-                children: Vec::new(),
+                child_count: 0,
                 body: String::new(),
                 created_unix: 0,
                 updated_unix: 0,
             }
         })
         .collect();
-    let edges: Vec<(String, Option<String>)> =
-        tickets.iter().map(|t| (t.id.clone(), t.parent.clone())).collect();
-    for t in &mut tickets {
-        t.children = edges
-            .iter()
-            .filter(|(_, p)| p.as_deref() == Some(t.id.as_str()))
-            .map(|(id, _)| id.clone())
-            .collect();
-    }
     let conn = Connection::open(path).unwrap();
     conn.execute_batch(db::SCHEMA).unwrap();
     for t in &tickets {
@@ -1860,7 +1858,7 @@ fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
                 blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
                 unlocks,
                 parent: None,
-                children: Vec::new(),
+                child_count: 0,
                 body: String::new(),
                 created_unix: 0,
                 updated_unix: 0,

@@ -189,17 +189,24 @@ async fn in_band_errors_cross_the_wire() {
 /// A watch-only client's local mirror: every mutation event carries the
 /// full affected ticket, so applying it is one upsert. A `group_changed`
 /// (MNG-10) carries a roll-up, not a row — this mirror keeps rows.
+/// SCALE-4: a parent's side of a birth or a move, `children_changed` /
+/// `child_removed`, is its id and new `child_count` — applying it sets the
+/// count on the row the mirror holds.
 fn apply(mirror: &mut std::collections::HashMap<String, Value>, ev: &Value) {
     match ev["type"].as_str() {
         Some("created")
         | Some("status_changed")
         | Some("unlocks_changed")
-        | Some("children_changed")
-        | Some("parent_changed")
-        | Some("child_removed") => {
+        | Some("parent_changed") => {
             let ticket = ev["ticket"].clone();
             let id = ticket["id"].as_str().expect("ticket id").to_string();
             mirror.insert(id, ticket);
+        }
+        Some("children_changed") | Some("child_removed") => {
+            let id = ev["id"].as_str().expect("parent id");
+            if let Some(row) = mirror.get_mut(id) {
+                row["child_count"] = ev["child_count"].clone();
+            }
         }
         Some("group_changed") => {}
         other => panic!("unexpected watch event {other:?}: {ev}"),
@@ -357,8 +364,9 @@ async fn cycle_create_errors_in_band_and_stores_nothing() {
 }
 
 /// AGS-19 acceptance 1, 2 and 4 over the real wire: a child names its
-/// parent at create, `get` shows both halves, the watch-only mirror sees
-/// the parent's update as `children_changed` carrying the full ticket, a
+/// parent at create, `get` shows both halves (SCALE-4: the parent's half
+/// is its `child_count`), the watch-only mirror sees the parent's update
+/// as `children_changed` carrying its id and count, a
 /// nonexistent parent is an in-band error naming the reason, a 3-deep
 /// chain (crossing epics) reads back, and `list {parent}` returns exactly
 /// that ticket's children.
@@ -370,7 +378,8 @@ async fn parent_children_and_the_parent_filter_over_the_wire() {
 
     let evs = collect(call(&client, "tickets.create", json!({"epic": "PA", "title": "P", "kind": "scope"})).await).await;
     assert_eq!(evs[0]["type"], "created");
-    assert_eq!(evs[0]["ticket"]["children"], json!([]), "born childless");
+    assert_eq!(evs[0]["ticket"]["child_count"], 0, "born childless");
+    assert!(evs[0]["ticket"].get("children").is_none(), "SCALE-4: no list on the row");
     assert!(evs[0]["ticket"]["parent"].is_null(), "and parentless");
     mirror.insert("PA-1".to_string(), evs[0]["ticket"].clone());
 
@@ -395,23 +404,21 @@ async fn parent_children_and_the_parent_filter_over_the_wire() {
     assert_eq!(evs[0]["ticket"]["id"], "PA-2");
     assert_eq!(evs[0]["ticket"]["parent"], "PA-1");
 
-    // The watcher saw the birth and the parent's update, full ticket.
+    // The watcher saw the birth and the parent's update: SCALE-4, the
+    // parent's id and new count, and nothing else.
     for _ in 0..2 {
         let ev = content(watch.next().await.unwrap().unwrap());
         if ev["type"] == "children_changed" {
-            assert_eq!(ev["ticket"]["id"], "PA-1");
-            assert_eq!(ev["added"], "PA-2");
-            assert_eq!(ev["ticket"]["children"], json!(["PA-2"]));
-            assert_eq!(ev["ticket"]["title"], "P", "the full parent, not a delta");
+            assert_eq!(ev, json!({"type": "children_changed", "id": "PA-1", "added": "PA-2", "child_count": 1}));
         }
         apply(&mut mirror, &ev);
     }
-    assert_eq!(mirror["PA-1"]["children"], json!(["PA-2"]),
+    assert_eq!(mirror["PA-1"]["child_count"], 1,
         "a watch-only client's mirror stays coherent");
 
     // Both ends agree when asked directly.
     let evs = collect(call(&client, "tickets.get", json!({"id": "PA-1"})).await).await;
-    assert_eq!(evs[0]["ticket"]["children"], json!(["PA-2"]));
+    assert_eq!(evs[0]["ticket"]["child_count"], 1);
     let evs = collect(call(&client, "tickets.get", json!({"id": "PA-2"})).await).await;
     assert_eq!(evs[0]["ticket"]["parent"], "PA-1");
 
@@ -432,10 +439,13 @@ async fn parent_children_and_the_parent_filter_over_the_wire() {
         let evs = collect(call(&client, "tickets.get", json!({"id": child})).await).await;
         assert_eq!(evs[0]["ticket"]["parent"], *parent, "{child}");
         let evs = collect(call(&client, "tickets.get", json!({"id": parent})).await).await;
-        assert_eq!(evs[0]["ticket"]["children"], json!([child]), "{parent}");
+        assert_eq!(evs[0]["ticket"]["child_count"], 1, "{parent}");
+        let evs = rows(call(&client, "tickets.list", json!({"parent": parent})).await).await;
+        assert_eq!(evs.len(), 1, "{parent}");
+        assert_eq!(evs[0]["ticket"]["id"], *child, "{parent}");
     }
     let evs = collect(call(&client, "tickets.get", json!({"id": "PB-2"})).await).await;
-    assert_eq!(evs[0]["ticket"]["children"], json!([]), "the leaf has none");
+    assert_eq!(evs[0]["ticket"]["child_count"], 0, "the leaf has none");
 
     // Acceptance 4: exactly the children, and nothing else. PA-3 names no
     // parent and so hangs under PA's root (MNG-14).
@@ -500,8 +510,9 @@ async fn list_pages_over_the_wire() {
     assert_eq!(row["kind"], "scope");
     assert!(row["severity"].is_null());
     assert!(row["parent"].is_null(), "the root is top-level");
-    // MNG-14: the six tickets that named no parent hang under the root.
-    assert_eq!(row["children"], json!(["PGA-2", "PGA-3", "PGA-4", "PGA-5", "PGA-6", "PGA-7"]));
+    // MNG-14: the six tickets that named no parent hang under the root —
+    // SCALE-4: counted on the row, listed by `list { parent }`.
+    assert_eq!(row["child_count"], 6);
     assert!(row.get("body").is_none(), "a summary carries no body: {row}");
     assert_eq!(page, json!({"type": "page", "next": "PGA-4", "remaining": 6}));
 
@@ -585,7 +596,7 @@ async fn a_walk_sees_births_above_its_cursor_and_watch_carries_the_rest() {
     assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
 
     // AAA-1 sorts below the cursor, so only watch carries it. (MID-5's
-    // birth also updates its root's children — MNG-14 — so the watch
+    // birth also moves its root's child count — MNG-14 — so the watch
     // interleaves a children_changed; the births are what this pins.)
     let mut pushed = Vec::new();
     while pushed.len() < 2 {
@@ -1019,8 +1030,8 @@ async fn concurrent_reads_complete_under_mutation_stream() {
             r.await.expect("reader completed");
         }
         // The watcher saw every acknowledged change, creates in seq order.
-        // Each create after the root also updates the root's `children`
-        // (MNG-14), and every create moves LOAD's roll-up (MNG-10; a flip
+        // Each create after the root also moves the root's `child_count`
+        // (MNG-14, SCALE-4), and every create moves LOAD's roll-up (MNG-10; a flip
         // to Ready moves none), so: 2 + (MUTATIONS - 1) × (created,
         // children_changed, group_changed, status_changed).
         let mut next_seq = 1u64;
@@ -1031,7 +1042,10 @@ async fn concurrent_reads_complete_under_mutation_stream() {
                     assert_eq!(ev["ticket"]["seq"], next_seq);
                     next_seq += 1;
                 }
-                "children_changed" => assert_eq!(ev["ticket"]["id"], "LOAD-1"),
+                "children_changed" => {
+                    assert_eq!(ev["id"], "LOAD-1");
+                    assert_eq!(ev["child_count"], next_seq - 2, "follows its create");
+                }
                 "group_changed" => {
                     assert_eq!(ev["group"]["epic"], "LOAD");
                     assert_eq!(ev["group"]["total"], next_seq - 1, "follows its create");
@@ -1049,8 +1063,9 @@ async fn concurrent_reads_complete_under_mutation_stream() {
 /// MNG-12/14 over the real wire: the first ticket of a prefix must be a
 /// scope (in-band error, nothing allocated); a ticket naming no parent
 /// hangs under the shortcode root; `set_parent` moves a ticket and the
-/// watch-only mirror sees the child (`parent_changed`) and both parents
-/// (`children_changed`, `child_removed`) as full tickets; `list {parent}`
+/// watch-only mirror sees the child (`parent_changed`) as a full ticket and
+/// both parents (`children_changed`, `child_removed`) as their ids and new
+/// counts (SCALE-4); `list {parent}`
 /// agrees; the guards — ancestry, outside the shortcode, missing — cross
 /// as in-band errors, and a shortcode's root may be hosted elsewhere.
 #[tokio::test]
@@ -1089,7 +1104,7 @@ async fn scope_first_default_parent_and_set_parent_over_the_wire() {
     for ev in rows(call(&client, "tickets.list", json!({})).await).await {
         mirror.insert(ev["ticket"]["id"].as_str().unwrap().to_string(), ev["ticket"].clone());
     }
-    assert_eq!(mirror["SC-1"]["children"], json!(["SC-2", "SC-3", "SD-1"]));
+    assert_eq!(mirror["SC-1"]["child_count"], 3);
     let mut watch = call(&client, "tickets.watch", json!({})).await;
 
     let evs = collect(call(&client, "tickets.set_parent",
@@ -1104,21 +1119,18 @@ async fn scope_first_default_parent_and_set_parent_over_the_wire() {
         let ev = content(watch.next().await.unwrap().unwrap());
         match ev["type"].as_str().unwrap() {
             "children_changed" => {
-                assert_eq!(ev["ticket"]["id"], "SC-2");
-                assert_eq!(ev["added"], "SC-3");
-                assert_eq!(ev["ticket"]["title"], "a", "the full parent, not a delta");
+                assert_eq!(ev, json!({"type": "children_changed", "id": "SC-2", "added": "SC-3", "child_count": 1}));
             }
             "child_removed" => {
-                assert_eq!(ev["ticket"]["id"], "SC-1");
-                assert_eq!(ev["removed"], "SC-3");
+                assert_eq!(ev, json!({"type": "child_removed", "id": "SC-1", "removed": "SC-3", "child_count": 2}));
             }
             _ => {}
         }
         apply(&mut mirror, &ev);
     }
     assert_eq!(mirror["SC-3"]["parent"], "SC-2");
-    assert_eq!(mirror["SC-2"]["children"], json!(["SC-3"]));
-    assert_eq!(mirror["SC-1"]["children"], json!(["SC-2", "SD-1"]));
+    assert_eq!(mirror["SC-2"]["child_count"], 1);
+    assert_eq!(mirror["SC-1"]["child_count"], 2);
 
     let evs = rows(call(&client, "tickets.list", json!({"parent": "SC-2"})).await).await;
     assert_eq!(evs.len(), 1);
