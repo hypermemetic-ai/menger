@@ -1784,3 +1784,560 @@ async fn a_seeded_store_rolls_up_as_the_nav_draws_it() {
         .unwrap();
     assert_eq!(store.groups(), nav(&store));
 }
+
+// ---- SCALE-3: create without scans -----------------------------------
+
+/// What each index's question was answered with before SCALE-3, answered
+/// the same way here — by walking a `list` of the whole store: each
+/// shortcode's highest sequence, and every id some `blocked_by` names that
+/// is no ticket, with the tickets naming it sorted by (epic, seq) — the
+/// order the old scan sorted a newborn's `unlocks` into.
+type Scanned = (BTreeMap<String, u32>, BTreeMap<String, Vec<String>>);
+
+fn scanned(store: &Store) -> Scanned {
+    let all = store.list(None, None, None);
+    let at: HashMap<&str, (&str, u32)> =
+        all.iter().map(|t| (t.id.as_str(), (t.epic.as_str(), t.seq))).collect();
+    let mut last: BTreeMap<String, u32> = BTreeMap::new();
+    let mut unborn: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for t in &all {
+        let seq = last.entry(t.epic.clone()).or_insert(0);
+        *seq = (*seq).max(t.seq);
+    }
+    let named: BTreeSet<&str> = all
+        .iter()
+        .flat_map(|t| t.blocked_by.iter().map(String::as_str))
+        .filter(|b| !at.contains_key(b))
+        .collect();
+    for id in named {
+        let mut waiting: Vec<&Ticket> =
+            all.iter().filter(|t| t.blocked_by.iter().any(|b| b == id)).collect();
+        waiting.sort_by_key(|t| at[t.id.as_str()]);
+        unborn.insert(id.to_string(), waiting.iter().map(|t| t.id.clone()).collect());
+    }
+    (last, unborn)
+}
+
+/// What the cache keeps, in the same shape.
+fn kept(store: &Store) -> Scanned {
+    let cache = store.tickets.read().unwrap();
+    let last = cache
+        .ids
+        .last_seqs()
+        .map(|(epic, seq)| (epic.to_string(), seq))
+        .collect();
+    (last, cache.ids.unborn())
+}
+
+#[track_caller]
+fn assert_kept_is_a_scan(store: &Store, after: &str) {
+    assert_eq!(kept(store), scanned(store), "after {after}");
+}
+
+/// Writes tickets straight through the schema — any shape, the server's
+/// or not — with `unlocks` mirrored for every blocker that exists, as the
+/// store keeps it. `(id, kind, blocked_by)`; no parents.
+fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
+    let conn = Connection::open(path).unwrap();
+    conn.execute_batch(db::SCHEMA).unwrap();
+    for (id, kind, blocked_by) in rows {
+        let (epic, seq) = id.rsplit_once('-').unwrap();
+        let unlocks: Vec<String> = rows
+            .iter()
+            .filter(|(_, _, b)| b.contains(id))
+            .map(|(other, _, _)| other.to_string())
+            .collect();
+        db::upsert(
+            &conn,
+            &Ticket {
+                id: id.to_string(),
+                epic: epic.into(),
+                seq: seq.parse().unwrap(),
+                title: id.to_string(),
+                status: Status::Pending,
+                kind: *kind,
+                severity: None,
+                blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+                unlocks,
+                parent: None,
+                children: Vec::new(),
+                body: String::new(),
+                created_unix: 0,
+                updated_unix: 0,
+            },
+        )
+        .unwrap();
+    }
+}
+
+/// Acceptance 2 and the ticket's third row: a store whose tickets name an
+/// id before it exists — from three shortcodes, one of them sorting before
+/// the id's own — is closed and reopened from disk, and the ticket born
+/// with that id has exactly those tickets as its `unlocks`, in (epic, seq)
+/// order, as the scan this replaced gave it.
+#[tokio::test]
+async fn a_reopened_store_resolves_forward_references_at_birth_as_the_scan_did() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("forward.db");
+    {
+        let store = Store::open(&path).unwrap();
+        store
+            .create(NewTicket {
+                blocked_by: vec!["FWD-3".into()],
+                ..scope("FWD", "names its third ticket")
+            })
+            .await
+            .unwrap();
+        store
+            .create(NewTicket {
+                blocked_by: vec!["FWD-3".into(), "FWD-3".into(), "ZZZ-1".into()],
+                ..new_ticket("FWD", "names it twice, and an unborn shortcode")
+            })
+            .await
+            .unwrap();
+        store
+            .create(NewTicket {
+                blocked_by: vec!["FWD-3".into()],
+                ..scope("AAA", "sorts before FWD, born after it")
+            })
+            .await
+            .unwrap();
+        store
+            .create(NewTicket {
+                blocked_by: vec!["FWD-3".into()],
+                ..scope("ZZZ", "sorts after")
+            })
+            .await
+            .unwrap();
+        assert_kept_is_a_scan(&store, "the creates");
+    }
+
+    let store = Store::open(&path).unwrap();
+    assert_kept_is_a_scan(&store, "the reopen");
+    let (_, unborn) = scanned(&store);
+    assert_eq!(unborn["FWD-3"], ["AAA-1", "FWD-1", "FWD-2", "ZZZ-1"]);
+    assert_eq!(store.get("ZZZ-1").unwrap().unlocks, ["FWD-2"], "resolved at ZZZ-1's birth");
+
+    let born = store.create(new_ticket("FWD", "the named one")).await.unwrap();
+    assert_eq!(born.id, "FWD-3");
+    assert_eq!(born.unlocks, unborn["FWD-3"], "what the scan gave");
+    assert_eq!(store.get("FWD-3").unwrap().unlocks, born.unlocks);
+    assert_kept_is_a_scan(&store, "the birth");
+    assert_eq!(kept(&store).1, BTreeMap::new(), "nothing left unborn");
+
+    // And durably so: one more reopen reads it back from the file.
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.get("FWD-3").unwrap().unlocks, ["AAA-1", "FWD-1", "FWD-2", "ZZZ-1"]);
+    assert_kept_is_a_scan(&store, "the second reopen");
+}
+
+/// The fourth row, for every way tickets reach the cache other than
+/// `create` — loading a database the server could not have written
+/// (a hole in a sequence, an id that can never be born, a lowercase name,
+/// a reference to a shortcode that does not exist), `set_parent`, a
+/// reopen — and for the ways `create` itself can go: each rejection
+/// (blocked_by cycle, missing parent, a parent outside the shortcode, a
+/// first ticket that is not a scope) allocates nothing and indexes
+/// nothing, so the next create gets the id the rejected one would have
+/// had. After every step the kept indexes are exactly a scan's.
+#[tokio::test]
+async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_parent() {
+    use Kind::{Build, Scope};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shapes.db");
+    write_blocked_db(
+        &path,
+        &[
+            ("GAP-1", Scope, &[]),
+            ("GAP-3", Build, &["GAP-2"]), // a hole: GAP-2 can never be born
+            ("ODD-1", Scope, &["RT-0", "odd-2", "NOPE-1"]),
+            ("ODD-2", Build, &["ODD-1"]),
+            ("WAIT-1", Scope, &["WAIT-2", "LATE-1"]),
+        ],
+    );
+    let store = Store::open(&path).unwrap();
+    assert_kept_is_a_scan(&store, "the load");
+    let held = kept(&store);
+    assert_eq!(held.0["GAP"], 3, "the highest, not the count");
+    assert_eq!(
+        held.1.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["GAP-2", "LATE-1", "NOPE-1", "RT-0", "WAIT-2", "odd-2"],
+        "ODD-2 exists, so ODD-1's edge to it is no forward reference"
+    );
+
+    // Highest plus one, past the hole; GAP-2 stays unborn.
+    let t = store.create(new_ticket("GAP", "after the hole")).await.unwrap();
+    assert_eq!((t.id.as_str(), t.unlocks.len()), ("GAP-4", 0));
+    assert_kept_is_a_scan(&store, "a create past a hole");
+
+    // Rejections leave no trace, in the tickets or in the indexes.
+    let before = kept(&store);
+    let refused = [
+        NewTicket {
+            blocked_by: vec!["WAIT-2".into()],
+            ..new_ticket("WAIT", "names itself") // would be WAIT-2
+        },
+        NewTicket {
+            blocked_by: vec!["WAIT-1".into(), "NEVER-1".into()],
+            ..new_ticket("WAIT", "closes WAIT-2 -> WAIT-1 -> WAIT-2")
+        },
+        NewTicket {
+            blocked_by: vec!["NEVER-2".into()],
+            parent: Some("NOWHERE-1".into()),
+            ..new_ticket("WAIT", "a parent that is no ticket")
+        },
+        NewTicket {
+            blocked_by: vec!["NEVER-3".into()],
+            parent: Some("GAP-1".into()),
+            ..new_ticket("WAIT", "a parent outside the shortcode")
+        },
+        NewTicket {
+            blocked_by: vec!["NEVER-4".into()],
+            ..new_ticket("FRESH", "a build first")
+        },
+    ];
+    for new in refused {
+        let title = new.title.clone();
+        assert!(store.create(new).await.is_err(), "{title}");
+        assert_eq!(kept(&store), before, "a refused create indexed nothing: {title}");
+        assert_kept_is_a_scan(&store, &title);
+    }
+    let t = store.create(new_ticket("WAIT", "the id the refusals did not take")).await.unwrap();
+    assert_eq!(t.id, "WAIT-2");
+    assert_eq!(t.unlocks, ["WAIT-1"], "and the forward reference resolved");
+    assert_kept_is_a_scan(&store, "WAIT-2's birth");
+
+    // A first ticket of a shortcode named before it existed, as a parent
+    // of nothing and a blocker of WAIT-1.
+    let t = store.create(scope("LATE", "named by WAIT-1")).await.unwrap();
+    assert_eq!((t.id.as_str(), t.unlocks.clone()), ("LATE-1", vec!["WAIT-1".to_string()]));
+    assert_kept_is_a_scan(&store, "LATE-1's birth");
+
+    // New forward references, and a create that is both blocker and parent.
+    store
+        .create(NewTicket {
+            blocked_by: vec!["WAIT-5".into(), "LATE-3".into(), "WAIT-2".into()],
+            ..new_ticket("WAIT", "WAIT-3")
+        })
+        .await
+        .unwrap();
+    assert_kept_is_a_scan(&store, "a create naming two unborn ids");
+    store
+        .create(NewTicket {
+            blocked_by: vec!["WAIT-1".into()],
+            parent: Some("WAIT-1".into()),
+            ..new_ticket("WAIT", "WAIT-4")
+        })
+        .await
+        .unwrap();
+    let t = store.create(new_ticket("WAIT", "WAIT-5")).await.unwrap();
+    assert_eq!(t.unlocks, ["WAIT-3"]);
+    assert_kept_is_a_scan(&store, "WAIT-5's birth");
+
+    // set_parent moves no sequence and no blocked_by.
+    store.set_parent("WAIT-3", "WAIT-2").await.unwrap();
+    assert_kept_is_a_scan(&store, "set_parent");
+    store.set_parent("LATE-1", "WAIT-5").await.unwrap();
+    assert_kept_is_a_scan(&store, "set_parent of a root across shortcodes");
+    store.set_status("WAIT-2", Status::Complete).await.unwrap();
+    assert_kept_is_a_scan(&store, "set_status");
+
+    let held = kept(&store);
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(kept(&store), held, "a reopen rebuilds what was kept");
+    assert_kept_is_a_scan(&store, "the reopen");
+    let t = store.create(new_ticket("LATE", "LATE-2")).await.unwrap();
+    assert_eq!(t.id, "LATE-2");
+    let t = store.create(new_ticket("LATE", "LATE-3")).await.unwrap();
+    assert_eq!(t.unlocks, ["WAIT-3"]);
+    assert_kept_is_a_scan(&store, "the creates after the reopen");
+}
+
+/// The fourth row for `seed_synthetic`, both ways: into an empty store,
+/// and into one that already holds tickets — including one that names, as
+/// a forward reference, an id the seed then generates (the seed is
+/// deterministic, so a dry run says which). The seeded id exists now, so
+/// it is no longer unborn; the next create in every shortcode, seeded or
+/// not, is its highest plus one.
+#[tokio::test]
+async fn the_id_indexes_are_a_scan_after_a_seed_with_and_without_into_existing() {
+    let fresh = Store::new();
+    fresh.seed_synthetic(spec(3_000, 9)).unwrap();
+    assert_kept_is_a_scan(&fresh, "a seed into an empty store");
+    assert_eq!(kept(&fresh).1, BTreeMap::new(), "the generator names only what it made");
+
+    let dry = Store::new();
+    dry.seed_synthetic(spec(2_000, 5)).unwrap();
+    let seeded = dry.list(None, None, None)[0].id.clone(); // e.g. its first shortcode's root
+
+    let store = Store::new();
+    store.create(scope("REAL", "already here")).await.unwrap();
+    store
+        .create(NewTicket {
+            blocked_by: vec![seeded.clone(), "REAL-9".into()],
+            ..new_ticket("REAL", "names an id the seed will make")
+        })
+        .await
+        .unwrap();
+    assert!(kept(&store).1.contains_key(&seeded));
+    store
+        .seed_synthetic(SeedSpec {
+            into_existing: true,
+            ..spec(2_000, 5)
+        })
+        .unwrap();
+    assert!(store.get(&seeded).is_some(), "the seed made {seeded}");
+    assert_kept_is_a_scan(&store, "a seed into an existing store");
+    assert!(!kept(&store).1.contains_key(&seeded), "{seeded} is born");
+
+    // Again over itself: every seeded shortcode continues its numbering.
+    store
+        .seed_synthetic(SeedSpec {
+            into_existing: true,
+            ..spec(2_000, 5)
+        })
+        .unwrap();
+    assert_kept_is_a_scan(&store, "a second seed over the first");
+    let (last, _) = scanned(&store);
+    for (epic, highest) in &last {
+        let t = store.create(new_ticket(epic, "after the seeds")).await.unwrap();
+        assert_eq!(t.seq, highest + 1, "{epic}");
+    }
+    assert_kept_is_a_scan(&store, "a create in every shortcode");
+}
+
+/// The fourth row for both in-place migrations: a pre-AGS-13 database
+/// (`ticket_type`) and a pre-AGS-19 one (no `parent`), each holding
+/// forward references, open to indexes a scan agrees with — and the named
+/// id, born, unlocks exactly its referrers.
+#[tokio::test]
+async fn the_id_indexes_are_a_scan_after_both_in_place_migrations() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let path = dir.path().join("pre-ags13.db");
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(LEGACY_SCHEMA).unwrap();
+        for (seq, tt, blocked_by) in [
+            (1, "epic", r#"["LEG-4", "OUT-1"]"#),
+            (2, "implementation", r#"["LEG-1"]"#),
+            (3, "analysis", r#"["LEG-4"]"#),
+        ] {
+            conn.execute(
+                "INSERT INTO tickets VALUES (?1, 'LEG', ?2, 'legacy', 'Pending', ?3, NULL, ?4, '[]', 'body', 1, 1)",
+                rusqlite::params![format!("LEG-{seq}"), seq, tt, blocked_by],
+            )
+            .unwrap();
+        }
+    }
+    let store = Store::open(&path).unwrap();
+    assert_kept_is_a_scan(&store, "the AGS-13 migration");
+    assert_eq!(kept(&store).1["LEG-4"], ["LEG-1", "LEG-3"]);
+    let t = store.create(new_ticket("LEG", "the named one")).await.unwrap();
+    assert_eq!((t.id.as_str(), t.unlocks.clone()), ("LEG-4", vec!["LEG-1".into(), "LEG-3".into()]));
+    assert_kept_is_a_scan(&store, "LEG-4's birth");
+
+    let path = dir.path().join("pre-ags19.db");
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(PRE_AGS19_SCHEMA).unwrap();
+        for (seq, kind, blocked_by, body) in [
+            (1, "scope", r#"["OLD-3"]"#, "no frontmatter"),
+            (2, "build", r#"["OLD-3", "OTHER-2"]"#, "---\nparent: OLD-1\n---\n\nbody"),
+        ] {
+            conn.execute(
+                "INSERT INTO tickets VALUES (?1, 'OLD', ?2, 'old', 'Pending', ?3, NULL, ?4, '[]', ?5, 1, 1)",
+                rusqlite::params![format!("OLD-{seq}"), seq, kind, blocked_by, body],
+            )
+            .unwrap();
+        }
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.get("OLD-2").unwrap().parent.as_deref(), Some("OLD-1"), "migrated");
+    assert_kept_is_a_scan(&store, "the AGS-19 migration");
+    let t = store.create(new_ticket("OLD", "the named one")).await.unwrap();
+    assert_eq!((t.id.as_str(), t.unlocks.clone()), ("OLD-3", vec!["OLD-1".into(), "OLD-2".into()]));
+    assert_kept_is_a_scan(&store, "OLD-3's birth");
+}
+
+/// Acceptance 3: after a 10⁴ seed into a store that already holds tickets
+/// — one of its shortcodes the seed's own, so the seed continues it — the
+/// next create in a seeded shortcode is its highest sequence plus one.
+#[tokio::test]
+async fn after_a_seed_into_an_existing_store_the_next_create_is_highest_plus_one() {
+    let dry = Store::new();
+    dry.seed_synthetic(spec(10_000, 1)).unwrap();
+    let biggest = dry.groups().into_iter().max_by_key(|g| g.total).unwrap().epic;
+
+    let store = Store::new();
+    store.create(scope(&biggest, "here before the seed")).await.unwrap();
+    store.create(new_ticket(&biggest, "and its second")).await.unwrap();
+    store.create(scope("REAL", "a shortcode the seed does not know")).await.unwrap();
+    store
+        .seed_synthetic(SeedSpec {
+            into_existing: true,
+            ..spec(10_000, 1)
+        })
+        .unwrap();
+    assert_eq!(store.count(), 10_003);
+
+    let highest = store.list(Some(&biggest), None, None).last().unwrap().seq;
+    assert!(highest > 2, "the seed continued {biggest} after the two already there");
+    let t = store.create(new_ticket(&biggest, "the next one")).await.unwrap();
+    assert_eq!(t.seq, highest + 1);
+    let other = dry.list(None, None, None).into_iter().find(|t| t.epic != biggest).unwrap().epic;
+    let highest = store.list(Some(&other), None, None).last().unwrap().seq;
+    assert_eq!(store.create(new_ticket(&other, "x")).await.unwrap().seq, highest + 1);
+    assert_eq!(store.create(new_ticket("REAL", "x")).await.unwrap().id, "REAL-2");
+    assert_kept_is_a_scan(&store, "the seed and the creates");
+}
+
+/// The ticket's second row: creates racing in one shortcode — and in a
+/// second one beside it — get distinct ids with no gaps, and what is kept
+/// is a scan's when they are done.
+#[tokio::test]
+async fn concurrent_creates_take_every_id_once_with_no_gaps() {
+    let store = Arc::new(Store::new());
+    store.create(scope("RACE", "root")).await.unwrap();
+    store.create(scope("PACE", "root")).await.unwrap();
+    let mut handles = Vec::new();
+    for i in 0..32 {
+        let store = store.clone();
+        let epic = if i % 2 == 0 { "RACE" } else { "PACE" };
+        handles.push(tokio::spawn(async move {
+            store.create(new_ticket(epic, &format!("t{i}"))).await.unwrap()
+        }));
+    }
+    let mut seqs: HashMap<String, Vec<u32>> = HashMap::new();
+    for h in handles {
+        let t = h.await.unwrap();
+        seqs.entry(t.epic).or_default().push(t.seq);
+    }
+    for (epic, mut got) in seqs {
+        got.sort_unstable();
+        assert_eq!(got, (2..=17).collect::<Vec<u32>>(), "{epic}: every id once, no gaps");
+    }
+    assert_kept_is_a_scan(&store, "the race");
+}
+
+/// The create path, the long way: 600 pseudo-random creates — forward
+/// references to ids a few ahead in the same shortcode and in others,
+/// blockers that exist, self-references and cycles through forward
+/// references (refused), missing and foreign parents (refused), new
+/// shortcodes with and without a scope first — with `set_parent` moves
+/// between them. Before every create, a scan says what the newborn must
+/// get; after it, the newborn has exactly that id and those `unlocks`, a
+/// refusal changed nothing, and the kept indexes are a scan's.
+#[tokio::test]
+async fn every_create_gets_the_id_and_unlocks_a_scan_would_give_it() {
+    struct Rng(u64);
+    impl Rng {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            ((z ^ (z >> 31)) % n as u64) as usize
+        }
+    }
+    const EPICS: [&str; 6] = ["AB", "B", "BA", "SC", "Z", "ZZ"];
+    let store = Store::new();
+    let mut rng = Rng(0x5343_414C_4533);
+    let (mut born, mut refused, mut resolved) = (0, 0, 0);
+    for step in 0..600 {
+        let (last, unborn) = scanned(&store);
+        let all = store.list(None, None, None);
+        if !all.is_empty() && rng.below(8) == 0 {
+            let child = &all[rng.below(all.len())];
+            let mine: Vec<&Ticket> = all.iter().filter(|t| t.epic == child.epic).collect();
+            let parent = mine[rng.below(mine.len())].id.clone();
+            let _ = store.set_parent(&child.id, &parent).await;
+            assert_kept_is_a_scan(&store, &format!("step {step}: set_parent"));
+            continue;
+        }
+        let epic = EPICS[rng.below(EPICS.len())];
+        let seq = last.get(epic).copied().unwrap_or(0) + 1;
+        let mut blocked_by = Vec::new();
+        for _ in 0..rng.below(3) {
+            blocked_by.push(match rng.below(4) {
+                // An id up to three ahead, in any of the shortcodes: the
+                // next one is this ticket's own (a self-reference).
+                0 | 1 => {
+                    let e = EPICS[rng.below(EPICS.len())];
+                    format!("{e}-{}", last.get(e).copied().unwrap_or(0) + 1 + rng.below(3) as u32)
+                }
+                _ if !all.is_empty() => all[rng.below(all.len())].id.clone(),
+                _ => format!("{epic}-{seq}"),
+            });
+        }
+        let kind = if seq == 1 || rng.below(6) == 0 {
+            [Kind::Scope, Kind::Build][rng.below(2)]
+        } else {
+            Kind::Build
+        };
+        let parent = match rng.below(6) {
+            0 if !all.is_empty() => Some(all[rng.below(all.len())].id.clone()),
+            1 => Some(format!("{epic}-99")),
+            _ => None,
+        };
+        let what = format!("step {step}: create {epic}-{seq} {kind} blocked_by {blocked_by:?} under {parent:?}");
+        let before = kept(&store);
+        let new = NewTicket {
+            kind,
+            blocked_by,
+            parent,
+            ..new_ticket(epic, "walked")
+        };
+        match store.create(new).await {
+            Ok(t) => {
+                born += 1;
+                assert_eq!(t.seq, seq, "{what}");
+                let expected = unborn.get(&t.id).cloned().unwrap_or_default();
+                resolved += usize::from(!expected.is_empty());
+                assert_eq!(t.unlocks, expected, "{what}");
+            }
+            Err(_) => {
+                refused += 1;
+                assert_eq!(kept(&store), before, "{what}: refused, nothing indexed");
+            }
+        }
+        assert_kept_is_a_scan(&store, &what);
+    }
+    assert!(born > 250 && refused > 50 && resolved > 30, "{born} born, {refused} refused, {resolved} resolved");
+}
+
+/// SCALE-3 reads a shortcode's root from the roll-ups instead of walking
+/// the prefix to its first scope. The answer is the same for the shapes
+/// only a legacy prefix has: a scope that is not seq 1 is still the
+/// default parent, and a prefix that never had a scope still has none.
+#[tokio::test]
+async fn the_default_parent_is_the_lowest_seq_scope_in_a_legacy_prefix_too() {
+    use Kind::{Build, Scope};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy-roots.db");
+    write_blocked_db(
+        &path,
+        &[
+            ("DEMO-1", Build, &[]),
+            ("DEMO-2", Build, &[]),
+            ("DEMO-3", Scope, &[]), // the root, not seq 1
+            ("DEMO-4", Scope, &[]), // a later scope is not
+            ("NOSC-1", Build, &[]),
+            ("NOSC-2", Build, &[]),
+        ],
+    );
+    let store = Store::open(&path).unwrap();
+    let t = store.create(new_ticket("DEMO", "defaulted")).await.unwrap();
+    assert_eq!((t.id.as_str(), t.parent.as_deref()), ("DEMO-5", Some("DEMO-3")));
+    let t = store.create(new_ticket("NOSC", "no root to default to")).await.unwrap();
+    assert_eq!((t.id.as_str(), t.parent.as_deref()), ("NOSC-3", None));
+    let t = store.create(scope("NOSC", "a first scope, late")).await.unwrap();
+    assert_eq!(t.parent, None, "a shortcode's root is top-level unless it names a host");
+    let t = store.create(new_ticket("NOSC", "now it has one")).await.unwrap();
+    assert_eq!(t.parent.as_deref(), Some("NOSC-4"));
+    // MNG-14's guard reads the same root: only it may be hosted elsewhere.
+    assert!(store.set_parent("DEMO-4", "NOSC-4").await.is_err());
+    store.set_parent("DEMO-3", "NOSC-4").await.unwrap();
+}

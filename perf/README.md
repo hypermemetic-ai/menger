@@ -70,6 +70,29 @@ The production server (ports 4455–4457) and `~/.local/share/menger/` are
 never touched: ports come from the kernel (`listen(0)`), databases live
 under `--tmp`, and the harness refuses a `--tmp` under the data dir.
 
+## One write under a small and a large parent — `large-parent.py` (SCALE-3)
+
+The ladder's create → `watch` row times one create inside a full browser
+run; this probe isolates what a create costs as the store and its parent
+grow. Plain Python 3, no dependencies, against `target/release/menger`
+(`cargo build --release` first):
+
+```sh
+python3 perf/large-parent.py 1000000          # [EPIC] defaults to MAP
+```
+
+It seeds N (`--seed-synthetic N`, seed value 1) into a fresh database under
+`target/perf-tmp` on kernel-chosen ports with the shell off, then over REST
+times 20 creates under `MAP-1` — the largest epic's root, which seed value
+1 generates at every N (23 % of the store at 10⁴, 16 % at 10⁶) — and 20
+under a new `TINY` root, and prints both medians, the size of the root's
+`get` and summary row, the largest `children_changed` event seen on
+`watch`, and the server's RSS. The small parent isolates the store's size
+(SCALE-3's criterion: its median at 10⁶ within 2× of 10⁴); the large one
+adds the parent's `children` list, which every create under it clones,
+persists and broadcasts (SCALE-4). The database is deleted afterwards; the
+server log stays beside it.
+
 ## Report layout
 
 `plans/PERF/artifacts/MAGNITUDE-<date>.md` — machine specs, the ladder

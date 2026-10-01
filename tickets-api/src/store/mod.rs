@@ -407,12 +407,15 @@ fn find_parent_cycle(
 /// first ticket of every prefix created since MNG-12, and whatever scope
 /// came first in a prefix older than that (DEMO's is DEMO-4). `None` only
 /// for a legacy prefix that never had a scope.
+///
+/// SCALE-3: read from the roll-ups, which keep exactly that per shortcode
+/// (MNG-10 — fixed once set: kinds never change and every later ticket has
+/// a higher seq), rather than found by walking the prefix to its first
+/// scope. That walk was one step for every prefix made since MNG-12, but
+/// the whole prefix for a legacy one that never had a scope — and `create`
+/// took it, under the write lock, for every ticket filed there.
 fn shortcode_root<'a>(tickets: &'a Cache, epic: &str) -> Option<&'a Ticket> {
-    // The cache is ordered by (epic, seq), so the prefix's tickets are one
-    // contiguous range and the first scope met is the lowest-seq one.
-    let lo = OrderKey { epic: epic.to_string(), seq: 0 };
-    let hi = OrderKey { epic: epic.to_string(), seq: u32::MAX };
-    tickets.order.range(lo..=hi).map(|(_, t)| t).find(|t| t.kind == Kind::Scope)
+    tickets.rollups.root(epic).and_then(|id| tickets.get(id))
 }
 
 /// A blocker satisfies the ready-set rule when it is done with.
@@ -435,11 +438,17 @@ fn satisfied(status: Status) -> bool {
 /// disagree. MNG-10 adds a third half, [`rollup::Rollups`] — the per-
 /// shortcode roll-ups `groups` answers from — under the same lock for the
 /// same reason: every write that changes a count changes it in the same
-/// critical section as the tickets it counts.
+/// critical section as the tickets it counts. SCALE-3 adds a fourth,
+/// [`ids::Ids`] — each shortcode's highest sequence, and the ids named in
+/// some `blocked_by` before they exist — which is what `create` reads to
+/// allocate an id and to resolve forward references, instead of walking
+/// every ticket twice; a birth moves it in the same critical section as
+/// the ticket born.
 struct Cache {
     order: BTreeMap<OrderKey, Ticket>,
     at: HashMap<String, OrderKey>,
     rollups: rollup::Rollups,
+    ids: ids::Ids,
 }
 
 /// MNG-10: the tickets half of the cache, borrowed on its own — what the
@@ -453,6 +462,11 @@ struct Rows<'a> {
 impl<'a> Rows<'a> {
     fn get(&self, id: &str) -> Option<&'a Ticket> {
         self.order.get(self.at.get(id)?)
+    }
+
+    /// Whether `id` names a ticket — the hash half alone, no descent.
+    fn contains(&self, id: &str) -> bool {
+        self.at.contains_key(id)
     }
 
     fn len(&self) -> usize {
@@ -472,7 +486,9 @@ impl Cache {
     /// to ~545 ms at 100,000 tickets, measured — and every ordered read
     /// after it is a walk of what is already sorted. The roll-ups are
     /// built here once, from the sorted tickets (MNG-10), and from then on
-    /// only kept.
+    /// only kept; so are the id indexes (SCALE-3) — derived state, never
+    /// persisted, so a reopened or migrated store gets them from what it
+    /// loaded.
     fn new(loaded: HashMap<String, Ticket>) -> Self {
         let order: BTreeMap<OrderKey, Ticket> = loaded
             .into_values()
@@ -482,18 +498,33 @@ impl Cache {
             .values()
             .map(|t| (t.id.clone(), OrderKey::of(t)))
             .collect();
-        let started = std::time::Instant::now();
-        let rollups = rollup::Rollups::build(Rows {
+        let rows = Rows {
             order: &order,
             at: &at,
-        });
+        };
+        let started = std::time::Instant::now();
+        let rollups = rollup::Rollups::build(rows);
         tracing::info!(
             "rolled up {} shortcodes over {} tickets in {:.1} ms",
             rollups.len(),
             order.len(),
             started.elapsed().as_secs_f64() * 1000.0
         );
-        Self { order, at, rollups }
+        let started = std::time::Instant::now();
+        let ids = ids::Ids::build(rows);
+        tracing::info!(
+            "indexed {} shortcodes' sequences and {} ids named before birth over {} tickets in {:.1} ms",
+            ids.last_seqs().count(),
+            ids.unborn_count(),
+            order.len(),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        Self {
+            order,
+            at,
+            rollups,
+            ids,
+        }
     }
 
     fn rows(&self) -> Rows<'_> {
@@ -516,7 +547,9 @@ impl Cache {
 
     /// MNG-10: a create's rows — the newborn and every ticket it touched —
     /// go in, then the newborn is counted. Returns the groups whose row
-    /// moved, innermost first.
+    /// moved, innermost first. SCALE-3: and it is born into the id
+    /// indexes — its shortcode's sequence, the forward references it
+    /// resolved, the ones it makes.
     fn created(&mut self, ticket: Ticket, touched: impl IntoIterator<Item = Ticket>) -> Vec<Group> {
         for updated in touched {
             self.insert(updated);
@@ -528,6 +561,7 @@ impl Cache {
             at: &self.at,
         };
         let ticket = rows.get(&id).expect("just inserted");
+        self.ids.born(rows, ticket);
         self.rollups.created(rows, ticket)
     }
 
@@ -580,10 +614,6 @@ impl Cache {
 
     fn len(&self) -> usize {
         self.at.len()
-    }
-
-    fn tickets(&self) -> impl Iterator<Item = &Ticket> {
-        self.order.values()
     }
 }
 
@@ -709,20 +739,18 @@ impl Store {
 
         let _serial = self.write_serial.lock().await;
         // Under the write-serial lock the cache mirrors the database
-        // exactly, so max-existing-seq + 1 is the next id — monotonic
-        // across restarts (the cache was loaded from the database) and
-        // race-free (writers are serialized). This read phase computes
-        // everything and mutates nothing: a rejection leaves no trace.
+        // exactly, so the shortcode's highest seq + 1 is the next id —
+        // monotonic across restarts (the cache was loaded from the
+        // database) and race-free (writers are serialized). SCALE-3: that
+        // highest seq is kept in the cache, beside the tickets and moved
+        // by every birth, so allocating is a lookup rather than a walk of
+        // every ticket in the store. This read phase computes everything
+        // and mutates nothing: a rejection leaves no trace, in the
+        // tickets or in what is kept about them.
         let (ticket, touched, unlocks_added) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let tickets = &cache;
-            let seq = tickets
-                .tickets()
-                .filter(|t| t.epic == epic)
-                .map(|t| t.seq)
-                .max()
-                .unwrap_or(0)
-                + 1;
+            let seq = tickets.ids.next_seq(&epic);
             let id = format!("{epic}-{seq}");
 
             // MNG-12: every shortcode starts with a scope. `seq == 1` is
@@ -768,14 +796,11 @@ impl Store {
             };
 
             // Dangling forward references to this id resolve now: their
-            // owners are the newborn's `unlocks` from birth.
-            let mut referrers: Vec<(String, u32, String)> = tickets
-                .tickets()
-                .filter(|t| t.blocked_by.iter().any(|b| b == &id))
-                .map(|t| (t.epic.clone(), t.seq, t.id.clone()))
-                .collect();
-            referrers.sort();
-            let unlocks: Vec<String> = referrers.into_iter().map(|(_, _, rid)| rid).collect();
+            // owners are the newborn's `unlocks` from birth. SCALE-3: the
+            // cache keeps them by the id they name, already in (epic, seq)
+            // order — only ids that do not exist yet, so it holds the few
+            // forward references there are, never every edge.
+            let unlocks = tickets.ids.waiting_on(&id);
 
             let now = chrono::Utc::now().timestamp();
             let ticket = Ticket {
@@ -1188,12 +1213,13 @@ impl Store {
                     existing: cache.len(),
                 });
             }
-            let mut max: HashMap<String, u32> = HashMap::new();
-            for t in cache.tickets() {
-                let e = max.entry(t.epic.clone()).or_insert(0);
-                *e = (*e).max(t.seq);
-            }
-            max
+            // SCALE-3: the per-shortcode sequence `create` allocates from,
+            // so seeded ids continue exactly where a create's would.
+            cache
+                .ids
+                .last_seqs()
+                .map(|(epic, seq)| (epic.to_string(), seq))
+                .collect()
         };
 
         let generated = synthetic::generate(spec, &next_seq);
@@ -1231,6 +1257,11 @@ impl Store {
             // to its prefixes in any shape, and nothing is broadcast here.
             let rollups = rollup::Rollups::build(tickets.rows());
             tickets.rollups = rollups;
+            // SCALE-3: the id indexes too, for the same reason — the seed
+            // went into the cache without passing through `create`, and
+            // one of its tickets may be an id the store already named.
+            let ids = ids::Ids::build(tickets.rows());
+            tickets.ids = ids;
         }
         Ok(SeedReport {
             count: spec.count,
@@ -1286,6 +1317,32 @@ impl Store {
 /// (a create of the id a dangling parent names, a `set_parent` of a ticket
 /// on a cycle) rebuild the roll-ups from the cache, with a warning.
 mod rollup;
+
+/// SCALE-3: what `create` reads instead of walking every ticket twice
+/// under the write lock — each shortcode's highest sequence (the next id
+/// is it plus one) and the dangling forward references, kept from the end
+/// they name (an id some `blocked_by` names that is no ticket yet → who
+/// names it, in the store's order: the newborn's `unlocks` from birth).
+///
+/// Only the *dangling* references, never every edge: an edge to a ticket
+/// that exists is already on both tickets (`blocked_by` and `unlocks`), and
+/// a bounded store (SCALE-10) cannot hold O(edges) beside the rows. So the
+/// index is O(shortcodes + forward references) — tiny by definition — and
+/// a birth is O(the newborn's own `blocked_by`).
+///
+/// Beside MNG-10's per-shortcode roll-ups, not inside them: those are the
+/// nav's drawing — which shortcodes get a row, rebuilt whole when a hand
+/// edit is repaired — while a shortcode's sequence is a fact about the
+/// store, read before the newborn exists, for every shortcode that holds a
+/// ticket whether the nav draws it or not. An id must never move because
+/// a drawing did. The one per-shortcode fact both need, the scope root,
+/// stays where MNG-10 keeps it, and `create` reads it from there.
+///
+/// Derived, never persisted: built in one pass at load (after both
+/// in-place migrations) and after a seed, and kept by every birth through
+/// `create`. `set_parent` and `set_status` touch neither a sequence nor a
+/// `blocked_by`, so they leave it as it is.
+mod ids;
 
 /// PERF-2: the synthetic ticket generator. Private to the store: the
 /// shape it produces mirrors what `create` + `set_status` would have

@@ -223,6 +223,8 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
   store/               the service-wide cache (SQLite system of record behind it)
     mod.rs             the Store: the cache, reads, the write-through path
     rollup.rs          the per-shortcode roll-ups it keeps (MNG-10)
+    ids.rs             each shortcode's last sequence and the ids named before
+                       birth — what create reads instead of scanning (SCALE-3)
     db.rs              the schema, upserts, the in-place migrations
     synthetic.rs       the --seed-synthetic generator (PERF-2)
     tests.rs           the store's unit tests

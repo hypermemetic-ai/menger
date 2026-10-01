@@ -238,6 +238,12 @@ impl Rollups {
         self.shortcodes.len()
     }
 
+    /// `epic`'s scope root — its lowest-seq `scope` — drawn or not (SCALE-3:
+    /// where `create` and `set_parent` find it).
+    pub(super) fn root(&self, epic: &str) -> Option<&str> {
+        self.shortcodes.get(epic)?.root.as_deref()
+    }
+
     /// Every drawn group, in shortcode order.
     pub(super) fn groups(&self) -> Vec<Group> {
         self.shortcodes
