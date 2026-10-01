@@ -42,6 +42,15 @@
 //! a field so a manual copy is one keystroke; every outcome is confirmed
 //! by a short-lived toast. No creation affordance lives here (MFE-1
 //! story 2, retracted).
+//!
+//! MFE-12: the element a menu was opened on can now leave the DOM — the
+//! board mounts a window, and a closed nav node unmounts its children.
+//! Nothing here needs it to stay: the open menu holds the ticket's *id*
+//! and reads everything it shows and sets through the row store, and the
+//! scroll that would carry a board row out of the window closes the menu
+//! first. A keyboard-opened menu hands focus back to its row through
+//! [`keys::restore_focus`], which finds the row again by id if the window
+//! remounted it, and otherwise leaves j/k to resume from it.
 
 use js_sys::Reflect;
 use leptos::prelude::*;

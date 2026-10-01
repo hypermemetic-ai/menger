@@ -53,6 +53,18 @@
 //! collapse toggle, one `expanded` key (an epic code for a group, a ticket
 //! id for a ticket: the two can never collide), and the tree's key map at
 //! any depth.
+//!
+//! MFE-12: **children mount when their node opens.** Collapse used to be a
+//! class — every leaf of every group was in the DOM from the first paint,
+//! 80,325 nodes at 10^4 behind `display: none` — and is now an unmount: a
+//! closed node holds an empty `group` container (so its `aria-owns` still
+//! names an element) and nothing else, and opening it mounts its children
+//! then. What that trades away is AGS-20's "expanding hands back the very
+//! same row nodes": a reopened node's children are new elements (their
+//! ticket signals are the same, so nothing they show is stale). The forest
+//! itself ([`plan`]) is untouched and still covers every ticket — it is
+//! what the rollups count, what the auto-expand walks, and why the tree's
+//! key map, which only ever walked the open rows, needs nothing new.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -61,7 +73,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{dom, keys, st_class, Route, Row};
+use crate::{dom, keys, row_index, st_class, Route, Row};
 use menger_tickets_api::Status;
 
 /// Every treeitem in the nav, in document order (group rows and leaves).
@@ -69,9 +81,10 @@ fn tree_items() -> Vec<web_sys::HtmlElement> {
     keys::query_all("#nav .tree [role=treeitem]")
 }
 
-/// The rows a keystroke can reach: the tree minus the children of
-/// collapsed nodes (collapse is `display: none`, so "rendered" is the
-/// whole test).
+/// The rows a keystroke can reach: the open rows of the tree. MFE-12: the
+/// children of a collapsed node are not mounted at all, so this is every
+/// mounted treeitem — the filter is for the nav hidden whole
+/// (`#app.nonav`).
 fn visible_items() -> Vec<web_sys::HtmlElement> {
     tree_items().into_iter().filter(keys::is_visible).collect()
 }
@@ -681,9 +694,13 @@ pub(crate) fn Nav(
 type Ancestry = Arc<Vec<Memo<bool>>>;
 
 /// One node of the tree — an epic's shortcode row or a ticket row — and,
-/// beneath it, a keyed `<For>` of its own children, recursively. Collapse
-/// is a class on the wrapper (CSS hides the direct `.kids`) rather than an
-/// unmount, so expanding a node hands back the very same row nodes.
+/// beneath it, a keyed `<For>` of its own children, recursively.
+///
+/// MFE-12: the `<For>` exists only while the node is open — collapse
+/// unmounts the children rather than hiding them, so a closed node costs
+/// its own row and an empty container, whatever it holds. Its child list
+/// is likewise only read out of the plan while it is open; a closed node
+/// asks the plan nothing but whether it has children at all.
 fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>>) -> AnyView {
     let key = node.key().to_string();
     let is_group = node.is_group();
@@ -692,18 +709,28 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
         let k = key.clone();
         Memo::new(move |_| last.with(|l| l.as_deref() == Some(k.as_str())))
     };
-    let kids = {
-        let k = key.clone();
-        let plan = ctx.plan;
-        Memo::new(move |_| plan.with(|p| p.kids.get(&k).cloned().unwrap_or_default()))
-    };
-    let last_kid = Memo::new(move |_| kids.with(|v| v.last().map(|n| n.key().to_string())));
-    let has_kids = Memo::new(move |_| !kids.with(Vec::is_empty));
     let open = {
         let k = key.clone();
         let expanded = ctx.expanded;
         Memo::new(move |_| expanded.with(|e| e.contains(&k)))
     };
+    let has_kids = {
+        let k = key.clone();
+        let plan = ctx.plan;
+        Memo::new(move |_| plan.with(|p| p.kids.get(&k).is_some_and(|v| !v.is_empty())))
+    };
+    let kids = {
+        let k = key.clone();
+        let plan = ctx.plan;
+        Memo::new(move |_| {
+            if open.get() {
+                plan.with(|p| p.kids.get(&k).cloned().unwrap_or_default())
+            } else {
+                Vec::new()
+            }
+        })
+    };
+    let last_kid = Memo::new(move |_| kids.with(|v| v.last().map(|n| n.key().to_string())));
     let child_ancestry: Ancestry = {
         let mut v = (*ancestry).clone();
         v.push(mine_last);
@@ -775,13 +802,21 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
                         let child_ancestry = child_ancestry.clone();
                         view! {
                             <div class="kids" role="group" id=kids_id.clone()>
-                                <For
-                                    each=move || kids.get()
-                                    key=|n: &Node| n.key().to_string()
-                                    children=move |n: Node| {
-                                        node_view(n, ctx, child_ancestry.clone(), last_kid)
-                                    }
-                                />
+                                {move || {
+                                    let child_ancestry = child_ancestry.clone();
+                                    open.get()
+                                        .then(|| {
+                                            view! {
+                                                <For
+                                                    each=move || kids.get()
+                                                    key=|n: &Node| n.key().to_string()
+                                                    children=move |n: Node| {
+                                                        node_view(n, ctx, child_ancestry.clone(), last_kid)
+                                                    }
+                                                />
+                                            }
+                                        })
+                                }}
                             </div>
                         }
                     })
@@ -803,25 +838,26 @@ fn group_row(
     expanded_attr: impl Fn() -> Option<String> + Send + Sync + 'static,
     owns_attr: impl Fn() -> Option<String> + Send + Sync + 'static,
 ) -> AnyView {
+    // MFE-12: counted over the group's own subtree, each ticket found by
+    // its key — O(subtree · log N), so every group's rollup together is one
+    // pass over the store — rather than a scan of the whole store per
+    // group, which was O(groups · N) on every paint of the walk.
     let rollup = {
         let k = key.clone();
         let (plan, rows) = (ctx.plan, ctx.rows);
         move || {
-            let ids: BTreeSet<String> = plan.with(|p| {
-                p.subtree
-                    .get(&k)
-                    .map(|v| v.iter().cloned().collect())
-                    .unwrap_or_default()
-            });
-            rows.with(|v| {
-                let (mut done, mut total) = (0usize, 0usize);
-                for r in v.iter().filter(|r| ids.contains(&r.id)) {
-                    total += 1;
-                    if r.ticket.with(|t| t.status == Status::Complete) {
-                        done += 1;
+            plan.with(|p| {
+                rows.with(|v| {
+                    let (mut done, mut total) = (0usize, 0usize);
+                    for id in p.subtree.get(&k).into_iter().flatten() {
+                        let Some(i) = row_index(v, id) else { continue };
+                        total += 1;
+                        if v[i].ticket.with(|t| t.status == Status::Complete) {
+                            done += 1;
+                        }
                     }
-                }
-                format!("{done}/{total}")
+                    format!("{done}/{total}")
+                })
             })
         }
     };
@@ -862,10 +898,11 @@ fn leaf_row(
     owns_attr: impl Fn() -> Option<String> + Send + Sync + 'static,
 ) -> AnyView {
     // The row exists because the plan was built from it, and a row's
-    // signal is stable for the ticket's lifetime.
+    // signal is stable for the ticket's lifetime. MFE-12: found by its key,
+    // not a scan — an expand mounts thousands of these at once.
     let Some(ticket) = ctx
         .rows
-        .with_untracked(|v| v.iter().find(|r| r.id == id).map(|r| r.ticket))
+        .with_untracked(|v| row_index(v, &id).map(|i| v[i].ticket))
     else {
         return ().into_any();
     };

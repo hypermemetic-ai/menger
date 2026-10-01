@@ -192,3 +192,93 @@ everything and renders everything, because MNG-9 is the server half.
 10² and 10³ stay comfortable, 10⁴ is now the wall, and the flat ~140 ms
 cold deep link (`get` + `blockers`, two point queries) still proves the
 model the rest of the app has yet to adopt.
+
+## What MFE-12 changed (re-run, branch `mfe-12-window-the-board`)
+
+The two sections above are the ladder on the REST client. MFE-9 then put
+the app on the Plexus WebSocket — its numbers were taken by
+`plans/MFE/artifacts/MFE-9-numbers.js`, and the ladder was not re-run — and
+MFE-12 changed what the app mounts: the board is a *window* over the row
+store (the rows on screen plus 100 either side, between two spacer rows at
+the row pitch) and the nav mounts a node's children when it opens instead
+of hiding them with a class. The row store and the walk are untouched. This
+is the ladder's first run on the socket client and on a windowed app:
+`--date 2026-10-01-mfe12`, the same machine, the server unchanged since
+MFE-11 (`49394a5`; the header's "+ uncommitted changes" is the MFE-12
+frontend and this harness, measured one lint-only edit short of the
+commit — `map_or(true, …)` became `is_none_or(…)` in `keys.rs`). Server
+rows read against the MNG-9 re-run; only the browser rows are new.
+
+### The browser rows, redefined
+
+Four rows waited for things a windowed app never does by design — every
+ticket as a board `<tr>`, every leaf in the nav — so each browser row now
+measures something true of this app:
+
+| row | measures | was |
+|---|---|---|
+| app load → live · WS | `page.goto` to `#conn.live`: socket up, `watch`, `health`, MNG-9's whole summary walk (`limit 500`, painted on MFE-9's doubling schedule) | the same, on REST |
+| board first rows painted | navigation start (the page's own time origin) to the first `tbody#board tr[data-ticket-id]`, polled per frame from an init script as MFE-9-numbers.js does; recorded even if live never comes. Its detail is what the page holds at live with the board open: DOM elements (`getElementsByTagName('*')`), DOM nodes with text (CDP `Nodes`), board rows mounted, JS heap | *new*; replaces "board render (all rows)", which waited for N `<tr>`s |
+| nav shortcodes visible | every epic's group row present (group rows are always mounted) | unchanged |
+| board scroll to the last ticket | from setting the content column's `scrollTop` to its `scrollHeight` until the last ticket in (epic, seq) order — the paged walk's last id, or the probe this run last created — is mounted and inside the column's viewport (MFE-12 criterion 4, at every magnitude) | *new* |
+| open ticket page (from board), ticket page cold deep link | unchanged | unchanged |
+| created ticket appears (board + open nav) | the board scrolled to its end and the nav opened on the store's last epic and its scope root — untimed: the user looking where the ticket will land — then a ticket created in that epic with curl, so it sorts last on the board and hangs under the root (MNG-14); timed from the create call until its row is on the board **and** its leaf in the nav | a `PROBE` ticket, waited for as a board row and a nav leaf anywhere in the DOM — which neither the window nor a closed group holds |
+| expand largest nav group (every ticket) | a click on the largest group's row, then on the toggle of each child that has children — under MNG-14 the epic's scope root holds every other ticket — until every ticket of the epic is mounted and the first is rendered; timed from the first click; detail: the group click alone, elements after. Last in each run: it is the one measurement that can take the page down. Its clicks get the browser budget: the click that opens the root does not return until every leaf is mounted (the first 10⁶ pass recorded the harness's own 5 s click timeout instead — kept as `raw/1e6-first-pass.json`) | one click on the group row, waiting for leaves that were already mounted behind `display: none` — a reflow, not a mount |
+
+At a glance, "board DOM nodes" becomes **page DOM elements at live, board
+open** and **board rows mounted at live**. A failed browser row now carries
+the page's own errors in its reason.
+
+### What it found
+
+**The render is O(window).** From 10² to 10⁶ the page holds 1,734 →
+4,058 elements at live with the board open (MFE-9 measured 240,359 at 10⁴),
+the board mounts 125 rows at any magnitude past 10², and the first rows are
+on screen in 190–210 ms flat from 10³ to 10⁶. Scrolling to the last ticket is ~40 ms at every magnitude from
+10³ — at 10⁶ through the scaled layout: 10⁶ rows at 37.8 px is 37.8 M px,
+past where Chromium stops laying out (2²⁵ = 33,554,432 px; Firefox near
+17.9 M), so above 15 M px (~395,000 rows) the board is drawn at exactly
+15 M px with the scroll range mapped linearly onto the store. The ticket
+page, from the board or cold, stays flat at 40–170 ms.
+
+**What is left is linear, and it is not the render.** Load → live is
+0.95 s, 4.5 s and 51 s at 10⁴, 10⁵, 10⁶ — ×10 per decade — and nav
+shortcodes visible tracks it to the millisecond, because both wait for the
+same walk: every one of N summaries over the socket, decoded in wasm,
+merged into the row store, with the nav's forest (`plan`) rebuilt once per
+paint. At 10⁵ the page holds 2,850 elements while it waits. That is
+SCALE-7's evidence, as SCALE-2 asked to record it: 10⁵ and 10⁶ both reach
+live now, and what costs N is the walk and the row store, not the DOM.
+
+**Two view costs still grow with N.** A *created* ticket appears in 44 ms
+at 10⁴, 223 ms at 10⁵ and 2.0 s at 10⁶: an insert changes the row list,
+and the nav rebuilds its whole forest and recounts every group's rollup —
+O(N log N) per insert (a status change does not: it never fires the list).
+And *expanding* a group is linear in the group: 354 ms for MAP's 2,328
+tickets at 10⁴, 2.5 s for 19,195 at 10⁵. Mount-on-expand bounds a closed
+node, not an open one — at 10⁶ MAP holds 163,531 tickets, opening its scope
+root mounts all of them at once, and the wasm aborts (`RuntimeError:
+unreachable`) the way the board did at ~64,000 rows before MFE-12: the
+row's FAIL. A windowed tree (an open node's children mounted by viewport,
+like the board) or SCALE-4's children by page is what bounds it; both are
+past this ticket's design, which mounts every child of an open node.
+
+### Before and after, this session
+
+MFE-9-numbers.js, `trunk build --release`, 1400×950, medians of 3 (the
+10⁵ stall is one run with a 150 s budget, `plans/MFE/artifacts/MFE-12/`):
+
+| | 10⁴ before | 10⁴ after | 10⁵ before | 10⁵ after |
+|---|---:|---:|---:|---:|
+| first board row | 321 ms | 187 ms | 366 ms | 343 ms |
+| live · WS | 4.13 s | 660 ms | never — stalled at 64,000 rows, `RuntimeError: unreachable` | 4.67 s |
+| page DOM elements | 240,439 | 2,763 | 1,586,199 at the stall | 3,250 |
+| expand MAP (group + root, every leaf) | 1.15–1.21 s | 0.34–0.39 s | — | 2.5–2.8 s (19,195 leaves) |
+
+`plans/MFE/artifacts/MFE-12-window.js` (33 checks: the window, the scroll
+to the end, j/k past the window, the palette, the menu, live create and
+status change, the nav's expand and collapse, ARIA) passes 33/33 at 10⁴
+and at 10⁵. The ladder's own load → live at 10⁴ (946 ms) is timed from
+Playwright's `goto` call rather than the page's time origin, on a 900 px
+viewport, in a browser that has run the smaller magnitudes;
+MFE-9-numbers.js is the measurement MFE-12's criterion names.

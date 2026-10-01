@@ -49,10 +49,16 @@ Every `list` / `ready_set` response now ends with one `page` event, so
 the event counts here are the tickets, with that item subtracted.
 
 Browser (Playwright chromium, fresh context per run): app load → "live";
-every nav shortcode visible; the board's rows all in the DOM (plus DOM
-node count and JS heap); expanding the largest nav group; opening the
-ticket page from the board and as a cold deep link; a curl-created
-ticket appearing live in both the board and the nav.
+the board's first rows painted (plus what the page holds at live — DOM
+elements, nodes, rows mounted, JS heap); every nav shortcode visible;
+scrolling the board to its last ticket; opening the ticket page from the
+board and as a cold deep link; a curl-created ticket appearing where the
+user is looking (the board at its end, the nav open on that epic); and,
+last, expanding the largest nav group until every one of its tickets is
+mounted. Since MFE-12 the app mounts a *window* of the board and a nav
+node's children only when it opens, so "every row in the DOM" is no
+longer something to wait for; `perf/notes.md` ("What MFE-12 changed")
+defines each browser row exactly.
 
 Every measurement runs under its own budget (`budgetMs` in
 `magnitude.mjs`, scaled by magnitude) and is recorded as a **FAIL** row

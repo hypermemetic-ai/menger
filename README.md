@@ -130,6 +130,18 @@ owns no routing):
   the shell substitutes wherever it serves the app's entrypoint (`/` and
   `/app/`), exactly as it always has for `web/index.html`.
 
+Rendering (MFE-12): the app holds every row but mounts only what can be
+seen. The board is a window — the rows on screen plus 100 either side,
+between two spacer rows at the measured row pitch — so every board row is
+one line (a long title ends in an ellipsis; hover shows it whole); a store
+taller than a browser will lay out (about 888,000 rows in Chromium) is
+drawn at a fixed height with the scroll range mapped onto it. The nav
+mounts a node's children when it opens. j/k, the jump palette and the
+ticket menu work from the row store, so none of them needs a row to be
+mounted. At 10,000 tickets the page holds ~2,800 elements and is live in
+~0.7 s; 100,000 is live in ~5 s and 1,000,000 in ~50 s — the walk of the
+store is what is left.
+
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service

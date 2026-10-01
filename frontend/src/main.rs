@@ -69,6 +69,26 @@
 //! MNG-9's `list { summary, limit, after }` walk lands, so the browser
 //! never waits for — or renders — a body it is not showing.
 
+//! MFE-12: the views mount what can be seen. After MFE-9 the data plane was
+//! no longer the limit — the render was: 24 DOM nodes per ticket, every
+//! board row and every nav leaf (collapsed or not) mounted, 240,359 nodes
+//! at 10^4 and a wasm abort at ~64,000 rows. The row store is untouched —
+//! one sorted `Vec<Row>`, a signal per row, the same walk — and only the
+//! views over it change. The board mounts a *window*: the rows in the
+//! content column's viewport plus [`BOARD_MARGIN`] on either side, between
+//! two spacer rows that stand in for everything else at the measured row
+//! pitch, so the scrollbar still spans the whole store and scrolling slides
+//! the window ([`board_window`]). A store taller than a browser will lay
+//! out (Chromium stops at 2^25 px — 888,000 rows) is laid out at
+//! [`BOARD_MAX_PX`] with the scroll range mapped linearly onto it
+//! ([`board_layout`]), so the last ticket of a million is still a scroll
+//! away. The nav mounts a node's children when it
+//! opens instead of hiding them with a class (src/nav.rs). Neither the
+//! keyboard nor the menu depends on a row being mounted: j/k walk the
+//! store's order and scroll an unmounted row in before focusing it, the
+//! palette filters the store, and the menu reads its ticket from the store
+//! by id (src/keys.rs, src/menu.rs).
+
 mod dom;
 mod keys;
 mod md;
@@ -164,6 +184,26 @@ impl Row {
 
 fn key_of(t: &TicketSummary) -> (&str, u32) {
     (t.epic.as_str(), t.seq)
+}
+
+/// MFE-12: where the ticket `id` sits in the store, in O(log n). Every id
+/// the server allocates is `{epic}-{seq}` — exactly the key the vector is
+/// sorted by — so an id names its own position; one that is not shaped
+/// like that, or that the search misses, falls back to a scan, so the
+/// answer is never wrong, only slower. The nav mounts thousands of leaves
+/// in one expand and the keyboard asks per keystroke; a scan each was
+/// O(N) per leaf.
+pub(crate) fn row_index(v: &[Row], id: &str) -> Option<usize> {
+    let key = id
+        .rsplit_once('-')
+        .and_then(|(epic, seq)| Some((epic, seq.parse::<u32>().ok()?)));
+    if let Some(key) = key {
+        let pos = v.partition_point(|r| r.key() < key);
+        if v.get(pos).is_some_and(|r| r.id == id) {
+            return Some(pos);
+        }
+    }
+    v.iter().position(|r| r.id == id)
 }
 
 /// Fine-grained upsert of one ticket. An existing ticket updates its row's
@@ -299,36 +339,324 @@ fn fmt_unix(unix: i64) -> String {
 }
 
 // ---------------------------------------------------------------------
+// The board's window (MFE-12)
+
+/// Rows the board keeps mounted beyond each edge of the viewport. Generous
+/// on purpose: a mounted row is ~16 DOM nodes, so two margins are a few
+/// thousand nodes whatever N is — and they are several screens of j/k,
+/// PageUp/PageDown and find-in-page with no remount, and a board of up to
+/// about a hundred tickets (menger's own plan today) mounted whole.
+pub(crate) const BOARD_MARGIN: usize = 100;
+
+/// The window moves in steps of this many rows — both edges snapped
+/// outward — so a scroll of a few rows changes nothing at all, and a long
+/// one re-diffs the board's `<For>` once per step rather than per pixel.
+pub(crate) const BOARD_STEP: usize = 25;
+
+/// The row pitch (px) assumed until a rendered row has been measured.
+/// Every board row is one line tall (index.html), so one measurement holds
+/// for all of them, mounted or not; this is only the first frame's guess.
+const BOARD_PITCH_GUESS: f64 = 38.0;
+
+/// The tallest the board's `<tbody>` is ever laid out (px). Browsers stop
+/// laying out at a fixed height — Chromium at 2^25 px (33,554,432), Firefox
+/// near 17.9 M — and at 38 px a row, 10^6 rows is 37.8 M: past it, rows
+/// pile up at the limit and the end of the board cannot be scrolled to.
+/// Below this height (~395,000 rows) the board is laid out at its natural
+/// height; above it, at exactly this height, scaled ([`board_layout`]).
+pub(crate) const BOARD_MAX_PX: f64 = 15_000_000.0;
+
+/// The board's window: the half-open range of store indices that is
+/// mounted, for `n` rows when `shown` rows starting at index `first` fit
+/// in the viewport. [`BOARD_MARGIN`] either side, both edges snapped
+/// outward to [`BOARD_STEP`], clamped to the store. A viewport past the
+/// end (the store shrank under it) shows the last rows rather than none.
+pub(crate) fn board_window(n: usize, first: usize, shown: usize) -> (usize, usize) {
+    let first = first.min(n.saturating_sub(shown.max(1)));
+    let start = first.saturating_sub(BOARD_MARGIN) / BOARD_STEP * BOARD_STEP;
+    let end = (first + shown + BOARD_MARGIN).div_ceil(BOARD_STEP) * BOARD_STEP;
+    let end = end.min(n);
+    (start.min(end), end)
+}
+
+/// Where the board's viewport is, measured from the DOM (px): how far the
+/// top of the board's `<tbody>` has scrolled above the content column's
+/// top edge (negative while the header shows), how tall that column is,
+/// and the row pitch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Geom {
+    pub(crate) above: f64,
+    pub(crate) viewport: f64,
+    pub(crate) pitch: f64,
+}
+
+impl Geom {
+    fn pitch(self) -> f64 {
+        if self.pitch > 1.0 {
+            self.pitch
+        } else {
+            BOARD_PITCH_GUESS
+        }
+    }
+
+    /// True when `n` rows at their natural pitch would be taller than
+    /// [`BOARD_MAX_PX`].
+    fn scaled(self, n: usize) -> bool {
+        n as f64 * self.pitch() > BOARD_MAX_PX
+    }
+
+    /// The scroll offset range a scaled board maps onto the store, and the
+    /// last row that can sit at the viewport's top.
+    fn span(self, n: usize) -> (f64, f64) {
+        let span = (BOARD_MAX_PX - self.viewport).max(1.0);
+        let last_top = (n as f64 - self.viewport / self.pitch()).max(0.0);
+        (span, last_top)
+    }
+
+    /// The store row (fractional) at the viewport's top edge when the
+    /// board is scrolled `v` px into itself. Natural: `v / pitch`. Scaled:
+    /// the scroll range maps linearly onto the store, so the scrollbar's
+    /// position is the position in the store.
+    pub(crate) fn row_at(self, n: usize, v: f64) -> f64 {
+        if !self.scaled(n) {
+            return v / self.pitch();
+        }
+        let (span, last_top) = self.span(n);
+        last_top * v.clamp(0.0, span) / span
+    }
+
+    /// The inverse of [`Geom::row_at`]: the scroll offset that puts row
+    /// `r` at the viewport's top edge.
+    pub(crate) fn offset_of(self, n: usize, r: f64) -> f64 {
+        if !self.scaled(n) {
+            return r * self.pitch();
+        }
+        let (span, last_top) = self.span(n);
+        if last_top > 0.0 {
+            r.clamp(0.0, last_top) * span / last_top
+        } else {
+            0.0
+        }
+    }
+}
+
+/// What the board mounts: the window over the store and the heights of
+/// the two spacer rows around it (px).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Layout {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) top_px: f64,
+    pub(crate) bottom_px: f64,
+}
+
+/// The board for `n` rows and a viewport. At its natural height (up to
+/// [`BOARD_MAX_PX`]) row `i` is at `i · pitch` and the spacers are the rows
+/// they stand in for: exact, and the window only moves in steps.
+///
+/// Scaled, the board is [`BOARD_MAX_PX`] tall and the scroll offset maps
+/// linearly onto the store ([`Geom::row_at`]); the mounted rows keep their
+/// natural pitch and the top spacer is sized so that the row the mapping
+/// names sits exactly at the viewport's top — so it changes with every
+/// scroll, and a scroll moves the rows 1/scale times as far as natural.
+/// The window gives up margin near the two ends rather than let a spacer
+/// go negative; the first and last rows are reachable either way.
+pub(crate) fn board_layout(n: usize, g: Geom) -> Layout {
+    let p = g.pitch();
+    let shown = (g.viewport.max(0.0) / p).ceil() as usize + 1;
+    if !g.scaled(n) {
+        let first = (g.above.max(0.0) / p).floor() as usize;
+        let (start, end) = board_window(n, first, shown);
+        return Layout { start, end, top_px: start as f64 * p, bottom_px: (n - end) as f64 * p };
+    }
+    let (span, _) = g.span(n);
+    let v = g.above.clamp(0.0, span);
+    let r = g.row_at(n, v);
+    let (s0, e0) = board_window(n, r.floor() as usize, shown);
+    // No more rows above row `r` than fit above `v`, nor below it than fit
+    // in what is left of the board — except that the row the viewport's
+    // top cuts through is always mounted (which, within a row of the very
+    // top, draws it up to a row low rather than leave a blank sliver).
+    let first = r.floor() as usize;
+    let start = s0.max((r - v / p).ceil().max(0.0) as usize).min(first);
+    let end = e0.min((r + (BOARD_MAX_PX - v) / p).ceil() as usize).max(start);
+    let top_px = (v - (r - start as f64) * p).max(0.0);
+    let bottom_px = (BOARD_MAX_PX - top_px - (end - start) as f64 * p).max(0.0);
+    Layout { start, end, top_px, bottom_px }
+}
+
+/// A board row's height (px) — the pitch, since every row is one line.
+/// Read as the row's computed height: client rects are single-precision,
+/// so millions of px down the board a rect's height is off by up to half a
+/// pixel (and past a layout limit, positions saturate and a pitch taken
+/// from two of them collapses toward zero). The row is the window's
+/// second: the first sits against the top spacer and loses half of the
+/// collapsed border it would share with a row above.
+fn measured_pitch(body: &web_sys::Element) -> Option<f64> {
+    let row = body
+        .query_selector("tr[data-ticket-id] + tr[data-ticket-id]")
+        .ok()
+        .flatten()
+        .or_else(|| body.query_selector("tr[data-ticket-id]").ok().flatten())?;
+    let height = dom::window().get_computed_style(&row).ok()??.get_property_value("height").ok()?;
+    // The page's own parseFloat ("37.7812px" -> 37.7812): no float parser
+    // rides into the wasm for one number.
+    let pitch = js_sys::parse_float(&height);
+    (pitch > 1.0).then_some(pitch)
+}
+
+/// The board's geometry off the DOM, given the pitch to assume when no
+/// row is mounted to measure.
+fn measure_board(body: &web_sys::Element, pitch: f64) -> Option<Geom> {
+    let scroller = body.closest(".content").ok().flatten()?;
+    let (s, b) = (scroller.get_bounding_client_rect(), body.get_bounding_client_rect());
+    Some(Geom {
+        above: s.top() - b.top(),
+        viewport: f64::from(scroller.client_height()),
+        pitch: measured_pitch(body).unwrap_or(pitch),
+    })
+}
+
+/// Scroll the content column the least that puts store row `index` (of
+/// `n`) on screen — `nearest`, like `scrollIntoView` — the way the
+/// keyboard reaches a row outside the window. Pure geometry: the row need
+/// not be mounted, and once the scroll lands the window moves to mount it.
+pub(crate) fn scroll_board_to(index: usize, n: usize) {
+    let Some(body) = dom::window().document().and_then(|d| d.get_element_by_id("board")) else {
+        return;
+    };
+    let Some(scroller) = body.closest(".content").ok().flatten() else { return };
+    let Some(g) = measure_board(&body, BOARD_PITCH_GUESS) else { return };
+    let top = g.row_at(n, g.above);
+    let fits = g.viewport / g.pitch();
+    let i = index as f64;
+    let want = if i < top {
+        i
+    } else if i + 1.0 > top + fits {
+        i + 1.0 - fits
+    } else {
+        return;
+    };
+    let delta = g.offset_of(n, want) - g.above;
+    scroller.set_scroll_top(scroller.scroll_top() + delta.round() as i32);
+}
+
+// ---------------------------------------------------------------------
 // Views
 
 /// The board (MFE-3), unchanged in behavior; MFE-7 adds click-through:
 /// the id cell is a real link (middle-click friendly) and a click
 /// anywhere else on the row — except the status control — navigates to
 /// the ticket page.
+///
+/// MFE-12: a window over the store, not a row per ticket. `viewport` is
+/// the App's signal that the content column scrolled or resized; the
+/// board measures itself on it ([`Geom`]), and the window and its two
+/// spacers are a memo of the geometry and the store's length
+/// ([`board_layout`]) — so a status change, which moves neither, re-runs
+/// nothing here, mounted row or not. Rows that stay in the window keep
+/// their `<tr>` (the `<For>` is keyed by id as before).
 #[component]
-fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl IntoView {
+fn Board(
+    rows: RwSignal<Vec<Row>>,
+    last_error: RwSignal<Option<String>>,
+    viewport: Trigger,
+) -> impl IntoView {
+    let body = NodeRef::<leptos::html::Tbody>::new();
+    let geom = RwSignal::new(Geom {
+        above: 0.0,
+        viewport: dom::window()
+            .inner_height()
+            .ok()
+            .and_then(|h| h.as_f64())
+            .unwrap_or(900.0),
+        pitch: BOARD_PITCH_GUESS,
+    });
+    let layout = Memo::new(move |_| board_layout(rows.with(Vec::len), geom.get()));
+    let range = Memo::new(move |_| layout.with(|l| (l.start, l.end)));
+    let scaled = Memo::new(move |_| geom.get().scaled(rows.with(Vec::len)));
+
+    // Read the geometry off the DOM. `try_` throughout: the deferred call
+    // below can land after the board has unmounted.
+    let measure = move || {
+        let Some(Some(tb)) = body.try_get_untracked() else { return };
+        let Some(old) = geom.try_get_untracked() else { return };
+        let Some(next) = measure_board(&tb, old.pitch) else { return };
+        if next != old {
+            geom.try_set(next);
+        }
+    };
+    Effect::new(move |_| {
+        viewport.track();
+        measure();
+    });
+
     // AGS-18: rows are focusable (roving tabindex — every row renders
     // with -1 and exactly one is promoted to 0), so j/k move a real focus
     // and Enter opens what is focused. The status <select> keeps its own
-    // place in the tab order, after the row.
+    // place in the tab order, after the row. MFE-12: the window moves too,
+    // and the tab stop can leave with it — so this runs per window, a tick
+    // after it renders, and re-reads the geometry off the rows it drew.
     Effect::new(move |_| {
+        range.track();
         rows.with(|v| v.len());
-        spawn_local(async {
+        spawn_local(async move {
             dom::sleep_ms(0).await;
+            measure();
             keys::ensure_board_tab_stop();
         });
     });
+
+    // The two spacers: every row above and below the window. Each exists
+    // only while it stands in for something, so at the top of the store
+    // the first row is the tbody's first child.
+    let spacer = move |px: fn(&Layout) -> f64| {
+        let present = Memo::new(move |_| layout.with(|l| px(l) > 0.0));
+        move || {
+            present.get().then(|| {
+                view! {
+                    <tr class="spacer" aria-hidden="true">
+                        <td colspan="6" style:height=move || format!("{}px", layout.with(px))></td>
+                    </tr>
+                }
+            })
+        }
+    };
+
     view! {
-        <table>
+        // ARIA's virtualized-table contract: the table says how many rows
+        // it has, each mounted row says which one it is (1 is the head).
+        <table class="board" aria-rowcount=move || rows.with(Vec::len) + 1>
             <thead>
-                <tr>
-                    <th>"id"</th><th>"title"</th><th>"kind"</th>
-                    <th>"status"</th><th>"severity"</th><th>"blocked by"</th>
+                <tr aria-rowindex="1">
+                    <th class="c-id">"id"</th><th class="c-title">"title"</th><th class="c-kind">"kind"</th>
+                    <th class="c-status">"status"</th><th class="c-sev">"severity"</th><th class="c-blk">"blocked by"</th>
                 </tr>
             </thead>
-            <tbody id="board">
+            <tbody
+                id="board"
+                node_ref=body
+                // Scaled, the top spacer changes with every scroll; the
+                // browser's scroll anchoring would answer each change with
+                // a scroll of its own.
+                class:scaled=move || scaled.get()
+                on:focusin=move |ev| {
+                    let id = ev
+                        .target()
+                        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                        .and_then(|el| el.closest("tr[data-ticket-id]").ok().flatten())
+                        .and_then(|tr| tr.get_attribute("data-ticket-id"));
+                    if let Some(id) = id {
+                        keys::note_board_focus(id);
+                    }
+                }
+            >
+                {spacer(|l| l.top_px)}
                 <For
-                    each=move || rows.get()
+                    each=move || {
+                        let (start, end) = range.get();
+                        rows.with(|v| v[start.min(v.len())..end.min(v.len())].to_vec())
+                    }
                     // id alone: mutations re-render fields inside the
                     // row; the <tr> itself is never replaced.
                     key=|row| row.id.clone()
@@ -337,10 +665,12 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                         let id = row.id.clone();
                         let nav_id = row.id.clone();
                         let href_id = row.id.clone();
+                        let index_id = row.id.clone();
                         view! {
                             <tr
                                 data-ticket-id=row.id.clone()
                                 tabindex="-1"
+                                aria-rowindex=move || rows.with(|v| row_index(v, &index_id)).map(|i| i + 2)
                                 on:click=move |ev| {
                                     // The select (and its options) keep their own
                                     // behavior; the id link handles itself.
@@ -375,7 +705,10 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                                             })
                                     }}
                                 </td>
-                                <td>{move || ticket.with(|t| t.title.clone())}</td>
+                                // MFE-12: one line per row (the window's
+                                // geometry rests on it); a title cut short
+                                // keeps its whole text on hover.
+                                <td title=move || ticket.with(|t| t.title.clone())>{move || ticket.with(|t| t.title.clone())}</td>
                                 <td class="kind">{move || ticket.with(|t| t.kind.to_string())}</td>
                                 <td class="status">
                                     <select
@@ -424,11 +757,12 @@ fn Board(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl
                                     </select>
                                 </td>
                                 <td>{move || ticket.with(|t| t.severity.map(|s| s.to_string()).unwrap_or_default())}</td>
-                                <td>{move || ticket.with(|t| t.blocked_by.join(" "))}</td>
+                                <td title=move || ticket.with(|t| t.blocked_by.join(" "))>{move || ticket.with(|t| t.blocked_by.join(" "))}</td>
                             </tr>
                         }
                     }
                 />
+                {spacer(|l| l.bottom_px)}
             </tbody>
         </table>
     }
@@ -801,12 +1135,18 @@ fn App() -> impl IntoView {
     // the overlay it opens. Both are additive — every existing pointer
     // path is untouched.
     let overlay = RwSignal::new(keys::Overlay::None);
-    keys::install(overlay);
+    keys::install(overlay, rows);
+
+    // MFE-12: the content column is the board's viewport. Its scroll and
+    // the window's resize are the two things that move which rows are on
+    // screen; the board measures itself when this fires.
+    let viewport = Trigger::new();
+    window_event_listener(leptos::ev::resize, move |_| viewport.notify());
 
     view! {
         <div id="app" class:nonav=move || nav_hidden.get()>
             <nav::Nav rows route hidden=nav_hidden />
-            <div class="content">
+            <div class="content" on:scroll=move |_| viewport.notify()>
                 <header>
                     {move || {
                         nav_hidden.get().then(|| view! {
@@ -841,7 +1181,7 @@ fn App() -> impl IntoView {
                         })
                     }}
                     {move || match route.get() {
-                        Route::Board => view! { <Board rows last_error /> }.into_any(),
+                        Route::Board => view! { <Board rows last_error viewport /> }.into_any(),
                         Route::Ticket(id) => {
                             view! { <TicketPage id rows socket last_error /> }.into_any()
                         }
@@ -863,7 +1203,149 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{st_class, STATUSES};
+    use super::{
+        board_layout, board_window, row_index, st_class, Geom, Row, BOARD_MARGIN, BOARD_MAX_PX,
+        BOARD_STEP, STATUSES,
+    };
+
+    /// MFE-12: the window is the viewport plus a margin either side,
+    /// snapped outward to the step, inside the store — and it holds still
+    /// while the viewport moves within one step.
+    #[test]
+    fn the_board_window_is_the_viewport_plus_a_margin_in_steps() {
+        let (m, s) = (BOARD_MARGIN, BOARD_STEP);
+        // The top of a big store: from row 0, the viewport and one margin
+        // below it, snapped up to a step.
+        let (start, end) = board_window(10_000, 0, 28);
+        assert_eq!(start, 0);
+        assert_eq!(end, (28 + m).div_ceil(s) * s);
+        // The middle: a margin both sides, both edges on a step.
+        let (start, end) = board_window(10_000, 5_000, 28);
+        assert!(start <= 5_000 - m && start % s == 0, "{start}");
+        assert!(end >= 5_000 + 28 + m && end % s == 0, "{end}");
+        assert!(end - start <= 28 + 2 * m + 2 * s, "bounded: {start}..{end}");
+        // Scrolling within a step changes nothing; a step later it moves.
+        let w = board_window(10_000, 5_000, 28);
+        assert_eq!(board_window(10_000, 5_001, 28), w);
+        assert_ne!(board_window(10_000, 5_000 + s, 28), w);
+        // The bottom: the last row is mounted, nothing past the store.
+        let (start, end) = board_window(10_000, 10_000 - 28, 28);
+        assert_eq!(end, 10_000);
+        assert!(start < 10_000 - 28 - m + s);
+        // A viewport past the end (the store shrank under it) still shows
+        // the last rows; a small store is mounted whole; an empty one is empty.
+        assert_eq!(board_window(10_000, 50_000, 28).1, 10_000);
+        assert!(board_window(10_000, 50_000, 28).0 < 10_000 - 28);
+        assert_eq!(board_window(90, 0, 28), (0, 90));
+        assert_eq!(board_window(90, 60, 28), (0, 90));
+        assert_eq!(board_window(0, 0, 28), (0, 0));
+    }
+
+    /// MFE-12: under the height cap the board is its natural self — row
+    /// `i` at `i · pitch`, the spacers exactly the rows they replace, the
+    /// window [`board_window`]'s.
+    #[test]
+    fn under_the_cap_the_board_is_laid_out_at_its_natural_height() {
+        let p = 37.78125;
+        let n = 10_000;
+        for above in [-120.0, 0.0, 1.0, 9_000.0, 188_000.0, n as f64 * p] {
+            let g = Geom { above, viewport: 880.0, pitch: p };
+            let l = board_layout(n, g);
+            let first = (above.max(0.0) / p).floor() as usize;
+            assert_eq!((l.start, l.end), board_window(n, first, (880.0 / p).ceil() as usize + 1), "{above}");
+            assert_eq!(l.top_px, l.start as f64 * p);
+            assert_eq!(l.bottom_px, (n - l.end) as f64 * p);
+            assert_eq!(g.row_at(n, above), above / p);
+            assert_eq!(g.offset_of(n, 12.5), 12.5 * p);
+        }
+    }
+
+    /// MFE-12: over the cap (10^6 rows is 37.8 M px; browsers stop laying
+    /// out at 17.9–33.5 M) the board is exactly [`BOARD_MAX_PX`] tall at
+    /// every scroll offset, neither spacer goes negative, the rows on
+    /// screen are always mounted and drawn where the mapping says, and the
+    /// two ends of the store are the two ends of the scroll range.
+    #[test]
+    fn over_the_cap_every_row_is_reachable_and_the_board_never_grows() {
+        let (p, vp) = (37.78125, 880.0);
+        let n = 1_000_000;
+        let g = |above: f64| Geom { above, viewport: vp, pitch: p };
+        let span = BOARD_MAX_PX - vp;
+        let mut last_r = -1.0;
+        let mut v = -200.0;
+        while v <= span + 60.0 {
+            let l = board_layout(n, g(v));
+            let r = g(v).row_at(n, v);
+            assert!(r >= last_r, "monotonic at {v}");
+            last_r = r;
+            assert!(l.top_px >= 0.0 && l.bottom_px >= 0.0, "{v}: {l:?}");
+            // the board is the cap tall (a last row's worth more at most,
+            // where the end rounds up to keep the last row whole)
+            let height = l.top_px + (l.end - l.start) as f64 * p + l.bottom_px;
+            assert!(height >= BOARD_MAX_PX - 1e-3 && height < BOARD_MAX_PX + p, "{v}: height {height}");
+            // every row overlapping the viewport is mounted…
+            let first = r.floor() as usize;
+            let last = ((r + vp / p).ceil() as usize).min(n);
+            assert!(l.start <= first && last <= l.end, "{v}: rows {first}..{last} vs {l:?}");
+            // …and the row the mapping names sits at the viewport's top —
+            // exactly, but for the first row's worth of scroll
+            let drawn = l.top_px + (r - l.start as f64) * p;
+            let want = v.clamp(0.0, span);
+            let slack = if want < p { p } else { 1e-6 };
+            assert!((drawn - want).abs() < slack, "{v}: drawn at {drawn}");
+            // the mapping round-trips
+            assert!((g(v).offset_of(n, r) - v.clamp(0.0, span)).abs() < 1e-3);
+            v += 9_973.0; // a stride that lands everywhere in a row
+        }
+        // the top: row 0, no spacer above; the bottom: the last row, none below
+        let top = board_layout(n, g(0.0));
+        assert_eq!((top.start, top.top_px), (0, 0.0));
+        let bottom = board_layout(n, g(span));
+        assert_eq!(bottom.end, n);
+        assert!(bottom.bottom_px < 1e-3, "{bottom:?}");
+        // mid-board the window is the ordinary stepped one, margins and all
+        let mid = board_layout(n, g(span / 2.0));
+        let r = g(span / 2.0).row_at(n, span / 2.0);
+        assert_eq!((mid.start, mid.end), board_window(n, r.floor() as usize, (vp / p).ceil() as usize + 1));
+        assert!((r - (n as f64 - vp / p) / 2.0).abs() < 1.0, "halfway down the scroll range is halfway down the store: {r}");
+    }
+
+    fn row(id: &str) -> Row {
+        let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
+        Row::of(menger_tickets_api::TicketSummary {
+            id: id.to_string(),
+            epic: epic.to_string(),
+            seq: seq.parse().expect("seq"),
+            title: String::new(),
+            status: menger_tickets_api::Status::Pending,
+            kind: menger_tickets_api::Kind::Build,
+            severity: None,
+            parent: None,
+            children: Vec::new(),
+            blocked_by: Vec::new(),
+            unlocks: Vec::new(),
+            created_unix: 0,
+            updated_unix: 0,
+        })
+    }
+
+    /// MFE-12: an id is its own `(epic, seq)` key, so it finds its row by
+    /// binary search — across epics, multi-digit seqs and a dashed epic —
+    /// and an id the store does not hold is `None`, never a neighbor.
+    #[test]
+    fn row_index_finds_a_ticket_by_its_own_key() {
+        let v: Vec<Row> = ["AGS-1", "AGS-2", "AGS-10", "MFE-3", "SUB-X-4", "TRANSPORT-2"]
+            .into_iter()
+            .map(row)
+            .collect();
+        for (i, r) in v.iter().enumerate() {
+            assert_eq!(row_index(&v, &r.id), Some(i), "{}", r.id);
+        }
+        assert_eq!(row_index(&v, "AGS-3"), None);
+        assert_eq!(row_index(&v, "ZZZ-1"), None);
+        assert_eq!(row_index(&v, "no-dash-seq"), None);
+        assert_eq!(row_index(&[], "AGS-1"), None);
+    }
 
     fn index_html() -> String {
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/index.html")).unwrap()

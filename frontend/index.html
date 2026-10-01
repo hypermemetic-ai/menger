@@ -194,6 +194,25 @@
   th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 500; font-size: .8rem; }
   td.id { color: var(--accent); white-space: nowrap; }
+  /* MFE-12: the board mounts a window of rows between two spacers sized
+     at the row pitch, so every row is exactly one line: fixed columns, and
+     a cell that does not fit ends in an ellipsis (the title and blocked-by
+     cells carry their whole text as a tooltip). Fixed columns also keep
+     the widths still as the window slides — under auto layout they would
+     follow whichever rows happen to be mounted. */
+  table.board { table-layout: fixed; }
+  table.board th.c-id { width: 11rem; }
+  table.board th.c-kind { width: 6.5rem; }
+  table.board th.c-status { width: 9rem; }
+  table.board th.c-sev { width: 6.5rem; }
+  table.board th.c-blk { width: 10rem; }
+  tbody#board td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  tbody#board tr.spacer td { padding: 0; border: 0; }
+  tbody#board.scaled { overflow-anchor: none; }
+  /* The status control is the tallest thing in a row, and its natural
+     height follows the face it is set in — Blocked's bold one is 4px
+     taller — so its box is pinned: every row the same pitch. */
+  tbody#board select.status { height: 1.5rem; }
   /* AGS-20: a board row that decomposes says so (no parent column). */
   td.id .haskids {
     margin-left: .35rem; font-size: 10.5px; color: var(--muted);
@@ -203,8 +222,8 @@
 
   /* MFE-7: universal click-through + the ticket page. */
   header h1 a { color: inherit; text-decoration: none; }
-  tbody#board tr { cursor: pointer; }
-  tbody#board tr:hover td { background: var(--hover); }
+  tbody#board tr[data-ticket-id] { cursor: pointer; }
+  tbody#board tr[data-ticket-id]:hover td { background: var(--hover); }
   td.id a { color: inherit; text-decoration: none; }
   td.id a:hover { text-decoration: underline; }
   #ticket-page .crumbs { margin: 0 0 .75rem; }
@@ -320,9 +339,9 @@
     border: 1px solid var(--line); color: var(--muted); background: var(--card);
   }
   #nav .tag.roll { font-variant-numeric: tabular-nums; color: var(--chip-fg); background: var(--chip-bg); }
-  /* AGS-20: the tree nests. Collapse hides a node's OWN kids container
-     (the child combinator), so a collapsed ancestor hides everything
-     beneath it without any node losing its DOM. */
+  /* AGS-20: the tree nests. MFE-12: a collapsed node's kids container is
+     mounted empty (its children mount when it opens — src/nav.rs); this
+     keeps the empty box out of the layout. */
   #nav .node.collapsed > .kids { display: none; }
   /* AGS-13: kinds. The board and the ticket page spell the word; the nav
      marks each leaf with its kind's glyph, tinted per kind. */

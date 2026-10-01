@@ -7,9 +7,10 @@
 // checkpoints the WAL the way a clean close would, restarts the server
 // to record the startup load time and RSS, measures the REST paths
 // (health, list + payload bytes, get, ready_set, blockers), drives the
-// Leptos app in Playwright's chromium (load -> live, nav shortcodes,
-// expanding the largest group, board render, ticket page, a curl-created
-// ticket appearing live), measures create -> watch push latency over SSE,
+// Leptos app in Playwright's chromium (load -> live, first rows, nav
+// shortcodes, scroll to the last ticket, ticket page, a created ticket
+// appearing, expanding the largest group — MFE-12's windowed definitions,
+// perf/notes.md), measures create -> watch push latency over SSE,
 // then stops the server and deletes the database. Every measurement has
 // its own timeout and is recorded as a failure row when it exceeds it —
 // the breaking point is the finding, never a hang.
@@ -75,7 +76,7 @@ function parseArgs(argv) {
     else if (a === "--smoke") o.smoke = true;
     else if (a === "--report-only") o.reportOnly = true;
     else if (a === "-h" || a === "--help") {
-      console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 28).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
+      console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(1, 29).map((l) => l.replace(/^\/\/ ?/, "")).join("\n"));
       process.exit(0);
     } else throw new Error(`unknown option ${a}`);
   }
@@ -422,6 +423,9 @@ function wsListPaged(port, limit, timeoutMs) {
     let pageStart = 0, maxPage = 0;
     const ids = new Set();
     let lastRemaining = null;
+    // MFE-12: the walk is in (epic, seq) order, so its last row is the
+    // board's last row — what "scroll to the end" must reach.
+    let lastRow = null;
     const fail = (e) => {
       try { ws.close(); } catch { /* ignore */ }
       reject(e instanceof Error ? e : new Error(String(e)));
@@ -450,6 +454,7 @@ function wsListPaged(port, limit, timeoutMs) {
         if (ev.type === "summary") {
           events++;
           ids.add(ev.summary.id);
+          lastRow = { id: ev.summary.id, epic: ev.summary.epic };
           if (ev.summary.body !== undefined) return fail(new Error("a summary row carried a body"));
         } else if (ev.type === "page") {
           pages++;
@@ -458,7 +463,7 @@ function wsListPaged(port, limit, timeoutMs) {
           if (ev.next) { ask(ev.next); } else {
             clearTimeout(timer);
             ws.close();
-            resolve({ bytes, events, pages, ttfb_ms: first, max_page_ms: +maxPage.toFixed(1), distinct: ids.size, remaining: lastRemaining });
+            resolve({ bytes, events, pages, ttfb_ms: first, max_page_ms: +maxPage.toFixed(1), distinct: ids.size, remaining: lastRemaining, last_id: lastRow?.id, last_epic: lastRow?.epic });
           }
         } else if (ev.type === "error") {
           return fail(new Error(`in-band error: ${ev.message}`));
@@ -600,7 +605,9 @@ function machineSpecs(browserVersion) {
     chromium: browserVersion,
     rustc: first("rustc", ["-V"]),
     menger: (cargoToml.match(/^version = "(.+?)"/m) || [])[1],
-    commit: first("git", ["-C", REPO, "rev-parse", "--short", "HEAD"]),
+    // A run on uncommitted work says so: the hash alone would name code
+    // that is not what was measured.
+    commit: [first("git", ["-C", REPO, "rev-parse", "--short", "HEAD"]), spawnSync("git", ["-C", REPO, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).stdout?.trim() ? "+ uncommitted changes" : null].filter(Boolean).join(" "),
     playwright: JSON.parse(fs.readFileSync(path.join(HERE, "node_modules", "playwright", "package.json"), "utf8")).version,
     server_profile: "release",
   };
@@ -753,6 +760,7 @@ async function runMagnitude(m, opts, browser) {
         return out;
       });
       rows("ws_list_paged").push(r);
+      if (r.status === "ok" && !R.samples.last) R.samples.last = { id: r.last_id, epic: r.last_epic };
       log(`ws list paged ${i + 1}/${runs}: ${r.status} ${fmtMs(r.ms)}${r.bytes ? ` ${fmtBytes(r.bytes)}` : ""}${r.pages ? ` in ${fmtInt(r.pages)} pages, worst ${fmtMs(r.max_page_ms)}` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
     }
 
@@ -773,7 +781,7 @@ async function runMagnitude(m, opts, browser) {
 
     let largest = null;
     for (const [epic, size] of epicCounts) if (!largest || size > largest.size) largest = { epic, size };
-    R.samples.largest_epic = largest;
+    R.samples.largest_epic = largest ? { ...largest } : null;
     R.samples.epic_count_seen = epicCounts.size;
     R.samples.multi_blocker = multi[0] ?? null;
     if (!largest) R.notes.push("largest epic unknown (no list succeeded); nav expansion measured on the first group instead");
@@ -806,7 +814,14 @@ async function runMagnitude(m, opts, browser) {
     R.rss_after_rest_bytes = procStatus(server.pid).rss_bytes;
 
     // ---- 4. Browser --------------------------------------------------------
+    // MFE-12: the app mounts a window of the board and a nav node's children
+    // only when it opens, so "every row in the DOM" is no longer a thing to
+    // wait for. Each row below measures something true of that app; the
+    // definitions are in perf/notes.md ("What MFE-12 changed").
     const expectGroups = R.samples.epics;
+    // The board's last row in (epic, seq) order: the walk's last, until a
+    // probe created below lands after it.
+    let lastRow = R.samples.last ?? null;
     let coldFailed = null;
     for (let i = 0; i < runs; i++) {
       const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
@@ -817,6 +832,16 @@ async function runMagnitude(m, opts, browser) {
       page.on("console", (msg) => {
         const t = msg.text();
         if (/session ended|panicked|RuntimeError|out of memory/i.test(t) && pageErrors.length < 5) pageErrors.push(t.slice(0, 200));
+      });
+      // First board row, from inside the page (navigation start is its
+      // time origin), the way MFE-9-numbers.js takes it.
+      await page.addInitScript(() => {
+        window.__perf = { firstRow: null };
+        const obs = () => {
+          if (document.querySelector("tbody#board tr[data-ticket-id]")) window.__perf.firstRow = performance.now();
+          else requestAnimationFrame(obs);
+        };
+        requestAnimationFrame(obs);
       });
       /// Why the page is not live: the app's own banner or console line.
       const diagnose = async () => {
@@ -831,6 +856,22 @@ async function runMagnitude(m, opts, browser) {
         if (r.status === "ok" && r.since_goto_ms != null) r.ms = r.since_goto_ms;
         rows(name).push(r);
         return r;
+      };
+      /// A failed row says what the page itself reported, if anything —
+      /// a wasm abort reads very differently from a slow page.
+      const withPageErrors = (r) => {
+        if (r.status !== "ok" && pageErrors.length) r.reason = `${r.reason} [page: ${pageErrors.slice(0, 2).join(" | ")}]`.slice(0, 400);
+        return r;
+      };
+      /// The content column — the board's scroller — to its very end.
+      const scrollBoardToEnd = () => page.evaluate(() => { const c = document.querySelector("#app .content"); c.scrollTop = c.scrollHeight; });
+      /// Mounted and inside the content column's viewport.
+      const onScreenFn = (sel) => {
+        const el = document.querySelector(sel);
+        const c = document.querySelector("#app .content");
+        if (!el || !c) return false;
+        const a = c.getBoundingClientRect(), b = el.getBoundingClientRect();
+        return b.top >= a.top - 1 && b.bottom <= a.bottom + 1;
       };
 
       // load -> live
@@ -847,9 +888,26 @@ async function runMagnitude(m, opts, browser) {
         if (why) r.reason = `${r.reason} [${why}]`.slice(0, 400);
       }
       log(`browser ${i + 1}/${runs}: load->live ${r.status} ${fmtMs(r.ms)}${r.reason ? ` — ${r.reason}` : ""}`);
-      if (r.status !== "ok") {
-        const why = `prerequisite load->live ${r.status}: ${r.reason}`;
-        for (const name of ["nav_groups_visible", "board_render", "nav_expand_largest", "ticket_page_from_board", "live_create_appears"]) {
+
+      // first rows painted (from navigation start) and what the page holds
+      // at live with the board open — recorded even when live never came,
+      // because how far a stalled board got is the finding.
+      r = await measure("board_first_rows", 30000, async () => {
+        const first = await page.evaluate(() => window.__perf?.firstRow ?? null);
+        if (first == null) throw new Error("no board row was ever painted");
+        const dom = await page.evaluate(() => document.getElementsByTagName("*").length);
+        const mounted = await page.evaluate(() => document.querySelectorAll("tbody#board tr[data-ticket-id]").length);
+        return { ms: +first.toFixed(1), dom_nodes: dom, rows: mounted };
+      });
+      rows("board_first_rows").push(r);
+      const boardMem = await browserMemory(page).catch(() => null);
+      if (boardMem) r.memory = boardMem;
+      if (boardMem?.dom_nodes != null && r.status === "ok") r.nodes = boardMem.dom_nodes;
+      log(`  board first rows: ${r.status} ${fmtMs(r.ms)}${r.dom_nodes ? ` (${fmtInt(r.rows)} rows mounted, ${fmtInt(r.dom_nodes)} elements, ${fmtInt(r.nodes)} nodes)` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
+
+      if (rows("app_load_live").at(-1).status !== "ok") {
+        const why = `prerequisite load->live ${rows("app_load_live").at(-1).status}: ${rows("app_load_live").at(-1).reason}`;
+        for (const name of ["nav_groups_visible", "board_scroll_end", "ticket_page_from_board", "live_create_appears", "nav_expand_largest"]) {
           rows(name).push({ name, status: "failed", ms: null, reason: why });
         }
         if (i === 0) await page.screenshot({ path: path.join(shots, `${label}-board.png`), timeout: 30000 }).catch(() => {});
@@ -862,39 +920,30 @@ async function runMagnitude(m, opts, browser) {
         }));
         log(`  nav groups: ${r.status} ${fmtMs(r.ms)} (${r.groups ?? "?"} groups)`);
 
-        // board render (every row in the DOM)
-        r = rowsAtGoto("board_render", await measure("board_render", B("browser"), async () => {
-          await page.waitForFunction((n) => document.querySelectorAll("tbody#board tr").length >= n, N, { timeout: B("browser"), polling: 50 });
-          const dom = await page.evaluate(() => document.getElementsByTagName("*").length);
-          return { since_goto_ms: sinceGoto(), dom_nodes: dom, rows: N };
-        }));
-        log(`  board render: ${fmtMs(r.ms)} ${r.status}${r.dom_nodes ? ` (${fmtInt(r.dom_nodes)} DOM nodes)` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
-        const boardMem = await browserMemory(page).catch(() => null);
-        if (boardMem) rows("board_render").at(-1).memory = boardMem;
-
-        // expand the largest group
-        const target = largest?.epic ?? (await page.evaluate(() => document.querySelector("#nav .group")?.getAttribute("data-group")));
-        const targetSize = largest?.size ?? null;
-        r = rows("nav_expand_largest").push(await measure("nav_expand_largest", B("browser"), async () => {
-          const sel = `#nav .group[data-group="${target}"] .grouprow`;
-          await page.waitForSelector(sel, { timeout: 5000, state: "attached" });
+        // scroll the board to the end: the last ticket in (epic, seq)
+        // order mounted and on screen
+        r = rows("board_scroll_end").push(withPageErrors(await measure("board_scroll_end", B("browser"), async () => {
+          if (!lastRow) throw new Error("last ticket unknown (the paged walk failed)");
+          const sel = `tbody#board tr[data-ticket-id="${lastRow.id}"]`;
           const t0 = now();
-          await page.click(sel, { timeout: 5000, force: true });
-          await page.waitForFunction(({ g, size }) => {
-            const grp = document.querySelector(`#nav .group[data-group="${g}"]`);
-            if (!grp || grp.classList.contains("collapsed")) return false;
-            const leaves = grp.querySelectorAll(".kids .leaf").length;
-            const first = grp.querySelector(".kids .leaf");
-            return leaves >= (size ?? 1) && first && first.getClientRects().length > 0;
-          }, { g: target, size: targetSize }, { timeout: B("browser"), polling: 50 });
-          const leaves = await page.evaluate((g) => document.querySelectorAll(`#nav .group[data-group="${g}"] .kids .leaf`).length, target);
-          return { ms: +(now() - t0).toFixed(1), epic: target, leaves, dom_nodes: await page.evaluate(() => document.getElementsByTagName("*").length) };
-        })) && rows("nav_expand_largest").at(-1);
-        log(`  expand ${target}: ${r.status} ${fmtMs(r.ms)}${r.leaves ? ` (${fmtInt(r.leaves)} leaves)` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
+          await scrollBoardToEnd();
+          await page.waitForFunction(onScreenFn, sel, { timeout: B("browser"), polling: "raf" }).catch(async (e) => {
+            const got = await page.evaluate(() => {
+              const rs = [...document.querySelectorAll("tbody#board tr[data-ticket-id]")];
+              const c = document.querySelector("#app .content");
+              return { last: rs.at(-1)?.dataset.ticketId, ri: rs.at(-1)?.getAttribute("aria-rowindex"), scrollHeight: c?.scrollHeight };
+            }).catch(() => ({}));
+            throw new Error(`${lastRow.id} never on screen; the board ends at ${got.last} (aria-rowindex ${got.ri}), scrollHeight ${got.scrollHeight} px — ${e.message.split("\n")[0]}`);
+          });
+          const ms = +(now() - t0).toFixed(1);
+          const mounted = await page.evaluate(() => document.querySelectorAll("tbody#board tr[data-ticket-id]").length);
+          return { ms, id: lastRow.id, rows: mounted };
+        }))) && rows("board_scroll_end").at(-1);
+        log(`  board scroll to the end: ${r.status} ${fmtMs(r.ms)}${r.id ? ` (${r.id}; ${r.rows} rows mounted)` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
         if (i === 0) await page.screenshot({ path: path.join(shots, `${label}-board.png`), timeout: 60000 }).catch((e) => R.notes.push(`screenshot failed: ${e.message.split("\n")[0]}`));
 
         // ticket page from the loaded board (warm: rows already in the store)
-        r = rows("ticket_page_from_board").push(await measure("ticket_page_from_board", B("browser"), async () => {
+        r = rows("ticket_page_from_board").push(withPageErrors(await measure("ticket_page_from_board", B("browser"), async () => {
           if (!sampleId) throw new Error("no sample id");
           const t0 = now();
           await page.evaluate((id) => { location.hash = `#/ticket/${id}`; }, sampleId);
@@ -905,23 +954,76 @@ async function runMagnitude(m, opts, browser) {
             return nb === 0 ? !!document.querySelector("#ticket-page section.dag") : li >= nb;
           }, { id: sampleId, nb: multi[0]?.blockers.length ?? 0 }, { timeout: B("browser"), polling: 50 });
           return { ms: +(now() - t0).toFixed(1), id: sampleId };
-        })) && rows("ticket_page_from_board").at(-1);
+        }))) && rows("ticket_page_from_board").at(-1);
         log(`  ticket page (from board): ${r.status} ${fmtMs(r.ms)}${r.reason ? ` — ${r.reason}` : ""}`);
         if (i === 0) await page.screenshot({ path: path.join(shots, `${label}-ticket.png`), timeout: 60000 }).catch(() => {});
 
-        // back to the board, then a curl-created ticket appears live
-        r = rows("live_create_appears").push(await measure("live_create_appears", B("browser"), async () => {
+        // a created ticket appears where the user is looking: the board at
+        // its end and the nav open on the last epic's tickets, the ticket
+        // created in that epic so it sorts last (and hangs under the
+        // epic's scope root, MNG-14) — in both, from the create call
+        r = rows("live_create_appears").push(withPageErrors(await measure("live_create_appears", B("browser"), async () => {
+          if (!lastRow) throw new Error("last ticket unknown (the paged walk failed)");
           await page.evaluate(() => { location.hash = "#/"; });
-          await page.waitForSelector("tbody#board", { timeout: B("browser"), state: "attached" });
+          await page.waitForSelector("tbody#board tr[data-ticket-id]", { timeout: B("browser"), state: "attached" });
+          await scrollBoardToEnd();
+          await page.waitForFunction(onScreenFn, `tbody#board tr[data-ticket-id="${lastRow.id}"]`, { timeout: B("browser"), polling: "raf" });
+          // Open the epic's group and its scope root (untimed — this is
+          // the user getting there; the expand has its own row).
+          const g = lastRow.epic;
+          const group = `#nav .group[data-group="${g}"]`;
+          if ((await page.getAttribute(`${group} > .grouprow`, "aria-expanded")) !== "true") await page.click(`${group} > .grouprow`, { force: true });
+          await page.waitForSelector(`${group} > .kids > .node`, { timeout: B("browser") });
+          for (const key of await page.$$eval(`${group} > .kids > .node`, (ns) => ns.filter((n) => n.querySelector(":scope > .row[aria-expanded='false']")).map((n) => n.dataset.nodeKey))) {
+            await page.click(`#nav .node[data-node-key="${key}"] > .row .toggle.clickable`, { force: true });
+          }
+          await page.waitForFunction((g) => ![...document.querySelectorAll(`#nav .group[data-group="${g}"] > .kids > .node > .row[aria-expanded]`)].some((r) => r.getAttribute("aria-expanded") !== "true"), g, { timeout: B("browser") });
           const t0 = now();
-          const { tool, body } = await createViaCurl(server, { epic: "PROBE", title: `live probe ${label} run ${i + 1}`, kind: i === 0 ? "scope" : "gap" });
+          const { tool, body } = await createViaCurl(server, { epic: g, title: `live probe ${label} run ${i + 1}` });
           const id = body?.data?.[0]?.ticket?.id;
           if (!id) throw new Error(`create failed: ${JSON.stringify(body).slice(0, 160)}`);
           const tCreated = now();
           await page.waitForFunction((id) => !!document.querySelector(`tbody#board tr[data-ticket-id="${id}"]`) && !!document.querySelector(`#nav a[data-nav-id="${id}"]`), id, { timeout: B("browser"), polling: 25 });
+          lastRow = { id, epic: g };
+          if (largest?.epic === g) largest.size += 1;
           return { ms: +(now() - t0).toFixed(1), create_ms: +(tCreated - t0).toFixed(1), id, tool };
-        })) && rows("live_create_appears").at(-1);
-        log(`  live create appears: ${r.status} ${fmtMs(r.ms)}${r.id ? ` (${r.id} via ${r.tool}, create ${fmtMs(r.create_ms)})` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
+        }))) && rows("live_create_appears").at(-1);
+        log(`  created ticket appears: ${r.status} ${fmtMs(r.ms)}${r.id ? ` (${r.id} via ${r.tool}, create ${fmtMs(r.create_ms)})` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
+
+        // expand the largest group until every ticket of it is mounted —
+        // last in the run because at the top of the ladder it is the one
+        // measurement that can take the page down with it
+        const target = largest?.epic ?? (await page.evaluate(() => document.querySelector("#nav .group")?.getAttribute("data-group")));
+        const targetSize = largest?.size ?? null;
+        r = rows("nav_expand_largest").push(withPageErrors(await measure("nav_expand_largest", B("browser"), async () => {
+          const group = `#nav .group[data-group="${target}"]`;
+          await page.waitForSelector(`${group} > .grouprow`, { timeout: B("browser"), state: "attached" });
+          // Start closed (the live-create step may have opened it).
+          if ((await page.getAttribute(`${group} > .grouprow`, "aria-expanded")) === "true") {
+            await page.click(`${group} > .grouprow`, { timeout: B("browser"), force: true });
+            await page.waitForFunction((sel) => !document.querySelector(`${sel} .leaf`), group, { timeout: B("browser") });
+          }
+          // The clicks get the whole budget: the one that opens the scope
+          // root mounts every leaf before the page answers the input event.
+          const t0 = now();
+          await page.click(`${group} > .grouprow`, { timeout: B("browser"), force: true });
+          await page.waitForSelector(`${group} > .kids > .node`, { timeout: B("browser") });
+          const groupMs = +(now() - t0).toFixed(1);
+          // …then every node under it that holds tickets (under MNG-14,
+          // the epic's scope root holds all the rest).
+          for (const key of await page.$$eval(`${group} > .kids > .node`, (ns) => ns.filter((n) => n.querySelector(":scope > .row[aria-expanded]")).map((n) => n.dataset.nodeKey))) {
+            await page.click(`#nav .node[data-node-key="${key}"] > .row .toggle.clickable`, { timeout: B("browser"), force: true });
+          }
+          await page.waitForFunction(({ g, size }) => {
+            const leaves = document.querySelectorAll(`#nav .group[data-group="${g}"] .kids .leaf`);
+            const first = leaves[0];
+            return leaves.length >= (size ?? 1) && first && first.getClientRects().length > 0;
+          }, { g: target, size: targetSize }, { timeout: B("browser"), polling: 50 });
+          const leaves = await page.evaluate((g) => document.querySelectorAll(`#nav .group[data-group="${g}"] .kids .leaf`).length, target);
+          return { ms: +(now() - t0).toFixed(1), group_ms: groupMs, epic: target, leaves, dom_nodes: await page.evaluate(() => document.getElementsByTagName("*").length) };
+        }))) && rows("nav_expand_largest").at(-1);
+        log(`  expand ${target}: ${r.status} ${fmtMs(r.ms)}${r.leaves ? ` (${fmtInt(r.leaves)} leaves; the group row alone ${fmtMs(r.group_ms)})` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
+        if (i === 0) await page.screenshot({ path: path.join(shots, `${label}-nav-open.png`), timeout: 60000 }).catch(() => {});
         if (pageErrors.length) R.notes.push(`page errors run ${i + 1}: ${pageErrors.slice(0, 3).join(" | ")}`);
         await ctx.close().catch(() => {});
       }
@@ -1024,13 +1126,17 @@ const MEASUREMENTS = [
   { key: "rest_ready_set", label: "REST ready_set", extra: ["bytes", "events"] },
   { key: "rest_blockers", label: "REST blockers", extra: ["count", "bytes"] },
   { key: "create_watch_push", label: "create → watch push (SSE)", extra: ["create_ack_ms"] },
-  { key: "app_load_live", label: "browser: app load → live", extra: [] },
+  // MFE-12: the browser rows as a windowed, socket-based app makes them
+  // true — `board_render` ("all rows in the DOM") is gone, the two rows
+  // that replace it and the redefined ones are in perf/notes.md.
+  { key: "app_load_live", label: "browser: app load → live · WS", extra: [] },
+  { key: "board_first_rows", label: "browser: board first rows painted", extra: ["dom_nodes", "nodes", "rows"] },
   { key: "nav_groups_visible", label: "browser: nav shortcodes visible", extra: ["groups"] },
-  { key: "board_render", label: "browser: board render (all rows)", extra: ["dom_nodes"] },
-  { key: "nav_expand_largest", label: "browser: expand largest nav group", extra: ["leaves", "dom_nodes"] },
+  { key: "board_scroll_end", label: "browser: board scroll to the last ticket", extra: ["rows"] },
   { key: "ticket_page_from_board", label: "browser: open ticket page (from board)", extra: [] },
   { key: "ticket_page_cold", label: "browser: ticket page cold deep link", extra: [] },
-  { key: "live_create_appears", label: "browser: curl-created ticket appears live", extra: ["create_ms"] },
+  { key: "live_create_appears", label: "browser: created ticket appears (board + open nav)", extra: ["create_ms"] },
+  { key: "nav_expand_largest", label: "browser: expand largest nav group (every ticket)", extra: ["leaves", "group_ms", "dom_nodes"] },
 ];
 
 function cell(s) {
@@ -1056,7 +1162,10 @@ function detail(key, s) {
   if (s.create_ms != null) bits.push(`create call ${fmtMs(s.create_ms)}`);
   if (s.groups != null) bits.push(`${s.groups} groups`);
   if (s.leaves != null) bits.push(`${fmtInt(s.leaves)} leaves`);
-  if (s.dom_nodes != null) bits.push(`${fmtInt(Math.round(s.dom_nodes))} DOM nodes`);
+  if (s.group_ms != null) bits.push(`the group row alone ${fmtMs(s.group_ms)}`);
+  if (s.rows != null) bits.push(`${fmtInt(Math.round(s.rows))} board rows mounted`);
+  if (s.dom_nodes != null) bits.push(`${fmtInt(Math.round(s.dom_nodes))} DOM elements`);
+  if (s.nodes != null) bits.push(`${fmtInt(Math.round(s.nodes))} DOM nodes (CDP)`);
   if (s.count != null) bits.push(`${s.count} blockers`);
   if (s.failure && s.ok) bits.push(`failures: ${s.failure}`);
   return bits.join("; ");
@@ -1093,7 +1202,7 @@ function writeReport(opts, all, specs, notesPath) {
   L.push("");
   L.push(`## Method`);
   L.push("");
-  L.push(`Per magnitude, a fresh database seeded with \`--seed-synthetic 10^m --seed-value ${opts.seedValue}\` (PERF-2): Zipf-sized epics, every status and kind, ~25 % of tickets with 1–3 acyclic \`blocked_by\` edges mirrored in \`unlocks\`, ~500-byte markdown bodies. The seed server is stopped, the WAL checkpointed (what a clean close does), and the server restarted to measure the load; the same process then serves every REST and browser measurement. \`list\` is also streamed over the WebSocket transport (one item per notification, what \`web/index.html\` speaks) as the control for the REST gateway's collect-then-respond envelope. Runs per measurement: ${ms.map((r) => `10^${r.magnitude}: ${r.runs}`).join(", ")}; medians reported. Every measurement has a per-magnitude budget and is recorded as **FAIL** with the reason when it exceeds it. Browser timings are from navigation start (load → live, nav, board) or from the triggering action (expand, ticket page from board, live create). The server runs on ephemeral ports; the production server on 4455–4457 and its database were never touched.`);
+  L.push(`Per magnitude, a fresh database seeded with \`--seed-synthetic 10^m --seed-value ${opts.seedValue}\` (PERF-2): Zipf-sized epics, every status and kind, ~25 % of tickets with 1–3 acyclic \`blocked_by\` edges mirrored in \`unlocks\`, ~500-byte markdown bodies. The seed server is stopped, the WAL checkpointed (what a clean close does), and the server restarted to measure the load; the same process then serves every REST and browser measurement. \`list\` is also streamed over the WebSocket transport (one item per notification, what \`web/index.html\` speaks) as the control for the REST gateway's collect-then-respond envelope. Runs per measurement: ${ms.map((r) => `10^${r.magnitude}: ${r.runs}`).join(", ")}; medians reported. Every measurement has a per-magnitude budget and is recorded as **FAIL** with the reason when it exceeds it. Browser timings are from navigation start (load → live, first rows, nav) or from the triggering action (scroll to the end, ticket page from board, a create, the expand); since MFE-12 the app mounts a window of the board and a nav node's children only when it opens, and each browser row's exact definition is in the notes below ("What MFE-12 changed"). The server runs on ephemeral ports; the production server on 4455–4457 and its database were never touched.`);
   L.push("");
 
   L.push(`## The ladder at a glance (medians)`);
@@ -1107,7 +1216,8 @@ function writeReport(opts, all, specs, notesPath) {
   L.push(`| server RSS after load | ${ms.map((r) => fmtBytes(r.summary?.startup_load?.rss_after_load_bytes)).join(" | ")} |`);
   L.push(`| server peak RSS (run) | ${ms.map((r) => fmtBytes(r.peak_rss_bytes)).join(" | ")} |`);
   L.push(`| database file | ${ms.map((r) => fmtBytes(r.db_bytes)).join(" | ")} |`);
-  L.push(`| board DOM nodes | ${ms.map((r) => fmtInt(r.summary?.board_render?.dom_nodes)).join(" | ")} |`);
+  L.push(`| page DOM elements at live, board open | ${ms.map((r) => fmtInt(r.summary?.board_first_rows?.dom_nodes)).join(" | ")} |`);
+  L.push(`| board rows mounted at live | ${ms.map((r) => fmtInt(r.summary?.board_first_rows?.rows)).join(" | ")} |`);
   L.push(`| largest epic | ${ms.map((r) => (r.samples?.largest_epic ? `${fmtInt(r.samples.largest_epic.size)}` : "—")).join(" | ")} |`);
   L.push("");
 
