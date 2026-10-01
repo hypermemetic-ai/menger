@@ -208,8 +208,12 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        the server (default features: `server`) and the app
                        (default-features = false, wasm32)
   types.rs             Ticket · Status · Kind · Severity · TicketSummary · Group · TicketsEvent
-  store.rs             the service-wide cache (SQLite system of record behind it),
-                       and the per-shortcode roll-ups it keeps (MNG-10)
+  store/               the service-wide cache (SQLite system of record behind it)
+    mod.rs             the Store: the cache, reads, the write-through path
+    rollup.rs          the per-shortcode roll-ups it keeps (MNG-10)
+    db.rs              the schema, upserts, the in-place migrations
+    synthetic.rs       the --seed-synthetic generator (PERF-2)
+    tests.rs           the store's unit tests
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell

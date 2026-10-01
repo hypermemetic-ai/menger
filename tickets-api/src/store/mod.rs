@@ -1,0 +1,1302 @@
+//! The service-wide ticket cache, with the database behind it.
+//!
+//! This layer is the primary interface through which the whole
+//! application touches tickets — activations, DAG queries, and the shell
+//! all go through here, never to storage directly. An embedded SQLite
+//! database (the system of record) sits behind the cache: every ticket
+//! loads into memory at startup, reads are served from the cache only
+//! (async-safe: no lock held across an await, no I/O on the read path),
+//! and writes go through write-through — durable in the database before
+//! the cache is updated, the event emitted, and `watch` subscribers
+//! notified. Nothing outside this module holds a database handle.
+//! The status vocabulary matches the house ticketing convention; the kind
+//! vocabulary is the owner's closed five (AGS-13), and a database written
+//! before AGS-13 is migrated to it, durably, the first time it is opened.
+//! AGS-19 adds parenthood: a ticket may name a `parent` (the ticket it is
+//! an output of), `children` is the mirror the store maintains, and a
+//! database written before AGS-19 gains both columns — with typed parents
+//! backfilled from body frontmatter — durably, once, on first open.
+//! MNG-9 names the store's total order — [`OrderKey`], `(epic, seq)` —
+//! and holds the cache in it: the tickets live in a sorted map, and a
+//! hash map says where an id sits in it. So the order costs nothing to
+//! walk, an id is a cursor, and a page (`after` + `limit`) is a range
+//! scan rather than a sort of everything.
+
+use rusqlite::Connection;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::Path;
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
+use tokio::sync::broadcast;
+use tokio::sync::Mutex as AsyncMutex;
+
+/// MFE-9: the ticket vocabulary itself now lives in `menger-tickets-api`
+/// so the browser app can consume the same declarations instead of a
+/// hand-written mirror of the JSON they arrive as. Re-exported here
+/// unchanged — every `crate::store::Status` in the server still resolves,
+/// and the store remains the only thing that *writes* them.
+pub use crate::types::{Group, Kind, Severity, Status, Ticket};
+
+/// MNG-9: the store's total order over tickets — `(epic, seq)`, which the
+/// schema keeps unique (`UNIQUE (epic, seq)`). Every list has been in this
+/// order since MNG-2; naming it makes it a *cursor* as well: because it is
+/// total and unique, a ticket id names one position in it, so "the next
+/// `limit` tickets after this id" needs no state beyond the id itself.
+/// Derived `Ord` is epic-then-seq, byte-lexicographic on the epic — the
+/// same comparison `list` sorted with before the index existed.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OrderKey {
+    pub epic: String,
+    pub seq: u32,
+}
+
+impl OrderKey {
+    fn of(ticket: &Ticket) -> Self {
+        Self {
+            epic: ticket.epic.clone(),
+            seq: ticket.seq,
+        }
+    }
+}
+
+/// MNG-9: what one page of the store's order is cut with. `after` is the
+/// exclusive cursor (a ticket id); `limit` caps the page; the three
+/// filters are the ones `list` has always had, and they compose with the
+/// cursor — `remaining` counts under the same filters.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PageQuery<'a> {
+    pub epic: Option<&'a str>,
+    pub status: Option<Status>,
+    pub parent: Option<&'a str>,
+    /// The id the page starts strictly after. `None` starts at the top.
+    pub after: Option<&'a str>,
+    /// At most this many tickets. `None` is "every match" — what `list`
+    /// answered before MNG-9, and still does.
+    pub limit: Option<u32>,
+}
+
+/// MNG-9: what a page walk keeps. `All` is not "a predicate that always
+/// says yes": it is the evidence that there is nothing left to test —
+/// the filters that *can* be answered by position (the epic, the cursor)
+/// having already been spent on the [`Span`] — so counting what remains
+/// costs the walk and not a test per ticket.
+enum Filter<'a> {
+    All,
+    By(&'a dyn Fn(&Ticket) -> bool),
+}
+
+/// MNG-9: the stretch of the sorted index a page is cut from — the two
+/// things that are *positions* rather than predicates.
+///
+/// `after` is a lower bound, exclusive. An `epic` is one too: because the
+/// order is `(epic, seq)`, an epic's tickets are contiguous, so filtering
+/// by epic is bounding the walk rather than testing every ticket in the
+/// store — which is what keeps a per-epic page O(the epic) instead of
+/// O(everything).
+struct Span {
+    start: std::ops::Bound<OrderKey>,
+    end: std::ops::Bound<OrderKey>,
+    /// The cursor this span was cut with, kept so an empty page can still
+    /// say where to resume.
+    cursor: Option<String>,
+    /// The cursor sits at or past the end of the span: nothing can match.
+    empty: bool,
+}
+
+impl Span {
+    fn of(cache: &Cache, after: Option<&str>, epic: Option<&str>) -> Result<Self, StoreError> {
+        use std::ops::Bound::{Excluded, Included, Unbounded};
+        let (mut start, end) = match epic {
+            None => (Unbounded, Unbounded),
+            Some(e) => (
+                Included(OrderKey {
+                    epic: e.to_string(),
+                    seq: 0,
+                }),
+                Included(OrderKey {
+                    epic: e.to_string(),
+                    seq: u32::MAX,
+                }),
+            ),
+        };
+        let mut empty = false;
+        if let Some(id) = after {
+            let key = cache
+                .at
+                .get(id)
+                .cloned()
+                .ok_or_else(|| StoreError::CursorNotFound(id.to_string()))?;
+            match (&start, &end) {
+                // The cursor is at or past the epic's last ticket.
+                (_, Included(last)) if key >= *last => empty = true,
+                // Below the epic's first: the epic's bound already covers it.
+                (Included(first), _) if key < *first => {}
+                _ => start = Excluded(key),
+            }
+        }
+        Ok(Self {
+            start,
+            end,
+            cursor: after.map(str::to_string),
+            empty,
+        })
+    }
+
+    /// The tickets in this span, in order, or `None` when there are none.
+    fn range<'c>(
+        &self,
+        cache: &'c Cache,
+    ) -> Option<std::collections::btree_map::Range<'c, OrderKey, Ticket>> {
+        if self.empty {
+            return None;
+        }
+        Some(cache.order.range((self.start.clone(), self.end.clone())))
+    }
+}
+
+/// MNG-9: one page of the store's order, and where the walk stands.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Page {
+    /// The page itself, in `(epic, seq)` order.
+    pub tickets: Vec<Ticket>,
+    /// The cursor for the next page — the last id on this page, or the
+    /// cursor this page was cut with when the page came back empty.
+    /// `None` means the walk is over: nothing matches beyond this page.
+    pub next: Option<String>,
+    /// How many further tickets match the same filters beyond this page.
+    pub remaining: u64,
+}
+
+/// A mutation, broadcast to every `watch` subscriber. (Internal — the
+/// wire form is `TicketsEvent`, same `type` tag; `kind` is a ticket's.)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Change {
+    Created { ticket: Ticket },
+    StatusChanged { ticket: Ticket, previous: Status },
+    /// An existing ticket's `unlocks` gained `added` because a newly
+    /// created ticket named it in `blocked_by`. Carries the full updated
+    /// ticket so watch-only clients stay coherent.
+    UnlocksChanged { ticket: Ticket, added: String },
+    /// AGS-19: an existing ticket's `children` gained `added` — a child
+    /// was born naming it as `parent`. Same discipline as
+    /// `UnlocksChanged`: the full updated parent rides along.
+    ChildrenChanged { ticket: Ticket, added: String },
+    /// MNG-12: a ticket's `parent` was set after birth (`set_parent`);
+    /// `previous` is the parent it had, if any. Carries the full child.
+    ParentChanged {
+        ticket: Ticket,
+        previous: Option<String>,
+    },
+    /// MNG-12: an existing ticket's `children` lost `removed` — that
+    /// child was re-parented elsewhere. The full updated ex-parent rides
+    /// along, as with `ChildrenChanged`.
+    ChildRemoved { ticket: Ticket, removed: String },
+    /// MNG-10: a shortcode's roll-up moved. Broadcast after the ticket
+    /// changes of the same mutation — the counts are derived from them, so
+    /// a client applying events in order meets the cause before the
+    /// effect — one per group whose row changed, innermost first.
+    GroupChanged { group: Group },
+}
+
+impl Change {
+    /// The shortcode a change belongs to — what `watch { epic }` filters
+    /// on. A ticket change belongs to its ticket's epic; a roll-up change
+    /// to the group's own shortcode (MNG-10), so a watcher of `PLEXUS`
+    /// hears PLEXUS's count move when a sub-shortcode's ticket completes,
+    /// without hearing the ticket itself.
+    pub fn epic(&self) -> &str {
+        match self {
+            Self::Created { ticket }
+            | Self::StatusChanged { ticket, .. }
+            | Self::UnlocksChanged { ticket, .. }
+            | Self::ChildrenChanged { ticket, .. }
+            | Self::ParentChanged { ticket, .. }
+            | Self::ChildRemoved { ticket, .. } => &ticket.epic,
+            Self::GroupChanged { group } => &group.epic,
+        }
+    }
+}
+
+/// One entry of a ticket's `blocked_by`, resolved against current state.
+#[derive(Debug, Clone)]
+pub enum BlockerRef {
+    /// The blocker exists; carries it at its current status.
+    Resolved(Ticket),
+    /// The id names no existing ticket (a dangling forward reference).
+    Dangling(String),
+}
+
+pub struct NewTicket {
+    pub epic: String,
+    pub title: String,
+    pub kind: Kind,
+    pub severity: Option<Severity>,
+    pub blocked_by: Vec<String>,
+    /// AGS-19: the ticket this one is an output of. Must already exist
+    /// (any epic) and must not make the newborn its own ancestor.
+    pub parent: Option<String>,
+    pub body: String,
+}
+
+/// PERF-2: a request to bulk-seed synthetic tickets through the cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeedSpec {
+    /// How many tickets to generate.
+    pub count: usize,
+    /// The RNG seed: the same value generates the same tickets, so a
+    /// magnitude is reproducible run to run.
+    pub seed: u64,
+    /// Seed even though the store already holds tickets. Off by default:
+    /// seeding is for fresh (measurement) databases, and adding a million
+    /// synthetic rows to someone's real one must be an explicit choice.
+    /// When on, ids continue after the existing per-epic maxima exactly
+    /// as `create` would allocate them.
+    pub into_existing: bool,
+}
+
+/// What a seed run did, for the startup log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeedReport {
+    pub count: usize,
+    pub epics: usize,
+    /// Total `blocked_by` entries (each mirrored by one `unlocks` entry).
+    pub edges: usize,
+    pub generate: std::time::Duration,
+    pub persist: std::time::Duration,
+    pub elapsed: std::time::Duration,
+}
+
+#[derive(Debug)]
+pub enum StoreError {
+    NotFound(String),
+    InvalidEpic(String),
+    /// Creating `id` with the requested `blocked_by` would close a cycle;
+    /// `path` is the blocked_by chain from `id` back to `id`.
+    Cycle { id: String, path: Vec<String> },
+    /// AGS-19: the requested `parent` names no existing ticket. Nothing
+    /// was stored and the id stays unallocated.
+    ParentNotFound { id: String, parent: String },
+    /// AGS-19: the requested parent chain would make `id` its own
+    /// ancestor; `path` is the chain from the parent back to `id`.
+    ParentCycle { id: String, path: Vec<String> },
+    /// MNG-12: every shortcode starts with a scope. The first ticket of a
+    /// prefix that has none yet must be `kind: scope`; `kind` is what was
+    /// asked for instead. Nothing was stored and no id was allocated.
+    FirstMustBeScope { epic: String, kind: Kind },
+    /// MNG-14: a ticket's parent must be inside its own shortcode; only a
+    /// shortcode's scope root may hang under another shortcode (its host).
+    /// Nothing changed.
+    ParentOutsideShortcode { id: String, parent: String },
+    /// The write could not be made durable; nothing was acknowledged.
+    Db(String),
+    /// PERF-2: a seed was requested into a store that already holds
+    /// `existing` tickets without `SeedSpec::into_existing`. Nothing was
+    /// generated or written.
+    SeedRefused { existing: usize },
+    /// MNG-9: the `after` cursor names no ticket, so there is no position
+    /// to resume from. Distinct from `NotFound`: the miss is the cursor,
+    /// not the thing asked for, and the message says so.
+    CursorNotFound(String),
+}
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(id) => write!(f, "no ticket with id '{id}'"),
+            Self::InvalidEpic(e) => write!(
+                f,
+                "invalid epic '{e}' (expected a short alphanumeric prefix like MNG)"
+            ),
+            Self::Cycle { id, path } => write!(
+                f,
+                "creating '{id}' would close a blocked_by cycle: {id} -> {}",
+                path.join(" -> ")
+            ),
+            Self::ParentNotFound { id, parent } => write!(
+                f,
+                "no ticket with id '{parent}': a parent must exist before its child \
+                 (nothing changed for '{id}')"
+            ),
+            Self::ParentCycle { id, path } => write!(
+                f,
+                "'{id}' would become its own ancestor: parent chain {id} -> {}",
+                path.join(" -> ")
+            ),
+            Self::FirstMustBeScope { epic, kind } => write!(
+                f,
+                "every shortcode starts with a scope: '{epic}' has no tickets yet, so its \
+                 first ticket must be kind 'scope' (got '{}'); create the scope root first",
+                db::enum_str(kind)
+            ),
+            Self::ParentOutsideShortcode { id, parent } => write!(
+                f,
+                "'{parent}' is outside the shortcode of '{id}': a ticket's parent must be in \
+                 its own shortcode — only a shortcode's scope root may hang under another \
+                 shortcode (nothing changed for '{id}')"
+            ),
+            Self::Db(msg) => write!(f, "database error: {msg}"),
+            Self::SeedRefused { existing } => write!(
+                f,
+                "refusing to seed synthetic tickets: the store already holds {existing} ticket(s) \
+                 and seeding into an existing database was not explicitly allowed"
+            ),
+            Self::CursorNotFound(id) => write!(f, "after: no ticket {id}"),
+        }
+    }
+}
+
+/// Walks `blocked_by` edges from the proposed blockers through existing
+/// tickets; if the allocated `new_id` is reachable (self-reference
+/// included), returns the blocked_by chain that closes the cycle.
+/// Dangling ids other than `new_id` terminate their branch.
+fn find_cycle(
+    tickets: &Cache,
+    new_id: &str,
+    blocked_by: &[String],
+) -> Option<Vec<String>> {
+    let mut stack: Vec<Vec<String>> = blocked_by.iter().map(|b| vec![b.clone()]).collect();
+    let mut visited: HashSet<String> = HashSet::new();
+    while let Some(path) = stack.pop() {
+        let last = path.last().expect("paths start non-empty");
+        if last == new_id {
+            return Some(path);
+        }
+        if !visited.insert(last.clone()) {
+            continue;
+        }
+        if let Some(t) = tickets.get(last) {
+            for b in &t.blocked_by {
+                let mut next = path.clone();
+                next.push(b.clone());
+                stack.push(next);
+            }
+        }
+    }
+    None
+}
+
+/// AGS-19: walks the parent chain upward from `parent`; if the allocated
+/// `new_id` is reachable (naming itself included), returns the chain from
+/// `parent` up to `new_id` — the ticket would be its own ancestor. A
+/// chain that leaves the store (a parent with no parent) or revisits a
+/// ticket terminates; the walk cannot loop.
+fn find_parent_cycle(
+    tickets: &Cache,
+    new_id: &str,
+    parent: &str,
+) -> Option<Vec<String>> {
+    let mut path = vec![parent.to_string()];
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut current = parent.to_string();
+    loop {
+        if current == new_id {
+            return Some(path);
+        }
+        if !seen.insert(current.clone()) {
+            return None;
+        }
+        let next = tickets.get(&current).and_then(|t| t.parent.clone())?;
+        path.push(next.clone());
+        current = next;
+    }
+}
+
+/// MNG-12/14: a shortcode's root is its lowest-seq `scope` ticket — the
+/// first ticket of every prefix created since MNG-12, and whatever scope
+/// came first in a prefix older than that (DEMO's is DEMO-4). `None` only
+/// for a legacy prefix that never had a scope.
+fn shortcode_root<'a>(tickets: &'a Cache, epic: &str) -> Option<&'a Ticket> {
+    // The cache is ordered by (epic, seq), so the prefix's tickets are one
+    // contiguous range and the first scope met is the lowest-seq one.
+    let lo = OrderKey { epic: epic.to_string(), seq: 0 };
+    let hi = OrderKey { epic: epic.to_string(), seq: u32::MAX };
+    tickets.order.range(lo..=hi).map(|(_, t)| t).find(|t| t.kind == Kind::Scope)
+}
+
+/// A blocker satisfies the ready-set rule when it is done with.
+fn satisfied(status: Status) -> bool {
+    matches!(status, Status::Complete | Status::Superseded)
+}
+
+/// The cache, under one lock (MNG-9). The tickets live in `order` — the
+/// sorted `(epic, seq)` map — and `at` says where an id sits in it, so:
+///
+/// - an **ordered** read (`list`, `ready_set`, any page) is a range walk
+///   over tickets that are already in order and already in hand: no sort,
+///   and no lookup per ticket. That last part is what a paging index is
+///   for; an index of *ids* would put a random hash lookup between the
+///   walk and every ticket it has to look at.
+/// - a **point** read (`get`, a blocker) is `at` then `order`: a hash
+///   lookup and a 17-deep descent at 100,000 tickets, both flat in N.
+///
+/// One lock over both halves is the point: a reader can never see the two
+/// disagree. MNG-10 adds a third half, [`rollup::Rollups`] — the per-
+/// shortcode roll-ups `groups` answers from — under the same lock for the
+/// same reason: every write that changes a count changes it in the same
+/// critical section as the tickets it counts.
+struct Cache {
+    order: BTreeMap<OrderKey, Ticket>,
+    at: HashMap<String, OrderKey>,
+    rollups: rollup::Rollups,
+}
+
+/// MNG-10: the tickets half of the cache, borrowed on its own — what the
+/// roll-ups walk while they update their own half under the same lock.
+#[derive(Clone, Copy)]
+struct Rows<'a> {
+    order: &'a BTreeMap<OrderKey, Ticket>,
+    at: &'a HashMap<String, OrderKey>,
+}
+
+impl<'a> Rows<'a> {
+    fn get(&self, id: &str) -> Option<&'a Ticket> {
+        self.order.get(self.at.get(id)?)
+    }
+
+    fn len(&self) -> usize {
+        self.at.len()
+    }
+
+    fn tickets(&self) -> impl Iterator<Item = &'a Ticket> {
+        self.order.values()
+    }
+}
+
+impl Cache {
+    /// Builds the cache from the tickets loaded at startup. Collected,
+    /// not inserted one at a time: `BTreeMap`'s `FromIterator` sorts once
+    /// and bulk-builds the tree instead of rebalancing n times. Holding
+    /// the cache in the store's order costs this once per start — 350 ms
+    /// to ~545 ms at 100,000 tickets, measured — and every ordered read
+    /// after it is a walk of what is already sorted. The roll-ups are
+    /// built here once, from the sorted tickets (MNG-10), and from then on
+    /// only kept.
+    fn new(loaded: HashMap<String, Ticket>) -> Self {
+        let order: BTreeMap<OrderKey, Ticket> = loaded
+            .into_values()
+            .map(|t| (OrderKey::of(&t), t))
+            .collect();
+        let at = order
+            .values()
+            .map(|t| (t.id.clone(), OrderKey::of(t)))
+            .collect();
+        let started = std::time::Instant::now();
+        let rollups = rollup::Rollups::build(Rows {
+            order: &order,
+            at: &at,
+        });
+        tracing::info!(
+            "rolled up {} shortcodes over {} tickets in {:.1} ms",
+            rollups.len(),
+            order.len(),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        Self { order, at, rollups }
+    }
+
+    fn rows(&self) -> Rows<'_> {
+        Rows {
+            order: &self.order,
+            at: &self.at,
+        }
+    }
+
+    /// Inserts or replaces one ticket. A ticket's `(epic, seq)` is fixed
+    /// at birth — no operation re-epics or re-numbers one — so replacing
+    /// an existing ticket rewrites the same entry, and the two halves
+    /// cannot drift apart. Rows only: the roll-ups move through the
+    /// mutation-shaped methods below, which call this.
+    fn insert(&mut self, ticket: Ticket) {
+        let key = OrderKey::of(&ticket);
+        self.at.insert(ticket.id.clone(), key.clone());
+        self.order.insert(key, ticket);
+    }
+
+    /// MNG-10: a create's rows — the newborn and every ticket it touched —
+    /// go in, then the newborn is counted. Returns the groups whose row
+    /// moved, innermost first.
+    fn created(&mut self, ticket: Ticket, touched: impl IntoIterator<Item = Ticket>) -> Vec<Group> {
+        for updated in touched {
+            self.insert(updated);
+        }
+        let id = ticket.id.clone();
+        self.insert(ticket);
+        let rows = Rows {
+            order: &self.order,
+            at: &self.at,
+        };
+        let ticket = rows.get(&id).expect("just inserted");
+        self.rollups.created(rows, ticket)
+    }
+
+    /// MNG-10: a status change; only a crossing of `Complete` moves a count.
+    fn status_changed(&mut self, ticket: Ticket, previous: Status) -> Vec<Group> {
+        let id = ticket.id.clone();
+        self.insert(ticket);
+        let rows = Rows {
+            order: &self.order,
+            at: &self.at,
+        };
+        let ticket = rows.get(&id).expect("just inserted");
+        self.rollups.status_changed(rows, ticket, previous)
+    }
+
+    /// MNG-10: a `set_parent`. The moved tree's count is taken from where
+    /// it is counted *before* the rows change (that is where the old
+    /// parent still is) and given to where it will be; the rows go in;
+    /// then the shape is settled against the new rows.
+    fn reparented(
+        &mut self,
+        child: Ticket,
+        new_parent: Ticket,
+        old_parent: Option<Ticket>,
+    ) -> Vec<Group> {
+        let rows = Rows {
+            order: &self.order,
+            at: &self.at,
+        };
+        let moving = self.rollups.reparenting(
+            rows,
+            rows.get(&child.id).expect("the child exists"),
+            &new_parent,
+        );
+        self.insert(child);
+        self.insert(new_parent);
+        if let Some(old) = old_parent {
+            self.insert(old);
+        }
+        let rows = Rows {
+            order: &self.order,
+            at: &self.at,
+        };
+        self.rollups.reparented(rows, moving)
+    }
+
+    fn get(&self, id: &str) -> Option<&Ticket> {
+        self.order.get(self.at.get(id)?)
+    }
+
+    fn len(&self) -> usize {
+        self.at.len()
+    }
+
+    fn tickets(&self) -> impl Iterator<Item = &Ticket> {
+        self.order.values()
+    }
+}
+
+pub struct Store {
+    /// The cache. Every read in the process is answered from here; the
+    /// lock is synchronous and never held across an await.
+    tickets: RwLock<Cache>,
+    tx: broadcast::Sender<Change>,
+    /// The system of record. Private to this module — nothing else in the
+    /// application holds a database handle. Only touched off-runtime, via
+    /// `spawn_blocking`.
+    db: Arc<StdMutex<Connection>>,
+    /// Serializes mutations end to end: id allocation, the durable write,
+    /// the cache update, and the broadcast happen atomically with respect
+    /// to other writers, so ids are unique under concurrent creates and
+    /// `watch` subscribers see changes in acknowledgment order. Readers
+    /// never take this lock.
+    write_serial: AsyncMutex<()>,
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Store {
+    /// An in-memory store (SQLite `:memory:`): the same write-through path
+    /// with no file behind it. For unit tests; the server always opens a
+    /// real location via [`Store::open`].
+    pub fn new() -> Self {
+        let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        Self::with_connection(conn).expect("init in-memory schema")
+    }
+
+    /// Opens (creating if absent) the database at `path` and loads every
+    /// ticket into the cache. A fresh location is an empty store, not an
+    /// error. Does blocking I/O — call from a blocking context (the
+    /// builder wraps this in `spawn_blocking`).
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        let conn = Connection::open(path)?;
+        // WAL + synchronous=FULL: an acknowledged commit survives SIGKILL.
+        conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
+        conn.execute_batch("PRAGMA synchronous = FULL;")?;
+        Self::with_connection(conn)
+    }
+
+    fn with_connection(mut conn: Connection) -> anyhow::Result<Self> {
+        conn.execute_batch(db::SCHEMA)?;
+        // A database written before AGS-13 is rewritten to kinds here, once,
+        // durably — before anything is loaded. An unmappable row refuses
+        // the open (loudly, nothing changed) rather than loading a guess.
+        db::migrate_legacy_ticket_type(&mut conn)?;
+        // A database written before AGS-19 gains `parent`/`children` here,
+        // once, durably — with typed parents backfilled from body
+        // frontmatter. Never fatal: an unresolvable one is logged and
+        // left empty.
+        db::migrate_add_parenthood(&mut conn)?;
+        let tickets = db::load_all(&conn)?;
+        let (tx, _) = broadcast::channel(256);
+        Ok(Self {
+            tickets: RwLock::new(Cache::new(tickets)),
+            tx,
+            db: Arc::new(StdMutex::new(conn)),
+            write_serial: AsyncMutex::new(()),
+        })
+    }
+
+    /// Writes a batch of tickets durably in one transaction, off the
+    /// async runtime. On `Err` nothing has been acknowledged: the cache
+    /// is untouched and no event is emitted.
+    async fn persist(&self, batch: Vec<Ticket>) -> Result<(), StoreError> {
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<()> {
+            let mut conn = db.lock().expect("db lock poisoned");
+            let tx = conn.transaction()?;
+            for t in &batch {
+                db::upsert(&tx, t)?;
+            }
+            tx.commit()
+        })
+        .await
+        .map_err(|e| StoreError::Db(format!("write task failed: {e}")))?
+        .map_err(|e| StoreError::Db(e.to_string()))
+    }
+
+    /// Allocates the next `EPIC-N` id, maintains the DAG, writes through
+    /// to the database, and only then updates the cache and notifies
+    /// `watch` subscribers.
+    ///
+    /// DAG maintenance: a create whose allocated id would close a
+    /// `blocked_by` cycle (self-reference included) is rejected before
+    /// anything persists — nothing stored, the id stays unallocated.
+    /// Otherwise the new id is appended to each existing blocker's
+    /// `unlocks`, and any existing tickets whose `blocked_by` already
+    /// named the allocated id (dangling forward references) become the
+    /// newborn's `unlocks` from birth.
+    ///
+    /// Parenthood (AGS-19) is maintained the same way: a `parent` that
+    /// names no ticket, or one that would make the newborn its own
+    /// ancestor, is rejected before anything persists; otherwise the new
+    /// id is appended to the parent's `children`. A ticket that is both
+    /// parent and blocker is updated once, carrying both edges.
+    ///
+    /// The newborn and every updated ticket commit in one transaction;
+    /// broadcasts follow the commit in acknowledgment order: `Created`,
+    /// then `ChildrenChanged` for the parent, then one `UnlocksChanged`
+    /// per blocker.
+    pub async fn create(&self, new: NewTicket) -> Result<Ticket, StoreError> {
+        let epic = new.epic.trim().to_ascii_uppercase();
+        if epic.is_empty() || !epic.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(StoreError::InvalidEpic(new.epic));
+        }
+        let requested_parent = new
+            .parent
+            .map(|p| p.trim().to_ascii_uppercase())
+            .filter(|p| !p.is_empty());
+
+        let _serial = self.write_serial.lock().await;
+        // Under the write-serial lock the cache mirrors the database
+        // exactly, so max-existing-seq + 1 is the next id — monotonic
+        // across restarts (the cache was loaded from the database) and
+        // race-free (writers are serialized). This read phase computes
+        // everything and mutates nothing: a rejection leaves no trace.
+        let (ticket, touched, unlocks_added) = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let tickets = &cache;
+            let seq = tickets
+                .tickets()
+                .filter(|t| t.epic == epic)
+                .map(|t| t.seq)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            let id = format!("{epic}-{seq}");
+
+            // MNG-12: every shortcode starts with a scope. `seq == 1` is
+            // exactly "this prefix has no tickets yet" (ids are never
+            // reused), so the newborn would be the shortcode's root.
+            if seq == 1 && new.kind != Kind::Scope {
+                return Err(StoreError::FirstMustBeScope {
+                    epic,
+                    kind: new.kind,
+                });
+            }
+
+            if let Some(path) = find_cycle(tickets, &id, &new.blocked_by) {
+                return Err(StoreError::Cycle { id, path });
+            }
+            // MNG-14 (owner, 2026-09-06): a parent named must exist; a
+            // non-root's parent must be inside its own shortcode, and when
+            // omitted it defaults to the shortcode's scope root. The root
+            // itself (seq == 1) is the exception: its parent, if any, is
+            // the shortcode it hangs under — a sub-shortcode — in any
+            // prefix; omitted, it stays a top-level root.
+            let parent = match (&requested_parent, seq) {
+                (Some(p), _) => {
+                    let Some(pt) = tickets.get(p) else {
+                        return Err(StoreError::ParentNotFound {
+                            id,
+                            parent: p.clone(),
+                        });
+                    };
+                    if seq > 1 && pt.epic != epic {
+                        return Err(StoreError::ParentOutsideShortcode {
+                            id,
+                            parent: p.clone(),
+                        });
+                    }
+                    if let Some(path) = find_parent_cycle(tickets, &id, p) {
+                        return Err(StoreError::ParentCycle { id, path });
+                    }
+                    Some(p.clone())
+                }
+                (None, 1) => None,
+                (None, _) => shortcode_root(tickets, &epic).map(|r| r.id.clone()),
+            };
+
+            // Dangling forward references to this id resolve now: their
+            // owners are the newborn's `unlocks` from birth.
+            let mut referrers: Vec<(String, u32, String)> = tickets
+                .tickets()
+                .filter(|t| t.blocked_by.iter().any(|b| b == &id))
+                .map(|t| (t.epic.clone(), t.seq, t.id.clone()))
+                .collect();
+            referrers.sort();
+            let unlocks: Vec<String> = referrers.into_iter().map(|(_, _, rid)| rid).collect();
+
+            let now = chrono::Utc::now().timestamp();
+            let ticket = Ticket {
+                id: id.clone(),
+                epic,
+                seq,
+                title: new.title,
+                status: Status::Pending,
+                kind: new.kind,
+                severity: new.severity,
+                blocked_by: new.blocked_by,
+                unlocks,
+                parent: parent.clone(),
+                children: Vec::new(),
+                body: new.body,
+                created_unix: now,
+                updated_unix: now,
+            };
+
+            // Symmetry, in one place: every existing ticket this create
+            // touches is cloned once and updated in place, so a ticket
+            // that is both the parent and a blocker carries both edges
+            // into the commit. Updated clones only — the cache changes
+            // after the database commit.
+            let mut touched: HashMap<String, Ticket> = HashMap::new();
+            if let Some(parent_id) = &parent {
+                let mut updated = tickets.get(parent_id).expect("parent checked above").clone();
+                updated.children.push(id.clone());
+                updated.updated_unix = now;
+                touched.insert(parent_id.clone(), updated);
+            }
+            let mut unlocks_added: Vec<String> = Vec::new();
+            for blocker_id in &ticket.blocked_by {
+                let mirrored = touched
+                    .get(blocker_id)
+                    .or_else(|| tickets.get(blocker_id))
+                    .map(|b| b.unlocks.contains(&id));
+                // None: a dangling blocker — nothing exists to update.
+                if mirrored != Some(false) {
+                    continue;
+                }
+                let updated = touched
+                    .entry(blocker_id.clone())
+                    .or_insert_with(|| {
+                        tickets.get(blocker_id).expect("blocker resolved above").clone()
+                    });
+                updated.unlocks.push(id.clone());
+                updated.updated_unix = now;
+                unlocks_added.push(blocker_id.clone());
+            }
+            (ticket, touched, unlocks_added)
+        };
+
+        let mut batch: Vec<Ticket> = touched.values().cloned().collect();
+        batch.push(ticket.clone());
+        self.persist(batch).await?;
+
+        let groups = self
+            .tickets
+            .write()
+            .expect("store lock poisoned")
+            .created(ticket.clone(), touched.values().cloned());
+        let _ = self.tx.send(Change::Created {
+            ticket: ticket.clone(),
+        });
+        if let Some(parent_id) = &ticket.parent {
+            let _ = self.tx.send(Change::ChildrenChanged {
+                ticket: touched[parent_id].clone(),
+                added: ticket.id.clone(),
+            });
+        }
+        for blocker_id in unlocks_added {
+            let _ = self.tx.send(Change::UnlocksChanged {
+                ticket: touched[&blocker_id].clone(),
+                added: ticket.id.clone(),
+            });
+        }
+        self.broadcast_groups(groups);
+        Ok(ticket)
+    }
+
+    /// MNG-10: the roll-up half of a mutation's broadcast, sent last — after
+    /// every ticket change of the same mutation, so the established order
+    /// (`Created` first, …) is untouched and a client meets the cause
+    /// before the count it moved.
+    fn broadcast_groups(&self, groups: Vec<Group>) {
+        for group in groups {
+            let _ = self.tx.send(Change::GroupChanged { group });
+        }
+    }
+
+    /// MNG-10: one roll-up per shortcode row the nav draws, in shortcode
+    /// order — `total`, `done`, `root` and `host` exactly as AGS-20's
+    /// `plan()` computes them from every row. Answered from the roll-ups
+    /// the cache keeps beside the tickets, so the cost is the number of
+    /// shortcodes, never the number of tickets.
+    ///
+    /// A prefix whose tickets are all drawn under other shortcodes' tickets
+    /// (only a legacy, pre-MNG-14 shape: a cross-shortcode child with no
+    /// scope root of its own) has no row in the nav and so no group here;
+    /// those tickets count in the groups they are drawn in.
+    pub fn groups(&self) -> Vec<Group> {
+        self.tickets
+            .read()
+            .expect("store lock poisoned")
+            .rollups
+            .groups()
+    }
+
+    pub fn get(&self, id: &str) -> Option<Ticket> {
+        self.tickets
+            .read()
+            .expect("store lock poisoned")
+            .get(id)
+            .cloned()
+    }
+
+    /// Tickets ordered by (epic, seq), optionally filtered. The `parent`
+    /// filter (AGS-19) selects exactly that ticket's children. The
+    /// unpaged shape, kept: [`Store::page`] is the same walk with a
+    /// cursor and a limit (MNG-9).
+    pub fn list(
+        &self,
+        epic: Option<&str>,
+        status: Option<Status>,
+        parent: Option<&str>,
+    ) -> Vec<Ticket> {
+        self.page(PageQuery {
+            epic,
+            status,
+            parent,
+            ..PageQuery::default()
+        })
+        // Only an `after` cursor can fail, and there is none here.
+        .expect("an uncursored page cannot fail")
+        .tickets
+    }
+
+    /// MNG-9: one page of the store's order — at most `limit` tickets
+    /// strictly after the `after` cursor, under the same filters `list`
+    /// has always taken, plus how many further tickets match.
+    ///
+    /// The walk is over the cache's sorted half, so the cost is the page
+    /// (plus the count of what remains), not a clone-and-sort of every
+    /// ticket. `after` naming no ticket is [`StoreError::CursorNotFound`]:
+    /// a cursor into nothing is a caller error, not an empty page.
+    pub fn page(&self, q: PageQuery<'_>) -> Result<Page, StoreError> {
+        let epic = q.epic.map(str::to_ascii_uppercase);
+        let parent = q.parent.map(str::to_ascii_uppercase);
+        let after = q.after.map(str::to_ascii_uppercase);
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let span = Span::of(&cache, after.as_deref(), epic.as_deref())?;
+        // The epic is already spent — it bounded the span rather than
+        // filtering inside it — so with no status or parent asked for,
+        // there is nothing left to test on the way through.
+        if q.status.is_none() && parent.is_none() {
+            return Ok(Self::walk_cache(&cache, span, q.limit, Filter::All));
+        }
+        let keep = |t: &Ticket| {
+            q.status.is_none_or(|s| t.status == s)
+                && parent.as_deref().is_none_or(|p| t.parent.as_deref() == Some(p))
+        };
+        Ok(Self::walk_cache(&cache, span, q.limit, Filter::By(&keep)))
+    }
+
+    /// MNG-9: one page of the ready set — the [`Store::ready_set`]
+    /// membership rule, cut with the same cursor and limit as
+    /// [`Store::page`].
+    pub fn ready_page(
+        &self,
+        epic: Option<&str>,
+        after: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Page, StoreError> {
+        let epic = epic.map(str::to_ascii_uppercase);
+        let after = after.map(str::to_ascii_uppercase);
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let span = Span::of(&cache, after.as_deref(), epic.as_deref())?;
+        let keep = |t: &Ticket| {
+            t.status == Status::Ready
+                && t.blocked_by
+                    .iter()
+                    .all(|b| cache.get(b).is_some_and(|bt| satisfied(bt.status)))
+        };
+        Ok(Self::walk_cache(&cache, span, limit, Filter::By(&keep)))
+    }
+
+    /// The one walk both page methods run: the span, `limit` matches
+    /// cloned into the page, then the rest of the span counted — because
+    /// `remaining` is an exact number, not an estimate. That count is the
+    /// O(what is left) the ticket's Risks section names and accepts;
+    /// what keeps it cheap is that the span is already the right stretch
+    /// of the order and its tickets are already in hand.
+    fn walk_cache(cache: &Cache, span: Span, limit: Option<u32>, filter: Filter<'_>) -> Page {
+        let take = limit.map_or(usize::MAX, |n| n as usize);
+        let mut tickets = Vec::new();
+        if let Some(n) = limit {
+            tickets.reserve(n as usize);
+        }
+        let remaining = match (span.range(cache), filter) {
+            (None, _) => 0,
+            (Some(range), Filter::All) => {
+                let mut it = range;
+                tickets.extend(it.by_ref().take(take).map(|(_, t)| t.clone()));
+                it.count()
+            }
+            (Some(range), Filter::By(keep)) => {
+                let mut it = range.map(|(_, t)| t).filter(|t| keep(t));
+                tickets.extend(it.by_ref().take(take).cloned());
+                it.count()
+            }
+        } as u64;
+
+        let next = if remaining == 0 {
+            None
+        } else {
+            // The page's last id, or — for the degenerate empty page
+            // (`limit: 0`) — the cursor it was cut with: either way, where
+            // the next page resumes.
+            tickets.last().map(|t| t.id.clone()).or(span.cursor)
+        };
+        Page {
+            tickets,
+            next,
+            remaining,
+        }
+    }
+
+    /// Changes the status, write-through: durable in the database before
+    /// the cache is updated and subscribers are notified. A change into or
+    /// out of `Complete` moves `done` for the group the ticket is drawn in
+    /// and every group around it (MNG-10): `StatusChanged`, then one
+    /// `GroupChanged` per group, innermost first. Any other change moves
+    /// no count and broadcasts no group.
+    pub async fn set_status(&self, id: &str, status: Status) -> Result<Change, StoreError> {
+        let _serial = self.write_serial.lock().await;
+        let mut ticket = self
+            .get(id)
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+        let previous = ticket.status;
+        ticket.status = status;
+        ticket.updated_unix = chrono::Utc::now().timestamp();
+
+        self.persist(vec![ticket.clone()]).await?;
+        let groups = self
+            .tickets
+            .write()
+            .expect("store lock poisoned")
+            .status_changed(ticket.clone(), previous);
+        let change = Change::StatusChanged { ticket, previous };
+        let _ = self.tx.send(change.clone());
+        self.broadcast_groups(groups);
+        Ok(change)
+    }
+
+    /// MNG-12: files an existing ticket as an output of `parent` — the
+    /// verb AGS-19 left out, for adopting a ticket born parentless or
+    /// moving one. Same guards as `create`: the parent must exist, a
+    /// non-root's parent must be inside its own shortcode (MNG-14; the
+    /// shortcode's scope root may be hosted anywhere), and the chain must
+    /// stay acyclic (naming itself included); a rejection changes
+    /// nothing. The child, the new parent (`children` gains the
+    /// id) and the previous parent, if any (`children` loses it), commit
+    /// in one transaction; then the cache; then, in order,
+    /// `ParentChanged` (the child), `ChildrenChanged` (the new parent)
+    /// and `ChildRemoved` (the old one). Setting the parent a ticket
+    /// already has writes nothing and emits nothing: the returned
+    /// `ParentChanged` then shows `previous == Some(parent)`.
+    pub async fn set_parent(&self, id: &str, parent: &str) -> Result<Change, StoreError> {
+        let id = id.trim().to_ascii_uppercase();
+        let parent = parent.trim().to_ascii_uppercase();
+        let _serial = self.write_serial.lock().await;
+        let (child, new_parent, old_parent, previous) = {
+            let tickets = self.tickets.read().expect("store lock poisoned");
+            let mut child = tickets
+                .get(&id)
+                .ok_or_else(|| StoreError::NotFound(id.clone()))?
+                .clone();
+            let Some(parent_ticket) = tickets.get(&parent) else {
+                return Err(StoreError::ParentNotFound { id, parent });
+            };
+            if child.parent.as_deref() == Some(parent.as_str()) {
+                return Ok(Change::ParentChanged {
+                    ticket: child,
+                    previous: Some(parent),
+                });
+            }
+            // MNG-14: only the shortcode's scope root may hang under
+            // another shortcode; everything else stays inside its own.
+            let is_root = shortcode_root(&tickets, &child.epic).is_some_and(|r| r.id == child.id);
+            if !is_root && parent_ticket.epic != child.epic {
+                return Err(StoreError::ParentOutsideShortcode { id, parent });
+            }
+            if let Some(path) = find_parent_cycle(&tickets, &id, &parent) {
+                return Err(StoreError::ParentCycle { id, path });
+            }
+            let now = chrono::Utc::now().timestamp();
+            let previous = child.parent.take();
+            child.parent = Some(parent.clone());
+            child.updated_unix = now;
+
+            let mut new_parent = parent_ticket.clone();
+            new_parent.children.push(id.clone());
+            new_parent.updated_unix = now;
+
+            // A previous parent that names no ticket (a hand-edited
+            // database) has nothing to update; the child's edge still moves.
+            let old_parent = previous.as_deref().and_then(|p| tickets.get(p)).map(|t| {
+                let mut t = t.clone();
+                t.children.retain(|c| c != &id);
+                t.updated_unix = now;
+                t
+            });
+            (child, new_parent, old_parent, previous)
+        };
+
+        let mut batch = vec![child.clone(), new_parent.clone()];
+        batch.extend(old_parent.iter().cloned());
+        self.persist(batch).await?;
+
+        let groups = self
+            .tickets
+            .write()
+            .expect("store lock poisoned")
+            .reparented(child.clone(), new_parent.clone(), old_parent.clone());
+        let change = Change::ParentChanged {
+            ticket: child,
+            previous,
+        };
+        let _ = self.tx.send(change.clone());
+        let _ = self.tx.send(Change::ChildrenChanged {
+            ticket: new_parent,
+            added: id.clone(),
+        });
+        if let Some(old) = old_parent {
+            let _ = self.tx.send(Change::ChildRemoved {
+                ticket: old,
+                removed: id,
+            });
+        }
+        self.broadcast_groups(groups);
+        Ok(change)
+    }
+
+    /// Tickets that can start now: status `Ready` and every `blocked_by`
+    /// entry resolves to a ticket whose status is `Complete` or
+    /// `Superseded`. A dangling blocker (id naming no existing ticket)
+    /// keeps its ticket out. The epic filter applies to membership;
+    /// blockers resolve globally. Ordered by (epic, seq).
+    pub fn ready_set(&self, epic: Option<&str>) -> Vec<Ticket> {
+        self.ready_page(epic, None, None)
+            .expect("an uncursored page cannot fail")
+            .tickets
+    }
+
+    /// One ticket's `blocked_by`, each entry resolved to the current
+    /// ticket or marked dangling, in `blocked_by` order.
+    pub fn blockers(&self, id: &str) -> Result<Vec<BlockerRef>, StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let ticket = cache
+            .get(id)
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+        Ok(ticket
+            .blocked_by
+            .iter()
+            .map(|b| match cache.get(b) {
+                Some(t) => BlockerRef::Resolved(t.clone()),
+                None => BlockerRef::Dangling(b.clone()),
+            })
+            .collect())
+    }
+
+    pub fn count(&self) -> usize {
+        self.tickets.read().expect("store lock poisoned").len()
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<Change> {
+        self.tx.subscribe()
+    }
+
+    /// PERF-2: bulk-seeds `spec.count` synthetic tickets, through this
+    /// layer and nothing else. The tickets are generated in memory first
+    /// (ids allocated the way `create` allocates them — max existing seq
+    /// per epic, plus one — every `blocked_by` edge pointing at an
+    /// already-generated ticket so the DAG is acyclic by construction,
+    /// and each mirrored in its blocker's `unlocks`), then written
+    /// through to the database in a few large transactions (one fsync
+    /// per ~50k rows, never one per row), and only then inserted into
+    /// the cache. Deterministic given `spec.seed`.
+    ///
+    /// Refuses a store that already holds tickets unless
+    /// `spec.into_existing` — nothing is generated or written then.
+    /// Nothing is broadcast: seeding runs before the server serves, so
+    /// there is no subscriber to tell, and a million `Created` events
+    /// would only lag the channel. Blocking I/O: call from a blocking
+    /// context (the builder wraps it in `spawn_blocking`).
+    pub fn seed_synthetic(&self, spec: SeedSpec) -> Result<SeedReport, StoreError> {
+        // Mutations stay serialized even here: a concurrent writer means
+        // this was called while serving, which it must not be.
+        let _serial = self
+            .write_serial
+            .try_lock()
+            .map_err(|_| StoreError::Db("seed requested while another write is in flight".into()))?;
+        let started = std::time::Instant::now();
+
+        let next_seq: HashMap<String, u32> = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            if cache.len() > 0 && !spec.into_existing {
+                return Err(StoreError::SeedRefused {
+                    existing: cache.len(),
+                });
+            }
+            let mut max: HashMap<String, u32> = HashMap::new();
+            for t in cache.tickets() {
+                let e = max.entry(t.epic.clone()).or_insert(0);
+                *e = (*e).max(t.seq);
+            }
+            max
+        };
+
+        let generated = synthetic::generate(spec, &next_seq);
+        let generate = started.elapsed();
+        let epics = {
+            let mut seen: HashSet<&str> = HashSet::new();
+            generated.iter().for_each(|t| {
+                seen.insert(t.epic.as_str());
+            });
+            seen.len()
+        };
+        let edges: usize = generated.iter().map(|t| t.blocked_by.len()).sum();
+
+        let persist_started = std::time::Instant::now();
+        {
+            let mut conn = self.db.lock().expect("db lock poisoned");
+            for chunk in generated.chunks(synthetic::ROWS_PER_TRANSACTION) {
+                let tx = conn
+                    .transaction()
+                    .map_err(|e| StoreError::Db(e.to_string()))?;
+                db::insert_many(&tx, chunk).map_err(|e| StoreError::Db(e.to_string()))?;
+                tx.commit().map_err(|e| StoreError::Db(e.to_string()))?;
+            }
+        }
+        let persist = persist_started.elapsed();
+
+        {
+            let mut tickets = self.tickets.write().expect("store lock poisoned");
+            tickets.at.reserve(generated.len());
+            for t in generated {
+                tickets.insert(t);
+            }
+            // MNG-10: built once over the seeded store, as at load — not
+            // kept per row: a seed into an existing store can add tickets
+            // to its prefixes in any shape, and nothing is broadcast here.
+            let rollups = rollup::Rollups::build(tickets.rows());
+            tickets.rollups = rollups;
+        }
+        Ok(SeedReport {
+            count: spec.count,
+            epics,
+            edges,
+            generate,
+            persist,
+            elapsed: started.elapsed(),
+        })
+    }
+}
+
+/// MNG-10: the per-shortcode roll-ups — AGS-20's nav tree, computed by the
+/// server and *kept*, so `groups` costs the number of shortcodes and never
+/// the number of tickets.
+///
+/// What is counted is exactly what `frontend/src/nav.rs`'s `plan()` draws:
+/// a ticket nests under its parent's row (any shortcode); a ticket with no
+/// parent is a row of its own shortcode's group; in a **sub-shortcode** —
+/// one whose scope root's parent is in another shortcode, its *host* — a
+/// ticket whose parent is that host is a row of the sub-shortcode's group
+/// instead (the *cut*); and a group's `done/total` counts every ticket in
+/// its subtree, nested groups included.
+///
+/// The shape that makes this cheap to keep: a cut is always an edge
+/// *between* shortcodes (the host is in another one), so following
+/// `parent` while it stays inside the shortcode never meets one. Every
+/// ticket therefore belongs to a **tree** — the ancestor where that walk
+/// stops is its *top* — and a whole tree is drawn wherever its top is:
+///
+/// - a top with no parent (or none plan() honours: one that names no
+///   ticket, or a parent cycle) is drawn in its own shortcode's row,
+///   whatever else ever moves. Those trees are pooled per shortcode
+///   (`base`).
+/// - a top whose parent is in another shortcode (a **cross** top: every
+///   sub-shortcode's root, plus any legacy cross-shortcode child) is drawn
+///   in its own row when that parent is the host, and under that parent —
+///   in whatever group holds it — otherwise. Each keeps its own tally.
+///
+/// The shape lives in those few places — one pool per shortcode, one
+/// entry per cross top — and [`Rollups::settle`] re-derives it from them
+/// alone, in plan()'s own order: O(shortcodes + cross tops), never
+/// O(tickets). A status change or a create costs a walk up to its tree's
+/// top plus the chain of groups around it; a `set_parent`, and a create
+/// that starts a sub-shortcode, settle and diff. A `set_parent` that moves
+/// a subtree from one tree to another inside a shortcode walks that
+/// subtree to count it — only possible in a legacy prefix with several
+/// parentless tickets; since MNG-14 a shortcode is one tree.
+///
+/// A database edited by hand can hold what the server never makes — a
+/// parent that names no ticket, a parent cycle. It is loaded and rolled up
+/// as plan() would draw it; the two writes that can *repair* such a thing
+/// (a create of the id a dangling parent names, a `set_parent` of a ticket
+/// on a cycle) rebuild the roll-ups from the cache, with a warning.
+mod rollup;
+
+/// PERF-2: the synthetic ticket generator. Private to the store: the
+/// shape it produces mirrors what `create` + `set_status` would have
+/// built one call at a time, so every invariant the DAG queries rely on
+/// (ids, `blocked_by` -> `unlocks` symmetry, acyclicity) holds by
+/// construction rather than by checking.
+mod synthetic;
+
+/// SQL for the system of record. Private: the rest of the application
+/// only ever sees the cache above.
+mod db;
+
+#[cfg(test)]
+mod tests;
