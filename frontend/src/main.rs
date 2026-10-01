@@ -102,6 +102,12 @@
 //! session while mounted, which replaces the body when the event is that
 //! ticket's (src/session.rs) — no `get`, no reload.
 
+//! SCALE-5: `watch` says when it fell behind the server's broadcast
+//! (`lagged`), instead of going on as if whole. The session answers it with
+//! the walk a reconnect makes — same socket, rows upserted in place so they
+//! keep their DOM, the open page's body fetched again — and the dock stays
+//! `live` (src/session.rs).
+
 mod dom;
 mod keys;
 mod md;

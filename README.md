@@ -127,7 +127,10 @@ owns no routing):
   `list { summary: true, limit: 500 }` with `after = next` (MNG-9),
   painting as pages land, and reconnects on a ~1 s loop — a server
   restart returns the page to live on its own, with rows keeping their
-  DOM identity. The port comes from `<meta name="menger-ws-port">`, which
+  DOM identity. A `lagged` on `watch` (SCALE-5) is answered with the same
+  walk over the same socket, plus the open ticket page's `get`: rows
+  keep their DOM, `watch` keeps running, and the dock stays `live`. The
+  port comes from `<meta name="menger-ws-port">`, which
   the shell substitutes wherever it serves the app's entrypoint (`/` and
   `/app/`), exactly as it always has for `web/index.html`.
 
@@ -201,7 +204,7 @@ ticket is logged and left empty, never fatal.
 | `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's `parent`, the new parent's `children` and the old parent's `children` (if any) move in one transaction; the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, root, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only), `root` is the lowest-seq `scope`, `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
 | `tickets.extents {}` | one `extent { epic, last_seq }` per shortcode that holds a ticket, in shortcode order (the store's), then the stream's own `done` (SCALE-16) — where each shortcode ends: ids are allocated highest-plus-one and never deleted, so a shortcode holds `last_seq` tickets, row k of it is `EPIC-k`, and a position in the store's order becomes a `list { after }` cursor without a walk; every `last_seq` together sums to `health.ticket_count` (a hand-edited database with a hole still reports the highest sequence; `after` naming the missing id is `list`'s cursor error). Not a roll-up: the shortcode's own tickets only, and every shortcode has one whether or not the nav draws it a row. Read from the sequence `create` allocates from (SCALE-3), so the cost is the number of shortcodes; no `watch` event — `created` carries the shortcode's new `last_seq` as its `seq` |
-| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` — a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`); `epic` filters a group by its own shortcode |
+| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` — a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`); `epic` filters a group by its own shortcode; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
 
 Paging (MNG-9). `(epic, seq)` is a total order the schema keeps unique, so
 a ticket id is a cursor: a client that renders opens `watch` first, then
@@ -228,6 +231,14 @@ Raw wire: JSON-RPC 2.0 over WebSocket. Every logical call is a
 `menger.call` subscription with `{method: "tickets.watch", params: {...}}`;
 events arrive as `result` notifications carrying `PlexusStreamItem`s.
 `web/index.html` is a complete, dependency-free client.
+
+`watch` is fed from a bounded broadcast (256 changes) and the server sends
+to a socket no faster than the client reads it, so a subscriber that falls
+far enough behind loses changes. It is told: one
+`{"type": "lagged", "missed": N}` data item where they were (SCALE-5),
+then the stream continues. A client that ignores event types it does not
+know is unaffected; one that keeps a copy should treat it as "fetch again
+what you show" — the Leptos app re-walks `list`, as after a reconnect.
 
 ## Layout
 

@@ -505,9 +505,17 @@ impl Tickets {
     /// `Created` / `StatusChanged` / `UnlocksChanged` / `ChildrenChanged`
     /// events. Runs until the client disconnects. Every event carries the
     /// full affected ticket, so a client that listed once and then only
-    /// watches can compute the ready set — and the parent tree — itself. A slow consumer that
-    /// lags the broadcast buffer skips the missed changes and keeps
-    /// receiving from the current position.
+    /// watches can compute the ready set — and the parent tree — itself.
+    ///
+    /// SCALE-5: the stream is fed from the store's bounded broadcast, and
+    /// a consumer that falls more than it holds behind loses the oldest
+    /// changes. That used to be silent — the stream went on as if whole and
+    /// the client's copy was stale with nothing to say so. Now the gap is
+    /// one `Lagged { missed }` where the lost changes were, then the oldest
+    /// change still held, in order, no change twice. Delivered past the
+    /// `epic` filter: whether a lost change was in the epic is exactly what
+    /// cannot be known. Raising the capacity instead would move the cliff
+    /// and keep the silence.
     ///
     /// MNG-10: a mutation that moves a roll-up is followed, after its
     /// ticket events, by one `GroupChanged` per group whose row moved,
@@ -518,7 +526,7 @@ impl Tickets {
     /// moves no group.
     #[plexus_macros::method(
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged), until disconnect",
+        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes",
         params(epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode)")
     )]
     pub async fn watch(
@@ -535,7 +543,9 @@ impl Tickets {
                             yield change_event(change);
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                        yield TicketsEvent::Lagged { missed };
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -1376,6 +1386,72 @@ mod tests {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.epic, "MNG"),
             other => panic!("expected Created, got {other:?}"),
         }
+    }
+
+    /// One line per event, unique within this test's burst — so "the
+    /// newest changes, none twice" is a comparison of lists.
+    fn label(ev: &TicketsEvent) -> String {
+        match ev {
+            TicketsEvent::Created { ticket } => format!("created {}", ticket.id),
+            TicketsEvent::ChildrenChanged { ticket, added } => format!("children {} +{added}", ticket.id),
+            TicketsEvent::GroupChanged { group } => format!("group {} {}", group.epic, group.total),
+            TicketsEvent::Lagged { missed } => format!("lagged {missed}"),
+            other => format!("{other:?}"),
+        }
+    }
+
+    /// SCALE-5 criterion 1, against the store's real channel (capacity 256,
+    /// untouched): a `watch` subscribed and then left unread while 200
+    /// creates broadcast 600 changes — each create is `created`, the root's
+    /// `children_changed`, the shortcode's `group_changed` — reads exactly
+    /// one `lagged { missed: 344 }` (600 - 256, the count the channel
+    /// reports), then precisely the newest 256 changes in acknowledgment
+    /// order, none twice, then later changes as usual. A `watch { epic }`
+    /// on another shortcode is told too, and then hears only its own.
+    #[tokio::test]
+    async fn a_watch_that_falls_behind_reads_one_lagged_then_the_newest_changes() {
+        const CREATES: u64 = 200;
+        const HELD: u64 = 256; // Store::with_connection's broadcast capacity
+        let hub = hub();
+        one(hub.create("LAG".into(), "root".into(), Some("scope".into()), None, None, None, None).await).await;
+        let mut watch = Box::pin(hub.watch(None).await);
+        let mut other = Box::pin(hub.watch(Some("other".into())).await);
+
+        let mut broadcast: Vec<String> = Vec::new();
+        for k in 2..=CREATES + 1 {
+            match one(hub.create("LAG".into(), format!("t{k}"), None, None, None, None, None).await).await {
+                TicketsEvent::Created { ticket } => assert_eq!(ticket.id, format!("LAG-{k}")),
+                ev => panic!("expected Created, got {ev:?}"),
+            }
+            broadcast.push(format!("created LAG-{k}"));
+            broadcast.push(format!("children LAG-1 +LAG-{k}"));
+            broadcast.push(format!("group LAG {k}"));
+        }
+        let missed = broadcast.len() as u64 - HELD;
+        assert_eq!(missed, 344);
+
+        // The filtered subscriber is told as well; the 256 LAG changes still
+        // held are then read and filtered out, and nothing else is ready.
+        assert_eq!(label(&other.next().await.expect("an event")), format!("lagged {missed}"), "past the epic filter");
+        assert!(futures::FutureExt::now_or_never(other.next()).is_none(), "no LAG change passes the filter");
+
+        let mut read: Vec<String> = Vec::new();
+        for _ in 0..=HELD {
+            read.push(label(&watch.next().await.expect("an event")));
+        }
+        assert_eq!(read[0], format!("lagged {missed}"), "one lagged, first, with the channel's count");
+        assert_eq!(read[1..], broadcast[missed as usize..], "then the newest {HELD}, in order, none twice");
+        assert_eq!(read.iter().filter(|l| l.starts_with("lagged")).count(), 1);
+        assert!(futures::FutureExt::now_or_never(watch.next()).is_none(), "and nothing more");
+
+        one(hub.create("LAG".into(), "after".into(), None, None, None, None, None).await).await;
+        assert_eq!(label(&watch.next().await.expect("an event")), format!("created LAG-{}", CREATES + 2), "and on, as usual");
+
+        one(hub.create("OTHER".into(), "its own".into(), Some("scope".into()), None, None, None, None).await).await;
+        assert_eq!(label(&other.next().await.expect("an event")), "created OTHER-1", "then only its own epic");
+
+        let wire = serde_json::to_value(TicketsEvent::Lagged { missed: 3 }).unwrap();
+        assert_eq!(wire, serde_json::json!({"type": "lagged", "missed": 3}));
     }
     /// MNG-12/14: `set_parent` over the activation — `ParentChanged` on a
     /// move, `NotFound` for a missing child, in-band errors for a missing

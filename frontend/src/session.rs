@@ -44,6 +44,18 @@
 //! on the way out — the re-walk upserts over them, so unchanged rows keep
 //! their DOM identity across a reconnect (AGS-20's discipline).
 //!
+//! SCALE-5: `watch` can also say that *it* fell behind — the server's
+//! broadcast is bounded, and a subscriber more than it holds behind loses
+//! the oldest changes, which used to vanish while the dock read `live`.
+//! Now they arrive as one `lagged { missed }`, and the session answers it
+//! the way it answers a reconnect, minus the reconnect: the same walk ([`walk`]),
+//! over the same socket, upserting in place, plus the open page's body —
+//! while `watch` keeps running and the dock stays `live`. The dock's count
+//! follows the walk for the same reason: after any walk it is the rows the
+//! walk found, and a `created` adds one only for a ticket the store did not
+//! already hold, so neither a re-walk nor the events queued behind it can
+//! count a ticket twice.
+//!
 //! # Bodies are not rows
 //!
 //! A row is a [`TicketSummary`] — every field of a ticket except the body.
@@ -57,7 +69,7 @@
 //! body signal to the session while it is mounted ([`hold_body`]), so the
 //! body still lives in exactly one place and the event needs no `get`.
 
-use crate::{dom, upsert, upsert_page, Conn, Dock, Row};
+use crate::{dom, row_index, upsert, upsert_page, Conn, Dock, Row};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::{TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
@@ -116,10 +128,11 @@ pub(crate) fn release_body(body: RwSignal<Option<String>>) {
     });
 }
 
-/// MNG-16: an `amended` ticket's body, to the open page if it is that
-/// ticket's and the body differs — a title-only amend re-renders nothing
-/// below the title (no markdown pass, no mermaid redraw).
-fn show_amended_body(ticket: &Ticket) {
+/// MNG-16: a ticket's body as an event or a fetch carries it, to the open
+/// page if it is that ticket's and the body differs — a title-only amend
+/// re-renders nothing below the title (no markdown pass, no mermaid
+/// redraw). SCALE-5's re-fetch after a `lagged` lands here too.
+fn show_body(ticket: &Ticket) {
     let held = OPEN_BODY.with(|b| {
         b.borrow()
             .as_ref()
@@ -223,6 +236,69 @@ async fn session(
     }
 
     // 3. The page walk. Every page paints as it lands.
+    walk(&client, rows, dock, last_error).await?;
+    conn.set(Conn::Live);
+
+    // 4. Live. `watch` runs until the socket dies.
+    while let Some(ev) = live.next().await {
+        match ev.map_err(|e| describe(&e))? {
+            // Every mutation event carries the full updated ticket —
+            // AGS-19's `children_changed` carries the full *parent*, which
+            // is how a page and a nav that never re-fetch learn that a
+            // child was born (AGS-20).
+            ClientEvent::Data(TicketsEvent::Created { ticket }) => {
+                // SCALE-5: news to the store, or one a walk already found
+                // (born while it ran, or queued behind a `lagged`)?
+                let fresh = rows.with_untracked(|v| row_index(v, &ticket.id).is_none());
+                upsert(rows, TicketSummary::from(&ticket));
+                if fresh {
+                    dock.update(|d| {
+                        if let Some(d) = d {
+                            d.ticket_count += 1;
+                        }
+                    });
+                }
+            }
+            ClientEvent::Data(
+                TicketsEvent::StatusChanged { ticket, .. }
+                | TicketsEvent::UnlocksChanged { ticket, .. }
+                | TicketsEvent::ChildrenChanged { ticket, .. },
+            ) => upsert(rows, TicketSummary::from(&ticket)),
+            // MNG-16: the row's title in place; the open page's body too.
+            ClientEvent::Data(TicketsEvent::Amended { ticket, .. }) => {
+                show_body(&ticket);
+                upsert(rows, TicketSummary::from(&ticket));
+            }
+            // SCALE-5: the server dropped `missed` changes this stream never
+            // saw. What the rows hold may be stale: fetch again what is
+            // shown — every row, by the walk a reconnect makes, and the open
+            // page's body. `watch` is whole again from here (what queued
+            // behind the gap applies after the walk, in order, as during the
+            // first walk), so the dock never leaves `live`.
+            ClientEvent::Data(TicketsEvent::Lagged { missed }) => {
+                leptos::logging::log!("watch lagged: {missed} change(s) missed; re-walking");
+                walk(&client, rows, dock, last_error).await?;
+                refetch_open_body(&client, rows, last_error).await;
+            }
+            // Future event kinds: ignore, stay live.
+            _ => {}
+        }
+    }
+    Err("watch stream ended".into())
+}
+
+/// MNG-9's walk of the whole store: `list { summary, limit }` page by page
+/// with `after = next`, painting as pages land, then the rows the walk did
+/// not name dropped. The session's step 3 — and, since SCALE-5, its answer
+/// to `lagged`: a re-walk over rows already held upserts them in place, so
+/// every row that did not change keeps its DOM. Leaves the dock's count at
+/// the number of tickets the walk found.
+async fn walk(
+    client: &Client,
+    rows: RwSignal<Vec<Row>>,
+    dock: RwSignal<Option<Dock>>,
+    last_error: RwSignal<Option<String>>,
+) -> Result<(), String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut after: Option<String> = None;
     let mut pending: Vec<TicketSummary> = Vec::with_capacity(PAGE_LIMIT as usize);
@@ -267,38 +343,36 @@ async fn session(
     // deletes tickets today, but a reconnect must converge regardless — and
     // this is a retain, not a rebuild, so every surviving row keeps its DOM.
     drop_missing(rows, &seen);
-    conn.set(Conn::Live);
-
-    // 4. Live. `watch` runs until the socket dies.
-    while let Some(ev) = live.next().await {
-        match ev.map_err(|e| describe(&e))? {
-            // Every mutation event carries the full updated ticket —
-            // AGS-19's `children_changed` carries the full *parent*, which
-            // is how a page and a nav that never re-fetch learn that a
-            // child was born (AGS-20).
-            ClientEvent::Data(TicketsEvent::Created { ticket }) => {
-                upsert(rows, TicketSummary::from(&ticket));
-                dock.update(|d| {
-                    if let Some(d) = d {
-                        d.ticket_count += 1;
-                    }
-                });
-            }
-            ClientEvent::Data(
-                TicketsEvent::StatusChanged { ticket, .. }
-                | TicketsEvent::UnlocksChanged { ticket, .. }
-                | TicketsEvent::ChildrenChanged { ticket, .. },
-            ) => upsert(rows, TicketSummary::from(&ticket)),
-            // MNG-16: the row's title in place; the open page's body too.
-            ClientEvent::Data(TicketsEvent::Amended { ticket, .. }) => {
-                show_amended_body(&ticket);
-                upsert(rows, TicketSummary::from(&ticket));
-            }
-            // Future event kinds: ignore, stay live.
-            _ => {}
+    dock.update(|d| {
+        if let Some(d) = d {
+            d.ticket_count = seen.len() as u64;
         }
+    });
+    Ok(())
+}
+
+/// SCALE-5: after a `lagged`, the open page's body — the one thing the
+/// walk does not carry — fetched again, as a reconnect's `get` would. An
+/// `amended` for it may have been among the changes lost.
+async fn refetch_open_body(
+    client: &Client,
+    rows: RwSignal<Vec<Row>>,
+    last_error: RwSignal<Option<String>>,
+) {
+    let Some(id) = OPEN_BODY.with(|b| b.borrow().as_ref().map(|(id, _)| id.clone())) else {
+        return;
+    };
+    match client.get_all(id.clone()).await {
+        Ok(events) => {
+            for ev in events {
+                if let TicketsEvent::Ticket { ticket } = ev {
+                    show_body(&ticket);
+                    upsert(rows, TicketSummary::from(&ticket));
+                }
+            }
+        }
+        Err(e) => last_error.set(Some(format!("get {id}: {}", describe(&e)))),
     }
-    Err("watch stream ended".into())
 }
 
 /// Retain only the rows the walk named. Skipped entirely when nothing is

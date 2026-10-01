@@ -397,6 +397,15 @@ pub enum TicketsEvent {
     /// child was re-parented elsewhere (yielded by `watch`). Carries the
     /// full updated ex-parent.
     ChildRemoved { ticket: Ticket, removed: String },
+    /// SCALE-5: this `watch` fell more than the store's broadcast holds
+    /// behind, and the channel dropped `missed` changes before it could
+    /// read them (`missed` ≥ 1: the count the channel reports). Yielded
+    /// only by `watch`, exactly once per gap, in place of the changes lost
+    /// — whatever its `epic` filter, since the subscriber cannot know
+    /// whether a lost change was in its epic — and then the stream goes on
+    /// with the oldest change still held. Not an error and not an end:
+    /// it means "what you hold may be stale — fetch again what you show".
+    Lagged { missed: u64 },
     /// MNG-10: one shortcode's roll-up (yielded per shortcode by `groups`,
     /// in shortcode order).
     Group { group: Group },
