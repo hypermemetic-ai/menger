@@ -371,6 +371,13 @@ pub enum TicketsEvent {
     },
     /// A ticket's status changed (yielded by `set_status`, and by `watch`).
     StatusChanged { ticket: Ticket, previous: Status },
+    /// MNG-16: a ticket's title and/or body was replaced (yielded by
+    /// `amend`, and by `watch` for every amend that changed something).
+    /// `changed` names what moved — `"title"`, `"body"`, both in that
+    /// order, or nothing: `amend`'s own answer to a no-op, which `watch`
+    /// never carries. The full ticket rides along, body included, so a
+    /// watch-only client — and an open ticket page — needs no `get`.
+    Amended { ticket: Ticket, changed: Vec<String> },
     /// An existing ticket's `unlocks` gained `added`: a newly created
     /// ticket named it in `blocked_by` (yielded by `watch`). Carries the
     /// full updated ticket so a watch-only client stays coherent.

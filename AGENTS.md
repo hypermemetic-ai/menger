@@ -119,8 +119,9 @@ derived from it or from the declaration that produces it. Pick by consumer:
   `Pending → Ready → active → in review → done` (+ `archived`, always
   with a pointer). Workers move their ticket across it (owner,
   2026-09-06): mark `active` the moment work starts (so no leaf is
-  double-claimed) and record the branch on the ticket; flip to `in
-  review` in the commit that finishes the work — gate green, committed,
+  double-claimed) and record the branch on the ticket (`tickets.amend`
+  rewrites its body — MNG-16); flip to `in review` in the commit that
+  finishes the work — gate green, committed,
   change linked (the commit message ends `— in review`); the **merge**
   (the pipeline) lands it to `done`, so the merge hash is the completion
   hash. Each flip is `tickets.set_status` on the running server (and the

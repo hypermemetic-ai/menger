@@ -218,6 +218,12 @@ pub struct Page {
 pub enum Change {
     Created { ticket: Ticket },
     StatusChanged { ticket: Ticket, previous: Status },
+    /// MNG-16: a ticket's title and/or body was replaced (`amend`);
+    /// `changed` names which, in that order. Carries the full ticket — body
+    /// included, so an open page can show the new one without a `get`.
+    /// Only broadcast when something changed: a no-op amend writes and
+    /// emits nothing.
+    Amended { ticket: Ticket, changed: Vec<String> },
     /// An existing ticket's `unlocks` gained `added` because a newly
     /// created ticket named it in `blocked_by`. Carries the full updated
     /// ticket so watch-only clients stay coherent.
@@ -253,6 +259,7 @@ impl Change {
         match self {
             Self::Created { ticket }
             | Self::StatusChanged { ticket, .. }
+            | Self::Amended { ticket, .. }
             | Self::UnlocksChanged { ticket, .. }
             | Self::ChildrenChanged { ticket, .. }
             | Self::ParentChanged { ticket, .. }
@@ -332,6 +339,9 @@ pub enum StoreError {
     /// shortcode's scope root may hang under another shortcode (its host).
     /// Nothing changed.
     ParentOutsideShortcode { id: String, parent: String },
+    /// MNG-16: an `amend` asked for a title that is empty after trimming.
+    /// A ticket always has one; nothing was written.
+    EmptyTitle { id: String },
     /// The write could not be made durable; nothing was acknowledged.
     Db(String),
     /// PERF-2: a seed was requested into a store that already holds
@@ -378,6 +388,11 @@ impl std::fmt::Display for StoreError {
                 "'{parent}' is outside the shortcode of '{id}': a ticket's parent must be in \
                  its own shortcode — only a shortcode's scope root may hang under another \
                  shortcode (nothing changed for '{id}')"
+            ),
+            Self::EmptyTitle { id } => write!(
+                f,
+                "a ticket's title cannot be empty: the title given for '{id}' is blank \
+                 (nothing changed for '{id}')"
             ),
             Self::Db(msg) => write!(f, "database error: {msg}"),
             Self::SeedRefused { existing } => write!(
@@ -1295,6 +1310,63 @@ impl Store {
         Ok(change)
     }
 
+    /// MNG-16: replaces a ticket's title and/or body — whole values, last
+    /// writer wins (AGS-3 owns live, contended text). The one write after
+    /// birth that touches neither status nor shape: `id`, status, kind,
+    /// both edge lists and parenthood are carried over untouched, so no
+    /// roll-up moves and no id index changes — the row goes into the cache
+    /// and that is all.
+    ///
+    /// Each value given is compared with the current one; only a different
+    /// one is written, and `changed` names what was (`"title"`, then
+    /// `"body"`). Nothing different — neither given, or both equal — is no
+    /// write and no broadcast, and the returned `Amended` says `changed:
+    /// []`, as `set_parent` answers a no-op. Otherwise `updated_unix` moves
+    /// to now, the row commits, then the cache, then one `Amended`. A title
+    /// that is empty after trimming is refused before anything is read; a
+    /// title or body that is given is stored exactly as given, byte for
+    /// byte (like `create`, which does not trim either).
+    pub async fn amend(
+        &self,
+        id: &str,
+        title: Option<String>,
+        body: Option<String>,
+    ) -> Result<Change, StoreError> {
+        let id = id.trim().to_ascii_uppercase();
+        if title.as_deref().is_some_and(|t| t.trim().is_empty()) {
+            return Err(StoreError::EmptyTitle { id });
+        }
+        let _serial = self.write_serial.lock().await;
+        let mut ticket = self
+            .get(&id)
+            .ok_or_else(|| StoreError::NotFound(id.clone()))?;
+        let mut changed: Vec<String> = Vec::new();
+        if let Some(title) = title.filter(|t| *t != ticket.title) {
+            ticket.title = title;
+            changed.push("title".into());
+        }
+        if let Some(body) = body.filter(|b| *b != ticket.body) {
+            ticket.body = body;
+            changed.push("body".into());
+        }
+        if changed.is_empty() {
+            return Ok(Change::Amended { ticket, changed });
+        }
+        ticket.updated_unix = chrono::Utc::now().timestamp();
+
+        self.persist(vec![ticket.clone()]).await?;
+        // Rows only, deliberately: what an amend changes is counted by no
+        // roll-up and indexed by no id index (see above), so there is no
+        // mutation-shaped `Cache` method to go through.
+        self.tickets
+            .write()
+            .expect("store lock poisoned")
+            .insert(ticket.clone());
+        let change = Change::Amended { ticket, changed };
+        let _ = self.tx.send(change.clone());
+        Ok(change)
+    }
+
     /// Tickets that can start now: status `Ready` and every `blocked_by`
     /// entry resolves to a ticket whose status is `Complete` or
     /// `Superseded`. A dangling blocker (id naming no existing ticket)
@@ -1529,3 +1601,8 @@ mod tests_find;
 /// two worker states are not (ready, done, a satisfied blocker).
 #[cfg(test)]
 mod tests_worker_states;
+
+/// MNG-16: `amend` — every row of its table, byte-exact bodies through the
+/// file, and nothing else about the ticket moving.
+#[cfg(test)]
+mod tests_amend;

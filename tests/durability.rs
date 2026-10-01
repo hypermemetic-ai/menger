@@ -574,6 +574,36 @@ async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkil
     assert_eq!(ev["ticket"]["status"], "In Review", "byte-exact after SIGKILL + restart");
 }
 
+/// MNG-16 criterion 1, black-box: an amended body round-trips byte-exact
+/// through `get` — CRLF, tabs, trailing spaces, astral characters, no
+/// final newline — and an acknowledged amend survives SIGKILL: the
+/// restarted server answers the same ticket, title and body included.
+#[tokio::test]
+async fn an_acknowledged_amend_survives_sigkill_byte_exact() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    let body = "## Divergence notes\r\n\n- 2026-10-01: ünïcode ✓ 𝔘 🧪\t(tab)   \n\
+                ```mermaid\ngraph LR\n  A --> B\n```\nno final newline";
+
+    let s1 = spawn_server(Some(&db), &[], dir.path(), "amend1").await;
+    let c1 = connect(s1.port).await;
+    one(&c1, "tickets.create", json!({"epic": "AMK", "title": "born", "kind": "scope", "body": "first"})).await;
+    let ev = one(&c1, "tickets.amend", json!({"id": "AMK-1", "title": "amended", "body": body})).await;
+    assert_eq!(ev["type"], "amended", "{ev}");
+    assert_eq!(ev["changed"], json!(["title", "body"]));
+    let acked = one(&c1, "tickets.get", json!({"id": "AMK-1"})).await;
+    assert_eq!(acked["ticket"]["body"].as_str().unwrap().as_bytes(), body.as_bytes(), "byte-exact through get");
+    drop(c1);
+    s1.kill9();
+
+    let s2 = spawn_server(Some(&db), &[], dir.path(), "amend2").await;
+    let c2 = connect(s2.port).await;
+    let got = one(&c2, "tickets.get", json!({"id": "AMK-1"})).await;
+    assert_eq!(got, acked, "the acknowledged ticket, whole, after SIGKILL + restart");
+    assert_eq!(got["ticket"]["title"], "amended");
+    assert_eq!(got["ticket"]["body"].as_str().unwrap().as_bytes(), body.as_bytes());
+}
+
 /// AGS-13: a legacy value the pinned mapping does not cover refuses the
 /// open — the process exits non-zero naming the row — and the database
 /// is left untouched for a human to fix.

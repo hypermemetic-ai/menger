@@ -49,6 +49,13 @@
 //! A row is a [`TicketSummary`] — every field of a ticket except the body.
 //! The one body the app shows is the open ticket page's, fetched by `get`
 //! and held by that page, never in the row store.
+//!
+//! MNG-16: a body can change after birth now (`tickets.amend`), and the
+//! `amended` event carries the whole ticket, body included. The row takes
+//! the summary — a new title updates in place, like a status — and the
+//! open page, if it is that ticket's, takes the body: the page lends its
+//! body signal to the session while it is mounted ([`hold_body`]), so the
+//! body still lives in exactly one place and the event needs no `get`.
 
 use crate::{dom, upsert, upsert_page, Conn, Dock, Row};
 use futures::StreamExt;
@@ -85,6 +92,48 @@ thread_local! {
     /// through every view signature to reach the two views that make a
     /// call.
     static TRANSPORT: RefCell<Option<Rc<WsTransport>>> = const { RefCell::new(None) };
+
+    /// MNG-16: the open ticket page's id and its body signal, while it is
+    /// mounted — how an `amended` event reaches the one body the app holds.
+    /// A `thread_local` for the same reason as `TRANSPORT`.
+    static OPEN_BODY: RefCell<Option<(String, RwSignal<Option<String>>)>> = const { RefCell::new(None) };
+}
+
+/// MNG-16: the ticket page lends the session its body for as long as it is
+/// mounted. One page is open at a time; the newest holder wins.
+pub(crate) fn hold_body(id: String, body: RwSignal<Option<String>>) {
+    OPEN_BODY.with(|b| *b.borrow_mut() = Some((id, body)));
+}
+
+/// The page's cleanup. Releases only its own signal: on a move from one
+/// ticket to another the next page may already hold the slot.
+pub(crate) fn release_body(body: RwSignal<Option<String>>) {
+    OPEN_BODY.with(|b| {
+        let mut b = b.borrow_mut();
+        if b.as_ref().is_some_and(|(_, held)| *held == body) {
+            *b = None;
+        }
+    });
+}
+
+/// MNG-16: an `amended` ticket's body, to the open page if it is that
+/// ticket's and the body differs — a title-only amend re-renders nothing
+/// below the title (no markdown pass, no mermaid redraw).
+fn show_amended_body(ticket: &Ticket) {
+    let held = OPEN_BODY.with(|b| {
+        b.borrow()
+            .as_ref()
+            .filter(|(id, _)| *id == ticket.id)
+            .map(|(_, body)| *body)
+    });
+    if let Some(body) = held {
+        if body
+            .try_with_untracked(|b| b.as_deref() != Some(ticket.body.as_str()))
+            .unwrap_or(false)
+        {
+            body.try_set(Some(ticket.body.clone()));
+        }
+    }
 }
 
 /// A client over the live connection, or `None` before the first one is up.
@@ -240,6 +289,11 @@ async fn session(
                 | TicketsEvent::UnlocksChanged { ticket, .. }
                 | TicketsEvent::ChildrenChanged { ticket, .. },
             ) => upsert(rows, TicketSummary::from(&ticket)),
+            // MNG-16: the row's title in place; the open page's body too.
+            ClientEvent::Data(TicketsEvent::Amended { ticket, .. }) => {
+                show_amended_body(&ticket);
+                upsert(rows, TicketSummary::from(&ticket));
+            }
             // Future event kinds: ignore, stay live.
             _ => {}
         }

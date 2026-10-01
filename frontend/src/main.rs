@@ -95,6 +95,13 @@
 //! this crate adds is their rows in index.html's status table, light and
 //! dark, and a class name for the one status with a space ([`st_class`]).
 
+//! MNG-16: a ticket's title and body can change after birth
+//! (`tickets.amend`). `amended` upserts its row like any other event, so the
+//! board's cell, the nav's label and an open page's heading re-render the
+//! title in place; and the open ticket page lends its body signal to the
+//! session while mounted, which replaces the body when the event is that
+//! ticket's (src/session.rs) — no `get`, no reload.
+
 mod dom;
 mod keys;
 mod md;
@@ -1039,6 +1046,10 @@ fn TicketPage(
     let blockers_loaded = RwSignal::new(false);
     // The one body the app holds. `None` until `get` answers.
     let body = RwSignal::new(None::<String>);
+    // MNG-16: lent to the session while the page is mounted, so an
+    // `amended` event for this ticket replaces the body without a `get`.
+    session::hold_body(id.clone(), body);
+    on_cleanup(move || session::release_body(body));
 
     {
         let id = id.clone();

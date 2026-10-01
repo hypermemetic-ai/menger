@@ -93,6 +93,7 @@ fn change_event(change: Change) -> TicketsEvent {
         Change::StatusChanged { ticket, previous } => {
             TicketsEvent::StatusChanged { ticket, previous }
         }
+        Change::Amended { ticket, changed } => TicketsEvent::Amended { ticket, changed },
         Change::UnlocksChanged { ticket, added } => TicketsEvent::UnlocksChanged { ticket, added },
         Change::ChildrenChanged { ticket, added } => TicketsEvent::ChildrenChanged { ticket, added },
         Change::ParentChanged { ticket, previous } => {
@@ -328,6 +329,39 @@ impl Tickets {
         }
     }
 
+    /// MNG-16: replaces a ticket's title and/or body — the correction a
+    /// DB-first store otherwise has no way to make (a worker's branch, a
+    /// divergence note, a contract patched with its finding). Whole values,
+    /// last writer wins. Yields exactly one event: `Amended { ticket,
+    /// changed }` — `changed` names what moved, and is empty when nothing
+    /// did (neither given, or the values already there), which writes and
+    /// broadcasts nothing — `NotFound` if `id` names no ticket, or an
+    /// in-band `Error` for a title that is empty after trimming. `watch`
+    /// carries every `Amended` that changed something.
+    #[plexus_macros::method(
+        description = "Replace a ticket's title and/or body (whole values); yields amended { ticket, changed }",
+        params(
+            id = "Ticket id, e.g. MNG-2",
+            title = "New title (optional; must not be blank)",
+            body = "New markdown body, the whole of it (optional)"
+        )
+    )]
+    pub async fn amend(
+        &self,
+        id: String,
+        title: Option<String>,
+        body: Option<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            match store.amend(&id, title, body).await {
+                Ok(change) => yield change_event(change),
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            }
+        }
+    }
+
     /// The DAG query: which tickets can start now? Yields one row event
     /// per member of the ready set — status `Ready` and every
     /// `blocked_by` entry `Complete` or `Superseded` — ordered by
@@ -479,9 +513,12 @@ impl Tickets {
     /// ticket events, by one `GroupChanged` per group whose row moved,
     /// innermost first — the whole group, so applying it is one upsert.
     /// The `epic` filter applies to a group by the group's own shortcode.
+    ///
+    /// MNG-16: an `amend` that changed something is one `Amended`, and
+    /// moves no group.
     #[plexus_macros::method(
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged), until disconnect",
+        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged), until disconnect",
         params(epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode)")
     )]
     pub async fn watch(
@@ -655,6 +692,55 @@ mod tests {
         assert_eq!(ids, ["WK-2"]);
         let (ids, _) = ids_and_page(hub.list(None, Some("In Review".into()), None, None, None, None).await).await;
         assert_eq!(ids, ["WK-3"]);
+    }
+
+    /// MNG-16 over the activation: `amend` answers `amended { ticket,
+    /// changed }` on the wire (and `changed: []` for a no-op), `not_found`
+    /// for a missing id, an in-band `error` for a blank title; `watch`
+    /// carries one `amended` per amend that changed something and none for
+    /// the no-op or the refusals — so the next event after them is the next
+    /// real change.
+    #[tokio::test]
+    async fn amend_yields_amended_and_watch_carries_only_what_changed() {
+        let hub = hub();
+        one(hub.create("AM".into(), "root".into(), Some("scope".into()), None, None, None, None).await).await;
+        let mut watch = Box::pin(hub.watch(None).await);
+
+        let ev = one(hub.amend("am-1".into(), None, Some("the body, now".into())).await).await;
+        let wire = serde_json::to_value(&ev).unwrap();
+        assert_eq!(wire["type"], "amended");
+        assert_eq!(wire["changed"], serde_json::json!(["body"]));
+        assert_eq!(wire["ticket"]["id"], "AM-1");
+        assert_eq!(wire["ticket"]["body"], "the body, now");
+        match watch.next().await.expect("change") {
+            TicketsEvent::Amended { ticket, changed } => {
+                assert_eq!((ticket.id.as_str(), ticket.body.as_str()), ("AM-1", "the body, now"));
+                assert_eq!(changed, ["body"]);
+            }
+            other => panic!("expected Amended, got {other:?}"),
+        }
+
+        match one(hub.amend("AM-1".into(), None, Some("the body, now".into())).await).await {
+            TicketsEvent::Amended { changed, .. } => assert!(changed.is_empty(), "{changed:?}"),
+            other => panic!("expected Amended, got {other:?}"),
+        }
+        assert!(matches!(
+            one(hub.amend("AM-7".into(), Some("t".into()), None).await).await,
+            TicketsEvent::NotFound { id } if id == "AM-7"
+        ));
+        match one(hub.amend("AM-1".into(), Some("  ".into()), None).await).await {
+            TicketsEvent::Error { message } => assert!(message.contains("empty"), "{message}"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        one(hub.amend("AM-1".into(), Some("a better title".into()), None).await).await;
+        match watch.next().await.expect("change") {
+            TicketsEvent::Amended { ticket, changed } => {
+                assert_eq!(ticket.title, "a better title");
+                assert_eq!(changed, ["title"], "the no-op and the refusals said nothing");
+            }
+            other => panic!("expected Amended, got {other:?}"),
+        }
     }
 
     #[tokio::test]
