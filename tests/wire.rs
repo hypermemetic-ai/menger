@@ -597,6 +597,80 @@ async fn a_walk_sees_births_above_its_cursor_and_watch_carries_the_rest() {
     assert_eq!(pushed, ["MID-5", "AAA-1"]);
 }
 
+/// SCALE-6 acceptance 1 and 3 over the real wire, against a store holding
+/// exactly `AGS-1`, `AGS-18` and `MFE-7 · "The Ticket Page"` — written into
+/// the database before the server opens it, since `create` would number
+/// AGS-2..17 on the way to AGS-18. `find {query}` yields `summary` items
+/// and closes with one `page`; `"ags-1"` is AGS-1 then AGS-18, `"ticket
+/// page"` is MFE-7, `"zzz"` is no rows and `page { next: null, remaining:
+/// 0 }`; `limit: 2` then `after = next` visits every match once; an
+/// `after` naming no ticket is one error and done.
+#[tokio::test]
+async fn find_over_the_wire() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
+    let db = dir.path().join("tickets.db");
+    // The schema as the server writes it; then the three rows by hand.
+    drop(menger::store::Store::open(&db).expect("create the schema"));
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    for (id, epic, seq, title) in [
+        ("AGS-1", "AGS", 1, "Keyboard navigation"),
+        ("AGS-18", "AGS", 18, "The jump palette"),
+        ("MFE-7", "MFE", 7, "The Ticket Page"),
+    ] {
+        conn.execute(
+            "INSERT INTO tickets (id, epic, seq, title, status, kind, blocked_by, unlocks, body, created_unix, updated_unix)
+             VALUES (?1, ?2, ?3, ?4, 'Pending', 'scope', '[]', '[]', 'bodies are not searched', 0, 0)",
+            rusqlite::params![id, epic, seq, title],
+        )
+        .unwrap();
+    }
+    drop(conn);
+    let port = start_server_at(db, Some(dir)).await;
+    let client = connect(port).await;
+
+    let found = |evs: &[Value]| -> Vec<String> {
+        evs.iter()
+            .map(|e| {
+                assert_eq!(e["type"], "summary", "find yields summary rows: {e}");
+                assert!(e["summary"].get("body").is_none(), "no body: {e}");
+                e["summary"]["id"].as_str().unwrap().to_string()
+            })
+            .collect()
+    };
+
+    let (evs, page) = paged(call(&client, "tickets.find", json!({"query": "ags-1"})).await).await;
+    assert_eq!(found(&evs), ["AGS-1", "AGS-18"]);
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
+
+    let (evs, _) = paged(call(&client, "tickets.find", json!({"query": "ticket page"})).await).await;
+    assert_eq!(found(&evs), ["MFE-7"]);
+
+    let (evs, page) = paged(call(&client, "tickets.find", json!({"query": "zzz"})).await).await;
+    assert!(evs.is_empty(), "{evs:?}");
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
+
+    // Acceptance 3: two at a time, every match once — here, the blank
+    // query's every ticket, and a title query's two.
+    for (query, all) in [(" ", vec!["AGS-1", "AGS-18", "MFE-7"]), ("THE", vec!["AGS-18", "MFE-7"])] {
+        let mut walked: Vec<String> = Vec::new();
+        let mut after = json!(null);
+        loop {
+            let (evs, page) = paged(call(&client, "tickets.find",
+                json!({"query": query, "limit": 2, "after": after})).await).await;
+            walked.extend(found(&evs));
+            assert_eq!(page["remaining"], (all.len() - walked.len()) as u64, "{query:?}");
+            if page["next"].is_null() {
+                break;
+            }
+            after = page["next"].clone();
+        }
+        assert_eq!(walked, all, "{query:?}");
+    }
+
+    let evs = collect(call(&client, "tickets.find", json!({"query": "ags", "after": "ZZZ-9"})).await).await;
+    assert_eq!(evs, [json!({"type": "error", "message": "after: no ticket ZZZ-9"})]);
+}
+
 /// MNG-10 acceptance 1 and 2 over the real wire. `groups {}` answers one
 /// `group` item per shortcode row and then the stream's own `done` — no
 /// page, nothing else — with exactly the numbers AGS-20's nav `plan()`

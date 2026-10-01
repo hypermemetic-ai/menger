@@ -80,6 +80,12 @@ fn page_events(
     })))
 }
 
+/// SCALE-6: how many rows `find` answers when no `limit` is asked for —
+/// the 50 the jump palette shows (AGS-18), so a keystroke's answer is a
+/// page, not the store.
+#[cfg(feature = "server")]
+const FIND_LIMIT: u32 = 50;
+
 #[cfg(feature = "server")]
 fn change_event(change: Change) -> TicketsEvent {
     match change {
@@ -346,6 +352,41 @@ impl Tickets {
         stream! {
             let page = store.ready_page(epic.as_deref(), after.as_deref(), limit);
             for ev in page_events(page, summary) {
+                yield ev;
+            }
+        }
+    }
+
+    /// SCALE-6: the jump palette's question, answered where the rows are
+    /// — so a client that does not hold every row (SCALE-7) can still
+    /// find one. Yields one `summary` row per ticket whose id or title
+    /// contains `query`, case-insensitively with ASCII folding (AGS-18's
+    /// rule, the palette's own), in (epic, seq) order — at most `limit`,
+    /// default 50, what the palette shows — then exactly one `page`
+    /// event: `remaining` plus the rows is the palette's total. `query`
+    /// is trimmed; empty or blank matches every ticket, so the palette
+    /// opens on the head of the store. `after` pages it exactly as
+    /// `list` (MNG-9) — a position, not a match — and one naming no
+    /// ticket is one in-band `error`. Ids and titles only: a jump aid,
+    /// not search over bodies.
+    #[plexus_macros::method(
+        description = "Find tickets whose id or title contains the query (case-insensitive); summary rows, paged with after + limit",
+        params(
+            query = "Substring of the ticket id or title, case-insensitive (ASCII), trimmed; empty matches every ticket",
+            after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
+            limit = "At most this many tickets (default 50); the page event carries the next cursor (optional)"
+        )
+    )]
+    pub async fn find(
+        &self,
+        query: String,
+        after: Option<String>,
+        limit: Option<u32>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            let page = store.find_page(&query, after.as_deref(), Some(limit.unwrap_or(FIND_LIMIT)));
+            for ev in page_events(page, Some(true)) {
                 yield ev;
             }
         }
@@ -1071,6 +1112,49 @@ mod tests {
             ids_and_page(hub.ready_set(None, Some("RS-2".into()), Some(2), Some(true)).await).await;
         assert_eq!(ids, vec!["RS-3"]);
         assert_eq!(page, Some((None, 0)));
+    }
+
+    /// SCALE-6: `find` yields `summary` rows — never full tickets — then
+    /// one `page`; with no `limit` it answers the palette's 50, and
+    /// `remaining` is the rest of the matches. The query is trimmed and
+    /// case-folded; `after` is `list`'s cursor (a position: FND-3 does not
+    /// match "ticket page"), and one naming no ticket is the one in-band
+    /// error.
+    #[tokio::test]
+    async fn find_yields_summary_rows_then_one_page_fifty_by_default() {
+        let hub = hub();
+        for i in 1..=60 {
+            let kind = (i == 1).then(|| "scope".to_string()); // MNG-12: the root first
+            one(hub.create("FND".into(), format!("row {i}"), kind, None, None, Some("a body".into()), None).await).await;
+        }
+        one(hub.create("OTH".into(), "The Ticket Page".into(), Some("scope".into()), None, None, None, None).await).await;
+
+        let evs: Vec<TicketsEvent> = Box::pin(hub.find("".into(), None, None).await).collect().await;
+        assert_eq!(evs.len(), 51, "50 rows and the page");
+        let row = serde_json::to_value(&evs[0]).unwrap();
+        assert_eq!((row["type"].as_str(), row["summary"]["id"].as_str()), (Some("summary"), Some("FND-1")));
+        assert!(row["summary"].get("body").is_none(), "a summary carries no body: {row}");
+        let (ids, page) = ids_and_page(hub.find("".into(), None, None).await).await;
+        assert_eq!(ids.len(), 50, "the palette's 50 when no limit is asked");
+        assert_eq!(page, Some((Some("FND-50".into()), 11)));
+
+        let (ids, page) = ids_and_page(hub.find("  fnd-5 ".into(), None, None).await).await;
+        let expected: Vec<String> =
+            std::iter::once(5).chain(50..=59).map(|n| format!("FND-{n}")).collect();
+        assert_eq!(ids, expected, "trimmed, case-folded, in (epic, seq) order");
+        assert_eq!(page, Some((None, 0)));
+
+        let (ids, page) =
+            ids_and_page(hub.find("ticket page".into(), Some("fnd-3".into()), Some(1)).await).await;
+        assert_eq!((ids, page), (vec!["OTH-1".to_string()], Some((None, 0))));
+
+        let evs: Vec<TicketsEvent> = Box::pin(hub.find("row".into(), Some("ZZZ-9".into()), None).await)
+            .collect()
+            .await;
+        match evs.as_slice() {
+            [TicketsEvent::Error { message }] => assert_eq!(message, "after: no ticket ZZZ-9"),
+            other => panic!("one in-band error and nothing else, got {other:?}"),
+        }
     }
 
     #[tokio::test]

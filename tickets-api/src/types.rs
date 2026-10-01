@@ -327,9 +327,9 @@ pub enum TicketsEvent {
     Ticket { ticket: Ticket },
     /// MNG-9: one ticket row without its body — what `list` and
     /// `ready_set` yield per row instead of `ticket` when the call asked
-    /// for `summary`.
+    /// for `summary`, and what `find` always yields (SCALE-6).
     Summary { summary: TicketSummary },
-    /// MNG-9: where a `list` / `ready_set` walk stands, yielded once as
+    /// MNG-9: where a `list` / `ready_set` / `find` walk stands, yielded once as
     /// the last data event of the call. `next` is the cursor to pass as
     /// the next call's `after` — `null` when nothing more matches, which
     /// is how a client knows the walk is over — and `remaining` counts

@@ -177,6 +177,7 @@ ticket is logged and left empty, never fatal.
 | `tickets.get { id }` | `ticket` or `not_found` |
 | `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page — `after` naming no ticket is one in-band `error` |
 | `tickets.ready_set { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete or Superseded), ordered (epic, seq), then one `page { next, remaining }` |
+| `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
 | `tickets.set_status { id, status }` | `status_changed { ticket, previous }` |
 | `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's `parent`, the new parent's `children` and the old parent's `children` (if any) move in one transaction; the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, root, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only), `root` is the lowest-seq `scope`, `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
@@ -235,6 +236,9 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
     synthetic.rs       the --seed-synthetic generator (PERF-2)
     tests.rs           the store's unit tests
     tests_paging.rs    page.remaining against a count, on every shape (SCALE-19)
+    tests_find.rs      find's rule against the palette's own tests and code
+                       (read from frontend/src/keys.rs), its pages against
+                       MNG-9's (SCALE-6)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell

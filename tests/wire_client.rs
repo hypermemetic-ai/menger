@@ -251,6 +251,24 @@ async fn the_wire_assertions_through_the_generated_client() {
     );
     assert_eq!(ids(listed), vec!["WIRE-1".to_string()]);
 
+    // -- find (SCALE-6) -----------------------------------------------------
+    // The generated client's `find`: typed `summary` rows, then the page.
+    let found = client
+        .find_all(" OVER the ".into(), None, None)
+        .await
+        .expect("find");
+    match found.as_slice() {
+        [TicketsEvent::Summary { summary }, TicketsEvent::Page { next: None, remaining: 0 }] => {
+            assert_eq!(summary.id, "WIRE-1");
+            assert_eq!(summary.title, "first over the wire");
+        }
+        other => panic!("expected one `summary` and the page, got {other:?}"),
+    }
+    assert!(
+        rows(client.find_all("zzz".into(), None, Some(2)).await.expect("find")).is_empty(),
+        "nothing matches"
+    );
+
     // -- a dangling blocker -------------------------------------------------
     created(
         client

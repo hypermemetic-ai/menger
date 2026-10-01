@@ -466,6 +466,57 @@ fn satisfied(status: Status) -> bool {
     matches!(status, Status::Complete | Status::Superseded)
 }
 
+/// SCALE-6: what `find` matches with — the jump palette's rule (AGS-18,
+/// `palette_match` in `frontend/src/keys.rs`), moved to where the rows
+/// are. A ticket matches when the query, trimmed, is a substring of its id
+/// or of its title, ASCII case folded. A blank query is no needle at all:
+/// it matches every ticket, and `find` answers it by position, as `list`.
+///
+/// Folding is ASCII only, as the palette's is — ids are ASCII by
+/// construction, and a title's other bytes compare as they are (UTF-8 is
+/// self-synchronizing, so a byte window never matches across a character
+/// boundary). The tests hold this to every case the palette's own tests
+/// name, read from that file.
+struct Needle {
+    /// The trimmed query, ASCII-lowercased once — so a window compares a
+    /// folded byte against a folded byte without folding the query again.
+    folded: Vec<u8>,
+}
+
+impl Needle {
+    /// `None` for an empty or blank query: it matches every ticket.
+    fn of(query: &str) -> Option<Self> {
+        let query = query.trim();
+        (!query.is_empty()).then(|| Self {
+            folded: query.as_bytes().to_ascii_lowercase(),
+        })
+    }
+
+    fn matches(&self, t: &Ticket) -> bool {
+        self.within(&t.id) || self.within(&t.title)
+    }
+
+    /// The palette's `h.windows(n).any(|w| w.eq_ignore_ascii_case(n))`,
+    /// with the needle folded once and a window looked at only where its
+    /// first byte already matches — what keeps a query that matches
+    /// nothing (the whole store tested, for an exact `remaining`) inside a
+    /// keystroke's budget.
+    fn within(&self, haystack: &str) -> bool {
+        let (h, n) = (haystack.as_bytes(), self.folded.as_slice());
+        if n.len() > h.len() {
+            return false;
+        }
+        let (first, rest) = (n[0], &n[1..]);
+        (0..=h.len() - n.len()).any(|i| {
+            h[i].to_ascii_lowercase() == first
+                && h[i + 1..i + n.len()]
+                    .iter()
+                    .zip(rest)
+                    .all(|(b, q)| b.to_ascii_lowercase() == *q)
+        })
+    }
+}
+
 /// The cache, under one lock (MNG-9). The tickets live in `order` — the
 /// sorted `(epic, seq)` map — and `at` says where an id sits in it, so:
 ///
@@ -1051,7 +1102,37 @@ impl Store {
         Ok(Self::walk_cache(&cache, span, limit, Filter::By(&keep)))
     }
 
-    /// The one walk both page methods run: the span, `limit` matches
+    /// SCALE-6: one page of the tickets whose id or title contains
+    /// `query` — the jump palette's rule ([`Needle`]) — cut with the same
+    /// cursor and limit as [`Store::page`] (MNG-9: `after` is exclusive and
+    /// a position, so it may name a ticket that does not match; one naming
+    /// no ticket is [`StoreError::CursorNotFound`]), `remaining` counting
+    /// the matches beyond the page.
+    ///
+    /// An empty or blank query is the store's order unfiltered — the page
+    /// the palette opens on costs the page, `remaining` by arithmetic
+    /// (SCALE-19). Any other query tests the tickets after the cursor: the
+    /// rows stop at `limit`, the count does not, so an exact `remaining` is
+    /// a scan of every id and title past the page — the price the ticket's
+    /// Risks section accepts while the cache is a full mirror (an index is
+    /// SCALE-13's B5).
+    pub fn find_page(
+        &self,
+        query: &str,
+        after: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Page, StoreError> {
+        let after = after.map(str::to_ascii_uppercase);
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let span = Span::of(&cache, after.as_deref(), None)?;
+        let Some(needle) = Needle::of(query) else {
+            return Ok(Self::walk_cache(&cache, span, limit, Filter::All));
+        };
+        let keep = |t: &Ticket| needle.matches(t);
+        Ok(Self::walk_cache(&cache, span, limit, Filter::By(&keep)))
+    }
+
+    /// The one walk every page method runs: the span, `limit` matches
     /// cloned into the page, then the rest of the span counted — because
     /// `remaining` is an exact number, not an estimate. That count is the
     /// O(what is left) the ticket's Risks section names and accepts;
@@ -1438,3 +1519,8 @@ mod tests;
 /// count, page for page, against MNG-9's rule applied to a plain list.
 #[cfg(test)]
 mod tests_paging;
+
+/// SCALE-6: `find` — the server's rule held to the palette's own tests and
+/// code, and its pages to MNG-9's rules.
+#[cfg(test)]
+mod tests_find;
