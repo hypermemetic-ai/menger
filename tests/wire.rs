@@ -707,6 +707,76 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     assert_eq!(ev["group"], json!({"epic": "HUB", "total": 8, "done": 4, "root": "HUB-1", "host": null}));
 }
 
+/// SCALE-16 over the real wire. `extents {}` answers one `extent` item per
+/// shortcode that holds a ticket — flat `{ epic, last_seq }` — in
+/// shortcode order, and then the stream's own `done`: no page, nothing
+/// else. The `last_seq`s add up to `health`'s count; a refused create
+/// moves nothing; and they are not the roll-ups — HUB's group counts the
+/// sub-shortcode nested under it, its extent only its own tickets.
+/// Acceptance 2: for every shortcode E and row k, `list { epic: E, after:
+/// "E-k", limit: 1 }` yields `E-(k+1)` — a position becomes a cursor.
+#[tokio::test]
+async fn extents_are_each_shortcodes_last_seq_and_a_row_is_a_cursor() {
+    let port = start_server().await;
+    let client = connect(port).await;
+
+    for params in [
+        json!({"epic": "HUB", "title": "the host", "kind": "scope"}),
+        json!({"epic": "HUB", "title": "a"}),
+        json!({"epic": "SUB", "title": "hosted", "kind": "scope", "parent": "HUB-2"}),
+        json!({"epic": "SUB", "title": "b"}),
+        json!({"epic": "SUB", "title": "c"}),
+        json!({"epic": "HUB", "title": "d"}),
+        json!({"epic": "AAA", "title": "first by name", "kind": "scope"}),
+    ] {
+        let evs = collect(call(&client, "tickets.create", params).await).await;
+        assert_eq!(evs[0]["type"], "created", "{evs:?}");
+    }
+    // Refused (a build cannot open a shortcode): nothing allocated.
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "NEW", "title": "x"})).await).await;
+    assert_eq!(evs[0]["type"], "error", "{evs:?}");
+
+    let items = collect(call(&client, "tickets.extents", json!({})).await).await;
+    assert_eq!(
+        items,
+        vec![
+            json!({"type": "extent", "epic": "AAA", "last_seq": 1}),
+            json!({"type": "extent", "epic": "HUB", "last_seq": 3}),
+            json!({"type": "extent", "epic": "SUB", "last_seq": 3}),
+        ],
+        "one flat extent per shortcode, in order, and nothing after them"
+    );
+    let health = collect(call(&client, "tickets.health", json!({})).await).await;
+    let sum: u64 = items.iter().map(|ev| ev["last_seq"].as_u64().unwrap()).sum();
+    assert_eq!(json!(sum), health[0]["ticket_count"]);
+    let groups = collect(call(&client, "tickets.groups", json!({})).await).await;
+    let hub = groups.iter().find(|ev| ev["group"]["epic"] == "HUB").unwrap();
+    assert_eq!(hub["group"]["total"], 6, "the roll-up nests SUB; the extent does not");
+
+    for ev in &items {
+        let (epic, last) = (ev["epic"].as_str().unwrap(), ev["last_seq"].as_u64().unwrap());
+        for k in 1..=last {
+            let (rows, page) = paged(
+                call(&client, "tickets.list", json!({"epic": epic, "after": format!("{epic}-{k}"), "limit": 1, "summary": true}))
+                    .await,
+            )
+            .await;
+            let got: Vec<&str> = rows.iter().map(|r| r["summary"]["id"].as_str().unwrap()).collect();
+            if k < last {
+                assert_eq!(got, [format!("{epic}-{}", k + 1)], "{epic} after row {k}");
+            } else {
+                assert!(got.is_empty() && page["next"].is_null(), "{epic} ends at row {last}: {got:?} {page}");
+            }
+        }
+    }
+
+    // A birth is its shortcode's new last_seq — `created` already says so.
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "SUB", "title": "e"})).await).await;
+    assert_eq!((evs[0]["ticket"]["epic"].as_str(), evs[0]["ticket"]["seq"].as_u64()), (Some("SUB"), Some(4)));
+    let items = collect(call(&client, "tickets.extents", json!({})).await).await;
+    assert_eq!(items[2], json!({"type": "extent", "epic": "SUB", "last_seq": 4}));
+}
+
 #[tokio::test]
 async fn shell_serves_the_page() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

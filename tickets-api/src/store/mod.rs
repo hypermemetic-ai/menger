@@ -910,6 +910,25 @@ impl Store {
             .groups()
     }
 
+    /// SCALE-16: every shortcode that holds a ticket, with its highest
+    /// sequence, in shortcode order — the per-shortcode sequence `create`
+    /// allocates from (SCALE-3), read as it stands, so the cost is the
+    /// number of shortcodes, never the number of tickets.
+    ///
+    /// Because ids are allocated highest-plus-one and nothing deletes, a
+    /// shortcode's sequences are dense and it holds exactly that many
+    /// tickets. A database edited by hand can hold a hole; the answer is
+    /// still the highest sequence, never a count.
+    pub fn extents(&self) -> Vec<(String, u32)> {
+        self.tickets
+            .read()
+            .expect("store lock poisoned")
+            .ids
+            .last_seqs()
+            .map(|(epic, seq)| (epic.to_string(), seq))
+            .collect()
+    }
+
     pub fn get(&self, id: &str) -> Option<Ticket> {
         self.tickets
             .read()

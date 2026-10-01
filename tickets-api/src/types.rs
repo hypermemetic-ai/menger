@@ -369,6 +369,20 @@ pub enum TicketsEvent {
     /// first. A group whose shortcode no longer draws a row of its own
     /// arrives once with `total: 0`.
     GroupChanged { group: Group },
+    /// SCALE-16: where one shortcode ends in the store's order — its
+    /// highest sequence (yielded per shortcode by `extents`, in shortcode
+    /// order). Ids are allocated highest-plus-one and nothing deletes, so
+    /// the shortcode holds `last_seq` tickets and its row k is `EPIC-k`;
+    /// a database edited by hand may hold a hole, and then this is still
+    /// the highest sequence — a page after the row before the hole starts
+    /// at the next ticket, while `after` naming the missing id itself is
+    /// `list`'s in-band error for a cursor that names no ticket. Not a
+    /// roll-up: unlike `Group::total` it counts only the
+    /// shortcode's own tickets, and every shortcode that holds one has an
+    /// extent whether or not the nav draws it a row. No watch event keeps
+    /// it: `created` carries the newborn's `epic` and `seq`, which is its
+    /// shortcode's new `last_seq`.
+    Extent { epic: String, last_seq: u32 },
     /// One resolved blocker of the queried ticket, at its current status
     /// (yielded per-entry by `blockers`).
     Blocker { ticket: Ticket },

@@ -178,3 +178,69 @@ async fn seed_flag_seeds_logs_persists_and_refuses_existing_unless_allowed() {
     assert_eq!(one(&c4, "tickets.health", json!({})).await["ticket_count"], 310);
     assert!(s4.log().contains("seeded 10 synthetic tickets"), "{}", s4.log());
 }
+
+/// Drains a finite call: every `data` item's content, up to `done`.
+async fn collect(client: &WsClient, method: &str, params: Value) -> Vec<Value> {
+    let mut sub = call(client, method, params).await;
+    let mut out = Vec::new();
+    while let Some(item) = sub.next().await {
+        let item = item.unwrap();
+        match item["type"].as_str() {
+            Some("done") => return out,
+            Some("data") => out.push(item["content"].clone()),
+            other => panic!("unexpected stream item type {other:?}: {item}"),
+        }
+    }
+    panic!("stream ended without a done item");
+}
+
+/// SCALE-16 through the binary, on a seeded store: `extents` names every
+/// shortcode the seed made (the log's epic count), in shortcode order,
+/// and its `last_seq`s sum to `health`'s count — before and after a
+/// restart, which rebuilds the sequences from the file. Acceptance 2 on
+/// seeded data: for sampled rows k of every shortcode E, `list { epic: E,
+/// after: "E-k", limit: 1 }` yields `E-(k+1)`.
+#[tokio::test]
+async fn extents_of_a_seeded_store_sum_to_its_count_and_turn_rows_into_cursors() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    let s = spawn_server(&db, dir.path(), "seed", &["--seed-synthetic", "3000"], &[], free_port().await);
+    let c = connect(s.port).await;
+    let count = one(&c, "tickets.health", json!({})).await["ticket_count"].as_u64().unwrap();
+    assert_eq!(count, 3000);
+    let log = s.log();
+    let epics: usize = log
+        .split(" epics, ")
+        .next()
+        .and_then(|head| head.rsplit(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("the seed logs its epic count:\n{log}"));
+
+    let extents = collect(&c, "tickets.extents", json!({})).await;
+    assert_eq!(extents.len(), epics, "one per shortcode");
+    assert!(extents.iter().all(|ev| ev["type"] == "extent"), "{extents:?}");
+    let named: Vec<&str> = extents.iter().map(|ev| ev["epic"].as_str().unwrap()).collect();
+    assert!(named.windows(2).all(|w| w[0] < w[1]), "shortcode order: {named:?}");
+    let sum: u64 = extents.iter().map(|ev| ev["last_seq"].as_u64().unwrap()).sum();
+    assert_eq!(sum, count);
+
+    for ev in &extents {
+        let (epic, last) = (ev["epic"].as_str().unwrap(), ev["last_seq"].as_u64().unwrap());
+        for k in [1, last / 2, last - 1].into_iter().filter(|k| (1..last).contains(k)) {
+            let rows = collect(
+                &c,
+                "tickets.list",
+                json!({"epic": epic, "after": format!("{epic}-{k}"), "limit": 1, "summary": true}),
+            )
+            .await;
+            assert_eq!(rows[0]["summary"]["id"], format!("{epic}-{}", k + 1), "{epic} after row {k}");
+            assert_eq!(rows[1]["type"], "page");
+        }
+    }
+    drop(c);
+    drop(s);
+
+    let s = spawn_server(&db, dir.path(), "reload", &[], &[], free_port().await);
+    let c = connect(s.port).await;
+    assert_eq!(collect(&c, "tickets.extents", json!({})).await, extents, "rebuilt from the file");
+}

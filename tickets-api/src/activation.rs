@@ -371,6 +371,29 @@ impl Tickets {
         }
     }
 
+    /// SCALE-16: where each shortcode ends in the store's order. Yields
+    /// one `Extent` per shortcode that holds a ticket, in shortcode order
+    /// — its highest sequence, read from the per-shortcode sequence
+    /// `create` allocates from (SCALE-3), so the cost is the number of
+    /// shortcodes. Sequences are dense, so with these a client turns a
+    /// position in the store's order into a cursor without walking to it:
+    /// prefix sums find the shortcode E and the row k, and `list { after:
+    /// "E-k" }` starts at row k + 1. Nothing trails the extents — there is
+    /// no cursor to hand back — so the stream's own `done` is the whole
+    /// answer, as for `groups` and `blockers`. No watch event keeps them:
+    /// `created` already carries the newborn's `epic` and `seq`.
+    #[plexus_macros::method(
+        description = "Each shortcode's last sequence, in shortcode order — where each shortcode ends in the store's order"
+    )]
+    pub async fn extents(&self) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            for (epic, last_seq) in store.extents() {
+                yield TicketsEvent::Extent { epic, last_seq };
+            }
+        }
+    }
+
     /// "Why can't this start?" in one call. Yields, in `blocked_by`
     /// order, one `Blocker` event per blocker that exists (the full
     /// ticket, at its current status) and one `DanglingBlocker` event per
@@ -615,6 +638,42 @@ mod tests {
             }
             other => panic!("the SUB ticket's status_changed is filtered out; got {other:?}"),
         }
+    }
+
+    /// SCALE-16: `extents` yields one `Extent` per shortcode that holds a
+    /// ticket and nothing else — no trailing page — in shortcode order;
+    /// a refused create moves nothing, and the `last_seq`s add up to
+    /// `health`'s count.
+    #[tokio::test]
+    async fn extents_yields_each_shortcodes_last_seq_in_shortcode_order() {
+        let hub = hub();
+        for (epic, kind) in [("ZED", "scope"), ("AB", "scope"), ("ZED", "build"), ("B", "scope"), ("ZED", "gap")] {
+            one(hub.create(epic.into(), "t".into(), Some(kind.into()), None, None, None, None).await).await;
+        }
+        // Refused: AB-2 would be its own blocker. Nothing is allocated.
+        let refused = one(hub.create("AB".into(), "t".into(), None, None, Some(vec!["AB-2".into()]), None, None).await).await;
+        assert!(matches!(refused, TicketsEvent::Error { .. }), "{refused:?}");
+
+        let evs: Vec<TicketsEvent> = Box::pin(hub.extents().await).collect().await;
+        let extents: Vec<(String, u32)> = evs
+            .into_iter()
+            .map(|ev| match ev {
+                TicketsEvent::Extent { epic, last_seq } => (epic, last_seq),
+                other => panic!("extents yields only `extent` events, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            extents,
+            [("AB".to_string(), 1), ("B".to_string(), 1), ("ZED".to_string(), 3)],
+            "byte order on the epic: AB before B"
+        );
+        let total: u64 = extents.iter().map(|(_, n)| u64::from(*n)).sum();
+        match one(hub.health().await).await {
+            TicketsEvent::Health { ticket_count, .. } => assert_eq!(ticket_count, total),
+            other => panic!("expected Health, got {other:?}"),
+        }
+        let wire = serde_json::to_value(TicketsEvent::Extent { epic: "AB".into(), last_seq: 1 }).unwrap();
+        assert_eq!(wire, serde_json::json!({"type": "extent", "epic": "AB", "last_seq": 1}));
     }
 
     /// Ids of a `list` / `ready_set` stream, in order — asserting the

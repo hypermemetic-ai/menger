@@ -2341,3 +2341,63 @@ async fn the_default_parent_is_the_lowest_seq_scope_in_a_legacy_prefix_too() {
     assert!(store.set_parent("DEMO-4", "NOSC-4").await.is_err());
     store.set_parent("DEMO-3", "NOSC-4").await.unwrap();
 }
+
+// ---- SCALE-16: extents -----------------------------------------------
+
+/// `extents` is the kept sequence as it stands: on a 10⁴ seed, one per
+/// shortcode in shortcode order, summing to the count, and row k of every
+/// shortcode is `EPIC-k` — so `after: EPIC-k` pages from row k + 1. On a
+/// database edited by hand to leave a hole it is still the highest
+/// sequence, not a count; and a prefix the nav draws no row for (its
+/// tickets all filed under another shortcode's) still has its extent.
+#[tokio::test]
+async fn extents_are_each_shortcodes_highest_sequence_in_order() {
+    let store = Store::new();
+    let report = store.seed_synthetic(spec(10_000, 42)).unwrap();
+    let extents = store.extents();
+    assert_eq!(extents.len(), report.epics);
+    assert!(extents.windows(2).all(|w| w[0].0 < w[1].0), "shortcode order");
+    assert_eq!(extents.iter().map(|(_, n)| *n as usize).sum::<usize>(), store.count());
+    assert_eq!(extents, kept(&store).0.into_iter().collect::<Vec<_>>());
+    for (epic, last) in &extents {
+        for k in [1, last / 2, *last] {
+            let page = store
+                .page(PageQuery {
+                    epic: Some(epic),
+                    after: Some(&format!("{epic}-{k}")),
+                    limit: Some(1),
+                    ..PageQuery::default()
+                })
+                .unwrap();
+            let want = (k < *last).then(|| format!("{epic}-{}", k + 1));
+            assert_eq!(page.tickets.first().map(|t| t.id.clone()), want, "{epic} after row {k}");
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("holes.db");
+    write_blocked_db(
+        &path,
+        &[("GAP-1", Kind::Scope, &[]), ("GAP-3", Kind::Build, &[])],
+    );
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.extents(), [("GAP".to_string(), 3)], "the highest, with a hole below it");
+    let after = |cursor: &str| {
+        store.page(PageQuery {
+            epic: Some("GAP"),
+            after: Some(cursor),
+            limit: Some(1),
+            ..PageQuery::default()
+        })
+    };
+    assert_eq!(ids(&after("GAP-1").unwrap()), ["GAP-3"], "after the row before the hole: the next ticket");
+    assert!(matches!(after("GAP-2"), Err(StoreError::CursorNotFound(_))), "the hole itself is no cursor");
+
+    let path = dir.path().join("legacy.db");
+    write_db(&path, &legacy());
+    let store = Store::open(&path).unwrap();
+    assert!(!store.groups().iter().any(|g| g.epic == "XPC"), "no row for XPC");
+    let extents = store.extents();
+    assert!(extents.contains(&("XPC".to_string(), 2)), "but an extent: {extents:?}");
+    assert_eq!(extents.len(), store.list(None, None, None).iter().map(|t| &t.epic).collect::<HashSet<_>>().len());
+}

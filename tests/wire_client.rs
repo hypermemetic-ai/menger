@@ -467,6 +467,30 @@ async fn the_wire_assertions_through_the_generated_client() {
         "the roll-ups are watch-derivable too"
     );
 
+    // -- extents (SCALE-16) -------------------------------------------------
+    // The generated client's `extents`: each shortcode's last sequence,
+    // typed, in shortcode order — the same numbers the watch mirror holds.
+    let extents: Vec<(String, u32)> = client
+        .extents_all()
+        .await
+        .expect("extents")
+        .into_iter()
+        .map(|event| match event {
+            TicketsEvent::Extent { epic, last_seq } => (epic, last_seq),
+            other => panic!("extents yields only `extent`, got {other:?}"),
+        })
+        .collect();
+    let mut from_mirror: BTreeMap<String, u32> = BTreeMap::new();
+    for t in mirror.values() {
+        let last = from_mirror.entry(t.epic.clone()).or_default();
+        *last = (*last).max(t.seq);
+    }
+    assert_eq!(
+        extents,
+        [("DG".to_string(), 1), ("PA".to_string(), 3), ("RS".to_string(), 2), ("WIRE".to_string(), 1)]
+    );
+    assert_eq!(extents, from_mirror.into_iter().collect::<Vec<_>>(), "watch-derivable from `created`");
+
     // -- unsubscribe --------------------------------------------------------
     // Dropping the stream sends `menger.call_unsub`; the connection survives
     // it and keeps serving.
