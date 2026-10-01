@@ -36,7 +36,7 @@ use tokio::sync::Mutex as AsyncMutex;
 /// hand-written mirror of the JSON they arrive as. Re-exported here
 /// unchanged — every `crate::store::Status` in the server still resolves,
 /// and the store remains the only thing that *writes* them.
-pub use crate::types::{Kind, Severity, Status, Ticket};
+pub use crate::types::{Group, Kind, Severity, Status, Ticket};
 
 /// MNG-9: the store's total order over tickets — `(epic, seq)`, which the
 /// schema keeps unique (`UNIQUE (epic, seq)`). Every list has been in this
@@ -193,17 +193,28 @@ pub enum Change {
     /// child was re-parented elsewhere. The full updated ex-parent rides
     /// along, as with `ChildrenChanged`.
     ChildRemoved { ticket: Ticket, removed: String },
+    /// MNG-10: a shortcode's roll-up moved. Broadcast after the ticket
+    /// changes of the same mutation — the counts are derived from them, so
+    /// a client applying events in order meets the cause before the
+    /// effect — one per group whose row changed, innermost first.
+    GroupChanged { group: Group },
 }
 
 impl Change {
-    pub fn ticket(&self) -> &Ticket {
+    /// The shortcode a change belongs to — what `watch { epic }` filters
+    /// on. A ticket change belongs to its ticket's epic; a roll-up change
+    /// to the group's own shortcode (MNG-10), so a watcher of `PLEXUS`
+    /// hears PLEXUS's count move when a sub-shortcode's ticket completes,
+    /// without hearing the ticket itself.
+    pub fn epic(&self) -> &str {
         match self {
             Self::Created { ticket }
             | Self::StatusChanged { ticket, .. }
             | Self::UnlocksChanged { ticket, .. }
             | Self::ChildrenChanged { ticket, .. }
             | Self::ParentChanged { ticket, .. }
-            | Self::ChildRemoved { ticket, .. } => ticket,
+            | Self::ChildRemoved { ticket, .. } => &ticket.epic,
+            Self::GroupChanged { group } => &group.epic,
         }
     }
 }
@@ -421,10 +432,36 @@ fn satisfied(status: Status) -> bool {
 ///   lookup and a 17-deep descent at 100,000 tickets, both flat in N.
 ///
 /// One lock over both halves is the point: a reader can never see the two
-/// disagree.
+/// disagree. MNG-10 adds a third half, [`rollup::Rollups`] — the per-
+/// shortcode roll-ups `groups` answers from — under the same lock for the
+/// same reason: every write that changes a count changes it in the same
+/// critical section as the tickets it counts.
 struct Cache {
     order: BTreeMap<OrderKey, Ticket>,
     at: HashMap<String, OrderKey>,
+    rollups: rollup::Rollups,
+}
+
+/// MNG-10: the tickets half of the cache, borrowed on its own — what the
+/// roll-ups walk while they update their own half under the same lock.
+#[derive(Clone, Copy)]
+struct Rows<'a> {
+    order: &'a BTreeMap<OrderKey, Ticket>,
+    at: &'a HashMap<String, OrderKey>,
+}
+
+impl<'a> Rows<'a> {
+    fn get(&self, id: &str) -> Option<&'a Ticket> {
+        self.order.get(self.at.get(id)?)
+    }
+
+    fn len(&self) -> usize {
+        self.at.len()
+    }
+
+    fn tickets(&self) -> impl Iterator<Item = &'a Ticket> {
+        self.order.values()
+    }
 }
 
 impl Cache {
@@ -433,7 +470,9 @@ impl Cache {
     /// and bulk-builds the tree instead of rebalancing n times. Holding
     /// the cache in the store's order costs this once per start — 350 ms
     /// to ~545 ms at 100,000 tickets, measured — and every ordered read
-    /// after it is a walk of what is already sorted.
+    /// after it is a walk of what is already sorted. The roll-ups are
+    /// built here once, from the sorted tickets (MNG-10), and from then on
+    /// only kept.
     fn new(loaded: HashMap<String, Ticket>) -> Self {
         let order: BTreeMap<OrderKey, Ticket> = loaded
             .into_values()
@@ -443,17 +482,96 @@ impl Cache {
             .values()
             .map(|t| (t.id.clone(), OrderKey::of(t)))
             .collect();
-        Self { order, at }
+        let started = std::time::Instant::now();
+        let rollups = rollup::Rollups::build(Rows {
+            order: &order,
+            at: &at,
+        });
+        tracing::info!(
+            "rolled up {} shortcodes over {} tickets in {:.1} ms",
+            rollups.len(),
+            order.len(),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        Self { order, at, rollups }
+    }
+
+    fn rows(&self) -> Rows<'_> {
+        Rows {
+            order: &self.order,
+            at: &self.at,
+        }
     }
 
     /// Inserts or replaces one ticket. A ticket's `(epic, seq)` is fixed
     /// at birth — no operation re-epics or re-numbers one — so replacing
     /// an existing ticket rewrites the same entry, and the two halves
-    /// cannot drift apart.
+    /// cannot drift apart. Rows only: the roll-ups move through the
+    /// mutation-shaped methods below, which call this.
     fn insert(&mut self, ticket: Ticket) {
         let key = OrderKey::of(&ticket);
         self.at.insert(ticket.id.clone(), key.clone());
         self.order.insert(key, ticket);
+    }
+
+    /// MNG-10: a create's rows — the newborn and every ticket it touched —
+    /// go in, then the newborn is counted. Returns the groups whose row
+    /// moved, innermost first.
+    fn created(&mut self, ticket: Ticket, touched: impl IntoIterator<Item = Ticket>) -> Vec<Group> {
+        for updated in touched {
+            self.insert(updated);
+        }
+        let id = ticket.id.clone();
+        self.insert(ticket);
+        let rows = Rows {
+            order: &self.order,
+            at: &self.at,
+        };
+        let ticket = rows.get(&id).expect("just inserted");
+        self.rollups.created(rows, ticket)
+    }
+
+    /// MNG-10: a status change; only a crossing of `Complete` moves a count.
+    fn status_changed(&mut self, ticket: Ticket, previous: Status) -> Vec<Group> {
+        let id = ticket.id.clone();
+        self.insert(ticket);
+        let rows = Rows {
+            order: &self.order,
+            at: &self.at,
+        };
+        let ticket = rows.get(&id).expect("just inserted");
+        self.rollups.status_changed(rows, ticket, previous)
+    }
+
+    /// MNG-10: a `set_parent`. The moved tree's count is taken from where
+    /// it is counted *before* the rows change (that is where the old
+    /// parent still is) and given to where it will be; the rows go in;
+    /// then the shape is settled against the new rows.
+    fn reparented(
+        &mut self,
+        child: Ticket,
+        new_parent: Ticket,
+        old_parent: Option<Ticket>,
+    ) -> Vec<Group> {
+        let rows = Rows {
+            order: &self.order,
+            at: &self.at,
+        };
+        let moving = self.rollups.reparenting(
+            rows,
+            rows.get(&child.id).expect("the child exists"),
+            &new_parent,
+        );
+        self.insert(child);
+        self.insert(new_parent);
+        if let Some(old) = old_parent {
+            self.insert(old);
+        }
+        let rows = Rows {
+            order: &self.order,
+            at: &self.at,
+        };
+        self.rollups.reparented(rows, moving)
     }
 
     fn get(&self, id: &str) -> Option<&Ticket> {
@@ -715,13 +833,11 @@ impl Store {
         batch.push(ticket.clone());
         self.persist(batch).await?;
 
-        {
-            let mut tickets = self.tickets.write().expect("store lock poisoned");
-            for updated in touched.values() {
-                tickets.insert(updated.clone());
-            }
-            tickets.insert(ticket.clone());
-        }
+        let groups = self
+            .tickets
+            .write()
+            .expect("store lock poisoned")
+            .created(ticket.clone(), touched.values().cloned());
         let _ = self.tx.send(Change::Created {
             ticket: ticket.clone(),
         });
@@ -737,7 +853,36 @@ impl Store {
                 added: ticket.id.clone(),
             });
         }
+        self.broadcast_groups(groups);
         Ok(ticket)
+    }
+
+    /// MNG-10: the roll-up half of a mutation's broadcast, sent last — after
+    /// every ticket change of the same mutation, so the established order
+    /// (`Created` first, …) is untouched and a client meets the cause
+    /// before the count it moved.
+    fn broadcast_groups(&self, groups: Vec<Group>) {
+        for group in groups {
+            let _ = self.tx.send(Change::GroupChanged { group });
+        }
+    }
+
+    /// MNG-10: one roll-up per shortcode row the nav draws, in shortcode
+    /// order — `total`, `done`, `root` and `host` exactly as AGS-20's
+    /// `plan()` computes them from every row. Answered from the roll-ups
+    /// the cache keeps beside the tickets, so the cost is the number of
+    /// shortcodes, never the number of tickets.
+    ///
+    /// A prefix whose tickets are all drawn under other shortcodes' tickets
+    /// (only a legacy, pre-MNG-14 shape: a cross-shortcode child with no
+    /// scope root of its own) has no row in the nav and so no group here;
+    /// those tickets count in the groups they are drawn in.
+    pub fn groups(&self) -> Vec<Group> {
+        self.tickets
+            .read()
+            .expect("store lock poisoned")
+            .rollups
+            .groups()
     }
 
     pub fn get(&self, id: &str) -> Option<Ticket> {
@@ -860,7 +1005,11 @@ impl Store {
     }
 
     /// Changes the status, write-through: durable in the database before
-    /// the cache is updated and subscribers are notified.
+    /// the cache is updated and subscribers are notified. A change into or
+    /// out of `Complete` moves `done` for the group the ticket is drawn in
+    /// and every group around it (MNG-10): `StatusChanged`, then one
+    /// `GroupChanged` per group, innermost first. Any other change moves
+    /// no count and broadcasts no group.
     pub async fn set_status(&self, id: &str, status: Status) -> Result<Change, StoreError> {
         let _serial = self.write_serial.lock().await;
         let mut ticket = self
@@ -871,12 +1020,14 @@ impl Store {
         ticket.updated_unix = chrono::Utc::now().timestamp();
 
         self.persist(vec![ticket.clone()]).await?;
-        self.tickets
+        let groups = self
+            .tickets
             .write()
             .expect("store lock poisoned")
-            .insert(ticket.clone());
+            .status_changed(ticket.clone(), previous);
         let change = Change::StatusChanged { ticket, previous };
         let _ = self.tx.send(change.clone());
+        self.broadcast_groups(groups);
         Ok(change)
     }
 
@@ -945,14 +1096,11 @@ impl Store {
         batch.extend(old_parent.iter().cloned());
         self.persist(batch).await?;
 
-        {
-            let mut tickets = self.tickets.write().expect("store lock poisoned");
-            tickets.insert(child.clone());
-            tickets.insert(new_parent.clone());
-            if let Some(old) = &old_parent {
-                tickets.insert(old.clone());
-            }
-        }
+        let groups = self
+            .tickets
+            .write()
+            .expect("store lock poisoned")
+            .reparented(child.clone(), new_parent.clone(), old_parent.clone());
         let change = Change::ParentChanged {
             ticket: child,
             previous,
@@ -968,6 +1116,7 @@ impl Store {
                 removed: id,
             });
         }
+        self.broadcast_groups(groups);
         Ok(change)
     }
 
@@ -1077,6 +1226,11 @@ impl Store {
             for t in generated {
                 tickets.insert(t);
             }
+            // MNG-10: built once over the seeded store, as at load — not
+            // kept per row: a seed into an existing store can add tickets
+            // to its prefixes in any shape, and nothing is broadcast here.
+            let rollups = rollup::Rollups::build(tickets.rows());
+            tickets.rollups = rollups;
         }
         Ok(SeedReport {
             count: spec.count,
@@ -1086,6 +1240,754 @@ impl Store {
             persist,
             elapsed: started.elapsed(),
         })
+    }
+}
+
+/// MNG-10: the per-shortcode roll-ups — AGS-20's nav tree, computed by the
+/// server and *kept*, so `groups` costs the number of shortcodes and never
+/// the number of tickets.
+///
+/// What is counted is exactly what `frontend/src/nav.rs`'s `plan()` draws:
+/// a ticket nests under its parent's row (any shortcode); a ticket with no
+/// parent is a row of its own shortcode's group; in a **sub-shortcode** —
+/// one whose scope root's parent is in another shortcode, its *host* — a
+/// ticket whose parent is that host is a row of the sub-shortcode's group
+/// instead (the *cut*); and a group's `done/total` counts every ticket in
+/// its subtree, nested groups included.
+///
+/// The shape that makes this cheap to keep: a cut is always an edge
+/// *between* shortcodes (the host is in another one), so following
+/// `parent` while it stays inside the shortcode never meets one. Every
+/// ticket therefore belongs to a **tree** — the ancestor where that walk
+/// stops is its *top* — and a whole tree is drawn wherever its top is:
+///
+/// - a top with no parent (or none plan() honours: one that names no
+///   ticket, or a parent cycle) is drawn in its own shortcode's row,
+///   whatever else ever moves. Those trees are pooled per shortcode
+///   (`base`).
+/// - a top whose parent is in another shortcode (a **cross** top: every
+///   sub-shortcode's root, plus any legacy cross-shortcode child) is drawn
+///   in its own row when that parent is the host, and under that parent —
+///   in whatever group holds it — otherwise. Each keeps its own tally.
+///
+/// The shape lives in those few places — one pool per shortcode, one
+/// entry per cross top — and [`Rollups::settle`] re-derives it from them
+/// alone, in plan()'s own order: O(shortcodes + cross tops), never
+/// O(tickets). A status change or a create costs a walk up to its tree's
+/// top plus the chain of groups around it; a `set_parent`, and a create
+/// that starts a sub-shortcode, settle and diff. A `set_parent` that moves
+/// a subtree from one tree to another inside a shortcode walks that
+/// subtree to count it — only possible in a legacy prefix with several
+/// parentless tickets; since MNG-14 a shortcode is one tree.
+///
+/// A database edited by hand can hold what the server never makes — a
+/// parent that names no ticket, a parent cycle. It is loaded and rolled up
+/// as plan() would draw it; the two writes that can *repair* such a thing
+/// (a create of the id a dangling parent names, a `set_parent` of a ticket
+/// on a cycle) rebuild the roll-ups from the cache, with a warning.
+mod rollup {
+    use super::{Group, Kind, Rows, Status, Ticket};
+    use std::collections::{BTreeMap, HashMap, HashSet};
+
+    /// Tickets counted: how many, and how many `Complete` (the nav's
+    /// `done` — `Superseded` is not done).
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    struct Tally {
+        total: u64,
+        done: u64,
+    }
+
+    impl Tally {
+        /// One completion, gained or lost — all a status change moves.
+        const DONE: Self = Self { total: 0, done: 1 };
+
+        fn of(t: &Ticket) -> Self {
+            Self {
+                total: 1,
+                done: u64::from(t.status == Status::Complete),
+            }
+        }
+
+        fn shift(&mut self, by: Tally, gain: bool) {
+            if gain {
+                self.total += by.total;
+                self.done += by.done;
+            } else {
+                self.total -= by.total;
+                self.done -= by.done;
+            }
+        }
+    }
+
+    /// One shortcode's half of the roll-up.
+    #[derive(Debug, Default)]
+    struct Shortcode {
+        /// Its lowest-seq `scope` ticket. Fixed once set: kinds never
+        /// change and every later ticket has a higher seq.
+        root: Option<String>,
+        /// The trees whose top has no parent — drawn in this row whatever
+        /// moves elsewhere.
+        base: Tally,
+        /// How many such tops: 1 in every shortcode made since MNG-14 (its
+        /// root), more only in a legacy prefix with parentless tickets. A
+        /// move of the only one takes `base` whole instead of walking it.
+        base_tops: u64,
+        /// Settled: AGS-20's sub-shortcode host — the ticket this row nests
+        /// under — or `None` for a top-level row.
+        host: Option<String>,
+        /// Settled: the group whose subtree holds `host`, i.e. the row this
+        /// one is drawn inside.
+        up: Option<String>,
+        /// The tickets drawn under this row before any nested group: `base`
+        /// plus the cross trees homed here. Zero means the nav draws no
+        /// row for this shortcode.
+        own: Tally,
+        /// `own` plus every nested group's — the row's `done/total`.
+        roll: Tally,
+    }
+
+    /// A cross top's tree: its tally, and the group it is drawn in.
+    #[derive(Debug)]
+    struct Cross {
+        tally: Tally,
+        home: String,
+    }
+
+    /// Where a tree's tally is kept: a shortcode's pool, or a cross top's
+    /// own entry.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Bucket {
+        Base(String),
+        Cross(String),
+    }
+
+    impl Bucket {
+        fn of(top: &Ticket, exit: Option<&Ticket>) -> Self {
+            match exit {
+                Some(_) => Self::Cross(top.id.clone()),
+                None => Self::Base(top.epic.clone()),
+            }
+        }
+    }
+
+    /// The groups drawn before a reshaping write, with their depth, to
+    /// diff the settled shape against.
+    type Snapshot = BTreeMap<String, (Group, usize)>;
+
+    /// What [`Rollups::reparenting`] decided before the rows changed, for
+    /// [`Rollups::reparented`] to finish once they have.
+    pub(super) struct Reparenting {
+        before: Snapshot,
+        /// Set when the moved ticket was on a hand-edited parent cycle:
+        /// moving it frees the rest of the cycle, so everything is rebuilt.
+        rebuild: Option<String>,
+    }
+
+    pub(super) struct Rollups {
+        /// In shortcode order — plan()'s order, which decides between two
+        /// sub-shortcodes that would nest inside each other.
+        shortcodes: BTreeMap<String, Shortcode>,
+        cross: HashMap<String, Cross>,
+        /// Tickets on a parent cycle (hand-edited only; almost always empty).
+        on_cycle: HashSet<String>,
+        /// Ids named as a parent that name no ticket (hand-edited only).
+        dangling: HashSet<String>,
+    }
+
+    impl Rollups {
+        /// Rolls up every ticket once — at load, and after a seed — in one
+        /// pass in the store's order, then [`Self::settle`].
+        ///
+        /// A ticket's top is its parent's top (or itself), so the work per
+        /// ticket is its parent's: checking the parent's chain for a cycle
+        /// and walking it to its top. Most tickets share their parent with
+        /// the ticket before them — since MNG-14, their shortcode's root —
+        /// so that is done once per run of siblings, not once per ticket,
+        /// and a shortcode's tickets, being contiguous, are pooled into one
+        /// entry as they pass.
+        pub(super) fn build(rows: Rows<'_>) -> Self {
+            let mut r = Self {
+                shortcodes: BTreeMap::new(),
+                cross: HashMap::new(),
+                on_cycle: HashSet::new(),
+                dangling: HashSet::new(),
+            };
+            type Top<'a> = (&'a Ticket, Option<&'a Ticket>);
+            let mut sibling: Option<(&Ticket, Top<'_>)> = None;
+            let mut here: Option<(&str, Shortcode)> = None;
+            for t in rows.tickets() {
+                if here.as_ref().is_none_or(|(epic, _)| *epic != t.epic) {
+                    if let Some((epic, s)) = here.take() {
+                        r.shortcodes.insert(epic.to_string(), s);
+                    }
+                    here = Some((&t.epic, Shortcode::default()));
+                }
+                let parent = match t.parent.as_deref() {
+                    None => None,
+                    Some(p) => match sibling {
+                        Some((last, top)) if last.id == p => Some((last, top)),
+                        _ => match rows.get(p) {
+                            None => {
+                                r.dangling.insert(p.to_string());
+                                None
+                            }
+                            Some(parent) => {
+                                // Any cycle through `t` passes through its
+                                // parent: tracing from there finds it before
+                                // anything is placed by it.
+                                r.trace(rows, parent);
+                                sibling = Some((parent, r.top(rows, parent)));
+                                sibling
+                            }
+                        },
+                    },
+                };
+                // `top`, unrolled by one step around the memo.
+                let (top, exit) = match parent {
+                    Some(_) if r.on_cycle.contains(t.id.as_str()) => (t, None),
+                    Some((p, _)) if p.epic != t.epic => (t, Some(p)),
+                    Some((_, top)) => top,
+                    None => (t, None),
+                };
+                let tally = Tally::of(t);
+                let s = &mut here.as_mut().expect("entered above").1;
+                if exit.is_some() {
+                    match r.cross.get_mut(&top.id) {
+                        Some(c) => c.tally.shift(tally, true),
+                        None => {
+                            r.cross.insert(
+                                top.id.clone(),
+                                Cross {
+                                    tally,
+                                    home: String::new(),
+                                },
+                            );
+                        }
+                    }
+                } else {
+                    // A tree never leaves its shortcode: the top's is t's.
+                    s.base.shift(tally, true);
+                    if top.id == t.id {
+                        s.base_tops += 1;
+                    }
+                }
+                // (epic, seq) order: the first scope met is the lowest-seq.
+                if t.kind == Kind::Scope && s.root.is_none() {
+                    s.root = Some(t.id.clone());
+                }
+            }
+            if let Some((epic, s)) = here {
+                r.shortcodes.insert(epic.to_string(), s);
+            }
+            r.settle(rows);
+            r
+        }
+
+        /// Brent's cycle finding along `from`'s chain of parents: a cycle met
+        /// joins `on_cycle`. `create` and `set_parent` refuse to make one and
+        /// the AGS-19 backfill skips one, so only a database edited by hand
+        /// holds any; plan() draws each member as a root of its shortcode,
+        /// and so do the roll-ups. No allocation, and O(the chain) when — as
+        /// always outside a hand edit — there is no cycle to find.
+        fn trace(&mut self, rows: Rows<'_>, from: &Ticket) {
+            fn up<'a>(rows: Rows<'a>, t: &Ticket) -> Option<&'a Ticket> {
+                t.parent.as_deref().and_then(|p| rows.get(p))
+            }
+            let (mut power, mut length) = (1usize, 1usize);
+            let mut tortoise = from;
+            let Some(mut hare) = up(rows, from) else {
+                return;
+            };
+            while !std::ptr::eq(tortoise, hare) {
+                if power == length {
+                    tortoise = hare;
+                    power *= 2;
+                    length = 0;
+                }
+                match up(rows, hare) {
+                    Some(next) => hare = next,
+                    None => return,
+                }
+                length += 1;
+            }
+            // `hare` is on a cycle of `length` tickets.
+            if self.on_cycle.contains(hare.id.as_str()) {
+                return;
+            }
+            let mut x = hare;
+            for _ in 0..length {
+                self.on_cycle.insert(x.id.clone());
+                x = up(rows, x).expect("on the cycle");
+            }
+        }
+
+        /// How many shortcodes the store holds (drawn or not).
+        pub(super) fn len(&self) -> usize {
+            self.shortcodes.len()
+        }
+
+        /// Every drawn group, in shortcode order.
+        pub(super) fn groups(&self) -> Vec<Group> {
+            self.shortcodes
+                .keys()
+                .filter_map(|epic| self.view(epic))
+                .collect()
+        }
+
+        /// A newborn (already in `rows`) is counted where it is drawn.
+        pub(super) fn created(&mut self, rows: Rows<'_>, t: &Ticket) -> Vec<Group> {
+            if self.dangling.contains(&t.id) {
+                let before = self.snapshot();
+                let why = format!("{} was named as a parent before it existed", t.id);
+                return self.rebuild(rows, before, &why);
+            }
+            let parent = t.parent.as_deref().and_then(|p| rows.get(p));
+            // A parent in another shortcode makes the newborn a cross top —
+            // MNG-14 allows that only to a new shortcode's root, i.e. a new
+            // sub-shortcode: a reshaping, settled whole.
+            let before = parent
+                .is_some_and(|p| p.epic != t.epic)
+                .then(|| self.snapshot());
+            let s = self.shortcodes.entry(t.epic.clone()).or_default();
+            let new_root = t.kind == Kind::Scope && s.root.is_none();
+            if new_root {
+                s.root = Some(t.id.clone());
+            }
+            let tally = Tally::of(t);
+            if let Some(before) = before {
+                self.cross.insert(
+                    t.id.clone(),
+                    Cross {
+                        tally,
+                        home: String::new(),
+                    },
+                );
+                self.settle(rows);
+                return self.diff(before);
+            }
+            let home = self.count(rows, t, tally, true);
+            if parent.is_none() {
+                // Born with no parent: the top of a new tree in the pool.
+                self.shortcodes
+                    .get_mut(&t.epic)
+                    .expect("entered above")
+                    .base_tops += 1;
+            }
+            let mut moved = self.carry(&home, tally, true);
+            // A new root moves no count outside its own tree, but the
+            // shortcode's row now names it.
+            if new_root && !moved.iter().any(|g| g.epic == t.epic) {
+                moved.extend(self.view(&t.epic));
+            }
+            moved
+        }
+
+        /// A status change (already in `rows`): only a crossing of
+        /// `Complete` moves anything.
+        pub(super) fn status_changed(
+            &mut self,
+            rows: Rows<'_>,
+            t: &Ticket,
+            previous: Status,
+        ) -> Vec<Group> {
+            let gain = t.status == Status::Complete;
+            if gain == (previous == Status::Complete) {
+                return Vec::new();
+            }
+            let home = self.count(rows, t, Tally::DONE, gain);
+            self.carry(&home, Tally::DONE, gain)
+        }
+
+        /// A `set_parent`, before the rows change: the child's tree — the
+        /// child and its descendants inside its shortcode, which the move
+        /// leaves intact — is taken from the bucket it is counted in and
+        /// given to the one it is joining. Settling waits for the rows.
+        pub(super) fn reparenting(
+            &mut self,
+            rows: Rows<'_>,
+            child: &Ticket,
+            new_parent: &Ticket,
+        ) -> Reparenting {
+            let before = self.snapshot();
+            if self.on_cycle.contains(&child.id) {
+                return Reparenting {
+                    before,
+                    rebuild: Some(format!("{} was moved off a parent cycle", child.id)),
+                };
+            }
+            let (top, exit) = self.top(rows, child);
+            let from = Bucket::of(top, exit);
+            // Under a parent in its own shortcode the child joins that
+            // parent's tree (whose top is not the child: that would be the
+            // cycle `set_parent` refuses); under one in another shortcode
+            // it is a cross top of its own.
+            let to = if new_parent.epic == child.epic {
+                let (top, exit) = self.top(rows, new_parent);
+                Bucket::of(top, exit)
+            } else {
+                Bucket::Cross(child.id.clone())
+            };
+            let base_top = top.id == child.id && exit.is_none();
+            if from != to {
+                let tally = if top.id == child.id && exit.is_some() {
+                    // A cross top's entry is exactly its tree.
+                    self.cross
+                        .remove(&child.id)
+                        .expect("a cross top has an entry")
+                        .tally
+                } else {
+                    let pool = &self.shortcodes[&child.epic];
+                    let tally = if base_top && pool.base_tops == 1 {
+                        pool.base
+                    } else {
+                        self.subtree(rows, child)
+                    };
+                    self.bucket(&from).shift(tally, false);
+                    tally
+                };
+                match &to {
+                    Bucket::Cross(id) if !self.cross.contains_key(id) => {
+                        self.cross.insert(
+                            id.clone(),
+                            Cross {
+                                tally,
+                                home: String::new(),
+                            },
+                        );
+                    }
+                    _ => self.bucket(&to).shift(tally, true),
+                }
+            }
+            if base_top {
+                // It has a parent now: no longer a top of the pool.
+                self.shortcodes
+                    .get_mut(&child.epic)
+                    .expect("every epic has a shortcode")
+                    .base_tops -= 1;
+            }
+            Reparenting {
+                before,
+                rebuild: None,
+            }
+        }
+
+        /// …and once the rows have changed: settle the shape and report
+        /// every group whose row moved.
+        pub(super) fn reparented(&mut self, rows: Rows<'_>, r: Reparenting) -> Vec<Group> {
+            if let Some(why) = r.rebuild {
+                return self.rebuild(rows, r.before, &why);
+            }
+            self.settle(rows);
+            self.diff(r.before)
+        }
+
+        /// The top of `t`'s tree — the ancestor where following `parent`
+        /// leaves the shortcode, names no ticket, or meets a cycle — and,
+        /// when it leaves the shortcode, the parent it leaves for.
+        fn top<'a>(&self, rows: Rows<'a>, t: &'a Ticket) -> (&'a Ticket, Option<&'a Ticket>) {
+            let mut x = t;
+            // `on_cycle` is exact, so the chain ends; bounded regardless,
+            // so a broken invariant is a wrong count, never a hang under
+            // the write lock.
+            for _ in 0..rows.len() {
+                if self.on_cycle.contains(x.id.as_str()) {
+                    return (x, None);
+                }
+                match x.parent.as_deref().and_then(|p| rows.get(p)) {
+                    None => return (x, None),
+                    Some(p) if p.epic != x.epic => return (x, Some(p)),
+                    Some(p) => x = p,
+                }
+            }
+            (x, None)
+        }
+
+        /// Whether plan() cuts `top`'s edge to `parent` (in another
+        /// shortcode): `parent` is the host of `top`'s shortcode, so the
+        /// tree is drawn in its own row rather than under the host.
+        fn cut(&self, top: &Ticket, parent: &Ticket) -> bool {
+            self.shortcodes
+                .get(&top.epic)
+                .and_then(|s| s.host.as_deref())
+                == Some(parent.id.as_str())
+        }
+
+        /// The shortcode whose row `t` is drawn under: up to its tree's
+        /// top, and across into the next shortcode for as long as the top
+        /// nests under a ticket there.
+        fn home<'a>(&self, rows: Rows<'a>, t: &'a Ticket) -> &'a str {
+            let mut x = t;
+            // Each step crosses a parent edge out of a distinct cross top,
+            // and the parent graph is acyclic: this ends within that many.
+            for _ in 0..=self.cross.len() {
+                let (top, exit) = self.top(rows, x);
+                match exit {
+                    Some(p) if !self.cut(top, p) => x = p,
+                    _ => return &top.epic,
+                }
+            }
+            &x.epic
+        }
+
+        /// Counts `by` into (or out of) the bucket `t`'s tree is kept in,
+        /// and says which group that tree is drawn in.
+        fn count(&mut self, rows: Rows<'_>, t: &Ticket, by: Tally, gain: bool) -> String {
+            let (top, exit) = self.top(rows, t);
+            if exit.is_some() {
+                let c = self
+                    .cross
+                    .get_mut(&top.id)
+                    .expect("a cross top has an entry");
+                c.tally.shift(by, gain);
+                return c.home.clone();
+            }
+            self.shortcodes
+                .get_mut(&top.epic)
+                .expect("every epic has a shortcode")
+                .base
+                .shift(by, gain);
+            top.epic.clone()
+        }
+
+        fn bucket(&mut self, b: &Bucket) -> &mut Tally {
+            match b {
+                Bucket::Base(epic) => {
+                    &mut self
+                        .shortcodes
+                        .get_mut(epic)
+                        .expect("every epic has a shortcode")
+                        .base
+                }
+                Bucket::Cross(id) => {
+                    &mut self
+                        .cross
+                        .get_mut(id)
+                        .expect("a cross top has an entry")
+                        .tally
+                }
+            }
+        }
+
+        /// Moves `by` into (or out of) `home`'s own count and the roll-up
+        /// of `home` and every group it is drawn inside; returns each as it
+        /// now stands, innermost first.
+        fn carry(&mut self, home: &str, by: Tally, gain: bool) -> Vec<Group> {
+            let chain = self.chain(home);
+            for (i, epic) in chain.iter().enumerate() {
+                let s = self.shortcodes.get_mut(epic).expect("in the chain");
+                if i == 0 {
+                    s.own.shift(by, gain);
+                }
+                s.roll.shift(by, gain);
+            }
+            chain.iter().filter_map(|epic| self.view(epic)).collect()
+        }
+
+        /// `epic`, then the group its row is drawn inside, and so on out to
+        /// a top-level row.
+        fn chain(&self, epic: &str) -> Vec<String> {
+            let mut out = vec![epic.to_string()];
+            // Acyclic by settle's nesting check; bounded regardless.
+            while out.len() <= self.shortcodes.len() {
+                let last = out.last().expect("starts non-empty");
+                match self.shortcodes.get(last).and_then(|s| s.up.clone()) {
+                    Some(up) => out.push(up),
+                    None => break,
+                }
+            }
+            out
+        }
+
+        /// The tally of `t`'s tree from `t` down — `t` and every descendant
+        /// reached without leaving its shortcode — walking the store's
+        /// `children` mirror, each entry checked against the child's own
+        /// `parent`.
+        fn subtree<'a>(&self, rows: Rows<'a>, t: &'a Ticket) -> Tally {
+            let mut tally = Tally::default();
+            let mut stack = vec![t];
+            while let Some(x) = stack.pop() {
+                tally.shift(Tally::of(x), true);
+                stack.extend(x.children.iter().filter_map(|c| rows.get(c)).filter(|c| {
+                    c.parent.as_deref() == Some(x.id.as_str())
+                        && c.epic == x.epic
+                        && !self.on_cycle.contains(c.id.as_str())
+                }));
+            }
+            tally
+        }
+
+        /// Re-derives the shape from the pools and the cross tops: plan()'s
+        /// sub-shortcodes, where each cross tree is drawn, where each
+        /// sub-shortcode's row is drawn, and every roll-up.
+        fn settle(&mut self, rows: Rows<'_>) {
+            for s in self.shortcodes.values_mut() {
+                s.host = None;
+                s.up = None;
+            }
+            // plan(): in shortcode order, a root whose parent is in another
+            // shortcode makes its shortcode a sub-shortcode hosted there —
+            // unless, with the ones accepted before it, that would draw the
+            // group inside itself.
+            let epics: Vec<String> = self.shortcodes.keys().cloned().collect();
+            for epic in &epics {
+                let Some(root) = self.shortcodes[epic]
+                    .root
+                    .as_deref()
+                    .and_then(|r| rows.get(r))
+                else {
+                    continue;
+                };
+                // A root on a parent cycle has no parent as plan() sees it.
+                if self.on_cycle.contains(&root.id) {
+                    continue;
+                }
+                let Some(host) = root.parent.as_deref().and_then(|p| rows.get(p)) else {
+                    continue;
+                };
+                if host.epic == *epic {
+                    continue; // ordinary nesting inside the shortcode
+                }
+                self.shortcodes.get_mut(epic).expect("listed").host = Some(host.id.clone());
+                if self.nests_inside(rows, host, epic) {
+                    self.shortcodes.get_mut(epic).expect("listed").host = None;
+                }
+            }
+            for s in self.shortcodes.values_mut() {
+                s.own = s.base;
+            }
+            let tops: Vec<String> = self.cross.keys().cloned().collect();
+            for id in &tops {
+                let top = rows.get(id).expect("a cross top is a ticket");
+                let home = self.home(rows, top).to_string();
+                let tally = self.cross[id].tally;
+                self.shortcodes
+                    .get_mut(&home)
+                    .expect("a home is a shortcode")
+                    .own
+                    .shift(tally, true);
+                self.cross.get_mut(id).expect("listed").home = home;
+            }
+            // A sub-shortcode's row is drawn in the group holding its host.
+            for epic in &epics {
+                let Some(host) = self.shortcodes[epic]
+                    .host
+                    .as_deref()
+                    .and_then(|h| rows.get(h))
+                else {
+                    continue;
+                };
+                let up = self.home(rows, host).to_string();
+                self.shortcodes.get_mut(epic).expect("listed").up = Some(up);
+            }
+            for s in self.shortcodes.values_mut() {
+                s.roll = s.own;
+            }
+            for epic in &epics {
+                let own = self.shortcodes[epic].own;
+                if own.total == 0 {
+                    continue;
+                }
+                for up in self.chain(epic).into_iter().skip(1) {
+                    self.shortcodes
+                        .get_mut(&up)
+                        .expect("in the chain")
+                        .roll
+                        .shift(own, true);
+                }
+            }
+        }
+
+        /// plan()'s `nests_inside`: would drawing `epic`'s row under `host`
+        /// put the group inside itself? Walks the drawn tree up from
+        /// `host`, a tree top at a time; meeting a row of `epic` is the
+        /// loop.
+        fn nests_inside<'a>(&self, rows: Rows<'a>, host: &'a Ticket, epic: &str) -> bool {
+            let mut cur = host;
+            let mut seen: HashSet<&str> = HashSet::new();
+            loop {
+                if !seen.insert(cur.id.as_str()) {
+                    return true; // a loop that cannot be drawn: refuse
+                }
+                let (top, exit) = self.top(rows, cur);
+                match exit {
+                    Some(p) if !self.cut(top, p) => cur = p,
+                    _ => {
+                        if top.epic == epic {
+                            return true;
+                        }
+                        match self
+                            .shortcodes
+                            .get(&top.epic)
+                            .and_then(|s| s.host.as_deref())
+                            .and_then(|h| rows.get(h))
+                        {
+                            Some(h) => cur = h,
+                            None => return false,
+                        }
+                    }
+                }
+            }
+        }
+
+        /// The group `epic`'s row shows, or `None` when the nav draws no
+        /// row for it (every one of its tickets is drawn under another
+        /// shortcode's).
+        fn view(&self, epic: &str) -> Option<Group> {
+            let s = self.shortcodes.get(epic)?;
+            (s.own.total > 0).then(|| Group {
+                epic: epic.to_string(),
+                total: s.roll.total,
+                done: s.roll.done,
+                root: s.root.clone(),
+                host: s.host.clone(),
+            })
+        }
+
+        fn snapshot(&self) -> Snapshot {
+            self.shortcodes
+                .keys()
+                .filter_map(|epic| {
+                    let group = self.view(epic)?;
+                    Some((epic.clone(), (group, self.chain(epic).len())))
+                })
+                .collect()
+        }
+
+        /// Every group whose row differs from `before` — new rows included,
+        /// and a row that is no longer drawn as one last `total: 0` —
+        /// innermost first (as the incremental paths report), then in
+        /// shortcode order.
+        fn diff(&self, before: Snapshot) -> Vec<Group> {
+            let mut moved: Vec<(usize, Group)> = Vec::new();
+            for (epic, s) in &self.shortcodes {
+                match (before.get(epic), self.view(epic)) {
+                    (Some((was, _)), Some(now)) if *was == now => {}
+                    (_, Some(now)) => moved.push((self.chain(epic).len(), now)),
+                    (Some((_, depth)), None) => moved.push((
+                        *depth,
+                        Group {
+                            epic: epic.clone(),
+                            total: 0,
+                            done: 0,
+                            root: s.root.clone(),
+                            host: None,
+                        },
+                    )),
+                    (None, None) => {}
+                }
+            }
+            moved.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.epic.cmp(&b.1.epic)));
+            moved.into_iter().map(|(_, group)| group).collect()
+        }
+
+        fn rebuild(&mut self, rows: Rows<'_>, before: Snapshot, why: &str) -> Vec<Group> {
+            tracing::warn!(
+                "roll-ups rebuilt from all {} tickets: {why} (a database edited by hand)",
+                rows.len()
+            );
+            *self = Self::build(rows);
+            self.diff(before)
+        }
     }
 }
 
@@ -3045,4 +3947,549 @@ mod tests {
         assert_eq!(store.get("MV-2").unwrap().children, Vec::<String>::new());
     }
 
+    // ---- MNG-10: the roll-ups are the nav's plan() -----------------------
+
+    use crate::nav_plan::{self, Facts};
+    use std::collections::BTreeSet;
+
+    /// What the nav draws for this store's rows: AGS-20's `plan()` over
+    /// every ticket, as groups.
+    fn nav(store: &Store) -> Vec<Group> {
+        let all = store.list(None, None, None);
+        let facts: Vec<Facts> = all
+            .iter()
+            .map(|t| Facts {
+                id: t.id.clone(),
+                epic: t.epic.clone(),
+                seq: t.seq,
+                kind: t.kind.to_string(),
+                parent: t.parent.clone(),
+            })
+            .collect();
+        let complete: BTreeSet<String> = all
+            .iter()
+            .filter(|t| t.status == Status::Complete)
+            .map(|t| t.id.clone())
+            .collect();
+        nav_plan::rows(&facts, &complete)
+            .into_iter()
+            .map(|r| Group {
+                epic: r.epic,
+                total: r.total,
+                done: r.done,
+                root: r.root,
+                host: r.host,
+            })
+            .collect()
+    }
+
+    /// Every `GroupChanged` waiting on `rx`, in the order sent (the ticket
+    /// changes around them drained and dropped).
+    fn group_changes(rx: &mut broadcast::Receiver<Change>) -> Vec<Group> {
+        let mut out = Vec::new();
+        while let Ok(change) = rx.try_recv() {
+            if let Change::GroupChanged { group } = change {
+                out.push(group);
+            }
+        }
+        out
+    }
+
+    /// What a write must report, given the nav's drawing before and after
+    /// it: every row that changed or appeared, and a row no longer drawn
+    /// as `total: 0` — in shortcode order.
+    fn moved(before: &[Group], after: &[Group]) -> Vec<Group> {
+        let mut out: Vec<Group> = after.iter().filter(|g| !before.contains(g)).cloned().collect();
+        for g in before {
+            if !after.iter().any(|a| a.epic == g.epic) {
+                out.push(Group {
+                    total: 0,
+                    done: 0,
+                    host: None,
+                    ..g.clone()
+                });
+            }
+        }
+        out.sort_by(|a, b| a.epic.cmp(&b.epic));
+        out
+    }
+
+    fn group(epic: &str, total: u64, done: u64, root: &str, host: Option<&str>) -> Group {
+        Group {
+            epic: epic.into(),
+            total,
+            done,
+            root: Some(root.into()),
+            host: host.map(Into::into),
+        }
+    }
+
+    /// The oracle is the nav's function: the fixtures `nav.rs` pins its
+    /// forest with draw the same subtrees here.
+    #[test]
+    fn the_oracle_draws_the_navs_own_fixtures() {
+        let f = |id: &str, kind: &str, parent: Option<&str>| {
+            let (epic, seq) = id.split_once('-').unwrap();
+            Facts {
+                id: id.into(),
+                epic: epic.into(),
+                seq: seq.parse().unwrap(),
+                kind: kind.into(),
+                parent: parent.map(Into::into),
+            }
+        };
+        let p = nav_plan::plan(&[
+            f("AGS-1", "scope", None),
+            f("AGS-19", "build", None),
+            f("PERF-1", "scope", None),
+            f("PERF-3", "build", None),
+            f("PERF-4", "execution", Some("PERF-3")),
+            f("PERF-5", "gap", Some("PERF-4")),
+            f("XPC-1", "build", Some("AGS-19")),
+        ]);
+        assert_eq!(p.top, vec!["AGS", "PERF"], "XPC has no parentless ticket");
+        assert_eq!(p.subtree["AGS"], vec!["AGS-1", "AGS-19", "XPC-1"]);
+        assert_eq!(p.subtree["PERF"], vec!["PERF-1", "PERF-3", "PERF-4", "PERF-5"]);
+        let p = nav_plan::plan(&[
+            f("PLEXUS-1", "scope", None),
+            f("PLEXUS-2", "build", Some("PLEXUS-1")),
+            f("TRANSPORT-1", "scope", Some("PLEXUS-1")),
+            f("TRANSPORT-2", "build", Some("TRANSPORT-1")),
+        ]);
+        assert_eq!(p.top, vec!["PLEXUS"], "TRANSPORT is never top-level");
+        assert_eq!(p.sub_of.get("TRANSPORT").map(String::as_str), Some("PLEXUS-1"));
+        assert_eq!(
+            p.subtree["PLEXUS"],
+            vec!["PLEXUS-1", "PLEXUS-2", "TRANSPORT-1", "TRANSPORT-2"]
+        );
+        assert_eq!(p.subtree["TRANSPORT"], vec!["TRANSPORT-1", "TRANSPORT-2"]);
+        let p = nav_plan::plan(&[
+            f("CYC-1", "build", Some("CYC-2")),
+            f("CYC-2", "build", Some("CYC-1")),
+            f("CYC-3", "build", Some("CYC-1")),
+        ]);
+        assert_eq!(p.top, vec!["CYC"]);
+        assert_eq!(p.subtree["CYC"], vec!["CYC-1", "CYC-2", "CYC-3"]);
+        let p = nav_plan::plan(&[
+            f("AAA-1", "scope", Some("BBB-2")),
+            f("BBB-1", "scope", Some("AAA-1")),
+            f("BBB-2", "build", None),
+        ]);
+        assert!(p.sub_of.len() <= 1, "{:?}", p.sub_of);
+        let reachable: usize = p.top.iter().map(|g| p.subtree[g].len()).sum();
+        assert_eq!(reachable, 3, "every ticket is drawn somewhere");
+    }
+
+    /// MNG-10 acceptance 1 and 2 at the store level, on the shape the nav
+    /// rule exists for: TRAN hosted under PLEX-1 and WIRE under TRAN-2 — a
+    /// sub-shortcode of a sub-shortcode. Each row counts its subtree; a
+    /// completion moves `done` in the row it is drawn in and in every row
+    /// around it, innermost first, after the ticket's own event; a status
+    /// change that does not cross `Complete` moves nothing; births and
+    /// re-hosting move totals; equal to the nav's `plan()` throughout.
+    #[tokio::test]
+    async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
+        let store = Store::new();
+        let sub = |epic: &str, title: &str, host: &str| NewTicket {
+            kind: Kind::Scope,
+            ..child_of(epic, title, host)
+        };
+        store.create(scope("PLEX", "plexus")).await.unwrap(); // PLEX-1
+        store.create(new_ticket("PLEX", "core")).await.unwrap(); // PLEX-2 → PLEX-1
+        store.create(sub("TRAN", "transport", "PLEX-1")).await.unwrap(); // TRAN-1
+        store.create(new_ticket("TRAN", "ws")).await.unwrap(); // TRAN-2 → TRAN-1
+        store.create(new_ticket("TRAN", "rest")).await.unwrap(); // TRAN-3 → TRAN-1
+        store.create(sub("WIRE", "wire", "TRAN-2")).await.unwrap(); // WIRE-1
+        store.create(new_ticket("WIRE", "frames")).await.unwrap(); // WIRE-2 → WIRE-1
+        store.create(scope("SOLO", "alone")).await.unwrap(); // SOLO-1
+        store.create(new_ticket("SOLO", "one")).await.unwrap(); // SOLO-2 → SOLO-1
+
+        assert_eq!(
+            store.groups(),
+            vec![
+                group("PLEX", 7, 0, "PLEX-1", None),
+                group("SOLO", 2, 0, "SOLO-1", None),
+                group("TRAN", 5, 0, "TRAN-1", Some("PLEX-1")),
+                group("WIRE", 2, 0, "WIRE-1", Some("TRAN-2")),
+            ]
+        );
+        assert_eq!(store.groups(), nav(&store));
+        let mut rx = store.subscribe();
+
+        // Acceptance 2: one shortcode, one event, done + 1, after the
+        // status change it follows from.
+        store.set_status("SOLO-2", Status::Complete).await.unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), Change::StatusChanged { .. }));
+        match rx.try_recv().unwrap() {
+            Change::GroupChanged { group: g } => assert_eq!(g, group("SOLO", 2, 1, "SOLO-1", None)),
+            other => panic!("expected GroupChanged, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "one group moved, one event");
+
+        // Not a crossing of Complete: nothing moves.
+        store.set_status("WIRE-2", Status::Ready).await.unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), Change::StatusChanged { .. }));
+        assert!(rx.try_recv().is_err(), "Pending → Ready moves no count");
+
+        // Deepest first: WIRE, the TRAN row it nests in, then PLEX.
+        store.set_status("WIRE-2", Status::Complete).await.unwrap();
+        assert_eq!(
+            group_changes(&mut rx),
+            vec![
+                group("WIRE", 2, 1, "WIRE-1", Some("TRAN-2")),
+                group("TRAN", 5, 1, "TRAN-1", Some("PLEX-1")),
+                group("PLEX", 7, 1, "PLEX-1", None),
+            ]
+        );
+        // Superseded is not done (the nav's rule): back out the same way.
+        store.set_status("WIRE-2", Status::Superseded).await.unwrap();
+        let done: Vec<(String, u64)> =
+            group_changes(&mut rx).into_iter().map(|g| (g.epic, g.done)).collect();
+        assert_eq!(done, [("WIRE".into(), 0), ("TRAN".into(), 0), ("PLEX".into(), 0)]);
+
+        // A birth deep inside counts in every row around it.
+        store.create(new_ticket("WIRE", "more")).await.unwrap(); // WIRE-3
+        let totals: Vec<(String, u64)> =
+            group_changes(&mut rx).into_iter().map(|g| (g.epic, g.total)).collect();
+        assert_eq!(totals, [("WIRE".into(), 3), ("TRAN".into(), 6), ("PLEX".into(), 8)]);
+        assert_eq!(store.groups(), nav(&store));
+
+        // Re-hosting a sub-shortcode moves its whole count: WIRE from under
+        // TRAN-2 to under SOLO-1. After the ticket events, every row that
+        // moved — innermost first, then shortcode order.
+        store.set_parent("WIRE-1", "SOLO-1").await.unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), Change::ParentChanged { .. }));
+        assert!(matches!(rx.try_recv().unwrap(), Change::ChildrenChanged { .. }));
+        assert!(matches!(rx.try_recv().unwrap(), Change::ChildRemoved { .. }));
+        assert_eq!(
+            group_changes(&mut rx),
+            vec![
+                group("TRAN", 3, 0, "TRAN-1", Some("PLEX-1")),
+                group("WIRE", 3, 0, "WIRE-1", Some("SOLO-1")),
+                group("PLEX", 5, 0, "PLEX-1", None),
+                group("SOLO", 5, 1, "SOLO-1", None),
+            ]
+        );
+        assert_eq!(store.groups(), nav(&store));
+
+        // A top-level shortcode becomes a sub-shortcode: SOLO (and WIRE
+        // inside it) under PLEX-2. Its pool moves whole.
+        store.set_parent("SOLO-1", "PLEX-2").await.unwrap();
+        assert_eq!(
+            store.groups(),
+            vec![
+                group("PLEX", 10, 1, "PLEX-1", None),
+                group("SOLO", 5, 1, "SOLO-1", Some("PLEX-2")),
+                group("TRAN", 3, 0, "TRAN-1", Some("PLEX-1")),
+                group("WIRE", 3, 0, "WIRE-1", Some("SOLO-1")),
+            ]
+        );
+        assert_eq!(store.groups(), nav(&store));
+        let epics: Vec<String> = group_changes(&mut rx).into_iter().map(|g| g.epic).collect();
+        assert_eq!(epics, ["SOLO", "PLEX"], "WIRE's own row did not move");
+    }
+
+    /// A database the server could not write today but must still load,
+    /// written straight through the schema — `children` mirrored from
+    /// `parent`, as the store keeps it.
+    fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)]) {
+        let mut tickets: Vec<Ticket> = rows
+            .iter()
+            .map(|(id, kind, status, parent)| {
+                let (epic, seq) = id.rsplit_once('-').unwrap();
+                Ticket {
+                    id: id.to_string(),
+                    epic: epic.into(),
+                    seq: seq.parse().unwrap(),
+                    title: id.to_string(),
+                    status: *status,
+                    kind: *kind,
+                    severity: None,
+                    blocked_by: Vec::new(),
+                    unlocks: Vec::new(),
+                    parent: parent.map(Into::into),
+                    children: Vec::new(),
+                    body: String::new(),
+                    created_unix: 0,
+                    updated_unix: 0,
+                }
+            })
+            .collect();
+        let edges: Vec<(String, Option<String>)> =
+            tickets.iter().map(|t| (t.id.clone(), t.parent.clone())).collect();
+        for t in &mut tickets {
+            t.children = edges
+                .iter()
+                .filter(|(_, p)| p.as_deref() == Some(t.id.as_str()))
+                .map(|(id, _)| id.clone())
+                .collect();
+        }
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(db::SCHEMA).unwrap();
+        for t in &tickets {
+            db::upsert(&conn, t).unwrap();
+        }
+    }
+
+    /// Every shape the nav has a rule for, most of which the server no
+    /// longer makes: parentless non-roots, a root that is not seq 1, a
+    /// prefix with no scope, a non-root filed under the host, a
+    /// cross-shortcode child with no row of its own, two sub-shortcodes
+    /// that would nest inside each other — and two only a hand edit makes:
+    /// parent cycles (inside a shortcode, and across three and across two:
+    /// lengths no bounded walk lands back on by luck) and a parent that
+    /// names no ticket.
+    fn legacy() -> Vec<(&'static str, Kind, Status, Option<&'static str>)> {
+        use Kind::{Build, Scope};
+        use Status::{Complete, Pending};
+        vec![
+            ("AAA-1", Scope, Pending, Some("BBB-2")), // plan() keeps AAA under BBB-2 …
+            ("AGS-1", Scope, Complete, None),
+            ("AGS-2", Build, Complete, Some("AGS-1")),
+            ("AGS-3", Build, Pending, None), // a parentless non-root (pre-MNG-14)
+            ("AGS-4", Build, Complete, Some("AGS-3")),
+            ("BBB-1", Scope, Pending, Some("AAA-1")), // … and refuses BBB under AAA-1
+            ("BBB-2", Build, Complete, None),
+            ("CXA-1", Scope, Pending, Some("CXB-1")), // a cycle across three shortcodes
+            ("CXB-1", Scope, Complete, Some("CXC-1")),
+            ("CXB-2", Build, Complete, Some("CXB-1")),
+            ("CXC-1", Scope, Pending, Some("CXA-1")),
+            ("DUA-1", Scope, Pending, Some("DUB-1")), // and across two
+            ("DUB-1", Scope, Complete, Some("DUA-1")),
+            ("CYC-1", Build, Complete, Some("CYC-2")), // a cycle inside one
+            ("CYC-2", Build, Pending, Some("CYC-1")),
+            ("CYC-3", Build, Complete, Some("CYC-1")),
+            ("CYC-4", Scope, Pending, None),
+            ("DEMO-1", Build, Complete, None), // builds before the first scope (pre-MNG-12)
+            ("DEMO-2", Build, Pending, None),
+            ("DEMO-3", Build, Pending, Some("DEMO-2")),
+            ("DEMO-4", Scope, Pending, None), // the root, not seq 1
+            ("DEMO-5", Build, Complete, Some("DEMO-4")),
+            ("NOSC-1", Build, Pending, None), // a prefix that never had a scope
+            ("NOSC-2", Build, Complete, None),
+            ("ORPH-1", Scope, Pending, None),
+            ("ORPH-2", Build, Complete, Some("GHOST-1")), // names no ticket (yet)
+            ("PLEX-1", Scope, Pending, None),
+            ("PLEX-2", Build, Complete, Some("PLEX-1")),
+            ("TRAN-1", Scope, Pending, Some("PLEX-1")), // a sub-shortcode
+            ("TRAN-2", Build, Complete, Some("TRAN-1")),
+            ("TRAN-3", Build, Pending, Some("PLEX-1")), // a non-root under the host: TRAN's row
+            ("XPC-1", Build, Complete, Some("AGS-3")), // a cross child with no scope: no row
+            ("XPC-2", Build, Pending, Some("XPC-1")),
+        ]
+    }
+
+    /// Loading draws what plan() draws, every legacy and hand-edited shape
+    /// included; and the two writes that repair a hand edit — a `set_parent`
+    /// that moves a ticket off a cycle, a create of the id a dangling
+    /// parent names — leave it drawn as plan() draws the result, reporting
+    /// exactly the rows that moved.
+    #[tokio::test]
+    async fn hand_edited_shapes_roll_up_as_drawn_and_their_repair_rebuilds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.db");
+        write_db(&path, &legacy());
+        let store = Store::open(&path).unwrap();
+        let drawn = store.groups();
+        assert_eq!(drawn, nav(&store));
+        let by = |epic: &str| drawn.iter().find(|g| g.epic == epic).cloned();
+        assert_eq!(by("XPC"), None, "XPC's tickets are all drawn under AGS-3");
+        assert_eq!(by("AGS").map(|g| (g.total, g.done)), Some((6, 4)), "XPC counts in AGS");
+        assert_eq!(by("AAA").and_then(|g| g.host).as_deref(), Some("BBB-2"));
+        assert_eq!(by("BBB").and_then(|g| g.host), None, "the second nesting is refused");
+        assert_eq!(by("DEMO").and_then(|g| g.root).as_deref(), Some("DEMO-4"));
+        assert_eq!(by("NOSC").map(|g| g.root), Some(None), "never had a scope");
+        assert_eq!(by("TRAN").map(|g| g.total), Some(3), "TRAN-3 is drawn in TRAN's row");
+        assert_eq!(by("CYC").map(|g| (g.total, g.done)), Some((4, 2)));
+        assert_eq!(by("ORPH").map(|g| g.total), Some(2), "a dangling parent is no parent");
+        for (epic, total) in [("CXA", 1), ("CXB", 2), ("CXC", 1), ("DUA", 1), ("DUB", 1)] {
+            let g = by(epic).unwrap();
+            assert_eq!((g.total, g.host), (total, None), "{epic}: a cycle member is a root");
+        }
+        let mut rx = store.subscribe();
+
+        // Off the cycle: CYC-2 under CYC-4 frees CYC-1 (and CYC-3 with
+        // it) — all still in CYC's row, so nothing is reported.
+        store.set_parent("CYC-2", "CYC-4").await.unwrap();
+        assert_eq!(store.groups(), nav(&store));
+        assert_eq!(group_changes(&mut rx), Vec::<Group>::new());
+
+        // Off the cross cycle: CXA's root under PLEX-2 frees the other two
+        // — CXC-1's parent CXA-1 makes CXC a sub-shortcode of CXA, and
+        // CXB-1's parent CXC-1 one of CXC: three rows nest into PLEX at
+        // once, each inside the last.
+        let before = nav(&store);
+        store.set_parent("CXA-1", "PLEX-2").await.unwrap();
+        let after = nav(&store);
+        assert_eq!(store.groups(), after);
+        let at = |epic: &str| after.iter().find(|g| g.epic == epic).cloned().unwrap();
+        assert_eq!((at("CXA").total, at("CXA").host.as_deref()), (4, Some("PLEX-2")));
+        assert_eq!((at("CXC").total, at("CXC").host.as_deref()), (3, Some("CXA-1")));
+        assert_eq!((at("CXB").total, at("CXB").host.as_deref()), (2, Some("CXC-1")));
+        assert_eq!((at("PLEX").total, at("PLEX").done), (9, 4));
+        let got = group_changes(&mut rx);
+        assert_eq!(
+            got.iter().map(|g| g.epic.as_str()).collect::<Vec<_>>(),
+            ["CXB", "CXC", "CXA", "PLEX"],
+            "innermost first"
+        );
+        let mut got = got;
+        got.sort_by(|a, b| a.epic.cmp(&b.epic));
+        assert_eq!(got, moved(&before, &after));
+
+        // The ghost is born: ORPH-2 now hangs under it, in GHOST's row.
+        let before = nav(&store);
+        store.create(scope("GHOST", "late")).await.unwrap();
+        let after = nav(&store);
+        assert_eq!(store.groups(), after);
+        assert_eq!(
+            after.iter().find(|g| g.epic == "GHOST").map(|g| (g.total, g.done)),
+            Some((2, 1))
+        );
+        let mut got = group_changes(&mut rx);
+        got.sort_by(|a, b| a.epic.cmp(&b.epic));
+        assert_eq!(got, moved(&before, &after));
+        assert_eq!(got.iter().map(|g| g.epic.as_str()).collect::<Vec<_>>(), ["GHOST", "ORPH"]);
+    }
+
+    /// MNG-10 acceptance 1, the long way: from the legacy database, 800
+    /// pseudo-random writes — creates (new shortcodes, sub-shortcodes,
+    /// refused ones), status changes and `set_parent` moves of tickets and
+    /// of roots across shortcodes — and after every one, the roll-ups are
+    /// exactly what the nav's `plan()` draws from all rows, and the
+    /// `GroupChanged` events are exactly the rows that moved: no more, no
+    /// fewer, each once. A reopen then rebuilds the same roll-ups.
+    #[tokio::test]
+    async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
+        struct Rng(u64);
+        impl Rng {
+            fn below(&mut self, n: usize) -> usize {
+                self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = self.0;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                ((z ^ (z >> 31)) % n as u64) as usize
+            }
+        }
+        const EPICS: [&str; 13] = [
+            "AAA", "AGS", "BBB", "CYC", "DEMO", "NOSC", "PLEX", "TRAN", "XPC", "GHOST", "NEW",
+            "SUBB", "ZED",
+        ];
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("walk.db");
+        write_db(&path, &legacy());
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.groups(), nav(&store));
+        let mut rx = store.subscribe();
+        let mut rng = Rng(0x4D4E_4731);
+        let (mut writes, mut moves, mut rehosts) = (0, 0, 0);
+
+        for step in 0..800 {
+            let all = store.list(None, None, None);
+            let before = nav(&store);
+            let any = |rng: &mut Rng| all[rng.below(all.len())].id.clone();
+            let what = match rng.below(10) {
+                0..=3 => {
+                    let epic = EPICS[rng.below(EPICS.len())];
+                    let kind = if rng.below(3) == 0 { Kind::Scope } else { Kind::Build };
+                    let mine: Vec<&Ticket> = all.iter().filter(|t| t.epic == epic).collect();
+                    let parent = match rng.below(5) {
+                        0 | 1 => None,
+                        2 | 3 if !mine.is_empty() => Some(mine[rng.below(mine.len())].id.clone()),
+                        _ => Some(any(&mut rng)),
+                    };
+                    let what = format!("create {epic} {kind} under {parent:?}");
+                    let new = NewTicket {
+                        kind,
+                        parent,
+                        ..new_ticket(epic, "walked")
+                    };
+                    if store.create(new).await.is_ok() {
+                        writes += 1;
+                    }
+                    what
+                }
+                4..=7 => {
+                    let id = any(&mut rng);
+                    let status = if rng.below(2) == 0 {
+                        Status::Complete
+                    } else {
+                        Status::ALL[rng.below(Status::ALL.len())]
+                    };
+                    store.set_status(&id, status).await.unwrap();
+                    writes += 1;
+                    format!("set_status {id} {status}")
+                }
+                _ => {
+                    // A root a third of the time: re-hosting shortcodes is
+                    // the reshaping the roll-ups must follow.
+                    let child = if rng.below(3) == 0 {
+                        before[rng.below(before.len())].root.clone().unwrap_or_else(|| any(&mut rng))
+                    } else {
+                        any(&mut rng)
+                    };
+                    let epic = store.get(&child).unwrap().epic;
+                    let mine: Vec<&Ticket> = all.iter().filter(|t| t.epic == epic).collect();
+                    let parent = if rng.below(2) == 0 {
+                        mine[rng.below(mine.len())].id.clone()
+                    } else {
+                        any(&mut rng)
+                    };
+                    let was = store.get(&child).unwrap().parent;
+                    if store.set_parent(&child, &parent).await.is_ok()
+                        && was.as_deref() != Some(parent.as_str())
+                    {
+                        writes += 1;
+                        moves += 1;
+                        if store.get(&parent).unwrap().epic != epic {
+                            rehosts += 1;
+                        }
+                    }
+                    format!("set_parent {child} under {parent}")
+                }
+            };
+            let after = nav(&store);
+            assert_eq!(store.groups(), after, "step {step}: {what}");
+            let mut got = group_changes(&mut rx);
+            got.sort_by(|a, b| a.epic.cmp(&b.epic));
+            assert_eq!(got, moved(&before, &after), "step {step}: {what}");
+        }
+        assert!(writes > 400 && moves > 40 && rehosts > 5, "{writes} writes, {moves} moves, {rehosts} re-hosts");
+
+        let kept = store.groups();
+        drop(store);
+        assert_eq!(Store::open(&path).unwrap().groups(), kept, "a reopen rebuilds the same");
+    }
+
+    /// The build at scale: a 10⁴ seed rolls up as the nav draws it — every
+    /// ticket in exactly one top-level row — and stays so when one of its
+    /// shortcodes is hosted under another and when a second seed lands in
+    /// the same store.
+    #[tokio::test]
+    async fn a_seeded_store_rolls_up_as_the_nav_draws_it() {
+        let store = Store::new();
+        let report = store.seed_synthetic(spec(10_000, 42)).unwrap();
+        let groups = store.groups();
+        assert_eq!(groups.len(), report.epics);
+        assert_eq!(groups, nav(&store));
+        let top: u64 = groups.iter().filter(|g| g.host.is_none()).map(|g| g.total).sum();
+        assert_eq!(top, 10_000, "every ticket drawn in exactly one top-level row");
+
+        let host = format!("{}-2", groups[0].epic);
+        store
+            .set_parent(groups[1].root.as_deref().unwrap(), &host)
+            .await
+            .unwrap();
+        assert_eq!(store.groups(), nav(&store));
+        assert_eq!(store.groups()[1].host.as_deref(), Some(host.as_str()));
+
+        store
+            .seed_synthetic(SeedSpec {
+                into_existing: true,
+                ..spec(500, 3)
+            })
+            .unwrap();
+        assert_eq!(store.groups(), nav(&store));
+    }
 }

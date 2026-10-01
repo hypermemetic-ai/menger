@@ -284,6 +284,33 @@ impl From<&Ticket> for TicketSummary {
     }
 }
 
+/// MNG-10: one shortcode's roll-up — the row AGS-20's nav draws for it,
+/// computed by the server so a client can draw the tree without holding
+/// every ticket.
+///
+/// The numbers are the nav's, exactly (`frontend/src/nav.rs`, `plan()` and
+/// the group row's rollup): `total` counts every ticket in the shortcode
+/// row's subtree as the nav nests it — its own tickets, a ticket of another
+/// shortcode filed under one of them, and every sub-shortcode hosted
+/// beneath it, at any depth — and `done` counts the `Complete` ones among
+/// them (`Superseded` is not done; the nav's rule). `root` is the
+/// shortcode's lowest-seq `scope` ticket (`None` only for a prefix that
+/// never had one). `host` is set when the shortcode is a **sub-shortcode**
+/// (AGS-20): the ticket, in another shortcode, that its root is filed
+/// under and that its row nests beneath — `None` for a top-level row.
+///
+/// Like [`TicketSummary`], the optional fields are written out as `null`
+/// rather than skipped: every group has the same keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Group {
+    /// The shortcode (epic prefix), uppercase.
+    pub epic: String,
+    pub total: u64,
+    pub done: u64,
+    pub root: Option<String>,
+    pub host: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TicketsEvent {
@@ -332,6 +359,16 @@ pub enum TicketsEvent {
     /// child was re-parented elsewhere (yielded by `watch`). Carries the
     /// full updated ex-parent.
     ChildRemoved { ticket: Ticket, removed: String },
+    /// MNG-10: one shortcode's roll-up (yielded per shortcode by `groups`,
+    /// in shortcode order).
+    Group { group: Group },
+    /// MNG-10: a shortcode's roll-up moved (yielded by `watch`) — a status
+    /// change crossed `Complete`, a ticket was born into its subtree, or a
+    /// `set_parent` reshaped it. Carries the whole group as it is now; it
+    /// follows the ticket events of the same mutation, innermost group
+    /// first. A group whose shortcode no longer draws a row of its own
+    /// arrives once with `total: 0`.
+    GroupChanged { group: Group },
     /// One resolved blocker of the queried ticket, at its current status
     /// (yielded per-entry by `blockers`).
     Blocker { ticket: Ticket },

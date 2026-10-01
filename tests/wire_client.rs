@@ -20,12 +20,12 @@
 
 use futures::StreamExt;
 use menger::build_rpc;
-use menger_tickets_api::{Status, Ticket, TicketsClient, TicketsEvent};
+use menger_tickets_api::{Group, Status, Ticket, TicketsClient, TicketsEvent};
 use plexus_client::{ClientEvent, MethodRef, StreamItem, Transport, WsTransport};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::TransportServer;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -79,8 +79,13 @@ async fn connect(port: u16) -> WsTransport {
 /// is a single upsert. In `wire.rs` this is a `match` on a type string with
 /// a `panic!` arm; here it is a `match` over the event enum, so an event
 /// kind the mirror does not handle is a compile-time question, not a
-/// runtime one.
-fn apply(mirror: &mut HashMap<String, Ticket>, event: &TicketsEvent) -> &'static str {
+/// runtime one. MNG-10's `GroupChanged` carries the whole group, so it is
+/// one upsert too — into the client's copy of the nav's roll-ups.
+fn apply(
+    mirror: &mut HashMap<String, Ticket>,
+    groups: &mut BTreeMap<String, Group>,
+    event: &TicketsEvent,
+) -> &'static str {
     let (ticket, kind) = match event {
         TicketsEvent::Created { ticket } => (ticket, "created"),
         TicketsEvent::StatusChanged { ticket, .. } => (ticket, "status_changed"),
@@ -88,6 +93,10 @@ fn apply(mirror: &mut HashMap<String, Ticket>, event: &TicketsEvent) -> &'static
         TicketsEvent::ChildrenChanged { ticket, .. } => (ticket, "children_changed"),
         TicketsEvent::ParentChanged { ticket, .. } => (ticket, "parent_changed"),
         TicketsEvent::ChildRemoved { ticket, .. } => (ticket, "child_removed"),
+        TicketsEvent::GroupChanged { group } => {
+            groups.insert(group.epic.clone(), group.clone());
+            return "group_changed";
+        }
         other => panic!("unexpected watch event {other:?}"),
     };
     mirror.insert(ticket.id.clone(), ticket.clone());
@@ -363,6 +372,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- the watch-only mirror ---------------------------------------------
     // Every mutation event kind, decoded into the activation's own types.
     let mut mirror: HashMap<String, Ticket> = HashMap::new();
+    let mut group_copy: BTreeMap<String, Group> = BTreeMap::new();
     let mut kinds: Vec<&'static str> = Vec::new();
     let mut first_transition: Option<Status> = None;
     loop {
@@ -374,7 +384,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                     if let TicketsEvent::StatusChanged { previous, .. } = &event {
                         first_transition.get_or_insert(*previous);
                     }
-                    kinds.push(apply(&mut mirror, &event));
+                    kinds.push(apply(&mut mirror, &mut group_copy, &event));
                 }
                 ClientEvent::Progress { .. } => {}
             },
@@ -387,6 +397,7 @@ async fn the_wire_assertions_through_the_generated_client() {
         "children_changed",
         "parent_changed",
         "child_removed",
+        "group_changed",
     ] {
         assert!(kinds.contains(&expected), "the watch mirror saw no `{expected}`: {kinds:?}");
     }
@@ -424,6 +435,37 @@ async fn the_wire_assertions_through_the_generated_client() {
     };
     assert_eq!(server_ready, vec!["WIRE-1".to_string()]);
     assert_eq!(server_ready, local_ready, "watch-derivable, as wire.rs claims");
+
+    // -- groups (MNG-10) ----------------------------------------------------
+    // One typed `Group` per shortcode row — and a client that only watched
+    // holds the same roll-ups, built from `GroupChanged` alone.
+    let groups: Vec<Group> = client
+        .groups_all()
+        .await
+        .expect("groups")
+        .into_iter()
+        .map(|event| match event {
+            TicketsEvent::Group { group } => group,
+            other => panic!("groups yields only `group`, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        groups
+            .iter()
+            .map(|g| (g.epic.as_str(), g.total, g.done, g.root.as_deref(), g.host.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("DG", 1, 0, Some("DG-1"), None),
+            ("PA", 3, 0, Some("PA-1"), None),
+            ("RS", 2, 0, Some("RS-1"), None),
+            ("WIRE", 1, 0, Some("WIRE-1"), None),
+        ]
+    );
+    assert_eq!(
+        group_copy.into_values().collect::<Vec<_>>(),
+        groups,
+        "the roll-ups are watch-derivable too"
+    );
 
     // -- unsubscribe --------------------------------------------------------
     // Dropping the stream sends `menger.call_unsub`; the connection survives

@@ -12,6 +12,11 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// MNG-10's oracle: AGS-20's nav `plan()`, transcribed — the same file the
+/// store's tests hold the roll-ups to.
+#[path = "../tickets-api/src/nav_plan.rs"]
+mod nav_plan;
+
 async fn free_port() -> u16 {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     listener.local_addr().unwrap().port()
@@ -137,8 +142,13 @@ async fn health_create_list_watch_over_the_wire() {
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "created");
     assert_eq!(ev["ticket"]["id"], "WIRE-1");
+    // …and, after it, the new shortcode's row (MNG-10)
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "group_changed");
+    assert_eq!(ev["group"], json!({"epic": "WIRE", "total": 1, "done": 0, "root": "WIRE-1", "host": null}));
 
-    // set_status → watch sees the transition too
+    // set_status → watch sees the transition too (Pending → Ready moves no
+    // count, so no group follows it)
     let mut sub = call(
         &client,
         "tickets.set_status",
@@ -177,7 +187,8 @@ async fn in_band_errors_cross_the_wire() {
 }
 
 /// A watch-only client's local mirror: every mutation event carries the
-/// full affected ticket, so applying it is one upsert.
+/// full affected ticket, so applying it is one upsert. A `group_changed`
+/// (MNG-10) carries a roll-up, not a row — this mirror keeps rows.
 fn apply(mirror: &mut std::collections::HashMap<String, Value>, ev: &Value) {
     match ev["type"].as_str() {
         Some("created")
@@ -190,6 +201,7 @@ fn apply(mirror: &mut std::collections::HashMap<String, Value>, ev: &Value) {
             let id = ticket["id"].as_str().expect("ticket id").to_string();
             mirror.insert(id, ticket);
         }
+        Some("group_changed") => {}
         other => panic!("unexpected watch event {other:?}: {ev}"),
     }
 }
@@ -257,8 +269,8 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
 
     // Watch delivered: created(RS-2), children_changed(RS-1) — RS-2 named
     // no parent and hangs under the root (MNG-14) — unlocks_changed(RS-1),
-    // 2x status_changed.
-    for _ in 0..5 {
+    // group_changed(RS, now 2 tickets; MNG-10), 2x status_changed.
+    for _ in 0..6 {
         let ev = content(watch.next().await.unwrap().unwrap());
         apply(&mut mirror, &ev);
     }
@@ -585,6 +597,116 @@ async fn a_walk_sees_births_above_its_cursor_and_watch_carries_the_rest() {
     assert_eq!(pushed, ["MID-5", "AAA-1"]);
 }
 
+/// MNG-10 acceptance 1 and 2 over the real wire. `groups {}` answers one
+/// `group` item per shortcode row and then the stream's own `done` — no
+/// page, nothing else — with exactly the numbers AGS-20's nav `plan()`
+/// computes from every row the app's walk would fetch: here a shortcode
+/// hosting a sub-shortcode that hosts another, and one standing alone.
+/// Then on `watch`: a completion in a top-level shortcode is its
+/// `status_changed` followed by exactly one `group_changed`, `done` + 1; a
+/// completion three rows deep moves all three, innermost first; and
+/// `watch { epic }` hears the group of its own shortcode only.
+#[tokio::test]
+async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed() {
+    let port = start_server().await;
+    let client = connect(port).await;
+
+    for params in [
+        json!({"epic": "HUB", "title": "the host", "kind": "scope"}), // HUB-1
+        json!({"epic": "HUB", "title": "core"}),                      // HUB-2 → HUB-1
+        json!({"epic": "HUB", "title": "under core", "parent": "HUB-2"}), // HUB-3
+        json!({"epic": "SUB", "title": "hosted", "kind": "scope", "parent": "HUB-2"}), // SUB-1
+        json!({"epic": "SUB", "title": "a"}),                         // SUB-2 → SUB-1
+        json!({"epic": "SUB", "title": "b", "parent": "SUB-2"}),      // SUB-3
+        json!({"epic": "DEEP", "title": "deeper", "kind": "scope", "parent": "SUB-3"}), // DEEP-1
+        json!({"epic": "DEEP", "title": "c"}),                        // DEEP-2 → DEEP-1
+        json!({"epic": "LONE", "title": "alone", "kind": "scope"}),   // LONE-1
+        json!({"epic": "LONE", "title": "d"}),                        // LONE-2 → LONE-1
+    ] {
+        let evs = collect(call(&client, "tickets.create", params).await).await;
+        assert_eq!(evs[0]["type"], "created", "{evs:?}");
+    }
+    for id in ["HUB-3", "SUB-2", "DEEP-2"] {
+        collect(call(&client, "tickets.set_status", json!({"id": id, "status": "Complete"})).await).await;
+    }
+
+    // `collect` reads to the stream's `done` and refuses any other item
+    // type, so this is the whole answer: group items, then done.
+    let items = collect(call(&client, "tickets.groups", json!({})).await).await;
+    assert!(items.iter().all(|ev| ev["type"] == "group"), "only groups: {items:?}");
+    let groups: Vec<Value> = items.into_iter().map(|ev| ev["group"].clone()).collect();
+    assert_eq!(
+        groups,
+        vec![
+            json!({"epic": "DEEP", "total": 2, "done": 1, "root": "DEEP-1", "host": "SUB-3"}),
+            json!({"epic": "HUB", "total": 8, "done": 3, "root": "HUB-1", "host": null}),
+            json!({"epic": "LONE", "total": 2, "done": 0, "root": "LONE-1", "host": null}),
+            json!({"epic": "SUB", "total": 5, "done": 2, "root": "SUB-1", "host": "HUB-2"}),
+        ]
+    );
+
+    // Acceptance 1's comparison: the nav's plan() over every row, as the
+    // app's summary walk would have fetched them.
+    let all = rows(call(&client, "tickets.list", json!({"summary": true})).await).await;
+    let facts: Vec<nav_plan::Facts> = all
+        .iter()
+        .map(|ev| {
+            let s = &ev["summary"];
+            nav_plan::Facts {
+                id: s["id"].as_str().unwrap().into(),
+                epic: s["epic"].as_str().unwrap().into(),
+                seq: s["seq"].as_u64().unwrap() as u32,
+                kind: s["kind"].as_str().unwrap().into(),
+                parent: s["parent"].as_str().map(Into::into),
+            }
+        })
+        .collect();
+    let complete: std::collections::BTreeSet<String> = all
+        .iter()
+        .filter(|ev| ev["summary"]["status"] == "Complete")
+        .map(|ev| ev["summary"]["id"].as_str().unwrap().to_string())
+        .collect();
+    let nav: Vec<Value> = nav_plan::rows(&facts, &complete)
+        .into_iter()
+        .map(|r| json!({"epic": r.epic, "total": r.total, "done": r.done, "root": r.root, "host": r.host}))
+        .collect();
+    assert_eq!(groups, nav, "the server's roll-ups are the nav's");
+
+    // Acceptance 2: the status change, then exactly one group_changed.
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    let mut hub_only = call(&client, "tickets.watch", json!({"epic": "HUB"})).await;
+    collect(call(&client, "tickets.set_status", json!({"id": "LONE-2", "status": "Complete"})).await).await;
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "status_changed");
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "group_changed");
+    assert_eq!(ev["group"], json!({"epic": "LONE", "total": 2, "done": 1, "root": "LONE-1", "host": null}));
+    // Nothing else came of it: the next item is the next write's.
+    collect(call(&client, "tickets.set_status", json!({"id": "HUB-1", "status": "Ready"})).await).await;
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!((ev["type"].as_str(), ev["ticket"]["id"].as_str()), (Some("status_changed"), Some("HUB-1")));
+
+    // Three rows deep: DEEP, then SUB, then HUB.
+    collect(call(&client, "tickets.set_status", json!({"id": "DEEP-1", "status": "Complete"})).await).await;
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "status_changed");
+    let mut moved = Vec::new();
+    for _ in 0..3 {
+        let ev = content(watch.next().await.unwrap().unwrap());
+        assert_eq!(ev["type"], "group_changed");
+        moved.push((ev["group"]["epic"].clone(), ev["group"]["done"].clone()));
+    }
+    assert_eq!(moved, [(json!("DEEP"), json!(2)), (json!("SUB"), json!(3)), (json!("HUB"), json!(4))]);
+
+    // `watch { epic: HUB }`: neither LONE's group nor DEEP's ticket — the
+    // HUB-1 flip, then HUB's own row.
+    let ev = content(hub_only.next().await.unwrap().unwrap());
+    assert_eq!((ev["type"].as_str(), ev["ticket"]["id"].as_str()), (Some("status_changed"), Some("HUB-1")));
+    let ev = content(hub_only.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "group_changed");
+    assert_eq!(ev["group"], json!({"epic": "HUB", "total": 8, "done": 4, "root": "HUB-1", "host": null}));
+}
+
 #[tokio::test]
 async fn shell_serves_the_page() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -754,10 +876,11 @@ async fn concurrent_reads_complete_under_mutation_stream() {
         }
         // The watcher saw every acknowledged change, creates in seq order.
         // Each create after the root also updates the root's `children`
-        // (MNG-14), so: 1 + (MUTATIONS - 1) × (created, children_changed,
-        // status_changed).
+        // (MNG-14), and every create moves LOAD's roll-up (MNG-10; a flip
+        // to Ready moves none), so: 2 + (MUTATIONS - 1) × (created,
+        // children_changed, group_changed, status_changed).
         let mut next_seq = 1u64;
-        for _ in 0..(3 * MUTATIONS - 2) {
+        for _ in 0..(4 * MUTATIONS - 2) {
             let ev = content(watch.next().await.unwrap().unwrap());
             match ev["type"].as_str().unwrap() {
                 "created" => {
@@ -765,6 +888,10 @@ async fn concurrent_reads_complete_under_mutation_stream() {
                     next_seq += 1;
                 }
                 "children_changed" => assert_eq!(ev["ticket"]["id"], "LOAD-1"),
+                "group_changed" => {
+                    assert_eq!(ev["group"]["epic"], "LOAD");
+                    assert_eq!(ev["group"]["total"], next_seq - 1, "follows its create");
+                }
                 "status_changed" => {}
                 other => panic!("unexpected watch event {other}"),
             }

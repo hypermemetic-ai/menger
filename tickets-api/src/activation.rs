@@ -93,6 +93,7 @@ fn change_event(change: Change) -> TicketsEvent {
             TicketsEvent::ParentChanged { ticket, previous }
         }
         Change::ChildRemoved { ticket, removed } => TicketsEvent::ChildRemoved { ticket, removed },
+        Change::GroupChanged { group } => TicketsEvent::GroupChanged { group },
     }
 }
 
@@ -350,6 +351,26 @@ impl Tickets {
         }
     }
 
+    /// MNG-10: the nav's tree without its rows. Yields one `Group` per
+    /// shortcode row the nav draws, in shortcode order — `done/total` over
+    /// the row's whole subtree, its scope `root`, and the `host` ticket it
+    /// nests under when it is a sub-shortcode — exactly as AGS-20's
+    /// `plan()` computes them from every row. Nothing trails the groups:
+    /// unlike `list` there is no cursor to hand back, so the stream's own
+    /// `done` is the whole answer, as for `blockers`. `watch` keeps a
+    /// client's copy current with `GroupChanged`.
+    #[plexus_macros::method(
+        description = "One roll-up per shortcode: done/total over its subtree, its scope root, and the host it nests under"
+    )]
+    pub async fn groups(&self) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            for group in store.groups() {
+                yield TicketsEvent::Group { group };
+            }
+        }
+    }
+
     /// "Why can't this start?" in one call. Yields, in `blocked_by`
     /// order, one `Blocker` event per blocker that exists (the full
     /// ticket, at its current status) and one `DanglingBlocker` event per
@@ -386,10 +407,15 @@ impl Tickets {
     /// watches can compute the ready set — and the parent tree — itself. A slow consumer that
     /// lags the broadcast buffer skips the missed changes and keeps
     /// receiving from the current position.
+    ///
+    /// MNG-10: a mutation that moves a roll-up is followed, after its
+    /// ticket events, by one `GroupChanged` per group whose row moved,
+    /// innermost first — the whole group, so applying it is one upsert.
+    /// The `epic` filter applies to a group by the group's own shortcode.
     #[plexus_macros::method(
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved), until disconnect",
-        params(epic = "Only changes in this epic (optional)")
+        description = "Subscribe to ticket changes (Created / StatusChanged / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged), until disconnect",
+        params(epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode)")
     )]
     pub async fn watch(
         &self,
@@ -401,7 +427,7 @@ impl Tickets {
             loop {
                 match rx.recv().await {
                     Ok(change) => {
-                        if epic.as_deref().is_none_or(|e| change.ticket().epic == e) {
+                        if epic.as_deref().is_none_or(|e| change.epic() == e) {
                             yield change_event(change);
                         }
                     }
@@ -542,11 +568,52 @@ mod tests {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "MNG-1"),
             other => panic!("expected Created, got {other:?}"),
         }
+        // MNG-10: a new shortcode's row appears after the ticket that made it.
+        match watch.next().await.expect("change") {
+            TicketsEvent::GroupChanged { group } => assert_eq!((group.epic.as_str(), group.total), ("MNG", 1)),
+            other => panic!("expected GroupChanged, got {other:?}"),
+        }
 
         one(hub.set_status("MNG-1".into(), "Ready".into()).await).await;
         match watch.next().await.expect("change") {
             TicketsEvent::StatusChanged { previous, .. } => assert_eq!(previous, Status::Pending),
             other => panic!("expected StatusChanged, got {other:?}"),
+        }
+    }
+
+    /// MNG-10: `groups` yields one `Group` per shortcode row and nothing
+    /// else — no trailing page; the stream's end is the answer's end — and
+    /// `watch { epic }` delivers a `GroupChanged` by the group's own
+    /// shortcode: a watcher of PLX hears PLX's count move when a ticket of
+    /// its sub-shortcode completes, without hearing the ticket.
+    #[tokio::test]
+    async fn groups_yields_the_rows_and_watch_filters_group_changes_by_their_shortcode() {
+        let hub = hub();
+        one(hub.create("PLX".into(), "host".into(), Some("scope".into()), None, None, None, None).await).await;
+        one(hub.create("SUB".into(), "hosted".into(), Some("scope".into()), None, None, None, Some("PLX-1".into())).await).await;
+        one(hub.create("SUB".into(), "work".into(), None, None, None, None, None).await).await;
+
+        let evs: Vec<TicketsEvent> = Box::pin(hub.groups().await).collect().await;
+        let groups: Vec<crate::types::Group> = evs
+            .into_iter()
+            .map(|ev| match ev {
+                TicketsEvent::Group { group } => group,
+                other => panic!("groups yields only `group` events, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            groups.iter().map(|g| (g.epic.as_str(), g.total, g.host.as_deref())).collect::<Vec<_>>(),
+            [("PLX", 3, None), ("SUB", 2, Some("PLX-1"))]
+        );
+        assert_eq!(serde_json::to_value(&groups[0]).unwrap()["host"], serde_json::Value::Null, "null, not missing");
+
+        let mut plx = Box::pin(hub.watch(Some("plx".into())).await);
+        one(hub.set_status("SUB-2".into(), "Complete".into()).await).await;
+        match plx.next().await.expect("change") {
+            TicketsEvent::GroupChanged { group } => {
+                assert_eq!((group.epic.as_str(), group.total, group.done), ("PLX", 3, 1))
+            }
+            other => panic!("the SUB ticket's status_changed is filtered out; got {other:?}"),
         }
     }
 

@@ -26,13 +26,18 @@
 //! ```
 
 pub mod types;
-pub use types::{Kind, Severity, Status, Ticket, TicketSummary, TicketsEvent};
+pub use types::{Group, Kind, Severity, Status, Ticket, TicketSummary, TicketsEvent};
 
 /// The cache and its storage — the server's system of record (MNG-2).
 #[cfg(feature = "server")]
 pub mod store;
 #[cfg(feature = "server")]
 pub use store::Store;
+
+/// MNG-10, test-only: AGS-20's nav `plan()`, transcribed — the oracle the
+/// store's roll-ups are held equal to.
+#[cfg(test)]
+pub(crate) mod nav_plan;
 
 pub mod activation;
 pub use activation::TicketsClient;
