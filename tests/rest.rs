@@ -24,9 +24,22 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio::net::TcpStream;
 
+/// A port no other test in this binary has been handed (MNG-19). Binding
+/// `:0` and dropping the listener only *suggests* a port: the kernel can
+/// suggest the same one to a second test before the first test's server
+/// has bound it — one server then fails to start and both tests talk to
+/// the other, each seeing a store that is not its own.
 async fn free_port() -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    listener.local_addr().unwrap().port()
+    static HANDED: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    loop {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut handed = HANDED.lock().unwrap();
+        if !handed.contains(&port) {
+            handed.push(port);
+            return port;
+        }
+    }
 }
 
 /// A spawned `menger` process with REST enabled on its own free port.
