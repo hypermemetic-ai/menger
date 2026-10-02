@@ -37,11 +37,13 @@ derived from it or from the declaration that produces it. Pick by consumer:
   **Params are individual flags, not a JSON blob** — treat synapse as a
   normal CLI: `--kebab-case-flag value` after the method path, and
   `<method> --help` prints each parameter's name and type. **A list
-  parameter is its flag repeated**: `--blocked-by MNG-1 --blocked-by MNG-2`
-  sends `["MNG-1","MNG-2"]`. (As of synapse 3.13 a comma-joined value or a
-  JSON array inside one flag is sent as a single string; SYNAPSE-2 adds
-  `--blocked-by MNG-1,MNG-2`.) A multi-line `--body` is an ordinary quoted
-  argument: `--body "$(cat body.md)"`.
+  parameter is its flag repeated, or commas**: `--blocked-by MNG-1
+  --blocked-by MNG-2` and `--blocked-by MNG-1,MNG-2` both send
+  `["MNG-1","MNG-2"]` (commas need synapse ≥ 3.14, SYNAPSE-2 — this
+  machine has it; on an older binary `a,b` is silently one string). An
+  element that itself holds a comma is double-quoted inside the value, and
+  the shell must not eat the quotes: `'"a,b","c"'`. A multi-line `--body`
+  is an ordinary quoted argument: `--body "$(cat body.md)"`.
 
   Global options go **before** the backend name — after the path they are
   read as a subcommand ("Method 'create' cannot have subcommands"). `-j`
