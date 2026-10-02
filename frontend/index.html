@@ -332,7 +332,11 @@
   }
   #nav .nav-hide { margin-left: auto; }
   #nav .nav-hide:hover, header .nav-reveal:hover { color: var(--accent); border-color: var(--accent); }
-  #nav .tree-scroll { flex: 1; overflow: auto; min-height: 0; }
+  /* SCALE-24: no scroll anchoring — a windowed list keeps its spacers at
+     the height of what they stand for, so content above the viewport never
+     changes height when the window moves, and Chrome's anchor (which a
+     keyed <For> can move in the DOM) only mis-compensated. */
+  #nav .tree-scroll { flex: 1; overflow: auto; min-height: 0; overflow-anchor: none; }
   #nav .tree { padding: 6px 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; white-space: nowrap; }
   #nav .row {
     display: flex; align-items: center; gap: 4px; padding: 0 10px;
@@ -363,6 +367,12 @@
      mounted empty (its children mount when it opens — src/nav.rs); this
      keeps the empty box out of the layout. */
   #nav .node.collapsed > .kids { display: none; }
+  /* SCALE-24: past a page of children a node's list is a window — spacers
+     stand for the children it has not mounted, at their height, and a
+     pending row holds a child's line until its ticket arrives. */
+  #nav .kids > .spacer { pointer-events: none; }
+  #nav .row.pending { cursor: default; color: var(--muted); }
+  #nav .row.pending:hover { background: none; }
   /* AGS-13: kinds. The board and the ticket page spell the word; the nav
      marks each leaf with its kind's glyph, tinted per kind. */
   td.kind, dd.kind { color: var(--muted); }

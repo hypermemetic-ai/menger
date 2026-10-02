@@ -123,14 +123,16 @@ owns no routing):
   the app's whole data plane is one `WsTransport` on :4455 speaking
   `menger.call`, driven by the client menger's own activation
   declarations generate (`tickets-api`, the crate the server and the
-  browser share). It opens `watch` first, then walks
+  browser share). It opens `watch` first, asks `health` and `groups`
+  (the nav's shortcode rows, SCALE-24), then walks
   `list { summary: true, limit: 500 }` with `after = next` (MNG-9),
-  painting as pages land, and reconnects on a ~1 s loop — a server
+  painting as pages land — while `watch` is applied as it arrives, so
+  nothing waits for the walk — and reconnects on a ~1 s loop — a server
   restart returns the page to live on its own, with rows keeping their
   DOM identity. A `lagged` on `watch` (SCALE-5) is answered with the same
-  walk over the same socket, plus the open ticket page's `get`: rows
-  keep their DOM, `watch` keeps running, and the dock stays `live`. The
-  port comes from `<meta name="menger-ws-port">`, which
+  walk over the same socket, plus the groups and the open ticket page's
+  `get`: rows keep their DOM, `watch` keeps running, and the dock stays
+  `live`. The port comes from `<meta name="menger-ws-port">`, which
   the shell substitutes wherever it serves the app's entrypoint (`/` and
   `/app/`), exactly as it always has for `web/index.html`.
 
@@ -145,6 +147,16 @@ ticket menu work from the row store, so none of them needs a row to be
 mounted. At 10,000 tickets the page holds ~2,800 elements and is live in
 ~0.7 s; 100,000 is live in ~5 s and 1,000,000 in ~50 s — the walk of the
 store is what is left.
+
+The nav (SCALE-24) needs no walk: its shortcode rows are the server's
+roll-ups (`groups`, kept by `group_changed`), a shortcode opens on its
+root, and an opened node's children come by page (`list { parent }`) — past
+one page, as a window over them like the board's, so a root of 163,530
+children shows its first page in ~70 ms and its last child is a scroll
+away. At 10^6 the shortcodes are on screen in ~160 ms and a cold deep link
+shows its leaf selected in the nav in ~0.4 s. Every row the app shows lives
+in one row cache — a signal per ticket, held while a view shows it — that
+the board, the nav and the ticket page share.
 
 ## Surface
 

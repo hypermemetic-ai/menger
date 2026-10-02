@@ -34,7 +34,8 @@
 //!    with `after = next` until `next` is null (MNG-9). Rows upsert as each
 //!    page lands, so the board paints while the walk is still running — the
 //!    property PERF-4's "list everything, then render everything, then go
-//!    live" design could not have.
+//!    live" design could not have. (SCALE-24: after `groups`, and beside
+//!    step 4 rather than before it — see below.)
 //! 4. **Live.** The dock reads `live · WS` and the loop pumps `watch`
 //!    forever; every mutation event carries the whole affected ticket, so
 //!    one upsert keeps board, nav and any open ticket page coherent.
@@ -65,6 +66,31 @@
 //! already hold, so neither a re-walk nor the events queued behind it can
 //! count a ticket twice.
 //!
+//! SCALE-24: **`watch` is pumped while the walk runs.** Until now the
+//! session walked first and only then read `watch`, applying what had queued
+//! behind the walk in order — which made every change wait for the walk: 50 s
+//! at 10^6 before a created ticket moved its shortcode's total. The nav no
+//! longer needs the walk, so the walk runs beside the live loop ([`start_walk`])
+//! and every event applies as it arrives. What made the old order safe is
+//! kept another way: while a walk runs, the ids `watch` has written are
+//! remembered ([`touched`]), a page of the walk — possibly older than an event
+//! already applied — does not overwrite them, and the walk's end does not
+//! drop them. The dock still reads `live · WS` only once a walk has finished.
+//!
+//! SCALE-24: **the nav's rows come first.** Between `health` and the walk
+//! the session asks `groups {}` — one roll-up per shortcode row, the whole
+//! of what the nav needs to draw its top level — and hands them to the nav's
+//! [`nav::Tree`]; `group_changed` keeps them. An open nav list's deltas
+//! (`children_changed`, `child_removed`) go to it as they go to an open
+//! ticket page. On a `lagged` the groups are asked for again first, and the
+//! nav's open lists ask for what they show (the tree's epoch moves).
+//!
+//! **Rows live in the row cache** (src/cache.rs). Every event goes to it —
+//! applied to a row some view holds — and the board's list still takes
+//! every ticket it hears of, as before, until SCALE-26 ends the walk. What
+//! a ticket page fetches (its ticket, blockers, children) it holds there for
+//! as long as it is open, instead of inserting into the board's list.
+//!
 //! # Bodies are not rows
 //!
 //! A row is a [`TicketSummary`] — every field of a ticket except the body.
@@ -79,12 +105,12 @@
 //! body still lives in exactly one place and the event needs no `get`.
 
 use crate::kids::Kids;
-use crate::{dom, row_index, upsert, upsert_page, Conn, Dock, Row};
+use crate::{cache, dom, nav, row_index, upsert, upsert_page, Conn, Dock, Row};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::{TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
 use plexus_client::{ClientEvent, WsTransport};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 use wasm_bindgen_futures::spawn_local;
@@ -123,8 +149,31 @@ thread_local! {
     /// SCALE-4: the children lists open ticket pages hold, by parent id —
     /// what a parent's side of a birth or a move is applied to. A list,
     /// not a map: there is one open page at a time, and two pages of one
-    /// parent would each want the delta.
-    static OPEN_KIDS: RefCell<Vec<(String, RwSignal<Kids>)>> = const { RefCell::new(Vec::new()) };
+    /// parent would each want the delta. SCALE-24: with the page's holder,
+    /// which a re-fetch after a `lagged` holds its rows with.
+    static OPEN_KIDS: RefCell<Vec<(String, RwSignal<Kids>, cache::Holder)>> = const { RefCell::new(Vec::new()) };
+
+    /// SCALE-24: while a walk runs, the ids `watch` has written since it
+    /// started — newer than any page of the walk asked for before them.
+    static TOUCHED: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
+
+    /// SCALE-24: the walk in flight; a newer one (after a `lagged`)
+    /// supersedes it, and the older stops at its next page.
+    static WALK_GEN: Cell<u32> = const { Cell::new(0) };
+}
+
+/// SCALE-24: whether `watch` wrote `id` since the running walk began — a page
+/// of the walk must not put an older row over it (`upsert_page`).
+pub(crate) fn touched(id: &str) -> bool {
+    TOUCHED.with(|t| t.borrow().as_ref().is_some_and(|s| s.contains(id)))
+}
+
+fn touch(id: &str) {
+    TOUCHED.with(|t| {
+        if let Some(s) = t.borrow_mut().as_mut() {
+            s.insert(id.to_string());
+        }
+    });
 }
 
 /// MNG-16: the ticket page lends the session its body for as long as it is
@@ -174,10 +223,10 @@ const KIDS_LIMIT: u32 = 200;
 /// SCALE-4: keep `kids` — an open page's list of `parent`'s children —
 /// live from `watch` until the page goes. Registered here, applied by the
 /// session loop, unregistered when the page's owner is cleaned up.
-pub(crate) fn watch_children(parent: String, kids: RwSignal<Kids>) {
-    OPEN_KIDS.with(|open| open.borrow_mut().push((parent, kids)));
+pub(crate) fn watch_children(parent: String, kids: RwSignal<Kids>, holder: cache::Holder) {
+    OPEN_KIDS.with(|open| open.borrow_mut().push((parent, kids, holder)));
     on_cleanup(move || {
-        OPEN_KIDS.with(|open| open.borrow_mut().retain(|(_, k)| *k != kids));
+        OPEN_KIDS.with(|open| open.borrow_mut().retain(|(_, k, _)| *k != kids));
     });
 }
 
@@ -186,8 +235,8 @@ fn kids_of(parent: &str, change: impl Fn(&mut Kids) -> bool) {
     let lists: Vec<RwSignal<Kids>> = OPEN_KIDS.with(|open| {
         open.borrow()
             .iter()
-            .filter(|(p, _)| p == parent)
-            .map(|(_, k)| *k)
+            .filter(|(p, _, _)| p == parent)
+            .map(|(_, k, _)| *k)
             .collect()
     });
     for kids in lists {
@@ -202,23 +251,13 @@ fn kids_of(parent: &str, change: impl Fn(&mut Kids) -> bool) {
     }
 }
 
-/// SCALE-4: a parent's count moved — set it on its row, if the store holds
-/// it, in place (the list signal never fires).
-fn set_child_count(rows: RwSignal<Vec<Row>>, id: &str, count: u64) {
-    let sig = rows.with_untracked(|v| row_index(v, id).map(|i| v[i].ticket));
-    if let Some(sig) = sig {
-        if sig.with_untracked(|t| t.child_count != count) {
-            sig.update(|t| t.child_count = count);
-        }
-    }
-}
-
 /// A client over the live connection, or `None` before the first one is up.
 ///
 /// This is how a *view* reaches the server: it asks for the client, makes
 /// one typed call, and lets the answer upsert into the shared row store.
 /// A view never touches the transport, and never keeps what it fetched
-/// anywhere but the store (or, for a body, its own page state).
+/// anywhere but the store (or, for a body, its own page state). SCALE-24:
+/// the store is the row cache, where a view holds what it shows.
 pub(crate) fn client() -> Option<Client> {
     TRANSPORT
         .with(|t| t.borrow().clone())
@@ -244,10 +283,11 @@ pub(crate) fn drive(
     conn: RwSignal<Conn>,
     socket: RwSignal<u32>,
     last_error: RwSignal<Option<String>>,
+    tree: nav::Tree,
 ) {
     spawn_local(async move {
         loop {
-            let err = session(rows, dock, conn, socket, last_error)
+            let err = session(rows, dock, conn, socket, last_error, tree)
                 .await
                 .expect_err("a session only returns on error");
             TRANSPORT.with(|t| *t.borrow_mut() = None);
@@ -265,6 +305,7 @@ async fn session(
     conn: RwSignal<Conn>,
     socket: RwSignal<u32>,
     last_error: RwSignal<Option<String>>,
+    tree: nav::Tree,
 ) -> Result<(), String> {
     let transport = Rc::new(
         WsTransport::connect(&dom::ws_url(), HUB)
@@ -299,13 +340,33 @@ async fn session(
         }
     }
 
-    // 3. The page walk. Every page paints as it lands.
-    walk(&client, rows, dock, last_error).await?;
-    conn.set(Conn::Live);
+    // 3. SCALE-24: the nav's shortcode rows — one roll-up per shortcode,
+    //    whatever N is; the nav draws its top level from these alone.
+    groups(&client, tree, last_error).await?;
 
-    // 4. Live. `watch` runs until the socket dies.
+    // 4. The page walk, beside the live loop (SCALE-24). Every page paints
+    //    as it lands; the dock reads `live` when it ends.
+    let session_alive = Rc::new(Cell::new(true));
+    let _alive = Alive(session_alive.clone());
+    start_walk(rows, dock, conn, session_alive.clone(), last_error);
+
+    // 5. Live. `watch` runs until the socket dies — from the start, not
+    //    after the walk: every change reaches what is shown as it happens.
     while let Some(ev) = live.next().await {
-        match ev.map_err(|e| describe(&e))? {
+        let ev = ev.map_err(|e| describe(&e))?;
+        // SCALE-24: what `watch` writes, the running walk does not overwrite.
+        match &ev {
+            ClientEvent::Data(
+                TicketsEvent::Created { ticket }
+                | TicketsEvent::StatusChanged { ticket, .. }
+                | TicketsEvent::UnlocksChanged { ticket, .. }
+                | TicketsEvent::ParentChanged { ticket, .. }
+                | TicketsEvent::Amended { ticket, .. },
+            ) => touch(&ticket.id),
+            ClientEvent::Data(TicketsEvent::ChildrenChanged { id, .. } | TicketsEvent::ChildRemoved { id, .. }) => touch(id),
+            _ => {}
+        }
+        match ev {
             // Every mutation event carries the full updated ticket —
             // AGS-19's `children_changed` carries the full *parent*, which
             // is how a page and a nav that never re-fetch learn that a
@@ -314,7 +375,10 @@ async fn session(
                 // SCALE-5: news to the store, or one a walk already found
                 // (born while it ran, or queued behind a `lagged`)?
                 let fresh = rows.with_untracked(|v| row_index(v, &ticket.id).is_none());
-                upsert(rows, TicketSummary::from(&ticket));
+                let summary = TicketSummary::from(&ticket);
+                // SCALE-24: the `children_changed` behind it names it.
+                nav::arrived(&summary, true);
+                upsert(rows, summary);
                 if fresh {
                     dock.update(|d| {
                         if let Some(d) = d {
@@ -329,25 +393,31 @@ async fn session(
             ) => upsert(rows, TicketSummary::from(&ticket)),
             // SCALE-4: the parent's id, the child and the new count — the
             // child's own row arrived with its `created`.
+            // SCALE-24: and onto the nav's open list of the parent's children.
             ClientEvent::Data(TicketsEvent::ChildrenChanged { id, added, child_count }) => {
-                set_child_count(rows, &id, child_count);
+                cache::set_child_count(&id, child_count);
                 kids_of(&id, |k| k.added(&added));
+                nav::children_changed(&id, &added, child_count);
             }
             // MFE-17: a ticket was filed under another parent. Its row
-            // takes the new `parent`; and since the nav reads the forest's
-            // shape off the row list, untracked (a status change must not
-            // re-plan it), the list is told — the one change of shape that
-            // is not an insert.
+            // takes the new `parent`. SCALE-24: the nav no longer reads the
+            // board's list, so the list is not told; the two parents' sides
+            // (`child_removed`, `children_changed`) move the nav's lists, and
+            // a re-hosted shortcode moves with its `group_changed`.
             ClientEvent::Data(TicketsEvent::ParentChanged { ticket, .. }) => {
-                upsert(rows, TicketSummary::from(&ticket));
-                rows.notify();
+                let summary = TicketSummary::from(&ticket);
+                nav::arrived(&summary, false);
+                upsert(rows, summary);
             }
             // MFE-17: the old parent's side of that move — its count, and
             // any open page's list of its children.
             ClientEvent::Data(TicketsEvent::ChildRemoved { id, removed, child_count }) => {
-                set_child_count(rows, &id, child_count);
+                cache::set_child_count(&id, child_count);
                 kids_of(&id, |k| k.removed(&removed));
+                nav::child_removed(&id, &removed, child_count);
             }
+            // SCALE-24 (MNG-10): a shortcode row's roll-up moved.
+            ClientEvent::Data(TicketsEvent::GroupChanged { group }) => tree.group_changed(group),
             // MNG-16: the row's title in place; the open page's body too.
             ClientEvent::Data(TicketsEvent::Amended { ticket, .. }) => {
                 show_body(&ticket);
@@ -363,14 +433,18 @@ async fn session(
             // SCALE-5: the server dropped `missed` changes this stream never
             // saw. What the rows hold may be stale: fetch again what is
             // shown — every row, by the walk a reconnect makes, and the open
-            // page's body. `watch` is whole again from here (what queued
-            // behind the gap applies after the walk, in order, as during the
-            // first walk), so the dock never leaves `live`.
+            // page's body. `watch` is whole again from here, so the dock
+            // never leaves `live`.
+            // SCALE-24: the nav's rows first — the groups again, and the
+            // epoch they move makes every open nav list ask for its window;
+            // then the walk, beside this loop (what comes in behind the gap
+            // applies as it comes, and the walk does not write over it).
             ClientEvent::Data(TicketsEvent::Lagged { missed }) => {
                 leptos::logging::log!("watch lagged: {missed} change(s) missed; re-walking");
-                walk(&client, rows, dock, last_error).await?;
-                refetch_open_body(&client, rows, last_error).await;
-                refetch_open_children(rows, last_error);
+                groups(&client, tree, last_error).await?;
+                start_walk(rows, dock, conn, session_alive.clone(), last_error);
+                refetch_open_body(&client, last_error).await;
+                refetch_open_children(last_error);
             }
             // Future event kinds: ignore, stay live.
             _ => {}
@@ -379,17 +453,78 @@ async fn session(
     Err("watch stream ended".into())
 }
 
+/// The session's liveness, for the walks it starts: false once it has ended,
+/// so a walk that finishes after a disconnect does not claim `live`.
+struct Alive(Rc<Cell<bool>>);
+
+impl Drop for Alive {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
+
+/// SCALE-24: the walk, as its own task beside the session's live loop. A
+/// newer walk supersedes a running one (a `lagged` during the walk); the
+/// one that finishes sets the dock `live`, if its session still is. A walk
+/// that fails — the socket died — just ends: the live loop sees the same
+/// socket die and the session reconnects.
+fn start_walk(
+    rows: RwSignal<Vec<Row>>,
+    dock: RwSignal<Option<Dock>>,
+    conn: RwSignal<Conn>,
+    alive: Rc<Cell<bool>>,
+    last_error: RwSignal<Option<String>>,
+) {
+    let gen = WALK_GEN.with(|g| {
+        g.set(g.get().wrapping_add(1));
+        g.get()
+    });
+    TOUCHED.with(|t| *t.borrow_mut() = Some(HashSet::new()));
+    spawn_local(async move {
+        let Some(client) = client() else { return };
+        let done = walk(&client, rows, dock, last_error, gen).await;
+        if WALK_GEN.with(Cell::get) != gen {
+            return; // superseded: the newer walk finishes the job
+        }
+        TOUCHED.with(|t| *t.borrow_mut() = None);
+        match done {
+            Ok(()) if alive.get() => conn.set(Conn::Live),
+            Ok(()) => {}
+            Err(e) => leptos::logging::log!("walk ended: {e}"),
+        }
+    });
+}
+
+/// SCALE-24: `groups {}` — every shortcode row the nav draws, with its
+/// roll-up, root and host — handed to the nav. Its size is the number of
+/// shortcodes (252 at 10^6), not tickets: 2.1 ms at 10^6 (MNG-17).
+async fn groups(client: &Client, tree: nav::Tree, last_error: RwSignal<Option<String>>) -> Result<(), String> {
+    let mut all = Vec::new();
+    for ev in client.groups_all().await.map_err(|e| describe(&e))? {
+        match ev {
+            TicketsEvent::Group { group } => all.push(group),
+            TicketsEvent::Error { message } => last_error.set(Some(format!("groups: {message}"))),
+            _ => {}
+        }
+    }
+    tree.set_groups(all);
+    Ok(())
+}
+
 /// MNG-9's walk of the whole store: `list { summary, limit }` page by page
 /// with `after = next`, painting as pages land, then the rows the walk did
 /// not name dropped. The session's step 3 — and, since SCALE-5, its answer
 /// to `lagged`: a re-walk over rows already held upserts them in place, so
 /// every row that did not change keeps its DOM. Leaves the dock's count at
-/// the number of tickets the walk found.
+/// the number of tickets the walk found. SCALE-24: and the ones `watch`
+/// brought while it ran; it stops, dropping nothing, once a newer walk
+/// (`gen`) has started.
 async fn walk(
     client: &Client,
     rows: RwSignal<Vec<Row>>,
     dock: RwSignal<Option<Dock>>,
     last_error: RwSignal<Option<String>>,
+    gen: u32,
 ) -> Result<(), String> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut after: Option<String> = None;
@@ -423,6 +558,9 @@ async fn walk(
         // re-diff of everything already painted, which at 10^4 is 8.2 s of
         // work against 2.3 s for the same rows painted once. Measured, in
         // plans/MFE/artifacts/MFE-9-numbers.js.
+        if WALK_GEN.with(Cell::get) != gen {
+            return Ok(()); // a newer walk has started
+        }
         if pending.len() >= painted.max(PAGE_LIMIT as usize) || after.is_none() {
             painted += pending.len();
             upsert_page(rows, std::mem::take(&mut pending));
@@ -434,10 +572,18 @@ async fn walk(
     // The walk is the server's truth: drop rows it no longer names. Nothing
     // deletes tickets today, but a reconnect must converge regardless — and
     // this is a retain, not a rebuild, so every surviving row keeps its DOM.
+    // SCALE-24: a row `watch` wrote while the walk ran is the server's truth
+    // too, whether or not the walk passed it.
+    TOUCHED.with(|t| {
+        if let Some(t) = t.borrow().as_ref() {
+            seen.extend(t.iter().cloned());
+        }
+    });
     drop_missing(rows, &seen);
+    let held = rows.with_untracked(Vec::len) as u64;
     dock.update(|d| {
         if let Some(d) = d {
-            d.ticket_count = seen.len() as u64;
+            d.ticket_count = held;
         }
     });
     Ok(())
@@ -446,11 +592,7 @@ async fn walk(
 /// SCALE-5: after a `lagged`, the open page's body — the one thing the
 /// walk does not carry — fetched again, as a reconnect's `get` would. An
 /// `amended` for it may have been among the changes lost.
-async fn refetch_open_body(
-    client: &Client,
-    rows: RwSignal<Vec<Row>>,
-    last_error: RwSignal<Option<String>>,
-) {
+async fn refetch_open_body(client: &Client, last_error: RwSignal<Option<String>>) {
     let Some(id) = OPEN_BODY.with(|b| b.borrow().as_ref().map(|(id, _)| id.clone())) else {
         return;
     };
@@ -459,7 +601,7 @@ async fn refetch_open_body(
             for ev in events {
                 if let TicketsEvent::Ticket { ticket } = ev {
                     show_body(&ticket);
-                    upsert(rows, TicketSummary::from(&ticket));
+                    cache::put(TicketSummary::from(&ticket));
                 }
             }
         }
@@ -468,11 +610,24 @@ async fn refetch_open_body(
 }
 
 /// Retain only the rows the walk named. Skipped entirely when nothing is
-/// missing, so the common case never touches the list signal.
+/// missing, so the common case never touches the list signal. SCALE-24: a
+/// dropped row's hold in the row cache goes with it.
 fn drop_missing(rows: RwSignal<Vec<Row>>, seen: &HashSet<String>) {
     let stale = rows.with_untracked(|v| v.iter().any(|r| !seen.contains(&r.id)));
     if stale {
-        rows.update(|v| v.retain(|r| seen.contains(&r.id)));
+        let mut gone = Vec::new();
+        rows.update(|v| {
+            v.retain(|r| {
+                let keep = seen.contains(&r.id);
+                if !keep {
+                    gone.push(r.id.clone());
+                }
+                keep
+            })
+        });
+        for id in gone {
+            cache::release(&id);
+        }
     }
 }
 
@@ -531,10 +686,13 @@ fn first_refusal(events: &[TicketsEvent]) -> Option<String> {
 /// as the board and stays live on `watch`); the *body* goes to the page's
 /// own signal and nowhere else. Resolved blockers upsert too — their
 /// statuses then render live — and an id the call did not resolve is a
-/// dangling forward reference once `blockers_loaded` is set.
+/// dangling forward reference once `blockers_loaded` is set. SCALE-24: the
+/// store is the row cache, and the page holds them there (`holder`) for as
+/// long as it is open — at 10^6 a cold deep link's ticket is one the board's
+/// walk will not reach for most of a minute.
 pub(crate) fn load_ticket(
     id: String,
-    rows: RwSignal<Vec<Row>>,
+    holder: cache::Holder,
     body: RwSignal<Option<String>>,
     not_found: RwSignal<bool>,
     blockers_loaded: RwSignal<bool>,
@@ -554,7 +712,7 @@ pub(crate) fn load_ticket(
                     match ev {
                         TicketsEvent::Ticket { ticket } => {
                             body.set(Some(ticket.body.clone()));
-                            upsert(rows, TicketSummary::from(&ticket));
+                            holder.hold(TicketSummary::from(&ticket));
                         }
                         TicketsEvent::NotFound { .. } => not_found.set(true),
                         TicketsEvent::Error { message } => {
@@ -570,7 +728,7 @@ pub(crate) fn load_ticket(
             Ok(events) => {
                 for ev in events {
                     if let TicketsEvent::Blocker { ticket } = ev {
-                        upsert(rows, TicketSummary::from(&ticket));
+                        holder.hold(TicketSummary::from(&ticket));
                     }
                 }
             }
@@ -584,10 +742,10 @@ pub(crate) fn load_ticket(
 /// the changes a `lagged` lost, and the walk does not carry a parent's
 /// list — so every open page's children are asked for again from their
 /// first page, which is what the page itself does on a reconnect.
-fn refetch_open_children(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) {
-    let open: Vec<(String, RwSignal<Kids>)> = OPEN_KIDS.with(|open| open.borrow().clone());
-    for (parent, kids) in open {
-        load_children(parent, None, rows, kids, last_error);
+fn refetch_open_children(last_error: RwSignal<Option<String>>) {
+    let open: Vec<(String, RwSignal<Kids>, cache::Holder)> = OPEN_KIDS.with(|open| open.borrow().clone());
+    for (parent, kids, holder) in open {
+        load_children(parent, None, holder, kids, last_error);
     }
 }
 
@@ -596,13 +754,14 @@ fn refetch_open_children(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<S
 /// reconnect) or the next one after the cursor the last page handed back.
 /// The rows upsert into the shared store, so each child renders live
 /// through its own signal as before; the ids, in the store's order, go to
-/// the page's list. `list { parent }` costs the page at any size of parent
+/// the page's list. SCALE-24: the store is the row cache; the page holds
+/// the rows (`holder`). `list { parent }` costs the page at any size of parent
 /// (the server keeps an index of children), so this is one round trip
 /// whether the ticket has two children or 163,530.
 pub(crate) fn load_children(
     id: String,
     after: Option<String>,
-    rows: RwSignal<Vec<Row>>,
+    holder: cache::Holder,
     kids: RwSignal<Kids>,
     last_error: RwSignal<Option<String>>,
 ) {
@@ -629,7 +788,7 @@ pub(crate) fn load_children(
                     }
                 }
                 let ids: Vec<String> = page.iter().map(|t| t.id.clone()).collect();
-                upsert_page(rows, page);
+                holder.hold_page(page);
                 kids.try_update(|k| k.page(first, ids, next));
             }
             Err(e) => last_error.set(Some(format!("children of {id}: {}", describe(&e)))),

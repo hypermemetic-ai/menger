@@ -17,6 +17,12 @@
 //! This is the list's state and the rules that move it — pure, so a
 //! native test can pin them. The fetching is `session::load_children`; the
 //! deltas reach it through `session`'s registry of open lists.
+//!
+//! SCALE-24: the rows a page fetches are the page's own holds in the row
+//! cache (src/cache.rs), given back when it closes — no longer inserted into
+//! the board's list. The nav's children by page (src/nav.rs) are a sibling
+//! of this list, not this list: the nav has to reach any child of 163,530
+//! by scrolling, where this page reaches them a "more" at a time.
 
 /// One open page's children: what it holds, in the store's `(epic, seq)`
 /// order, and where the next page starts.
@@ -34,8 +40,9 @@ pub(crate) struct Kids {
 
 /// An id's place in the store's order — `{epic}-{seq}`, which every id the
 /// server allocates is (MNG-9). One that is not shaped like that has no
-/// place to be inserted at.
-fn key(id: &str) -> Option<(&str, u32)> {
+/// place to be inserted at. SCALE-24: the nav's lists place children by it
+/// too, and turn a position into a cursor with it.
+pub(crate) fn key(id: &str) -> Option<(&str, u32)> {
     id.rsplit_once('-')
         .and_then(|(epic, seq)| Some((epic, seq.parse::<u32>().ok()?)))
 }

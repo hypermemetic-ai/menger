@@ -51,6 +51,10 @@
 //! first. A keyboard-opened menu hands focus back to its row through
 //! [`keys::restore_focus`], which finds the row again by id if the window
 //! remounted it, and otherwise leaves j/k to resume from it.
+//!
+//! SCALE-24: the row store it reads is the row cache (src/cache.rs), by id —
+//! where every view that draws a ticket holds it — not the board's list,
+//! which no longer holds every ticket the nav can show.
 
 use js_sys::Reflect;
 use leptos::prelude::*;
@@ -58,7 +62,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use crate::{dom, keys, session, st_class, Row};
+use crate::{cache, dom, keys, session, st_class};
 use menger_tickets_api::Status;
 
 /// The menu's DOM id — the one element the document-level listeners
@@ -363,14 +367,14 @@ fn show_toast(toast: RwSignal<Option<Toast>>, gen: StoredValue<u32>, t: Toast) {
 /// open menu (if any) and the confirmation toast (if any); owns the
 /// document-level listeners.
 #[component]
-pub(crate) fn TicketMenu(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<String>>) -> impl IntoView {
+pub(crate) fn TicketMenu(last_error: RwSignal<Option<String>>) -> impl IntoView {
     let target = RwSignal::new(None::<Target>);
     let toast = RwSignal::new(None::<Toast>);
     let toast_gen = StoredValue::new(0u32);
     install_listeners(target);
 
     view! {
-        {move || target.get().map(|t| menu_view(t, rows, last_error, target, toast, toast_gen))}
+        {move || target.get().map(|t| menu_view(t, last_error, target, toast, toast_gen))}
         {move || toast.get().map(|t| toast_view(t, toast))}
     }
 }
@@ -381,7 +385,6 @@ pub(crate) fn TicketMenu(rows: RwSignal<Vec<Row>>, last_error: RwSignal<Option<S
 /// keyboard cursor on the menu itself.
 fn menu_view(
     t: Target,
-    rows: RwSignal<Vec<Row>>,
     last_error: RwSignal<Option<String>>,
     target: RwSignal<Option<Target>>,
     toast: RwSignal<Option<Toast>>,
@@ -390,7 +393,7 @@ fn menu_view(
     let Target { id, x, y } = t;
     let ticket = {
         let id = id.clone();
-        Memo::new(move |_| rows.with(|v| v.iter().find(|r| r.id == id).map(|r| r.ticket)))
+        Memo::new(move |_| cache::find(&id))
     };
     // Live through the row's signal: a status change arriving over watch
     // while the menu is open moves the mark.

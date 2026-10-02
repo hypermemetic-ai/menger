@@ -89,6 +89,14 @@ web-sys = { version = "0.3", features = [
   "HtmlInputElement",
   "MediaQueryList",
   "HtmlButtonElement",
+  # SCALE-24: the nav gives focus back to a row its window's keyed <For>
+  # moved in the DOM (a moved element loses focus), from a MutationObserver
+  # — without scrolling (FocusOptions).
+  "MutationObserver",
+  "MutationObserverInit",
+  "MutationRecord",
+  "FocusOptions",
+  "FocusEvent",
 ] }
 
 console_error_panic_hook = "0.1"

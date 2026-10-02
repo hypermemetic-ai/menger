@@ -128,6 +128,21 @@
 //! the new parent's takes it (src/kids.rs), and the board's "decomposes"
 //! marks follow both counts. Nothing else on the board moves.
 
+//! SCALE-24: the nav no longer reads the board's list. Its shortcode rows
+//! are the server's roll-ups (`groups`, kept by `group_changed`), a
+//! shortcode's tree hangs from its root, and an opened node's children come
+//! by page — a window of them, past one page — so the nav is right at any N
+//! without the walk, and a root of 163,530 children no longer aborts the
+//! wasm (src/nav.rs). What it shows, it fetches; and so that a ticket on
+//! screen in three places is still one signal, every row now lives in the
+//! row cache (src/cache.rs): the board's list holds its rows there (the walk
+//! goes on until SCALE-26), the nav its pages, the ticket page its ticket,
+//! blockers and children, the menu what it opens on — each held while it is
+//! shown, and every `watch` event applied to them in place. The ticket page
+//! and the menu find their ticket in the cache by id instead of scanning the
+//! board's list (an O(N) scan per row change at 10^6).
+
+mod cache;
 mod dom;
 mod keys;
 mod kids;
@@ -196,6 +211,11 @@ pub(crate) enum Conn {
 /// One board row. `id`/`epic`/`seq` are immutable for a ticket's
 /// lifetime (they define its identity and sort position), so they live
 /// outside the signal; everything mutable renders through `ticket`.
+///
+/// SCALE-24: `ticket` is a handle on the row cache's signal for the id, and
+/// the board's list holds one hold per row it has (released when the walk
+/// drops it) — so the board, the nav and the ticket page draw one ticket
+/// through one signal.
 #[derive(Clone)]
 pub(crate) struct Row {
     pub(crate) id: String,
@@ -208,13 +228,14 @@ pub(crate) struct Row {
 }
 
 impl Row {
+    /// A row of the board's list: one hold on the ticket's row in the cache.
     fn of(t: TicketSummary) -> Self {
-        Self {
-            id: t.id.clone(),
-            epic: t.epic.clone(),
-            seq: t.seq,
-            ticket: RwSignal::new(t),
-        }
+        let (id, epic, seq) = (t.id.clone(), t.epic.clone(), t.seq);
+        Self::held(id, epic, seq, cache::hold(t))
+    }
+
+    fn held(id: String, epic: String, seq: u32, sig: cache::RowSignal) -> Self {
+        Self { id, epic, seq, ticket: RwSignal::from(sig) }
     }
 
     /// The row's position in the store's total order — MNG-9's
@@ -261,15 +282,14 @@ pub(crate) fn row_index(v: &[Row], id: &str) -> Option<usize> {
 pub(crate) fn upsert(rows: RwSignal<Vec<Row>>, t: TicketSummary) {
     let existing = rows.with_untracked(|v| {
         let pos = v.partition_point(|r| r.key() < key_of(&t));
-        v.get(pos).filter(|r| r.id == t.id).map(|r| r.ticket)
+        v.get(pos).is_some_and(|r| r.id == t.id)
     });
     match existing {
-        Some(sig) => {
-            if sig.with_untracked(|old| *old != t) {
-                sig.set(t);
-            }
+        // SCALE-24: the row's signal is the cache's.
+        true => {
+            cache::put(t);
         }
-        None => rows.update(|v| {
+        false => rows.update(|v| {
             let pos = v.partition_point(|r| r.key() < key_of(&t));
             v.insert(pos, Row::of(t));
         }),
@@ -297,35 +317,51 @@ pub(crate) fn upsert_page(rows: RwSignal<Vec<Row>>, page: Vec<TicketSummary>) {
         return;
     }
     let mut fresh: Vec<TicketSummary> = Vec::new();
+    let mut held: Vec<TicketSummary> = Vec::new();
     rows.with_untracked(|v| {
         for t in page {
             let pos = v.partition_point(|r| r.key() < key_of(&t));
             match v.get(pos) {
-                Some(r) if r.id == t.id => {
-                    if r.ticket.with_untracked(|old| *old != t) {
-                        r.ticket.set(t);
-                    }
-                }
+                Some(r) if r.id == t.id => held.push(t),
                 _ => fresh.push(t),
             }
         }
     });
+    // SCALE-24: a row already on the board is the cache's signal — and one
+    // `watch` wrote since the walk began is newer than this page.
+    for t in held {
+        if !session::touched(&t.id) {
+            cache::put(t);
+        }
+    }
+    let fresh: Vec<TicketSummary> = fresh
+        .into_iter()
+        .map(|t| match cache::get(&t.id).filter(|_| session::touched(&t.id)) {
+            Some(newer) => newer.get_untracked(),
+            None => t,
+        })
+        .collect();
     if fresh.is_empty() {
         return;
     }
+    // One hold per new row, their arrival announced once for the page.
+    let keys: Vec<(String, String, u32)> = fresh.iter().map(|t| (t.id.clone(), t.epic.clone(), t.seq)).collect();
+    let sigs = cache::hold_page(fresh);
+    let fresh: Vec<Row> = keys
+        .into_iter()
+        .zip(sigs)
+        .map(|((id, epic, seq), sig)| Row::held(id, epic, seq, sig))
+        .collect();
     rows.update(|v| {
         let mut merged: Vec<Row> = Vec::with_capacity(v.len() + fresh.len());
-        let mut incoming = std::mem::take(&mut fresh).into_iter().peekable();
+        let mut incoming = fresh.into_iter().peekable();
         for row in v.drain(..) {
-            while incoming
-                .peek()
-                .is_some_and(|t| key_of(t) < (row.epic.as_str(), row.seq))
-            {
-                merged.push(Row::of(incoming.next().expect("peeked")));
+            while incoming.peek().is_some_and(|r| r.key() < row.key()) {
+                merged.push(incoming.next().expect("peeked"));
             }
             merged.push(row);
         }
-        merged.extend(incoming.map(Row::of));
+        merged.extend(incoming);
         *v = merged;
     });
 }
@@ -822,16 +858,13 @@ fn Board(
 /// dangling entry resolves live while the page is open. The entry carries
 /// `data-ticket-id` (the AGS-16 menu's attachment) exactly while it names
 /// a ticket — a dangling reference is not one.
-fn dag_entry(
-    id: String,
-    rows: RwSignal<Vec<Row>>,
-    dangling_when: Option<RwSignal<bool>>,
-) -> impl IntoView {
+fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>) -> impl IntoView {
     // SCALE-4: found by its key, as MFE-12's nav leaves are — a page of
-    // children is up to 200 of these, and each re-runs on every insert.
+    // children is up to 200 of these. SCALE-24: in the row cache, by id —
+    // re-run when a row arrives, not on every change of the board's list.
     let found = {
         let id = id.clone();
-        Memo::new(move |_| rows.with(|v| row_index(v, &id).map(|i| v[i].ticket)))
+        Memo::new(move |_| cache::find(&id))
     };
     let dangling = move || found.get().is_none() && dangling_when.is_some_and(|loaded| loaded.get());
     let attr_id = id.clone();
@@ -840,6 +873,7 @@ fn dag_entry(
         <li data-dag-id=attr_id data-ticket-id=move || (!dangling()).then(|| menu_id.clone())>
             {move || match found.get() {
                 Some(t) => {
+                    let t = RwSignal::from(t);
                     let href = format!("#/ticket/{id}");
                     view! {
                         <a href=href>{id.clone()}</a>
@@ -868,20 +902,19 @@ fn dag_entry(
 /// A ticket's ancestors, root first, from the row store (AGS-20). Stops
 /// at the first id the store does not hold — a deep link can be on screen
 /// before the snapshot lands — and at a repeat, so a hand-edited parent
-/// cycle cannot spin the crumb.
-fn ancestors(rows: RwSignal<Vec<Row>>, id: &str) -> Vec<String> {
+/// cycle cannot spin the crumb. SCALE-24: from the row cache, by id, so a
+/// parent that arrives later (the nav's chain, the walk) fills itself in.
+fn ancestors(id: &str) -> Vec<String> {
     let mut chain: Vec<String> = Vec::new();
     let mut cur = id.to_string();
-    rows.with(|v| {
-        while let Some(row) = v.iter().find(|r| r.id == cur) {
-            let Some(p) = row.ticket.with(|t| t.parent.clone()) else { break };
-            if p == id || chain.contains(&p) {
-                break;
-            }
-            chain.push(p.clone());
-            cur = p;
+    while let Some(row) = cache::find(&cur) {
+        let Some(p) = row.with(|t| t.parent.clone()) else { break };
+        if p == id || chain.contains(&p) {
+            break;
         }
-    });
+        chain.push(p.clone());
+        cur = p;
+    }
     chain.reverse();
     chain
 }
@@ -911,7 +944,6 @@ fn short_commit(full: &str) -> String {
 fn ticket_view(
     ticket: RwSignal<TicketSummary>,
     body_raw: RwSignal<Option<String>>,
-    rows: RwSignal<Vec<Row>>,
     blockers_loaded: RwSignal<bool>,
     kids: RwSignal<kids::Kids>,
     more: impl Fn() + Copy + Send + Sync + 'static,
@@ -957,7 +989,7 @@ fn ticket_view(
                 <ul id="blockers">
                     {ids
                         .into_iter()
-                        .map(|bid| dag_entry(bid, rows, Some(blockers_loaded)))
+                        .map(|bid| dag_entry(bid, Some(blockers_loaded)))
                         .collect_view()}
                 </ul>
             }
@@ -973,7 +1005,7 @@ fn ticket_view(
                 <ul id="unlocks">
                     {ids
                         .into_iter()
-                        .map(|uid| dag_entry(uid, rows, None))
+                        .map(|uid| dag_entry(uid, None))
                         .collect_view()}
                 </ul>
             }
@@ -990,7 +1022,7 @@ fn ticket_view(
                 <ul id="children">
                     {ids
                         .into_iter()
-                        .map(|cid| dag_entry(cid, rows, None))
+                        .map(|cid| dag_entry(cid, None))
                         .collect_view()}
                 </ul>
             }
@@ -1117,7 +1149,6 @@ fn ticket_view(
 #[component]
 fn TicketPage(
     id: String,
-    rows: RwSignal<Vec<Row>>,
     /// MFE-9: the socket's generation counter. It ticks the moment a
     /// connection is up — *before* the board's page walk finishes — so a
     /// cold deep link still renders from two point queries without waiting
@@ -1135,9 +1166,12 @@ fn TicketPage(
     // `amended` event for this ticket replaces the body without a `get`.
     session::hold_body(id.clone(), body);
     on_cleanup(move || session::release_body(body));
+    // SCALE-24: what this page fetches — its ticket, its blockers, its
+    // children — it holds in the row cache while it is open.
+    let holder = StoredValue::new(cache::Holder::new());
     // SCALE-4: this ticket's children, by page, kept live by `watch`.
     let kids = RwSignal::new(kids::Kids::default());
-    session::watch_children(id.clone(), kids);
+    session::watch_children(id.clone(), kids, holder.get_value());
 
     {
         let id = id.clone();
@@ -1147,27 +1181,29 @@ fn TicketPage(
             }
             session::load_ticket(
                 id.clone(),
-                rows,
+                holder.get_value(),
                 body,
                 not_found,
                 blockers_loaded,
                 last_error,
             );
-            session::load_children(id.clone(), None, rows, kids, last_error);
+            session::load_children(id.clone(), None, holder.get_value(), kids, last_error);
         });
     }
     let more = {
         let id = StoredValue::new(id.clone());
         move || {
             if let Some(after) = kids.with_untracked(|k| k.next.clone()) {
-                session::load_children(id.get_value(), Some(after), rows, kids, last_error);
+                session::load_children(id.get_value(), Some(after), holder.get_value(), kids, last_error);
             }
         }
     };
 
+    // SCALE-24: the page's ticket is the row cache's — held by this page once
+    // its `get` answers, and drawn as soon as anyone holds it.
     let ticket = {
         let id = id.clone();
-        Memo::new(move |_| rows.with(|v| v.iter().find(|r| r.id == id).map(|r| r.ticket)))
+        Memo::new(move |_| cache::find(&id))
     };
 
     // AGS-20: the crumb is the ancestor chain — the decomposition read
@@ -1176,7 +1212,7 @@ fn TicketPage(
     let crumbs = {
         let id = id.clone();
         move || {
-            ancestors(rows, &id)
+            ancestors(&id)
                 .into_iter()
                 .map(|a| {
                     let (href, code) = (format!("#/ticket/{a}"), a.clone());
@@ -1194,7 +1230,7 @@ fn TicketPage(
         <div id="ticket-page">
             <p class="crumbs"><a href="#/">"← board"</a>{crumbs}</p>
             {move || match ticket.get() {
-                Some(t) => ticket_view(t, body, rows, blockers_loaded, kids, more).into_any(),
+                Some(t) => ticket_view(RwSignal::from(t), body, blockers_loaded, kids, more).into_any(),
                 None if not_found.get() => {
                     let id = id_view.clone();
                     view! {
@@ -1225,13 +1261,16 @@ fn App() -> impl IntoView {
     let socket = RwSignal::new(0u32);
     let last_error = RwSignal::new(None::<String>);
     let route = use_route();
+    // SCALE-24: the nav's model of the store — the server's roll-ups, which
+    // the session fetches and keeps.
+    let tree = nav::Tree::new();
 
     // MFE-9: the whole data plane is one task holding one WebSocket
     // (session.rs) — `watch` first, then MNG-9's summary pages walked with
     // `after = next`, then live. ~1s retry keeps a server restart to a few
     // seconds of "reconnecting…" (MFE-2 criterion 3). It runs regardless of
     // route: the ticket page's liveness is this same stream.
-    session::drive(rows, dock, conn, socket, last_error);
+    session::drive(rows, dock, conn, socket, last_error, tree);
 
     let conn_view = move || match conn.get() {
         Conn::Connecting => ("", "connecting…"),
@@ -1263,7 +1302,7 @@ fn App() -> impl IntoView {
 
     view! {
         <div id="app" class:nonav=move || nav_hidden.get()>
-            <nav::Nav rows route hidden=nav_hidden />
+            <nav::Nav tree route hidden=nav_hidden />
             <div class="content" on:scroll=move |_| viewport.notify()>
                 <header>
                     {move || {
@@ -1301,14 +1340,14 @@ fn App() -> impl IntoView {
                     {move || match route.get() {
                         Route::Board => view! { <Board rows last_error viewport /> }.into_any(),
                         Route::Ticket(id) => {
-                            view! { <TicketPage id rows socket last_error /> }.into_any()
+                            view! { <TicketPage id socket last_error /> }.into_any()
                         }
                     }}
                 </main>
             </div>
             // AGS-16: mounted once, outside every ticket element, so a
             // right-click inside the menu itself never re-targets it.
-            <menu::TicketMenu rows last_error />
+            <menu::TicketMenu last_error />
             <keys::Overlays rows overlay />
         </div>
     }
