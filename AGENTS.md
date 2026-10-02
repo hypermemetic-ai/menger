@@ -70,10 +70,12 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   `synapse.config.json` and plain `synapse-cc build`; `synapse-cc watch`
   rebuilds on schema changes. A generated client is a snapshot of the
   schema, so it is regenerated whenever the activation's surface changes —
-  a new method, parameter or event. As of 2026-10-01 `synapse` and
-  `hub-codegen` are on this machine's PATH and `synapse-cc` is not built
-  (`cabal install` in its checkout), and it has not been run against
-  menger.
+  a new method, parameter or event. Run it **in the `plexus-codegen`
+  container** (`../dockerfiles/plexus-codegen`, STARTER-2) rather than
+  from a host install; `../plexus-starter`'s `scripts/codegen.sh` is the
+  worked example of wiring that into `npm run build`, `cargo xtask` and
+  CI. `synapse-cc` 0.3.4 and `hub-codegen` 0.4.1 are also installed in
+  `~/.local/bin` (2026-10-02); neither has been run against menger.
 - **A new language target** is a new `hub-codegen` generator over the same
   IR — never a hand-written client that mirrors the wire.
 - **REST + SSE** (:4457) — for curl and for scripts that cannot run
