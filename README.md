@@ -228,7 +228,8 @@ which rewrites no row, so it is instant at any size; a binary from before
 it still opens the file.
 
 ```sh
-synapse -P 4455 -j -p '{"id":"MNG-10","commits":["77df9a0"]}' menger tickets link_commits
+synapse -P 4455 menger tickets link_commits --id MNG-10 --commits 77df9a0
+synapse -P 4455 menger tickets link_commits --id SCALE-4 --commits 0bb28b2 --commits 090cdec
 ```
 
 | method | yields |

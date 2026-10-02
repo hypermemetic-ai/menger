@@ -22,6 +22,10 @@ derived from it or from the declaration that produces it. Pick by consumer:
 - **`synapse`** (`../synapse`; on PATH) — the CLI over any Plexus backend.
   This is how an agent, a worker or a shell script reads and writes
   tickets; prefer it to hand-rolled curl against the REST bridge.
+  **Read `../ought/synapse/SKILL.md` before issuing synapse commands** —
+  it is the house's invocation contract (where flags go, how to navigate
+  to a method, how to discover its parameters from the CLI itself); what
+  follows here is only what is particular to menger.
 
   ```sh
   synapse -P 4455 menger tickets health
@@ -30,21 +34,22 @@ derived from it or from the declaration that produces it. Pick by consumer:
   synapse -P 4455 menger tickets watch          # open-ended stream
   ```
 
-  `-j` prints the raw JSON stream items, `-p '{…}'` passes params as one
-  JSON object (the way to send a multi-line `body`), `-n` shows the
-  request without sending it, `-s` fetches the schema, `-i` emits the IR
-  the code generators consume. 4455 is inside its `_self scan` range.
-  A list parameter is its flag repeated — `--blocked-by MNG-1 --blocked-by
-  MNG-2` sends `["MNG-1","MNG-2"]` (a comma or a JSON array in one flag is
-  sent as a single string); `<method> --help` prints each parameter's type.
-  `-j` and `-p` are for scripts, not for arrays: `-j` is the output format,
-  `-p` the whole params object at once. Options go **before** the backend
-  name — after the path they are read as a subcommand ("Method 'create'
-  cannot have subcommands"):
+  **Params are individual flags, not a JSON blob** — treat synapse as a
+  normal CLI: `--kebab-case-flag value` after the method path, and
+  `<method> --help` prints each parameter's name and type. **A list
+  parameter is its flag repeated**: `--blocked-by MNG-1 --blocked-by MNG-2`
+  sends `["MNG-1","MNG-2"]`. (As of synapse 3.13 a comma-joined value or a
+  JSON array inside one flag is sent as a single string; SYNAPSE-2 adds
+  `--blocked-by MNG-1,MNG-2`.) A multi-line `--body` is an ordinary quoted
+  argument: `--body "$(cat body.md)"`.
 
-  ```sh
-  synapse -P 4455 -j -p '{"epic":"MNG","title":"…","body":"…"}' menger tickets create
-  ```
+  Global options go **before** the backend name — after the path they are
+  read as a subcommand ("Method 'create' cannot have subcommands"). `-j`
+  prints the raw JSON stream items (for a script that parses the reply),
+  `-n` shows the request without sending it, `-s` fetches the schema, `-i`
+  emits the IR the code generators consume, and `-p '{…}'` passes the whole
+  params object at once — a script's convenience, never a requirement.
+  4455 is inside its `_self scan` range.
 - **The macro-emitted Rust client** — `TicketsClient<T>`, emitted by
   `#[plexus_macros::activation(client, …)]` from the activation's own
   `impl` in `tickets-api/` (MFE-11). Compile-time and Rust-only: the
@@ -139,7 +144,8 @@ derived from it or from the declaration that produces it. Pick by consumer:
   (menger's current name for `done`; SDLC-2 reconciles the vocabulary
   with ought's). **Link the commit** (SDLC-9): in the step that flips the
   ticket to `In Review`, the worker links its commit(s) with
-  `tickets.link_commits` (`{"id":"MNG-10","commits":["77df9a0"]}`;
+  `tickets.link_commits` (`synapse -P 4455 menger tickets link_commits
+  --id MNG-10 --commits 77df9a0`, the flag repeated per commit;
   `repo@hash` for a commit outside menger); the merge links the merge
   commit too if it differs, when it sets `Complete`.
 - `web/index.html` is dependency-free and embedded via `include_str!` —
