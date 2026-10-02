@@ -1,5 +1,5 @@
 use clap::Parser;
-use menger::store::SeedSpec;
+use menger::store::{SeedSpec, Store, Verdict};
 use menger::{build_rpc_with, default_db_path, shell};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::{RestHttpConfig, RouteFn, TransportServer};
@@ -68,6 +68,16 @@ struct Args {
         value_parser = clap::builder::FalseyValueParser::new()
     )]
     seed_into_existing: bool,
+
+    /// SCALE-28: check the database (--db-path, or the default) instead of
+    /// serving it: rebuild its derived state — shortcode runs, dangling
+    /// forward references, roll-ups, children and child_count — by a scan
+    /// of its tickets, compare with what it stores, print each difference
+    /// or "consistent", and exit 0 when consistent, 1 on any difference
+    /// (or none stored), 2 when it cannot be read. Read-only: changes
+    /// nothing, migrates nothing, serves nothing.
+    #[arg(long)]
+    verify_derived: bool,
 }
 
 #[tokio::main]
@@ -86,6 +96,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let db_path = args.db_path.unwrap_or_else(default_db_path);
+    if args.verify_derived {
+        std::process::exit(verify_derived(db_path).await);
+    }
     let seed = args.seed_synthetic.map(|count| SeedSpec {
         count,
         seed: args.seed_value,
@@ -149,4 +162,47 @@ async fn main() -> anyhow::Result<()> {
     }
 
     builder.build().await?.serve().await
+}
+
+/// SCALE-28: `--verify-derived` — the verdict on stdout, one difference a
+/// line, and the exit code it means. Run off the async runtime: it reads
+/// and scans the whole file.
+async fn verify_derived(db_path: PathBuf) -> i32 {
+    let path = db_path.clone();
+    let verdict = tokio::task::spawn_blocking(move || Store::verify_derived(&path))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|v| v);
+    match verdict {
+        Ok(Verdict::Consistent {
+            tickets,
+            runs,
+            refs,
+            groups,
+            parents,
+        }) => {
+            println!(
+                "consistent: {} — {tickets} tickets; {runs} shortcode runs, {refs} dangling forward \
+                 references, {groups} roll-up groups and the children and child_count of {parents} \
+                 parents are what a scan of the tickets gives",
+                db_path.display()
+            );
+            0
+        }
+        Ok(Verdict::Differs(differences)) => {
+            for d in &differences {
+                println!("{d}");
+            }
+            println!("{}: {} difference(s) between the stored derived state and a scan", db_path.display(), differences.len());
+            1
+        }
+        Ok(Verdict::NotStored(why)) => {
+            println!("{}: {why}", db_path.display());
+            1
+        }
+        Err(e) => {
+            eprintln!("cannot verify {}: {e:#}", db_path.display());
+            2
+        }
+    }
 }

@@ -17,7 +17,7 @@ pub(super) struct Children {
 /// ones beside it (sub-shortcode roots it hosts): four bytes a child,
 /// where AGS-19's list on the row was an id string a child, on the row,
 /// in the database and in every event about the parent.
-#[derive(Default)]
+#[derive(Default, PartialEq)]
 struct Kids {
     by_epic: BTreeMap<String, Vec<u32>>,
     /// Every vector's length, summed — the parent's `child_count`.
@@ -118,6 +118,59 @@ impl Children {
             flush(&mut of, done);
         }
         Self { of }
+    }
+
+    /// SCALE-28: an empty index to [`Self::push`] the database's own into.
+    pub(super) fn filling() -> Self {
+        Self { of: HashMap::new() }
+    }
+
+    /// SCALE-28: one entry of the database's index on `(parent, epic, seq)`,
+    /// read in that order — at start, instead of a [`Self::build`] from the
+    /// tickets. In that order every parent's children arrive together, each
+    /// shortcode's ascending, so a child is a push; the parent's and the
+    /// shortcode's names are only copied when they change.
+    pub(super) fn push(&mut self, parent: &str, epic: &str, seq: u32) {
+        let kids = match self.of.get_mut(parent) {
+            Some(kids) => kids,
+            None => self.of.entry(parent.to_string()).or_default(),
+        };
+        match kids.by_epic.get_mut(epic) {
+            Some(seqs) => seqs.push(seq),
+            None => {
+                kids.by_epic.insert(epic.to_string(), vec![seq]);
+            }
+        }
+        kids.count += 1;
+    }
+
+    /// How many parents have a child — for the startup log and the verdict.
+    pub(super) fn parents(&self) -> usize {
+        self.of.len()
+    }
+
+    /// SCALE-28: every parent whose children differ between the two, in id
+    /// order — what `--verify-derived` reports of the index.
+    pub(super) fn differences(&self, other: &Self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .of
+            .iter()
+            .filter(|(p, kids)| other.of.get(*p) != Some(kids))
+            .map(|(p, _)| p.clone())
+            .chain(other.of.keys().filter(|p| !self.of.contains_key(*p)).cloned())
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// `parent`'s children as `(epic, seq)` keys, in the store's order.
+    pub(super) fn of(&self, parent: &str) -> Vec<(String, u32)> {
+        self.of.get(parent).map_or_else(Vec::new, |kids| {
+            kids.by_epic
+                .iter()
+                .flat_map(|(e, seqs)| seqs.iter().map(move |s| (e.clone(), *s)))
+                .collect()
+        })
     }
 
     /// How many tickets name `parent` — its `child_count`. A lookup.

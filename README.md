@@ -55,6 +55,35 @@ cargo run --release -- --db-path /tmp/scratch.db --seed-synthetic 100000 \
 The magnitude ladder in `perf/` (PERF-3) drives this option per
 magnitude on temp databases and ephemeral ports.
 
+### The stored derived state, and checking it (SCALE-28)
+
+What the store derives from the tickets — each shortcode's run of
+sequences (the next id, `extents`, `page.remaining`,
+`health.ticket_count`), the dangling forward references `create`
+resolves, the roll-ups behind `groups`, and each ticket's children
+(an index on `(parent, epic, seq)`) with its `child_count` (a column on
+its row) — is stored in the database beside them, written by every write
+in the same transaction as its tickets, and read at start instead of
+rebuilt by a pass over every ticket. A database written before SCALE-28
+has it built once, on first open, durably, and the log says so
+(`SCALE-28: stored the derived state for the first time …`); every later
+start logs `read the derived state from the database … nothing rebuilt`.
+A seed stores it after its last chunk of tickets; killed before that, the
+file says its derived state is behind, and the next open builds it again.
+
+```sh
+menger --verify-derived --db-path /path/to/tickets.db
+```
+
+opens the file read-only, rebuilds all four by a scan of its tickets,
+compares them with what is stored, and prints each difference — the
+structure and the key, what is stored and what a scan gives
+(`child_count of ALT-2: stored 5; a scan gives 1`) — or `consistent: …`.
+Exit 0 when consistent; 1 on any difference, or when the file holds no
+derived state to compare (written before SCALE-28 and not opened since);
+2 when it cannot be read. It changes nothing, migrates nothing and serves
+nothing: run it before a deploy and after any migration.
+
 ## Frontend (the Leptos app)
 
 The MFE epic's browser client lives in `frontend/` — a **separate cargo
@@ -203,7 +232,8 @@ whole shortcode, 163,530 ids and 2 MB at 10⁶, rewritten, stored and
 broadcast on every birth). The parent must exist at creation and the
 chain is acyclic (a ticket cannot be its own ancestor); a nonexistent or
 cyclic parent is an in-band `error` naming the reason. A child's birth
-writes only the child — the parent's stored row is not touched — and
+writes the child and, on the parent's row, only its count (SCALE-28; from
+SCALE-4 until then, nothing of the parent's) — never a list — and
 `watch` carries the parent's side as `children_changed { id, added,
 child_count }`: the parent's id, the child, the new count. A database
 written before AGS-19 gains `parent` on first open, durably, with typed
@@ -260,7 +290,7 @@ synapse -P 4455 menger tickets link_commits --id SCALE-4 --commits 0bb28b2 --com
 | `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id |
 | `tickets.link_commits { id, commits }` | `commits_linked { ticket, added }` (SDLC-9) — appends every commit reference in `commits` the ticket does not already carry, in the order given; `added` is what was newly linked, in order. Every entry already linked, or `commits` empty, is no write and no broadcast and answers `added: []`. An entry that is not a commit reference is one in-band `error` naming every such entry, and nothing is written — a call is all or nothing; so is a link that would put more than 256 commits on the ticket. An id naming no ticket is `not_found`. Durable before it is acknowledged; `updated_unix` moves, nothing else does |
 | `tickets.unlink_commits { id, commits }` | `commits_unlinked { ticket, removed }` (SDLC-9) — every entry the ticket carries is removed; `removed` names them in the order given; none of them linked is no write, `removed: []`. The same grammar, the same all-or-nothing `error`, `not_found` |
-| `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's row is written, and it leaves the old parent's children and joins the new one's (SCALE-4: neither parent's row is written; `watch` carries `children_changed` and `child_removed` with each parent's new `child_count`); the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
+| `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's row is written, and it leaves the old parent's children and joins the new one's (SCALE-4: neither parent's row is rewritten — SCALE-28 stores each one's new `child_count` on it, in the move's transaction; `watch` carries `children_changed` and `child_removed` with each parent's new `child_count`); the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, root, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only), `root` is the lowest-seq `scope`, `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
 | `tickets.extents {}` | one `extent { epic, last_seq }` per shortcode that holds a ticket, in shortcode order (the store's), then the stream's own `done` (SCALE-16) — where each shortcode ends: ids are allocated highest-plus-one and never deleted, so a shortcode holds `last_seq` tickets, row k of it is `EPIC-k`, and a position in the store's order becomes a `list { after }` cursor without a walk; every `last_seq` together sums to `health.ticket_count` (a hand-edited database with a hole still reports the highest sequence; `after` naming the missing id is `list`'s cursor error). Not a roll-up: the shortcode's own tickets only, and every shortcode has one whether or not the nav draws it a row. Read from the sequence `create` allocates from (SCALE-3), so the cost is the number of shortcodes; no `watch` event — `created` carries the shortcode's new `last_seq` as its `seq` |
 | `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `commits_linked` / `commits_unlinked` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`); `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
@@ -329,6 +359,10 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        what child_count is (SCALE-4)
     db.rs              the schema, the writes, a row and a body read back, the
                        in-place migrations
+    stored.rs          the derived state as stored beside the tickets — its
+                       tables, what a write's transaction writes to them, the
+                       read at start, the build on first open, and
+                       --verify-derived (SCALE-28)
     commits.rs         what a commit reference is, as stored and compared, and
                        how many a ticket holds (SDLC-9)
     synthetic.rs       the --seed-synthetic generator (PERF-2)
@@ -349,6 +383,10 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
     tests_detached.rs  every write dropped by its caller mid-commit still
                        reaches the cache and watch; the next id is the next
                        one (MNG-20)
+    tests_stored.rs    the stored derived state, read back from the file,
+                       against the scan oracles after every kind of write on
+                       every kind of store; the build once, the read at
+                       start, the seed's marker, verify (SCALE-28)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell

@@ -20,6 +20,7 @@ pub(super) const SCHEMA: &str = "
             created_unix INTEGER NOT NULL,
             updated_unix INTEGER NOT NULL,
             commits      TEXT NOT NULL DEFAULT '[]',
+            child_count  INTEGER NOT NULL DEFAULT 0,
             UNIQUE (epic, seq)
         );
     ";
@@ -406,14 +407,15 @@ fn parse_ids(idx: usize, s: &str) -> rusqlite::Result<Vec<String>> {
 }
 
 /// Inserts or replaces one ticket. A single implicit transaction:
-/// when this returns Ok, the row is durable.
+/// when this returns Ok, the row is durable. SCALE-28: `child_count` with
+/// it — a newborn's is 0 but where a hand edit already named it a parent.
 pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix, commits)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                  created_unix, updated_unix, commits, child_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT (id) DO UPDATE SET
                  epic = excluded.epic,
                  seq = excluded.seq,
@@ -427,7 +429,8 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
                  body = excluded.body,
                  created_unix = excluded.created_unix,
                  updated_unix = excluded.updated_unix,
-                 commits = excluded.commits",
+                 commits = excluded.commits,
+                 child_count = excluded.child_count",
         params![
             t.id,
             t.epic,
@@ -443,6 +446,7 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
             t.created_unix,
             t.updated_unix,
             serde_json::to_string(&t.commits).expect("serialize commits"),
+            t.child_count,
         ],
     )?;
     Ok(())
@@ -451,14 +455,16 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
 /// PERF-2: inserts many fresh rows inside the caller's transaction
 /// through one prepared statement. Plain INSERT (no upsert): seeded
 /// ids are allocated above existing maxima, so a conflict here would
-/// be a generator bug and must surface, not overwrite.
+/// be a generator bug and must surface, not overwrite. SCALE-28: each
+/// with the `child_count` it was generated with (0); the seed stores the
+/// counts once the whole seed is in.
 pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare_cached(
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix, commits)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                  created_unix, updated_unix, commits, child_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
     )?;
     for t in tickets {
         stmt.execute(params![
@@ -476,6 +482,7 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Re
             t.created_unix,
             t.updated_unix,
             serde_json::to_string(&t.commits).expect("serialize commits"),
+            t.child_count,
         ])?;
     }
     Ok(())
@@ -483,9 +490,10 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Re
 
 /// SCALE-14: every stored column of a row but the body, in the order
 /// [`read_row`] reads them — what the cache loads, and the head of what a
-/// whole ticket is read back as. SDLC-9: `commits` last, at 12.
+/// whole ticket is read back as. SDLC-9: `commits` at 12. SCALE-28:
+/// `child_count` last, at 13.
 const ROW_COLUMNS: &str = "id, epic, seq, title, status, kind, severity,
-                    blocked_by, unlocks, created_unix, updated_unix, parent, commits";
+                    blocked_by, unlocks, created_unix, updated_unix, parent, commits, child_count";
 
 /// One row from a `SELECT` that starts with [`ROW_COLUMNS`].
 fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
@@ -506,9 +514,9 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         created_unix: row.get(9)?,
         updated_unix: row.get(10)?,
         parent: row.get::<_, Option<String>>(11)?,
-        // SCALE-4: not stored — the cache counts each ticket's children
-        // from every other ticket's `parent` once all are loaded.
-        child_count: 0,
+        // SCALE-28: stored, moved by the transaction of every birth or move
+        // under this ticket (SCALE-4 counted it from the parents at load).
+        child_count: row.get(13)?,
         commits: parse_ids(12, &row.get::<_, String>(12)?)?,
     })
 }
@@ -535,11 +543,10 @@ pub(super) fn body(conn: &Connection, id: &str) -> rusqlite::Result<Option<Strin
 }
 
 /// SCALE-14: one whole ticket as stored — its row and its body from one
-/// statement, so from one snapshot. `child_count` is 0: the database does
-/// not store it (SCALE-4).
+/// statement, so from one snapshot (SCALE-28: its `child_count` too).
 pub(super) fn ticket(conn: &Connection, id: &str) -> rusqlite::Result<Option<Ticket>> {
     conn.prepare_cached(&format!("SELECT {ROW_COLUMNS}, body FROM tickets WHERE id = ?1"))?
-        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(13)?)))
+        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(14)?)))
         .optional()
 }
 
@@ -548,6 +555,8 @@ pub(super) fn ticket(conn: &Connection, id: &str) -> rusqlite::Result<Option<Tic
 /// shape of every write after birth but `amend`'s. One row or an error:
 /// the ticket is in the cache, so it is in the database. SDLC-9: the
 /// commits are a column of the row, so `link_commits` writes through here.
+/// SCALE-28: and not `child_count` — the derived state's, written only by
+/// the birth or move that changes it ([`super::stored::Changes`]).
 pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
     let changed = conn.prepare_cached(
         "UPDATE tickets SET

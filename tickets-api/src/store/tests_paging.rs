@@ -59,7 +59,7 @@ async fn create_in(store: &Store, epic: &str) -> Ticket {
 
 /// Writes tickets straight through the schema, `(epic, seq)` each, id
 /// `EPIC-seq` — any shape, including the ones the server never makes.
-fn write_runs(path: &Path, rows: &[(&str, u32)]) {
+pub(super) fn write_runs(path: &Path, rows: &[(&str, u32)]) {
     let conn = Connection::open(path).unwrap();
     conn.execute_batch(db::SCHEMA).unwrap();
     for (epic, seq) in rows {
@@ -92,12 +92,12 @@ type Answer = (Vec<String>, Option<String>, u64);
 
 /// The store's order as a plain list of `(id, key)`, read once per state
 /// of the store: the oracle's whole input.
-struct Oracle {
+pub(super) struct Oracle {
     rows: Vec<(String, OrderKey)>,
 }
 
 impl Oracle {
-    fn of(store: &Store) -> Self {
+    pub(super) fn of(store: &Store) -> Self {
         let cache = store.tickets.read().unwrap();
         Self {
             rows: cache.order.iter().map(|(k, t)| (t.id.clone(), k.clone())).collect(),
@@ -139,7 +139,7 @@ impl Oracle {
 
     /// Each shortcode as a scan finds it: `(lowest, highest, how many,
     /// every sequence 1..=highest)` — what the cache keeps, worked out.
-    fn runs(&self) -> BTreeMap<String, (u32, u32, u64, bool)> {
+    pub(super) fn runs(&self) -> BTreeMap<String, (u32, u32, u64, bool)> {
         let mut seqs: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
         for (_, k) in &self.rows {
             seqs.entry(k.epic.clone()).or_default().insert(k.seq);

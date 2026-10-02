@@ -1,5 +1,6 @@
+use super::stored::{Changes, CrossRow, GroupRow, Mark};
 use super::{Group, Kind, Row, Rows, Status};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Tickets counted: how many, and how many `Complete` (the nav's
 /// `done` — `Superseded` is not done).
@@ -32,7 +33,7 @@ impl Tally {
 }
 
 /// One shortcode's half of the roll-up.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct Shortcode {
     /// Its lowest-seq `scope` ticket. Fixed once set: kinds never
     /// change and every later ticket has a higher seq.
@@ -59,7 +60,7 @@ struct Shortcode {
 }
 
 /// A cross top's tree: its tally, and the group it is drawn in.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Cross {
     tally: Tally,
     home: String,
@@ -82,6 +83,10 @@ impl Bucket {
     }
 }
 
+/// SCALE-28: the roll-ups as stored ([`Rollups::stored`]): a row per
+/// shortcode, one per cross top, one per mark.
+pub(super) type Stored = (BTreeMap<String, GroupRow>, BTreeMap<String, CrossRow>, BTreeSet<(Mark, String)>);
+
 /// The groups drawn before a reshaping write, with their depth, to
 /// diff the settled shape against.
 type Snapshot = BTreeMap<String, (Group, usize)>;
@@ -95,6 +100,12 @@ pub(super) struct Reparenting {
     rebuild: Option<String>,
 }
 
+/// SCALE-28: `Clone` — a write works out what the roll-ups become on a
+/// copy, before it commits, so it can store the rows that differ in the
+/// same transaction ([`Rollups::changes`]); the cache takes the copy once
+/// the commit has landed. A copy is one entry per shortcode and per cross
+/// top: the cost of `groups`, not of the tickets.
+#[derive(Clone)]
 pub(super) struct Rollups {
     /// In shortcode order — plan()'s order, which decides between two
     /// sub-shortcodes that would nest inside each other.
@@ -233,6 +244,113 @@ impl Rollups {
         }
     }
 
+    /// SCALE-28: from what is stored — at start, instead of [`Self::build`].
+    /// Every field is stored as kept, the settled shape included (host, the
+    /// group a row is drawn inside, each roll-up), so nothing is settled
+    /// again: what was kept is what is read.
+    pub(super) fn from_stored(
+        groups: BTreeMap<String, GroupRow>,
+        cross: BTreeMap<String, CrossRow>,
+        marks: BTreeSet<(Mark, String)>,
+    ) -> Self {
+        let tally = |(total, done): (u64, u64)| Tally { total, done };
+        let mut r = Self {
+            shortcodes: groups
+                .into_iter()
+                .map(|(epic, g)| {
+                    let s = Shortcode {
+                        root: g.root,
+                        base: tally(g.base),
+                        base_tops: g.base_tops,
+                        host: g.host,
+                        up: g.up,
+                        own: tally(g.own),
+                        roll: tally(g.roll),
+                    };
+                    (epic, s)
+                })
+                .collect(),
+            cross: cross
+                .into_iter()
+                .map(|(id, c)| (id, Cross { tally: tally(c.tally), home: c.home }))
+                .collect(),
+            on_cycle: HashSet::new(),
+            dangling: HashSet::new(),
+        };
+        for (mark, id) in marks {
+            match mark {
+                Mark::Cycle => r.on_cycle.insert(id),
+                Mark::Dangling => r.dangling.insert(id),
+            };
+        }
+        r
+    }
+
+    /// SCALE-28: as stored — a row per shortcode, one per cross top, one per
+    /// mark.
+    pub(super) fn stored(&self) -> Stored {
+        let groups = self.shortcodes.iter().map(|(e, s)| (e.clone(), Self::row(s))).collect();
+        let cross = self.cross.iter().map(|(id, c)| (id.clone(), Self::cross_row(c))).collect();
+        let marks = self
+            .on_cycle
+            .iter()
+            .map(|id| (Mark::Cycle, id.clone()))
+            .chain(self.dangling.iter().map(|id| (Mark::Dangling, id.clone())))
+            .collect();
+        (groups, cross, marks)
+    }
+
+    fn row(s: &Shortcode) -> GroupRow {
+        GroupRow {
+            root: s.root.clone(),
+            host: s.host.clone(),
+            up: s.up.clone(),
+            base: (s.base.total, s.base.done),
+            base_tops: s.base_tops,
+            own: (s.own.total, s.own.done),
+            roll: (s.roll.total, s.roll.done),
+        }
+    }
+
+    fn cross_row(c: &Cross) -> CrossRow {
+        CrossRow {
+            tally: (c.tally.total, c.tally.done),
+            home: c.home.clone(),
+        }
+    }
+
+    /// SCALE-28: the stored rows that differ between these roll-ups and
+    /// `after` — what a write that turns one into the other writes in its
+    /// transaction. A comparison per shortcode and per cross top, and a
+    /// row written only where one moved: a create writes its tree's group
+    /// and the few around it, as many as its `group_changed` events (and
+    /// those whose settled state moved without a drawn number moving).
+    pub(super) fn changes(&self, after: &Self, into: &mut Changes) {
+        for (epic, s) in &after.shortcodes {
+            if self.shortcodes.get(epic) != Some(s) {
+                into.groups.push((epic.clone(), Some(Self::row(s))));
+            }
+        }
+        for epic in self.shortcodes.keys().filter(|e| !after.shortcodes.contains_key(*e)) {
+            into.groups.push((epic.clone(), None));
+        }
+        for (id, c) in &after.cross {
+            if self.cross.get(id) != Some(c) {
+                into.cross.push((id.clone(), Some(Self::cross_row(c))));
+            }
+        }
+        for id in self.cross.keys().filter(|id| !after.cross.contains_key(*id)) {
+            into.cross.push((id.clone(), None));
+        }
+        for (mark, was, now) in [
+            (Mark::Cycle, &self.on_cycle, &after.on_cycle),
+            (Mark::Dangling, &self.dangling, &after.dangling),
+        ] {
+            into.marks.extend(now.difference(was).map(|id| ((mark, id.clone()), true)));
+            into.marks.extend(was.difference(now).map(|id| ((mark, id.clone()), false)));
+        }
+    }
+
     /// How many shortcodes the store holds (drawn or not).
     pub(super) fn len(&self) -> usize {
         self.shortcodes.len()
@@ -300,6 +418,13 @@ impl Rollups {
         moved
     }
 
+    /// Whether a status change from `previous` to `now` moves any count:
+    /// only a crossing of `Complete` does (SCALE-28: so a write that moves
+    /// none copies nothing and stores nothing).
+    pub(super) fn crosses(previous: Status, now: Status) -> bool {
+        (now == Status::Complete) != (previous == Status::Complete)
+    }
+
     /// A status change (already in `rows`): only a crossing of
     /// `Complete` moves anything.
     pub(super) fn status_changed(
@@ -309,7 +434,7 @@ impl Rollups {
         previous: Status,
     ) -> Vec<Group> {
         let gain = t.status == Status::Complete;
-        if gain == (previous == Status::Complete) {
+        if !Self::crosses(previous, t.status) {
             return Vec::new();
         }
         let home = self.count(rows, t, Tally::DONE, gain);

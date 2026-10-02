@@ -85,7 +85,9 @@ It seeds N (`--seed-synthetic N`, seed value 1) into a fresh database under
 `target/perf-tmp` on kernel-chosen ports with the shell off, then over REST
 times 20 creates under `MAP-1` — the largest epic's root, which seed value
 1 generates at every N (23 % of the store at 10⁴, 16 % at 10⁶) — and 20
-under a new `TINY` root, and prints both medians and their ratio, the size
+under a new `TINY` root, and prints both medians and their ratio (and,
+since SCALE-28, the medians of moving each of those 40 to `Complete` — a
+status change that moves every roll-up around it), the size
 of the root's `get` and summary row, the time of a page of the root's
 children (`list { parent, summary, limit: 200 }`, the first page and one
 90 % of the way down), the largest `children_changed` event seen on

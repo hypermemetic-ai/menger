@@ -1,3 +1,4 @@
+use super::stored::{Changes, RefKey, RunRow};
 use super::{OrderKey, Row, Rows};
 use std::collections::{BTreeMap, HashMap};
 
@@ -146,32 +147,91 @@ impl Ids {
         self.unborn.len()
     }
 
-    /// A ticket is born (already in `rows`): its shortcode's sequence
-    /// reaches it, the forward references to its id are resolved — they
-    /// were read into its `unlocks` before the commit — and the ones it
-    /// makes itself are kept. SCALE-19: and its shortcode holds one more.
-    /// Born means new: `create` allocates past the highest sequence, so
-    /// the newborn is never a ticket the run already counted.
-    pub(super) fn born(&mut self, rows: Rows<'_>, t: &Row) {
-        match self.runs.get_mut(&t.epic) {
-            Some(run) => {
-                run.first = run.first.min(t.seq);
-                run.last = run.last.max(t.seq);
-                run.held += 1;
-            }
-            None => {
-                self.runs.insert(
-                    t.epic.clone(),
-                    Run {
-                        first: t.seq,
-                        last: t.seq,
-                        held: 1,
-                    },
-                );
+    /// A ticket is born (`rows` hold it): its shortcode's sequence reaches
+    /// it, the forward references to its id are resolved — they were read
+    /// into its `unlocks` before the commit — and the ones it makes itself
+    /// are kept. SCALE-19: and its shortcode holds one more. Born means
+    /// new: `create` allocates past the highest sequence, so the newborn is
+    /// never a ticket the run already counted.
+    ///
+    /// SCALE-28: worked out here, before the write commits, and moved by
+    /// [`Self::born`] after — so what the write's transaction stores
+    /// ([`Birth::store`]) and what the cache becomes are one value, not two
+    /// computations that could disagree.
+    pub(super) fn birth(&self, rows: Rows<'_>, t: &Row) -> Birth {
+        let run = match self.runs.get(&t.epic) {
+            Some(run) => Run {
+                first: run.first.min(t.seq),
+                last: run.last.max(t.seq),
+                held: run.held + 1,
+            },
+            None => Run {
+                first: t.seq,
+                last: t.seq,
+                held: 1,
+            },
+        };
+        // A ticket naming one id twice is one entry, as a scan finds it once.
+        let mut named: Vec<String> = Vec::new();
+        for b in &t.blocked_by {
+            if !rows.contains(b) && !named.contains(b) {
+                named.push(b.clone());
             }
         }
-        self.unborn.remove(&t.id);
-        self.names(rows, t);
+        Birth {
+            epic: t.epic.clone(),
+            run,
+            id: t.id.clone(),
+            resolves: self.unborn.contains_key(&t.id),
+            names: named
+                .into_iter()
+                .map(|b| ((b, OrderKey::of(t)), t.id.clone()))
+                .collect(),
+        }
+    }
+
+    /// …and once it has committed, the cache takes it.
+    pub(super) fn born(&mut self, birth: Birth) {
+        self.runs.insert(birth.epic, birth.run);
+        self.unborn.remove(&birth.id);
+        for ((id, key), referrer) in birth.names {
+            self.unborn.entry(id).or_default().insert(key, referrer);
+        }
+    }
+
+    /// SCALE-28: from what is stored — at start, instead of [`Self::build`].
+    pub(super) fn from_stored(runs: BTreeMap<String, RunRow>, refs: BTreeMap<RefKey, String>) -> Self {
+        let mut unborn: HashMap<String, BTreeMap<OrderKey, String>> = HashMap::new();
+        for ((id, key), referrer) in refs {
+            unborn.entry(id).or_default().insert(key, referrer);
+        }
+        Self {
+            runs: runs
+                .into_iter()
+                .map(|(epic, (first, last, held))| (epic, Run { first, last, held }))
+                .collect(),
+            unborn,
+        }
+    }
+
+    /// SCALE-28: as stored — each shortcode's run, and each dangling forward
+    /// reference keyed by the id it names and the naming ticket's position.
+    pub(super) fn stored(&self) -> (BTreeMap<String, RunRow>, BTreeMap<RefKey, String>) {
+        let runs = self
+            .runs
+            .iter()
+            .map(|(epic, run)| (epic.clone(), (run.first, run.last, run.held)))
+            .collect();
+        let refs = self
+            .unborn
+            .iter()
+            .flat_map(|(id, waiting)| {
+                waiting
+                    .iter()
+                    .map(move |(key, referrer)| ((id.clone(), key.clone()), referrer.clone()))
+            })
+            .collect();
+        (runs, refs)
     }
 
     /// Keeps each id `t` names in `blocked_by` that is no ticket. A ticket
@@ -205,5 +265,30 @@ impl Ids {
             .iter()
             .map(|(epic, run)| (epic.clone(), (run.first, run.last, run.held, run.dense())))
             .collect()
+    }
+}
+
+/// SCALE-28: what one birth does to the indexes ([`Ids::birth`]) — the
+/// newborn's shortcode's run as it will stand, whether references to its id
+/// leave, and the ones it makes.
+pub(super) struct Birth {
+    epic: String,
+    run: Run,
+    id: String,
+    /// Some ticket named the newborn's id before it existed.
+    resolves: bool,
+    names: Vec<(RefKey, String)>,
+}
+
+impl Birth {
+    /// The rows the birth's own transaction writes: one run, and a
+    /// reference only where one leaves or is made — almost never.
+    pub(super) fn store(&self, into: &mut Changes) {
+        into.runs
+            .push((self.epic.clone(), (self.run.first, self.run.last, self.run.held)));
+        if self.resolves {
+            into.refs_born.push(self.id.clone());
+        }
+        into.refs_named.extend(self.names.iter().cloned());
     }
 }

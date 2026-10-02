@@ -50,7 +50,7 @@ pub(super) fn children(store: &Store, id: &str) -> Vec<String> {
 /// Every parent's children as a scan of the store finds them: each
 /// ticket's `(epic, seq)` under the id its `parent` names, in the store's
 /// order.
-fn scanned(store: &Store) -> BTreeMap<String, Vec<(String, u32)>> {
+pub(super) fn scanned(store: &Store) -> BTreeMap<String, Vec<(String, u32)>> {
     let cache = store.tickets.read().unwrap();
     let mut out: BTreeMap<String, Vec<(String, u32)>> = BTreeMap::new();
     for t in cache.order.values() {
@@ -448,9 +448,11 @@ async fn a_birth_and_a_move_broadcast_the_parents_id_and_count() {
 }
 
 /// Every column of one stored row, as text — what the database holds for it.
+/// SCALE-28: but `child_count`, which the file keeps on the parent's row now
+/// and the birth or move under it writes (asserted on its own below).
 fn stored_row(path: &Path, id: &str) -> Vec<Option<String>> {
     let conn = Connection::open(path).unwrap();
-    let cols = columns(&conn);
+    let cols: Vec<String> = columns(&conn).into_iter().filter(|c| c != "child_count").collect();
     let sql = format!(
         "SELECT {} FROM tickets WHERE id = ?1",
         cols.iter().map(|c| format!("CAST({c} AS TEXT)")).collect::<Vec<_>>().join(", ")
@@ -492,6 +494,13 @@ async fn a_parents_stored_row_does_not_change_when_it_gains_or_loses_children() 
     assert_eq!(store.get("GROW-2").await.unwrap().child_count, 9);
     assert_eq!(stored_row(&path, "GROW-1"), root, "the root's row, byte for byte");
     assert_eq!(stored_row(&path, "GROW-2"), other, "a parent moved into and out of");
+    let stored_count = |id: &str| -> u64 {
+        Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT child_count FROM tickets WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!((stored_count("GROW-1"), stored_count("GROW-2")), (92, 9), "SCALE-28: the count, and only it");
     drop(store);
     let store = Store::open(&path).unwrap();
     assert_eq!(store.get("GROW-1").await.unwrap().child_count, 92, "counted from the parents at load");

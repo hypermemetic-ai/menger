@@ -1256,7 +1256,7 @@ use std::collections::BTreeSet;
 
 /// What the nav draws for this store's rows: AGS-20's `plan()` over
 /// every ticket, as groups.
-fn nav(store: &Store) -> Vec<Group> {
+pub(super) fn nav(store: &Store) -> Vec<Group> {
     let all = store.page(PageQuery::default()).unwrap().tickets;
     let facts: Vec<Facts> = all
         .iter()
@@ -1493,7 +1493,7 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
 
 /// A database the server could not write today but must still load,
 /// written straight through the schema.
-fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)]) {
+pub(super) fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)]) {
     let tickets: Vec<Ticket> = rows
         .iter()
         .map(|(id, kind, status, parent)| {
@@ -1532,7 +1532,7 @@ fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)]) {
 /// parent cycles (inside a shortcode, and across three and across two:
 /// lengths no bounded walk lands back on by luck) and a parent that
 /// names no ticket.
-fn legacy() -> Vec<(&'static str, Kind, Status, Option<&'static str>)> {
+pub(super) fn legacy() -> Vec<(&'static str, Kind, Status, Option<&'static str>)> {
     use Kind::{Build, Scope};
     use Status::{Complete, Pending};
     vec![
@@ -1793,9 +1793,9 @@ async fn a_seeded_store_rolls_up_as_the_nav_draws_it() {
 /// shortcode's highest sequence, and every id some `blocked_by` names that
 /// is no ticket, with the tickets naming it sorted by (epic, seq) — the
 /// order the old scan sorted a newborn's `unlocks` into.
-type Scanned = (BTreeMap<String, u32>, BTreeMap<String, Vec<String>>);
+pub(super) type Scanned = (BTreeMap<String, u32>, BTreeMap<String, Vec<String>>);
 
-fn scanned(store: &Store) -> Scanned {
+pub(super) fn scanned(store: &Store) -> Scanned {
     let all = store.page(PageQuery::default()).unwrap().tickets;
     let at: HashMap<&str, (&str, u32)> =
         all.iter().map(|t| (t.id.as_str(), (t.epic.as_str(), t.seq))).collect();

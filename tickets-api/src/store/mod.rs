@@ -55,6 +55,17 @@
 //! and the caller only waits for the answer. Before it, a caller that went
 //! away while its write was committing left the database ahead of the
 //! cache — and the next `create` in that shortcode overwrote the row.
+//! SCALE-28 stores what the cache derives from the tickets — each
+//! shortcode's run, the dangling forward references, the roll-ups, and each
+//! ticket's children (the file's index on `(parent, epic, seq)`) with its
+//! `child_count` (a column on its row) — beside them, in the file, written
+//! by every write in the transaction that writes its tickets ([`Derived`]):
+//! a SIGKILL at any instant leaves the two agreeing. A start reads the four
+//! structures instead of rebuilding them by a pass over every ticket (the
+//! rows still load, until B4 stops that too); a file written before
+//! SCALE-28 has them built once, durably, on first open ([`stored::build`]);
+//! and `menger --verify-derived` rebuilds them by a scan and compares
+//! ([`Store::verify_derived`]). The cache's own copies stay, and answer, as before.
 
 use crate::types::TicketSummary;
 use rusqlite::{Connection, OpenFlags};
@@ -769,10 +780,11 @@ fn shortcode_root<'a>(tickets: &'a Cache, epic: &str) -> Option<&'a Row> {
 }
 
 /// SCALE-4: every parent's `child_count`, from a freshly built children
-/// index — at load, and after a seed. A step per parent, not per ticket:
-/// a ticket starts at 0 (the database stores no count) and a build only
-/// ever finds more children than a store had, never fewer, so the tickets
-/// it does not name are already right. Returns how many parents it set.
+/// index — at a build by scan, and after a seed. A step per parent, not per
+/// ticket: a scan starts every ticket at 0 (SCALE-28: whatever its stored
+/// row says — [`Cache::new`]) and a seed only ever finds more children than
+/// a store had, never fewer, so the tickets it does not name are already
+/// right. Returns how many parents it set.
 fn count_children(
     order: &mut BTreeMap<OrderKey, Row>,
     at: &HashMap<String, OrderKey>,
@@ -876,6 +888,12 @@ impl Needle {
 /// that applies each one: a reader takes the count with the rows, and that
 /// is how it knows whether the database it reads a body from is at the
 /// same write ([`Store::full`]).
+///
+/// SCALE-28: the last three halves are stored too, and a write moves the
+/// file's copy in its transaction and this one in the same critical section
+/// as its rows — from one worked-out change ([`Derived`]), so the two copies
+/// are one value in two places. A start reads them from the file
+/// ([`stored::load`]); only a build ([`Cache::new`]) computes them.
 struct Cache {
     order: BTreeMap<OrderKey, Row>,
     at: HashMap<String, OrderKey>,
@@ -894,16 +912,38 @@ struct Rows<'a> {
     order: &'a BTreeMap<OrderKey, Row>,
     at: &'a HashMap<String, OrderKey>,
     children: &'a children::Children,
+    /// SCALE-28: one row as the write in hand will leave it — the newborn,
+    /// or a ticket with its new status or parent — standing in for the
+    /// cache's own (beside them, for a newborn). A write works out what it
+    /// does to the derived state before it commits, so the rows it reads
+    /// are the ones it is about to make, while the cache still holds the
+    /// old; every lookup, test of existence and walk in the store's order
+    /// sees the patch. The children index does not: only a subtree walk
+    /// reads it, and only on the rows before a move
+    /// ([`rollup::Rollups::reparenting`]).
+    patch: Option<&'a Row>,
 }
 
 impl<'a> Rows<'a> {
+    /// These rows with `row` as the write will leave it ([`Rows::patch`]).
+    fn with(self, row: &'a Row) -> Self {
+        Self {
+            patch: Some(row),
+            ..self
+        }
+    }
+
     fn get(&self, id: &str) -> Option<&'a Row> {
-        self.order.get(self.at.get(id)?)
+        match self.patch {
+            Some(p) if p.id == id => Some(p),
+            _ => self.order.get(self.at.get(id)?),
+        }
     }
 
     /// SCALE-4: `t`'s children in its own shortcode, in the store's order
     /// — what a subtree walk follows.
     fn children_in_shortcode(&self, t: &'a Row) -> impl Iterator<Item = &'a Row> + 'a {
+        debug_assert!(self.patch.is_none(), "the children index does not see a patch");
         let order = self.order;
         self.children
             .in_shortcode(&t.id, &t.epic)
@@ -918,39 +958,118 @@ impl<'a> Rows<'a> {
 
     /// Whether `id` names a ticket — the hash half alone, no descent.
     fn contains(&self, id: &str) -> bool {
-        self.at.contains_key(id)
+        self.patch.is_some_and(|p| p.id == id) || self.at.contains_key(id)
     }
 
     fn len(&self) -> usize {
-        self.at.len()
+        self.at.len() + usize::from(self.patch.is_some_and(|p| !self.at.contains_key(&p.id)))
     }
 
-    fn tickets(&self) -> impl Iterator<Item = &'a Row> {
-        self.order.values()
+    /// Every row in the store's order — SCALE-28: the patch in its place,
+    /// replacing the cache's own or between its neighbours.
+    fn tickets(&self) -> impl Iterator<Item = &'a Row> + 'a {
+        let mut entries = self.order.iter().peekable();
+        let mut patch = self.patch.map(|p| (OrderKey::of(p), p));
+        std::iter::from_fn(move || {
+            if let Some((key, _)) = &patch {
+                if !entries.peek().is_some_and(|(k, _)| *k < key) {
+                    if entries.peek().is_some_and(|(k, _)| *k == key) {
+                        entries.next();
+                    }
+                    return patch.take().map(|(_, p)| p);
+                }
+            }
+            entries.next().map(|(_, t)| t)
+        })
     }
 }
 
+/// SCALE-28: one write's change to what the cache derives from the
+/// tickets, worked out before the write commits — from the cache as it
+/// stands and the rows the write will leave ([`Rows::with`]); the
+/// write-serial lock is held, so nothing else moves either — and carried in
+/// two halves: `stored`, the rows the write's own transaction writes beside
+/// its tickets, and `moved`, what the cache becomes once that transaction
+/// has committed. One value in two places, so the file and the cache are
+/// never told different things; and a write that fails to commit has
+/// changed neither.
+///
+/// Before SCALE-28 the cache worked the change out in place, after the
+/// commit, and nothing stored it: a start rebuilt it all by a pass over the
+/// tickets. The roll-ups are worked out on a copy now ([`rollup::Rollups`]
+/// is a row per shortcode and per cross top: the cost of `groups`), and the
+/// copy is what the cache takes.
+struct Derived {
+    stored: stored::Changes,
+    moved: Moved,
+}
+
+/// The cache's half of a [`Derived`].
+#[derive(Default)]
+struct Moved {
+    /// A create's birth into the id indexes (SCALE-3).
+    birth: Option<ids::Birth>,
+    /// The roll-ups as the write leaves them; `None` when it moves none.
+    rollups: Option<rollup::Rollups>,
+    /// The groups whose row moved, innermost first — the write's
+    /// `group_changed` events (MNG-10).
+    groups: Vec<Group>,
+}
+
+impl Derived {
+    /// A write that moves nothing derived: `amend`, `link_commits`,
+    /// `unlink_commits`, a status change that does not cross `Complete`.
+    fn none() -> Self {
+        Self {
+            stored: stored::Changes::default(),
+            moved: Moved::default(),
+        }
+    }
+
+    /// The roll-ups as a write leaves them, and the rows of them it stores.
+    fn rolled(cache: &Cache, rollups: rollup::Rollups, groups: Vec<Group>) -> Self {
+        let mut stored = stored::Changes::default();
+        cache.rollups.changes(&rollups, &mut stored);
+        Self {
+            stored,
+            moved: Moved {
+                birth: None,
+                rollups: Some(rollups),
+                groups,
+            },
+        }
+    }
+}
+
+/// The tickets as a plain list, put in the store's order: sorted once
+/// rather than inserted one at a time — `BTreeMap`'s `FromIterator` sorts
+/// and bulk-builds the tree instead of rebalancing n times — and the hash
+/// half that says where each id sits.
+fn ordered(loaded: HashMap<String, Row>) -> (BTreeMap<OrderKey, Row>, HashMap<String, OrderKey>) {
+    let order: BTreeMap<OrderKey, Row> = loaded.into_values().map(|t| (OrderKey::of(&t), t)).collect();
+    let at = order.values().map(|t| (t.id.clone(), OrderKey::of(t))).collect();
+    (order, at)
+}
+
 impl Cache {
-    /// Builds the cache from the tickets loaded at startup. Collected,
-    /// not inserted one at a time: `BTreeMap`'s `FromIterator` sorts once
-    /// and bulk-builds the tree instead of rebalancing n times. Holding
-    /// the cache in the store's order costs this once per start — 350 ms
-    /// to ~545 ms at 100,000 tickets, measured — and every ordered read
-    /// after it is a walk of what is already sorted. The roll-ups are
-    /// built here once, from the sorted tickets (MNG-10), and from then on
-    /// only kept; so are the id indexes (SCALE-3) — derived state, never
-    /// persisted, so a reopened or migrated store gets them from what it
-    /// loaded. SCALE-4: and so is the children index, and with it every
-    /// ticket's `child_count` (the database stores neither).
+    /// Builds the cache from the tickets alone: their rows put in order
+    /// ([`ordered`]) — 350 ms to ~545 ms at 100,000 tickets, measured, and
+    /// every ordered read after it is a walk of what is already sorted —
+    /// then the derived state computed by a pass over them: the children
+    /// index and every `child_count` (SCALE-4), the roll-ups (MNG-10), the
+    /// id indexes (SCALE-3).
+    ///
+    /// SCALE-28: a *build*, no longer every start's — a start reads the
+    /// derived state from the file ([`stored::load`]). This is what a file
+    /// that holds none gets once ([`stored::build`]), and what
+    /// `--verify-derived` compares the stored state with: so it is a scan
+    /// and nothing else, every count included — a row's stored
+    /// `child_count` is set aside, and the count is the parents'.
     fn new(loaded: HashMap<String, Row>) -> Self {
-        let mut order: BTreeMap<OrderKey, Row> = loaded
-            .into_values()
-            .map(|t| (OrderKey::of(&t), t))
-            .collect();
-        let at: HashMap<String, OrderKey> = order
-            .values()
-            .map(|t| (t.id.clone(), OrderKey::of(t)))
-            .collect();
+        let (mut order, at) = ordered(loaded);
+        for t in order.values_mut() {
+            t.child_count = 0;
+        }
         let started = std::time::Instant::now();
         let children = children::Children::build(order.values());
         let parents = count_children(&mut order, &at, &children);
@@ -963,6 +1082,7 @@ impl Cache {
             order: &order,
             at: &at,
             children: &children,
+            patch: None,
         };
         let started = std::time::Instant::now();
         let rollups = rollup::Rollups::build(rows);
@@ -991,11 +1111,53 @@ impl Cache {
         }
     }
 
+    /// SCALE-28: the cache from the tickets' rows — each carrying its stored
+    /// `child_count` — and the derived state as the file stores it: nothing
+    /// is computed from the rows but their order.
+    fn from_parts(
+        loaded: HashMap<String, Row>,
+        ids: ids::Ids,
+        rollups: rollup::Rollups,
+        children: children::Children,
+    ) -> Self {
+        let (order, at) = ordered(loaded);
+        Self {
+            order,
+            at,
+            rollups,
+            ids,
+            children,
+            written: 0,
+        }
+    }
+
+    /// SCALE-28: the derived state as numbers ([`stored::Form`]) — what a
+    /// build stores, and what is compared with what is stored.
+    fn form(&self) -> stored::Form {
+        let (runs, refs) = self.ids.stored();
+        let (groups, cross, marks) = self.rollups.stored();
+        let counts = self
+            .order
+            .values()
+            .filter(|t| t.child_count > 0)
+            .map(|t| (t.id.clone(), t.child_count))
+            .collect();
+        stored::Form {
+            runs,
+            refs,
+            groups,
+            cross,
+            marks,
+            counts,
+        }
+    }
+
     fn rows(&self) -> Rows<'_> {
         Rows {
             order: &self.order,
             at: &self.at,
             children: &self.children,
+            patch: None,
         }
     }
 
@@ -1020,21 +1182,41 @@ impl Cache {
         self.order.insert(key, ticket);
     }
 
+    /// SCALE-28: what the birth of `newborn` does to the derived state,
+    /// before it commits: its birth into the id indexes (SCALE-3), its
+    /// parent's new `child_count` (SCALE-4 — the newborn is new, so never
+    /// already one of its parent's children), and the roll-ups, worked out
+    /// on a copy over the rows with the newborn among them (MNG-10).
+    fn birth(&self, newborn: &Row) -> Derived {
+        let rows = self.rows().with(newborn);
+        let birth = self.ids.birth(rows, newborn);
+        let mut rollups = self.rollups.clone();
+        let groups = rollups.created(rows, newborn);
+        let mut derived = Derived::rolled(self, rollups, groups);
+        birth.store(&mut derived.stored);
+        if let Some(p) = &newborn.parent {
+            derived.stored.counts.push((p.clone(), self.children.count(p) + 1));
+        }
+        derived.moved.birth = Some(birth);
+        derived
+    }
+
     /// MNG-10: a create's rows — the newborn and every ticket it touched —
     /// go in, then the newborn is counted. Returns the groups whose row
     /// moved, innermost first. SCALE-3: and it is born into the id
     /// indexes — its shortcode's sequence, the forward references it
     /// resolved, the ones it makes. SCALE-4: and into its parent's
-    /// children, whose count it moves; returns that count too.
+    /// children, whose count it moves; returns that count too. SCALE-28:
+    /// the indexes and roll-ups as [`Cache::birth`] worked them out.
     fn created(
         &mut self,
         ticket: Row,
         touched: impl IntoIterator<Item = Row>,
+        moved: Moved,
     ) -> (Vec<Group>, Option<u64>) {
         for updated in touched {
             self.insert(updated);
         }
-        let id = ticket.id.clone();
         let key = OrderKey::of(&ticket);
         let parent = ticket.parent.clone();
         self.insert(ticket);
@@ -1043,50 +1225,59 @@ impl Cache {
             self.set_child_count(&p, count);
             count
         });
-        let rows = Rows {
-            order: &self.order,
-            at: &self.at,
-            children: &self.children,
-        };
-        let ticket = rows.get(&id).expect("just inserted");
-        self.ids.born(rows, ticket);
-        (self.rollups.created(rows, ticket), count)
+        (self.take(moved), count)
+    }
+
+    /// SCALE-28: what `row`'s status change from `previous` does to the
+    /// roll-ups, before it commits — nothing, copied or stored, unless it
+    /// crosses `Complete`.
+    fn status_change(&self, row: &Row, previous: Status) -> Derived {
+        if !rollup::Rollups::crosses(previous, row.status) {
+            return Derived::none();
+        }
+        let mut rollups = self.rollups.clone();
+        let groups = rollups.status_changed(self.rows().with(row), row, previous);
+        Derived::rolled(self, rollups, groups)
     }
 
     /// MNG-10: a status change; only a crossing of `Complete` moves a count.
-    fn status_changed(&mut self, ticket: Row, previous: Status) -> Vec<Group> {
-        let id = ticket.id.clone();
+    fn status_changed(&mut self, ticket: Row, moved: Moved) -> Vec<Group> {
         self.insert(ticket);
-        let rows = Rows {
-            order: &self.order,
-            at: &self.at,
-            children: &self.children,
-        };
-        let ticket = rows.get(&id).expect("just inserted");
-        self.rollups.status_changed(rows, ticket, previous)
+        self.take(moved)
     }
 
-    /// MNG-10: a `set_parent`. The moved tree's count is taken from where
-    /// it is counted *before* the rows change (that is where the old
-    /// parent still is) and given to where it will be; the rows go in;
-    /// then the shape is settled against the new rows.
-    ///
-    /// SCALE-4: the child is the only row that changes. It leaves
-    /// `previous`'s children and joins its new parent's, and each parent's
-    /// count is set from the index; returns the groups, then the new
-    /// parent's count and the old one's.
-    fn reparented(&mut self, child: Row, previous: Option<&str>) -> (Vec<Group>, u64, u64) {
-        let parent = child.parent.clone().expect("set_parent sets a parent");
-        let rows = Rows {
-            order: &self.order,
-            at: &self.at,
-            children: &self.children,
-        };
-        let moving = self.rollups.reparenting(
+    /// SCALE-28: what moving `child` (as the move leaves it) off `previous`
+    /// does to the derived state, before it commits. MNG-10: the moved
+    /// tree's count is taken from where it is counted *before* the rows
+    /// change (that is where the old parent still is) and given to where it
+    /// will be; then the shape is settled against the rows as they will be.
+    /// SCALE-4: each parent's count moves by one — the child leaves the old
+    /// parent's children, where it was, and joins the new one's, where it
+    /// was not (the parent it already has is no write).
+    fn reparent(&self, child: &Row, previous: Option<&str>) -> Derived {
+        let parent = child.parent.as_deref().expect("set_parent sets a parent");
+        let rows = self.rows();
+        let mut rollups = self.rollups.clone();
+        let moving = rollups.reparenting(
             rows,
             rows.get(&child.id).expect("the child exists"),
-            rows.get(&parent).expect("the parent exists"),
+            rows.get(parent).expect("the parent exists"),
         );
+        let groups = rollups.reparented(rows.with(child), moving);
+        let mut derived = Derived::rolled(self, rollups, groups);
+        derived.stored.counts.push((parent.to_string(), self.children.count(parent) + 1));
+        if let Some(p) = previous {
+            derived.stored.counts.push((p.to_string(), self.children.count(p).saturating_sub(1)));
+        }
+        derived
+    }
+
+    /// MNG-10: a `set_parent`, once it has committed. SCALE-4: the child is
+    /// the only row that changes. It leaves `previous`'s children and joins
+    /// its new parent's, and each parent's count is set from the index;
+    /// returns the groups, then the new parent's count and the old one's.
+    fn reparented(&mut self, child: Row, previous: Option<&str>, moved: Moved) -> (Vec<Group>, u64, u64) {
+        let parent = child.parent.clone().expect("set_parent sets a parent");
         let key = OrderKey::of(&child);
         self.insert(child);
         let left = previous.map_or(0, |p| {
@@ -1096,12 +1287,18 @@ impl Cache {
         });
         let joined = self.children.add(&parent, &key);
         self.set_child_count(&parent, joined);
-        let rows = Rows {
-            order: &self.order,
-            at: &self.at,
-            children: &self.children,
-        };
-        (self.rollups.reparented(rows, moving), joined, left)
+        (self.take(moved), joined, left)
+    }
+
+    /// SCALE-28: the cache's half of a committed write's [`Derived`].
+    fn take(&mut self, moved: Moved) -> Vec<Group> {
+        if let Some(birth) = moved.birth {
+            self.ids.born(birth);
+        }
+        if let Some(rollups) = moved.rollups {
+            self.rollups = rollups;
+        }
+        moved.groups
     }
 
     fn get(&self, id: &str) -> Option<&Row> {
@@ -1313,7 +1510,21 @@ impl Store {
         // durably — every ticket with none linked. Adding a column with a
         // constant default rewrites no row, so this is instant at any size.
         db::migrate_add_commits(&mut conn)?;
-        let rows = db::load_rows(&conn)?;
+        // SCALE-28: the derived state is read from the file — each
+        // shortcode's run, the dangling forward references, the roll-ups,
+        // the children index — beside the rows, each carrying its stored
+        // `child_count`. A file that holds none (written before SCALE-28,
+        // or new), or holds it behind its tickets (a seed that stopped),
+        // has it built here, once, from the tickets, durably and in one
+        // transaction, before anything is handed out; the cache that build
+        // made is the one the store starts with.
+        let cache = match stored::state(&conn)? {
+            stored::State::Current => {
+                let rows = db::load_rows(&conn)?;
+                stored::load(&conn, rows)?
+            }
+            found => stored::build(&mut conn, found)?,
+        };
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
             Some(path) => Readers::open(path)?,
@@ -1321,13 +1532,22 @@ impl Store {
         };
         let (tx, _) = broadcast::channel(256);
         Ok(Self {
-            tickets: Arc::new(RwLock::new(Cache::new(rows))),
+            tickets: Arc::new(RwLock::new(cache)),
             tx,
             db,
             readers: Arc::new(readers),
             committing: Arc::new(AtomicU64::new(0)),
             write_serial: Arc::new(AsyncMutex::new(())),
         })
+    }
+
+    /// SCALE-28: `menger --verify-derived` — the file at `path` opened
+    /// read-only, its four derived structures built by a scan of its tickets
+    /// and compared with what it stores ([`Verdict`]). No store is opened,
+    /// nothing is migrated, nothing is written: the connection cannot write,
+    /// and it is the store's own, opened and closed inside this module.
+    pub fn verify_derived(path: &Path) -> anyhow::Result<Verdict> {
+        stored::verify(path)
     }
 
     /// MNG-20: the write-serial lock, owned — what a write takes first and
@@ -1433,8 +1653,9 @@ impl Store {
     /// raised before a commit starts, and if, once the snapshot is taken,
     /// it is still the `written` the rows came with, no commit can be in
     /// the snapshot that is not in the rows. If it has moved, every row is
-    /// read from the snapshot with its body — one stored version, with the
-    /// cache's `child_count` (which the database does not keep). Either
+    /// read from the snapshot with its body — one stored version (SCALE-28:
+    /// its `child_count` too, which the file keeps now and moves in the
+    /// same transaction as the child that moves it). Either
     /// way each ticket is one statement and the read waits for no writer.
     /// (A writer that never stops keeps the count moving, so its readers
     /// mostly take the second way: the price is parsing the row they read.)
@@ -1472,12 +1693,7 @@ impl Store {
                         #[cfg(test)]
                         tests_bodies::STORED_VERSION_READS.fetch_add(1, Ordering::Relaxed);
                         rows.into_iter()
-                            .map(|row| {
-                                let mut stored =
-                                    db::ticket(&tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
-                                stored.child_count = row.child_count;
-                                Ok(stored)
-                            })
+                            .map(|row| db::ticket(&tx, &row.id)?.ok_or_else(|| missing(&row.id)))
                             .collect::<Result<Vec<Ticket>, StoreError>>()?
                     };
                     tx.commit()?;
@@ -1567,7 +1783,7 @@ impl Store {
         // every ticket in the store. This read phase computes everything
         // and mutates nothing: a rejection leaves no trace, in the
         // tickets or in what is kept about them.
-        let (ticket, touched, unlocks_added, parent_epic) = {
+        let (ticket, touched, unlocks_added, parent_epic, derived) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let tickets = &cache;
             let seq = tickets.ids.next_seq(&epic);
@@ -1684,30 +1900,39 @@ impl Store {
             let parent_epic = parent
                 .as_deref()
                 .map(|p| tickets.get(p).expect("parent checked above").epic.clone());
-            (ticket, touched, unlocks_added, parent_epic)
+            // SCALE-28: and what the birth does to the derived state — its
+            // shortcode's run, the forward references, its parent's count,
+            // the roll-ups — worked out now, while nothing has changed.
+            let derived = tickets.birth(&Row::from(&ticket));
+            (ticket, touched, unlocks_added, parent_epic, derived)
         };
 
         // SCALE-14: the newborn is written whole — the one ticket a write
         // holds with its body, the caller's — and each blocker it touched
         // as its row, the body left as stored. The blockers ride out whole
         // in their `UnlocksChanged`, so their bodies are read back in the
-        // same transaction.
+        // same transaction. SCALE-28: and the derived state it moves, in
+        // that transaction too.
         let born = ticket.clone();
         let newborn = Row::from(&ticket);
         let rows: Vec<Row> = touched.values().cloned().collect();
+        let Derived { stored, moved } = derived;
         self.write(
             serial,
             move |tx| {
                 db::upsert(tx, &born)?;
-                rows.into_iter()
+                let blockers = rows
+                    .into_iter()
                     .map(|row| {
                         db::update_row(tx, &row)?;
                         let body = db::body(tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
                         Ok((row.id.clone(), whole(row, body)))
                     })
-                    .collect::<Result<HashMap<String, Ticket>, StoreError>>()
+                    .collect::<Result<HashMap<String, Ticket>, StoreError>>()?;
+                stored.write(tx)?;
+                Ok(blockers)
             },
-            move |cache, _| cache.created(newborn, touched.into_values()),
+            move |cache, _| cache.created(newborn, touched.into_values(), moved),
             move |blockers, (groups, child_count), tx| {
                 let _ = tx.send(Change::Created {
                     ticket: ticket.clone(),
@@ -2079,11 +2304,22 @@ impl Store {
         let previous = row.status;
         row.status = status;
         row.updated_unix = chrono::Utc::now().timestamp();
+        // SCALE-28: the roll-ups it moves, stored with the row.
+        let Derived { stored, moved } = self
+            .tickets
+            .read()
+            .expect("store lock poisoned")
+            .status_change(&row, previous);
+        let commit = Self::row_commit(row);
 
         self.write(
             serial,
-            Self::row_commit(row),
-            move |cache, (row, _)| cache.status_changed(row.clone(), previous),
+            move |tx| {
+                let out = commit(tx)?;
+                stored.write(tx)?;
+                Ok(out)
+            },
+            move |cache, (row, _)| cache.status_changed(row.clone(), moved),
             move |(row, body), groups, tx| {
                 let change = Change::StatusChanged {
                     ticket: whole(row, body),
@@ -2164,11 +2400,23 @@ impl Store {
             (child, parent_ticket.epic.clone(), old_epic, previous)
         };
 
+        // SCALE-28: both parents' counts and the roll-ups it moves, stored
+        // with the child's row.
+        let Derived { stored, moved } = self
+            .tickets
+            .read()
+            .expect("store lock poisoned")
+            .reparent(&child, previous.as_deref());
         let left_behind = previous.clone();
+        let commit = Self::row_commit(child);
         self.write(
             serial,
-            Self::row_commit(child),
-            move |cache, (child, _)| cache.reparented(child.clone(), left_behind.as_deref()),
+            move |tx| {
+                let out = commit(tx)?;
+                stored.write(tx)?;
+                Ok(out)
+            },
+            move |cache, (child, _)| cache.reparented(child.clone(), left_behind.as_deref(), moved),
             move |(child, body), (groups, joined, left), tx| {
                 let change = Change::ParentChanged {
                     ticket: whole(child, body),
@@ -2471,7 +2719,7 @@ impl Store {
             .map_err(|_| StoreError::Db("seed requested while another write is in flight".into()))?;
         let started = std::time::Instant::now();
 
-        let next_seq: HashMap<String, u32> = {
+        let (next_seq, existing): (HashMap<String, u32>, usize) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             if cache.len() > 0 && !spec.into_existing {
                 return Err(StoreError::SeedRefused {
@@ -2480,11 +2728,12 @@ impl Store {
             }
             // SCALE-3: the per-shortcode sequence `create` allocates from,
             // so seeded ids continue exactly where a create's would.
-            cache
+            let next_seq = cache
                 .ids
                 .last_seqs()
                 .map(|(epic, seq)| (epic.to_string(), seq))
-                .collect()
+                .collect();
+            (next_seq, cache.len())
         };
 
         let generated = synthetic::generate(spec, &next_seq);
@@ -2504,18 +2753,38 @@ impl Store {
         // leaves it counted: some of it may be stored, none of it is in the
         // cache, and a reader that sees the two counts disagree reads rows
         // from the database instead of trusting its own.
+        //
+        // SCALE-28: the derived state cannot ride in each chunk's
+        // transaction — it is built once the whole seed is in the cache, as
+        // below — so the first chunk's transaction also says the stored
+        // state is behind the tickets, and the transaction that stores it
+        // says it no longer is. Killed in between, the file says so, and
+        // the next open builds it from the tickets (as for a file from
+        // before SCALE-28): at no instant does it claim a state it does not
+        // hold. The children index is part of that state, kept by SQLite a
+        // row at a time in parent order — not the order a seed writes in:
+        // at 10⁶ it took the persist from ~10 s to ~15 s. So a seed at least
+        // the size of the store it lands in drops it with its first chunk
+        // and builds it again, sorted, with the rest (0.95 s at 10⁶).
+        let rebuild_index = generated.len() >= existing;
         self.committing.fetch_add(1, Ordering::SeqCst);
         {
             let mut conn = self.db.lock().expect("db lock poisoned");
-            for chunk in generated.chunks(synthetic::ROWS_PER_TRANSACTION) {
+            for (i, chunk) in generated.chunks(synthetic::ROWS_PER_TRANSACTION).enumerate() {
                 let tx = conn.transaction()?;
+                if i == 0 {
+                    stored::mark_stale(&tx, true)?;
+                    if rebuild_index {
+                        stored::drop_children_index(&tx)?;
+                    }
+                }
                 db::insert_many(&tx, chunk)?;
                 tx.commit()?;
             }
         }
         let persist = persist_started.elapsed();
 
-        apply(&self.tickets, |tickets| {
+        let form = apply(&self.tickets, |tickets| {
             tickets.at.reserve(generated.len());
             // SCALE-14: into the cache as rows — each body is dropped as its
             // ticket goes in, as a load never reads one.
@@ -2523,13 +2792,13 @@ impl Store {
                 tickets.insert(Row::from(t));
             }
             // SCALE-4: the children index, and every parent's count from
-            // it, built over the seeded store as at load — first, because
+            // it, built over the seeded store as a build does — first, because
             // the roll-ups walk it. A seed only ever adds children, so a
             // count set before it is either set again here or still right.
             let children = children::Children::build(tickets.order.values());
             count_children(&mut tickets.order, &tickets.at, &children);
             tickets.children = children;
-            // MNG-10: built once over the seeded store, as at load — not
+            // MNG-10: built once over the seeded store, as a build does — not
             // kept per row: a seed into an existing store can add tickets
             // to its prefixes in any shape, and nothing is broadcast here.
             let rollups = rollup::Rollups::build(tickets.rows());
@@ -2539,7 +2808,18 @@ impl Store {
             // one of its tickets may be an id the store already named.
             let ids = ids::Ids::build(tickets.rows());
             tickets.ids = ids;
+            tickets.form()
         });
+        // SCALE-28: and all of it stored, in one transaction, which also
+        // says the stored state is the tickets' again.
+        {
+            let mut conn = self.db.lock().expect("db lock poisoned");
+            let tx = conn.transaction()?;
+            stored::create_children_index(&tx)?;
+            stored::write_all(&tx, &form)?;
+            stored::mark_stale(&tx, false)?;
+            tx.commit()?;
+        }
         Ok(SeedReport {
             count: spec.count,
             epics,
@@ -2593,6 +2873,13 @@ impl Store {
 /// as plan() would draw it; the two writes that can *repair* such a thing
 /// (a create of the id a dangling parent names, a `set_parent` of a ticket
 /// on a cycle) rebuild the roll-ups from the cache, with a warning.
+///
+/// SCALE-28: stored, a row per shortcode, per cross top and per hand-edit
+/// mark, every field as kept — so a start reads the shape instead of
+/// settling it. A write works its change out on a copy before it commits
+/// (the two rebuilds included: they rebuild from the rows as the write
+/// will leave them), stores the rows that differ in its transaction, and
+/// the cache takes the copy.
 mod rollup;
 
 /// SCALE-3: what `create` reads instead of walking every ticket twice
@@ -2615,10 +2902,11 @@ mod rollup;
 /// a drawing did. The one per-shortcode fact both need, the scope root,
 /// stays where MNG-10 keeps it, and `create` reads it from there.
 ///
-/// Derived, never persisted: built in one pass at load (after both
-/// in-place migrations) and after a seed, and kept by every birth through
+/// Built in one pass after a seed, and kept by every birth through
 /// `create`. `set_parent` and `set_status` touch neither a sequence nor a
-/// `blocked_by`, so they leave it as it is.
+/// `blocked_by`, so they leave it as it is. SCALE-28: and stored — a row
+/// per shortcode, a row per reference — by the birth's own transaction, so
+/// a start reads it instead of building it in a pass over every ticket.
 ///
 /// SCALE-19: beside each shortcode's sequence, how many tickets it holds —
 /// kept by the same paths, so a shortcode is known to be *dense* (every
@@ -2651,10 +2939,16 @@ mod synthetic;
 /// Per parent: per shortcode, the sequences of its children, ascending —
 /// a `u32` a child, the shortcode's name once. Keyed by the id `parent`
 /// names whether or not it is a ticket, as `list { parent }` always
-/// answered. Derived, never persisted: built in one pass at load (after
-/// every in-place migration) and after a seed, and moved by `create` and
+/// answered. Built in one pass after a seed, and moved by `create` and
 /// `set_parent` in the same critical section as the row whose parent it
 /// is; each move sets the parent's `child_count` from it.
+///
+/// SCALE-28: the file holds the same thing as an index on the tickets,
+/// `(parent, epic, seq)` — the store's order under each parent, kept by
+/// SQLite with the rows — and each `child_count` as a column, written by the
+/// transaction of the birth or move that changes it. A start reads this
+/// index from that one rather than from a pass over the tickets; B4 can
+/// page children from it directly.
 mod children;
 
 /// SDLC-9: what a commit reference is — the grammar `link_commits` and
@@ -2665,6 +2959,14 @@ mod commits;
 /// SQL for the system of record. Private: the rest of the application
 /// only ever sees the cache above.
 mod db;
+
+/// SCALE-28: the derived state, stored — the tables beside the tickets,
+/// what a write's transaction writes to them ([`stored::Changes`]), a start
+/// reads from them, a first open builds into them, and `--verify-derived`
+/// compares with a scan.
+mod stored;
+
+pub use stored::Verdict;
 
 #[cfg(test)]
 mod tests;
@@ -2715,3 +3017,11 @@ mod tests_commits;
 /// the store mirrors its database, and the next id is the next one.
 #[cfg(test)]
 mod tests_detached;
+
+/// SCALE-28: the stored derived state, read back through a connection of
+/// its own, against the scan oracles after every kind of write — on stores
+/// built by create, by seed, from the fixtures written before it and from
+/// hand-edited shapes — and the build on first open, the reads at start,
+/// the seed's marker and `--verify-derived`.
+#[cfg(test)]
+mod tests_stored;

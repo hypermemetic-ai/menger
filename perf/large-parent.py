@@ -76,7 +76,7 @@ try:
     # The root's children by page: the first 200, and 200 from 90 % of the
     # way down (seeded children of a root are its shortcode's other
     # tickets, so `BIG-k` is a cursor inside the list).
-    def med(v): return f"median {statistics.median(v):.1f} ms  (min {min(v):.1f}, max {max(v):.1f})"
+    def med(v): return f"median {statistics.median(v):.3f} ms  (min {min(v):.3f}, max {max(v):.3f})"
     for label, after in (("first page", None), ("deep page", f"{BIG}-{max(2, kids * 9 // 10)}")):
         ts = []
         for _ in range(7):
@@ -105,20 +105,35 @@ try:
     threading.Thread(target=watch, daemon=True).start(); time.sleep(0.5)
 
     def creates(epic, n=20, **kw):
-        ts = []
+        ts, ids = [], []
         for i in range(n):
             ms, raw = call("create", {"epic": epic, "title": f"probe {i}", **kw})
             ev = json.loads(raw)["data"][0]
             assert ev["type"] == "created", ev
             ts.append(ms)
+            ids.append(ev["ticket"]["id"])
+        return ts, ids
+    # SCALE-28: and a status change of each probe into Complete — a crossing,
+    # so it moves the roll-up of every group around it, the most a status
+    # change writes.
+    def completes(ids):
+        ts = []
+        for i in ids:
+            ms, raw = call("set_status", {"id": i, "status": "Complete"})
+            ev = json.loads(raw)["data"][0]
+            assert ev["type"] == "status_changed", ev
+            ts.append(ms)
         return ts
-    big = creates(BIG)
+    big, big_ids = creates(BIG)
     call("create", {"epic": "TINY", "title": "tiny root", "kind": "scope"})
-    small = creates("TINY")
+    small, small_ids = creates("TINY")
+    big_done, small_done = completes(big_ids), completes(small_ids)
     time.sleep(0.5)
     print(f"  create under {BIG}-1 ({kids} children): {med(big)}")
     print(f"  create under TINY-1 (<=20 children):        {med(small)}")
     print(f"  ratio of medians: {statistics.median(big) / statistics.median(small):.2f}x")
+    print(f"  set_status -> Complete, under {BIG}-1:      {med(big_done)}")
+    print(f"  set_status -> Complete, under TINY-1:       {med(small_done)}")
     cc = [sz for (ty, sz) in events if ty == "children_changed"]
     cr = [sz for (ty, sz) in events if ty == "created"]
     print(f"  watch events seen: {len(events)}; types: {sorted(set(t for t,_ in events))}")
