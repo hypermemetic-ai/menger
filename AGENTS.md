@@ -41,14 +41,14 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   `<method> --help` prints each parameter's name and type. **A list
   parameter is its flag repeated, or commas**: `--blocked-by MNG-1
   --blocked-by MNG-2` and `--blocked-by MNG-1,MNG-2` both send
-  `["MNG-1","MNG-2"]` (commas need synapse ≥ 3.14, SYNAPSE-2 — this
-  machine has it; on an older binary `a,b` is silently one string). An
+  `["MNG-1","MNG-2"]` (commas need synapse ≥ 3.14, SYNAPSE-2; on an
+  older binary `a,b` is silently one string). An
   element that itself holds a comma is double-quoted inside the value, and
   the shell must not eat the quotes: `'"a,b","c"'`. A multi-line `--body`
-  is an ordinary quoted argument: `--body "$(cat body.md)"` — unless the
-  value begins with `--` (a body opening with frontmatter's `---`), which
-  synapse ≤ 3.14 reads as a flag and refuses (SYNAPSE-4); pass that one
-  with `-p "$(jq -Rs '{id: "MNG-1", body: .}' body.md)"`.
+  is an ordinary quoted argument — `--body "$(cat body.md)"` — whatever it
+  begins with (frontmatter's `---` included) and whatever it holds: a `$`
+  the shell did not expand arrives literally. Both need synapse ≥ 3.14.2
+  (SYNAPSE-4, SYNAPSE-6; this machine has it); `--key=value` works too.
 
   Global options go **before** the backend name — after the path they are
   read as a subcommand ("Method 'create' cannot have subcommands"). `-j`
