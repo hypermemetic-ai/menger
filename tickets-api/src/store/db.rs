@@ -21,6 +21,7 @@ pub(super) const SCHEMA: &str = "
             updated_unix INTEGER NOT NULL,
             commits      TEXT NOT NULL DEFAULT '[]',
             child_count  INTEGER NOT NULL DEFAULT 0,
+            unsatisfied  INTEGER NOT NULL DEFAULT 0,
             UNIQUE (epic, seq)
         );
     ";
@@ -457,16 +458,19 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
 /// ids are allocated above existing maxima, so a conflict here would
 /// be a generator bug and must surface, not overwrite. SCALE-28: each
 /// with the `child_count` it was generated with (0); the seed stores the
-/// counts once the whole seed is in.
-pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Result<()> {
+/// counts once the whole seed is in. SCALE-32: and each with its count of
+/// unsatisfied blockers, `open` (one per ticket, in order) — worked out
+/// before the rows are written, so no row is written twice.
+pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare_cached(
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix, commits, child_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                  created_unix, updated_unix, commits, child_count, unsatisfied)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
     )?;
-    for t in tickets {
+    debug_assert_eq!(tickets.len(), open.len());
+    for (t, open) in tickets.iter().zip(open) {
         stmt.execute(params![
             t.id,
             t.epic,
@@ -483,6 +487,7 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Re
             t.updated_unix,
             serde_json::to_string(&t.commits).expect("serialize commits"),
             t.child_count,
+            open,
         ])?;
     }
     Ok(())
@@ -533,6 +538,27 @@ pub(super) fn load_rows(conn: &Connection) -> anyhow::Result<HashMap<String, Row
         out.insert(row.id.clone(), row);
     }
     Ok(out)
+}
+
+/// SCALE-32: [`load_rows`], and each ticket's count of unsatisfied blockers
+/// that is not 0 — from the same statement, beside its row, so a start reads
+/// the column in the pass that loads the rows and not in a second scan of
+/// the table. Not on the row: the row is the wire's summary, and the count
+/// is the store's own.
+pub(super) fn load_rows_counted(
+    conn: &Connection,
+) -> anyhow::Result<(HashMap<String, Row>, HashMap<String, u32>)> {
+    let mut stmt = conn.prepare(&format!("SELECT {ROW_COLUMNS}, unsatisfied FROM tickets"))?;
+    let rows = stmt.query_map([], |r| Ok((read_row(r)?, r.get::<_, u32>(14)?)))?;
+    let (mut out, mut open) = (HashMap::new(), HashMap::new());
+    for row in rows {
+        let (row, n) = row?;
+        if n > 0 {
+            open.insert(row.id.clone(), n);
+        }
+        out.insert(row.id.clone(), row);
+    }
+    Ok((out, open))
 }
 
 /// SCALE-14: one ticket's body, or `None` when no row has `id`.

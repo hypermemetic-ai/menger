@@ -71,7 +71,9 @@ struct Args {
 
     /// SCALE-28: check the database (--db-path, or the default) instead of
     /// serving it: rebuild its derived state — shortcode runs, dangling
-    /// forward references, roll-ups, children and child_count — by a scan
+    /// forward references, roll-ups, children and child_count, and
+    /// (SCALE-32) each ticket's unsatisfied blockers, the ready set and
+    /// every shortcode's status counts — by a scan
     /// of its tickets, compare with what it stores, print each difference
     /// or "consistent", and exit 0 when consistent, 1 on any difference
     /// (or none stored), 2 when it cannot be read. Read-only: changes
@@ -180,11 +182,14 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             refs,
             groups,
             parents,
+            blocked,
+            ready,
         }) => {
             println!(
                 "consistent: {} — {tickets} tickets; {runs} shortcode runs, {refs} dangling forward \
-                 references, {groups} roll-up groups and the children and child_count of {parents} \
-                 parents are what a scan of the tickets gives",
+                 references, {groups} roll-up groups, the children and child_count of {parents} \
+                 parents, the unsatisfied blockers of {blocked} tickets, a ready set of {ready} and \
+                 every shortcode's status counts are what a scan of the tickets gives",
                 db_path.display()
             );
             0

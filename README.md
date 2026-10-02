@@ -62,9 +62,12 @@ sequences (the next id, `extents`, `page.remaining`,
 `health.ticket_count`), the dangling forward references `create`
 resolves, the roll-ups behind `groups`, and each ticket's children
 (an index on `(parent, epic, seq)`) with its `child_count` (a column on
-its row) — is stored in the database beside them, written by every write
-in the same transaction as its tickets, and read at start instead of
-rebuilt by a pass over every ticket. A database written before SCALE-28
+its row), and (SCALE-32) each ticket's count of unsatisfied blockers (a
+column on its row), the ready set (a partial index over that count and
+the status, in store order) and each shortcode's count of each status
+and share of the ready set — is stored in the database beside them,
+written by every write in the same transaction as its tickets, and read
+at start instead of rebuilt by a pass over every ticket. A database written before SCALE-28
 has it built once, on first open, durably, and the log says so
 (`SCALE-28: stored the derived state for the first time …`); every later
 start logs `read the derived state from the database … nothing rebuilt`.
@@ -75,7 +78,7 @@ file says its derived state is behind, and the next open builds it again.
 menger --verify-derived --db-path /path/to/tickets.db
 ```
 
-opens the file read-only, rebuilds all four by a scan of its tickets,
+opens the file read-only, rebuilds all of it by a scan of its tickets,
 compares them with what is stored, and prints each difference — the
 structure and the key, what is stored and what a scan gives
 (`child_count of ALT-2: stored 5; a scan gives 1`) — or `consistent: …`.
@@ -303,8 +306,12 @@ is `≤ limit` rows and one `page { next, remaining }`; `remaining` counts
 what is left under the same filters — exactly, and, with no `status` or
 `parent` filter, without walking it: the store keeps each shortcode's
 count beside its sequence, so a page costs the page (SCALE-19; a
-`parent` page counts from its index of children, SCALE-4; a `status` or
-`ready_set` page still counts). A client that wants everything with
+`parent` page counts from its index of children, SCALE-4). A `ready_set`
+page is a range of the ready set the store keeps, and its `remaining`
+counts at most the members of the one shortcode the cursor cuts into; a
+`status` page sums whole shortcodes from kept per-status counts and walks
+only the rest of the cut one — but the page itself still tests each row
+until it has `limit` matches (SCALE-32). A client that wants everything with
 bodies calls `list {}` exactly as before and ignores the trailing `page`.
 The body is ~70 % of a row, and only the ticket page shows one — it comes
 from `get`.
@@ -421,6 +428,10 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        what child_count is (SCALE-4)
     db.rs              the schema, the writes, a row and a body read back, the
                        in-place migrations
+    ready.rs           each ticket's count of unsatisfied blockers, the ready
+                       set it decides (store order), each shortcode's count of
+                       each status — what ready_set and list { status } page
+                       and count from (SCALE-32)
     stored.rs          the derived state as stored beside the tickets — its
                        tables, what a write's transaction writes to them, the
                        read at start, the build on first open, and
@@ -449,6 +460,10 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        against the scan oracles after every kind of write on
                        every kind of store; the build once, the read at
                        start, the seed's marker, verify (SCALE-28)
+    tests_ready.rs     the counts, the ready set and the status counts against
+                       a scan after every write, in the cache and the file;
+                       every ready_set and list { status } page against the
+                       code before it (SCALE-32)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell

@@ -66,6 +66,16 @@
 //! SCALE-28 has them built once, durably, on first open ([`stored::build`]);
 //! and `menger --verify-derived` rebuilds them by a scan and compares
 //! ([`Store::verify_derived`]). The cache's own copies stay, and answer, as before.
+//! SCALE-32 keeps the two answers that were still a walk of the tickets
+//! ([`ready::Ready`]): each ticket's count of unsatisfied blockers, the ready
+//! set it decides — in the store's order, so a page of `ready_set` is a range
+//! of it and its `remaining` counts at most the one shortcode a cursor cuts —
+//! and each shortcode's count of each status, which `list { status }` sums
+//! whole shortcodes from. A write moves them where it moves what they count:
+//! a birth, and a status change — which, across the line MNG-4 draws, moves
+//! the count of every ticket its `unlocks` names. Stored as SCALE-28 stores
+//! the rest: a column, an index over it, two tables, in the write's
+//! transaction, compared by `--verify-derived`.
 
 use crate::types::TicketSummary;
 use rusqlite::{Connection, OpenFlags};
@@ -207,8 +217,15 @@ pub struct PageQuery<'a> {
 /// costs the walk and not a test per ticket. SCALE-19: and then not the
 /// walk either — with nothing to test, what remains is the span's length
 /// less the page, which the cache knows per shortcode ([`Span::len`]).
+///
+/// SCALE-32: `Kept` is a predicate the cache keeps counts of — a status, so
+/// far ([`Span::len_of`]) — so its page is still tested row by row, and its
+/// `remaining` is that count less the page, as `All`'s is. `By` is one the
+/// cache keeps nothing for (`find`'s needle, a status among one parent's
+/// children): everything past the page is tested and counted.
 enum Filter<'a> {
     All,
+    Kept(&'a dyn Fn(&Row) -> bool),
     By(&'a dyn Fn(&Row) -> bool),
 }
 
@@ -318,6 +335,38 @@ impl Span {
             // No other shape is cut (`Span::of`); were one, the walk is
             // still the answer.
             _ => self.range(cache).map_or(0, |range| range.count() as u64),
+        }
+    }
+
+    /// SCALE-32: how many tickets in this span hold `status` — [`Span::len`]
+    /// for `list { status }`: every whole shortcode from its kept count of
+    /// the status ([`ready::Ready::held`]), and the one the cursor cuts into
+    /// by walking the rest of it and testing each row — the rest of one
+    /// shortcode, never the rest of the store. The value is the walk's.
+    fn len_of(&self, cache: &Cache, status: Status) -> u64 {
+        use std::ops::Bound::{Excluded, Included, Unbounded};
+        if self.empty {
+            return 0;
+        }
+        let rest_of_run = |key: &OrderKey| {
+            let end = OrderKey {
+                epic: key.epic.clone(),
+                seq: u32::MAX,
+            };
+            cache
+                .order
+                .range((Excluded(key), Included(&end)))
+                .filter(|(_, t)| t.status == status)
+                .count() as u64
+        };
+        match (&self.start, &self.end) {
+            (Unbounded, Unbounded) => cache.ready.held_after(None, status),
+            (Excluded(key), Unbounded) => rest_of_run(key) + cache.ready.held_after(Some(&key.epic), status),
+            (Included(first), Included(_)) => cache.ready.held(&first.epic, status),
+            (Excluded(key), Included(_)) => rest_of_run(key),
+            _ => self
+                .range(cache)
+                .map_or(0, |range| range.filter(|(_, t)| t.status == status).count() as u64),
         }
     }
 }
@@ -894,12 +943,18 @@ impl Needle {
 /// as its rows — from one worked-out change ([`Derived`]), so the two copies
 /// are one value in two places. A start reads them from the file
 /// ([`stored::load`]); only a build ([`Cache::new`]) computes them.
+///
+/// SCALE-32 adds a sixth, [`ready::Ready`] — each ticket's count of
+/// unsatisfied blockers, the ready set they decide, each shortcode's count
+/// of each status — which is what `ready_set` and `list { status }` page
+/// and count from; moved and stored the same way.
 struct Cache {
     order: BTreeMap<OrderKey, Row>,
     at: HashMap<String, OrderKey>,
     rollups: rollup::Rollups,
     ids: ids::Ids,
     children: children::Children,
+    ready: ready::Ready,
     written: u64,
 }
 
@@ -1014,11 +1069,15 @@ struct Moved {
     /// The groups whose row moved, innermost first — the write's
     /// `group_changed` events (MNG-10).
     groups: Vec<Group>,
+    /// SCALE-32: the counts, the ready set and the status counts as a birth
+    /// or a status change moves them.
+    ready: Option<ready::Move>,
 }
 
 impl Derived {
     /// A write that moves nothing derived: `amend`, `link_commits`,
-    /// `unlink_commits`, a status change that does not cross `Complete`.
+    /// `unlink_commits` — and, before SCALE-32, a status change that did not
+    /// cross `Complete` (every status change now moves a status count).
     fn none() -> Self {
         Self {
             stored: stored::Changes::default(),
@@ -1036,8 +1095,18 @@ impl Derived {
                 birth: None,
                 rollups: Some(rollups),
                 groups,
+                ready: None,
             },
         }
+    }
+
+    /// SCALE-32: and what it does to the counts, the ready set and the
+    /// status counts — stored in the same transaction, taken by the cache
+    /// with the rest.
+    fn readied(mut self, ready: ready::Move) -> Self {
+        ready.store(&mut self.stored);
+        self.moved.ready = Some(ready);
+        self
     }
 }
 
@@ -1101,12 +1170,24 @@ impl Cache {
             order.len(),
             started.elapsed().as_secs_f64() * 1000.0
         );
+        let started = std::time::Instant::now();
+        let ready = ready::Ready::build(rows);
+        tracing::info!(
+            "counted the unsatisfied blockers of {} tickets, a ready set of {} and the status counts \
+             of {} shortcodes over {} tickets in {:.1} ms",
+            ready.blocked(),
+            ready.size(),
+            ready.shortcodes(),
+            order.len(),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
         Self {
             order,
             at,
             rollups,
             ids,
             children,
+            ready,
             written: 0,
         }
     }
@@ -1119,6 +1200,7 @@ impl Cache {
         ids: ids::Ids,
         rollups: rollup::Rollups,
         children: children::Children,
+        ready: ready::Ready,
     ) -> Self {
         let (order, at) = ordered(loaded);
         Self {
@@ -1127,6 +1209,7 @@ impl Cache {
             rollups,
             ids,
             children,
+            ready,
             written: 0,
         }
     }
@@ -1142,6 +1225,7 @@ impl Cache {
             .filter(|t| t.child_count > 0)
             .map(|t| (t.id.clone(), t.child_count))
             .collect();
+        let (unsatisfied, statuses, ready) = self.ready.stored();
         stored::Form {
             runs,
             refs,
@@ -1149,6 +1233,9 @@ impl Cache {
             cross,
             marks,
             counts,
+            unsatisfied,
+            statuses,
+            ready,
         }
     }
 
@@ -1187,12 +1274,14 @@ impl Cache {
     /// parent's new `child_count` (SCALE-4 — the newborn is new, so never
     /// already one of its parent's children), and the roll-ups, worked out
     /// on a copy over the rows with the newborn among them (MNG-10).
+    /// SCALE-32: and its own count of unsatisfied blockers and its status
+    /// counted ([`ready::Ready::born`]).
     fn birth(&self, newborn: &Row) -> Derived {
         let rows = self.rows().with(newborn);
         let birth = self.ids.birth(rows, newborn);
         let mut rollups = self.rollups.clone();
         let groups = rollups.created(rows, newborn);
-        let mut derived = Derived::rolled(self, rollups, groups);
+        let mut derived = Derived::rolled(self, rollups, groups).readied(self.ready.born(rows, newborn));
         birth.store(&mut derived.stored);
         if let Some(p) = &newborn.parent {
             derived.stored.counts.push((p.clone(), self.children.count(p) + 1));
@@ -1230,14 +1319,19 @@ impl Cache {
 
     /// SCALE-28: what `row`'s status change from `previous` does to the
     /// roll-ups, before it commits — nothing, copied or stored, unless it
-    /// crosses `Complete`.
+    /// crosses `Complete`. SCALE-32: and to the status counts, the ready set
+    /// and — across the satisfied line — the counts of the tickets it
+    /// unlocks ([`ready::Ready::status_changed`]), whatever the roll-ups do.
     fn status_change(&self, row: &Row, previous: Status) -> Derived {
-        if !rollup::Rollups::crosses(previous, row.status) {
-            return Derived::none();
-        }
-        let mut rollups = self.rollups.clone();
-        let groups = rollups.status_changed(self.rows().with(row), row, previous);
-        Derived::rolled(self, rollups, groups)
+        let rows = self.rows().with(row);
+        let derived = if rollup::Rollups::crosses(previous, row.status) {
+            let mut rollups = self.rollups.clone();
+            let groups = rollups.status_changed(rows, row, previous);
+            Derived::rolled(self, rollups, groups)
+        } else {
+            Derived::none()
+        };
+        derived.readied(self.ready.status_changed(rows, row, previous))
     }
 
     /// MNG-10: a status change; only a crossing of `Complete` moves a count.
@@ -1297,6 +1391,9 @@ impl Cache {
         }
         if let Some(rollups) = moved.rollups {
             self.rollups = rollups;
+        }
+        if let Some(ready) = moved.ready {
+            self.ready.moved(ready);
         }
         moved.groups
     }
@@ -1520,8 +1617,8 @@ impl Store {
         // made is the one the store starts with.
         let cache = match stored::state(&conn)? {
             stored::State::Current => {
-                let rows = db::load_rows(&conn)?;
-                stored::load(&conn, rows)?
+                let (rows, unsatisfied) = db::load_rows_counted(&conn)?;
+                stored::load(&conn, rows, unsatisfied)?
             }
             found => stored::build(&mut conn, found)?,
         };
@@ -2082,6 +2179,13 @@ impl Store {
     ///
     /// SCALE-14: a page of rows, from the cache alone — the `summary` page;
     /// a page of whole tickets is a [`Walk`].
+    ///
+    /// SCALE-32: with a `status` (and no `parent`), `remaining` is whole
+    /// shortcodes' kept counts of it and a walk of the rest of the one the
+    /// cursor cuts into ([`Span::len_of`]); the page itself still tests each
+    /// row from the cursor until it has `limit` — the whole span, for a
+    /// status none of it holds. An index on `(status, epic, seq)` would make
+    /// it a range; nothing keeps one yet.
     pub fn page(&self, q: PageQuery<'_>) -> Result<Page, StoreError> {
         let select = Select::List {
             epic: q.epic.map(str::to_ascii_uppercase),
@@ -2095,7 +2199,8 @@ impl Store {
 
     /// MNG-9: one page of the ready set — the [`Store::ready_set`]
     /// membership rule, cut with the same cursor and limit as
-    /// [`Store::page`]. SCALE-14: of rows, as `page`.
+    /// [`Store::page`]. SCALE-14: of rows, as `page`. SCALE-32: from the
+    /// set the cache keeps ([`Store::walk_ready`]): the page costs the page.
     pub fn ready_page(
         &self,
         epic: Option<&str>,
@@ -2131,26 +2236,41 @@ impl Store {
                 // The epic is already spent — it bounded the span rather than
                 // filtering inside it — so with no status asked for, there is
                 // nothing left to test on the way through.
-                let filter = match status {
-                    None => Filter::All,
-                    Some(_) => Filter::By(&keep),
-                };
-                Ok(match parent.as_deref() {
-                    Some(p) => Self::walk_children(cache, p, span, limit, filter, rest),
-                    None => Self::walk_cache(cache, span, limit, filter, rest),
+                Ok(match (parent.as_deref(), *status) {
+                    (Some(p), None) => Self::walk_children(cache, p, span, limit, Filter::All, rest),
+                    (Some(p), Some(_)) => Self::walk_children(cache, p, span, limit, Filter::By(&keep), rest),
+                    (None, None) => Self::walk_cache(cache, span, limit, Filter::All, rest),
+                    // SCALE-32: a status is tested on the way through the
+                    // page, and what is left is counted from what the cache
+                    // keeps per shortcode.
+                    (None, Some(s)) => {
+                        let rows = span.range(cache).map(|range| range.map(|(_, t)| t));
+                        let cursor = span.cursor.clone();
+                        Self::walk_rows(rows, || span.len_of(cache, s), cursor, limit, Filter::Kept(&keep), rest)
+                    }
                 })
             }
             Select::Ready { epic } => {
                 let span = Span::of(cache, after, epic.as_deref())?;
-                let keep = |t: &Row| {
-                    t.status == Status::Ready
-                        && t.blocked_by
-                            .iter()
-                            .all(|b| cache.get(b).is_some_and(|bt| satisfied(bt.status)))
-                };
-                Ok(Self::walk_cache(cache, span, limit, Filter::By(&keep), rest))
+                Ok(Self::walk_ready(cache, span, limit, rest))
             }
         }
+    }
+
+    /// SCALE-32: a page of the ready set — the kept set itself
+    /// ([`ready::Ready`]), cut by the span (the epic and the cursor are
+    /// positions in it as they are in the store), each member looked up by
+    /// its key. Membership is already decided, so nothing is tested: the
+    /// page costs the page, and what is left is the set's arithmetic — whole
+    /// shortcodes by their share, the one the cursor cuts into by its
+    /// members past the cursor. Before, every ticket in the span had each
+    /// of its blockers looked up, for the page and then for the count: at
+    /// 10⁶, 60 ms for the first page.
+    fn walk_ready(cache: &Cache, span: Span, limit: Option<u32>, rest: Rest) -> Page {
+        let (start, end) = (span.start.as_ref(), span.end.as_ref());
+        let rows = (!span.empty).then(|| cache.ready.range(start, end).filter_map(|key| cache.order.get(&key)));
+        let cursor = span.cursor.clone();
+        Self::walk_rows(rows, || cache.ready.len(start, end), cursor, limit, Filter::All, rest)
     }
 
     /// SCALE-6: one page of the tickets whose id or title contains
@@ -2243,7 +2363,9 @@ impl Store {
     /// `remaining` — `len` less the page when nothing is filtered (the
     /// page is a prefix of what `rows` holds), or the rest of the matches
     /// counted when something is. SCALE-14: unless the walk's own step
-    /// asks for the rows alone ([`Rest::Skip`]).
+    /// asks for the rows alone ([`Rest::Skip`]). SCALE-32: a filter the
+    /// cache keeps counts of ([`Filter::Kept`]) tests the page, and `len` —
+    /// then the span's matches — less the page is what is left.
     fn walk_rows<'c>(
         rows: Option<impl Iterator<Item = &'c Row>>,
         len: impl FnOnce() -> u64,
@@ -2263,6 +2385,14 @@ impl Store {
                 tickets.extend(rows.take(take).cloned());
                 match rest {
                     // The page is a prefix of the span: it cannot be longer.
+                    Rest::Count => len().saturating_sub(tickets.len() as u64),
+                    Rest::Skip => 0,
+                }
+            }
+            (Some(rows), Filter::Kept(keep)) => {
+                tickets.extend(rows.filter(|t| keep(t)).take(take).cloned());
+                match rest {
+                    // The page is a prefix of the span's matches.
                     Rest::Count => len().saturating_sub(tickets.len() as u64),
                     Rest::Skip => 0,
                 }
@@ -2766,19 +2896,46 @@ impl Store {
         // at 10⁶ it took the persist from ~10 s to ~15 s. So a seed at least
         // the size of the store it lands in drops it with its first chunk
         // and builds it again, sorted, with the rest (0.95 s at 10⁶).
+        // SCALE-32: the ready set's index too — and it is built after the
+        // counts it is over are written, not moved by each one.
         let rebuild_index = generated.len() >= existing;
+        // SCALE-32: each ticket's count of unsatisfied blockers, worked out
+        // before its row is written so the row is written with it. Counted
+        // after the seed is in, the counts were written a second time, a row
+        // each — 177,000 rows at 10⁶, most pages of the file rewritten: the
+        // seed went 14.6 s → 21 s. A generated ticket's blockers are tickets
+        // generated before it; a store's own are looked up, should one be
+        // named. What the seed does to the store's own counts (a newborn that
+        // resolves a forward reference, born done) the stored state after it
+        // still settles.
+        let open: Vec<u32> = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let born: HashMap<&str, Status> = generated.iter().map(|t| (t.id.as_str(), t.status)).collect();
+            generated
+                .iter()
+                .map(|t| {
+                    ready::open_blockers(&t.blocked_by, |b| {
+                        born.get(b).copied().or_else(|| cache.get(b).map(|r| r.status))
+                    })
+                })
+                .collect()
+        };
         self.committing.fetch_add(1, Ordering::SeqCst);
         {
             let mut conn = self.db.lock().expect("db lock poisoned");
-            for (i, chunk) in generated.chunks(synthetic::ROWS_PER_TRANSACTION).enumerate() {
+            let chunks = generated
+                .chunks(synthetic::ROWS_PER_TRANSACTION)
+                .zip(open.chunks(synthetic::ROWS_PER_TRANSACTION));
+            for (i, (chunk, open)) in chunks.enumerate() {
                 let tx = conn.transaction()?;
                 if i == 0 {
                     stored::mark_stale(&tx, true)?;
                     if rebuild_index {
                         stored::drop_children_index(&tx)?;
+                        stored::drop_ready_index(&tx)?;
                     }
                 }
-                db::insert_many(&tx, chunk)?;
+                db::insert_many(&tx, chunk, open)?;
                 tx.commit()?;
             }
         }
@@ -2808,6 +2965,10 @@ impl Store {
             // one of its tickets may be an id the store already named.
             let ids = ids::Ids::build(tickets.rows());
             tickets.ids = ids;
+            // SCALE-32: and the counts, the ready set and the status counts —
+            // a seed's tickets arrive with their statuses and blockers set.
+            let ready = ready::Ready::build(tickets.rows());
+            tickets.ready = ready;
             tickets.form()
         });
         // SCALE-28: and all of it stored, in one transaction, which also
@@ -2817,6 +2978,7 @@ impl Store {
             let tx = conn.transaction()?;
             stored::create_children_index(&tx)?;
             stored::write_all(&tx, &form)?;
+            stored::create_ready_index(&tx)?;
             stored::mark_stale(&tx, false)?;
             tx.commit()?;
         }
@@ -2951,6 +3113,29 @@ mod synthetic;
 /// page children from it directly.
 mod children;
 
+/// SCALE-32 (B3 of SCALE-13): what `ready_set` and `list { status }` answer
+/// from instead of testing every ticket in their span.
+///
+/// MNG-4's rule — `Ready`, and every id in `blocked_by` a ticket that is
+/// `Complete` or `Superseded` — as a number kept per ticket: how many of
+/// the ids it names are not (an id not born yet counts). The ready set is
+/// the tickets `Ready` with that number 0, kept per shortcode in the
+/// store's order; beside it, how many tickets of each shortcode hold each
+/// status.
+///
+/// Three writes move them, and only three: a ticket's birth (its own count,
+/// from its blockers as they stand; its status counted), a change of its
+/// own status (its status counts, its membership), and a change of a
+/// blocker's status across the satisfied line — which moves the count of
+/// every ticket that names it, found from the blocker's `unlocks` (the
+/// mirror MNG-4 keeps; never a scan). A move (`set_parent`), an amend, a
+/// link touch neither a status nor a `blocked_by`, and leave them as they
+/// are. A seed and a build count them in one pass, as the other structures
+/// are built. Stored by SCALE-28's form: the count a column on the ticket's
+/// row, the ready set a partial index over it and the status, the status
+/// counts and each shortcode's share of the ready set two small tables.
+mod ready;
+
 /// SDLC-9: what a commit reference is — the grammar `link_commits` and
 /// `unlink_commits` hold every entry to, and the text a reference is stored
 /// and compared as — and how many one ticket may carry.
@@ -3025,3 +3210,11 @@ mod tests_detached;
 /// the seed's marker and `--verify-derived`.
 #[cfg(test)]
 mod tests_stored;
+
+/// SCALE-32: the counts of unsatisfied blockers, the ready set and the
+/// status counts against a scan after every write, in the cache and read
+/// back from the file; every `ready_set` and `list { status }` page against
+/// the page the code before it gives; the fan-out; the first open of a file
+/// from before it; and `--verify-derived` naming what differs.
+#[cfg(test)]
+mod tests_ready;

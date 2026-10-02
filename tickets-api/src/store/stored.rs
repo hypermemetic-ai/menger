@@ -1,4 +1,4 @@
-use super::{children::Children, db, ids::Ids, rollup::Rollups, Cache, OrderKey, Row};
+use super::{children::Children, db, ids::Ids, ready::Ready, rollup::Rollups, Cache, OrderKey, Row};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -6,7 +6,11 @@ use std::path::Path;
 /// Which form of the stored derived state this build writes and reads.
 /// One table more (B3's edges, say) is a new form: a file holding an older
 /// one is built again, once, as a file from before SCALE-28 is.
-const FORM: i64 = 1;
+///
+/// SCALE-32 (B3) is form 2: each ticket's count of unsatisfied blockers (a
+/// column), the ready set (the file's index over it), each shortcode's
+/// count of each status and its share of the ready set.
+const FORM: i64 = 2;
 
 /// The tables the derived state is stored in, and the index children are
 /// read from — each keyed the way the read that will answer from it asks
@@ -33,6 +37,19 @@ const FORM: i64 = 1;
 ///   store's order: a page of `list { parent }` is a range of it (SCALE-4);
 ///   and each ticket's own `child_count` is a column on its row (added
 ///   beside it).
+/// - `tickets_ready` ([`READY_INDEX`]) — SCALE-32: the ready set, in the
+///   store's order: an index over the tickets that are `Ready` with a count
+///   of 0 in their `unsatisfied` column (added beside them: how many of the
+///   ids a ticket names in `blocked_by` are not a `Complete` or `Superseded`
+///   ticket). SQLite keeps it with the row, in the transaction that moves a
+///   status or a count; a page of `ready_set` is a range of it.
+/// - `status_counts` — SCALE-32: how many tickets of a shortcode hold a
+///   status, by shortcode then status, a row for each that is not 0: what
+///   `remaining` on a page of `list { status }` sums whole shortcodes from.
+/// - `ready_counts` — SCALE-32: each shortcode's share of the ready set, a
+///   row for each that holds any: what `remaining` on a page of `ready_set`
+///   sums whole shortcodes from, so only the one a cursor cuts is counted
+///   in the index.
 /// - `derived_state` — one row: which form is stored, and whether it is
 ///   behind the tickets (a seed commits its tickets a chunk at a time and
 ///   their derived state after the last; until then the row says so).
@@ -74,6 +91,16 @@ const SCHEMA: &str = "
             id   TEXT NOT NULL,
             PRIMARY KEY (mark, id)
         ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS status_counts (
+            epic   TEXT NOT NULL,
+            status TEXT NOT NULL,
+            held   INTEGER NOT NULL,
+            PRIMARY KEY (epic, status)
+        ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS ready_counts (
+            epic TEXT PRIMARY KEY,
+            held INTEGER NOT NULL
+        ) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS derived_state (
             one   INTEGER PRIMARY KEY CHECK (one = 1),
             form  INTEGER NOT NULL,
@@ -85,6 +112,13 @@ const SCHEMA: &str = "
 const CHILDREN_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS tickets_by_parent ON tickets (parent, epic, seq)";
 
+/// SCALE-32: the ready set — MNG-4's rule, as the file can answer it: the
+/// tickets `Ready` with no unsatisfied blocker, in the store's order. Partial,
+/// so it holds the members and nothing else; a read names the same two
+/// terms ([`read_ready`]) and SQLite answers from it.
+const READY_INDEX: &str = "CREATE INDEX IF NOT EXISTS tickets_ready ON tickets (epic, seq)
+         WHERE status = 'Ready' AND unsatisfied = 0";
+
 /// The children index, built where it is missing — sorted, in one pass.
 pub(super) fn create_children_index(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(CHILDREN_INDEX)
@@ -94,6 +128,19 @@ pub(super) fn create_children_index(conn: &Connection) -> rusqlite::Result<()> {
 /// stale in the same transaction, and builds it again when it stores it.
 pub(super) fn drop_children_index(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch("DROP INDEX IF EXISTS tickets_by_parent")
+}
+
+/// SCALE-32: the ready set's index, built where it is missing — once the
+/// counts it is over are written, so it is one sorted pass and not a row at
+/// a time as each count lands.
+pub(super) fn create_ready_index(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(READY_INDEX)
+}
+
+/// SCALE-32: the ready set's index, dropped — by a build or a large seed,
+/// which write the counts it is over and then build it again.
+pub(super) fn drop_ready_index(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("DROP INDEX IF EXISTS tickets_ready")
 }
 
 /// A shortcode's run as stored: `(first, last, held)` (SCALE-19's `Run`).
@@ -157,7 +204,9 @@ impl Mark {
 /// was read from the file or built by a scan — what a build writes, what
 /// `--verify-derived` compares and what the tests hold to their oracles.
 /// The children index itself is not here: it is the file's own index on
-/// the tickets, read into a [`Children`] and compared as one.
+/// the tickets, read into a [`Children`] and compared as one. Nor is the
+/// ready set (SCALE-32), for the same reason: it is read from its index
+/// ([`read_ready`]) and compared as a set.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(super) struct Form {
     pub(super) runs: BTreeMap<String, RunRow>,
@@ -167,6 +216,13 @@ pub(super) struct Form {
     pub(super) marks: BTreeSet<(Mark, String)>,
     /// Each ticket whose `child_count` is not 0, with it.
     pub(super) counts: BTreeMap<String, u64>,
+    /// SCALE-32: each ticket whose count of unsatisfied blockers is not 0,
+    /// with it.
+    pub(super) unsatisfied: BTreeMap<String, u32>,
+    /// SCALE-32: each shortcode's count of each status it holds.
+    pub(super) statuses: BTreeMap<(String, &'static str), u64>,
+    /// SCALE-32: each shortcode's share of the ready set, where it has one.
+    pub(super) ready: BTreeMap<String, u64>,
 }
 
 /// One write's change to the stored derived state — the rows its own
@@ -186,6 +242,15 @@ pub(super) struct Changes {
     pub(super) cross: Vec<(String, Option<CrossRow>)>,
     /// `true`: the mark is made; `false`: it goes.
     pub(super) marks: Vec<((Mark, String), bool)>,
+    /// SCALE-32: each ticket whose count of unsatisfied blockers moves, with
+    /// the count it moves to — and with it, by SQLite, the ready set's index.
+    pub(super) unsatisfied: Vec<(String, u32)>,
+    /// SCALE-32: each shortcode's count of a status that moves, with what it
+    /// moves to; 0: the row goes.
+    pub(super) statuses: Vec<((String, &'static str), u64)>,
+    /// SCALE-32: each shortcode's share of the ready set that moves; 0: the
+    /// row goes.
+    pub(super) ready: Vec<(String, u64)>,
 }
 
 impl Changes {
@@ -230,8 +295,70 @@ impl Changes {
             };
             conn.prepare_cached(sql)?.execute(params![mark.as_str(), id])?;
         }
+        // A crossing moves every count it moves to one of a few values
+        // (most to 0, or to 1 and back): one statement per value, over the
+        // ids as a list, rather than one per ticket.
+        let mut by_value: BTreeMap<u32, Vec<&str>> = BTreeMap::new();
+        for (id, open) in &self.unsatisfied {
+            by_value.entry(*open).or_default().push(id);
+        }
+        for (open, ids) in by_value {
+            match ids.as_slice() {
+                [id] => put_unsatisfied(conn, id, open)?,
+                _ => {
+                    let ids = serde_json::to_string(&ids).expect("serialize ids");
+                    conn.prepare_cached(
+                        "UPDATE tickets SET unsatisfied = ?1 WHERE id IN (SELECT value FROM json_each(?2))",
+                    )?
+                    .execute(params![open, ids])?;
+                }
+            }
+        }
+        for (key, held) in &self.statuses {
+            put_status(conn, key, *held)?;
+        }
+        for (epic, held) in &self.ready {
+            put_ready(conn, epic, *held)?;
+        }
         Ok(())
     }
+}
+
+/// SCALE-32: one ticket's count of unsatisfied blockers — a birth's, or a
+/// build's where the column differs from the scan.
+fn put_unsatisfied(conn: &Connection, id: &str, open: u32) -> rusqlite::Result<()> {
+    conn.prepare_cached("UPDATE tickets SET unsatisfied = ?2 WHERE id = ?1")?
+        .execute(params![id, open])?;
+    Ok(())
+}
+
+/// SCALE-32: a shortcode's count of a status; 0 is no row.
+fn put_status(conn: &Connection, (epic, status): &(String, &'static str), held: u64) -> rusqlite::Result<()> {
+    if held == 0 {
+        conn.prepare_cached("DELETE FROM status_counts WHERE epic = ?1 AND status = ?2")?
+            .execute(params![epic, status])?;
+    } else {
+        conn.prepare_cached(
+            "INSERT INTO status_counts (epic, status, held) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (epic, status) DO UPDATE SET held = excluded.held",
+        )?
+        .execute(params![epic, status, held])?;
+    }
+    Ok(())
+}
+
+/// SCALE-32: a shortcode's share of the ready set; 0 is no row.
+fn put_ready(conn: &Connection, epic: &str, held: u64) -> rusqlite::Result<()> {
+    if held == 0 {
+        conn.prepare_cached("DELETE FROM ready_counts WHERE epic = ?1")?.execute([epic])?;
+    } else {
+        conn.prepare_cached(
+            "INSERT INTO ready_counts (epic, held) VALUES (?1, ?2)
+                 ON CONFLICT (epic) DO UPDATE SET held = excluded.held",
+        )?
+        .execute(params![epic, held])?;
+    }
+    Ok(())
 }
 
 fn put_run(conn: &Connection, epic: &str, (first, last, held): &RunRow) -> rusqlite::Result<()> {
@@ -340,25 +467,33 @@ pub(super) fn mark_stale(conn: &Connection, stale: bool) -> rusqlite::Result<()>
 /// handed out, logged. In it the file gains what the form needs (the
 /// `child_count` column — `ADD COLUMN` with a constant default rewrites no
 /// row — the tables and the children index); every ticket's row is read and
-/// the four structures built from them by a scan, as every start built them
-/// before SCALE-28 (and with the roll-ups' own rule for hand-edited data:
+/// the four structures (SCALE-32: five) built from them by a scan, as every
+/// start built them before SCALE-28 (and with the roll-ups' own rule for hand-edited data:
 /// what is stored is what `rollup.rs` builds); and all of it is written
 /// over whatever was there. A SIGKILL before the commit leaves the file as
 /// it was, and the next open builds again; after it, every open reads.
 ///
 /// Returns the cache it built — the tickets and their derived state, as
 /// stored — so the open that built it does not read it all again.
+///
+/// SCALE-32: the file also gains the `unsatisfied` column (as `child_count`
+/// was added) and the ready set's index — dropped first and built after the
+/// counts are written, so it is one sorted pass.
 pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache> {
     let started = std::time::Instant::now();
     let tx = conn.transaction()?;
-    if !db::has_column(&tx, "tickets", "child_count")? {
-        tx.execute("ALTER TABLE tickets ADD COLUMN child_count INTEGER NOT NULL DEFAULT 0", [])?;
+    for column in ["child_count", "unsatisfied"] {
+        if !db::has_column(&tx, "tickets", column)? {
+            tx.execute(&format!("ALTER TABLE tickets ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"), [])?;
+        }
     }
     tx.execute_batch(SCHEMA)?;
     create_children_index(&tx)?;
+    drop_ready_index(&tx)?;
     let cache = Cache::new(db::load_rows(&tx)?);
     let form = cache.form();
     write_all(&tx, &form)?;
+    create_ready_index(&tx)?;
     mark_stale(&tx, false)?;
     tx.commit()?;
     let why = match found {
@@ -369,14 +504,19 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     };
     let message = format!(
         "SCALE-28: stored the derived state {why} — {} shortcode runs, {} dangling forward \
-         references, {} roll-up groups ({} cross trees, {} marks), the child_count of {} parents — \
-         built once by a scan of {} tickets in {:.1} ms, durably; every later open reads it",
+         references, {} roll-up groups ({} cross trees, {} marks), the child_count of {} parents, \
+         the unsatisfied blockers of {} tickets, a ready set of {} and the status counts of {} \
+         shortcodes — built once by a scan of {} tickets in {:.1} ms, durably; every later open \
+         reads it",
         form.runs.len(),
         form.refs.len(),
         form.groups.len(),
         form.cross.len(),
         form.marks.len(),
         form.counts.len(),
+        form.unsatisfied.len(),
+        cache.ready.size(),
+        cache.ready.shortcodes(),
         cache.len(),
         started.elapsed().as_secs_f64() * 1000.0
     );
@@ -391,11 +531,26 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
 /// and differs from it is replaced, what it does not hold goes. The counts
 /// are compared with the column first, so only a row whose count moves is
 /// written — a scan of the column, which a build or a seed can afford.
+/// SCALE-32: the same for the counts of unsatisfied blockers.
 pub(super) fn write_all(conn: &Connection, form: &Form) -> rusqlite::Result<()> {
     conn.execute_batch(
         "DELETE FROM shortcode_runs; DELETE FROM forward_refs; DELETE FROM rollup_groups;
-         DELETE FROM rollup_cross; DELETE FROM rollup_marks;",
+         DELETE FROM rollup_cross; DELETE FROM rollup_marks; DELETE FROM status_counts;
+         DELETE FROM ready_counts;",
     )?;
+    for (key, held) in &form.statuses {
+        put_status(conn, key, *held)?;
+    }
+    for (epic, held) in &form.ready {
+        put_ready(conn, epic, *held)?;
+    }
+    let stored = read_unsatisfied(conn)?;
+    for id in stored.keys().filter(|id| !form.unsatisfied.contains_key(*id)) {
+        put_unsatisfied(conn, id, 0)?;
+    }
+    for (id, open) in form.unsatisfied.iter().filter(|(id, n)| stored.get(*id) != Some(*n)) {
+        put_unsatisfied(conn, id, *open)?;
+    }
     for (epic, run) in &form.runs {
         put_run(conn, epic, run)?;
     }
@@ -428,14 +583,30 @@ fn read_counts(conn: &Connection) -> rusqlite::Result<BTreeMap<String, u64>> {
     rows.collect()
 }
 
+/// SCALE-32: every count of unsatisfied blockers that is not 0.
+fn read_unsatisfied(conn: &Connection) -> rusqlite::Result<BTreeMap<String, u32>> {
+    let mut stmt = conn.prepare("SELECT id, unsatisfied FROM tickets WHERE unsatisfied <> 0")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
+}
+
 /// Every table, as stored, with every `child_count` that is not 0 — the
 /// form `--verify-derived` compares with a scan. The counts are a scan of
 /// the column (it has no index, and needs none: a start has each with its
-/// row, and B4 reads a row's when it reads the row).
+/// row, and B4 reads a row's when it reads the row). SCALE-32: and every
+/// count of unsatisfied blockers, the same way.
 pub(super) fn read(conn: &Connection) -> rusqlite::Result<Form> {
     let mut form = read_tables(conn)?;
     form.counts = read_counts(conn)?;
+    form.unsatisfied = read_unsatisfied(conn)?;
     Ok(form)
+}
+
+/// A status as stored, as the `&'static str` it is kept under.
+fn status_str(stored: &str) -> rusqlite::Result<&'static str> {
+    stored.parse::<super::Status>().map(super::Status::as_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, e.into())
+    })
 }
 
 /// The tables alone — a few rows a shortcode — what a start reads its
@@ -491,7 +662,50 @@ fn read_tables(conn: &Connection) -> rusqlite::Result<Form> {
     while let Some(r) = rows.next()? {
         form.marks.insert((Mark::parse(&r.get::<_, String>(0)?)?, r.get(1)?));
     }
+    let mut stmt = conn.prepare("SELECT epic, status, held FROM status_counts")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        form.statuses.insert((r.get(0)?, status_str(r.get_ref(1)?.as_str()?)?), r.get(2)?);
+    }
+    let mut stmt = conn.prepare("SELECT epic, held FROM ready_counts")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        form.ready.insert(r.get(0)?, r.get(1)?);
+    }
     Ok(form)
+}
+
+/// SCALE-32: the ready set, from its index — in the store's order, so each
+/// shortcode's members arrive together and ascending. The query names the
+/// index's own two terms, which is what lets SQLite answer from it; `INDEXED
+/// BY` makes that the index or an error, never a scan of the tickets. What a
+/// start reads the ready set from, and what B4's `ready_set` is a range of.
+pub(super) fn read_ready(conn: &Connection) -> rusqlite::Result<BTreeMap<String, BTreeSet<u32>>> {
+    let mut stmt = conn.prepare(
+        "SELECT epic, seq FROM tickets INDEXED BY tickets_ready
+             WHERE status = 'Ready' AND unsatisfied = 0 ORDER BY epic, seq",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut members: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
+    let mut here: Option<(String, BTreeSet<u32>)> = None;
+    while let Some(r) = rows.next()? {
+        let (epic, seq) = (r.get_ref(0)?.as_str()?, r.get(1)?);
+        match &mut here {
+            Some((e, seqs)) if e == epic => {
+                seqs.insert(seq);
+            }
+            _ => {
+                if let Some((e, seqs)) = here.take() {
+                    members.insert(e, seqs);
+                }
+                here = Some((epic.to_string(), BTreeSet::from([seq])));
+            }
+        }
+    }
+    if let Some((e, seqs)) = here {
+        members.insert(e, seqs);
+    }
+    Ok(members)
 }
 
 /// Every parent's children from the file's index on `(parent, epic, seq)`
@@ -512,27 +726,42 @@ pub(super) fn read_children(conn: &Connection) -> rusqlite::Result<Children> {
 }
 
 /// The cache at start, from the rows and what is stored beside them — the
-/// four structures read, none rebuilt: no pass over the tickets computes
-/// them. Each ticket's `child_count` came with its row.
-pub(super) fn load(conn: &Connection, rows: HashMap<String, Row>) -> anyhow::Result<Cache> {
+/// four structures (SCALE-32: five) read, none rebuilt: no pass over the tickets computes
+/// them. Each ticket's `child_count` came with its row. SCALE-32: and its
+/// count of unsatisfied blockers, `unsatisfied` (those not 0); the ready set
+/// is read from its index, the status counts from their table.
+pub(super) fn load(
+    conn: &Connection,
+    rows: HashMap<String, Row>,
+    unsatisfied: HashMap<String, u32>,
+) -> anyhow::Result<Cache> {
     let started = std::time::Instant::now();
     let form = read_tables(conn)?;
     let tables = started.elapsed();
     let children = read_children(conn)?;
+    let indexed = started.elapsed();
+    let members = read_ready(conn)?;
     let (runs, refs, groups, cross, marks) =
         (form.runs.len(), form.refs.len(), form.groups.len(), form.cross.len(), form.marks.len());
     let parents = children.parents();
     let ids = Ids::from_stored(form.runs, form.refs);
     let rollups = Rollups::from_stored(form.groups, form.cross, form.marks);
+    let ready = Ready::from_stored(unsatisfied, members, form.statuses);
     tracing::info!(
         "read the derived state from the database in {:.1} ms — {runs} shortcode runs, {refs} \
          dangling forward references, {groups} roll-up groups ({cross} cross trees, {marks} marks) \
-         in {:.1} ms, the children of {parents} parents from the index in {:.1} ms; nothing rebuilt",
+         and the status counts of {} shortcodes in {:.1} ms, the children of {parents} parents \
+         from the index in {:.1} ms, a ready set of {} from its index in {:.1} ms (and the \
+         unsatisfied blockers of {} tickets with their rows); nothing rebuilt",
         started.elapsed().as_secs_f64() * 1000.0,
+        ready.shortcodes(),
         tables.as_secs_f64() * 1000.0,
-        (started.elapsed() - tables).as_secs_f64() * 1000.0
+        (indexed - tables).as_secs_f64() * 1000.0,
+        ready.size(),
+        (started.elapsed() - indexed).as_secs_f64() * 1000.0,
+        ready.blocked(),
     );
-    Ok(Cache::from_parts(rows, ids, rollups, children))
+    Ok(Cache::from_parts(rows, ids, rollups, children, ready))
 }
 
 /// What `menger --verify-derived` found.
@@ -545,6 +774,10 @@ pub enum Verdict {
         refs: usize,
         groups: usize,
         parents: usize,
+        /// SCALE-32: tickets with an unsatisfied blocker.
+        blocked: usize,
+        /// SCALE-32: the ready set.
+        ready: usize,
     },
     /// Where they differ, one line each, naming the structure and the key.
     Differs(Vec<String>),
@@ -554,8 +787,9 @@ pub enum Verdict {
 }
 
 /// SCALE-28: `menger --verify-derived` — opens the database read-only, in
-/// one read transaction (one snapshot), builds the four structures by a scan
-/// of its tickets exactly as a build does, reads what is stored, and
+/// one read transaction (one snapshot), builds the four structures (SCALE-32:
+/// five — the ready set compared with its index) by a scan of its tickets
+/// exactly as a build does, reads what is stored, and
 /// compares them, structure by structure and key by key. It writes nothing:
 /// the connection cannot, and runs no migration, so a file that needs one
 /// is reported, not changed.
@@ -594,6 +828,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
     let scanned = Cache::new(db::load_rows(&tx)?);
     let stored = read(&tx)?;
     let stored_children = read_children(&tx)?;
+    let stored_ready = read_ready(&tx)?;
     let want = scanned.form();
     let mut out = compare(&stored, &want);
     for parent in scanned.children.differences(&stored_children) {
@@ -603,6 +838,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
             scanned.children.of(&parent)
         ));
     }
+    out.extend(ready_differences(&stored_ready, scanned.ready.members()));
     tx.commit()?;
     if !out.is_empty() {
         return Ok(Verdict::Differs(out));
@@ -613,7 +849,30 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         refs: want.refs.len(),
         groups: want.groups.len(),
         parents: scanned.children.parents(),
+        blocked: want.unsatisfied.len(),
+        ready: scanned.ready.size(),
     })
+}
+
+/// SCALE-32: each ticket the ready set's index holds and a scan does not, or
+/// a scan holds and the index does not — one line each, in the store's order.
+pub(super) fn ready_differences(
+    stored: &BTreeMap<String, BTreeSet<u32>>,
+    scanned: &BTreeMap<String, BTreeSet<u32>>,
+) -> Vec<String> {
+    let all = |m: &BTreeMap<String, BTreeSet<u32>>| -> BTreeSet<(String, u32)> {
+        m.iter().flat_map(|(e, seqs)| seqs.iter().map(move |s| (e.clone(), *s))).collect()
+    };
+    let (stored, scanned) = (all(stored), all(scanned));
+    let mut out: Vec<(&(String, u32), &str)> = stored
+        .difference(&scanned)
+        .map(|k| (k, "the index holds it; a scan does not"))
+        .chain(scanned.difference(&stored).map(|k| (k, "a scan holds it; the index does not")))
+        .collect();
+    out.sort();
+    out.into_iter()
+        .map(|((epic, seq), why)| format!("ready set {epic}-{seq}: {why}"))
+        .collect()
 }
 
 /// Each place `stored` and `scanned` differ, one line each: the structure,
@@ -638,6 +897,12 @@ pub(super) fn compare(stored: &Form, scanned: &Form) -> Vec<String> {
     };
     diff(&mut out, "roll-up mark", &marks(&stored.marks), &marks(&scanned.marks), |()| "made".into());
     diff(&mut out, "child_count of", &stored.counts, &scanned.counts, |n| n.to_string());
+    diff(&mut out, "unsatisfied blockers of", &stored.unsatisfied, &scanned.unsatisfied, |n| n.to_string());
+    let statuses = |m: &BTreeMap<(String, &'static str), u64>| -> BTreeMap<String, u64> {
+        m.iter().map(|((epic, status), n)| (format!("{epic} {status}"), *n)).collect()
+    };
+    diff(&mut out, "status count", &statuses(&stored.statuses), &statuses(&scanned.statuses), |n| n.to_string());
+    diff(&mut out, "ready count", &stored.ready, &scanned.ready, |n| n.to_string());
     out
 }
 

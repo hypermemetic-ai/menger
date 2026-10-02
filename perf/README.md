@@ -101,6 +101,31 @@ either row shape, so one command measures a binary from before and after:
 the ports. The database is deleted afterwards; the server log stays
 beside it.
 
+## The ready set, status pages and the fan-out — `ready-probe.mjs` (SCALE-32)
+
+Two probes over the WebSocket against a server you start yourself (a
+`--db-path` under `target/`, test ports, `PLEXUS_NO_REGISTRY=1`):
+
+```sh
+node perf/ready-probe.mjs pages PORT 21 - TURU-2071 MAP-2   # "-" is the head
+python3 perf/fan-out.py target/fan.db                        # then serve it, and:
+node perf/ready-probe.mjs fan-out PORT 7
+```
+
+`pages` times the first page of `ready_set { summary, limit: 200 }` and of
+`list { status: "Ready", summary, limit: 200 }` after each cursor, beside
+an unfiltered `list { summary, limit: 200 }` as the transport's own floor
+(~2 ms at 10⁶). `TURU-2071` is 90 % of the way through seed value 1's store
+at 10⁶; `MAP-2` the start of its largest shortcode — the most a status
+page's `remaining` still walks. `fan-out.py` writes a store no seed makes:
+one ticket blocking 1, 10³ and 10⁵ `Ready` others; `fan-out` completes each
+blocker and sets it back, RUNS times each way, and reports the latency, the
+bytes a `watch` subscriber receives for that write (the blocker's
+`unlocks` rides whole in `status_changed` — SCALE-23) and the ready set
+after it. The file has no derived state, so either binary builds its own
+on first open; for steady-state numbers, open it once, stop, checkpoint
+the WAL, and measure on the next start.
+
 ## Report layout
 
 `plans/PERF/artifacts/MAGNITUDE-<date>.md` — machine specs, the ladder

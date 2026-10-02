@@ -466,7 +466,7 @@ async fn verify_names_an_altered_number_and_writes_nothing() {
     let before = bytes();
     let verdict = Store::verify_derived(&path).unwrap();
     assert!(
-        matches!(verdict, Verdict::Consistent { tickets: 3, runs: 2, refs: 0, groups: 2, parents: 2 }),
+        matches!(verdict, Verdict::Consistent { tickets: 3, runs: 2, refs: 0, groups: 2, parents: 2, .. }),
         "{verdict:?}"
     );
     assert_eq!(bytes(), before, "verifying a consistent file wrote nothing");
