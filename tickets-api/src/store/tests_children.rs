@@ -282,6 +282,7 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
                     unlocks: Vec::new(),
                     parent: parent.map(Into::into),
                     child_count: 0,
+                    commits: Vec::new(),
                     body: String::new(),
                     created_unix: 0,
                     updated_unix: 0,

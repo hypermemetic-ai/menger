@@ -207,6 +207,30 @@ rather than the order they arrived in, and `child_count` its length. A
 restart finds no column and migrates nothing; a pre-SCALE-4 binary cannot
 open the migrated file.
 
+A ticket knows the commits that finished it (SDLC-9): every row carries
+**`commits`**, in the order they were linked (`[]` when none), written by
+`link_commits` and `unlink_commits`. A **commit reference** is a
+hexadecimal object name of 7 to 64 characters, optionally prefixed by a
+repository and `@` — `77df9a0`, `plexus-macros@4f7114a…` — the repository
+being letters, digits, `.`, `_` and `-`; the hash is stored lowercase, the
+repository as given, and nothing is trimmed. References are compared as
+text: the server holds no repository, so it does not know that a short and
+a long hash name one commit — link the form you want kept, and qualify with
+`repo@` when the commit is not in the ticket's own repository. At most 256
+per ticket. Linking moves `updated_unix` and nothing else — not the status:
+a ticket can be `Complete` with no commit and hold commits while `Coding`
+(whether `done` requires one is SDLC-4's). The worker links its commit in
+the step that flips the ticket to `In Review`; the merge links the merge
+commit if it differs. There is no reverse lookup (which tickets a commit
+finished). A database written before SDLC-9 gains the column on first open,
+durably, every ticket with none linked — `ADD COLUMN … DEFAULT '[]'`,
+which rewrites no row, so it is instant at any size; a binary from before
+it still opens the file.
+
+```sh
+synapse -P 4455 -j -p '{"id":"MNG-10","commits":["77df9a0"]}' menger tickets link_commits
+```
+
 | method | yields |
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
@@ -217,10 +241,12 @@ open the migrated file.
 | `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
 | `tickets.set_status { id, status }` | `status_changed { ticket, previous }` — any of the nine, from any status (SDLC-7: the worker states `Coding` and `In Review` included); one outside them is an in-band `error` naming the nine |
 | `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id |
+| `tickets.link_commits { id, commits }` | `commits_linked { ticket, added }` (SDLC-9) — appends every commit reference in `commits` the ticket does not already carry, in the order given; `added` is what was newly linked, in order. Every entry already linked, or `commits` empty, is no write and no broadcast and answers `added: []`. An entry that is not a commit reference is one in-band `error` naming every such entry, and nothing is written — a call is all or nothing; so is a link that would put more than 256 commits on the ticket. An id naming no ticket is `not_found`. Durable before it is acknowledged; `updated_unix` moves, nothing else does |
+| `tickets.unlink_commits { id, commits }` | `commits_unlinked { ticket, removed }` (SDLC-9) — every entry the ticket carries is removed; `removed` names them in the order given; none of them linked is no write, `removed: []`. The same grammar, the same all-or-nothing `error`, `not_found` |
 | `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's row is written, and it leaves the old parent's children and joins the new one's (SCALE-4: neither parent's row is written; `watch` carries `children_changed` and `child_removed` with each parent's new `child_count`); the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, root, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only), `root` is the lowest-seq `scope`, `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
 | `tickets.extents {}` | one `extent { epic, last_seq }` per shortcode that holds a ticket, in shortcode order (the store's), then the stream's own `done` (SCALE-16) — where each shortcode ends: ids are allocated highest-plus-one and never deleted, so a shortcode holds `last_seq` tickets, row k of it is `EPIC-k`, and a position in the store's order becomes a `list { after }` cursor without a walk; every `last_seq` together sums to `health.ticket_count` (a hand-edited database with a hole still reports the highest sequence; `after` naming the missing id is `list`'s cursor error). Not a roll-up: the shortcode's own tickets only, and every shortcode has one whether or not the nav draws it a row. Read from the sequence `create` allocates from (SCALE-3), so the cost is the number of shortcodes; no `watch` event — `created` carries the shortcode's new `last_seq` as its `seq` |
-| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`); `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
+| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `commits_linked` / `commits_unlinked` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`); `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
 
 Paging (MNG-9). `(epic, seq)` is a total order the schema keeps unique, so
 a ticket id is a cursor: a client that renders opens `watch` first, then
@@ -286,6 +312,8 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        what child_count is (SCALE-4)
     db.rs              the schema, the writes, a row and a body read back, the
                        in-place migrations
+    commits.rs         what a commit reference is, as stored and compared, and
+                       how many a ticket holds (SDLC-9)
     synthetic.rs       the --seed-synthetic generator (PERF-2)
     tests.rs           the store's unit tests
     tests_paging.rs    page.remaining against a count, on every shape (SCALE-19)
@@ -298,6 +326,9 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
     tests_bodies.rs    whole tickets from rows and stored bodies, a walk of a
                        page of bodies at a time, read-your-writes under a
                        hammer of amends (SCALE-14)
+    tests_commits.rs   link_commits / unlink_commits: the grammar, every row of
+                       the table, the bound, the column added to an old file
+                       (SDLC-9)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell

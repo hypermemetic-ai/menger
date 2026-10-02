@@ -886,6 +886,22 @@ fn ancestors(rows: RwSignal<Vec<Row>>, id: &str) -> Vec<String> {
     chain
 }
 
+/// SDLC-9: a commit reference as the ticket page shows it — git's short
+/// form, the first seven digits of the hash, after the repository when the
+/// reference names one (`plexus-macros@4f7114a`). The server stores at
+/// least seven, so a short reference shows whole.
+fn short_commit(full: &str) -> String {
+    let (repo, hash) = match full.rsplit_once('@') {
+        Some((repo, hash)) => (Some(repo), hash),
+        None => (None, full),
+    };
+    let hash: String = hash.chars().take(7).collect();
+    match repo {
+        Some(repo) => format!("{repo}@{hash}"),
+        None => hash,
+    }
+}
+
 /// The full ticket render: every wire-exposed field. The body is
 /// markdown, sanitized in md.rs; a leading YAML frontmatter block is
 /// collapsed behind a <details>, never painted raw. Body/blockers/
@@ -912,6 +928,25 @@ fn ticket_view(
         kids.with(|k| k.unshown(count))
     });
     let parent_id = Memo::new(move |_| ticket.with(|t| t.parent.clone()));
+    // SDLC-9: the commits that finished this ticket, in link order, each in
+    // git's short form with the whole reference in its title. They are on
+    // the row, so a link made anywhere reaches this page as the row's
+    // update on `watch` — no fetch, no reload — and the memo keeps any
+    // other change to the row from rebuilding them.
+    let commits = Memo::new(move |_| ticket.with(|t| t.commits.clone()));
+    let commits_view = move || {
+        let refs = commits.get();
+        if refs.is_empty() {
+            return view! { "—" }.into_any();
+        }
+        refs.into_iter()
+            .map(|full| {
+                let short = short_commit(&full);
+                view! { <code class="commit" title=full.clone() data-commit=full>{short}</code> }
+            })
+            .collect_view()
+            .into_any()
+    };
 
     let blockers = move || {
         let ids = blocked_by.get();
@@ -1050,6 +1085,7 @@ fn ticket_view(
                 <div><dt>"seq"</dt><dd>{move || ticket.with(|t| t.seq)}</dd></div>
                 <div><dt>"created"</dt><dd>{move || ticket.with(|t| fmt_unix(t.created_unix))}</dd></div>
                 <div><dt>"updated"</dt><dd>{move || ticket.with(|t| fmt_unix(t.updated_unix))}</dd></div>
+                <div><dt>"commits"</dt><dd id="t-commits">{commits_view}</dd></div>
             </dl>
             <section class="dag">
                 <h3>"blocked by"</h3>
@@ -1406,6 +1442,7 @@ mod tests {
             child_count: 0,
             blocked_by: Vec::new(),
             unlocks: Vec::new(),
+            commits: Vec::new(),
             created_unix: 0,
             updated_unix: 0,
         })

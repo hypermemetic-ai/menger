@@ -137,7 +137,11 @@ derived from it or from the declaration that produces it. Pick by consumer:
   ought's words — `active` is `Coding`, `in review` is `In Review` — and
   stores the canonical spelling. The merge still sets `Complete`
   (menger's current name for `done`; SDLC-2 reconciles the vocabulary
-  with ought's).
+  with ought's). **Link the commit** (SDLC-9): in the step that flips the
+  ticket to `In Review`, the worker links its commit(s) with
+  `tickets.link_commits` (`{"id":"MNG-10","commits":["77df9a0"]}`;
+  `repo@hash` for a commit outside menger); the merge links the merge
+  commit too if it differs, when it sets `Complete`.
 - `web/index.html` is dependency-free and embedded via `include_str!` —
   no build step, keep it that way (MNG-5 hardens this into a contract).
   Since MFE-4 it is served at `/vanilla`; `/` is the Leptos app, and

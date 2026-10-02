@@ -645,8 +645,9 @@ async fn pre_scale4_database_drops_its_children_lists_on_first_open_and_survives
 /// body), and `pre-sdlc7.json` is that binary's own `list {}` of it.
 /// Statuses are stored as their wire text, so there is nothing to migrate:
 /// this binary answers the same nine tickets, field for field (but for
-/// SCALE-4's `children` → `child_count`, applied to the expectation). Then the
-/// two worker states are written over two of them and survive SIGKILL.
+/// SCALE-4's `children` → `child_count` and SDLC-9's `commits: []`, applied
+/// to the expectation). Then the two worker states are written over two of
+/// them and survive SIGKILL.
 #[tokio::test]
 async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkill() {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
@@ -660,6 +661,8 @@ async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkil
     for t in &mut expected {
         let kids = t.as_object_mut().unwrap().remove("children").expect("the old shape lists children");
         t["child_count"] = json!(kids.as_array().unwrap().len());
+        // SDLC-9: and every row carries its linked commits — none, here.
+        t["commits"] = json!([]);
     }
     let statuses: Vec<&str> = expected.iter().map(|t| t["status"].as_str().unwrap()).collect();
     for s in ["Pending", "Ready", "Blocked", "Complete", "Idea", "Epic", "Superseded"] {
@@ -742,6 +745,98 @@ async fn an_acknowledged_amend_survives_sigkill_byte_exact() {
     assert_eq!(got, acked, "the acknowledged ticket, whole, after SIGKILL + restart");
     assert_eq!(got["ticket"]["title"], "amended");
     assert_eq!(got["ticket"]["body"].as_str().unwrap().as_bytes(), body.as_bytes());
+}
+
+/// SDLC-9 criterion 3, black-box: an acknowledged link survives SIGKILL —
+/// the restarted server answers the same ticket, its commits in link order
+/// — and `unlink_commits` removes exactly what it names, durably too.
+#[tokio::test]
+async fn an_acknowledged_link_survives_sigkill_and_unlink_removes_exactly_what_it_names() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+
+    let s1 = spawn_server(Some(&db), &[], dir.path(), "link1").await;
+    let c1 = connect(s1.port).await;
+    one(&c1, "tickets.create", json!({"epic": "LNK", "title": "finished by commits", "kind": "scope", "body": "b"})).await;
+    let ev = one(&c1, "tickets.link_commits", json!({"id": "LNK-1", "commits": ["77df9a0", "plexus-macros@4F7114A"]})).await;
+    assert_eq!(ev["type"], "commits_linked", "{ev}");
+    let ev = one(&c1, "tickets.link_commits", json!({"id": "LNK-1", "commits": ["77df9a0", "0bb28b2"]})).await;
+    assert_eq!(ev["added"], json!(["0bb28b2"]));
+    let acked = one(&c1, "tickets.get", json!({"id": "LNK-1"})).await;
+    assert_eq!(acked["ticket"]["commits"], json!(["77df9a0", "plexus-macros@4f7114a", "0bb28b2"]));
+    drop(c1);
+    s1.kill9();
+
+    let s2 = spawn_server(Some(&db), &[], dir.path(), "link2").await;
+    let c2 = connect(s2.port).await;
+    let got = one(&c2, "tickets.get", json!({"id": "LNK-1"})).await;
+    assert_eq!(got, acked, "the acknowledged ticket, commits and all, after SIGKILL + restart");
+    let ev = one(&c2, "tickets.unlink_commits", json!({"id": "LNK-1", "commits": ["plexus-macros@4f7114a"]})).await;
+    assert_eq!(ev["type"], "commits_unlinked", "{ev}");
+    assert_eq!(ev["removed"], json!(["plexus-macros@4f7114a"]));
+    assert_eq!(ev["ticket"]["commits"], json!(["77df9a0", "0bb28b2"]), "exactly what it named");
+    drop(c2);
+    s2.kill9();
+
+    let s3 = spawn_server(Some(&db), &[], dir.path(), "link3").await;
+    let c3 = connect(s3.port).await;
+    let got = one(&c3, "tickets.get", json!({"id": "LNK-1"})).await;
+    assert_eq!(got["ticket"]["commits"], json!(["77df9a0", "0bb28b2"]), "the unlink survived SIGKILL too");
+}
+
+/// SDLC-9 criterion 5, black-box: `tests/fixtures/pre-scale4.db` was written
+/// before SDLC-9 (no `commits` column — and before SCALE-4, so it meets that
+/// migration first). On first open the server adds the column, durably, and
+/// says so; every ticket answers `commits: []`, whole and as a summary row.
+/// After SIGKILL and a restart the column is in the file, nothing migrates
+/// again, and a link made then is kept.
+#[tokio::test]
+async fn pre_sdlc9_database_opens_with_no_commits_durably() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pre-scale4.db"),
+        &db,
+    )
+    .unwrap();
+    assert!(!columns(&rusqlite::Connection::open(&db).unwrap()).contains(&"commits".to_string()));
+
+    async fn none_linked(client: &WsClient, when: &str) -> usize {
+        let whole = drain(client, "tickets.list", json!({})).await;
+        let rows = drain(client, "tickets.list", json!({"summary": true})).await;
+        assert_eq!(whole.len(), rows.len());
+        for (t, r) in whole.iter().zip(&rows) {
+            assert_eq!(t["ticket"]["commits"], json!([]), "{when}: {t}");
+            assert_eq!(r["summary"]["commits"], json!([]), "{when}: {r}");
+        }
+        whole.len()
+    }
+
+    let s1 = spawn_server(Some(&db), &[], dir.path(), "commits1").await;
+    let c1 = connect(s1.port).await;
+    let log = s1.startup_output();
+    assert!(
+        log.contains("SDLC-9: added the commits column to 9 ticket(s), each with none linked, durably"),
+        "startup reports the migration, got:\n{log}"
+    );
+    assert_eq!(none_linked(&c1, "after first open").await, 9);
+    drop(c1);
+    s1.kill9();
+    assert!(columns(&rusqlite::Connection::open(&db).unwrap()).contains(&"commits".to_string()), "in the file");
+
+    let s2 = spawn_server(Some(&db), &[], dir.path(), "commits2").await;
+    let c2 = connect(s2.port).await;
+    let log = s2.startup_output();
+    assert!(!log.contains("SDLC-9:"), "no second migration:\n{log}");
+    assert_eq!(none_linked(&c2, "after SIGKILL + restart").await, 9);
+    let ev = one(&c2, "tickets.link_commits", json!({"id": "PAR-2", "commits": ["9087ca7"]})).await;
+    assert_eq!(ev["ticket"]["commits"], json!(["9087ca7"]), "{ev}");
+    drop(c2);
+    s2.kill9();
+    let s3 = spawn_server(Some(&db), &[], dir.path(), "commits3").await;
+    let c3 = connect(s3.port).await;
+    let ev = one(&c3, "tickets.get", json!({"id": "PAR-2"})).await;
+    assert_eq!(ev["ticket"]["commits"], json!(["9087ca7"]));
 }
 
 /// AGS-13: a legacy value the pinned mapping does not cover refuses the

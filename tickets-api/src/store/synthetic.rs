@@ -300,6 +300,9 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> V
             unlocks: Vec::new(),
             parent,
             child_count: 0,
+            // SDLC-9: none — a commit is linked after birth, as `create`
+            // leaves it; the generator stays byte-identical per seed value.
+            commits: Vec::new(),
             body: body_s,
             created_unix: created,
             updated_unix: updated,

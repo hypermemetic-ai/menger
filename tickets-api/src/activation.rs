@@ -117,6 +117,10 @@ fn change_event(change: Change) -> TicketsEvent {
             TicketsEvent::StatusChanged { ticket, previous }
         }
         Change::Amended { ticket, changed } => TicketsEvent::Amended { ticket, changed },
+        Change::CommitsLinked { ticket, added } => TicketsEvent::CommitsLinked { ticket, added },
+        Change::CommitsUnlinked { ticket, removed } => {
+            TicketsEvent::CommitsUnlinked { ticket, removed }
+        }
         Change::UnlocksChanged { ticket, added } => TicketsEvent::UnlocksChanged { ticket, added },
         // SCALE-4: the parent's shortcode filtered `watch { epic }` on the
         // way here; the wire carries the id and the count.
@@ -419,6 +423,71 @@ impl Tickets {
         }
     }
 
+    /// SDLC-9: records which commits finished a ticket. Each entry is a
+    /// commit reference — a hexadecimal object name of 7 to 64 characters
+    /// (stored lowercase), optionally prefixed by a repository and `@`
+    /// (`77df9a0`, `plexus-macros@4f7114a`) — compared as text: the server
+    /// has no repository, so link the form you want kept. Every entry not
+    /// already on the ticket is appended, in the order given. Yields
+    /// exactly one event: `CommitsLinked { ticket, added }` — `added` is
+    /// what was newly linked, empty when nothing was (every entry already
+    /// linked, or none given), which writes and broadcasts nothing —
+    /// `NotFound` if `id` names no ticket, or an in-band `Error` naming
+    /// every entry that is not a reference, or for a link past 256 commits
+    /// on the ticket; an error writes nothing. Moves `updated_unix` and
+    /// nothing else — not the status. `watch` carries every
+    /// `CommitsLinked` that added something.
+    #[plexus_macros::method(
+        description = "Link commits to a ticket (the commits that finished it); yields commits_linked { ticket, added }",
+        params(
+            id = "Ticket id, e.g. MNG-10",
+            commits = "Commit references, in link order: a hex object name of 7-64 characters, optionally repo@ before it — e.g. [\"77df9a0\", \"plexus-macros@4f7114a\"]"
+        )
+    )]
+    pub async fn link_commits(
+        &self,
+        id: String,
+        commits: Vec<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            match store.link_commits(&id, commits).await {
+                Ok(change) => yield change_event(change),
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            }
+        }
+    }
+
+    /// SDLC-9: the inverse of `link_commits` — every entry the ticket
+    /// carries comes off. The same references, compared the same way, all
+    /// or nothing. Yields exactly one event: `CommitsUnlinked { ticket,
+    /// removed }` — `removed` empty when none of them was linked, which
+    /// writes and broadcasts nothing — `NotFound`, or an in-band `Error`
+    /// naming every entry that is not a reference. `watch` carries every
+    /// `CommitsUnlinked` that removed something.
+    #[plexus_macros::method(
+        description = "Unlink commits from a ticket; yields commits_unlinked { ticket, removed }",
+        params(
+            id = "Ticket id, e.g. MNG-10",
+            commits = "Commit references to remove, as linked (the hash is compared lowercase)"
+        )
+    )]
+    pub async fn unlink_commits(
+        &self,
+        id: String,
+        commits: Vec<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            match store.unlink_commits(&id, commits).await {
+                Ok(change) => yield change_event(change),
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            }
+        }
+    }
+
     /// The DAG query: which tickets can start now? Yields one row event
     /// per member of the ready set — status `Ready` and every
     /// `blocked_by` entry `Complete` or `Superseded` — ordered by
@@ -590,6 +659,10 @@ impl Tickets {
     /// MNG-16: an `amend` that changed something is one `Amended`, and
     /// moves no group.
     ///
+    /// SDLC-9: so is a `link_commits` or `unlink_commits` that changed
+    /// something — one `CommitsLinked` or `CommitsUnlinked`, the whole
+    /// ticket, no group.
+    ///
     /// SCALE-4: a parent's side of a birth or a move is the exception to
     /// "the full ticket": `ChildrenChanged` / `ChildRemoved` carry the
     /// parent's id, the child, and the parent's new `child_count` — the
@@ -597,7 +670,7 @@ impl Tickets {
     /// hangs. The `epic` filter applies to them by the parent's shortcode.
     #[plexus_macros::method(
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes",
+        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes",
         params(epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode)")
     )]
     pub async fn watch(
@@ -822,6 +895,86 @@ mod tests {
             }
             other => panic!("expected Amended, got {other:?}"),
         }
+    }
+
+    /// SDLC-9 over the activation (criteria 1, 2, 4): two commits linked,
+    /// then one of them again with a third — three in link order, the
+    /// second call's `added` the third alone, `get` showing them; a call
+    /// with one malformed entry is one in-band `error` naming it and writes
+    /// nothing; `not_found` for a missing id; and `watch` carries one event
+    /// per call that changed something — `commits_linked`,
+    /// `commits_unlinked` — and none for the no-ops or the refusal.
+    #[tokio::test]
+    async fn link_commits_yields_commits_linked_and_watch_carries_only_what_changed() {
+        let hub = hub();
+        one(hub.create("LC".into(), "root".into(), Some("scope".into()), None, None, None, None).await).await;
+        let mut watch = Box::pin(hub.watch(None).await);
+        let commits = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+
+        let ev = one(hub.link_commits("lc-1".into(), commits(&["77df9a0", "plexus-macros@4F7114A"])).await).await;
+        let wire = serde_json::to_value(&ev).unwrap();
+        assert_eq!(wire["type"], "commits_linked");
+        assert_eq!(wire["added"], serde_json::json!(["77df9a0", "plexus-macros@4f7114a"]));
+        assert_eq!(wire["ticket"]["id"], "LC-1");
+        assert_eq!(wire["ticket"]["commits"], wire["added"]);
+        let ev = one(hub.link_commits("LC-1".into(), commits(&["77df9a0", "0bb28b2"])).await).await;
+        let wire = serde_json::to_value(&ev).unwrap();
+        assert_eq!(wire["added"], serde_json::json!(["0bb28b2"]), "the third alone");
+        let three = serde_json::json!(["77df9a0", "plexus-macros@4f7114a", "0bb28b2"]);
+        assert_eq!(wire["ticket"]["commits"], three);
+        let got = serde_json::to_value(one(hub.get("LC-1".into()).await).await).unwrap();
+        assert_eq!(got["ticket"]["commits"], three, "get shows them, in link order");
+        let (rows, _) = ids_and_page(hub.list(None, None, None, None, None, Some(true)).await).await;
+        assert_eq!(rows, ["LC-1"]);
+        let evs: Vec<TicketsEvent> = Box::pin(hub.list(None, None, None, None, None, Some(true)).await).collect().await;
+        assert_eq!(serde_json::to_value(&evs[0]).unwrap()["summary"]["commits"], three, "and the summary row");
+
+        for (i, added) in [&["77df9a0"], &["0bb28b2"]].into_iter().enumerate() {
+            match watch.next().await.expect("change") {
+                TicketsEvent::CommitsLinked { ticket, added: got } => {
+                    assert_eq!((ticket.id.as_str(), got.len()), ("LC-1", if i == 0 { 2 } else { 1 }));
+                    assert_eq!(got[0], added[0]);
+                }
+                other => panic!("expected CommitsLinked, got {other:?}"),
+            }
+        }
+
+        // The no-op, the refusal, the miss: nothing on `watch`.
+        match one(hub.link_commits("LC-1".into(), commits(&["0BB28B2"])).await).await {
+            TicketsEvent::CommitsLinked { added, ticket } => {
+                assert!(added.is_empty(), "{added:?}");
+                assert_eq!(ticket.commits.len(), 3);
+            }
+            other => panic!("expected CommitsLinked, got {other:?}"),
+        }
+        match one(hub.link_commits("LC-1".into(), commits(&["c8c5678", "77df9a0;rm", "090cdec"])).await).await {
+            TicketsEvent::Error { message } => assert!(message.contains("'77df9a0;rm'"), "names the entry: {message}"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(matches!(
+            one(hub.link_commits("LC-9".into(), commits(&["c8c5678"])).await).await,
+            TicketsEvent::NotFound { id } if id == "LC-9"
+        ));
+        let got = serde_json::to_value(one(hub.get("LC-1".into()).await).await).unwrap();
+        assert_eq!(got["ticket"]["commits"], three, "the refused call wrote nothing");
+
+        let ev = one(hub.unlink_commits("LC-1".into(), commits(&["plexus-macros@4f7114a", "c8c5678"])).await).await;
+        let wire = serde_json::to_value(&ev).unwrap();
+        assert_eq!(wire["type"], "commits_unlinked");
+        assert_eq!(wire["removed"], serde_json::json!(["plexus-macros@4f7114a"]));
+        assert_eq!(wire["ticket"]["commits"], serde_json::json!(["77df9a0", "0bb28b2"]), "exactly what it named");
+        match one(hub.unlink_commits("LC-1".into(), commits(&["c8c5678"])).await).await {
+            TicketsEvent::CommitsUnlinked { removed, .. } => assert!(removed.is_empty()),
+            other => panic!("expected CommitsUnlinked, got {other:?}"),
+        }
+        match watch.next().await.expect("change") {
+            TicketsEvent::CommitsUnlinked { ticket, removed } => {
+                assert_eq!(removed, ["plexus-macros@4f7114a"], "the no-op, the refusal and the miss said nothing");
+                assert_eq!(ticket.commits, ["77df9a0", "0bb28b2"]);
+            }
+            other => panic!("expected CommitsUnlinked, got {other:?}"),
+        }
+        assert!(futures::FutureExt::now_or_never(watch.next()).is_none(), "and nothing more");
     }
 
     #[tokio::test]

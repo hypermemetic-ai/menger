@@ -255,6 +255,9 @@
   dl.meta dt { color: var(--muted); }
   dl.meta dd { margin: 0; }
   dd.status { padding: 0 .4rem; border: 1px solid var(--line); border-radius: 6px; }
+  /* SDLC-9: the commits that finished the ticket — short, mono, in link order. */
+  dd#t-commits { display: flex; flex-wrap: wrap; gap: 0 .6rem; }
+  dd#t-commits .commit { font-family: var(--mono); font-size: 12.5px; }
   section.dag h3, section.bodysec h3 {
     font-size: .8rem; color: var(--muted); font-weight: 500; margin: 1.1rem 0 .35rem;
   }

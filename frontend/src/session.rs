@@ -353,6 +353,13 @@ async fn session(
                 show_body(&ticket);
                 upsert(rows, TicketSummary::from(&ticket));
             }
+            // SDLC-9: commits linked or unlinked. They are on the row, so
+            // the row takes them — and the open ticket page, which renders
+            // through it, shows them; the body did not change.
+            ClientEvent::Data(
+                TicketsEvent::CommitsLinked { ticket, .. }
+                | TicketsEvent::CommitsUnlinked { ticket, .. },
+            ) => upsert(rows, TicketSummary::from(&ticket)),
             // SCALE-5: the server dropped `missed` changes this stream never
             // saw. What the rows hold may be stale: fetch again what is
             // shown — every row, by the walk a reconnect makes, and the open

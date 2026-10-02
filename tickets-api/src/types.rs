@@ -254,6 +254,13 @@ pub struct Ticket {
     /// the shortcode hangs under it, MNG-14) as large as the shortcode. The
     /// children themselves come by page: `list { parent }`.
     pub child_count: u64,
+    /// SDLC-9: the commits that finished this ticket, in the order they
+    /// were linked (`tickets.link_commits`) — each a commit reference, a
+    /// hexadecimal object name of 7 to 64 characters stored lowercase,
+    /// optionally `repository@` before it. `[]` when none. Recorded, not
+    /// verified: the server has no repository. At most 256 (SCALE-4's
+    /// lesson — a list on a row is bounded).
+    pub commits: Vec<String>,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
     pub body: String,
     pub created_unix: i64,
@@ -284,6 +291,9 @@ pub struct TicketSummary {
     pub child_count: u64,
     pub blocked_by: Vec<String>,
     pub unlocks: Vec<String>,
+    /// SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
+    /// the ticket page all have it without a `get`.
+    pub commits: Vec<String>,
     pub created_unix: i64,
     pub updated_unix: i64,
 }
@@ -302,6 +312,7 @@ impl From<Ticket> for TicketSummary {
             child_count: t.child_count,
             blocked_by: t.blocked_by,
             unlocks: t.unlocks,
+            commits: t.commits,
             created_unix: t.created_unix,
             updated_unix: t.updated_unix,
         }
@@ -381,6 +392,18 @@ pub enum TicketsEvent {
     /// never carries. The full ticket rides along, body included, so a
     /// watch-only client — and an open ticket page — needs no `get`.
     Amended { ticket: Ticket, changed: Vec<String> },
+    /// SDLC-9: commits were linked to a ticket (yielded by `link_commits`,
+    /// and by `watch` for every link that changed something). `added` is
+    /// what was newly linked, in the order given — the ticket's `commits`
+    /// end with it — or nothing: `link_commits`' own answer when every
+    /// entry was already linked, which `watch` never carries. The whole
+    /// ticket rides along, as with every write after birth.
+    CommitsLinked { ticket: Ticket, added: Vec<String> },
+    /// SDLC-9: commits were unlinked from a ticket (yielded by
+    /// `unlink_commits`, and by `watch` for every unlink that changed
+    /// something). `removed` is what came off, in the order given; empty
+    /// when none of it was linked, which `watch` never carries.
+    CommitsUnlinked { ticket: Ticket, removed: Vec<String> },
     /// An existing ticket's `unlocks` gained `added`: a newly created
     /// ticket named it in `blocked_by` (yielded by `watch`). Carries the
     /// full updated ticket so a watch-only client stays coherent.
@@ -559,6 +582,7 @@ mod tests {
             unlocks: vec!["SUM-3".into()],
             parent: Some("SUM-4".into()),
             child_count: 1,
+            commits: vec!["77df9a0".into()],
             body: "## Problem\n\nthe weight of a list".into(),
             created_unix: 1,
             updated_unix: 2,

@@ -77,6 +77,7 @@ fn write_runs(path: &Path, rows: &[(&str, u32)]) {
                 unlocks: Vec::new(),
                 parent: None,
                 child_count: 0,
+                commits: Vec::new(),
                 body: String::new(),
                 created_unix: 0,
                 updated_unix: 0,

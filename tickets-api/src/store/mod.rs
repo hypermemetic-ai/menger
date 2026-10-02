@@ -44,6 +44,11 @@
 //! no lock is held across an await; and a read sees every write that was
 //! acknowledged before it began, as one version of each ticket — never a
 //! body older, or newer, than the row beside it ([`Store::full`]).
+//! SDLC-9 puts on each row the commits that finished it — `commits`, in
+//! link order, bounded ([`commits`]) — written by `link_commits` and
+//! `unlink_commits` through the same `commit()` then `apply()` as every
+//! other write. A database written before SDLC-9 gains the column, durably,
+//! once, on first open, every ticket with none linked.
 
 use crate::types::TicketSummary;
 use rusqlite::{Connection, OpenFlags};
@@ -89,6 +94,7 @@ fn whole(row: Row, body: String) -> Ticket {
         child_count,
         blocked_by,
         unlocks,
+        commits,
         created_unix,
         updated_unix,
     } = row;
@@ -104,6 +110,7 @@ fn whole(row: Row, body: String) -> Ticket {
         unlocks,
         parent,
         child_count,
+        commits,
         body,
         created_unix,
         updated_unix,
@@ -427,6 +434,14 @@ pub enum Change {
     /// Only broadcast when something changed: a no-op amend writes and
     /// emits nothing.
     Amended { ticket: Ticket, changed: Vec<String> },
+    /// SDLC-9: commits were linked to a ticket (`link_commits`); `added` is
+    /// what was newly linked, in the order given. Carries the full ticket,
+    /// as every write after birth does. Only broadcast when something was
+    /// added: a no-op link writes and emits nothing.
+    CommitsLinked { ticket: Ticket, added: Vec<String> },
+    /// SDLC-9: commits were unlinked (`unlink_commits`); `removed` is what
+    /// came off, in the order given. Only broadcast when something did.
+    CommitsUnlinked { ticket: Ticket, removed: Vec<String> },
     /// An existing ticket's `unlocks` gained `added` because a newly
     /// created ticket named it in `blocked_by`. Carries the full updated
     /// ticket so watch-only clients stay coherent.
@@ -475,6 +490,8 @@ impl Change {
             Self::Created { ticket }
             | Self::StatusChanged { ticket, .. }
             | Self::Amended { ticket, .. }
+            | Self::CommitsLinked { ticket, .. }
+            | Self::CommitsUnlinked { ticket, .. }
             | Self::UnlocksChanged { ticket, .. }
             | Self::ParentChanged { ticket, .. } => &ticket.epic,
             Self::ChildrenChanged { epic, .. } | Self::ChildRemoved { epic, .. } => epic,
@@ -556,6 +573,13 @@ pub enum StoreError {
     /// MNG-16: an `amend` asked for a title that is empty after trimming.
     /// A ticket always has one; nothing was written.
     EmptyTitle { id: String },
+    /// SDLC-9: a `link_commits` or `unlink_commits` named entries that are
+    /// not commit references ([`commits::reference`]) — every one of them,
+    /// as given. A call is all or nothing: nothing was written.
+    NotACommit { id: String, entries: Vec<String> },
+    /// SDLC-9: the link would put `linked + adding` commits on `id`, past
+    /// [`commits::MAX_PER_TICKET`]. Nothing was written.
+    TooManyCommits { id: String, linked: usize, adding: usize },
     /// The write could not be made durable; nothing was acknowledged.
     /// SCALE-14: or a read could not get a body from the database.
     Db(String),
@@ -608,6 +632,24 @@ impl std::fmt::Display for StoreError {
                 f,
                 "a ticket's title cannot be empty: the title given for '{id}' is blank \
                  (nothing changed for '{id}')"
+            ),
+            Self::NotACommit { id, entries } => {
+                let named: Vec<String> = entries.iter().map(|e| format!("'{e}'")).collect();
+                let verb = if entries.len() == 1 { "is not a commit reference" } else { "are not commit references" };
+                write!(
+                    f,
+                    "{} {verb}: a commit reference is a hexadecimal object name of 7 to 64 \
+                     characters, optionally after a repository (letters, digits, '.', '_', '-') \
+                     and '@' — e.g. 77df9a0, plexus-macros@4f7114a (nothing changed for '{id}')",
+                    named.join(", ")
+                )
+            }
+            Self::TooManyCommits { id, linked, adding } => write!(
+                f,
+                "a ticket holds at most {} commits: '{id}' has {linked}, and linking {adding} more \
+                 would make {} (nothing changed for '{id}')",
+                commits::MAX_PER_TICKET,
+                linked + adding
             ),
             Self::Db(msg) => write!(f, "database error: {msg}"),
             Self::SeedRefused { existing } => write!(
@@ -1235,6 +1277,10 @@ impl Store {
         // column it mirrored (the edge, then and now) and dropped. Never
         // fatal: a list that disagreed is logged, and `parent` stands.
         db::migrate_drop_children(&mut conn)?;
+        // A database written before SDLC-9 gains `commits` here, once,
+        // durably — every ticket with none linked. Adding a column with a
+        // constant default rewrites no row, so this is instant at any size.
+        db::migrate_add_commits(&mut conn)?;
         let rows = db::load_rows(&conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
@@ -1519,6 +1565,8 @@ impl Store {
                 // names this id as some ticket's parent — the index has
                 // kept those under the id, as `list { parent }` finds them.
                 child_count: tickets.children.count(&id),
+                // SDLC-9: linked after birth, by `link_commits`.
+                commits: Vec::new(),
                 body: new.body,
                 created_unix: now,
                 updated_unix: now,
@@ -2137,6 +2185,116 @@ impl Store {
         Ok(change)
     }
 
+    /// SDLC-9: links `entries` to the ticket `id` — the record of which
+    /// commits finished it. Every entry must be a commit reference
+    /// ([`commits::reference`]); any that is not refuses the whole call,
+    /// naming it, before anything is read: a call is all or nothing. Of the
+    /// references, in the order given, each the ticket does not already
+    /// carry is appended — compared as stored text, so an entry named twice
+    /// is linked once — and `added` names them in that order.
+    ///
+    /// Nothing new — `entries` empty, or every one already linked — is no
+    /// write and no broadcast, and the returned `CommitsLinked` says
+    /// `added: []`, as `amend` answers a no-op. A link that would put more
+    /// than [`commits::MAX_PER_TICKET`] on the ticket is refused whole.
+    /// Otherwise the row commits — its commits and `updated_unix`, nothing
+    /// else: not the status (whether `done` needs a commit is SDLC-4's) —
+    /// then the cache, then one `CommitsLinked`. Like `amend`, it moves no
+    /// roll-up and no index, so the row goes into the cache and that is all.
+    pub async fn link_commits(&self, id: &str, entries: Vec<String>) -> Result<Change, StoreError> {
+        let id = id.trim().to_ascii_uppercase();
+        let refs = Self::references(&id, &entries)?;
+        let _serial = self.write_serial.lock().await;
+        let (mut row, written) = self.row(&id)?;
+        let mut known: HashSet<String> = row.commits.iter().cloned().collect();
+        let added: Vec<String> = refs.into_iter().filter(|r| known.insert(r.clone())).collect();
+        if added.is_empty() {
+            return Ok(Change::CommitsLinked {
+                ticket: self.full_one(row, written).await?,
+                added,
+            });
+        }
+        if row.commits.len() + added.len() > commits::MAX_PER_TICKET {
+            return Err(StoreError::TooManyCommits {
+                id,
+                linked: row.commits.len(),
+                adding: added.len(),
+            });
+        }
+        row.commits.extend(added.iter().cloned());
+        row.updated_unix = chrono::Utc::now().timestamp();
+
+        let (row, body) = self.commit_row(row).await?;
+        self.apply(|cache| cache.insert(row.clone()));
+        let change = Change::CommitsLinked {
+            ticket: whole(row, body),
+            added,
+        };
+        let _ = self.tx.send(change.clone());
+        Ok(change)
+    }
+
+    /// SDLC-9: unlinks `entries` from the ticket `id` — every entry the
+    /// ticket carries comes off, and `removed` names them in the order
+    /// given. The same grammar and the same all-or-nothing refusal as
+    /// [`Store::link_commits`]; an entry that is a reference but is not
+    /// linked is simply not removed. None of them linked is no write and no
+    /// broadcast, answered `removed: []`; otherwise the row commits (its
+    /// commits and `updated_unix`), then the cache, then one
+    /// `CommitsUnlinked`.
+    pub async fn unlink_commits(&self, id: &str, entries: Vec<String>) -> Result<Change, StoreError> {
+        let id = id.trim().to_ascii_uppercase();
+        let refs = Self::references(&id, &entries)?;
+        let _serial = self.write_serial.lock().await;
+        let (mut row, written) = self.row(&id)?;
+        let mut removed: Vec<String> = Vec::new();
+        for r in refs {
+            let before = row.commits.len();
+            row.commits.retain(|c| *c != r);
+            if row.commits.len() < before {
+                removed.push(r);
+            }
+        }
+        if removed.is_empty() {
+            return Ok(Change::CommitsUnlinked {
+                ticket: self.full_one(row, written).await?,
+                removed,
+            });
+        }
+        row.updated_unix = chrono::Utc::now().timestamp();
+
+        let (row, body) = self.commit_row(row).await?;
+        self.apply(|cache| cache.insert(row.clone()));
+        let change = Change::CommitsUnlinked {
+            ticket: whole(row, body),
+            removed,
+        };
+        let _ = self.tx.send(change.clone());
+        Ok(change)
+    }
+
+    /// SDLC-9: every entry of a link or an unlink as the reference it is
+    /// stored as, in order — or the refusal naming every entry that is not
+    /// one. Before the write-serial lock and before any read, so a call
+    /// with one bad entry does nothing at all.
+    fn references(id: &str, entries: &[String]) -> Result<Vec<String>, StoreError> {
+        let mut refs = Vec::with_capacity(entries.len());
+        let mut not: Vec<String> = Vec::new();
+        for entry in entries {
+            match commits::reference(entry) {
+                Some(r) => refs.push(r),
+                None => not.push(entry.clone()),
+            }
+        }
+        if !not.is_empty() {
+            return Err(StoreError::NotACommit {
+                id: id.to_string(),
+                entries: not,
+            });
+        }
+        Ok(refs)
+    }
+
     /// Tickets that can start now: status `Ready` and every `blocked_by`
     /// entry resolves to a ticket whose status is `Complete` or
     /// `Superseded`. A dangling blocker (id naming no existing ticket)
@@ -2406,6 +2564,11 @@ mod synthetic;
 /// is; each move sets the parent's `child_count` from it.
 mod children;
 
+/// SDLC-9: what a commit reference is — the grammar `link_commits` and
+/// `unlink_commits` hold every entry to, and the text a reference is stored
+/// and compared as — and how many one ticket may carry.
+mod commits;
+
 /// SQL for the system of record. Private: the rest of the application
 /// only ever sees the cache above.
 mod db;
@@ -2447,3 +2610,9 @@ mod tests_amend;
 /// writes, deterministically and under a hammer of amends.
 #[cfg(test)]
 mod tests_bodies;
+
+/// SDLC-9: `link_commits` and `unlink_commits` — the reference grammar,
+/// every row of the ticket's table, nothing else about the ticket moving,
+/// the bound, and a database from before the column.
+#[cfg(test)]
+mod tests_commits;

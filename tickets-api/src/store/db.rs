@@ -19,6 +19,7 @@ pub(super) const SCHEMA: &str = "
             body         TEXT NOT NULL,
             created_unix INTEGER NOT NULL,
             updated_unix INTEGER NOT NULL,
+            commits      TEXT NOT NULL DEFAULT '[]',
             UNIQUE (epic, seq)
         );
     ";
@@ -344,6 +345,41 @@ pub(super) fn migrate_drop_children(conn: &mut Connection) -> anyhow::Result<Dro
     Ok(found)
 }
 
+/// The column SDLC-9 adds: a ticket's linked commits, a JSON list like
+/// `blocked_by` and `unlocks`.
+const COMMITS_COLUMN: &str = "commits";
+
+/// One-shot, durable migration of a database written before SDLC-9.
+///
+/// If the `tickets` table has no `commits` column, this adds it —
+/// `TEXT NOT NULL DEFAULT '[]'`, the column [`SCHEMA`] creates, so a
+/// migrated file and a new one have the same columns in the same order —
+/// in one transaction, committed before the cache loads. Every existing
+/// ticket then reads `[]`: no commit was ever linked to it. SQLite records
+/// a constant default in the schema and rewrites no row to add the column,
+/// so this costs the same at 10⁶ tickets as at ten. A restart (or a
+/// SIGKILL right after) finds the column, and the check above makes every
+/// later open a no-op. Additive: a binary from before SDLC-9 names its
+/// columns, never `*`, so it still opens a migrated file — its inserts take
+/// the default — and only does not see the commits. Returns whether the
+/// column was added.
+pub(super) fn migrate_add_commits(conn: &mut Connection) -> anyhow::Result<bool> {
+    if has_column(conn, "tickets", COMMITS_COLUMN)? {
+        return Ok(false);
+    }
+    let tx = conn.transaction()?;
+    tx.execute(
+        &format!("ALTER TABLE tickets ADD COLUMN {COMMITS_COLUMN} TEXT NOT NULL DEFAULT '[]'"),
+        [],
+    )?;
+    let tickets: u64 = tx.query_row("SELECT count(*) FROM tickets", [], |r| r.get(0))?;
+    tx.commit()?;
+    tracing::info!(
+        "SDLC-9: added the {COMMITS_COLUMN} column to {tickets} ticket(s), each with none linked, durably"
+    );
+    Ok(true)
+}
+
 /// Serializes a unit enum to its serde string form (`Pending`,
 /// `build`, `Critical`) — the same casing the wire uses, and what the
 /// `FromStr` impls parse back.
@@ -376,8 +412,8 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                  created_unix, updated_unix, commits)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT (id) DO UPDATE SET
                  epic = excluded.epic,
                  seq = excluded.seq,
@@ -390,7 +426,8 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
                  parent = excluded.parent,
                  body = excluded.body,
                  created_unix = excluded.created_unix,
-                 updated_unix = excluded.updated_unix",
+                 updated_unix = excluded.updated_unix,
+                 commits = excluded.commits",
         params![
             t.id,
             t.epic,
@@ -405,6 +442,7 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
             t.body,
             t.created_unix,
             t.updated_unix,
+            serde_json::to_string(&t.commits).expect("serialize commits"),
         ],
     )?;
     Ok(())
@@ -419,8 +457,8 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Re
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                  created_unix, updated_unix, commits)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
     )?;
     for t in tickets {
         stmt.execute(params![
@@ -437,6 +475,7 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Re
             t.body,
             t.created_unix,
             t.updated_unix,
+            serde_json::to_string(&t.commits).expect("serialize commits"),
         ])?;
     }
     Ok(())
@@ -444,9 +483,9 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Re
 
 /// SCALE-14: every stored column of a row but the body, in the order
 /// [`read_row`] reads them — what the cache loads, and the head of what a
-/// whole ticket is read back as.
+/// whole ticket is read back as. SDLC-9: `commits` last, at 12.
 const ROW_COLUMNS: &str = "id, epic, seq, title, status, kind, severity,
-                    blocked_by, unlocks, created_unix, updated_unix, parent";
+                    blocked_by, unlocks, created_unix, updated_unix, parent, commits";
 
 /// One row from a `SELECT` that starts with [`ROW_COLUMNS`].
 fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
@@ -470,6 +509,7 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         // SCALE-4: not stored — the cache counts each ticket's children
         // from every other ticket's `parent` once all are loaded.
         child_count: 0,
+        commits: parse_ids(12, &row.get::<_, String>(12)?)?,
     })
 }
 
@@ -499,20 +539,21 @@ pub(super) fn body(conn: &Connection, id: &str) -> rusqlite::Result<Option<Strin
 /// not store it (SCALE-4).
 pub(super) fn ticket(conn: &Connection, id: &str) -> rusqlite::Result<Option<Ticket>> {
     conn.prepare_cached(&format!("SELECT {ROW_COLUMNS}, body FROM tickets WHERE id = ?1"))?
-        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(12)?)))
+        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(13)?)))
         .optional()
 }
 
 /// SCALE-14: rewrites every stored column of an existing ticket but its
 /// body, which the cache does not hold and the write did not change — the
 /// shape of every write after birth but `amend`'s. One row or an error:
-/// the ticket is in the cache, so it is in the database.
+/// the ticket is in the cache, so it is in the database. SDLC-9: the
+/// commits are a column of the row, so `link_commits` writes through here.
 pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
     let changed = conn.prepare_cached(
         "UPDATE tickets SET
                  epic = ?2, seq = ?3, title = ?4, status = ?5, kind = ?6,
                  severity = ?7, blocked_by = ?8, unlocks = ?9, parent = ?10,
-                 created_unix = ?11, updated_unix = ?12
+                 created_unix = ?11, updated_unix = ?12, commits = ?13
              WHERE id = ?1",
     )?
     .execute(params![
@@ -528,6 +569,7 @@ pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
         t.parent,
         t.created_unix,
         t.updated_unix,
+        serde_json::to_string(&t.commits).expect("serialize commits"),
     ])?;
     match changed {
         1 => Ok(()),
