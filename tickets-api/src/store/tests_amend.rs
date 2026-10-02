@@ -45,11 +45,11 @@ async fn a_body_round_trips_byte_exact_and_survives_a_reopen() {
         let (t, changed) = amended(store.amend("am-2", None, Some(AWKWARD.into())).await.unwrap());
         assert_eq!(changed, ["body"]);
         assert_eq!(t.body, AWKWARD);
-        assert_eq!(store.get("AM-2").unwrap().body.as_bytes(), AWKWARD.as_bytes());
+        assert_eq!(store.get("AM-2").await.unwrap().body.as_bytes(), AWKWARD.as_bytes());
         t
     };
     let store = Store::open(&path).unwrap();
-    let got = store.get("AM-2").unwrap();
+    let got = store.get("AM-2").await.unwrap();
     assert_eq!(got.body.as_bytes(), AWKWARD.as_bytes(), "the file holds the same bytes");
     assert_eq!(got, after, "and the whole ticket as acknowledged");
 }
@@ -89,7 +89,7 @@ async fn every_row_of_the_table() {
     assert_eq!((t.title.as_str(), t.body.as_str()), ("third title", "third body"));
     assert_eq!(next(&mut rx), (t.clone(), changed));
     assert!(rx.try_recv().is_err(), "both fields, one event");
-    assert_eq!(store.get("AM-2").unwrap(), t);
+    assert_eq!(store.get("AM-2").await.unwrap(), t);
 
     // neither given; the values already there; one equal and one not
     for (title, body) in [
@@ -120,7 +120,7 @@ async fn every_row_of_the_table() {
         }
     }
     assert!(rx.try_recv().is_err());
-    assert_eq!(store.get("AM-2").unwrap().body, "fourth body", "the refused amend wrote nothing");
+    assert_eq!(store.get("AM-2").await.unwrap().body, "fourth body", "the refused amend wrote nothing");
 }
 
 /// "Nothing else about the ticket changes": on a ticket with every edge —
@@ -136,7 +136,7 @@ async fn an_amend_changes_the_title_body_and_updated_unix_and_nothing_else() {
     store.create(ticket("ED", Kind::Gap, Some("ED-1"), &["ED-2", "ED-9"])).await.unwrap(); // ED-3
     store.create(ticket("ED", Kind::Spike, Some("ED-3"), &["ED-3"])).await.unwrap(); // ED-4
     store.set_status("ED-3", Status::Coding).await.unwrap();
-    let before: Vec<Ticket> = store.list(None, None, None);
+    let before: Vec<Ticket> = store.list(None, None, None).await.unwrap();
     let groups = store.groups();
     let extents = store.extents();
     let created_before = chrono::Utc::now().timestamp();
@@ -155,7 +155,7 @@ async fn an_amend_changes_the_title_body_and_updated_unix_and_nothing_else() {
     expect.updated_unix = t.updated_unix;
     assert_eq!(t, expect, "status, kind, severity, edges, parent, children, id, seq, created_unix: as they were");
 
-    let after = store.list(None, None, None);
+    let after = store.list(None, None, None).await.unwrap();
     for (b, a) in before.iter().zip(&after) {
         if a.id != "ED-3" {
             assert_eq!(a, b, "{} untouched", a.id);
@@ -167,5 +167,5 @@ async fn an_amend_changes_the_title_body_and_updated_unix_and_nothing_else() {
     for _ in 5..=9 {
         store.create(ticket("ED", Kind::Build, None, &[])).await.unwrap();
     }
-    assert_eq!(store.get("ED-9").unwrap().unlocks, ["ED-3"]);
+    assert_eq!(store.get("ED-9").await.unwrap().unlocks, ["ED-3"]);
 }

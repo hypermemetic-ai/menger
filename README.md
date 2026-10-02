@@ -273,7 +273,9 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        (default-features = false, wasm32)
   types.rs             Ticket · Status · Kind · Severity · TicketSummary · Group · TicketsEvent
   store/               the service-wide cache (SQLite system of record behind it)
-    mod.rs             the Store: the cache, reads, the write-through path
+    mod.rs             the Store: the cache of rows, reads (a body from the
+                       database on read-only connections — SCALE-14), the
+                       write-through path
     rollup.rs          the per-shortcode roll-ups it keeps (MNG-10)
     ids.rs             each shortcode's last sequence and the ids named before
                        birth — what create reads instead of scanning (SCALE-3);
@@ -282,7 +284,8 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
     children.rs        each parent's children, from every ticket's parent, in
                        the store's order — what list { parent } pages from and
                        what child_count is (SCALE-4)
-    db.rs              the schema, upserts, the in-place migrations
+    db.rs              the schema, the writes, a row and a body read back, the
+                       in-place migrations
     synthetic.rs       the --seed-synthetic generator (PERF-2)
     tests.rs           the store's unit tests
     tests_paging.rs    page.remaining against a count, on every shape (SCALE-19)
@@ -292,6 +295,9 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
     tests_children.rs  the children index against a scan, child_count, pages of
                        list { parent } against the old filter, the migration
                        that drops `children` (SCALE-4)
+    tests_bodies.rs    whole tickets from rows and stored bodies, a walk of a
+                       page of bodies at a time, read-your-writes under a
+                       hammer of amends (SCALE-14)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell

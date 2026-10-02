@@ -22,12 +22,13 @@
 use crate::types::TicketsEvent;
 #[cfg(feature = "server")]
 use crate::store::{
-    BlockerRef, Change, Kind, NewTicket, Page, PageQuery, Severity, Status, Store, StoreError,
+    BlockerRef, Change, Kind, NewTicket, Page, PageQuery, Select, Severity, Status, Step, Store,
+    StoreError, Walk,
 };
 #[cfg(feature = "server")]
 use async_stream::stream;
 #[cfg(feature = "server")]
-use futures::Stream;
+use futures::{Stream, StreamExt};
 #[cfg(feature = "server")]
 use std::sync::Arc;
 
@@ -46,15 +47,13 @@ impl Tickets {
 }
 
 /// MNG-9: one page of the store, as the events that carry it — a row per
-/// ticket (`summary` decides which shape) and then exactly one `page`
-/// event, which is what tells a client whether to ask for more. A failed
-/// cursor is the one in-band `error` instead, with no page event: nothing
-/// was walked, so there is nowhere to resume from.
+/// ticket and then exactly one `page` event, which is what tells a client
+/// whether to ask for more. A failed cursor is the one in-band `error`
+/// instead, with no page event: nothing was walked, so there is nowhere to
+/// resume from. SCALE-14: the `summary` shape — a page of the cache's rows,
+/// as they are; whole tickets come from [`walk_events`].
 #[cfg(feature = "server")]
-fn page_events(
-    page: Result<Page, StoreError>,
-    summary: Option<bool>,
-) -> Box<dyn Iterator<Item = TicketsEvent> + Send> {
+fn page_events(page: Result<Page, StoreError>) -> Box<dyn Iterator<Item = TicketsEvent> + Send> {
     let page = match page {
         Ok(page) => page,
         Err(e) => {
@@ -63,21 +62,45 @@ fn page_events(
             }))
         }
     };
-    let rows: Box<dyn Iterator<Item = TicketsEvent> + Send> = if summary.unwrap_or(false) {
-        Box::new(page.tickets.into_iter().map(|ticket| TicketsEvent::Summary {
-            summary: ticket.into(),
-        }))
-    } else {
-        Box::new(
-            page.tickets
-                .into_iter()
-                .map(|ticket| TicketsEvent::Ticket { ticket }),
-        )
-    };
-    Box::new(rows.chain(std::iter::once(TicketsEvent::Page {
-        next: page.next,
-        remaining: page.remaining,
-    })))
+    Box::new(
+        page.tickets
+            .into_iter()
+            .map(|summary| TicketsEvent::Summary { summary })
+            .chain(std::iter::once(TicketsEvent::Page {
+                next: page.next,
+                remaining: page.remaining,
+            })),
+    )
+}
+
+/// SCALE-14: the same events with whole tickets — a `ticket` row each,
+/// then the one `page` event — for `list` and `ready_set` without
+/// `summary`. Streamed from a [`Walk`], a page of bodies at a time, so a
+/// `list {}` of the whole store holds one page of bodies, not every one. A
+/// failed cursor is still the one in-band `error` and nothing else (the
+/// walk's first step); a read that fails part way ends the rows with an
+/// `error` in place of the page event.
+#[cfg(feature = "server")]
+fn walk_events(store: Arc<Store>, mut walk: Walk) -> impl Stream<Item = TicketsEvent> + Send {
+    stream! {
+        loop {
+            match walk.next(&store).await {
+                Ok(Step::Tickets(tickets)) => {
+                    for ticket in tickets {
+                        yield TicketsEvent::Ticket { ticket };
+                    }
+                }
+                Ok(Step::End { next, remaining }) => {
+                    yield TicketsEvent::Page { next, remaining };
+                    break;
+                }
+                Err(e) => {
+                    yield TicketsEvent::Error { message: e.to_string() };
+                    break;
+                }
+            }
+        }
+    }
 }
 
 /// SCALE-6: how many rows `find` answers when no `limit` is asked for —
@@ -225,9 +248,10 @@ impl Tickets {
     pub async fn get(&self, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
-            match store.get(&id) {
-                Some(ticket) => yield TicketsEvent::Ticket { ticket },
-                None => yield TicketsEvent::NotFound { id },
+            match store.get(&id).await {
+                Ok(ticket) => yield TicketsEvent::Ticket { ticket },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
             }
         }
     }
@@ -244,7 +268,10 @@ impl Tickets {
     /// rows that carry every field but the body. Without them the call is
     /// what it always was — every match, with bodies — followed by
     /// `page { next: null, remaining: 0 }`. An `after` naming no ticket
-    /// is one in-band `error` and nothing else.
+    /// is one in-band `error` and nothing else. SCALE-14: the rows come
+    /// from the cache and the bodies from the database, read a page at a
+    /// time as the rows go out — the same events, never every body at
+    /// once.
     #[plexus_macros::method(
         description = "List tickets, optionally filtered by epic, status and/or parent; paged with after + limit",
         params(
@@ -275,15 +302,23 @@ impl Tickets {
                     return;
                 }
             };
-            let page = store.page(PageQuery {
-                epic: epic.as_deref(),
-                status,
-                parent: parent.as_deref(),
-                after: after.as_deref(),
-                limit,
-            });
-            for ev in page_events(page, summary) {
-                yield ev;
+            if summary.unwrap_or(false) {
+                let page = store.page(PageQuery {
+                    epic: epic.as_deref(),
+                    status,
+                    parent: parent.as_deref(),
+                    after: after.as_deref(),
+                    limit,
+                });
+                for ev in page_events(page) {
+                    yield ev;
+                }
+            } else {
+                let walk = store.walk(Select::List { epic, status, parent }, after.as_deref(), limit);
+                let mut events = Box::pin(walk_events(store, walk));
+                while let Some(ev) = events.next().await {
+                    yield ev;
+                }
             }
         }
     }
@@ -409,9 +444,16 @@ impl Tickets {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
-            let page = store.ready_page(epic.as_deref(), after.as_deref(), limit);
-            for ev in page_events(page, summary) {
-                yield ev;
+            if summary.unwrap_or(false) {
+                for ev in page_events(store.ready_page(epic.as_deref(), after.as_deref(), limit)) {
+                    yield ev;
+                }
+            } else {
+                let walk = store.walk(Select::Ready { epic }, after.as_deref(), limit);
+                let mut events = Box::pin(walk_events(store, walk));
+                while let Some(ev) = events.next().await {
+                    yield ev;
+                }
             }
         }
     }
@@ -445,7 +487,7 @@ impl Tickets {
         let store = self.store.clone();
         stream! {
             let page = store.find_page(&query, after.as_deref(), Some(limit.unwrap_or(FIND_LIMIT)));
-            for ev in page_events(page, Some(true)) {
+            for ev in page_events(page) {
                 yield ev;
             }
         }
@@ -509,7 +551,7 @@ impl Tickets {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
-            match store.blockers(&id) {
+            match store.blockers(&id).await {
                 Ok(refs) => {
                     for r in refs {
                         yield match r {
@@ -518,7 +560,8 @@ impl Tickets {
                         };
                     }
                 }
-                Err(_) => yield TicketsEvent::NotFound { id },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
             }
         }
     }

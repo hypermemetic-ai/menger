@@ -51,7 +51,7 @@ async fn the_index_pages_the_whole_store_in_order_exactly_once() {
     store.create(scope("B", "b")).await.unwrap();
     store.create(scope("AB", "ab")).await.unwrap();
 
-    let all: Vec<String> = store.list(None, None, None).iter().map(|t| t.id.clone()).collect();
+    let all: Vec<String> = store.list(None, None, None).await.unwrap().iter().map(|t| t.id.clone()).collect();
     assert_eq!(
         all,
         ["A-1", "A-2", "A-3", "A-4", "A-5", "A-6", "A-7", "A-8", "A-9", "A-10", "A-11",
@@ -322,7 +322,7 @@ async fn legacy_ticket_type_migrates_durably_on_first_open() {
         let store = Store::open(&path).unwrap();
         assert_eq!(store.count(), 5);
         for (id, kind) in expected {
-            let t = store.get(id).unwrap();
+            let t = store.get(id).await.unwrap();
             assert_eq!(t.kind, kind, "{id}");
             assert!(t.body.contains("type: "), "{id}: frontmatter untouched");
         }
@@ -357,7 +357,7 @@ async fn legacy_ticket_type_migrates_durably_on_first_open() {
     // Second open: nothing to migrate, same kinds, still writable.
     let store = Store::open(&path).unwrap();
     for (id, kind) in expected {
-        assert_eq!(store.get(id).unwrap().kind, kind, "{id} after reopen");
+        assert_eq!(store.get(id).await.unwrap().kind, kind, "{id} after reopen");
     }
     let next = store.create(new_ticket("LEG", "born after the migration")).await.unwrap();
     assert_eq!(next.id, "LEG-6");
@@ -471,14 +471,14 @@ async fn a_childs_birth_updates_its_parent_and_is_broadcast() {
         other => panic!("expected ChildrenChanged, got {other:?}"),
     }
     assert_eq!(children(&store, "FAM-1"), vec!["FAM-2"]);
-    assert_eq!(store.get("FAM-1").unwrap().child_count, 1);
+    assert_eq!(store.get("FAM-1").await.unwrap().child_count, 1);
 
     // Durable: a reopen finds the edge, and counts it.
     drop(store);
     let store = Store::open(&path).unwrap();
     assert_eq!(children(&store, "FAM-1"), vec!["FAM-2"]);
-    assert_eq!(store.get("FAM-1").unwrap().child_count, 1);
-    assert_eq!(store.get("FAM-2").unwrap().parent.as_deref(), Some("FAM-1"));
+    assert_eq!(store.get("FAM-1").await.unwrap().child_count, 1);
+    assert_eq!(store.get("FAM-2").await.unwrap().parent.as_deref(), Some("FAM-1"));
 }
 
 /// Acceptance 2 at the store level: a parent that names no ticket is
@@ -543,18 +543,20 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
         .create(child_of("OTHER", "leaf", "OTHER-1"))
         .await
         .unwrap();
-    assert_eq!(store.get("CHAIN-1").unwrap().parent, None);
+    assert_eq!(store.get("CHAIN-1").await.unwrap().parent, None);
     assert_eq!(children(&store, "CHAIN-1"), vec!["OTHER-1"]);
-    assert_eq!(store.get("OTHER-1").unwrap().parent.as_deref(), Some("CHAIN-1"));
+    assert_eq!(store.get("OTHER-1").await.unwrap().parent.as_deref(), Some("CHAIN-1"));
     assert_eq!(children(&store, "OTHER-1"), vec!["OTHER-2"]);
-    assert_eq!(store.get("OTHER-2").unwrap().parent.as_deref(), Some("OTHER-1"));
+    assert_eq!(store.get("OTHER-2").await.unwrap().parent.as_deref(), Some("OTHER-1"));
     assert!(children(&store, "OTHER-2").is_empty());
 
     // And the guard itself: an ancestry walk that would come back
     // around is caught before anything persists.
     let tickets = Cache::new(
         store
-            .list(None, None, None)
+            .page(PageQuery::default())
+            .unwrap()
+            .tickets
             .into_iter()
             .map(|t| (t.id.clone(), t))
             .collect(),
@@ -586,7 +588,7 @@ async fn a_parent_that_is_also_a_blocker_gets_both_edges() {
     assert_eq!(child.parent.as_deref(), Some("BOTH-1"));
     assert_eq!(child.blocked_by, vec!["BOTH-1"]);
 
-    let parent = store.get("BOTH-1").unwrap();
+    let parent = store.get("BOTH-1").await.unwrap();
     assert_eq!(children(&store, "BOTH-1"), vec!["BOTH-2"]);
     assert_eq!(parent.child_count, 1);
     assert_eq!(parent.unlocks, vec!["BOTH-2"], "neither edge overwrote the other");
@@ -627,21 +629,21 @@ async fn list_filters_by_parent() {
     // the shortcode root and is LP-1's child too.
     let ids = |ts: Vec<Ticket>| ts.into_iter().map(|t| t.id).collect::<Vec<_>>();
     assert_eq!(
-        ids(store.list(None, None, Some("LP-1"))),
+        ids(store.list(None, None, Some("LP-1")).await.unwrap()),
         vec!["LP-2", "LP-3", "ZZ-1"],
         "exactly LP-1's children, ordered (epic, seq)"
     );
-    assert_eq!(ids(store.list(None, None, Some("lp-1"))), vec!["LP-2", "LP-3", "ZZ-1"]);
-    assert_eq!(ids(store.list(None, None, Some("LP-3"))), vec!["LP-4"]);
-    assert!(store.list(None, None, Some("LP-2")).is_empty(), "no children");
-    assert!(store.list(None, None, Some("NOPE-1")).is_empty());
+    assert_eq!(ids(store.list(None, None, Some("lp-1")).await.unwrap()), vec!["LP-2", "LP-3", "ZZ-1"]);
+    assert_eq!(ids(store.list(None, None, Some("LP-3")).await.unwrap()), vec!["LP-4"]);
+    assert!(store.list(None, None, Some("LP-2")).await.unwrap().is_empty(), "no children");
+    assert!(store.list(None, None, Some("NOPE-1")).await.unwrap().is_empty());
     // Composes with the existing filters.
-    assert_eq!(ids(store.list(Some("LP"), None, Some("LP-1"))), vec!["LP-2", "LP-3"]);
+    assert_eq!(ids(store.list(Some("LP"), None, Some("LP-1")).await.unwrap()), vec!["LP-2", "LP-3"]);
     assert_eq!(
-        ids(store.list(None, Some(Status::Ready), Some("LP-1"))),
+        ids(store.list(None, Some(Status::Ready), Some("LP-1")).await.unwrap()),
         vec!["LP-3"]
     );
-    assert_eq!(store.list(None, None, None).len(), 5, "unfiltered is unchanged");
+    assert_eq!(store.list(None, None, None).await.unwrap().len(), 5, "unfiltered is unchanged");
 }
 
 /// Acceptance 3 at the store level: a pre-AGS-19 database gains the
@@ -670,22 +672,22 @@ async fn pre_ags19_database_backfills_typed_parents_from_frontmatter() {
     {
         let store = Store::open(&path).unwrap();
         assert_eq!(store.count(), 6);
-        let p = |id: &str| store.get(id).unwrap().parent;
-        assert_eq!(p("OLD-1"), None);
-        assert_eq!(p("OLD-2").as_deref(), Some("OLD-1"));
-        assert_eq!(p("OLD-3"), None, "an unresolvable parent is left empty");
-        assert_eq!(p("OLD-4").as_deref(), Some("OLD-2"));
+        let p = async |id: &str| store.get(id).await.unwrap().parent;
+        assert_eq!(p("OLD-1").await, None);
+        assert_eq!(p("OLD-2").await.as_deref(), Some("OLD-1"));
+        assert_eq!(p("OLD-3").await, None, "an unresolvable parent is left empty");
+        assert_eq!(p("OLD-4").await.as_deref(), Some("OLD-2"));
         // The chain is acyclic: the first half of the OLD-5/OLD-6
         // pair is taken, the half that would close it is refused.
-        assert_eq!(p("OLD-5").as_deref(), Some("OLD-6"));
-        assert_eq!(p("OLD-6"), None);
+        assert_eq!(p("OLD-5").await.as_deref(), Some("OLD-6"));
+        assert_eq!(p("OLD-6").await, None);
         // …and every accepted edge is a child of its parent.
         assert_eq!(children(&store, "OLD-1"), vec!["OLD-2"]);
         assert_eq!(children(&store, "OLD-2"), vec!["OLD-4"]);
         assert_eq!(children(&store, "OLD-6"), vec!["OLD-5"]);
         assert!(children(&store, "OLD-3").is_empty());
         // The body is the raw record, untouched by the migration.
-        assert!(store.get("OLD-3").unwrap().body.contains("parent: OLD-99"));
+        assert!(store.get("OLD-3").await.unwrap().body.contains("parent: OLD-99"));
     }
 
     // The file itself carries the typed parents now.
@@ -720,7 +722,7 @@ async fn pre_ags19_database_backfills_typed_parents_from_frontmatter() {
     // and the newborn's own parent goes through the normal path.
     let store = Store::open(&path).unwrap();
     assert_eq!(db::migrate_add_parenthood(&mut Connection::open(&path).unwrap()).unwrap(), 0);
-    assert_eq!(store.get("OLD-4").unwrap().parent.as_deref(), Some("OLD-2"));
+    assert_eq!(store.get("OLD-4").await.unwrap().parent.as_deref(), Some("OLD-2"));
     let next = store.create(child_of("OLD", "born after", "OLD-4")).await.unwrap();
     assert_eq!(next.id, "OLD-7");
     assert_eq!(next.parent.as_deref(), Some("OLD-4"));
@@ -791,9 +793,9 @@ async fn reopen_round_trips_every_field_and_continues_seq() {
     // Restart: same location, everything identical.
     let store = Store::open(&path).unwrap();
     assert_eq!(store.count(), 2);
-    assert_eq!(store.get("RT-1").unwrap(), after_flip);
-    assert_eq!(store.get("RT-2").unwrap(), child);
-    assert_eq!(store.get("RT-2").unwrap().parent.as_deref(), Some("RT-1"));
+    assert_eq!(store.get("RT-1").await.unwrap(), after_flip);
+    assert_eq!(store.get("RT-2").await.unwrap(), child);
+    assert_eq!(store.get("RT-2").await.unwrap().parent.as_deref(), Some("RT-1"));
 
     // Id allocation continues from the persisted max, not from 1.
     let next = store.create(new_ticket("RT", "second")).await.unwrap();
@@ -873,7 +875,7 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
     assert!(report.epics >= 10, "several epics, got {}", report.epics);
     assert!(report.edges > 0);
 
-    let all = store.list(None, None, None);
+    let all = store.list(None, None, None).await.unwrap();
     assert_eq!(all.len(), 10_000);
     let by_id: HashMap<String, Ticket> = all.iter().map(|t| (t.id.clone(), t.clone())).collect();
 
@@ -933,7 +935,7 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
         .filter(|t| t.blocked_by.iter().all(|b| satisfied(by_id[b].status)))
         .map(|t| t.id.clone())
         .collect();
-    let got: Vec<String> = store.ready_set(None).into_iter().map(|t| t.id).collect();
+    let got: Vec<String> = store.ready_set(None).await.unwrap().into_iter().map(|t| t.id).collect();
     assert!(!got.is_empty());
     assert_eq!(got, expected);
     // ...and it is doing real work: some Ready tickets are held back.
@@ -944,7 +946,7 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
 
     // blockers on a sampled ticket with several blockers.
     let sample = all.iter().filter(|t| t.blocked_by.len() >= 2).nth(7).expect("a multi-blocker ticket");
-    let refs = store.blockers(&sample.id).unwrap();
+    let refs = store.blockers(&sample.id).await.unwrap();
     assert_eq!(refs.len(), sample.blocked_by.len());
     for (r, b) in refs.iter().zip(&sample.blocked_by) {
         match r {
@@ -957,23 +959,23 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
     drop(store);
     let reopened = Store::open(&path).unwrap();
     assert_eq!(reopened.count(), 10_000);
-    assert_eq!(reopened.list(None, None, None), all);
+    assert_eq!(reopened.list(None, None, None).await.unwrap(), all);
 }
 
 /// Criterion 4: the same seed value produces byte-identical tickets;
 /// a different one produces different tickets.
-#[test]
-fn seed_is_deterministic_per_seed_value() {
+#[tokio::test]
+async fn seed_is_deterministic_per_seed_value() {
     let a = Store::new();
     let b = Store::new();
     let c = Store::new();
     a.seed_synthetic(spec(500, 7)).unwrap();
     b.seed_synthetic(spec(500, 7)).unwrap();
     c.seed_synthetic(spec(500, 8)).unwrap();
-    let la = a.list(None, None, None);
-    assert_eq!(la, b.list(None, None, None));
-    assert_ne!(la, c.list(None, None, None));
-    assert_eq!(serde_json::to_string(&la).unwrap(), serde_json::to_string(&b.list(None, None, None)).unwrap());
+    let la = a.list(None, None, None).await.unwrap();
+    assert_eq!(la, b.list(None, None, None).await.unwrap());
+    assert_ne!(la, c.list(None, None, None).await.unwrap());
+    assert_eq!(serde_json::to_string(&la).unwrap(), serde_json::to_string(&b.list(None, None, None).await.unwrap()).unwrap());
 }
 
 /// Criterion 3: a store that already holds tickets refuses the seed
@@ -1001,12 +1003,12 @@ async fn seed_refuses_an_existing_store_unless_allowed_then_continues_ids() {
     // otherwise reject.
     store.seed_synthetic(allowed).unwrap();
     assert_eq!(store.count(), 201);
-    let all = store.list(None, None, None);
+    let all = store.list(None, None, None).await.unwrap();
     let mut ids: Vec<&str> = all.iter().map(|t| t.id.as_str()).collect();
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), 201);
-    assert!(store.get("REAL-1").is_some());
+    assert!(store.get("REAL-1").await.is_ok());
     // The normal write path still works afterwards.
     let next = store.create(new_ticket("REAL", "after the seed")).await.unwrap();
     assert_eq!(next.id, "REAL-2");
@@ -1113,7 +1115,7 @@ async fn a_parent_stays_inside_the_shortcode_except_for_the_root() {
     ));
     store.create(scope("HOST2", "another host")).await.unwrap();
     store.set_parent("SUB-1", "HOST2-1").await.unwrap();
-    assert_eq!(store.get("SUB-1").unwrap().parent.as_deref(), Some("HOST2-1"));
+    assert_eq!(store.get("SUB-1").await.unwrap().parent.as_deref(), Some("HOST2-1"));
     assert_eq!(children(&store, "HOST-1"), Vec::<String>::new());
     assert_eq!(children(&store, "HOST2-1"), vec!["SUB-1"]);
 }
@@ -1175,7 +1177,7 @@ async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
 
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get("AD-3").unwrap().parent.as_deref(), Some("AD-2"));
+    assert_eq!(store.get("AD-3").await.unwrap().parent.as_deref(), Some("AD-2"));
     assert_eq!(children(&store, "AD-2"), vec!["AD-3"]);
     assert_eq!(children(&store, "AD-1"), vec!["AD-2"]);
 }
@@ -1219,7 +1221,7 @@ async fn set_parent_guards_ancestry_and_a_move_removes_from_the_old_parent() {
         }
         other => panic!("expected ParentCycle, got {other:?}"),
     }
-    assert_eq!(store.get("MV-1").unwrap().parent, None, "nothing changed");
+    assert_eq!(store.get("MV-1").await.unwrap().parent, None, "nothing changed");
     assert_eq!(children(&store, "MV-2"), vec!["MV-3"]);
 
     // The move: MV-3 from under MV-2 to under MV-1.
@@ -1241,7 +1243,7 @@ async fn set_parent_guards_ancestry_and_a_move_removes_from_the_old_parent() {
         }
         other => panic!("expected ChildRemoved, got {other:?}"),
     }
-    assert_eq!(store.get("MV-3").unwrap().parent.as_deref(), Some("MV-1"));
+    assert_eq!(store.get("MV-3").await.unwrap().parent.as_deref(), Some("MV-1"));
     // SCALE-4: in the store's order, not the order they arrived in.
     assert_eq!(children(&store, "MV-1"), vec!["MV-2", "MV-3", "MV-4"]);
     assert_eq!(children(&store, "MV-2"), Vec::<String>::new());
@@ -1255,7 +1257,7 @@ use std::collections::BTreeSet;
 /// What the nav draws for this store's rows: AGS-20's `plan()` over
 /// every ticket, as groups.
 fn nav(store: &Store) -> Vec<Group> {
-    let all = store.list(None, None, None);
+    let all = store.page(PageQuery::default()).unwrap().tickets;
     let facts: Vec<Facts> = all
         .iter()
         .map(|t| Facts {
@@ -1676,7 +1678,7 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
     let (mut writes, mut moves, mut rehosts) = (0, 0, 0);
 
     for step in 0..800 {
-        let all = store.list(None, None, None);
+        let all = store.list(None, None, None).await.unwrap();
         let before = nav(&store);
         let any = |rng: &mut Rng| all[rng.below(all.len())].id.clone();
         let what = match rng.below(10) {
@@ -1719,20 +1721,20 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
                 } else {
                     any(&mut rng)
                 };
-                let epic = store.get(&child).unwrap().epic;
+                let epic = store.get(&child).await.unwrap().epic;
                 let mine: Vec<&Ticket> = all.iter().filter(|t| t.epic == epic).collect();
                 let parent = if rng.below(2) == 0 {
                     mine[rng.below(mine.len())].id.clone()
                 } else {
                     any(&mut rng)
                 };
-                let was = store.get(&child).unwrap().parent;
+                let was = store.get(&child).await.unwrap().parent;
                 if store.set_parent(&child, &parent).await.is_ok()
                     && was.as_deref() != Some(parent.as_str())
                 {
                     writes += 1;
                     moves += 1;
-                    if store.get(&parent).unwrap().epic != epic {
+                    if store.get(&parent).await.unwrap().epic != epic {
                         rehosts += 1;
                     }
                 }
@@ -1793,7 +1795,7 @@ async fn a_seeded_store_rolls_up_as_the_nav_draws_it() {
 type Scanned = (BTreeMap<String, u32>, BTreeMap<String, Vec<String>>);
 
 fn scanned(store: &Store) -> Scanned {
-    let all = store.list(None, None, None);
+    let all = store.page(PageQuery::default()).unwrap().tickets;
     let at: HashMap<&str, (&str, u32)> =
         all.iter().map(|t| (t.id.as_str(), (t.epic.as_str(), t.seq))).collect();
     let mut last: BTreeMap<String, u32> = BTreeMap::new();
@@ -1808,7 +1810,7 @@ fn scanned(store: &Store) -> Scanned {
         .filter(|b| !at.contains_key(b))
         .collect();
     for id in named {
-        let mut waiting: Vec<&Ticket> =
+        let mut waiting: Vec<&TicketSummary> =
             all.iter().filter(|t| t.blocked_by.iter().any(|b| b == id)).collect();
         waiting.sort_by_key(|t| at[t.id.as_str()]);
         unborn.insert(id.to_string(), waiting.iter().map(|t| t.id.clone()).collect());
@@ -1914,19 +1916,19 @@ async fn a_reopened_store_resolves_forward_references_at_birth_as_the_scan_did()
     assert_kept_is_a_scan(&store, "the reopen");
     let (_, unborn) = scanned(&store);
     assert_eq!(unborn["FWD-3"], ["AAA-1", "FWD-1", "FWD-2", "ZZZ-1"]);
-    assert_eq!(store.get("ZZZ-1").unwrap().unlocks, ["FWD-2"], "resolved at ZZZ-1's birth");
+    assert_eq!(store.get("ZZZ-1").await.unwrap().unlocks, ["FWD-2"], "resolved at ZZZ-1's birth");
 
     let born = store.create(new_ticket("FWD", "the named one")).await.unwrap();
     assert_eq!(born.id, "FWD-3");
     assert_eq!(born.unlocks, unborn["FWD-3"], "what the scan gave");
-    assert_eq!(store.get("FWD-3").unwrap().unlocks, born.unlocks);
+    assert_eq!(store.get("FWD-3").await.unwrap().unlocks, born.unlocks);
     assert_kept_is_a_scan(&store, "the birth");
     assert_eq!(kept(&store).1, BTreeMap::new(), "nothing left unborn");
 
     // And durably so: one more reopen reads it back from the file.
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get("FWD-3").unwrap().unlocks, ["AAA-1", "FWD-1", "FWD-2", "ZZZ-1"]);
+    assert_eq!(store.get("FWD-3").await.unwrap().unlocks, ["AAA-1", "FWD-1", "FWD-2", "ZZZ-1"]);
     assert_kept_is_a_scan(&store, "the second reopen");
 }
 
@@ -2068,7 +2070,7 @@ async fn the_id_indexes_are_a_scan_after_a_seed_with_and_without_into_existing()
 
     let dry = Store::new();
     dry.seed_synthetic(spec(2_000, 5)).unwrap();
-    let seeded = dry.list(None, None, None)[0].id.clone(); // e.g. its first shortcode's root
+    let seeded = dry.list(None, None, None).await.unwrap()[0].id.clone(); // e.g. its first shortcode's root
 
     let store = Store::new();
     store.create(scope("REAL", "already here")).await.unwrap();
@@ -2086,7 +2088,7 @@ async fn the_id_indexes_are_a_scan_after_a_seed_with_and_without_into_existing()
             ..spec(2_000, 5)
         })
         .unwrap();
-    assert!(store.get(&seeded).is_some(), "the seed made {seeded}");
+    assert!(store.get(&seeded).await.is_ok(), "the seed made {seeded}");
     assert_kept_is_a_scan(&store, "a seed into an existing store");
     assert!(!kept(&store).1.contains_key(&seeded), "{seeded} is born");
 
@@ -2153,7 +2155,7 @@ async fn the_id_indexes_are_a_scan_after_both_in_place_migrations() {
         }
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get("OLD-2").unwrap().parent.as_deref(), Some("OLD-1"), "migrated");
+    assert_eq!(store.get("OLD-2").await.unwrap().parent.as_deref(), Some("OLD-1"), "migrated");
     assert_kept_is_a_scan(&store, "the AGS-19 migration");
     let t = store.create(new_ticket("OLD", "the named one")).await.unwrap();
     assert_eq!((t.id.as_str(), t.unlocks.clone()), ("OLD-3", vec!["OLD-1".into(), "OLD-2".into()]));
@@ -2181,12 +2183,12 @@ async fn after_a_seed_into_an_existing_store_the_next_create_is_highest_plus_one
         .unwrap();
     assert_eq!(store.count(), 10_003);
 
-    let highest = store.list(Some(&biggest), None, None).last().unwrap().seq;
+    let highest = store.list(Some(&biggest), None, None).await.unwrap().last().unwrap().seq;
     assert!(highest > 2, "the seed continued {biggest} after the two already there");
     let t = store.create(new_ticket(&biggest, "the next one")).await.unwrap();
     assert_eq!(t.seq, highest + 1);
-    let other = dry.list(None, None, None).into_iter().find(|t| t.epic != biggest).unwrap().epic;
-    let highest = store.list(Some(&other), None, None).last().unwrap().seq;
+    let other = dry.list(None, None, None).await.unwrap().into_iter().find(|t| t.epic != biggest).unwrap().epic;
+    let highest = store.list(Some(&other), None, None).await.unwrap().last().unwrap().seq;
     assert_eq!(store.create(new_ticket(&other, "x")).await.unwrap().seq, highest + 1);
     assert_eq!(store.create(new_ticket("REAL", "x")).await.unwrap().id, "REAL-2");
     assert_kept_is_a_scan(&store, "the seed and the creates");
@@ -2246,7 +2248,7 @@ async fn every_create_gets_the_id_and_unlocks_a_scan_would_give_it() {
     let (mut born, mut refused, mut resolved) = (0, 0, 0);
     for step in 0..600 {
         let (last, unborn) = scanned(&store);
-        let all = store.list(None, None, None);
+        let all = store.list(None, None, None).await.unwrap();
         if !all.is_empty() && rng.below(8) == 0 {
             let child = &all[rng.below(all.len())];
             let mine: Vec<&Ticket> = all.iter().filter(|t| t.epic == child.epic).collect();
@@ -2397,5 +2399,5 @@ async fn extents_are_each_shortcodes_highest_sequence_in_order() {
     assert!(!store.groups().iter().any(|g| g.epic == "XPC"), "no row for XPC");
     let extents = store.extents();
     assert!(extents.contains(&("XPC".to_string(), 2)), "but an extent: {extents:?}");
-    assert_eq!(extents.len(), store.list(None, None, None).iter().map(|t| &t.epic).collect::<HashSet<_>>().len());
+    assert_eq!(extents.len(), store.list(None, None, None).await.unwrap().iter().map(|t| &t.epic).collect::<HashSet<_>>().len());
 }

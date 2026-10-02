@@ -1,4 +1,4 @@
-use super::{Group, Kind, Rows, Status, Ticket};
+use super::{Group, Kind, Row, Rows, Status};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Tickets counted: how many, and how many `Complete` (the nav's
@@ -13,7 +13,7 @@ impl Tally {
     /// One completion, gained or lost — all a status change moves.
     const DONE: Self = Self { total: 0, done: 1 };
 
-    fn of(t: &Ticket) -> Self {
+    fn of(t: &Row) -> Self {
         Self {
             total: 1,
             done: u64::from(t.status == Status::Complete),
@@ -74,7 +74,7 @@ enum Bucket {
 }
 
 impl Bucket {
-    fn of(top: &Ticket, exit: Option<&Ticket>) -> Self {
+    fn of(top: &Row, exit: Option<&Row>) -> Self {
         match exit {
             Some(_) => Self::Cross(top.id.clone()),
             None => Self::Base(top.epic.clone()),
@@ -124,8 +124,8 @@ impl Rollups {
             on_cycle: HashSet::new(),
             dangling: HashSet::new(),
         };
-        type Top<'a> = (&'a Ticket, Option<&'a Ticket>);
-        let mut sibling: Option<(&Ticket, Top<'_>)> = None;
+        type Top<'a> = (&'a Row, Option<&'a Row>);
+        let mut sibling: Option<(&Row, Top<'_>)> = None;
         let mut here: Option<(&str, Shortcode)> = None;
         for t in rows.tickets() {
             if here.as_ref().is_none_or(|(epic, _)| *epic != t.epic) {
@@ -201,8 +201,8 @@ impl Rollups {
     /// holds any; plan() draws each member as a root of its shortcode,
     /// and so do the roll-ups. No allocation, and O(the chain) when — as
     /// always outside a hand edit — there is no cycle to find.
-    fn trace(&mut self, rows: Rows<'_>, from: &Ticket) {
-        fn up<'a>(rows: Rows<'a>, t: &Ticket) -> Option<&'a Ticket> {
+    fn trace(&mut self, rows: Rows<'_>, from: &Row) {
+        fn up<'a>(rows: Rows<'a>, t: &Row) -> Option<&'a Row> {
             t.parent.as_deref().and_then(|p| rows.get(p))
         }
         let (mut power, mut length) = (1usize, 1usize);
@@ -253,7 +253,7 @@ impl Rollups {
     }
 
     /// A newborn (already in `rows`) is counted where it is drawn.
-    pub(super) fn created(&mut self, rows: Rows<'_>, t: &Ticket) -> Vec<Group> {
+    pub(super) fn created(&mut self, rows: Rows<'_>, t: &Row) -> Vec<Group> {
         if self.dangling.contains(&t.id) {
             let before = self.snapshot();
             let why = format!("{} was named as a parent before it existed", t.id);
@@ -305,7 +305,7 @@ impl Rollups {
     pub(super) fn status_changed(
         &mut self,
         rows: Rows<'_>,
-        t: &Ticket,
+        t: &Row,
         previous: Status,
     ) -> Vec<Group> {
         let gain = t.status == Status::Complete;
@@ -323,8 +323,8 @@ impl Rollups {
     pub(super) fn reparenting(
         &mut self,
         rows: Rows<'_>,
-        child: &Ticket,
-        new_parent: &Ticket,
+        child: &Row,
+        new_parent: &Row,
     ) -> Reparenting {
         let before = self.snapshot();
         if self.on_cycle.contains(&child.id) {
@@ -402,7 +402,7 @@ impl Rollups {
     /// The top of `t`'s tree — the ancestor where following `parent`
     /// leaves the shortcode, names no ticket, or meets a cycle — and,
     /// when it leaves the shortcode, the parent it leaves for.
-    fn top<'a>(&self, rows: Rows<'a>, t: &'a Ticket) -> (&'a Ticket, Option<&'a Ticket>) {
+    fn top<'a>(&self, rows: Rows<'a>, t: &'a Row) -> (&'a Row, Option<&'a Row>) {
         let mut x = t;
         // `on_cycle` is exact, so the chain ends; bounded regardless,
         // so a broken invariant is a wrong count, never a hang under
@@ -423,7 +423,7 @@ impl Rollups {
     /// Whether plan() cuts `top`'s edge to `parent` (in another
     /// shortcode): `parent` is the host of `top`'s shortcode, so the
     /// tree is drawn in its own row rather than under the host.
-    fn cut(&self, top: &Ticket, parent: &Ticket) -> bool {
+    fn cut(&self, top: &Row, parent: &Row) -> bool {
         self.shortcodes
             .get(&top.epic)
             .and_then(|s| s.host.as_deref())
@@ -433,7 +433,7 @@ impl Rollups {
     /// The shortcode whose row `t` is drawn under: up to its tree's
     /// top, and across into the next shortcode for as long as the top
     /// nests under a ticket there.
-    fn home<'a>(&self, rows: Rows<'a>, t: &'a Ticket) -> &'a str {
+    fn home<'a>(&self, rows: Rows<'a>, t: &'a Row) -> &'a str {
         let mut x = t;
         // Each step crosses a parent edge out of a distinct cross top,
         // and the parent graph is acyclic: this ends within that many.
@@ -449,7 +449,7 @@ impl Rollups {
 
     /// Counts `by` into (or out of) the bucket `t`'s tree is kept in,
     /// and says which group that tree is drawn in.
-    fn count(&mut self, rows: Rows<'_>, t: &Ticket, by: Tally, gain: bool) -> String {
+    fn count(&mut self, rows: Rows<'_>, t: &Row, by: Tally, gain: bool) -> String {
         let (top, exit) = self.top(rows, t);
         if exit.is_some() {
             let c = self
@@ -522,7 +522,7 @@ impl Rollups {
     /// entry checked against the child's own `parent` — the index is
     /// built from that field, so there is nothing left to check), one
     /// shortcode's slice of it per step.
-    fn subtree<'a>(&self, rows: Rows<'a>, t: &'a Ticket) -> Tally {
+    fn subtree<'a>(&self, rows: Rows<'a>, t: &'a Row) -> Tally {
         let mut tally = Tally::default();
         let mut stack = vec![t];
         while let Some(x) = stack.pop() {
@@ -620,7 +620,7 @@ impl Rollups {
     /// put the group inside itself? Walks the drawn tree up from
     /// `host`, a tree top at a time; meeting a row of `epic` is the
     /// loop.
-    fn nests_inside<'a>(&self, rows: Rows<'a>, host: &'a Ticket, epic: &str) -> bool {
+    fn nests_inside<'a>(&self, rows: Rows<'a>, host: &'a Row, epic: &str) -> bool {
         let mut cur = host;
         let mut seen: HashSet<&str> = HashSet::new();
         loop {

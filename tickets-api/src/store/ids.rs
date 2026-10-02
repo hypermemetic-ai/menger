@@ -1,4 +1,4 @@
-use super::{OrderKey, Rows, Ticket};
+use super::{OrderKey, Row, Rows};
 use std::collections::{BTreeMap, HashMap};
 
 pub(super) struct Ids {
@@ -152,7 +152,7 @@ impl Ids {
     /// makes itself are kept. SCALE-19: and its shortcode holds one more.
     /// Born means new: `create` allocates past the highest sequence, so
     /// the newborn is never a ticket the run already counted.
-    pub(super) fn born(&mut self, rows: Rows<'_>, t: &Ticket) {
+    pub(super) fn born(&mut self, rows: Rows<'_>, t: &Row) {
         match self.runs.get_mut(&t.epic) {
             Some(run) => {
                 run.first = run.first.min(t.seq);
@@ -176,7 +176,7 @@ impl Ids {
 
     /// Keeps each id `t` names in `blocked_by` that is no ticket. A ticket
     /// naming one id twice is one entry, as a scan finds it once.
-    fn names(&mut self, rows: Rows<'_>, t: &Ticket) {
+    fn names(&mut self, rows: Rows<'_>, t: &Row) {
         for b in &t.blocked_by {
             if !rows.contains(b) {
                 self.unborn

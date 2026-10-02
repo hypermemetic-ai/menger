@@ -494,7 +494,7 @@ async fn the_kept_runs_are_a_scan_after_every_path_that_brings_tickets_in() {
         }
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get("OLD-2").unwrap().parent.as_deref(), Some("OLD-1"), "migrated");
+    assert_eq!(store.get("OLD-2").await.unwrap().parent.as_deref(), Some("OLD-1"), "migrated");
     assert_runs_are_a_scan(&store, "the AGS-19 migration");
     assert_every_page_is_counted(&store, &mut Rng(19), "the AGS-19 migration");
 

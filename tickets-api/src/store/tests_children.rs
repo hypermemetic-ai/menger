@@ -38,7 +38,13 @@ fn new_ticket(epic: &str, kind: Kind, parent: Option<&str>) -> NewTicket {
 
 /// `list { parent: id }`'s ids — how a ticket's children are read now.
 pub(super) fn children(store: &Store, id: &str) -> Vec<String> {
-    store.list(None, None, Some(id)).into_iter().map(|t| t.id).collect()
+    store
+        .page(PageQuery { parent: Some(id), ..PageQuery::default() })
+        .unwrap()
+        .tickets
+        .into_iter()
+        .map(|t| t.id)
+        .collect()
 }
 
 /// Every parent's children as a scan of the store finds them: each
@@ -124,7 +130,7 @@ fn answered(store: &Store, q: &PageQuery<'_>) -> Result<Answer, String> {
 /// limit, under each epic and each status or none — is the old filter's.
 #[track_caller]
 fn assert_every_page_is_the_old_filters(store: &Store, parent: &str) {
-    let ids: Vec<String> = store.list(None, None, None).into_iter().map(|t| t.id).collect();
+    let ids: Vec<String> = store.page(PageQuery::default()).unwrap().tickets.into_iter().map(|t| t.id).collect();
     let mut epics: Vec<Option<String>> = vec![None];
     epics.extend(store.extents().into_iter().map(|(e, _)| Some(e)));
     let cursors = std::iter::once(None).chain(ids.iter().map(|id| Some(id.as_str())));
@@ -178,7 +184,7 @@ async fn a_page_of_children_is_the_old_filters_page() {
     assert_children_are_a_scan(&store, "the family");
     assert_eq!(children(&store, "PAR-2"), ["AAA-1", "PAR-3", "PAR-5", "SUB-1"]);
     assert_eq!(children(&store, "par-1"), ["PAR-2", "PAR-6"], "case-folded as before");
-    assert_eq!(store.get("PAR-2").unwrap().child_count, 4);
+    assert_eq!(store.get("PAR-2").await.unwrap().child_count, 4);
     for parent in ["PAR-1", "PAR-2", "PAR-3", "SUB-1", "PAR-6", "NOPE-1"] {
         assert_every_page_is_the_old_filters(&store, parent);
     }
@@ -216,7 +222,7 @@ async fn a_page_deep_in_a_large_parents_children_is_cut_by_position() {
     store.seed_synthetic(SeedSpec { count: 20_000, seed: 1, into_existing: false }).unwrap();
     assert_children_are_a_scan(&store, "a seed");
     let root = store.groups().into_iter().max_by_key(|g| g.total).unwrap().root.unwrap();
-    let n = store.get(&root).unwrap().child_count;
+    let n = store.get(&root).await.unwrap().child_count;
     assert!(n > 1_000, "{root} has {n} children");
     let cache = store.tickets.read().unwrap();
     let all = scanned(&store);
@@ -287,7 +293,7 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
     let store = Store::open(&path).unwrap();
     assert_children_are_a_scan(&store, "the load");
     assert_eq!(children(&store, "HAND-9"), ["HAND-3", "HAND-4"], "kept under the id they name");
-    assert_eq!(store.get("LOOP-1").unwrap().child_count, 1);
+    assert_eq!(store.get("LOOP-1").await.unwrap().child_count, 1);
 
     family(&store).await;
     assert_children_are_a_scan(&store, "the family");
@@ -341,7 +347,7 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
     let mut rng = Rng(4);
     let epics = ["RA", "RB", "RC", "RD"];
     for i in 0..600 {
-        let ids: Vec<String> = store.list(None, None, None).into_iter().map(|t| t.id).collect();
+        let ids: Vec<String> = store.list(None, None, None).await.unwrap().into_iter().map(|t| t.id).collect();
         let pick = |rng: &mut Rng| ids[rng.below(ids.len())].clone();
         let epic = epics[rng.below(epics.len())];
         match rng.below(10) {
@@ -369,7 +375,7 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
     }
     assert_children_are_a_scan(&store, "600 random writes");
     for parent in ["RA-1", "RB-1", "PAR-2"] {
-        if store.get(parent).is_some() {
+        if store.get(parent).await.is_ok() {
             let q = PageQuery { parent: Some(parent), limit: Some(7), ..PageQuery::default() };
             assert_eq!(answered(&store, &q), old_page(&store, &q), "{parent}");
         }
@@ -404,7 +410,7 @@ async fn a_birth_and_a_move_broadcast_the_parents_id_and_count() {
     match rx.try_recv().unwrap() {
         Change::UnlocksChanged { ticket, .. } => {
             assert_eq!(ticket.child_count, 1, "the blocker carries the count it now has");
-            assert_eq!(ticket, store.get("EV-1").unwrap());
+            assert_eq!(ticket, store.get("EV-1").await.unwrap());
         }
         other => panic!("expected UnlocksChanged, got {other:?}"),
     }
@@ -436,8 +442,8 @@ async fn a_birth_and_a_move_broadcast_the_parents_id_and_count() {
         }
         other => panic!("expected parent_changed, children_changed, child_removed: {other:?}"),
     }
-    assert_eq!(store.get("EV-1").unwrap().child_count, 1);
-    assert_eq!(store.get("EV-2").unwrap().child_count, 1);
+    assert_eq!(store.get("EV-1").await.unwrap().child_count, 1);
+    assert_eq!(store.get("EV-2").await.unwrap().child_count, 1);
 }
 
 /// Every column of one stored row, as text — what the database holds for it.
@@ -481,13 +487,13 @@ async fn a_parents_stored_row_does_not_change_when_it_gains_or_loses_children() 
         store.set_parent(&format!("GROW-{i}"), "GROW-2").await.unwrap();
     }
     store.set_parent("GROW-3", "GROW-1").await.unwrap();
-    assert_eq!(store.get("GROW-1").unwrap().child_count, 92);
-    assert_eq!(store.get("GROW-2").unwrap().child_count, 9);
+    assert_eq!(store.get("GROW-1").await.unwrap().child_count, 92);
+    assert_eq!(store.get("GROW-2").await.unwrap().child_count, 9);
     assert_eq!(stored_row(&path, "GROW-1"), root, "the root's row, byte for byte");
     assert_eq!(stored_row(&path, "GROW-2"), other, "a parent moved into and out of");
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get("GROW-1").unwrap().child_count, 92, "counted from the parents at load");
+    assert_eq!(store.get("GROW-1").await.unwrap().child_count, 92, "counted from the parents at load");
 }
 
 /// The store's schema as it was from AGS-19 to SCALE-4: `children` on the
@@ -576,7 +582,7 @@ async fn a_database_with_children_lists_opens_with_the_same_children_and_no_colu
         let mut by_key = order.clone();
         by_key.sort_by_key(|c| store.tickets.read().unwrap().at[c].clone());
         assert_eq!(order, by_key, "{id}: in the store's order");
-        assert_eq!(store.get(id).unwrap().child_count, list.len() as u64, "{id}");
+        assert_eq!(store.get(id).await.unwrap().child_count, list.len() as u64, "{id}");
     }
     assert_eq!(children(&store, "PAR-2"), ["AAA-1", "PAR-3", "PAR-5", "SUB-1"]);
     assert_children_are_a_scan(&store, "the migration");
@@ -637,7 +643,7 @@ async fn the_fixture_written_before_scale4_opens_with_its_children() {
     };
     assert_eq!(lists.len(), 9);
     let store = Store::open(&path).unwrap();
-    let order: Vec<String> = store.list(None, None, None).into_iter().map(|t| t.id).collect();
+    let order: Vec<String> = store.list(None, None, None).await.unwrap().into_iter().map(|t| t.id).collect();
     for (id, list) in &lists {
         let got = children(&store, id);
         let want: BTreeSet<&String> = list.iter().collect();
@@ -645,7 +651,7 @@ async fn the_fixture_written_before_scale4_opens_with_its_children() {
         let positions: Vec<usize> =
             got.iter().map(|c| order.iter().position(|o| o == c).unwrap()).collect();
         assert!(positions.windows(2).all(|w| w[0] < w[1]), "{id}: store order, {got:?}");
-        assert_eq!(store.get(id).unwrap().child_count, list.len() as u64, "{id}");
+        assert_eq!(store.get(id).await.unwrap().child_count, list.len() as u64, "{id}");
     }
     assert_eq!(lists[2], ("PAR-2".to_string(), vec!["SUB-1".into(), "AAA-1".into(), "PAR-5".into(), "PAR-3".into()]));
     assert_eq!(children(&store, "PAR-2"), ["AAA-1", "PAR-3", "PAR-5", "SUB-1"]);

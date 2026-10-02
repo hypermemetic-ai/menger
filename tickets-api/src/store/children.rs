@@ -1,4 +1,4 @@
-use super::{OrderKey, Ticket};
+use super::{OrderKey, Row};
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Bound;
 
@@ -92,7 +92,7 @@ impl Children {
     /// sorted, so each vector is built by pushing: O(N), once, and a run
     /// of siblings (every ticket of a shortcode, under its root) costs one
     /// lookup of its parent, not one each.
-    pub(super) fn build<'a>(tickets: impl Iterator<Item = &'a Ticket>) -> Self {
+    pub(super) fn build<'a>(tickets: impl Iterator<Item = &'a Row>) -> Self {
         let mut of: HashMap<String, Kids> = HashMap::new();
         let mut run: Option<(&str, &str, Vec<u32>)> = None;
         let flush = |of: &mut HashMap<String, Kids>, (parent, epic, seqs): (&str, &str, Vec<u32>)| {

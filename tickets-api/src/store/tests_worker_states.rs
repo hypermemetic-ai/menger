@@ -56,9 +56,11 @@ async fn all_nine_statuses_round_trip_through_the_database_and_filter() {
     let store = Store::open(&path).unwrap();
     for (i, s) in Status::ALL.into_iter().enumerate() {
         let id = format!("ST-{}", i + 2);
-        assert_eq!(store.get(&id).unwrap().status, s, "{id} after a reopen");
+        assert_eq!(store.get(&id).await.unwrap().status, s, "{id} after a reopen");
         let found: Vec<String> = store
             .list(Some("ST"), Some(s), None)
+            .await
+            .unwrap()
             .into_iter()
             .map(|t| t.id)
             .collect();
@@ -90,12 +92,12 @@ async fn the_worker_states_are_neither_ready_nor_done() {
         assert!(matches!(rx.try_recv(), Ok(Change::StatusChanged { .. })));
         assert!(rx.try_recv().is_err(), "{s}: no group_changed — nothing crossed Complete");
         assert_eq!(done(&store), 0, "{s}");
-        let ready: Vec<String> = store.ready_set(None).into_iter().map(|t| t.id).collect();
+        let ready: Vec<String> = store.ready_set(None).await.unwrap().into_iter().map(|t| t.id).collect();
         let want: &[&str] = if s == Status::Ready { &["WS-2"] } else { &[] };
         assert_eq!(ready, want, "{s}: WS-3 waits on its blocker; WS-2 is ready only while Ready");
     }
     store.set_status("WS-2", Status::Complete).await.unwrap();
     assert_eq!(done(&store), 1, "the merge's Complete is what counts");
-    let ready: Vec<String> = store.ready_set(None).into_iter().map(|t| t.id).collect();
+    let ready: Vec<String> = store.ready_set(None).await.unwrap().into_iter().map(|t| t.id).collect();
     assert_eq!(ready, ["WS-3"]);
 }

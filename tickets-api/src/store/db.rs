@@ -1,6 +1,6 @@
-use super::Ticket;
+use super::{Row, Ticket};
 use rusqlite::types::Type;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
@@ -442,41 +442,107 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket]) -> rusqlite::Re
     Ok(())
 }
 
-pub(super) fn load_all(conn: &Connection) -> anyhow::Result<HashMap<String, Ticket>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, epic, seq, title, status, kind, severity,
-                    blocked_by, unlocks, body, created_unix, updated_unix,
-                    parent
-             FROM tickets",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Ticket {
-            id: row.get(0)?,
-            epic: row.get(1)?,
-            seq: row.get(2)?,
-            title: row.get(3)?,
-            status: parse_col(4, &row.get::<_, String>(4)?)?,
-            kind: parse_col(5, &row.get::<_, String>(5)?)?,
-            severity: row
-                .get::<_, Option<String>>(6)?
-                .as_deref()
-                .map(|s| parse_col(6, s))
-                .transpose()?,
-            blocked_by: parse_ids(7, &row.get::<_, String>(7)?)?,
-            unlocks: parse_ids(8, &row.get::<_, String>(8)?)?,
-            body: row.get(9)?,
-            created_unix: row.get(10)?,
-            updated_unix: row.get(11)?,
-            parent: row.get::<_, Option<String>>(12)?,
-            // SCALE-4: not stored — the cache counts each ticket's children
-            // from every other ticket's `parent` once all are loaded.
-            child_count: 0,
-        })
-    })?;
+/// SCALE-14: every stored column of a row but the body, in the order
+/// [`read_row`] reads them — what the cache loads, and the head of what a
+/// whole ticket is read back as.
+const ROW_COLUMNS: &str = "id, epic, seq, title, status, kind, severity,
+                    blocked_by, unlocks, created_unix, updated_unix, parent";
+
+/// One row from a `SELECT` that starts with [`ROW_COLUMNS`].
+fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
+    Ok(Row {
+        id: row.get(0)?,
+        epic: row.get(1)?,
+        seq: row.get(2)?,
+        title: row.get(3)?,
+        status: parse_col(4, &row.get::<_, String>(4)?)?,
+        kind: parse_col(5, &row.get::<_, String>(5)?)?,
+        severity: row
+            .get::<_, Option<String>>(6)?
+            .as_deref()
+            .map(|s| parse_col(6, s))
+            .transpose()?,
+        blocked_by: parse_ids(7, &row.get::<_, String>(7)?)?,
+        unlocks: parse_ids(8, &row.get::<_, String>(8)?)?,
+        created_unix: row.get(9)?,
+        updated_unix: row.get(10)?,
+        parent: row.get::<_, Option<String>>(11)?,
+        // SCALE-4: not stored — the cache counts each ticket's children
+        // from every other ticket's `parent` once all are loaded.
+        child_count: 0,
+    })
+}
+
+/// SCALE-14: every ticket's row, and no body — what the cache holds. The
+/// body is never read here, not read and dropped: what a load allocates
+/// and frees still costs resident memory the allocator keeps.
+pub(super) fn load_rows(conn: &Connection) -> anyhow::Result<HashMap<String, Row>> {
+    let mut stmt = conn.prepare(&format!("SELECT {ROW_COLUMNS} FROM tickets"))?;
+    let rows = stmt.query_map([], read_row)?;
     let mut out = HashMap::new();
     for row in rows {
-        let ticket = row?;
-        out.insert(ticket.id.clone(), ticket);
+        let row = row?;
+        out.insert(row.id.clone(), row);
     }
     Ok(out)
+}
+
+/// SCALE-14: one ticket's body, or `None` when no row has `id`.
+pub(super) fn body(conn: &Connection, id: &str) -> rusqlite::Result<Option<String>> {
+    conn.prepare_cached("SELECT body FROM tickets WHERE id = ?1")?
+        .query_row([id], |row| row.get(0))
+        .optional()
+}
+
+/// SCALE-14: one whole ticket as stored — its row and its body from one
+/// statement, so from one snapshot. `child_count` is 0: the database does
+/// not store it (SCALE-4).
+pub(super) fn ticket(conn: &Connection, id: &str) -> rusqlite::Result<Option<Ticket>> {
+    conn.prepare_cached(&format!("SELECT {ROW_COLUMNS}, body FROM tickets WHERE id = ?1"))?
+        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(12)?)))
+        .optional()
+}
+
+/// SCALE-14: rewrites every stored column of an existing ticket but its
+/// body, which the cache does not hold and the write did not change — the
+/// shape of every write after birth but `amend`'s. One row or an error:
+/// the ticket is in the cache, so it is in the database.
+pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
+    let changed = conn.prepare_cached(
+        "UPDATE tickets SET
+                 epic = ?2, seq = ?3, title = ?4, status = ?5, kind = ?6,
+                 severity = ?7, blocked_by = ?8, unlocks = ?9, parent = ?10,
+                 created_unix = ?11, updated_unix = ?12
+             WHERE id = ?1",
+    )?
+    .execute(params![
+        t.id,
+        t.epic,
+        t.seq,
+        t.title,
+        enum_str(&t.status),
+        enum_str(&t.kind),
+        t.severity.as_ref().map(enum_str),
+        serde_json::to_string(&t.blocked_by).expect("serialize ids"),
+        serde_json::to_string(&t.unlocks).expect("serialize ids"),
+        t.parent,
+        t.created_unix,
+        t.updated_unix,
+    ])?;
+    match changed {
+        1 => Ok(()),
+        n => Err(rusqlite::Error::StatementChangedRows(n)),
+    }
+}
+
+/// SCALE-14: replaces one ticket's body — `amend`'s, the one write after
+/// birth that changes it.
+pub(super) fn set_body(conn: &Connection, id: &str, body: &str) -> rusqlite::Result<()> {
+    match conn
+        .prepare_cached("UPDATE tickets SET body = ?2 WHERE id = ?1")?
+        .execute(params![id, body])?
+    {
+        1 => Ok(()),
+        n => Err(rusqlite::Error::StatementChangedRows(n)),
+    }
 }

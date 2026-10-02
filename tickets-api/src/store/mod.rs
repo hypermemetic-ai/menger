@@ -31,15 +31,31 @@
 //! SCALE-4 loses its `children` column, durably, once, on first open; the
 //! `parent` column was always the edge, and the dropped lists are checked
 //! against it on the way out.
+//! SCALE-14 takes the body out of the cache — the first step of SCALE-10's
+//! bounded store, and the end of "no I/O on the read path": the cache holds
+//! each ticket's row ([`Row`], every field but the body), and anything that
+//! answers a whole [`Ticket`] reads the body from the database, inside this
+//! module and off the runtime: `get`, `blockers` and a full-ticket walk on
+//! read-only connections of their own ([`Readers`]), so that a read never
+//! queues behind a write's fsync; a write, for the tickets its events
+//! carry whole, in its own transaction before it commits. What
+//! is kept: nothing outside this module holds a database handle; a write
+//! is durable before the cache changes and before anything is broadcast;
+//! no lock is held across an await; and a read sees every write that was
+//! acknowledged before it began, as one version of each ticket — never a
+//! body older, or newer, than the row beside it ([`Store::full`]).
 
-use rusqlite::Connection;
+use crate::types::TicketSummary;
+use rusqlite::{Connection, OpenFlags};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use tokio::sync::broadcast;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::Semaphore;
 
 /// MFE-9: the ticket vocabulary itself now lives in `menger-tickets-api`
 /// so the browser app can consume the same declarations instead of a
@@ -47,6 +63,59 @@ use tokio::sync::Mutex as AsyncMutex;
 /// unchanged — every `crate::store::Status` in the server still resolves,
 /// and the store remains the only thing that *writes* them.
 pub use crate::types::{Group, Kind, Severity, Status, Ticket};
+
+/// SCALE-14: what the cache holds of a ticket — every field but the body,
+/// which is MNG-9's summary row exactly (the guard test
+/// `a_summary_is_a_ticket_minus_exactly_the_body` holds [`TicketSummary`]
+/// to "a [`Ticket`] minus its body"). The body is half of what a ticket
+/// cost resident (PERF-4) and one kind of answer shows it; the row is what
+/// every walk, filter, roll-up and index reads. A summary page is rows as
+/// they are; a full ticket is a row and a body ([`whole`]).
+type Row = TicketSummary;
+
+/// SCALE-14: a full ticket from its row and its body. Destructured, not
+/// copied field by field from memory: a field added to the row is a
+/// compile error here until it is carried over.
+fn whole(row: Row, body: String) -> Ticket {
+    let Row {
+        id,
+        epic,
+        seq,
+        title,
+        status,
+        kind,
+        severity,
+        parent,
+        child_count,
+        blocked_by,
+        unlocks,
+        created_unix,
+        updated_unix,
+    } = row;
+    Ticket {
+        id,
+        epic,
+        seq,
+        title,
+        status,
+        kind,
+        severity,
+        blocked_by,
+        unlocks,
+        parent,
+        child_count,
+        body,
+        created_unix,
+        updated_unix,
+    }
+}
+
+/// SCALE-14: a row the cache holds and the database does not. Nothing
+/// deletes a ticket, so only a file changed under a running server makes
+/// one; the read says so rather than answer a ticket without its body.
+fn missing(id: &str) -> StoreError {
+    StoreError::Db(format!("{id} is in the cache but not in the database"))
+}
 
 /// MNG-9: the store's total order over tickets — `(epic, seq)`, which the
 /// schema keeps unique (`UNIQUE (epic, seq)`). Every list has been in this
@@ -62,7 +131,7 @@ pub struct OrderKey {
 }
 
 impl OrderKey {
-    fn of(ticket: &Ticket) -> Self {
+    fn of(ticket: &Row) -> Self {
         Self {
             epic: ticket.epic.clone(),
             seq: ticket.seq,
@@ -95,7 +164,7 @@ pub struct PageQuery<'a> {
 /// less the page, which the cache knows per shortcode ([`Span::len`]).
 enum Filter<'a> {
     All,
-    By(&'a dyn Fn(&Ticket) -> bool),
+    By(&'a dyn Fn(&Row) -> bool),
 }
 
 /// MNG-9: the stretch of the sorted index a page is cut from — the two
@@ -159,7 +228,7 @@ impl Span {
     fn range<'c>(
         &self,
         cache: &'c Cache,
-    ) -> Option<std::collections::btree_map::Range<'c, OrderKey, Ticket>> {
+    ) -> Option<std::collections::btree_map::Range<'c, OrderKey, Row>> {
         if self.empty {
             return None;
         }
@@ -209,16 +278,140 @@ impl Span {
 }
 
 /// MNG-9: one page of the store's order, and where the walk stands.
+/// SCALE-14: a page of rows — what the cache holds, without bodies: the
+/// `summary` page, `find`'s, and what a [`Walk`] reads bodies for, a page
+/// at a time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Page {
     /// The page itself, in `(epic, seq)` order.
-    pub tickets: Vec<Ticket>,
+    pub tickets: Vec<TicketSummary>,
     /// The cursor for the next page — the last id on this page, or the
     /// cursor this page was cut with when the page came back empty.
     /// `None` means the walk is over: nothing matches beyond this page.
     pub next: Option<String>,
     /// How many further tickets match the same filters beyond this page.
     pub remaining: u64,
+}
+
+/// SCALE-14: what a walk of whole tickets selects — the two selections the
+/// wire answers with bodies, `list {}` and `ready_set {}`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Select {
+    /// `list`'s filters, as [`PageQuery`] takes them.
+    List {
+        epic: Option<String>,
+        status: Option<Status>,
+        parent: Option<String>,
+    },
+    /// The ready set's rule ([`Store::ready_set`]), optionally in one epic.
+    Ready { epic: Option<String> },
+}
+
+/// SCALE-14: whether a cut counts what it leaves behind. A page's
+/// `remaining` is exact (MNG-9) — with a predicate, a test of everything
+/// after the page. A [`Walk`] cuts a step at a time and counts once, where
+/// it ends: counting at every step would make one `list { status }` of
+/// the store quadratic.
+#[derive(Debug, Clone, Copy)]
+enum Rest {
+    Count,
+    /// The rows alone; the page's `next` and `remaining` are not worked out.
+    Skip,
+}
+
+/// SCALE-14: a walk of whole tickets — how `list` and `ready_set` answer
+/// with bodies without holding more than a page of them. A step cuts the
+/// next [`BODIES_PER_STEP`] rows from the cache, lets the lock go, and
+/// sets their bodies reading off the runtime; [`Walk::next`] hands out one
+/// step's tickets with the next step's already reading, so the database
+/// works while the transport sends. The walk keeps where it stands (the
+/// last id it cut) and how much of its `limit` is left. As any page walk
+/// (MNG-9), it sees tickets born ahead of its cursor while it goes.
+#[derive(Debug)]
+pub struct Walk {
+    select: Select,
+    after: Option<String>,
+    left: Option<u32>,
+    /// Set once the selection is spent: its `next` and `remaining`.
+    over: Option<(Option<String>, u64)>,
+    /// The step cut and reading ahead of the one handed out.
+    ahead: Option<Reading>,
+}
+
+/// One step's whole tickets, being read off the runtime.
+type Reading = tokio::task::JoinHandle<Result<Vec<Ticket>, StoreError>>;
+
+/// SCALE-14: one step of a [`Walk`].
+#[derive(Debug)]
+pub enum Step {
+    /// The next tickets, whole, in the store's order — at most
+    /// [`BODIES_PER_STEP`] of them.
+    Tickets(Vec<Ticket>),
+    /// The walk is over, and this is where it stands: what MNG-9's page
+    /// event says — exactly what one page of the walk's `limit` says.
+    End { next: Option<String>, remaining: u64 },
+}
+
+impl Walk {
+    /// The next tickets of the walk, or its end. A cursor naming no ticket
+    /// is [`StoreError::CursorNotFound`], at the first step: nothing walked.
+    pub async fn next(&mut self, store: &Store) -> Result<Step, StoreError> {
+        let current = match self.ahead.take() {
+            Some(reading) => Some(reading),
+            None => self.step(store)?,
+        };
+        let Some(current) = current else {
+            return self.end(store);
+        };
+        self.ahead = self.step(store)?;
+        let tickets = current
+            .await
+            .map_err(|e| StoreError::Db(format!("read task failed: {e}")))??;
+        Ok(Step::Tickets(tickets))
+    }
+
+    /// Cuts the next step's rows from where the walk stands and sets their
+    /// bodies reading; `None` when there is nothing left to cut — the
+    /// selection is spent, or the limit is.
+    fn step(&mut self, store: &Store) -> Result<Option<Reading>, StoreError> {
+        let take = self.left.map_or(BODIES_PER_STEP, |n| n.min(BODIES_PER_STEP));
+        if self.over.is_some() || take == 0 {
+            return Ok(None);
+        }
+        let (rows, written) = {
+            let cache = store.tickets.read().expect("store lock poisoned");
+            let page = Store::cut(&cache, &self.select, self.after.as_deref(), Some(take), Rest::Skip)?;
+            (page.tickets, cache.written)
+        };
+        if rows.len() < take as usize {
+            // Fewer than asked for: the selection is spent, nothing remains.
+            self.over = Some((None, 0));
+        }
+        let Some(last) = rows.last() else {
+            return Ok(None);
+        };
+        self.after = Some(last.id.clone());
+        self.left = self.left.map(|n| n - rows.len() as u32);
+        Ok(Some(tokio::spawn(store.full_owned(rows, written))))
+    }
+
+    /// Where the walk stands once nothing is left to cut. The limit spent
+    /// before the selection was, what is left is counted — once, from the
+    /// last id cut, the cursor a single page would hand back.
+    fn end(&mut self, store: &Store) -> Result<Step, StoreError> {
+        let (next, remaining) = match &self.over {
+            Some(over) => over.clone(),
+            None => {
+                let page = {
+                    let cache = store.tickets.read().expect("store lock poisoned");
+                    Store::cut(&cache, &self.select, self.after.as_deref(), Some(0), Rest::Count)?
+                };
+                self.over = Some((page.next.clone(), page.remaining));
+                (page.next, page.remaining)
+            }
+        };
+        Ok(Step::End { next, remaining })
+    }
 }
 
 /// A mutation, broadcast to every `watch` subscriber. (Internal — the
@@ -364,6 +557,7 @@ pub enum StoreError {
     /// A ticket always has one; nothing was written.
     EmptyTitle { id: String },
     /// The write could not be made durable; nothing was acknowledged.
+    /// SCALE-14: or a read could not get a body from the database.
     Db(String),
     /// PERF-2: a seed was requested into a store that already holds
     /// `existing` tickets without `SeedSpec::into_existing`. Nothing was
@@ -423,6 +617,14 @@ impl std::fmt::Display for StoreError {
             ),
             Self::CursorNotFound(id) => write!(f, "after: no ticket {id}"),
         }
+    }
+}
+
+/// SCALE-14: what goes wrong on a connection is a database error, read or
+/// write — so a closure run on one can use `?` on both kinds.
+impl From<rusqlite::Error> for StoreError {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Db(e.to_string())
     }
 }
 
@@ -493,7 +695,7 @@ fn find_parent_cycle(
 /// scope. That walk was one step for every prefix made since MNG-12, but
 /// the whole prefix for a legacy one that never had a scope — and `create`
 /// took it, under the write lock, for every ticket filed there.
-fn shortcode_root<'a>(tickets: &'a Cache, epic: &str) -> Option<&'a Ticket> {
+fn shortcode_root<'a>(tickets: &'a Cache, epic: &str) -> Option<&'a Row> {
     tickets.rollups.root(epic).and_then(|id| tickets.get(id))
 }
 
@@ -503,7 +705,7 @@ fn shortcode_root<'a>(tickets: &'a Cache, epic: &str) -> Option<&'a Ticket> {
 /// ever finds more children than a store had, never fewer, so the tickets
 /// it does not name are already right. Returns how many parents it set.
 fn count_children(
-    order: &mut BTreeMap<OrderKey, Ticket>,
+    order: &mut BTreeMap<OrderKey, Row>,
     at: &HashMap<String, OrderKey>,
     children: &children::Children,
 ) -> usize {
@@ -548,7 +750,7 @@ impl Needle {
         })
     }
 
-    fn matches(&self, t: &Ticket) -> bool {
+    fn matches(&self, t: &Row) -> bool {
         self.within(&t.id) || self.within(&t.title)
     }
 
@@ -599,12 +801,19 @@ impl Needle {
 /// `child_count` is; every path that sets a parent moves it in the same
 /// critical section as the ticket whose parent it is, and sets the
 /// parent's count from it, so the two cannot disagree.
+///
+/// SCALE-14: `order` holds rows, not tickets — no body is held — and the
+/// cache counts the writes it holds, `written`, in the critical section
+/// that applies each one: a reader takes the count with the rows, and that
+/// is how it knows whether the database it reads a body from is at the
+/// same write ([`Store::full`]).
 struct Cache {
-    order: BTreeMap<OrderKey, Ticket>,
+    order: BTreeMap<OrderKey, Row>,
     at: HashMap<String, OrderKey>,
     rollups: rollup::Rollups,
     ids: ids::Ids,
     children: children::Children,
+    written: u64,
 }
 
 /// MNG-10: the tickets half of the cache, borrowed on its own — what the
@@ -613,19 +822,19 @@ struct Cache {
 /// find a ticket's children now that the row no longer lists them.
 #[derive(Clone, Copy)]
 struct Rows<'a> {
-    order: &'a BTreeMap<OrderKey, Ticket>,
+    order: &'a BTreeMap<OrderKey, Row>,
     at: &'a HashMap<String, OrderKey>,
     children: &'a children::Children,
 }
 
 impl<'a> Rows<'a> {
-    fn get(&self, id: &str) -> Option<&'a Ticket> {
+    fn get(&self, id: &str) -> Option<&'a Row> {
         self.order.get(self.at.get(id)?)
     }
 
     /// SCALE-4: `t`'s children in its own shortcode, in the store's order
     /// — what a subtree walk follows.
-    fn children_in_shortcode(&self, t: &'a Ticket) -> impl Iterator<Item = &'a Ticket> + 'a {
+    fn children_in_shortcode(&self, t: &'a Row) -> impl Iterator<Item = &'a Row> + 'a {
         let order = self.order;
         self.children
             .in_shortcode(&t.id, &t.epic)
@@ -647,7 +856,7 @@ impl<'a> Rows<'a> {
         self.at.len()
     }
 
-    fn tickets(&self) -> impl Iterator<Item = &'a Ticket> {
+    fn tickets(&self) -> impl Iterator<Item = &'a Row> {
         self.order.values()
     }
 }
@@ -664,8 +873,8 @@ impl Cache {
     /// persisted, so a reopened or migrated store gets them from what it
     /// loaded. SCALE-4: and so is the children index, and with it every
     /// ticket's `child_count` (the database stores neither).
-    fn new(loaded: HashMap<String, Ticket>) -> Self {
-        let mut order: BTreeMap<OrderKey, Ticket> = loaded
+    fn new(loaded: HashMap<String, Row>) -> Self {
+        let mut order: BTreeMap<OrderKey, Row> = loaded
             .into_values()
             .map(|t| (OrderKey::of(&t), t))
             .collect();
@@ -709,6 +918,7 @@ impl Cache {
             rollups,
             ids,
             children,
+            written: 0,
         }
     }
 
@@ -735,7 +945,7 @@ impl Cache {
     /// an existing ticket rewrites the same entry, and the two halves
     /// cannot drift apart. Rows only: the roll-ups move through the
     /// mutation-shaped methods below, which call this.
-    fn insert(&mut self, ticket: Ticket) {
+    fn insert(&mut self, ticket: Row) {
         let key = OrderKey::of(&ticket);
         self.at.insert(ticket.id.clone(), key.clone());
         self.order.insert(key, ticket);
@@ -749,8 +959,8 @@ impl Cache {
     /// children, whose count it moves; returns that count too.
     fn created(
         &mut self,
-        ticket: Ticket,
-        touched: impl IntoIterator<Item = Ticket>,
+        ticket: Row,
+        touched: impl IntoIterator<Item = Row>,
     ) -> (Vec<Group>, Option<u64>) {
         for updated in touched {
             self.insert(updated);
@@ -775,7 +985,7 @@ impl Cache {
     }
 
     /// MNG-10: a status change; only a crossing of `Complete` moves a count.
-    fn status_changed(&mut self, ticket: Ticket, previous: Status) -> Vec<Group> {
+    fn status_changed(&mut self, ticket: Row, previous: Status) -> Vec<Group> {
         let id = ticket.id.clone();
         self.insert(ticket);
         let rows = Rows {
@@ -796,7 +1006,7 @@ impl Cache {
     /// `previous`'s children and joins its new parent's, and each parent's
     /// count is set from the index; returns the groups, then the new
     /// parent's count and the old one's.
-    fn reparented(&mut self, child: Ticket, previous: Option<&str>) -> (Vec<Group>, u64, u64) {
+    fn reparented(&mut self, child: Row, previous: Option<&str>) -> (Vec<Group>, u64, u64) {
         let parent = child.parent.clone().expect("set_parent sets a parent");
         let rows = Rows {
             order: &self.order,
@@ -825,7 +1035,7 @@ impl Cache {
         (self.rollups.reparented(rows, moving), joined, left)
     }
 
-    fn get(&self, id: &str) -> Option<&Ticket> {
+    fn get(&self, id: &str) -> Option<&Row> {
         self.order.get(self.at.get(id)?)
     }
 
@@ -834,15 +1044,137 @@ impl Cache {
     }
 }
 
+/// SCALE-14: how many read-only connections a store keeps open — and so
+/// how many reads touch the database at once. A read holds one for a point
+/// read (~10 µs warm, SCALE-12) or a step of bodies, so a few serve every
+/// caller; a bound keeps a burst of readers from opening a connection (and
+/// a page cache) each.
+const READERS: usize = 4;
+
+/// SCALE-14: how many bodies a full-ticket walk holds at once — the page
+/// MNG-9's clients walk in. `list {}` and `ready_set {}` without `summary`
+/// still answer every match with its body, as they always did, but a
+/// [`Walk`] reads them [`BODIES_PER_STEP`] at a time, one step ahead of
+/// the step it is handing out: never more than this many in hand.
+pub const BODIES_AT_ONCE: u32 = 200;
+
+/// SCALE-14: how many bodies one step of a [`Walk`] reads — half of
+/// [`BODIES_AT_ONCE`], because the next step's are read while this one's go
+/// out. Read in turn instead, the bodies cost a whole-store `list {}`
+/// ~1.5 s at 10⁶ on top of sending it (measured: 7.7 s against 6.2 s).
+pub const BODIES_PER_STEP: u32 = BODIES_AT_ONCE / 2;
+
+/// SCALE-14: the database's read side. A body is read on a connection of
+/// its own, not the writer's: SQLite in WAL mode lets a reader run beside
+/// a writer, but one connection shared behind a mutex would make every
+/// read wait out every write's fsync (SCALE-12, "Limits").
+enum Readers {
+    /// A file: [`READERS`] connections, opened read-only — they can never
+    /// write — when the store opens, each kept for the next read once a
+    /// read is done with it.
+    File {
+        path: PathBuf,
+        idle: StdMutex<Vec<Connection>>,
+        /// One permit per connection that may be open: a read waits here,
+        /// for a free connection, not on a lock — and the permit goes into
+        /// the blocking task with the connection, so a reader that is
+        /// dropped mid-read cannot let a second read past the bound.
+        permits: Arc<Semaphore>,
+    },
+    /// `:memory:` (the unit tests' store) has no file a second connection
+    /// could open: its reads take the writer's connection in turn.
+    Writer(Arc<StdMutex<Connection>>),
+}
+
+impl Readers {
+    /// The read side of the database at `path`, every connection opened
+    /// now and each through one read — which is when SQLite opens the WAL
+    /// beside the file. So a database the reads cannot open fails the open,
+    /// loudly, rather than the first `get`; and after it the read path
+    /// opens nothing by name: its files are held, as the writer's are, and
+    /// reads go on answering whatever becomes of the path (MNG-2's
+    /// "the database location vanishes mid-run").
+    fn open(path: &Path) -> anyhow::Result<Self> {
+        let idle = (0..READERS)
+            .map(|_| Self::connect(path))
+            .collect::<rusqlite::Result<Vec<Connection>>>()?;
+        Ok(Self::File {
+            path: path.to_path_buf(),
+            idle: StdMutex::new(idle),
+            permits: Arc::new(Semaphore::new(READERS)),
+        })
+    }
+
+    fn connect(path: &Path) -> rusqlite::Result<Connection> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | OpenFlags::SQLITE_OPEN_URI,
+        )?;
+        conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()))?;
+        Ok(conn)
+    }
+
+    /// Runs `f` on a read connection, off the async runtime. `f` begins and
+    /// ends its own transaction: a connection goes back idle with none open,
+    /// so the next read on it starts from the newest commit.
+    async fn read<T, F>(self: &Arc<Self>, f: F) -> Result<T, StoreError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T, StoreError> + Send + 'static,
+    {
+        let permit = match &**self {
+            Self::File { permits, .. } => Some(
+                Arc::clone(permits)
+                    .acquire_owned()
+                    .await
+                    .expect("the read permits are never closed"),
+            ),
+            Self::Writer(_) => None,
+        };
+        let readers = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            match &*readers {
+                Self::File { path, idle, .. } => {
+                    let open = idle.lock().expect("readers lock poisoned").pop();
+                    // A permit is a connection: none idle only if a read
+                    // panicked with one, and then it is opened again.
+                    let mut conn = match open {
+                        Some(conn) => conn,
+                        None => Self::connect(path)?,
+                    };
+                    let out = f(&mut conn);
+                    idle.lock().expect("readers lock poisoned").push(conn);
+                    out
+                }
+                Self::Writer(db) => f(&mut db.lock().expect("db lock poisoned")),
+            }
+        })
+        .await
+        .map_err(|e| StoreError::Db(format!("read task failed: {e}")))?
+    }
+}
+
 pub struct Store {
-    /// The cache. Every read in the process is answered from here; the
-    /// lock is synchronous and never held across an await.
+    /// The cache. Every read in the process starts here; the lock is
+    /// synchronous and never held across an await. SCALE-14: it holds
+    /// rows, and a read that answers whole tickets takes their bodies from
+    /// `readers` after it has let go of it.
     tickets: RwLock<Cache>,
     tx: broadcast::Sender<Change>,
     /// The system of record. Private to this module — nothing else in the
     /// application holds a database handle. Only touched off-runtime, via
-    /// `spawn_blocking`.
+    /// `spawn_blocking`. SCALE-14: the writer; reads have their own.
     db: Arc<StdMutex<Connection>>,
+    /// SCALE-14: the read-only connections bodies are read on.
+    readers: Arc<Readers>,
+    /// SCALE-14: how many writes have begun to commit — counted before the
+    /// commit starts, so a reader that finds it equal to the count the
+    /// cache gave it knows no commit can have reached its snapshot that
+    /// the rows it holds do not show ([`Store::full`]).
+    committing: Arc<AtomicU64>,
     /// Serializes mutations end to end: id allocation, the durable write,
     /// the cache update, and the broadcast happen atomically with respect
     /// to other writers, so ids are unique under concurrent creates and
@@ -863,13 +1195,13 @@ impl Store {
     /// real location via [`Store::open`].
     pub fn new() -> Self {
         let conn = Connection::open_in_memory().expect("open in-memory sqlite");
-        Self::with_connection(conn).expect("init in-memory schema")
+        Self::with_connection(conn, None).expect("init in-memory schema")
     }
 
     /// Opens (creating if absent) the database at `path` and loads every
-    /// ticket into the cache. A fresh location is an empty store, not an
-    /// error. Does blocking I/O — call from a blocking context (the
-    /// builder wraps this in `spawn_blocking`).
+    /// ticket's row into the cache (SCALE-14: not its body). A fresh
+    /// location is an empty store, not an error. Does blocking I/O — call
+    /// from a blocking context (the builder wraps this in `spawn_blocking`).
     pub fn open(path: &Path) -> anyhow::Result<Self> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -878,12 +1210,17 @@ impl Store {
         }
         let conn = Connection::open(path)?;
         // WAL + synchronous=FULL: an acknowledged commit survives SIGKILL.
+        // SCALE-14: WAL is also what lets the read connections read beside
+        // the writer instead of behind it.
         conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
         conn.execute_batch("PRAGMA synchronous = FULL;")?;
-        Self::with_connection(conn)
+        Self::with_connection(conn, Some(path))
     }
 
-    fn with_connection(mut conn: Connection) -> anyhow::Result<Self> {
+    /// The store over the writer `conn`. SCALE-14: the read connections are
+    /// opened after every migration, on `path` — or, with none (`:memory:`),
+    /// reads take the writer's turn.
+    fn with_connection(mut conn: Connection, path: Option<&Path>) -> anyhow::Result<Self> {
         conn.execute_batch(db::SCHEMA)?;
         // A database written before AGS-13 is rewritten to kinds here, once,
         // durably — before anything is loaded. An unmappable row refuses
@@ -898,32 +1235,172 @@ impl Store {
         // column it mirrored (the edge, then and now) and dropped. Never
         // fatal: a list that disagreed is logged, and `parent` stands.
         db::migrate_drop_children(&mut conn)?;
-        let tickets = db::load_all(&conn)?;
+        let rows = db::load_rows(&conn)?;
+        let db = Arc::new(StdMutex::new(conn));
+        let readers = match path {
+            Some(path) => Readers::open(path)?,
+            None => Readers::Writer(Arc::clone(&db)),
+        };
         let (tx, _) = broadcast::channel(256);
         Ok(Self {
-            tickets: RwLock::new(Cache::new(tickets)),
+            tickets: RwLock::new(Cache::new(rows)),
             tx,
-            db: Arc::new(StdMutex::new(conn)),
+            db,
+            readers: Arc::new(readers),
+            committing: Arc::new(AtomicU64::new(0)),
             write_serial: AsyncMutex::new(()),
         })
     }
 
-    /// Writes a batch of tickets durably in one transaction, off the
-    /// async runtime. On `Err` nothing has been acknowledged: the cache
-    /// is untouched and no event is emitted.
-    async fn persist(&self, batch: Vec<Ticket>) -> Result<(), StoreError> {
+    /// Makes one write durable, in one transaction, off the async runtime:
+    /// `f` changes the rows and reads back what the broadcast will need
+    /// (SCALE-14: the bodies of the tickets it carries whole, which the
+    /// cache no longer holds — a point read in the transaction that is
+    /// about to fsync anyway), and then it commits. On `Err` nothing has
+    /// been acknowledged: the cache is untouched and no event is emitted.
+    ///
+    /// SCALE-14: the write is counted in `committing` before it starts and
+    /// in the cache's `written` when [`Store::apply`] puts it there — what
+    /// a reader compares to know the database it read is the cache's.
+    async fn commit<T, F>(&self, f: F) -> Result<T, StoreError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError> + Send + 'static,
+    {
         let db = self.db.clone();
-        tokio::task::spawn_blocking(move || -> rusqlite::Result<()> {
+        self.committing.fetch_add(1, Ordering::SeqCst);
+        let out = tokio::task::spawn_blocking(move || {
             let mut conn = db.lock().expect("db lock poisoned");
             let tx = conn.transaction()?;
-            for t in &batch {
-                db::upsert(&tx, t)?;
-            }
-            tx.commit()
+            let out = f(&tx)?;
+            tx.commit()?;
+            Ok(out)
         })
         .await
-        .map_err(|e| StoreError::Db(format!("write task failed: {e}")))?
-        .map_err(|e| StoreError::Db(e.to_string()))
+        .map_err(|e| StoreError::Db(format!("write task failed: {e}")))
+        .and_then(|out| out);
+        if out.is_err() {
+            // Nothing committed, so nothing is on its way to the cache: a
+            // reader may trust its rows again.
+            self.committing.fetch_sub(1, Ordering::SeqCst);
+        }
+        out
+    }
+
+    /// SCALE-14: puts a committed write into the cache — and counts it
+    /// there, in the same critical section, so a reader that sees the rows
+    /// sees the count that says they are this write's. Every write applies
+    /// through here, once per [`Store::commit`].
+    fn apply<T>(&self, f: impl FnOnce(&mut Cache) -> T) -> T {
+        let mut cache = self.tickets.write().expect("store lock poisoned");
+        let out = f(&mut cache);
+        cache.written += 1;
+        out
+    }
+
+    /// SCALE-14: whole tickets for `rows`, which the cache answered while it
+    /// held `written` writes — each row with its body from the database, in
+    /// the rows' order. Every read that answers a full ticket ends here.
+    ///
+    /// The rows were read first, and the bodies after, on a read connection
+    /// in one transaction — one snapshot. That order is what makes a read
+    /// see every write acknowledged before it began: a write commits, then
+    /// enters the cache, then is acknowledged, so a row the cache shows is
+    /// already in any snapshot taken after it — never a body older than
+    /// its row. And it takes no lock a writer holds: WAL lets the snapshot
+    /// be read while a commit is fsyncing.
+    ///
+    /// The other way round — a write that commits between the rows and the
+    /// snapshot — would put a newer body beside an older row (an `amend`'s
+    /// new body under its old title). So the read counts: `committing` is
+    /// raised before a commit starts, and if, once the snapshot is taken,
+    /// it is still the `written` the rows came with, no commit can be in
+    /// the snapshot that is not in the rows. If it has moved, every row is
+    /// read from the snapshot with its body — one stored version, with the
+    /// cache's `child_count` (which the database does not keep). Either
+    /// way each ticket is one statement and the read waits for no writer.
+    /// (A writer that never stops keeps the count moving, so its readers
+    /// mostly take the second way: the price is parsing the row they read.)
+    async fn full(&self, rows: Vec<Row>, written: u64) -> Result<Vec<Ticket>, StoreError> {
+        self.full_owned(rows, written).await
+    }
+
+    /// [`Store::full`] as a future that borrows nothing from the store — so
+    /// a [`Walk`] can set the next step's read going before it hands this
+    /// one out.
+    fn full_owned(
+        &self,
+        rows: Vec<Row>,
+        written: u64,
+    ) -> impl std::future::Future<Output = Result<Vec<Ticket>, StoreError>> + Send + 'static {
+        let readers = Arc::clone(&self.readers);
+        let committing = Arc::clone(&self.committing);
+        async move {
+            let Some(first) = rows.first().map(|row| row.id.clone()) else {
+                return Ok(Vec::new());
+            };
+            readers
+                .read(move |conn| {
+                    let tx = conn.transaction()?;
+                    // The first read takes the snapshot every other one reads
+                    // from; only after it can the counts say what it holds.
+                    let first = db::body(&tx, &first)?.ok_or_else(|| missing(&first))?;
+                    let tickets = if committing.load(Ordering::SeqCst) == written {
+                        let mut bodies = vec![first];
+                        for row in &rows[1..] {
+                            bodies.push(db::body(&tx, &row.id)?.ok_or_else(|| missing(&row.id))?);
+                        }
+                        rows.into_iter().zip(bodies).map(|(row, body)| whole(row, body)).collect()
+                    } else {
+                        #[cfg(test)]
+                        tests_bodies::STORED_VERSION_READS.fetch_add(1, Ordering::Relaxed);
+                        rows.into_iter()
+                            .map(|row| {
+                                let mut stored =
+                                    db::ticket(&tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
+                                stored.child_count = row.child_count;
+                                Ok(stored)
+                            })
+                            .collect::<Result<Vec<Ticket>, StoreError>>()?
+                    };
+                    tx.commit()?;
+                    Ok(tickets)
+                })
+                .await
+        }
+    }
+
+    /// [`Store::full`] for one row.
+    async fn full_one(&self, row: Row, written: u64) -> Result<Ticket, StoreError> {
+        Ok(self
+            .full(vec![row], written)
+            .await?
+            .pop()
+            .expect("one row, one ticket"))
+    }
+
+    /// SCALE-14: a row of the cache and the cache's count of writes, read
+    /// together; [`StoreError::NotFound`] when `id` names no ticket.
+    fn row(&self, id: &str) -> Result<(Row, u64), StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let row = cache
+            .get(id)
+            .cloned()
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+        Ok((row, cache.written))
+    }
+
+    /// SCALE-14: a write after birth that changes a ticket's row and not its
+    /// body (`set_status`, `set_parent`): the row is written, the body left
+    /// as stored and read back in the same transaction — the event carries
+    /// the ticket whole.
+    async fn commit_row(&self, row: Row) -> Result<(Row, String), StoreError> {
+        self.commit(move |tx| {
+            db::update_row(tx, &row)?;
+            let body = db::body(tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
+            Ok((row, body))
+        })
+        .await
     }
 
     /// Allocates the next `EPIC-N` id, maintains the DAG, writes through
@@ -1053,7 +1530,7 @@ impl Store {
             // only — the cache changes after the database commit.
             // SCALE-4: the parent is not one of them — its edge is the
             // newborn's `parent`, and the count is the cache's.
-            let mut touched: HashMap<String, Ticket> = HashMap::new();
+            let mut touched: HashMap<String, Row> = HashMap::new();
             let mut unlocks_added: Vec<String> = Vec::new();
             for blocker_id in &ticket.blocked_by {
                 let mirrored = touched
@@ -1089,15 +1566,28 @@ impl Store {
             (ticket, touched, unlocks_added, parent_epic)
         };
 
-        let mut batch: Vec<Ticket> = touched.values().cloned().collect();
-        batch.push(ticket.clone());
-        self.persist(batch).await?;
+        // SCALE-14: the newborn is written whole — the one ticket a write
+        // holds with its body, the caller's — and each blocker it touched
+        // as its row, the body left as stored. The blockers ride out whole
+        // in their `UnlocksChanged`, so their bodies are read back in the
+        // same transaction.
+        let born = ticket.clone();
+        let rows: Vec<Row> = touched.values().cloned().collect();
+        let blockers: HashMap<String, Ticket> = self
+            .commit(move |tx| {
+                db::upsert(tx, &born)?;
+                rows.into_iter()
+                    .map(|row| {
+                        db::update_row(tx, &row)?;
+                        let body = db::body(tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
+                        Ok((row.id.clone(), whole(row, body)))
+                    })
+                    .collect()
+            })
+            .await?;
 
-        let (groups, child_count) = self
-            .tickets
-            .write()
-            .expect("store lock poisoned")
-            .created(ticket.clone(), touched.values().cloned());
+        let (groups, child_count) =
+            self.apply(|cache| cache.created(Row::from(&ticket), touched.into_values()));
         let _ = self.tx.send(Change::Created {
             ticket: ticket.clone(),
         });
@@ -1113,7 +1603,7 @@ impl Store {
         }
         for blocker_id in unlocks_added {
             let _ = self.tx.send(Change::UnlocksChanged {
-                ticket: touched[&blocker_id].clone(),
+                ticket: blockers[&blocker_id].clone(),
                 added: ticket.id.clone(),
             });
         }
@@ -1168,12 +1658,12 @@ impl Store {
             .collect()
     }
 
-    pub fn get(&self, id: &str) -> Option<Ticket> {
-        self.tickets
-            .read()
-            .expect("store lock poisoned")
-            .get(id)
-            .cloned()
+    /// One ticket, whole. SCALE-14: its row from the cache and its body from
+    /// the database ([`Store::full`]); [`StoreError::NotFound`] when `id`
+    /// names no ticket — answered by the cache, with no read.
+    pub async fn get(&self, id: &str) -> Result<Ticket, StoreError> {
+        let (row, written) = self.row(id)?;
+        self.full_one(row, written).await
     }
 
     /// Tickets ordered by (epic, seq), optionally filtered. The `parent`
@@ -1181,21 +1671,60 @@ impl Store {
     /// from the children index, still in the store's order). The unpaged
     /// shape, kept: [`Store::page`] is the same walk with a cursor and a
     /// limit (MNG-9).
-    pub fn list(
+    ///
+    /// SCALE-14: whole tickets, every one with its body — so the answer
+    /// holds every match's body at once, by its own signature. The wire
+    /// never asks for it: `list {}` walks the same selection a page of
+    /// bodies at a time ([`Store::walk`]); this is that walk, collected.
+    pub async fn list(
         &self,
         epic: Option<&str>,
         status: Option<Status>,
         parent: Option<&str>,
-    ) -> Vec<Ticket> {
-        self.page(PageQuery {
-            epic,
+    ) -> Result<Vec<Ticket>, StoreError> {
+        let select = Select::List {
+            epic: epic.map(String::from),
             status,
-            parent,
-            ..PageQuery::default()
-        })
-        // Only an `after` cursor can fail, and there is none here.
-        .expect("an uncursored page cannot fail")
-        .tickets
+            parent: parent.map(String::from),
+        };
+        self.collect(self.walk(select, None, None)).await
+    }
+
+    /// SCALE-14: a walk of whole tickets — `select`, after the `after`
+    /// cursor, at most `limit` of them — never more than [`BODIES_AT_ONCE`]
+    /// bodies held. Nothing is read here: [`Walk::next`] reads each step.
+    pub fn walk(&self, select: Select, after: Option<&str>, limit: Option<u32>) -> Walk {
+        let up = |s: Option<String>| s.map(|s| s.to_ascii_uppercase());
+        let select = match select {
+            Select::List {
+                epic,
+                status,
+                parent,
+            } => Select::List {
+                epic: up(epic),
+                status,
+                parent: up(parent),
+            },
+            Select::Ready { epic } => Select::Ready { epic: up(epic) },
+        };
+        Walk {
+            select,
+            after: after.map(str::to_ascii_uppercase),
+            left: limit,
+            over: None,
+            ahead: None,
+        }
+    }
+
+    /// Every page of `walk`, gathered.
+    async fn collect(&self, mut walk: Walk) -> Result<Vec<Ticket>, StoreError> {
+        let mut out = Vec::new();
+        loop {
+            match walk.next(self).await? {
+                Step::Tickets(page) => out.extend(page),
+                Step::End { .. } => return Ok(out),
+            }
+        }
     }
 
     /// MNG-9: one page of the store's order — at most `limit` tickets
@@ -1211,46 +1740,78 @@ impl Store {
     /// only a `status` beside it is tested, child by child. `after` naming
     /// no ticket is [`StoreError::CursorNotFound`]: a cursor into nothing
     /// is a caller error, not an empty page.
+    ///
+    /// SCALE-14: a page of rows, from the cache alone — the `summary` page;
+    /// a page of whole tickets is a [`Walk`].
     pub fn page(&self, q: PageQuery<'_>) -> Result<Page, StoreError> {
-        let epic = q.epic.map(str::to_ascii_uppercase);
-        let parent = q.parent.map(str::to_ascii_uppercase);
+        let select = Select::List {
+            epic: q.epic.map(str::to_ascii_uppercase),
+            status: q.status,
+            parent: q.parent.map(str::to_ascii_uppercase),
+        };
         let after = q.after.map(str::to_ascii_uppercase);
         let cache = self.tickets.read().expect("store lock poisoned");
-        let span = Span::of(&cache, after.as_deref(), epic.as_deref())?;
-        let keep = |t: &Ticket| q.status.is_none_or(|s| t.status == s);
-        // The epic is already spent — it bounded the span rather than
-        // filtering inside it — so with no status asked for, there is
-        // nothing left to test on the way through.
-        let filter = match q.status {
-            None => Filter::All,
-            Some(_) => Filter::By(&keep),
-        };
-        Ok(match parent.as_deref() {
-            Some(p) => Self::walk_children(&cache, p, span, q.limit, filter),
-            None => Self::walk_cache(&cache, span, q.limit, filter),
-        })
+        Self::cut(&cache, &select, after.as_deref(), q.limit, Rest::Count)
     }
 
     /// MNG-9: one page of the ready set — the [`Store::ready_set`]
     /// membership rule, cut with the same cursor and limit as
-    /// [`Store::page`].
+    /// [`Store::page`]. SCALE-14: of rows, as `page`.
     pub fn ready_page(
         &self,
         epic: Option<&str>,
         after: Option<&str>,
         limit: Option<u32>,
     ) -> Result<Page, StoreError> {
-        let epic = epic.map(str::to_ascii_uppercase);
+        let select = Select::Ready {
+            epic: epic.map(str::to_ascii_uppercase),
+        };
         let after = after.map(str::to_ascii_uppercase);
         let cache = self.tickets.read().expect("store lock poisoned");
-        let span = Span::of(&cache, after.as_deref(), epic.as_deref())?;
-        let keep = |t: &Ticket| {
-            t.status == Status::Ready
-                && t.blocked_by
-                    .iter()
-                    .all(|b| cache.get(b).is_some_and(|bt| satisfied(bt.status)))
-        };
-        Ok(Self::walk_cache(&cache, span, limit, Filter::By(&keep)))
+        Self::cut(&cache, &select, after.as_deref(), limit, Rest::Count)
+    }
+
+    /// What `page` and `ready_page` cut, and what a [`Walk`] cuts each step
+    /// from: `select`'s rows after `after` (already upper case), at most
+    /// `limit`, under the read lock the caller holds.
+    fn cut(
+        cache: &Cache,
+        select: &Select,
+        after: Option<&str>,
+        limit: Option<u32>,
+        rest: Rest,
+    ) -> Result<Page, StoreError> {
+        match select {
+            Select::List {
+                epic,
+                status,
+                parent,
+            } => {
+                let span = Span::of(cache, after, epic.as_deref())?;
+                let keep = |t: &Row| status.is_none_or(|s| t.status == s);
+                // The epic is already spent — it bounded the span rather than
+                // filtering inside it — so with no status asked for, there is
+                // nothing left to test on the way through.
+                let filter = match status {
+                    None => Filter::All,
+                    Some(_) => Filter::By(&keep),
+                };
+                Ok(match parent.as_deref() {
+                    Some(p) => Self::walk_children(cache, p, span, limit, filter, rest),
+                    None => Self::walk_cache(cache, span, limit, filter, rest),
+                })
+            }
+            Select::Ready { epic } => {
+                let span = Span::of(cache, after, epic.as_deref())?;
+                let keep = |t: &Row| {
+                    t.status == Status::Ready
+                        && t.blocked_by
+                            .iter()
+                            .all(|b| cache.get(b).is_some_and(|bt| satisfied(bt.status)))
+                };
+                Ok(Self::walk_cache(cache, span, limit, Filter::By(&keep), rest))
+            }
+        }
     }
 
     /// SCALE-6: one page of the tickets whose id or title contains
@@ -1277,10 +1838,10 @@ impl Store {
         let cache = self.tickets.read().expect("store lock poisoned");
         let span = Span::of(&cache, after.as_deref(), None)?;
         let Some(needle) = Needle::of(query) else {
-            return Ok(Self::walk_cache(&cache, span, limit, Filter::All));
+            return Ok(Self::walk_cache(&cache, span, limit, Filter::All, Rest::Count));
         };
-        let keep = |t: &Ticket| needle.matches(t);
-        Ok(Self::walk_cache(&cache, span, limit, Filter::By(&keep)))
+        let keep = |t: &Row| needle.matches(t);
+        Ok(Self::walk_cache(&cache, span, limit, Filter::By(&keep), Rest::Count))
     }
 
     /// The one walk every page method runs: the span, `limit` matches
@@ -1295,10 +1856,16 @@ impl Store {
     /// the page — [`Span::len`], arithmetic over the shortcodes — and the
     /// count, which made a paged walk of the store quadratic (15.7 s at
     /// 10⁶), is not taken at all. A predicate still costs its walk.
-    fn walk_cache(cache: &Cache, span: Span, limit: Option<u32>, filter: Filter<'_>) -> Page {
+    fn walk_cache(
+        cache: &Cache,
+        span: Span,
+        limit: Option<u32>,
+        filter: Filter<'_>,
+        rest: Rest,
+    ) -> Page {
         let rows = span.range(cache).map(|range| range.map(|(_, t)| t));
         let cursor = span.cursor.clone();
-        Self::walk_rows(rows, || span.len(cache), cursor, limit, filter)
+        Self::walk_rows(rows, || span.len(cache), cursor, limit, filter, rest)
     }
 
     /// SCALE-4: the same walk over `parent`'s children — the children
@@ -1313,6 +1880,7 @@ impl Store {
         span: Span,
         limit: Option<u32>,
         filter: Filter<'_>,
+        rest: Rest,
     ) -> Page {
         let (start, end) = (span.start.as_ref(), span.end.as_ref());
         let rows = (!span.empty).then(|| {
@@ -1328,19 +1896,22 @@ impl Store {
             cursor,
             limit,
             filter,
+            rest,
         )
     }
 
     /// What every walk shares: `limit` matches cloned into the page, then
     /// `remaining` — `len` less the page when nothing is filtered (the
     /// page is a prefix of what `rows` holds), or the rest of the matches
-    /// counted when something is.
+    /// counted when something is. SCALE-14: unless the walk's own step
+    /// asks for the rows alone ([`Rest::Skip`]).
     fn walk_rows<'c>(
-        rows: Option<impl Iterator<Item = &'c Ticket>>,
+        rows: Option<impl Iterator<Item = &'c Row>>,
         len: impl FnOnce() -> u64,
         cursor: Option<String>,
         limit: Option<u32>,
         filter: Filter<'_>,
+        rest: Rest,
     ) -> Page {
         let take = limit.map_or(usize::MAX, |n| n as usize);
         let mut tickets = Vec::new();
@@ -1351,13 +1922,19 @@ impl Store {
             (None, _) => 0,
             (Some(rows), Filter::All) => {
                 tickets.extend(rows.take(take).cloned());
-                // The page is a prefix of the span: it cannot be longer.
-                len().saturating_sub(tickets.len() as u64)
+                match rest {
+                    // The page is a prefix of the span: it cannot be longer.
+                    Rest::Count => len().saturating_sub(tickets.len() as u64),
+                    Rest::Skip => 0,
+                }
             }
             (Some(rows), Filter::By(keep)) => {
                 let mut it = rows.filter(|t| keep(t));
                 tickets.extend(it.by_ref().take(take).cloned());
-                it.count() as u64
+                match rest {
+                    Rest::Count => it.count() as u64,
+                    Rest::Skip => 0,
+                }
             }
         };
 
@@ -1384,20 +1961,17 @@ impl Store {
     /// no count and broadcasts no group.
     pub async fn set_status(&self, id: &str, status: Status) -> Result<Change, StoreError> {
         let _serial = self.write_serial.lock().await;
-        let mut ticket = self
-            .get(id)
-            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
-        let previous = ticket.status;
-        ticket.status = status;
-        ticket.updated_unix = chrono::Utc::now().timestamp();
+        let (mut row, _) = self.row(id)?;
+        let previous = row.status;
+        row.status = status;
+        row.updated_unix = chrono::Utc::now().timestamp();
 
-        self.persist(vec![ticket.clone()]).await?;
-        let groups = self
-            .tickets
-            .write()
-            .expect("store lock poisoned")
-            .status_changed(ticket.clone(), previous);
-        let change = Change::StatusChanged { ticket, previous };
+        let (row, body) = self.commit_row(row).await?;
+        let groups = self.apply(|cache| cache.status_changed(row.clone(), previous));
+        let change = Change::StatusChanged {
+            ticket: whole(row, body),
+            previous,
+        };
         let _ = self.tx.send(change.clone());
         self.broadcast_groups(groups);
         Ok(change)
@@ -1421,21 +1995,32 @@ impl Store {
         let id = id.trim().to_ascii_uppercase();
         let parent = parent.trim().to_ascii_uppercase();
         let _serial = self.write_serial.lock().await;
+        // The parent it already has: no write. SCALE-14: the answer still
+        // carries the child whole, so its body is read — after the lock on
+        // the cache is let go.
+        let unchanged = {
+            let tickets = self.tickets.read().expect("store lock poisoned");
+            let child = tickets
+                .get(&id)
+                .ok_or_else(|| StoreError::NotFound(id.clone()))?;
+            if tickets.get(&parent).is_none() {
+                return Err(StoreError::ParentNotFound { id, parent });
+            }
+            (child.parent.as_deref() == Some(parent.as_str()))
+                .then(|| (child.clone(), tickets.written))
+        };
+        if let Some((child, written)) = unchanged {
+            return Ok(Change::ParentChanged {
+                ticket: self.full_one(child, written).await?,
+                previous: Some(parent),
+            });
+        }
         let (child, new_epic, old_epic, previous) = {
             let tickets = self.tickets.read().expect("store lock poisoned");
-            let mut child = tickets
-                .get(&id)
-                .ok_or_else(|| StoreError::NotFound(id.clone()))?
-                .clone();
-            let Some(parent_ticket) = tickets.get(&parent) else {
-                return Err(StoreError::ParentNotFound { id, parent });
-            };
-            if child.parent.as_deref() == Some(parent.as_str()) {
-                return Ok(Change::ParentChanged {
-                    ticket: child,
-                    previous: Some(parent),
-                });
-            }
+            // Both checked above, under the write-serial lock: nothing has
+            // changed them since.
+            let mut child = tickets.get(&id).expect("the child exists").clone();
+            let parent_ticket = tickets.get(&parent).expect("the parent exists");
             // MNG-14: only the shortcode's scope root may hang under
             // another shortcode; everything else stays inside its own.
             let is_root = shortcode_root(&tickets, &child.epic).is_some_and(|r| r.id == child.id);
@@ -1459,15 +2044,12 @@ impl Store {
             (child, parent_ticket.epic.clone(), old_epic, previous)
         };
 
-        self.persist(vec![child.clone()]).await?;
+        let (child, body) = self.commit_row(child).await?;
 
-        let (groups, joined, left) = self
-            .tickets
-            .write()
-            .expect("store lock poisoned")
-            .reparented(child.clone(), previous.as_deref());
+        let (groups, joined, left) =
+            self.apply(|cache| cache.reparented(child.clone(), previous.as_deref()));
         let change = Change::ParentChanged {
-            ticket: child,
+            ticket: whole(child, body),
             previous: previous.clone(),
         };
         let _ = self.tx.send(change.clone());
@@ -1505,6 +2087,10 @@ impl Store {
     /// that is empty after trimming is refused before anything is read; a
     /// title or body that is given is stored exactly as given, byte for
     /// byte (like `create`, which does not trim either).
+    ///
+    /// SCALE-14: the body it compares with is the stored one, read under
+    /// the write-serial lock (so it is the newest), and only a body that
+    /// changed is written.
     pub async fn amend(
         &self,
         id: &str,
@@ -1516,9 +2102,7 @@ impl Store {
             return Err(StoreError::EmptyTitle { id });
         }
         let _serial = self.write_serial.lock().await;
-        let mut ticket = self
-            .get(&id)
-            .ok_or_else(|| StoreError::NotFound(id.clone()))?;
+        let mut ticket = self.get(&id).await?;
         let mut changed: Vec<String> = Vec::new();
         if let Some(title) = title.filter(|t| *t != ticket.title) {
             ticket.title = title;
@@ -1533,14 +2117,21 @@ impl Store {
         }
         ticket.updated_unix = chrono::Utc::now().timestamp();
 
-        self.persist(vec![ticket.clone()]).await?;
+        let row = Row::from(&ticket);
+        let body = changed.iter().any(|c| c == "body").then(|| ticket.body.clone());
+        let row = self
+            .commit(move |tx| {
+                db::update_row(tx, &row)?;
+                if let Some(body) = body {
+                    db::set_body(tx, &row.id, &body)?;
+                }
+                Ok(row)
+            })
+            .await?;
         // Rows only, deliberately: what an amend changes is counted by no
         // roll-up and indexed by no id index (see above), so there is no
         // mutation-shaped `Cache` method to go through.
-        self.tickets
-            .write()
-            .expect("store lock poisoned")
-            .insert(ticket.clone());
+        self.apply(|cache| cache.insert(row));
         let change = Change::Amended { ticket, changed };
         let _ = self.tx.send(change.clone());
         Ok(change)
@@ -1551,25 +2142,47 @@ impl Store {
     /// `Superseded`. A dangling blocker (id naming no existing ticket)
     /// keeps its ticket out. The epic filter applies to membership;
     /// blockers resolve globally. Ordered by (epic, seq).
-    pub fn ready_set(&self, epic: Option<&str>) -> Vec<Ticket> {
-        self.ready_page(epic, None, None)
-            .expect("an uncursored page cannot fail")
-            .tickets
+    ///
+    /// SCALE-14: whole tickets — the unpaged shape, as [`Store::list`]: a
+    /// [`Walk`] of the ready set, collected.
+    pub async fn ready_set(&self, epic: Option<&str>) -> Result<Vec<Ticket>, StoreError> {
+        let select = Select::Ready {
+            epic: epic.map(String::from),
+        };
+        self.collect(self.walk(select, None, None)).await
     }
 
     /// One ticket's `blocked_by`, each entry resolved to the current
-    /// ticket or marked dangling, in `blocked_by` order.
-    pub fn blockers(&self, id: &str) -> Result<Vec<BlockerRef>, StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let ticket = cache
-            .get(id)
-            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
-        Ok(ticket
-            .blocked_by
-            .iter()
-            .map(|b| match cache.get(b) {
-                Some(t) => BlockerRef::Resolved(t.clone()),
-                None => BlockerRef::Dangling(b.clone()),
+    /// ticket or marked dangling, in `blocked_by` order. SCALE-14: each
+    /// blocker whole — its row from the cache, its body from the database,
+    /// all of them in one read ([`Store::full`]).
+    pub async fn blockers(&self, id: &str) -> Result<Vec<BlockerRef>, StoreError> {
+        // Per entry: `None` takes the next resolved blocker, `Some` dangles.
+        let (slots, rows, written) = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let ticket = cache
+                .get(id)
+                .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+            let mut rows = Vec::new();
+            let slots: Vec<Option<String>> = ticket
+                .blocked_by
+                .iter()
+                .map(|b| match cache.get(b) {
+                    Some(row) => {
+                        rows.push(row.clone());
+                        None
+                    }
+                    None => Some(b.clone()),
+                })
+                .collect();
+            (slots, rows, cache.written)
+        };
+        let mut resolved = self.full(rows, written).await?.into_iter();
+        Ok(slots
+            .into_iter()
+            .map(|slot| match slot {
+                None => BlockerRef::Resolved(resolved.next().expect("a ticket per resolved row")),
+                Some(id) => BlockerRef::Dangling(id),
             })
             .collect())
     }
@@ -1635,32 +2248,36 @@ impl Store {
         let edges: usize = generated.iter().map(|t| t.blocked_by.len()).sum();
 
         let persist_started = std::time::Instant::now();
+        // SCALE-14: one write as a reader counts them ([`Store::full`]),
+        // however many transactions carry it. A seed that fails part way
+        // leaves it counted: some of it may be stored, none of it is in the
+        // cache, and a reader that sees the two counts disagree reads rows
+        // from the database instead of trusting its own.
+        self.committing.fetch_add(1, Ordering::SeqCst);
         {
             let mut conn = self.db.lock().expect("db lock poisoned");
             for chunk in generated.chunks(synthetic::ROWS_PER_TRANSACTION) {
-                let tx = conn
-                    .transaction()
-                    .map_err(|e| StoreError::Db(e.to_string()))?;
-                db::insert_many(&tx, chunk).map_err(|e| StoreError::Db(e.to_string()))?;
-                tx.commit().map_err(|e| StoreError::Db(e.to_string()))?;
+                let tx = conn.transaction()?;
+                db::insert_many(&tx, chunk)?;
+                tx.commit()?;
             }
         }
         let persist = persist_started.elapsed();
 
-        {
-            let mut tickets = self.tickets.write().expect("store lock poisoned");
+        self.apply(|tickets| {
             tickets.at.reserve(generated.len());
+            // SCALE-14: into the cache as rows — each body is dropped as its
+            // ticket goes in, as a load never reads one.
             for t in generated {
-                tickets.insert(t);
+                tickets.insert(Row::from(t));
             }
             // SCALE-4: the children index, and every parent's count from
             // it, built over the seeded store as at load — first, because
             // the roll-ups walk it. A seed only ever adds children, so a
             // count set before it is either set again here or still right.
             let children = children::Children::build(tickets.order.values());
-            let cache = &mut *tickets;
-            count_children(&mut cache.order, &cache.at, &children);
-            cache.children = children;
+            count_children(&mut tickets.order, &tickets.at, &children);
+            tickets.children = children;
             // MNG-10: built once over the seeded store, as at load — not
             // kept per row: a seed into an existing store can add tickets
             // to its prefixes in any shape, and nothing is broadcast here.
@@ -1671,7 +2288,7 @@ impl Store {
             // one of its tickets may be an id the store already named.
             let ids = ids::Ids::build(tickets.rows());
             tickets.ids = ids;
-        }
+        });
         Ok(SeedReport {
             count: spec.count,
             epics,
@@ -1822,3 +2439,11 @@ mod tests_worker_states;
 /// file, and nothing else about the ticket moving.
 #[cfg(test)]
 mod tests_amend;
+
+/// SCALE-14: bodies out of the cache — whole tickets from rows and bodies,
+/// byte-exact on every path that answers one; a walk that holds a page of
+/// bodies and answers what one page would; the cache-only answers that
+/// read no database; a read beside an uncommitted write; and read-your-
+/// writes, deterministically and under a hammer of amends.
+#[cfg(test)]
+mod tests_bodies;

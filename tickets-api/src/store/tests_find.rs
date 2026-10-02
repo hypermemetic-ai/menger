@@ -230,12 +230,12 @@ fn find_answers_the_tickets_examples() {
 /// ticket that does not match is still one), the first `limit` the page,
 /// the rest counted.
 fn oracle(store: &Store, query: &str, after: Option<&str>, limit: Option<u32>) -> (Vec<String>, Option<String>, u64) {
-    let all = store.list(None, None, None);
+    let all = store.page(PageQuery::default()).unwrap().tickets;
     let start = match after {
         None => 0,
         Some(id) => all.iter().position(|t| t.id == id.to_ascii_uppercase()).expect("a cursor that names a ticket") + 1,
     };
-    let matching: Vec<&Ticket> = all[start..].iter().filter(|t| palette_match(&t.id, &t.title, query)).collect();
+    let matching: Vec<&TicketSummary> = all[start..].iter().filter(|t| palette_match(&t.id, &t.title, query)).collect();
     let take = limit.map_or(matching.len(), |n| (n as usize).min(matching.len()));
     let rows: Vec<String> = matching[..take].iter().map(|t| t.id.clone()).collect();
     let remaining = (matching.len() - take) as u64;
@@ -264,7 +264,7 @@ fn find_pages_every_match_exactly_once_by_mng9s_rules() {
             into_existing: false,
         })
         .unwrap();
-    let all = store.list(None, None, None);
+    let all = store.page(PageQuery::default()).unwrap().tickets;
     let (first_epic, root_title) = (all[0].epic.clone(), all[0].title.clone());
     let queries = [
         "".to_string(),

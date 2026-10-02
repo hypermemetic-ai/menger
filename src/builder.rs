@@ -20,7 +20,8 @@ pub fn default_db_path() -> PathBuf {
 /// location is an empty store), loads every ticket into the service-wide
 /// cache, and reports the effective location, how many tickets loaded,
 /// and how long the load took. The cache keeps the only database handle
-/// in the process.
+/// in the process. SCALE-14: the store does — the writer and its read-only
+/// connections — and the cache holds each ticket's row, not its body.
 pub async fn build_rpc(db_path: &Path) -> anyhow::Result<Arc<DynamicHub>> {
     build_rpc_with(db_path, None).await
 }
