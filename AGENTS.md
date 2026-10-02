@@ -34,8 +34,13 @@ derived from it or from the declaration that produces it. Pick by consumer:
   JSON object (the way to send a multi-line `body`), `-n` shows the
   request without sending it, `-s` fetches the schema, `-i` emits the IR
   the code generators consume. 4455 is inside its `_self scan` range.
-  Options go **before** the backend name — after the path they are read
-  as a subcommand ("Method 'create' cannot have subcommands"):
+  A list parameter is its flag repeated — `--blocked-by MNG-1 --blocked-by
+  MNG-2` sends `["MNG-1","MNG-2"]` (a comma or a JSON array in one flag is
+  sent as a single string); `<method> --help` prints each parameter's type.
+  `-j` and `-p` are for scripts, not for arrays: `-j` is the output format,
+  `-p` the whole params object at once. Options go **before** the backend
+  name — after the path they are read as a subcommand ("Method 'create'
+  cannot have subcommands"):
 
   ```sh
   synapse -P 4455 -j -p '{"epic":"MNG","title":"…","body":"…"}' menger tickets create
