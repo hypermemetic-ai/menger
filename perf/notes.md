@@ -380,3 +380,63 @@ rows that stay behind the new ones, and a moved element is blurred) at every
 magnitude, and at 10⁶ j lost the focus 25 rows down and began again at the
 first row (the browser's scroll into view fought the scaled layout) — both
 fixed here (src/keys.rs).
+
+## What AGS-23 changed (branch `ags-23/nav-root-rows`)
+
+AGS-23 drew a shortcode with a root as its root's own ticket row — kind
+glyph, code, title, status tag and the shortcode's roll-up — where AGS-20
+drew a row of the code and the roll-up whose one child was the root; and it
+halved the indent. The top level still paints from `groups {}` alone: the
+group carries the root's title, status and kind (`root_row`), so no `get` is
+asked per shortcode, before the nav shows or after.
+
+### The browser rows, read in either shape
+
+| row | measures now | was |
+|---|---|---|
+| nav shortcodes visible | every epic's top-level row present — `#nav .tree > .node[data-group] > .row`, a shortcode row or (AGS-23) its root's row, drawn with its title and status from the group; detail `roots`: how many are root rows | every `.grouprow` present |
+| created ticket appears (board + open nav) | unchanged, but "the nav opened on the last epic's scope root" is one toggle now — the root's row is the top row | a click on the shortcode row, then the root's toggle |
+| expand largest nav group | one click on the root's toggle, timed to its first child rendered (`group_ms` is the same click to the first node mounted, which is that child now); then the scroll to the last child as before | the shortcode row's click (to the root mounted, its `get` answered), then the root's toggle |
+
+The harness tells the two shapes apart by the top row (`.grouprow` or a
+ticket row), so one harness measures either app: the before/after below are
+the same harness on the two builds, back to back.
+
+### Before and after, the same session
+
+`node perf/magnitude.mjs --magnitudes 4,5 --runs 5 --no-build`, before (the
+unchanged build, `78a6010`) then after, medians of 5:
+
+| | 10⁴ before → after | 10⁵ before → after |
+|---|---|---|
+| app load → live · WS | 195 → 205 ms | 211 → 221 ms |
+| nav shortcodes visible | 212 → 221 ms | 228 → 239 ms |
+| nav visible − live (the harness's own step) | 16.8 → 17.2 ms | 16.4 → 17.3 ms |
+| created ticket appears | 34 → 35 ms | 48 → 32 ms |
+| expand largest nav group | 106 → 52 ms | 99 → 79 ms |
+| ticket page, cold deep link | 159 → 157 ms | 166 → 168 ms |
+
+**Nav shortcodes visible is ~10 ms later (4–5 %), and all of it is load →
+live.** The harness polls for the rows after `live`, so this row is `live`
+plus its own step; the nav paints before `live`. Measured in the page
+(`plans/AGS/artifacts/AGS-23/ags23-paint.mjs`: an observer installed before
+the app, the two builds interleaved, 21 loads each, 10⁵ — 101 top rows):
+the `groups` answer arrives at the same moment (113.5 → 115.1 ms), the top
+rows are in the DOM at 128.8 → 134.9 ms and `live` at 175.7 → 182.6 ms. The
+old app against the new server is +2 ms (the larger `groups` answer to
+decode); a trace of the main thread to `live` puts the rest in paint
+(+2.0 ms: titles and status tags on screen where codes were), script
+(+3.1 ms: a ticket row is more to build than a code chip) and style and
+layout (+0.9 ms). That is the cost of drawing at first paint what the
+ticket asks the top row to show; none of it is network, and it is per
+drawn shortcode (O(shortcodes), 101 rows here). Tried and kept: the top
+level built from a keyed list of nodes rather than a reactive wrapper per
+shortcode, a row's kind read once (it never changes), list-only attributes
+only on rows in a list, the tree's memos reading the groups in place. Tried
+and dropped: `content-visibility` on rows (no change: the cost is before
+layout) and asking `groups` and `extents` together (worse: the two streams
+interleave and the groups arrive later).
+
+**Opening the largest shortcode is up to twice as fast**: its top row is the
+root, so opening it is one page of the root's children; the shortcode row
+used to `get` the root first.

@@ -104,7 +104,7 @@ use tokio::sync::{OwnedMutexGuard, Semaphore};
 /// hand-written mirror of the JSON they arrive as. Re-exported here
 /// unchanged — every `crate::store::Status` in the server still resolves,
 /// and the store remains the only thing that *writes* them.
-pub use crate::types::{Group, Kind, Severity, Status, Ticket};
+pub use crate::types::{Group, Kind, RootRow, Severity, Status, Ticket};
 
 /// SCALE-14: what the cache holds of a ticket — every field but the body,
 /// which is MNG-9's summary row exactly (the guard test
@@ -1396,9 +1396,54 @@ impl Cache {
     }
 
     /// MNG-10: a status change; only a crossing of `Complete` moves a count.
-    fn status_changed(&mut self, ticket: Row, moved: Moved) -> Vec<Group> {
+    /// AGS-23: but a shortcode root's status is on its group's row
+    /// ([`Group::root_row`]), so any change of it moves that group — first,
+    /// as the innermost, when the crossing did not already report it.
+    fn status_changed(&mut self, ticket: Row, previous: Status, moved: Moved) -> Vec<Group> {
+        let changed = ticket.status != previous;
+        let (epic, id) = (ticket.epic.clone(), ticket.id.clone());
         self.insert(ticket);
-        self.take(moved)
+        let mut groups = self.take(moved);
+        if changed && !groups.iter().any(|g| g.epic == epic) {
+            if let Some(g) = self.root_group(&epic, &id) {
+                groups.insert(0, g);
+            }
+        }
+        groups
+    }
+
+    /// MNG-16: an amend — rows only: what it changes is counted by no
+    /// roll-up and indexed by no id index. AGS-23: but a shortcode root's
+    /// title is on its group's row, so a new one moves that group.
+    fn amended(&mut self, row: Row, title_changed: bool) -> Vec<Group> {
+        let (epic, id) = (row.epic.clone(), row.id.clone());
+        self.insert(row);
+        if !title_changed {
+            return Vec::new();
+        }
+        self.root_group(&epic, &id).into_iter().collect()
+    }
+
+    /// AGS-23: `epic`'s group as it stands, dressed — when `id` is the
+    /// shortcode's root and the nav draws it a row.
+    fn root_group(&self, epic: &str, id: &str) -> Option<Group> {
+        if self.rollups.root(epic) != Some(id) {
+            return None;
+        }
+        self.rollups.group(epic).map(|g| self.dress(g))
+    }
+
+    /// AGS-23: a group as the wire carries it — the roll-ups' counts, root
+    /// and host, and the root's own row ([`Group::root_row`]) from the rows
+    /// as they stand. The roll-ups keep no ticket's fields; every group
+    /// leaving the cache passes through here.
+    fn dress(&self, mut g: Group) -> Group {
+        g.root_row = g.root.as_deref().and_then(|r| self.get(r)).map(|t| RootRow {
+            title: t.title.clone(),
+            status: t.status,
+            kind: t.kind,
+        });
+        g
     }
 
     /// SCALE-28: what moving `child` (as the move leaves it) off `previous`
@@ -1456,7 +1501,7 @@ impl Cache {
         if let Some(ready) = moved.ready {
             self.ready.moved(ready);
         }
-        moved.groups
+        moved.groups.into_iter().map(|g| self.dress(g)).collect()
     }
 
     fn get(&self, id: &str) -> Option<&Row> {
@@ -2168,11 +2213,8 @@ impl Store {
     /// scope root of its own) has no row in the nav and so no group here;
     /// those tickets count in the groups they are drawn in.
     pub fn groups(&self) -> Vec<Group> {
-        self.tickets
-            .read()
-            .expect("store lock poisoned")
-            .rollups
-            .groups()
+        let cache = self.tickets.read().expect("store lock poisoned");
+        cache.rollups.groups().into_iter().map(|g| cache.dress(g)).collect()
     }
 
     /// SCALE-16: every shortcode that holds a ticket, with its highest
@@ -2527,7 +2569,9 @@ impl Store {
     /// out of `Complete` moves `done` for the group the ticket is drawn in
     /// and every group around it (MNG-10): `StatusChanged`, then one
     /// `GroupChanged` per group, innermost first. Any other change moves
-    /// no count and broadcasts no group.
+    /// no count and broadcasts no group — AGS-23: unless the ticket is a
+    /// shortcode's root, whose status is its group's row
+    /// ([`Group::root_row`]): any change of it broadcasts that group.
     ///
     /// SDLC-11: a doc has no lifecycle — `set_status` on one is refused
     /// ([`StoreError::DocHasNoLifecycle`]), whatever status is asked for —
@@ -2561,7 +2605,7 @@ impl Store {
                 stored.write(tx)?;
                 Ok(out)
             },
-            move |cache, (row, _)| cache.status_changed(row.clone(), moved),
+            move |cache, (row, _)| cache.status_changed(row.clone(), previous, moved),
             move |(row, body), groups, tx| {
                 let change = Change::StatusChanged {
                     ticket: whole(row, body),
@@ -2698,7 +2742,9 @@ impl Store {
     /// `"body"`). Nothing different — neither given, or both equal — is no
     /// write and no broadcast, and the returned `Amended` says `changed:
     /// []`, as `set_parent` answers a no-op. Otherwise `updated_unix` moves
-    /// to now, the row commits, then the cache, then one `Amended`. A title
+    /// to now, the row commits, then the cache, then one `Amended` —
+    /// AGS-23: and, when the title of a shortcode's root changed, one
+    /// `GroupChanged` for that shortcode ([`Group::root_row`]). A title
     /// that is empty after trimming is refused before anything is read; a
     /// title or body that is given is stored exactly as given, byte for
     /// byte (like `create`, which does not trim either).
@@ -2734,6 +2780,7 @@ impl Store {
 
         let row = Row::from(&ticket);
         let body = changed.iter().any(|c| c == "body").then(|| ticket.body.clone());
+        let title_changed = changed.iter().any(|c| c == "title");
         self.write(
             serial,
             move |tx| {
@@ -2743,13 +2790,14 @@ impl Store {
                 }
                 Ok(row)
             },
-            // Rows only, deliberately: what an amend changes is counted by
-            // no roll-up and indexed by no id index (see above), so there
-            // is no mutation-shaped `Cache` method to go through.
-            |cache, row| cache.insert(row.clone()),
-            move |_, (), tx| {
+            // Rows only: what an amend changes is counted by no roll-up and
+            // indexed by no id index (see above). AGS-23: a root's new title
+            // is its group's, though — one `GroupChanged` after it.
+            move |cache, row| cache.amended(row.clone(), title_changed),
+            move |_, groups, tx| {
                 let change = Change::Amended { ticket, changed };
                 let _ = tx.send(change.clone());
+                broadcast_groups(tx, groups);
                 change
             },
         )

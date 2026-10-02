@@ -67,7 +67,16 @@ async fn a_doc_is_born_in_doc_and_may_root_a_shortcode() {
     assert_eq!(root.parent, None, "a shortcode's root, top level");
     assert_eq!(
         store.groups(),
-        vec![Group { epic: "MAN".into(), total: 0, done: 0, docs: 1, root: Some("MAN-1".into()), host: None }],
+        vec![Group {
+            epic: "MAN".into(),
+            total: 0,
+            done: 0,
+            docs: 1,
+            root: Some("MAN-1".into()),
+            // AGS-23: the root's row, as the nav draws it — its `Doc` chip.
+            root_row: Some(RootRow { title: "a doc in MAN".into(), status: Status::Doc, kind: Kind::Doc }),
+            host: None,
+        }],
         "a doc collection is a row: no work, one doc"
     );
     assert_eq!(store.groups(), tests::nav(&store));
@@ -259,6 +268,7 @@ async fn the_ready_set_never_holds_a_doc_and_list_filters_on_doc() {
 /// and the status counts carry `Doc` as a bucket of its own.
 #[tokio::test]
 async fn roll_ups_ignore_docs_and_count_them_apart() {
+    let scope_row = |status| RootRow { title: "a scope in P".into(), status, kind: Kind::Scope };
     let store = Store::new();
     store.create(new("P", Kind::Scope, None, &[])).await.unwrap(); // P-1
     store.create(work("P", None)).await.unwrap(); // P-2
@@ -268,7 +278,7 @@ async fn roll_ups_ignore_docs_and_count_them_apart() {
     store.create(work("P", Some("P-4"))).await.unwrap(); // P-6, work under a doc
     assert_eq!(
         group(&store, "P"),
-        Group { epic: "P".into(), total: 4, done: 0, docs: 2, root: Some("P-1".into()), host: None }
+        Group { epic: "P".into(), total: 4, done: 0, docs: 2, root: Some("P-1".into()), root_row: Some(scope_row(Status::Pending)), host: None }
     );
     assert_eq!(store.groups(), tests::nav(&store));
 
@@ -289,7 +299,7 @@ async fn roll_ups_ignore_docs_and_count_them_apart() {
     store.create(doc("P", Some("P-6"))).await.unwrap(); // P-7
     assert_eq!(
         group_changes(&mut rx),
-        vec![Group { epic: "P".into(), total: 4, done: 4, docs: 3, root: Some("P-1".into()), host: None }],
+        vec![Group { epic: "P".into(), total: 4, done: 4, docs: 3, root: Some("P-1".into()), root_row: Some(scope_row(Status::Complete)), host: None }],
         "a doc's birth moves docs, and nothing else"
     );
     let cache = store.tickets.read().unwrap();

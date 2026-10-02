@@ -209,6 +209,8 @@ async fn a_set_parent_dropped_mid_commit_still_reaches_the_cache_and_watch() {
 /// Criterion 2: `amend`, dropped mid-commit — the new title in the cache,
 /// the new body in the file, one `amended` on `watch`. An amend reads the
 /// stored body before it commits, so it is dropped after that read too.
+/// AGS-23: AM-1 roots its shortcode, so its new title is its group's too —
+/// one `group_changed` behind the `amended`, carrying it.
 #[tokio::test]
 async fn an_amend_dropped_mid_commit_still_reaches_the_cache_and_watch() {
     let dir = tempfile::tempdir().unwrap();
@@ -232,7 +234,13 @@ async fn an_amend_dropped_mid_commit_still_reaches_the_cache_and_watch() {
     );
     assert_eq!(stored.body, "a new body");
     assert!(
-        matches!(said.as_slice(), [Change::Amended { ticket, changed }] if *ticket == stored && changed == &["title", "body"]),
+        matches!(
+            said.as_slice(),
+            [Change::Amended { ticket, changed }, Change::GroupChanged { group }]
+                if *ticket == stored
+                    && changed == &["title", "body"]
+                    && group.root_row.as_ref().is_some_and(|r| r.title == "amended")
+        ),
         "{:?}",
         kinds(&said)
     );

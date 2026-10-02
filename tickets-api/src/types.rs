@@ -430,6 +430,14 @@ impl From<&Ticket> for TicketSummary {
 /// and one that arrives with `total: 0` and `docs: 0` is a row no longer
 /// drawn. `root` is the shortcode's lowest-seq scope — or doc: a doc may
 /// root a shortcode as a scope may.
+///
+/// AGS-23: the nav draws a shortcode that has a root *as* its root ticket's
+/// row, so the group carries what that row shows — `root_row`, the root's
+/// title, status and kind, read from the server's cache — and the top level
+/// still paints from `groups {}` alone, with no `get` per shortcode. It is
+/// kept current the way the counts are: a change to the root's title or
+/// status is a change to its group, and `group_changed` carries it (a kind
+/// never changes). `None` exactly when `root` is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Group {
     /// The shortcode (epic prefix), uppercase.
@@ -439,7 +447,19 @@ pub struct Group {
     /// SDLC-11: the docs in the row's subtree, which `total` leaves out.
     pub docs: u64,
     pub root: Option<String>,
+    /// AGS-23: what the root's own row shows.
+    pub root_row: Option<RootRow>,
     pub host: Option<String>,
+}
+
+/// AGS-23: a shortcode root's row as the nav draws it at the top of its
+/// shortcode — the three fields of the root ticket a row shows beside its
+/// id ([`Group::root`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RootRow {
+    pub title: String,
+    pub status: Status,
+    pub kind: Kind,
 }
 
 impl Group {
@@ -542,7 +562,9 @@ pub enum TicketsEvent {
     Group { group: Group },
     /// MNG-10: a shortcode's roll-up moved (yielded by `watch`) — a status
     /// change crossed `Complete`, a ticket was born into its subtree, or a
-    /// `set_parent` reshaped it. Carries the whole group as it is now; it
+    /// `set_parent` reshaped it; AGS-23: or its root's row did — the root's
+    /// status changed (any change, not only across `Complete`) or `amend`
+    /// changed its title. Carries the whole group as it is now; it
     /// follows the ticket events of the same mutation, innermost group
     /// first. A group whose shortcode no longer draws a row of its own
     /// arrives once with `total: 0` (SDLC-11: and `docs: 0`).
@@ -677,7 +699,7 @@ mod tests {
     /// drawn.
     #[test]
     fn a_group_is_drawn_when_it_holds_work_or_docs() {
-        let g = |total, docs| Group { epic: "G".into(), total, done: 0, docs, root: None, host: None };
+        let g = |total, docs| Group { epic: "G".into(), total, done: 0, docs, root: None, root_row: None, host: None };
         assert!(g(1, 0).drawn());
         assert!(g(0, 3).drawn(), "a doc collection");
         assert!(!g(0, 0).drawn());

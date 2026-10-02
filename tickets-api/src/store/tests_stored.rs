@@ -119,6 +119,12 @@ fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
             done: g.roll.1,
             docs: g.roll.2,
             root: g.root.clone(),
+            // AGS-23: the root's row is the file's row of the root.
+            root_row: g.root.as_ref().and_then(|r| file.rows.get(r)).map(|t| RootRow {
+                title: t.title.clone(),
+                status: t.status,
+                kind: t.kind,
+            }),
             host: g.host.clone(),
         })
         .collect();
@@ -314,10 +320,8 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, epics: &[&str
             && tally.docs > 0,
         "every kind of write, and enough of them: {tally:?}"
     );
-    let (form, groups, extents) = {
-        let cache = store.tickets.read().unwrap();
-        (cache.form(), cache.rollups.groups(), store.extents())
-    };
+    let form = store.tickets.read().unwrap().form();
+    let (groups, extents) = (store.groups(), store.extents());
     drop(store);
     let store = Store::open(path).unwrap();
     assert_eq!(store.tickets.read().unwrap().form(), form, "a reopen reads what was kept");

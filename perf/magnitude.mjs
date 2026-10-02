@@ -11,7 +11,8 @@
 // shortcodes, scroll to the last ticket, ticket page, a created ticket
 // appearing, expanding the largest group — MFE-12's windowed definitions,
 // redefined again where SCALE-24 and SCALE-26 changed what they wait for,
-// perf/notes.md), measures create -> watch push latency over SSE,
+// and read in either nav shape since AGS-23 drew a shortcode as its root's
+// row, perf/notes.md), measures create -> watch push latency over SSE,
 // then stops the server and deletes the database. Every measurement has
 // its own timeout and is recorded as a failure row when it exceeds it —
 // the breaking point is the finding, never a hang.
@@ -890,6 +891,34 @@ async function runMagnitude(m, opts, browser) {
         const a = c.getBoundingClientRect(), b = el.getBoundingClientRect();
         return b.top >= a.top - 1 && b.bottom <= a.bottom + 1;
       };
+      /// AGS-23: a shortcode in the nav, in either shape. Since AGS-23 one
+      /// with a root is drawn as its root's row — a ticket row (a link: it
+      /// opens by its toggle) whose children are the root's; before it (and
+      /// for a shortcode with no root) it was a shortcode row (it opens by a
+      /// click) whose one child was the root. Every shortcode's node carries
+      /// `data-group`, so the same measurement reads either app.
+      const shortcode = async (g) => {
+        const node = `#nav .node[data-group="${g}"]`;
+        await page.waitForSelector(`${node} > .row`, { timeout: B("browser"), state: "attached" });
+        const isRoot = !(await page.$(`${node} > .row.grouprow`));
+        return {
+          node,
+          row: `${node} > .row`,
+          isRoot,
+          toggle: isRoot ? `${node} > .row .toggle.clickable` : `${node} > .row`,
+          rootKids: isRoot ? `${node} > .kids` : `${node} > .kids > .node > .kids`,
+        };
+      };
+      /// Open a shortcode down to its root's children: its row, and — in the
+      /// shape before AGS-23 — the root beneath it.
+      const openToRootKids = async (s) => {
+        if ((await page.getAttribute(s.row, "aria-expanded")) !== "true") await page.click(s.toggle, { timeout: B("browser"), force: true });
+        if (s.isRoot) return;
+        await page.waitForSelector(`${s.node} > .kids > .node`, { timeout: B("browser") });
+        for (const key of await page.$$eval(`${s.node} > .kids > .node`, (ns) => ns.filter((n) => n.querySelector(":scope > .row[aria-expanded='false']")).map((n) => n.dataset.nodeKey))) {
+          await page.click(`#nav .node[data-node-key="${key}"] > .row .toggle.clickable`, { timeout: B("browser"), force: true });
+        }
+      };
 
       // load -> live
       let r = rowsAtGoto("app_load_live", await measure("app_load_live", B("browser"), async () => {
@@ -936,12 +965,17 @@ async function runMagnitude(m, opts, browser) {
         if (i === 0) await page.screenshot({ path: path.join(shots, `${label}-board.png`), timeout: 30000 }).catch(() => {});
         await ctx.close().catch(() => {});
       } else {
-        // nav shortcodes visible (every epic group row present)
+        // nav shortcodes visible: every epic's top-level row present — its
+        // shortcode row, or (AGS-23) its root's row, drawn from `groups {}`
+        // with its title and status; `roots` counts the latter.
         r = rowsAtGoto("nav_groups_visible", await measure("nav_groups_visible", B("browser"), async () => {
-          await page.waitForFunction((k) => document.querySelectorAll("#nav .grouprow").length >= k, expectGroups, { timeout: B("browser"), polling: 50 });
-          return { since_goto_ms: sinceGoto(), groups: await page.evaluate(() => document.querySelectorAll("#nav .grouprow").length) };
+          const top = "#nav .tree > .node[data-group] > .row";
+          await page.waitForFunction(({ k, top }) => document.querySelectorAll(top).length >= k, { k: expectGroups, top }, { timeout: B("browser"), polling: 50 });
+          const since = sinceGoto();
+          const got = await page.evaluate((top) => ({ groups: document.querySelectorAll(top).length, roots: document.querySelectorAll(`${top}.leaf`).length }), top);
+          return { since_goto_ms: since, ...got };
         }));
-        log(`  nav groups: ${r.status} ${fmtMs(r.ms)} (${r.groups ?? "?"} groups)`);
+        log(`  nav groups: ${r.status} ${fmtMs(r.ms)} (${r.groups ?? "?"} groups${r.roots ? `, ${r.roots} drawn as their root` : ""})`);
 
         // scroll the board to the end: the last ticket in (epic, seq)
         // order mounted and on screen
@@ -992,16 +1026,13 @@ async function runMagnitude(m, opts, browser) {
           await page.waitForSelector("tbody#board tr[data-ticket-id]", { timeout: B("browser"), state: "attached" });
           await scrollBoardToEnd();
           await page.waitForFunction(onScreenFn, `tbody#board tr[data-ticket-id="${lastRow.id}"]`, { timeout: B("browser"), polling: "raf" });
-          // Open the epic's group and its scope root (untimed — this is
-          // the user getting there; the expand has its own row).
+          // Open the epic's scope root (untimed — this is the user getting
+          // there; the expand has its own row): its row since AGS-23, its
+          // shortcode row and then the root before.
           const g = lastRow.epic;
-          const group = `#nav .group[data-group="${g}"]`;
-          if ((await page.getAttribute(`${group} > .grouprow`, "aria-expanded")) !== "true") await page.click(`${group} > .grouprow`, { force: true });
-          await page.waitForSelector(`${group} > .kids > .node`, { timeout: B("browser") });
-          for (const key of await page.$$eval(`${group} > .kids > .node`, (ns) => ns.filter((n) => n.querySelector(":scope > .row[aria-expanded='false']")).map((n) => n.dataset.nodeKey))) {
-            await page.click(`#nav .node[data-node-key="${key}"] > .row .toggle.clickable`, { force: true });
-          }
-          await page.waitForFunction((g) => ![...document.querySelectorAll(`#nav .group[data-group="${g}"] > .kids > .node > .row[aria-expanded]`)].some((r) => r.getAttribute("aria-expanded") !== "true"), g, { timeout: B("browser") });
+          const s = await shortcode(g);
+          await openToRootKids(s);
+          await page.waitForFunction((rk) => document.querySelector(rk)?.parentElement?.querySelector(":scope > .row")?.getAttribute("aria-expanded") === "true", s.rootKids, { timeout: B("browser") });
           // SCALE-24: an open node of more than a page is a window over its
           // children, so the user waiting for a birth at its end scrolls the
           // nav there first (SCALE-24-nav.js's `created_open`).
@@ -1027,41 +1058,39 @@ async function runMagnitude(m, opts, browser) {
         // made an open node of more than a page a window over its children,
         // so "until every ticket of it is mounted" (MFE-12's definition)
         // never comes; this is SCALE-24-nav.js's criterion 2.
-        const target = largest?.epic ?? (await page.evaluate(() => document.querySelector("#nav .group")?.getAttribute("data-group")));
+        const target = largest?.epic ?? (await page.evaluate(() => document.querySelector("#nav .node[data-group]")?.getAttribute("data-group")));
         r = rows("nav_expand_largest").push(withPageErrors(await measure("nav_expand_largest", B("browser"), async () => {
-          const group = `#nav .group[data-group="${target}"]`;
-          await page.waitForSelector(`${group} > .grouprow`, { timeout: B("browser"), state: "attached" });
+          const s = await shortcode(target);
           // Start closed (the live-create step may have opened it).
-          if ((await page.getAttribute(`${group} > .grouprow`, "aria-expanded")) === "true") {
-            await page.click(`${group} > .grouprow`, { timeout: B("browser"), force: true });
-            await page.waitForFunction((sel) => !document.querySelector(`${sel} .leaf`), group, { timeout: B("browser") });
+          if ((await page.getAttribute(s.row, "aria-expanded")) === "true") {
+            await page.click(s.toggle, { timeout: B("browser"), force: true });
+            await page.waitForFunction((node) => !document.querySelector(`${node} > .kids .leaf`), s.node, { timeout: B("browser") });
           }
           // The clicks get the whole budget: the one that opens the scope
           // root mounts every leaf before the page answers the input event.
           const t0 = now();
-          await page.click(`${group} > .grouprow`, { timeout: B("browser"), force: true });
-          await page.waitForSelector(`${group} > .kids > .node`, { timeout: B("browser") });
+          await page.click(s.toggle, { timeout: B("browser"), force: true });
+          await page.waitForSelector(`${s.node} > .kids > .node`, { timeout: B("browser") });
+          // The row alone: its first child mounted — the root, before
+          // AGS-23; since, the root's first child (the same as `ms`).
           const groupMs = +(now() - t0).toFixed(1);
-          // …then every node under it that holds tickets (under MNG-14,
-          // the epic's scope root holds all the rest).
-          for (const key of await page.$$eval(`${group} > .kids > .node`, (ns) => ns.filter((n) => n.querySelector(":scope > .row[aria-expanded]")).map((n) => n.dataset.nodeKey))) {
-            await page.click(`#nav .node[data-node-key="${key}"] > .row .toggle.clickable`, { timeout: B("browser"), force: true });
-          }
-          // The first of the root's children (the group's own first leaf is
-          // the root).
-          await page.waitForFunction((g) => {
-            const first = document.querySelector(`#nav .group[data-group="${g}"] > .kids > .node > .kids .leaf`);
+          // …then, before AGS-23, the root under the shortcode row (under
+          // MNG-14, the epic's scope root holds all the rest).
+          await openToRootKids(s);
+          // The first of the root's children.
+          await page.waitForFunction((rk) => {
+            const first = document.querySelector(`${rk} .leaf`);
             return first && first.getClientRects().length > 0;
-          }, target, { timeout: B("browser"), polling: 50 });
+          }, s.rootKids, { timeout: B("browser"), polling: 50 });
           const ms = +(now() - t0).toFixed(1);
-          const leaves = await page.evaluate((g) => document.querySelectorAll(`#nav .group[data-group="${g}"] .kids .leaf`).length, target);
+          const leaves = await page.evaluate((node) => document.querySelectorAll(`${node} .kids .leaf`).length, s.node);
           const dom = await page.evaluate(() => document.getElementsByTagName("*").length);
           // …and the last child of the open list it hangs from is a scroll
           // away: on screen, saying it is the last of its siblings.
           const t1 = now();
-          const last = await page.evaluate(async (g) => {
+          const last = await page.evaluate(async (rk) => {
             const sc = document.querySelector("#nav .tree-scroll");
-            const kids = document.querySelector(`#nav .group[data-group="${g}"] > .kids > .node > .kids`);
+            const kids = document.querySelector(rk);
             for (let k = 0; k < 120 && sc && kids; k++) {
               const want = kids.getBoundingClientRect().bottom - sc.getBoundingClientRect().bottom;
               if (Math.abs(want) > 1) sc.scrollTop += want;
@@ -1076,7 +1105,7 @@ async function runMagnitude(m, opts, browser) {
               await new Promise((res) => setTimeout(res, 50));
             }
             return null;
-          }, target);
+          }, s.rootKids);
           if (!last) throw new Error(`the open list's last child never came on screen (${leaves} leaves mounted)`);
           return { ms, group_ms: groupMs, epic: target, leaves, dom_nodes: dom, last_ms: +(now() - t1).toFixed(1), children: last.of, dom_end: await page.evaluate(() => document.getElementsByTagName("*").length) };
         }))) && rows("nav_expand_largest").at(-1);
@@ -1193,7 +1222,9 @@ const MEASUREMENTS = [
   // away (SCALE-24's window), not for every ticket — perf/notes.md.
   { key: "app_load_live", label: "browser: app load → live · WS", extra: ["frames"] },
   { key: "board_first_rows", label: "browser: board first rows painted", extra: ["dom_nodes", "nodes", "rows", "held", "wasm_bytes"] },
-  { key: "nav_groups_visible", label: "browser: nav shortcodes visible", extra: ["groups"] },
+  // AGS-23: a shortcode with a root is drawn as its root's row; `roots`
+  // counts the top-level rows that are (before AGS-23: none).
+  { key: "nav_groups_visible", label: "browser: nav shortcodes visible", extra: ["groups", "roots"] },
   { key: "board_scroll_end", label: "browser: board scroll to the last ticket", extra: ["rows", "held"] },
   { key: "ticket_page_from_board", label: "browser: open ticket page (from board)", extra: [] },
   { key: "ticket_page_cold", label: "browser: ticket page cold deep link", extra: [] },

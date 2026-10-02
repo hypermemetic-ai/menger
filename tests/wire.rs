@@ -158,10 +158,19 @@ async fn health_create_list_watch_over_the_wire() {
     // …and, after it, the new shortcode's row (MNG-10)
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
-    assert_eq!(ev["group"], json!({"epic": "WIRE", "total": 1, "done": 0, "docs": 0, "root": "WIRE-1", "host": null}));
+    assert_eq!(
+        ev["group"],
+        json!({
+            "epic": "WIRE", "total": 1, "done": 0, "docs": 0, "root": "WIRE-1",
+            // AGS-23: the root's own row, which the nav draws at the top
+            "root_row": {"title": "first over the wire", "status": "Pending", "kind": "scope"},
+            "host": null
+        })
+    );
 
     // set_status → watch sees the transition too (Pending → Ready moves no
-    // count, so no group follows it)
+    // count — AGS-23: but WIRE-1 is its shortcode's root, whose status is on
+    // the group's row, so the group follows it)
     let mut sub = call(
         &client,
         "tickets.set_status",
@@ -175,6 +184,10 @@ async fn health_create_list_watch_over_the_wire() {
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "status_changed");
     assert_eq!(ev["ticket"]["status"], "Ready");
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "group_changed");
+    assert_eq!(ev["group"]["root_row"]["status"], "Ready");
+    assert_eq!(ev["group"]["total"], 1, "no count moved");
 
     // list replays current state
     let mut sub = call(&client, "tickets.list", json!({})).await;
@@ -289,8 +302,10 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
 
     // Watch delivered: created(RS-2), children_changed(RS-1) — RS-2 named
     // no parent and hangs under the root (MNG-14) — unlocks_changed(RS-1),
-    // group_changed(RS, now 2 tickets; MNG-10), 2x status_changed.
-    for _ in 0..6 {
+    // group_changed(RS, now 2 tickets; MNG-10), 2x status_changed, and
+    // (AGS-23) after RS-1's, group_changed(RS): RS-1 roots RS, and its
+    // status is on the group's row.
+    for _ in 0..7 {
         let ev = content(watch.next().await.unwrap().unwrap());
         apply(&mut mirror, &ev);
     }
@@ -730,16 +745,18 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
 
     // `collect` reads to the stream's `done` and refuses any other item
     // type, so this is the whole answer: group items, then done.
+    // AGS-23: each with its root's row — every root here a Pending scope.
+    let root_row = |title: &str| json!({"title": title, "status": "Pending", "kind": "scope"});
     let items = collect(call(&client, "tickets.groups", json!({})).await).await;
     assert!(items.iter().all(|ev| ev["type"] == "group"), "only groups: {items:?}");
     let groups: Vec<Value> = items.into_iter().map(|ev| ev["group"].clone()).collect();
     assert_eq!(
         groups,
         vec![
-            json!({"epic": "DEEP", "total": 2, "done": 1, "docs": 0, "root": "DEEP-1", "host": "SUB-3"}),
-            json!({"epic": "HUB", "total": 8, "done": 3, "docs": 0, "root": "HUB-1", "host": null}),
-            json!({"epic": "LONE", "total": 2, "done": 0, "docs": 0, "root": "LONE-1", "host": null}),
-            json!({"epic": "SUB", "total": 5, "done": 2, "docs": 0, "root": "SUB-1", "host": "HUB-2"}),
+            json!({"epic": "DEEP", "total": 2, "done": 1, "docs": 0, "root": "DEEP-1", "root_row": root_row("deeper"), "host": "SUB-3"}),
+            json!({"epic": "HUB", "total": 8, "done": 3, "docs": 0, "root": "HUB-1", "root_row": root_row("the host"), "host": null}),
+            json!({"epic": "LONE", "total": 2, "done": 0, "docs": 0, "root": "LONE-1", "root_row": root_row("alone"), "host": null}),
+            json!({"epic": "SUB", "total": 5, "done": 2, "docs": 0, "root": "SUB-1", "root_row": root_row("hosted"), "host": "HUB-2"}),
         ]
     );
 
@@ -766,7 +783,14 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
         .collect();
     let nav: Vec<Value> = nav_plan::rows(&facts, &complete)
         .into_iter()
-        .map(|r| json!({"epic": r.epic, "total": r.total, "done": r.done, "docs": r.docs, "root": r.root, "host": r.host}))
+        .map(|r| {
+            // AGS-23: the root's row, as the summary walk has it.
+            let row = r.root.as_ref().map(|id| {
+                let s = &all.iter().find(|ev| ev["summary"]["id"] == json!(id)).expect("the root is a row")["summary"];
+                json!({"title": s["title"], "status": s["status"], "kind": s["kind"]})
+            });
+            json!({"epic": r.epic, "total": r.total, "done": r.done, "docs": r.docs, "root": r.root, "root_row": row, "host": r.host})
+        })
         .collect();
     assert_eq!(groups, nav, "the server's roll-ups are the nav's");
 
@@ -778,11 +802,20 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     assert_eq!(ev["type"], "status_changed");
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
-    assert_eq!(ev["group"], json!({"epic": "LONE", "total": 2, "done": 1, "docs": 0, "root": "LONE-1", "host": null}));
+    assert_eq!(
+        ev["group"],
+        json!({"epic": "LONE", "total": 2, "done": 1, "docs": 0, "root": "LONE-1", "root_row": root_row("alone"), "host": null})
+    );
     // Nothing else came of it: the next item is the next write's.
     collect(call(&client, "tickets.set_status", json!({"id": "HUB-1", "status": "Ready"})).await).await;
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!((ev["type"].as_str(), ev["ticket"]["id"].as_str()), (Some("status_changed"), Some("HUB-1")));
+    // AGS-23: HUB-1 roots HUB, and its status is on HUB's row: no count
+    // moved, but the group did — once, its own.
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "group_changed");
+    assert_eq!((ev["group"]["epic"].as_str(), ev["group"]["done"].as_u64()), (Some("HUB"), Some(3)));
+    assert_eq!(ev["group"]["root_row"]["status"], "Ready");
 
     // Three rows deep: DEEP, then SUB, then HUB.
     collect(call(&client, "tickets.set_status", json!({"id": "DEEP-1", "status": "Complete"})).await).await;
@@ -797,12 +830,21 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     assert_eq!(moved, [(json!("DEEP"), json!(2)), (json!("SUB"), json!(3)), (json!("HUB"), json!(4))]);
 
     // `watch { epic: HUB }`: neither LONE's group nor DEEP's ticket — the
-    // HUB-1 flip, then HUB's own row.
+    // HUB-1 flip and (AGS-23) the root row it moved, then HUB's own row.
     let ev = content(hub_only.next().await.unwrap().unwrap());
     assert_eq!((ev["type"].as_str(), ev["ticket"]["id"].as_str()), (Some("status_changed"), Some("HUB-1")));
     let ev = content(hub_only.next().await.unwrap().unwrap());
+    assert_eq!((ev["type"].as_str(), ev["group"]["done"].as_u64()), (Some("group_changed"), Some(3)));
+    let ev = content(hub_only.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
-    assert_eq!(ev["group"], json!({"epic": "HUB", "total": 8, "done": 4, "docs": 0, "root": "HUB-1", "host": null}));
+    assert_eq!(
+        ev["group"],
+        json!({
+            "epic": "HUB", "total": 8, "done": 4, "docs": 0, "root": "HUB-1",
+            "root_row": {"title": "the host", "status": "Ready", "kind": "scope"},
+            "host": null
+        })
+    );
 }
 
 /// SCALE-16 over the real wire. `extents {}` answers one `extent` item per
@@ -1239,7 +1281,12 @@ async fn docs_root_a_shortcode_refuse_set_status_in_band_and_are_never_ready() {
     let groups: Vec<Value> = items.into_iter().map(|ev| ev["group"].clone()).collect();
     assert_eq!(
         groups,
-        [json!({"epic": "MANIFEST", "total": 1, "done": 0, "docs": 2, "root": "MANIFEST-1", "host": null})]
+        [json!({
+            "epic": "MANIFEST", "total": 1, "done": 0, "docs": 2, "root": "MANIFEST-1",
+            // AGS-23: the root's row — a doc's, in `Doc`
+            "root_row": {"title": "the findings", "status": "Doc", "kind": "doc"},
+            "host": null
+        })]
     );
 
     // Nothing waits on a doc; a doc waits on nothing.

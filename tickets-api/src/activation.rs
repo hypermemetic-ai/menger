@@ -576,12 +576,15 @@ impl Tickets {
     /// the row's whole subtree (SDLC-11: its work; `docs` counts its docs,
     /// which have no completion), its scope (or doc) `root`, and the `host` ticket it
     /// nests under when it is a sub-shortcode — exactly as AGS-20's
-    /// `plan()` computes them from every row. Nothing trails the groups:
+    /// `plan()` computes them from every row. AGS-23: and the root's own
+    /// row — its title, status and kind (`root_row`) — which the nav draws
+    /// as the shortcode's top row, so its top level needs nothing else.
+    /// Nothing trails the groups:
     /// unlike `list` there is no cursor to hand back, so the stream's own
     /// `done` is the whole answer, as for `blockers`. `watch` keeps a
     /// client's copy current with `GroupChanged`.
     #[plexus_macros::method(
-        description = "One roll-up per shortcode: done/total over its subtree's work, its docs, its root, and the host it nests under"
+        description = "One roll-up per shortcode: done/total over its subtree's work, its docs, its root (with the root's title, status and kind), and the host it nests under"
     )]
     pub async fn groups(&self) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
@@ -665,9 +668,13 @@ impl Tickets {
     /// ticket events, by one `GroupChanged` per group whose row moved,
     /// innermost first — the whole group, so applying it is one upsert.
     /// The `epic` filter applies to a group by the group's own shortcode.
+    /// AGS-23: a group's row includes its root's (`root_row`), so a status
+    /// change of a shortcode's root moves its group whether or not it
+    /// crosses `Complete`.
     ///
     /// MNG-16: an `amend` that changed something is one `Amended`, and
-    /// moves no group.
+    /// moves no group — AGS-23: but a new title on a shortcode's root, which
+    /// is followed by its group's `GroupChanged`.
     ///
     /// SDLC-9: so is a `link_commits` or `unlink_commits` that changed
     /// something — one `CommitsLinked` or `CommitsUnlinked`, the whole

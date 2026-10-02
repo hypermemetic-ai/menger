@@ -1280,10 +1280,23 @@ pub(super) fn nav(store: &Store) -> Vec<Group> {
             total: r.total,
             done: r.done,
             docs: r.docs,
+            // AGS-23: the root's own row, as the rows have it — so a write
+            // that changes it is a group that moved, here as on the wire.
+            root_row: r.root.as_ref().and_then(|id| all.iter().find(|t| t.id == *id)).map(|t| RootRow {
+                title: t.title.clone(),
+                status: t.status,
+                kind: t.kind,
+            }),
             root: r.root,
             host: r.host,
         })
         .collect()
+}
+
+/// AGS-23: groups as the literal fixtures below spell them — counts, root
+/// and host; the root's row is held to the oracle (`nav`) instead.
+fn bare(groups: Vec<Group>) -> Vec<Group> {
+    groups.into_iter().map(|g| Group { root_row: None, ..g }).collect()
 }
 
 /// Every `GroupChanged` waiting on `rx`, in the order sent (the ticket
@@ -1325,6 +1338,7 @@ fn group(epic: &str, total: u64, done: u64, root: &str, host: Option<&str>) -> G
         done,
         docs: 0,
         root: Some(root.into()),
+        root_row: None,
         host: host.map(Into::into),
     }
 }
@@ -1410,7 +1424,7 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     store.create(new_ticket("SOLO", "one")).await.unwrap(); // SOLO-2 → SOLO-1
 
     assert_eq!(
-        store.groups(),
+        bare(store.groups()),
         vec![
             group("PLEX", 7, 0, "PLEX-1", None),
             group("SOLO", 2, 0, "SOLO-1", None),
@@ -1426,7 +1440,7 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     store.set_status("SOLO-2", Status::Complete).await.unwrap();
     assert!(matches!(rx.try_recv().unwrap(), Change::StatusChanged { .. }));
     match rx.try_recv().unwrap() {
-        Change::GroupChanged { group: g } => assert_eq!(g, group("SOLO", 2, 1, "SOLO-1", None)),
+        Change::GroupChanged { group: g } => assert_eq!(bare(vec![g]), [group("SOLO", 2, 1, "SOLO-1", None)]),
         other => panic!("expected GroupChanged, got {other:?}"),
     }
     assert!(rx.try_recv().is_err(), "one group moved, one event");
@@ -1439,7 +1453,7 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     // Deepest first: WIRE, the TRAN row it nests in, then PLEX.
     store.set_status("WIRE-2", Status::Complete).await.unwrap();
     assert_eq!(
-        group_changes(&mut rx),
+        bare(group_changes(&mut rx)),
         vec![
             group("WIRE", 2, 1, "WIRE-1", Some("TRAN-2")),
             group("TRAN", 5, 1, "TRAN-1", Some("PLEX-1")),
@@ -1467,7 +1481,7 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     assert!(matches!(rx.try_recv().unwrap(), Change::ChildrenChanged { .. }));
     assert!(matches!(rx.try_recv().unwrap(), Change::ChildRemoved { .. }));
     assert_eq!(
-        group_changes(&mut rx),
+        bare(group_changes(&mut rx)),
         vec![
             group("TRAN", 3, 0, "TRAN-1", Some("PLEX-1")),
             group("WIRE", 3, 0, "WIRE-1", Some("SOLO-1")),
@@ -1481,7 +1495,7 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     // inside it) under PLEX-2. Its pool moves whole.
     store.set_parent("SOLO-1", "PLEX-2").await.unwrap();
     assert_eq!(
-        store.groups(),
+        bare(store.groups()),
         vec![
             group("PLEX", 10, 1, "PLEX-1", None),
             group("SOLO", 5, 1, "SOLO-1", Some("PLEX-2")),
@@ -1492,6 +1506,74 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     assert_eq!(store.groups(), nav(&store));
     let epics: Vec<String> = group_changes(&mut rx).into_iter().map(|g| g.epic).collect();
     assert_eq!(epics, ["SOLO", "PLEX"], "WIRE's own row did not move");
+}
+
+/// AGS-23: the nav draws a shortcode as its root's row, from `groups {}`
+/// alone — so a group carries the root's title, status and kind, a
+/// rootless group carries none, and a change to any of them is a change to
+/// the group: one `GroupChanged`, the root's own shortcode's, after the
+/// ticket event — for a status change that crosses no `Complete` and for a
+/// title. A change to a ticket that is not a root, a body, or a status set
+/// to the one it had moves no group.
+#[tokio::test]
+async fn a_group_carries_its_roots_row_and_a_change_to_it_is_a_group_change() {
+    let store = Store::new();
+    store.create(scope("HOST", "the host")).await.unwrap(); // HOST-1
+    store.create(new_ticket("HOST", "work")).await.unwrap(); // HOST-2 → HOST-1
+    store
+        .create(NewTicket { kind: Kind::Scope, ..child_of("SUB", "the sub", "HOST-2") })
+        .await
+        .unwrap(); // SUB-1, hosted under HOST-2
+    let row = |title: &str, status| Some(RootRow { title: title.into(), status, kind: Kind::Scope });
+    let by = |epic: &str| store.groups().into_iter().find(|g| g.epic == epic).unwrap();
+    assert_eq!(by("HOST").root_row, row("the host", Status::Pending));
+    assert_eq!(by("SUB").root_row, row("the sub", Status::Pending));
+    assert_eq!(store.groups(), nav(&store));
+    let mut rx = store.subscribe();
+
+    // A root's status, crossing nothing: its group, once, after the ticket.
+    store.set_status("SUB-1", Status::Ready).await.unwrap();
+    assert!(matches!(rx.try_recv().unwrap(), Change::StatusChanged { .. }));
+    match rx.try_recv().unwrap() {
+        Change::GroupChanged { group } => {
+            assert_eq!((group.epic.as_str(), group.total, group.done), ("SUB", 1, 0));
+            assert_eq!(group.root_row, row("the sub", Status::Ready));
+        }
+        other => panic!("expected GroupChanged, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "the root's group only — not the host's");
+
+    // Across Complete: the counts' own report carries the new row, once.
+    store.set_status("SUB-1", Status::Complete).await.unwrap();
+    let moved = group_changes(&mut rx);
+    assert_eq!(moved.iter().map(|g| g.epic.as_str()).collect::<Vec<_>>(), ["SUB", "HOST"], "innermost first");
+    assert_eq!(moved[0].root_row, row("the sub", Status::Complete));
+    assert_eq!(moved[1].root_row, row("the host", Status::Pending));
+
+    // The status it already has: the ticket event, no group.
+    store.set_status("SUB-1", Status::Complete).await.unwrap();
+    assert!(matches!(rx.try_recv().unwrap(), Change::StatusChanged { .. }));
+    assert!(rx.try_recv().is_err());
+
+    // A root's title: its group, after the `Amended`; a body alone, none.
+    store.amend("HOST-1", Some("the host, renamed".into()), None).await.unwrap();
+    assert!(matches!(rx.try_recv().unwrap(), Change::Amended { .. }));
+    match rx.try_recv().unwrap() {
+        Change::GroupChanged { group } => assert_eq!(group.root_row, row("the host, renamed", Status::Pending)),
+        other => panic!("expected GroupChanged, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err());
+    store.amend("HOST-1", None, Some("a body".into())).await.unwrap();
+    assert!(matches!(rx.try_recv().unwrap(), Change::Amended { .. }));
+    assert!(rx.try_recv().is_err(), "a body is not on the row");
+
+    // Not a root: a ticket event and nothing more.
+    store.set_status("HOST-2", Status::Ready).await.unwrap();
+    store.amend("HOST-2", Some("other work".into()), None).await.unwrap();
+    assert!(matches!(rx.try_recv().unwrap(), Change::StatusChanged { .. }));
+    assert!(matches!(rx.try_recv().unwrap(), Change::Amended { .. }));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(store.groups(), nav(&store));
 }
 
 /// A database the server could not write today but must still load,

@@ -90,8 +90,9 @@
 //!   host's own children, as before.
 //! - **A shortcode's tree hangs from its group's `root`** (MNG-14: no other
 //!   ticket of a shortcode is parentless): opening the row shows the root,
-//!   one `get`. A shortcode with no root — a store from before MNG-12 —
-//!   lists its tickets flat under its row, by page (`list { epic }`).
+//!   one `get` (AGS-23: the root *is* the row now, drawn from the group). A
+//!   shortcode with no root — a store from before MNG-12 — lists its
+//!   tickets flat under its row, by page (`list { epic }`).
 //! - **A node's children come by page** when it opens — `list { parent,
 //!   after, limit: 200, summary }` (SCALE-4) — into a [`List`]: how many
 //!   there are (`child_count`), and which ids are known at which index. The
@@ -135,6 +136,40 @@
 //!
 //! Every row is a signal of the row cache (src/cache.rs), the one the board
 //! and the ticket page draw the same ticket through.
+//!
+//! AGS-23: **a shortcode's top row is its first ticket; half the indent per
+//! level** (owner, 2026-10-02: "it moves to the right less on each open and
+//! … the highest level tags aren't the empty ones with just the scope name,
+//! they are the first ticket"). Two changes to the drawing, none to where it
+//! comes from:
+//!
+//! - **Two columns a level** ([`art`]): `│ ` / two spaces for each
+//!   ancestor, `├─` / `└─` for the row — the four cases AGS-20's art told
+//!   apart, at half the width.
+//! - **A shortcode with a root is drawn as its root** ([`shortcode_node`]):
+//!   the shortcode row whose one child was the root (MNG-14) is gone, and
+//!   the root's own row stands in its place — a real ticket row (the link,
+//!   the selection, the right-click menu, the kind glyph, the code, the
+//!   title, the status tag or `Doc` chip) that also carries the shortcode's
+//!   roll-up. Opening it shows the root's children, then the sub-shortcodes
+//!   it hosts; a sub-shortcode is its own root's row the same way, under its
+//!   host after the host's children. Every tree is one level shallower. A
+//!   shortcode with no root (a store from before MNG-12) keeps its
+//!   shortcode row and its flat list.
+//! - **The top level still paints from `groups {}` alone.** The root's row
+//!   needs its title, status and kind at once, so the group carries them
+//!   (`Group::root_row`, from the server's cache) and `group_changed` keeps
+//!   them — the server sends one when the root's title or status changes.
+//!   The row draws from the group ([`face`]), not from the row cache: no
+//!   `get` per shortcode, before the nav shows or after. Opening it is one
+//!   page of the root's children, where opening the shortcode row used to
+//!   be a `get` of the root and then that page.
+//! - **The deep-link chain is one step shorter per shortcode** ([`climb`]):
+//!   a root needs no shortcode row opened above it — at the top it is the
+//!   top; hosted, it is a row of its host's, as the shortcode row was.
+//! - **Persisted expansion moves with it** ([`migrate_expanded`]): an open
+//!   shortcode's code in localStorage opened the row whose one child was
+//!   the root; it now opens the root, so a tree that was open stays open.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -146,7 +181,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::kids::key;
 use crate::{cache, dom, keys, session, st_class, Route};
-use menger_tickets_api::{Group, TicketSummary, TicketsEvent};
+use menger_tickets_api::{Group, Kind, Status, TicketSummary, TicketsEvent};
 
 /// Every treeitem in the nav, in document order (group rows and leaves).
 fn tree_items() -> Vec<web_sys::HtmlElement> {
@@ -251,23 +286,147 @@ pub(crate) fn rollup_label(g: &Group) -> String {
     }
 }
 
-/// A rendered node: a ticket row, or an epic's shortcode row. Its key is
-/// the ticket id / the epic code — the string that identifies it in the
-/// persisted `expanded` set and in the DOM (`data-node-key`). Ticket ids
-/// always carry a `-`, epic codes never do, so the two namespaces cannot
-/// collide.
+/// A rendered node: a ticket row, a shortcode drawn as its root's row, or a
+/// rootless epic's shortcode row. Its key is the ticket id / the root's id /
+/// the epic code — the string that identifies it in the persisted
+/// `expanded` set and in the DOM (`data-node-key`). Ticket ids always carry
+/// a `-`, epic codes never do, so the two namespaces cannot collide.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Node {
     Ticket(String),
+    /// AGS-23: a shortcode with a root, drawn as the root's row — the root's
+    /// id, then the shortcode. Keyed by the root's id, as the root's own
+    /// ticket node was, so its expansion is the root's.
+    Root(String, String),
+    /// A shortcode with no root (a store from before MNG-12): its code and
+    /// roll-up, over its tickets listed flat.
     Group(String),
 }
 
 impl Node {
     pub(crate) fn key(&self) -> &str {
         match self {
-            Node::Ticket(k) | Node::Group(k) => k,
+            Node::Ticket(k) | Node::Root(k, _) | Node::Group(k) => k,
         }
     }
+}
+
+/// AGS-23: the node a shortcode is drawn as — its root's row when it has a
+/// root, its shortcode row (and flat list) when it has none.
+pub(crate) fn shortcode_node(g: &Group) -> Node {
+    match &g.root {
+        Some(root) => Node::Root(root.clone(), g.epic.clone()),
+        None => Node::Group(g.epic.clone()),
+    }
+}
+
+/// AGS-23: a shortcode root's row as `groups {}` describes it — what the
+/// row draws, without the root in the row cache: the id, and the title,
+/// status and kind the group carries (`Group::root_row`). Nothing else on it
+/// is drawn (a root row's children come by page, its "has children" from
+/// the roll-up — [`root_has_kids`]), so nothing else is filled in. `None`
+/// for a rootless group, and for a group from a server that does not dress
+/// its root.
+pub(crate) fn face(g: &Group) -> Option<TicketSummary> {
+    let (id, row) = (g.root.as_ref()?, g.root_row.as_ref()?);
+    Some(root_summary(id, &g.epic, g.host.clone(), row.title.clone(), row.status, row.kind))
+}
+
+fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, status: Status, kind: Kind) -> TicketSummary {
+    TicketSummary {
+        id: id.to_string(),
+        epic: epic.to_string(),
+        seq: key(id).map_or(0, |(_, s)| s),
+        title,
+        status,
+        kind,
+        severity: None,
+        parent: host,
+        child_count: 0,
+        blocked_by: Vec::new(),
+        unlocks: Vec::new(),
+        commits: Vec::new(),
+        created_unix: 0,
+        updated_unix: 0,
+    }
+}
+
+/// AGS-23: whether a shortcode's root row opens onto anything. Its roll-up
+/// counts the root and everything drawn under the shortcode (MNG-10: its
+/// tickets, the trees filed under them, the sub-shortcodes it hosts), so
+/// anything beyond the root — work or docs — is under it.
+pub(crate) fn root_has_kids(g: &Group) -> bool {
+    g.total + g.docs > 1
+}
+
+/// AGS-20's tree art, two monospace columns a level (AGS-23; it was four):
+/// for each ancestor, outermost first, `│ ` while it has siblings still to
+/// come and two spaces once it was the last; then `├─` for a row with
+/// siblings after it, `└─` for the last of them.
+pub(crate) fn art(ancestors_last: impl IntoIterator<Item = bool>, last: bool) -> String {
+    let mut s = String::new();
+    for a in ancestors_last {
+        s.push_str(if a { "  " } else { "│ " });
+    }
+    s.push_str(if last { "└─" } else { "├─" });
+    s
+}
+
+/// AGS-23: one step of a deep link's chain, from the ticket `cur` up — given
+/// the group of its shortcode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Climb {
+    /// `cur` is a shortcode's root drawn at the top level: the chain ends.
+    Top,
+    /// `cur` is a sub-shortcode's root, drawn under its host after the
+    /// host's children: the host opens, and the chain goes on from it.
+    Host(String),
+    /// `cur` is in a shortcode with no root: its shortcode row opens onto
+    /// the flat list that shows it, and the chain ends.
+    Flat(String),
+    /// `cur` hangs under this parent, which opens onto it.
+    Parent(String),
+    /// None of these — a parentless ticket that is not its shortcode's root
+    /// (a legacy shape the nav does not draw).
+    Lost,
+}
+
+pub(crate) fn climb(g: Option<&Group>, cur: &TicketSummary) -> Climb {
+    match g {
+        Some(g) if g.root.as_deref() == Some(cur.id.as_str()) => match &g.host {
+            Some(h) => Climb::Host(h.clone()),
+            None => Climb::Top,
+        },
+        Some(g) if g.root.is_none() => Climb::Flat(g.epic.clone()),
+        _ => match &cur.parent {
+            Some(p) => Climb::Parent(p.clone()),
+            None => Climb::Lost,
+        },
+    }
+}
+
+/// AGS-23: the persisted expansion as it reads now. Until AGS-23 a
+/// shortcode's code in it opened the shortcode row, whose one child was the
+/// root; that row is the root's now, so the code becomes the root's id — an
+/// open tree stays open across the upgrade. A code whose shortcode has no
+/// root still names its shortcode row, and one the groups do not name yet
+/// is left as it is (it moves when its group arrives). `None` when nothing
+/// moves.
+pub(crate) fn migrate_expanded(expanded: &BTreeSet<String>, groups: &BTreeMap<String, Group>) -> Option<BTreeSet<String>> {
+    let moves: Vec<(&String, &String)> = expanded
+        .iter()
+        .filter(|k| !k.contains('-'))
+        .filter_map(|k| groups.get(k).and_then(|g| g.root.as_ref()).map(|r| (k, r)))
+        .collect();
+    if moves.is_empty() {
+        return None;
+    }
+    let mut next = expanded.clone();
+    for (code, root) in moves {
+        next.remove(code);
+        next.insert(root.clone());
+    }
+    Some(next)
 }
 
 // ---------------------------------------------------------------------
@@ -740,28 +899,41 @@ pub(crate) struct Tree {
     /// Ticket → the sub-shortcodes hosted under it, in shortcode order.
     hosted: Memo<BTreeMap<String, Vec<String>>>,
     /// The roots of hosted sub-shortcodes: a child of their host by
-    /// `parent`, drawn as their shortcode's row instead (AGS-20).
+    /// `parent`, drawn as their shortcode's row instead (AGS-20) — AGS-23:
+    /// which is the root's own row, after the host's children.
     hosted_roots: Memo<BTreeSet<String>>,
 }
 
 impl Tree {
     pub(crate) fn new() -> Self {
         let groups = RwSignal::new(None::<BTreeMap<String, Group>>);
-        let all = move || groups.with(|g| g.as_ref().map(|m| m.values().cloned().collect::<Vec<_>>()).unwrap_or_default());
+        // Each reads the groups in place, taking only what it keeps — a group
+        // carries its root's title now (AGS-23), and these run on every
+        // `group_changed`.
         let top = Memo::new(move |_| {
-            all().into_iter().filter(|g| g.host.is_none()).map(|g| g.epic).collect::<Vec<_>>()
+            groups.with(|m| {
+                m.iter().flat_map(|m| m.values()).filter(|g| g.host.is_none()).map(|g| g.epic.clone()).collect::<Vec<_>>()
+            })
         });
         let hosted = Memo::new(move |_| {
             let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-            for g in all() {
-                if let Some(h) = g.host {
-                    out.entry(h).or_default().push(g.epic);
+            groups.with(|m| {
+                for g in m.iter().flat_map(|m| m.values()) {
+                    if let Some(h) = &g.host {
+                        out.entry(h.clone()).or_default().push(g.epic.clone());
+                    }
                 }
-            }
+            });
             out
         });
         let hosted_roots = Memo::new(move |_| {
-            all().into_iter().filter(|g| g.host.is_some()).filter_map(|g| g.root).collect::<BTreeSet<_>>()
+            groups.with(|m| {
+                m.iter()
+                    .flat_map(|m| m.values())
+                    .filter(|g| g.host.is_some())
+                    .filter_map(|g| g.root.clone())
+                    .collect::<BTreeSet<_>>()
+            })
         });
         Self {
             groups,
@@ -803,8 +975,23 @@ impl Tree {
         });
     }
 
-    fn group(self, epic: &str) -> Option<Group> {
-        self.groups.with(|m| m.as_ref().and_then(|m| m.get(epic)).cloned())
+    /// `f` of `epic`'s group, tracked — without cloning the group.
+    fn with_group<T>(self, epic: &str, f: impl FnOnce(&Group) -> T) -> Option<T> {
+        self.groups.with(|m| m.as_ref().and_then(|m| m.get(epic)).map(f))
+    }
+
+    /// AGS-23: the nodes these shortcodes are drawn as, tracked — each its
+    /// root's row, or its shortcode row with no root ([`shortcode_node`]).
+    /// One list for a keyed `<For>`: a node is built once, and again only if
+    /// what it is drawn as changes (a legacy shortcode gaining its first
+    /// scope).
+    fn nodes(self, epics: &[String]) -> Vec<Node> {
+        self.groups.with(|m| {
+            epics
+                .iter()
+                .map(|e| m.as_ref().and_then(|m| m.get(e)).map_or_else(|| Node::Group(e.clone()), shortcode_node))
+                .collect()
+        })
     }
 }
 
@@ -1271,36 +1458,32 @@ struct Ctx {
 
 /// SCALE-24: the chain from a deep link's ticket up to the top level, one
 /// `get` per ancestor, as the nav draws it: each step is a node to open and
-/// the child it must show — a ticket's parent, a shortcode's row for its
-/// root, the host for a sub-shortcode's row. A shortcode with no root lists
-/// its tickets flat, so it is the whole chain.
+/// the child it must show — a ticket's parent, the host for a sub-shortcode's
+/// root. A shortcode with no root lists its tickets flat, so its row is the
+/// whole chain. AGS-23: a root is its shortcode's row, so no shortcode row
+/// opens above it — at the top level the chain ends there ([`climb`]).
 async fn chain_to(tree: Tree, leaf: &str) -> Option<Vec<(Node, Option<TicketSummary>)>> {
     let mut steps = Vec::new();
     let mut cur = get_summary(leaf).await?;
     for _ in 0..64 {
         let g = tree.groups.with_untracked(|m| m.as_ref().and_then(|m| m.get(&cur.epic)).cloned());
-        match g {
-            Some(g) if g.root.as_deref() == Some(cur.id.as_str()) => {
-                steps.push((Node::Group(g.epic.clone()), Some(cur)));
-                match g.host {
-                    Some(h) => {
-                        let host = get_summary(&h).await?;
-                        steps.push((Node::Ticket(h), None));
-                        cur = host;
-                    }
-                    None => return Some(steps),
-                }
+        match climb(g.as_ref(), &cur) {
+            Climb::Top => return Some(steps),
+            Climb::Host(h) => {
+                let host = get_summary(&h).await?;
+                steps.push((Node::Ticket(h), None));
+                cur = host;
             }
-            Some(g) if g.root.is_none() => {
-                steps.push((Node::Group(g.epic.clone()), Some(cur)));
+            Climb::Flat(epic) => {
+                steps.push((Node::Group(epic), Some(cur)));
                 return Some(steps);
             }
-            _ => {
-                let p = cur.parent.clone()?;
+            Climb::Parent(p) => {
                 let parent = get_summary(&p).await?;
                 steps.push((Node::Ticket(p), Some(cur)));
                 cur = parent;
             }
+            Climb::Lost => return None,
         }
     }
     None
@@ -1342,9 +1525,20 @@ async fn reveal(ctx: Ctx, leaf: String, gen: u32) {
 pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) -> impl IntoView {
     let expanded = RwSignal::new(load_expanded());
     Effect::new(move |_| expanded.with(save_expanded));
+    // AGS-23: an open shortcode's code, persisted before its row became its
+    // root's, opens the root — as the groups that say which root arrive.
+    Effect::new(move |_| {
+        let moved = tree.groups.with(|m| m.as_ref().and_then(|m| expanded.with_untracked(|e| migrate_expanded(e, m))));
+        if let Some(next) = moved {
+            expanded.set(next);
+        }
+    });
     let ctx = Ctx { tree, route, expanded };
     let top = tree.top;
-    let top_last = Memo::new(move |_| top.with(|t| t.last().cloned()));
+    // AGS-23: the top-level rows, each shortcode as the node it is drawn as;
+    // the last of them by its key.
+    let top_nodes = Memo::new(move |_| top.with(|t| tree.nodes(t)));
+    let top_last = Memo::new(move |_| top_nodes.with(|n| n.last().map(|n| n.key().to_string())));
 
     // Selection follows the route. The chain holding the open ticket
     // auto-expands so the selected row is visible — once per navigation
@@ -1410,11 +1604,9 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                     on:keydown=move |ev| tree_keydown(ev, expanded)
                 >
                     <For
-                        each=move || top.get()
-                        key=|g| g.clone()
-                        children=move |g: String| {
-                            node_view(Node::Group(g), ctx, Arc::new(Vec::new()), top_last, None)
-                        }
+                        each=move || top_nodes.get()
+                        key=|n: &Node| n.key().to_string()
+                        children=move |n: Node| node_view(n, ctx, Arc::new(Vec::new()), top_last, None)
                     />
                 </div>
             </div>
@@ -1423,19 +1615,14 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
 }
 
 /// The `is last child` flags of a node's ancestors, outermost first —
-/// what turns a depth into the tree's connector art (`│   ` for an
-/// ancestor with siblings still to come, four spaces for one that was
+/// what turns a depth into the tree's connector art ([`art`]: `│ ` for an
+/// ancestor with siblings still to come, two spaces for one that was
 /// last). Each flag is a memo, so an insert repaints only the rows whose
 /// answer actually changed.
 type Ancestry = Arc<Vec<Memo<bool>>>;
 
 fn connectors(anc: &Ancestry, last: bool) -> String {
-    let mut s = String::new();
-    for a in anc.iter() {
-        s.push_str(if a.get() { "    " } else { "│   " });
-    }
-    s.push_str(if last { "└── " } else { "├── " });
-    s
+    art(anc.iter().map(|a| a.get()), last)
 }
 
 /// A child's place in a list: the list, and whether it is windowed (then
@@ -1446,8 +1633,9 @@ struct Pos {
     windowed: Memo<bool>,
 }
 
-/// One node of the tree — an epic's shortcode row or a ticket row — and,
-/// beneath it, its children, recursively.
+/// One node of the tree — a ticket row, a shortcode drawn as its root's row
+/// (AGS-23), or a rootless shortcode's row — and, beneath it, its children,
+/// recursively.
 ///
 /// MFE-12: the children exist only while the node is open — collapse
 /// unmounts them rather than hiding them, so a closed node costs its own
@@ -1456,16 +1644,36 @@ struct Pos {
 /// row's `child_count` (a ticket) or its roll-up (a shortcode).
 fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>>, pos: Option<Pos>) -> AnyView {
     let key = node.key().to_string();
-    let is_group = matches!(node, Node::Group(_));
     let tree = ctx.tree;
+    // The shortcode this node stands for, if it does: a root's row or a
+    // rootless shortcode's.
+    let shortcode = match &node {
+        Node::Root(_, epic) | Node::Group(epic) => Some(epic.clone()),
+        Node::Ticket(_) => None,
+    };
+    let is_group = matches!(node, Node::Group(_));
 
-    // A ticket's row, from the row cache — held by the list (or the
-    // shortcode row) that put it here. A handle in this node's owner.
-    let ticket = match &node {
+    // A ticket's row, from the row cache — held by the list that put it
+    // here; a handle in this node's owner. AGS-23: a root's row, from its
+    // group ([`face`]) — `groups {}` carries what it shows and
+    // `group_changed` keeps it, so it needs no row of the cache.
+    let ticket: Option<Signal<TicketSummary>> = match &node {
         Node::Ticket(id) => match cache::get(id) {
-            Some(sig) => Some(RwSignal::from(sig)),
+            Some(sig) => Some(Signal::from(sig)),
             None => return ().into_any(),
         },
+        Node::Root(id, epic) => {
+            let (id, epic) = (id.clone(), epic.clone());
+            // The group as it is now; once it is gone (its row is leaving),
+            // the last it said.
+            Some(Signal::from(Memo::new(move |prev: Option<&TicketSummary>| {
+                tree.with_group(&epic, face)
+                    .flatten()
+                    .filter(|t| t.id == id)
+                    .or_else(|| prev.cloned())
+                    .unwrap_or_else(|| root_summary(&id, &epic, None, String::new(), Status::Pending, Kind::Scope))
+            })))
+        }
         Node::Group(_) => None,
     };
 
@@ -1479,10 +1687,16 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
         Memo::new(move |_| expanded.with(|e| e.contains(&k)))
     };
     let has_kids = {
-        let k = key.clone();
-        Memo::new(move |_| match ticket {
-            Some(t) => t.with(|t| t.child_count > 0) || tree.hosted.with(|h| h.contains_key(&k)),
-            None => tree.groups.with(|m| m.as_ref().and_then(|m| m.get(&k)).is_some_and(Group::drawn)),
+        let (k, node) = (key.clone(), node.clone());
+        Memo::new(move |_| match &node {
+            Node::Ticket(_) => {
+                ticket.is_some_and(|t| t.with(|t| t.child_count > 0)) || tree.hosted.with(|h| h.contains_key(&k))
+            }
+            // AGS-23: from the roll-up — the root's row is not the cache's.
+            Node::Root(_, epic) => {
+                tree.with_group(epic, root_has_kids).unwrap_or(false) || tree.hosted.with(|h| h.contains_key(&k))
+            }
+            Node::Group(epic) => tree.with_group(epic, Group::drawn).unwrap_or(false),
         })
     };
     let child_ancestry: Ancestry = {
@@ -1523,16 +1737,20 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
         let id = kids_id.clone();
         move || has_kids.get().then(|| id.clone())
     };
-    let index = {
+    // Where the node is in its list — only a node in one has a place.
+    let index = pos.map(|p| {
         let k = key.clone();
-        Memo::new(move |_| pos.and_then(|p| p.list.with(|l| l.index_of(&k))))
-    };
+        Memo::new(move |_| p.list.with(|l| l.index_of(&k)))
+    });
+    // A shortcode's roll-up, on whichever row stands for it (AGS-23: a
+    // root's row carries it beside the root's own status).
+    let rollup = shortcode.clone().map(|epic| Memo::new(move |_| tree.with_group(&epic, rollup_label).unwrap_or_default()));
 
     // Only one of these runs, so each may take the row's closures by
     // value; the two row shapes are otherwise unrelated.
     let row = match ticket {
-        None => group_row(key.clone(), ctx, prefix, toggle_glyph, toggle, expanded_attr, owns_attr),
-        Some(t) => leaf_row(key.clone(), t, ctx, pos, index, prefix, toggle_glyph, toggle, expanded_attr, owns_attr),
+        None => group_row(key.clone(), rollup.expect("a shortcode row"), prefix, toggle_glyph, toggle, expanded_attr, owns_attr),
+        Some(t) => leaf_row(key.clone(), t, rollup, ctx, pos, index, prefix, toggle_glyph, toggle, expanded_attr, owns_attr),
     };
 
     let kids_ref = NodeRef::<leptos::html::Div>::new();
@@ -1540,10 +1758,11 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
         <div
             class="node"
             class:group=is_group
+            class:shortcode=shortcode.is_some()
             role="none"
             data-node-key=key.clone()
-            data-group=is_group.then(|| key.clone())
-            data-index=move || index.get()
+            data-group=shortcode
+            data-index=index.map(|ix| move || ix.get())
             class:collapsed=move || !open.get()
         >
             {row}
@@ -1567,74 +1786,36 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
     .into_any()
 }
 
-/// What an open node shows beneath it. A shortcode: its root (or, with no
-/// root, its tickets by page). A ticket: its children by page, then the
-/// sub-shortcodes it hosts.
+/// What an open node shows beneath it. A ticket — AGS-23: a shortcode's
+/// root's row too — its children by page, then the sub-shortcodes it hosts.
+/// A shortcode with no root: its tickets by page, flat.
 fn children_of(
     node: Node,
     ctx: Ctx,
     ancestry: Ancestry,
     kids_ref: NodeRef<leptos::html::Div>,
-    ticket: Option<RwSignal<TicketSummary>>,
+    ticket: Option<Signal<TicketSummary>>,
 ) -> AnyView {
     let tree = ctx.tree;
+    let hosted = |id: &str| {
+        let id = id.to_string();
+        Memo::new(move |_| tree.hosted.with(|h| h.get(&id).cloned().unwrap_or_default()))
+    };
     match node {
-        Node::Group(epic) => {
-            let root = {
-                let epic = epic.clone();
-                Memo::new(move |_| tree.group(&epic).and_then(|g| g.root))
-            };
-            (move || match root.get() {
-                Some(r) => root_view(r, ctx, ancestry.clone()),
-                None => list_view(Source::Epic(epic.clone()), None, ctx, ancestry.clone(), kids_ref, None),
-            })
-            .into_any()
-        }
+        Node::Group(epic) => list_view(Source::Epic(epic), None, ctx, ancestry, kids_ref, None),
         Node::Ticket(id) => {
             let count = ticket.map(|t| Memo::new(move |_| t.with(|t| t.child_count as usize)));
-            let hosted = {
-                let id = id.clone();
-                Memo::new(move |_| tree.hosted.with(|h| h.get(&id).cloned().unwrap_or_default()))
-            };
+            let hosted = hosted(&id);
             list_view(Source::Parent(id), count, ctx, ancestry, kids_ref, Some(hosted))
         }
+        // AGS-23: the root's row is the group's, which carries no count of
+        // its children: its list is sized by its first page, and moved by
+        // `children_changed` / `child_removed`, which carry the count.
+        Node::Root(id, _) => {
+            let hosted = hosted(&id);
+            list_view(Source::Parent(id), None, ctx, ancestry, kids_ref, Some(hosted))
+        }
     }
-}
-
-/// A shortcode row's one child, its root: from the row cache if some view
-/// holds it, else one `get` — held while the row is open, and asked again
-/// on every reconnect so what it shows is not stale.
-fn root_view(root: String, ctx: Ctx, ancestry: Ancestry) -> AnyView {
-    let tree = ctx.tree;
-    let holder = cache::Holder::new();
-    let ready = RwSignal::new(holder.hold_id(&root));
-    let asked = StoredValue::new(0u32);
-    {
-        let (root, holder) = (root.clone(), holder.clone());
-        Effect::new(move |_| {
-            let epoch = tree.epoch.get();
-            if epoch == 0 || asked.get_value() == epoch {
-                return;
-            }
-            asked.set_value(epoch);
-            let (root, holder) = (root.clone(), holder.clone());
-            spawn_local(async move {
-                if let Some(t) = get_summary(&root).await {
-                    // Set once: a set notifies even when the value is the
-                    // same, and the root's node — its open list with it —
-                    // would be built again on every reconnect.
-                    if holder.hold(t).is_some() && ready.try_get_untracked() == Some(false) {
-                        ready.try_set(true);
-                    }
-                }
-            });
-        });
-    }
-    let last = {
-        let r = root.clone();
-        Memo::new(move |_| Some(r.clone()))
-    };
-    (move || ready.get().then(|| node_view(Node::Ticket(root.clone()), ctx, ancestry.clone(), last, None))).into_any()
 }
 
 /// One slot of a mounted chunk: a known child, or a row still being fetched.
@@ -1868,7 +2049,8 @@ fn list_view(
     }
 
     // The children the window mounts, in order; a hosted sub-shortcode's
-    // root is drawn as its shortcode's row, after the children.
+    // root is drawn as its shortcode's row, after the children (AGS-23: the
+    // root's own row, which carries the shortcode's roll-up).
     let slots = Memo::new(move |_| {
         let (lo, hi) = range.get();
         let hidden = tree.hosted_roots.get();
@@ -1882,10 +2064,16 @@ fn list_view(
                 .collect::<Vec<_>>()
         })
     });
-    let hosted = hosted.unwrap_or_else(|| Memo::new(|_| Vec::new()));
+    // The hosted sub-shortcodes, each as the node it is drawn as (AGS-23:
+    // its root's row); the last row under the node by its key — the last
+    // of them, else the last child.
+    let hosted = match hosted {
+        Some(h) => Memo::new(move |_| h.with(|h| tree.nodes(h))),
+        None => Memo::new(|_| Vec::new()),
+    };
     let last_kid = Memo::new(move |_| {
         hosted
-            .with(|h| h.last().cloned())
+            .with(|h| h.last().map(|n| n.key().to_string()))
             .or_else(|| list.with(|l| l.n.checked_sub(1).and_then(|i| l.id_at(i)).map(str::to_string)))
     });
     let pos = Pos { list, windowed };
@@ -1918,8 +2106,8 @@ fn list_view(
         {spacer(|s| s.bottom_px)}
         <For
             each=move || hosted.get()
-            key=|g| g.clone()
-            children=move |g: String| node_view(Node::Group(g), ctx, hosted_ancestry.clone(), last_kid, None)
+            key=|n: &Node| n.key().to_string()
+            children=move |n: Node| node_view(n, ctx, hosted_ancestry.clone(), last_kid, None)
         />
     }
     .into_any()
@@ -1994,21 +2182,17 @@ fn chunk_heights(kids: &web_sys::Element, s: Span) -> Vec<(usize, f64)> {
 /// An epic's shortcode row: the code chip and a `done/total` rollup over
 /// its whole subtree (AGS-20 — descendants included, at every depth and
 /// across epics). SCALE-24: the server's roll-up (MNG-10), moved in place by
-/// `group_changed` — nothing here counts.
+/// `group_changed` — nothing here counts. AGS-23: only a shortcode with no
+/// root is drawn this way; one with a root is its root's row.
 fn group_row(
     key: String,
-    ctx: Ctx,
+    rollup: Memo<String>,
     prefix: impl Fn() -> String + Send + Sync + 'static,
     toggle_glyph: impl Fn() -> &'static str + Send + Sync + 'static,
     toggle: impl Fn() + Send + Sync + 'static,
     expanded_attr: impl Fn() -> Option<String> + Send + Sync + 'static,
     owns_attr: impl Fn() -> Option<String> + Send + Sync + 'static,
 ) -> AnyView {
-    let rollup = {
-        let k = key.clone();
-        let tree = ctx.tree;
-        Memo::new(move |_| tree.group(&k).map(|g| rollup_label(&g)).unwrap_or_default())
-    };
     let code = key.clone();
     view! {
         <div
@@ -2036,14 +2220,17 @@ fn group_row(
 /// AGS-16 menu's attachment (a right-click anywhere on the row opens it).
 /// A ticket with children also carries the collapse toggle — clicking it
 /// opens the row instead of following the link. SCALE-24: in a windowed
-/// list it says where it is among all of its siblings.
+/// list it says where it is among all of its siblings. AGS-23: a shortcode
+/// drawn as its root's row is one of these, drawn from its group and
+/// carrying the shortcode's roll-up (`rollup`) beside the root's status.
 #[allow(clippy::too_many_arguments)]
 fn leaf_row(
     id: String,
-    ticket: RwSignal<TicketSummary>,
+    ticket: Signal<TicketSummary>,
+    rollup: Option<Memo<String>>,
     ctx: Ctx,
     pos: Option<Pos>,
-    index: Memo<Option<usize>>,
+    index: Option<Memo<Option<usize>>>,
     prefix: impl Fn() -> String + Send + Sync + 'static,
     toggle_glyph: impl Fn() -> &'static str + Send + Sync + 'static,
     toggle: impl Fn() + Send + Sync + 'static,
@@ -2056,11 +2243,15 @@ fn leaf_row(
         Memo::new(move |_| route.with(|rt| matches!(rt, Route::Ticket(x) if *x == id)))
     };
     let href = format!("#/ticket/{id}");
-    let tag_class = move || format!("tag {}", ticket.with(|t| st_class(t.status.as_str())));
-    let kind = move || ticket.with(|t| t.kind.to_string());
-    let windowed = move || pos.is_some_and(|p| p.windowed.get());
-    let setsize = move || windowed().then(|| pos.map_or(0, |p| p.list.with(|l| l.n)));
-    let posinset = move || windowed().then(|| index.get().map(|i| i + 1)).flatten();
+    // A ticket's kind is fixed at birth — no write changes it — so the row
+    // reads it once (AGS-23: three attribute effects fewer a row, which the
+    // top level, all ticket rows now, paints with).
+    let kind = ticket.with_untracked(|t| t.kind.as_str());
+    // A row's place among its siblings, said only in a list that is a window
+    // — and asked only of a row in a list (AGS-23: a top-level root's row is
+    // in none).
+    let setsize = pos.map(|p| move || p.windowed.get().then(|| p.list.with(|l| l.n)));
+    let posinset = pos.zip(index).map(|(p, ix)| move || p.windowed.get().then(|| ix.get().map(|i| i + 1)).flatten());
 
     view! {
         <a
@@ -2090,10 +2281,16 @@ fn leaf_row(
             >
                 {toggle_glyph}
             </span>
-            <span class="toggle kind" title=kind>{move || kind_glyph(&kind())}</span>
+            <span class="toggle kind" title=kind>{kind_glyph(kind)}</span>
             <span class="code">{id.clone()}</span>
             <span class="label">{move || ticket.with(|t| t.title.clone())}</span>
-            <span class=tag_class>{move || ticket.with(|t| t.status.to_string())}</span>
+            {rollup.map(|r| view! { <span class="tag roll">{move || r.get()}</span> })}
+            // The status tag, its paint and its word one effect: they move
+            // together.
+            {move || {
+                let st = ticket.with(|t| t.status);
+                view! { <span class=format!("tag {}", st_class(st.as_str()))>{st.as_str()}</span> }
+            }}
         </a>
     }
     .into_any()
@@ -2101,9 +2298,202 @@ fn leaf_row(
 
 #[cfg(test)]
 mod tests {
-    use super::{chunks, kind_glyph, offset_of, rollup_label, span, Ask, Geom, List, CHUNK, PAGE, WHOLE};
-    use menger_tickets_api::{Group, Kind};
-    use std::collections::BTreeMap;
+    use super::{
+        art, chunks, climb, face, kind_glyph, migrate_expanded, offset_of, rollup_label, root_has_kids, shortcode_node, span, Ask,
+        Climb, Geom, List, Node, CHUNK, PAGE, WHOLE,
+    };
+    use menger_tickets_api::{Group, Kind, RootRow, Status, TicketSummary};
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+    /// A group as `groups {}` sends it (AGS-23: with its root's row).
+    fn group(epic: &str, total: u64, done: u64, docs: u64, root: Option<(&str, &str, Status, Kind)>, host: Option<&str>) -> Group {
+        Group {
+            epic: epic.into(),
+            total,
+            done,
+            docs,
+            root: root.map(|r| r.0.into()),
+            root_row: root.map(|(_, title, status, kind)| RootRow { title: title.into(), status, kind }),
+            host: host.map(Into::into),
+        }
+    }
+
+    /// The demo store AGS-23 was checked against in the browser: SUP, whose
+    /// SUP-4 hosts the sub-shortcode SUB; DOCS, a doc collection; ALPHA, a
+    /// plain one; and PRE, a store from before MNG-12 — no root.
+    fn demo() -> BTreeMap<String, Group> {
+        [
+            group("ALPHA", 3, 0, 0, Some(("ALPHA-1", "Alpha: the first scope", Status::Ready, Kind::Scope)), None),
+            group("DOCS", 0, 0, 4, Some(("DOCS-1", "Reference shelf", Status::Doc, Kind::Doc)), None),
+            group("PRE", 5, 0, 0, None, None),
+            group("SUB", 4, 1, 0, Some(("SUB-1", "Codegen", Status::Pending, Kind::Scope)), Some("SUP-4")),
+            group("SUP", 11, 2, 0, Some(("SUP-1", "Superproject", Status::Coding, Kind::Scope)), None),
+        ]
+        .into_iter()
+        .map(|g| (g.epic.clone(), g))
+        .collect()
+    }
+
+    fn row(id: &str, parent: Option<&str>) -> TicketSummary {
+        let (epic, seq) = id.rsplit_once('-').unwrap();
+        TicketSummary {
+            id: id.into(),
+            epic: epic.into(),
+            seq: seq.parse().unwrap(),
+            title: id.into(),
+            status: Status::Pending,
+            kind: Kind::Build,
+            severity: None,
+            parent: parent.map(Into::into),
+            child_count: 0,
+            blocked_by: Vec::new(),
+            unlocks: Vec::new(),
+            commits: Vec::new(),
+            created_unix: 0,
+            updated_unix: 0,
+        }
+    }
+
+    /// AGS-23, the indent: each level of the tree adds two monospace columns
+    /// of connector art, not four — and the art still tells apart the four
+    /// cases it always did: an ancestor with siblings to come (`│`), one that
+    /// was last (blank), a row with siblings after it (`├`), the last (`└`).
+    #[test]
+    fn each_level_moves_right_two_columns_and_the_art_stays_unambiguous() {
+        assert_eq!(art([], false), "├─");
+        assert_eq!(art([], true), "└─");
+        assert_eq!(art([false], false), "│ ├─");
+        assert_eq!(art([true], true), "  └─");
+        assert_eq!(art([false, true, false], true), "│   │ └─");
+        for depth in 0..12 {
+            for last in [false, true] {
+                let ancestors: Vec<bool> = (0..depth).map(|d| d % 3 == 0).collect();
+                let s = art(ancestors.iter().copied(), last);
+                assert_eq!(s.chars().count(), 2 * (depth + 1), "depth {depth}: {s:?}");
+                // The row's own connector starts two columns further in per
+                // level, and each ancestor's column is its line or a blank.
+                let cols: Vec<char> = s.chars().collect();
+                assert_eq!(cols[2 * depth], if last { '└' } else { '├' });
+                for (d, was_last) in ancestors.iter().enumerate() {
+                    assert_eq!(cols[2 * d], if *was_last { ' ' } else { '│' }, "depth {depth}, ancestor {d}");
+                    assert_eq!(cols[2 * d + 1], ' ');
+                }
+            }
+        }
+    }
+
+    /// AGS-23, the shape: a shortcode with a root is drawn as the root's
+    /// row — keyed by the root's id, its face the group's `root_row` (the
+    /// kind glyph, the title, the status; a doc collection's root its `Doc`
+    /// chip), its roll-up the shortcode's — whether it is at the top level
+    /// or a sub-shortcode under its host. A shortcode with no root keeps its
+    /// own row.
+    #[test]
+    fn a_shortcode_with_a_root_is_its_roots_row_and_one_without_keeps_its_own() {
+        let g = demo();
+        let sup = &g["SUP"];
+        assert_eq!(shortcode_node(sup), Node::Root("SUP-1".into(), "SUP".into()));
+        assert_eq!(shortcode_node(sup).key(), "SUP-1", "the root's key: its expansion is the root's");
+        let t = face(sup).unwrap();
+        assert_eq!((t.id.as_str(), t.title.as_str(), t.status, t.kind), ("SUP-1", "Superproject", Status::Coding, Kind::Scope));
+        assert_eq!((t.epic.as_str(), t.seq, t.parent), ("SUP", 1, None), "top level: no host");
+        assert_eq!(kind_glyph(t.kind.as_str()), "◆");
+        assert_eq!(rollup_label(sup), "2/11", "the shortcode's roll-up moves onto the root's row");
+        assert!(root_has_kids(sup));
+
+        // A sub-shortcode: its root's row too, under its host.
+        let sub = &g["SUB"];
+        assert_eq!(shortcode_node(sub), Node::Root("SUB-1".into(), "SUB".into()));
+        assert_eq!(face(sub).unwrap().parent.as_deref(), Some("SUP-4"));
+        assert_eq!(rollup_label(sub), "1/4");
+
+        // A doc collection: its root is a doc, in `Doc`.
+        let docs = &g["DOCS"];
+        let d = face(docs).unwrap();
+        assert_eq!((d.status, d.kind, kind_glyph(d.kind.as_str())), (Status::Doc, Kind::Doc, "¶"));
+        assert_eq!(rollup_label(docs), "4 docs");
+        assert!(root_has_kids(docs));
+
+        // A root alone opens onto nothing.
+        let lone = group("LONE", 1, 0, 0, Some(("LONE-1", "alone", Status::Pending, Kind::Scope)), None);
+        assert!(!root_has_kids(&lone));
+        let lone_doc = group("NOTE", 0, 0, 1, Some(("NOTE-1", "a note", Status::Doc, Kind::Doc)), None);
+        assert!(!root_has_kids(&lone_doc));
+
+        // No root (a store from before MNG-12): the shortcode row, keyed by
+        // its code, and no face to draw a ticket row with.
+        let pre = &g["PRE"];
+        assert_eq!(shortcode_node(pre), Node::Group("PRE".into()));
+        assert_eq!(shortcode_node(pre).key(), "PRE");
+        assert_eq!(face(pre), None);
+        assert_eq!(rollup_label(pre), "0/5");
+    }
+
+    /// AGS-23, the chain a deep link opens: no shortcode row above a root —
+    /// a top-level root is the top, a sub-shortcode's root steps to its host
+    /// (which opens), and a rootless shortcode's row is the whole chain. So
+    /// SUB-4 — under SUB-2, under SUB's root, hosted under SUP-4, under SUP's
+    /// root — opens four nodes, every one a ticket, and sits at depth four:
+    /// ten columns of art, where AGS-20's tree put it at depth six, 28.
+    #[test]
+    fn a_deep_link_opens_one_level_fewer_per_shortcode() {
+        let g = demo();
+        let rows: HashMap<String, TicketSummary> = [
+            row("SUP-1", None),
+            row("SUP-4", Some("SUP-1")),
+            row("SUB-1", Some("SUP-4")),
+            row("SUB-2", Some("SUB-1")),
+            row("SUB-4", Some("SUB-2")),
+            row("PRE-2", Some("PRE-1")),
+            row("LEGACY-3", None),
+        ]
+        .into_iter()
+        .map(|t| (t.id.clone(), t))
+        .collect();
+        let chain = |leaf: &str| -> Option<Vec<Node>> {
+            let mut out = Vec::new();
+            let mut cur = rows[leaf].clone();
+            loop {
+                match climb(g.get(&cur.epic), &cur) {
+                    Climb::Top => return Some(out),
+                    Climb::Host(h) | Climb::Parent(h) => {
+                        out.push(Node::Ticket(h.clone()));
+                        cur = rows[h.as_str()].clone();
+                    }
+                    Climb::Flat(e) => {
+                        out.push(Node::Group(e));
+                        return Some(out);
+                    }
+                    Climb::Lost => return None,
+                }
+            }
+        };
+        let keys = |leaf: &str| chain(leaf).map(|c| c.iter().map(|n| n.key().to_string()).collect::<Vec<_>>());
+        assert_eq!(keys("SUB-4").unwrap(), ["SUB-2", "SUB-1", "SUP-4", "SUP-1"]);
+        assert_eq!(climb(g.get("SUB"), &rows["SUB-1"]), Climb::Host("SUP-4".into()), "a hosted root: its host opens");
+        assert_eq!(keys("SUP-1").unwrap(), Vec::<String>::new(), "a top-level root is the top row: nothing opens");
+        assert_eq!(keys("PRE-2").unwrap(), ["PRE"], "no root: the shortcode row, over its flat list");
+        assert_eq!(keys("LEGACY-3"), None, "a parentless non-root is drawn nowhere");
+        let depth = chain("SUB-4").unwrap().len();
+        assert_eq!((depth, art(vec![false; depth], true).chars().count()), (4, 10));
+    }
+
+    /// AGS-23: what an earlier nav persisted — an open shortcode's code —
+    /// opens that shortcode's root now (the row whose one child the root
+    /// was is the root's), so an open tree stays open. A rootless
+    /// shortcode's code, a ticket's id and a code no group names stay as
+    /// they were; a second pass moves nothing.
+    #[test]
+    fn a_persisted_shortcode_key_opens_its_root() {
+        let g = demo();
+        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<BTreeSet<String>>();
+        let was = set(&["SUP", "SUP-1", "SUP-4", "SUB", "DOCS", "PRE", "PRE-1", "GONE"]);
+        let now = migrate_expanded(&was, &g).expect("the codes with a root move");
+        assert_eq!(now, set(&["SUP-1", "SUP-4", "SUB-1", "DOCS-1", "PRE", "PRE-1", "GONE"]));
+        assert_eq!(migrate_expanded(&now, &g), None, "once");
+        assert_eq!(migrate_expanded(&set(&[]), &g), None);
+        assert_eq!(migrate_expanded(&set(&["SUP-1", "PRE"]), &g), None);
+    }
 
     /// The six kinds (SDLC-11: the doc's `¶` too) each get their own glyph;
     /// the neutral dot is reserved for whatever the table does not know.
@@ -2127,7 +2517,7 @@ mod tests {
     /// it holds; a row of docs alone counts its docs.
     #[test]
     fn a_rollup_shows_the_works_done_over_total_and_a_doc_collection_its_docs() {
-        let g = |total, done, docs| Group { epic: "G".into(), total, done, docs, root: None, host: None };
+        let g = |total, done, docs| Group { epic: "G".into(), total, done, docs, root: None, root_row: None, host: None };
         assert_eq!(rollup_label(&g(5, 2, 0)), "2/5");
         assert_eq!(rollup_label(&g(4, 4, 3)), "4/4", "docs do not hold a row open");
         assert_eq!(rollup_label(&g(0, 0, 1)), "1 doc");

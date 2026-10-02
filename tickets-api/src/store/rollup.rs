@@ -398,6 +398,12 @@ impl Rollups {
         self.shortcodes.get(epic)?.root.as_deref()
     }
 
+    /// AGS-23: `epic`'s row as it stands, if the nav draws one — what a
+    /// write reports that moves no count but changes the root's own row.
+    pub(super) fn group(&self, epic: &str) -> Option<Group> {
+        self.view(epic)
+    }
+
     /// Every drawn group, in shortcode order.
     pub(super) fn groups(&self) -> Vec<Group> {
         self.shortcodes
@@ -820,6 +826,9 @@ impl Rollups {
             done: s.roll.done,
             docs: s.roll.docs,
             root: s.root.clone(),
+            // AGS-23: the cache dresses it (`Cache::dress`) — the
+            // roll-ups keep no ticket's fields.
+            root_row: None,
             host: s.host.clone(),
         })
     }
@@ -852,6 +861,7 @@ impl Rollups {
                         done: 0,
                         docs: 0,
                         root: s.root.clone(),
+                        root_row: None,
                         host: None,
                     },
                 )),
