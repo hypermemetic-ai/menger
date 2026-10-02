@@ -59,6 +59,20 @@
 //! opens its first row. With no connection it says so and shows no matches.
 //! Its rows are its own: they are not put in the row cache, and the ticket
 //! opened from one is fetched by its page, as any.
+//!
+//! SCALE-26: **the board's order is arithmetic, and its rows may be on their
+//! way.** j/k walked the board's row list — every ticket the walk had found.
+//! There is no such list now: the board holds a window (src/board.rs), and a
+//! position is a ticket by `extents` alone. So a key steps a *position* — the
+//! focused row's, by its id — and focuses the ticket at the next one, which
+//! the window may not hold yet: the board scrolls it in, asks for it, and the
+//! row takes focus when it is drawn ([`focus_board_row`], polled for up to
+//! three seconds). Presses made meanwhile step on from that row, not from the
+//! one still focused, so a held-down j crosses the window's edge without
+//! losing a press. Home and End, once a board row has focus (or the window
+//! left it behind), go to the board's first and last rows the same way —
+//! before, they were the page's own scroll, which carried the focused row out
+//! of the window and dropped the focus.
 
 use std::cell::{Cell, RefCell};
 
@@ -67,7 +81,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{dom, navigate_to_ticket, row_index, session, st_class, Row};
+use crate::{board, dom, navigate_to_ticket, session, st_class};
 use menger_tickets_api::{TicketSummary, TicketsEvent};
 
 /// How long a `g` stays armed as the first key of a `g …` sequence.
@@ -104,7 +118,7 @@ pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
     ("k / ↑", "previous row"),
     ("l / →", "expand a group, or step into it"),
     ("h / ←", "collapse a group, or step out to it"),
-    ("Home / End", "first / last row of the tree"),
+    ("Home / End", "first / last row (nav tree, board)"),
     ("Enter", "open the focused ticket"),
     ("/ or Ctrl+K", "jump to a ticket (⌘K on a Mac)"),
     ("g h", "go to the board"),
@@ -299,11 +313,91 @@ thread_local! {
     /// anywhere else — what j/k resume from when the window has unmounted
     /// that row (and focus fell to `<body>` with it).
     static BOARD_FOCUS: RefCell<Option<String>> = const { RefCell::new(None) };
+
+    /// SCALE-26: the board row a step is on its way to (not drawn yet), and
+    /// when the step was taken — where the next press steps from.
+    static BOARD_TARGET: RefCell<Option<(String, f64)>> = const { RefCell::new(None) };
+
+    /// SCALE-26: the focused board row's element, and the one observer that
+    /// gives it focus back when the window's `<For>` moves it ([`keep_board_focus`]).
+    static BOARD_FOCUS_EL: RefCell<Option<web_sys::HtmlElement>> = const { RefCell::new(None) };
+    static BOARD_OBSERVER: RefCell<Option<web_sys::MutationObserver>> = const { RefCell::new(None) };
+    /// SCALE-26: the observer is handing focus back — not a new focus, so a
+    /// step on its way stays on its way.
+    static REFOCUS: Cell<bool> = const { Cell::new(false) };
 }
 
-/// MFE-12: a board row took focus (the board's `focusin`).
-pub(crate) fn note_board_focus(id: String) {
+/// How long a step waits for its row to be drawn: the scroll's frame, then
+/// the window's page (a few ms at 10^6, more over a slow link).
+const BOARD_STEP_WAIT_MS: f64 = 3000.0;
+
+/// MFE-12: a board row took focus (the board's `focusin`). SCALE-26: a step
+/// on its way ends there — it landed, or a click went somewhere else — and
+/// the row's element is what [`keep_board_focus`] gives focus back to.
+pub(crate) fn note_board_focus(id: String, row: Option<web_sys::HtmlElement>) {
+    if !REFOCUS.with(Cell::get) {
+        BOARD_TARGET.with(|t| *t.borrow_mut() = None);
+    }
+    if row.is_some() {
+        BOARD_FOCUS_EL.with(|f| *f.borrow_mut() = row);
+    }
     BOARD_FOCUS.with(|c| *c.borrow_mut() = Some(id));
+}
+
+/// SCALE-26: focus stays on the board's row while its window moves — the
+/// nav's `keep_focus` (SCALE-24), for the board. When the window grows at its
+/// top (a step up across its edge, a scroll back) the keyed `<For>` puts the
+/// rows that stay back behind the new ones, and an element moved in the DOM
+/// loses focus: the next j/k would start from nowhere. So the board's
+/// `<tbody>` is watched, and a focused row that a mutation batch moved while
+/// focus fell to `<body>` gets it back, without scrolling, in the observer's
+/// microtask — before the next keystroke. A row blurred any other way (a
+/// click elsewhere, `blur()`) is not moved, and stays blurred. One observer
+/// for the app's lifetime, pointed at each `<tbody>` the board mounts.
+pub(crate) fn keep_board_focus(tbody: &web_sys::Element) {
+    let obs = BOARD_OBSERVER.with(|o| {
+        o.borrow_mut()
+            .get_or_insert_with(|| {
+                let cb = Closure::<dyn FnMut(js_sys::Array, web_sys::MutationObserver)>::new(
+                    |records: js_sys::Array, _: web_sys::MutationObserver| {
+                        let Some(el) = BOARD_FOCUS_EL.with(|f| f.borrow().clone()) else { return };
+                        let Some(doc) = dom::window().document() else { return };
+                        let resting = doc.active_element().is_none_or(|a| a.tag_name() == "BODY");
+                        if !resting || !el.is_connected() {
+                            return;
+                        }
+                        // Taken out and put back — in one batch, or in two
+                        // (the second only adds it).
+                        let moved = records.iter().any(|r| {
+                            let Ok(r) = r.dyn_into::<web_sys::MutationRecord>() else { return false };
+                            [r.removed_nodes(), r.added_nodes()]
+                                .iter()
+                                .any(|nodes| (0..nodes.length()).filter_map(|i| nodes.get(i)).any(|n| n.is_same_node(Some(&el))))
+                        });
+                        if moved {
+                            let opts = web_sys::FocusOptions::new();
+                            opts.set_prevent_scroll(true);
+                            REFOCUS.with(|r| r.set(true));
+                            let _ = el.focus_with_options(&opts);
+                            REFOCUS.with(|r| r.set(false));
+                        }
+                    },
+                );
+                let obs = web_sys::MutationObserver::new(cb.as_ref().unchecked_ref()).expect("MutationObserver");
+                cb.forget(); // lives as long as the app
+                obs
+            })
+            .clone()
+    });
+    let init = web_sys::MutationObserverInit::new();
+    init.set_child_list(true);
+    let _ = obs.observe_with_options(tbody, &init);
+}
+
+/// SCALE-26: the row a step is still on its way to, if one is.
+fn board_target() -> Option<String> {
+    let now = js_sys::Date::now();
+    BOARD_TARGET.with(|t| t.borrow().as_ref().filter(|(_, at)| now - at < BOARD_STEP_WAIT_MS).map(|(id, _)| id.clone()))
 }
 
 /// Remember where focus is, so [`restore_focus`] can hand it back when
@@ -337,7 +431,7 @@ pub(crate) fn restore_focus() {
             // MFE-12: a board row the window unmounted while the overlay
             // (or the menu) was up. The same ticket's row, if the window
             // has it again; otherwise j/k resume from it.
-            note_board_focus(id.clone());
+            note_board_focus(id.clone(), None);
             if let Some(row) = mounted_board_row(&query_all("#board tr[data-ticket-id]"), &id) {
                 focus_row(row);
             }
@@ -391,10 +485,11 @@ pub(crate) fn consume_go_prefix(key: &str) -> bool {
 
 /// One `window` keydown listener for the app's lifetime — the same
 /// shape as the router's `hashchange`. MFE-12: it holds the row store,
-/// which is what the board's j/k walk now.
-pub(crate) fn install(overlay: RwSignal<Overlay>, rows: RwSignal<Vec<Row>>) {
+/// which is what the board's j/k walk now. SCALE-26: the board's model —
+/// positions by `extents`, not a list of rows.
+pub(crate) fn install(overlay: RwSignal<Overlay>, board: board::Board) {
     let cb = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
-        global_keydown(&ev, overlay, rows);
+        global_keydown(&ev, overlay, board);
     });
     dom::window()
         .add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref())
@@ -411,6 +506,8 @@ pub(crate) fn install(overlay: RwSignal<Overlay>, rows: RwSignal<Vec<Row>>) {
             .is_some();
         if !on_board {
             BOARD_FOCUS.with(|c| *c.borrow_mut() = None);
+            BOARD_TARGET.with(|t| *t.borrow_mut() = None);
+            BOARD_FOCUS_EL.with(|f| *f.borrow_mut() = None);
         }
     });
     if let Some(doc) = dom::window().document() {
@@ -433,7 +530,7 @@ fn defer_to_focus(el: &web_sys::Element) -> bool {
         .is_some()
 }
 
-fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, rows: RwSignal<Vec<Row>>) {
+fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board: board::Board) {
     if ev.default_prevented() || ev.is_composing() {
         return;
     }
@@ -486,7 +583,7 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, rows:
         ev.prevent_default();
         return;
     }
-    if board_key(&key, target.as_ref(), rows) {
+    if board_key(&key, target.as_ref(), board) {
         ev.prevent_default();
     }
 }
@@ -503,12 +600,19 @@ fn mounted_board_row<'a>(mounted: &'a [web_sys::HtmlElement], id: &str) -> Optio
 /// row store's — the board's order by construction, so nothing is
 /// mirrored into a second structure — not the DOM's, which holds only the
 /// window; the row a key lands on may not be mounted yet, and
-/// [`focus_board_row`] brings it in.
-fn board_key(key: &str, target: Option<&web_sys::Element>, rows: RwSignal<Vec<Row>>) -> bool {
-    let mounted = query_all("#board tr[data-ticket-id]");
-    if mounted.is_empty() {
+/// [`focus_board_row`] brings it in. SCALE-26: the order is the extents'
+/// (a row's position is its id's), the row may not be fetched yet either, a
+/// step still on its way is where the next one starts, and Home/End are the
+/// board's ends once a row has focus.
+fn board_key(key: &str, target: Option<&web_sys::Element>, board: board::Board) -> bool {
+    // SCALE-26: whether the board is on screen is its `<tbody>`, not its
+    // mounted rows — a window run ahead of its pages (k held down past what
+    // has been fetched) mounts none for a moment, and the presses made then
+    // are steps like any other.
+    if dom::window().document().and_then(|d| d.get_element_by_id("board")).is_none() {
         return false; // no board on screen
     }
+    let mounted = query_all("#board tr[data-ticket-id]");
     let focused = target
         .and_then(|t| t.closest("#board tr[data-ticket-id]").ok().flatten())
         .and_then(|el| el.get_attribute("data-ticket-id"));
@@ -520,10 +624,12 @@ fn board_key(key: &str, target: Option<&web_sys::Element>, rows: RwSignal<Vec<Ro
     let parked = BOARD_FOCUS
         .with(|c| c.borrow().clone())
         .filter(|id| resting && mounted_board_row(&mounted, id).is_none());
-    let (n, cur, resume) = rows.with_untracked(|v| {
-        let at = |id: &Option<String>| id.as_deref().and_then(|id| row_index(v, id));
-        (v.len(), at(&focused), at(&focused).or_else(|| at(&parked)))
-    });
+    // A step on its way (a click into a row, or focus anywhere else, ends it).
+    let pending = board_target();
+    let n = board.n_untracked();
+    let at = |id: &Option<String>| id.as_deref().and_then(|id| board.pos_of_untracked(id));
+    let cur = at(&pending).or_else(|| at(&focused));
+    let resume = cur.or_else(|| at(&parked));
     if n == 0 {
         return false;
     }
@@ -535,6 +641,10 @@ fn board_key(key: &str, target: Option<&web_sys::Element>, rows: RwSignal<Vec<Ro
         "k" => Some(resume.map_or(last, |i| i.saturating_sub(1))),
         "ArrowDown" => cur.map(|i| (i + 1).min(last)),
         "ArrowUp" => cur.map(|i| i.saturating_sub(1)),
+        // SCALE-26: the board's ends, once a row has focus — with none, the
+        // page's own Home/End, as before.
+        "Home" => resume.map(|_| 0),
+        "End" => resume.map(|_| last),
         "Enter" => {
             let Some(id) = focused else { return false };
             navigate_to_ticket(&id);
@@ -544,7 +654,7 @@ fn board_key(key: &str, target: Option<&web_sys::Element>, rows: RwSignal<Vec<Ro
     };
     match next {
         Some(i) => {
-            focus_board_row(&mounted, i, rows);
+            focus_board_row(&mounted, i, board);
             true
         }
         None => false,
@@ -554,26 +664,57 @@ fn board_key(key: &str, target: Option<&web_sys::Element>, rows: RwSignal<Vec<Ro
 /// Focus store row `index` on the board (MFE-12): at once where the window
 /// holds it; otherwise scroll it in and focus it when the window has drawn
 /// it — polled a frame at a time, because a scroll's event lands on the
-/// next frame and the window moves on that event.
-fn focus_board_row(mounted: &[web_sys::HtmlElement], index: usize, rows: RwSignal<Vec<Row>>) {
-    let Some((id, n)) = rows.with_untracked(|v| v.get(index).map(|r| (r.id.clone(), v.len()))) else {
-        return;
-    };
+/// next frame and the window moves on that event. SCALE-26: and the row may
+/// still have to be fetched, so the wait is longer, the row it waits for is
+/// remembered (the next press steps on from it), and a newer step ends it.
+fn focus_board_row(mounted: &[web_sys::HtmlElement], index: usize, board: board::Board) {
+    let Some(id) = board.id_at(index) else { return };
     if let Some(el) = mounted_board_row(mounted, &id) {
-        focus_and_rove(mounted, el);
+        BOARD_TARGET.with(|t| *t.borrow_mut() = None);
+        focus_board_el(mounted, el, index, board);
         return;
     }
-    crate::scroll_board_to(index, n);
+    let since = js_sys::Date::now();
+    BOARD_TARGET.with(|t| *t.borrow_mut() = Some((id.clone(), since)));
+    crate::scroll_board_to(index, board.n_untracked(), board.pitch());
     spawn_local(async move {
-        for _ in 0..30 {
+        while js_sys::Date::now() - since < BOARD_STEP_WAIT_MS {
             dom::sleep_ms(16).await;
+            let mine = BOARD_TARGET.with(|t| t.borrow().as_ref().is_some_and(|(want, at)| *want == id && *at == since));
+            if !mine {
+                return; // a newer step, or a focus elsewhere
+            }
             let all = query_all("#board tr[data-ticket-id]");
             if let Some(el) = mounted_board_row(&all, &id) {
-                focus_and_rove(&all, el);
+                BOARD_TARGET.with(|t| *t.borrow_mut() = None);
+                focus_board_el(&all, el, index, board);
                 return;
             }
         }
+        BOARD_TARGET.with(|t| {
+            let mut t = t.borrow_mut();
+            if t.as_ref().is_some_and(|(want, at)| *want == id && *at == since) {
+                *t = None;
+            }
+        });
     });
+}
+
+/// SCALE-26: a board row takes focus without the browser's own scroll into
+/// view, which assumes the rows stay where they are when it scrolls — and on
+/// a board laid out above 15 M px they do not (the scroll range is mapped
+/// onto the store, MFE-12: a scroll of one pitch moves the rows by ~2.5 at
+/// 10^6), so the row it scrolled to was somewhere else, often unmounted, and
+/// focus fell to `<body>` (j stopped dead 25 rows down at 10^6, before this
+/// build too). The board scrolls itself to the row by its own mapping
+/// (`scroll_board_to`, the least that shows it — a no-op when it is on
+/// screen), and the row is focused where it is.
+fn focus_board_el(all: &[web_sys::HtmlElement], el: &web_sys::HtmlElement, index: usize, board: board::Board) {
+    rove(all, el);
+    crate::scroll_board_to(index, board.n_untracked(), board.pitch());
+    let opts = web_sys::FocusOptions::new();
+    opts.set_prevent_scroll(true);
+    let _ = el.focus_with_options(&opts);
 }
 
 /// Seed the board's tab stop after a render (see [`ensure_tab_stop`]).

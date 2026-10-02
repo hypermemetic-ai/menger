@@ -218,6 +218,10 @@
   table.board th.c-blk { width: 10rem; }
   tbody#board td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   tbody#board tr.spacer td { padding: 0; border: 0; }
+  /* SCALE-26: rows the window has reached before their page has come — a
+     stretch of them is one muted line band at the row pitch, so nothing
+     moves when the rows land in its place. */
+  tbody#board tr.pending td { padding: 0 .6rem; border: 0; color: var(--muted); vertical-align: top; }
   tbody#board.scaled { overflow-anchor: none; }
   /* The status control is the tallest thing in a row, and its natural
      height follows the face it is set in — Blocked's bold one is 4px

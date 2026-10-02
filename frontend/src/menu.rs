@@ -55,6 +55,10 @@
 //! SCALE-24: the row store it reads is the row cache (src/cache.rs), by id —
 //! where every view that draws a ticket holds it — not the board's list,
 //! which no longer holds every ticket the nav can show.
+//!
+//! SCALE-26: and it holds its ticket there while it is open — fetching it
+//! when no view holds it (a ticket page's unlock not asked for yet): nothing
+//! walks the store into the cache any more.
 
 use js_sys::Reflect;
 use leptos::prelude::*;
@@ -391,6 +395,12 @@ fn menu_view(
     toast_gen: StoredValue<u32>,
 ) -> impl IntoView {
     let Target { id, x, y } = t;
+    // SCALE-26: the menu holds the ticket it is open on, and asks for it when
+    // no view does (no walk puts every ticket in the cache any more).
+    let holder = cache::Holder::new();
+    if !holder.hold_id(&id) {
+        session::load_rows(vec![id.clone()], holder);
+    }
     let ticket = {
         let id = id.clone();
         Memo::new(move |_| cache::find(&id))

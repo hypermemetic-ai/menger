@@ -40,6 +40,17 @@
 //!   it up with [`find`], which re-runs when new rows arrive. Rows already
 //!   held never notify it, so a page of the walk landing re-runs those few
 //!   lookups once, not per row.
+//!
+//! SCALE-26: the walk is gone, and with it the one view that held every
+//! ticket. The board holds its window and a margin either side, through its
+//! own [`Holder`] (src/board.rs), and gives back what scrolls far away; a
+//! `created` is held only where the board holds the rows around it, or by a
+//! ticket page that asked for it. So the cache now holds what is shown —
+//! about 2,400 rows at most for the board, however far it has been scrolled,
+//! plus what the nav and an open page show — and [`put`] is the whole of
+//! `watch`'s reach: an event for a row nobody holds is dropped. How many it
+//! holds is a signal ([`held_signal`]), which the page carries as
+//! `#app[data-rows-held]` for the harnesses.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -65,6 +76,20 @@ thread_local! {
     /// Notified when an id the cache did not hold arrives — what [`find`]
     /// re-runs on.
     static ARRIVALS: ArcTrigger = ArcTrigger::new();
+
+    /// SCALE-26: how many rows are held, as a signal — set after the map
+    /// changes size, never while it is borrowed.
+    static HELD: ArcRwSignal<usize> = ArcRwSignal::new(0);
+}
+
+/// The held count, set to what the map holds now if it moved.
+fn count() {
+    let n = ROWS.with(|rows| rows.borrow().len());
+    HELD.with(|h| {
+        if h.get_untracked() != n {
+            h.set(n);
+        }
+    });
 }
 
 /// `t` onto `sig`, if it differs — an unchanged row notifies nobody, so a
@@ -105,6 +130,7 @@ fn hold_quiet(t: TicketSummary) -> (RowSignal, bool) {
 pub(crate) fn hold(t: TicketSummary) -> RowSignal {
     let (sig, fresh) = hold_quiet(t);
     if fresh {
+        count();
         ARRIVALS.with(ArcTrigger::notify);
     }
     sig
@@ -124,6 +150,7 @@ pub(crate) fn hold_page(page: impl IntoIterator<Item = TicketSummary>) -> Vec<Ro
         })
         .collect();
     if fresh {
+        count();
         ARRIVALS.with(ArcTrigger::notify);
     }
     sigs
@@ -142,15 +169,19 @@ pub(crate) fn hold_id(id: &str) -> Option<RowSignal> {
 
 /// Give back one hold; the last one takes the row out of the cache.
 pub(crate) fn release(id: &str) {
-    ROWS.with(|rows| {
+    let gone = ROWS.with(|rows| {
         let mut rows = rows.borrow_mut();
-        if let Some(e) = rows.get_mut(id) {
-            e.holds = e.holds.saturating_sub(1);
-            if e.holds == 0 {
-                rows.remove(id);
+        match rows.get_mut(id) {
+            Some(e) => {
+                e.holds = e.holds.saturating_sub(1);
+                e.holds == 0 && rows.remove(id).is_some()
             }
+            None => false,
         }
     });
+    if gone {
+        count();
+    }
 }
 
 /// A `watch` event's ticket: applied to the row if the cache holds it,
@@ -189,9 +220,14 @@ pub(crate) fn find(id: &str) -> Option<RowSignal> {
 }
 
 /// How many rows are held — the number SCALE-26's budget is about.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn held() -> usize {
     ROWS.with(|rows| rows.borrow().len())
+}
+
+/// SCALE-26: [`held`] as a signal — what `#app[data-rows-held]` shows.
+pub(crate) fn held_signal() -> ArcRwSignal<usize> {
+    HELD.with(Clone::clone)
 }
 
 /// A view's holds, given back together.

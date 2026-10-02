@@ -48,17 +48,20 @@ Two WebSocket `list` rows, the same set two ways (MNG-9):
 Every `list` / `ready_set` response now ends with one `page` event, so
 the event counts here are the tickets, with that item subtracted.
 
-Browser (Playwright chromium, fresh context per run): app load → "live";
-the board's first rows painted (plus what the page holds at live — DOM
-elements, nodes, rows mounted, JS heap); every nav shortcode visible;
-scrolling the board to its last ticket; opening the ticket page from the
-board and as a cold deep link; a curl-created ticket appearing where the
-user is looking (the board at its end, the nav open on that epic); and,
-last, expanding the largest nav group until every one of its tickets is
-mounted. Since MFE-12 the app mounts a *window* of the board and a nav
-node's children only when it opens, so "every row in the DOM" is no
-longer something to wait for; `perf/notes.md` ("What MFE-12 changed")
-defines each browser row exactly.
+Browser (Playwright chromium, fresh context per run): app load → "live"
+(with the WebSocket frames the page sent before it); the board's first rows
+painted (plus what the page holds at live — DOM elements, nodes, rows
+mounted, the rows the client holds, wasm memory, JS heap); every nav
+shortcode visible; scrolling the board to its last ticket; opening the
+ticket page from the board and as a cold deep link; a curl-created ticket
+appearing where the user is looking (the board at its end, the nav open on
+that epic and scrolled to its end); and, last, expanding the largest nav
+group until its first children show and its last is a scroll away. Since
+MFE-12 the app mounts a *window* of the board and a nav node's children only
+when it opens, and since SCALE-24/SCALE-26 it holds only what it shows, so
+"every row in the DOM" (or in memory) is no longer something to wait for;
+`perf/notes.md` ("What MFE-12 changed", "What SCALE-26 changed") defines
+each browser row exactly.
 
 Every measurement runs under its own budget (`budgetMs` in
 `magnitude.mjs`, scaled by magnitude) and is recorded as a **FAIL** row

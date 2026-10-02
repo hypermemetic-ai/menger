@@ -282,3 +282,101 @@ and at 10⁵. The ladder's own load → live at 10⁴ (946 ms) is timed from
 Playwright's `goto` call rather than the page's time origin, on a 900 px
 viewport, in a browser that has run the smaller magnitudes;
 MFE-9-numbers.js is the measurement MFE-12's criterion names.
+
+## What SCALE-26 changed (re-run, branch `scale-26-board-by-window`)
+
+The section above is MFE-19, the ladder after MFE-12. Since then SCALE-24
+put the nav on the server's roll-ups and children by page, SCALE-25 the
+jump palette on `find`, and SCALE-26 the board on windows: `extents` (each
+shortcode's last sequence — sequences are dense, so row k of the board is a
+ticket id by arithmetic) and one `list { after, limit, summary }` for the
+rows a window shows. The session's walk of every summary is gone; the app
+asks for what it shows and holds only that. This is the ladder's first run
+on that app: `--date 2026-10-01-scale26`, the same machine, server unchanged
+since SCALE-25 (`467bc01`; the header's "+ uncommitted changes" is the
+SCALE-26 frontend and this harness — the code committed, but for doc
+comments, these notes and keyboard fixes no ladder row exercises: a step
+taken while the board's window holds no fetched row yet, the scroll to a row
+measured with the board's pitch rather than the first frame's guess, and a
+focused row put back in two mutation batches — `src/keys.rs`, `src/main.rs`).
+
+### The browser rows, redefined again
+
+| row | measures now | was (MFE-12) |
+|---|---|---|
+| app load → live · WS | `page.goto` to `#conn.live`. `live` is now the socket up, `watch` subscribed, `health`, `groups`, `extents` and the board's one window answered — five requests at any N. Detail: the WebSocket frames the page sent while the dock did not read `live`, counted in the page (`WebSocket.prototype.send`, as `plans/MFE/artifacts/SCALE-26-board.js` does) | the same goto, but `live` came after MNG-9's whole summary walk (2,000 pages at 10⁶) |
+| board first rows painted | unchanged; detail adds the rows the client holds (`#app[data-rows-held]`, the row cache's size) and the wasm module's linear memory (trunk's `TrunkApplicationStarted` hands the page the module's exports) | the same, without them — there was nothing to say: every row was held |
+| board scroll to the last ticket | unchanged definition, but no longer a re-render of rows in memory: the window at the end is asked for (one page) and drawn. Detail adds the rows held after | the walk had every row in hand |
+| created ticket appears (board + open nav) | as before, plus one untimed step: the nav, open on the last epic's root, is scrolled to its end — since SCALE-24 an open node of more than a page is a window, and a birth at its end is mounted only where its end is shown (SCALE-24-nav.js's `created_open`) | the nav's open node mounted every child |
+| expand largest nav group | a click on the group's row and on its root's toggle, timed to the first of the root's children rendered; then the open list scrolled to its end until its last child — `aria-posinset` = `aria-setsize` — is on screen (detail: how long, and of how many) | until every ticket of the epic was mounted — which SCALE-24's window never does by design (MFE-19: 2.51 s at 10⁵, the wasm aborted at 10⁶) |
+
+Not a browser row, but fixed on the way: the sample the `REST blockers` row
+needs is scanned out of a streamed `list` with a pattern of the ticket's
+keys in order, and SDLC-9's `commits` (between `child_count` and
+`created_unix`) broke it — the row read "no multi-blocker sample" at every
+magnitude. The pattern now allows it.
+
+### What it found
+
+**No browser row grows more than ×1.5 over four decades, and none fails at
+10⁶.** Load → live is 181 ms, 198 ms, 201 ms, 223 ms and 263 ms from 10² to
+10⁶ (MFE-19: 168 ms → 50.75 s); the page sent 5 frames before `live` at
+every magnitude (`watch`, `health`, `groups`, `extents`, `list`) where the
+unchanged app sent 4 at 10², 23 at 10⁴, 203 at 10⁵ and 2,003 at 10⁶ — a
+page of 500 per 500 tickets (SCALE-26-board.js on the unchanged build,
+below). The first board rows are on screen in 172–225 ms, at `live` or a
+frame before it. The rows the client holds at live are the
+window, 125 at a 900 px viewport, at every N; the wasm module's memory at
+live is 2.6 MiB at 10² and 5.0 MiB at 10⁶ (the walk's app at 10⁶: 682 MB,
+measured by SCALE-26-board.js on the unchanged build). What still grows a
+little is O(shortcodes), not O(N): 7 → 252 shortcode rows in the nav, 1,938
+→ 4,308 elements at live, and the `groups`/`extents` answers.
+
+**Every row that used to wait for the walk is flat.** Nav shortcodes
+visible 198–280 ms (MFE-19: 50.77 s at 10⁶). A created ticket appears on
+the board and in the open nav in 23–54 ms (2.03 s), because nothing
+rebuilds over every row and the board holds the stretch it lands in.
+Scrolling to the last ticket is 59–69 ms from 10³ up — the page at the end
+asked for and drawn — and the board then holds the window it shows (126 at
+10⁴, 125 at 10⁶; it gives back what scrolled more than 1,000 rows away).
+The largest group opens in 43–118 ms to its first children, and the last of
+MAP's 163,530 children is on screen 54 ms after a scroll to the list's end;
+the page holds 5,779 elements with it open (MFE-19: a `RuntimeError:
+unreachable` at 10⁶). The ticket page, from the board or cold, stays at
+34–231 ms.
+
+**What is left is the server's, and it is not new.** `REST list` returns
+413 from 10⁴ and `REST ready_set` from 10⁵ — the REST gateway's 10,000-item
+collect cap (TRANSPORT-2), unchanged since the MNG-9 section above; no
+browser path uses either. The WebSocket controls (a streamed `list` of
+everything, a paged walk of every summary) are linear by definition and
+are kept as the store's own cost.
+
+### Before and after, the same session
+
+`plans/MFE/artifacts/SCALE-26-board.js`, release server on
+`--seed-synthetic N` (seed value 1), 1400×950, medians of 3; "before" is
+the unchanged build (`467bc01`), "after" this branch. Raw output in
+`plans/MFE/artifacts/SCALE-26/`.
+
+| | 10⁴ before → after | 10⁵ before → after | 10⁶ before → after |
+|---|---|---|---|
+| first board rows | 194 → 211 ms | 211 → 218 ms | 232 → 220 ms |
+| `live · WS` | 679 ms → 211 ms | 4.43 s → 218 ms | 43.2 s → 220 ms |
+| frames sent before `live` | 23 → 5 | 203 → 5 | 2,003 → 5 |
+| rows the client holds at `live` | 10,000 → 150 | 100,000 → 150 | 1,000,000 → 150 |
+| most rows held, scrolled top to bottom in 100 jumps | 10,000 → 1,150 | 100,000 → 500 | 1,000,000 → 250 |
+| wasm memory at `live` | 9.8 MB → 3.6 MB | 69.3 MB → 4.2 MB | 681.7 MB → 5.6 MB |
+| JS heap at `live` | 3.4 → 3.5 MB | 2.2 → 4.1 MB | 2.6 → 3.1 MB |
+| checks passed | 8/15 → 15/15 | 7/15 → 15/15 | 6/15 → 15/15 |
+
+At 100 tickets the page sends the same 5 frames before `live` (before: 4 —
+`watch`, `health`, `groups` and the walk's one page; `live` 147 → 177 ms).
+The unchanged app held every row it had walked; the harness reads that as
+its board list's length (`aria-rowcount` − 1), since it has no
+`data-rows-held`. Two of its failures were not the walk's: k pressed up
+across the window's top edge lost the focus (the window's `<For>` moves the
+rows that stay behind the new ones, and a moved element is blurred) at every
+magnitude, and at 10⁶ j lost the focus 25 rows down and began again at the
+first row (the browser's scroll into view fought the scaled layout) — both
+fixed here (src/keys.rs).

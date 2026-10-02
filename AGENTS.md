@@ -103,11 +103,12 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
 - The browser app's data plane is the Plexus WebSocket, not the REST
   bridge (MFE-9): one `WsTransport` for the app's lifetime, the typed
   client from `tickets-api`'s `client` feature, `watch` opened before
-  MNG-9's `list` page walk. The REST bridge and the `/rest` proxy stay
-  for curl, scripts and non-Rust clients. `frontend/src` must contain no
-  `/rest/`, no hand-parsed SSE, and no `serde_json::Value` on a wire path.
-  Both halves are on the plexus 0.6 line (MFE-10), and the client the app
-  uses is emitted from the server's own activation (MFE-11).
+  anything else the session asks (SCALE-26: `health`, `groups`,
+  `extents` and one board window — no walk). The REST bridge and the
+  `/rest` proxy stay for curl, scripts and non-Rust clients. `frontend/src`
+  must contain no `/rest/`, no hand-parsed SSE, and no `serde_json::Value`
+  on a wire path. Both halves are on the plexus 0.6 line (MFE-10), and the
+  client the app uses is emitted from the server's own activation (MFE-11).
 - Every RPC method returns `impl Stream<Item = TicketsEvent> + Send + 'static`;
   event enums use `#[serde(tag = "type", rename_all = "snake_case")]` with an
   in-band `Error { message }` variant.

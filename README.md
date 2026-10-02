@@ -155,30 +155,42 @@ owns no routing):
   the app's whole data plane is one `WsTransport` on :4455 speaking
   `menger.call`, driven by the client menger's own activation
   declarations generate (`tickets-api`, the crate the server and the
-  browser share). It opens `watch` first, asks `health` and `groups`
-  (the nav's shortcode rows, SCALE-24), then walks
-  `list { summary: true, limit: 500 }` with `after = next` (MNG-9),
-  painting as pages land — while `watch` is applied as it arrives, so
-  nothing waits for the walk — and reconnects on a ~1 s loop — a server
+  browser share). It opens `watch` first, asks `health`, `groups` (the
+  nav's shortcode rows, SCALE-24) and `extents` (where every ticket sits,
+  SCALE-26), then one page for the board's window
+  (`list { after, limit, summary }`, MNG-9) — and is `live`: five requests
+  whatever the store holds. It reconnects on a ~1 s loop — a server
   restart returns the page to live on its own, with rows keeping their
-  DOM identity. A `lagged` on `watch` (SCALE-5) is answered with the same
-  walk over the same socket, plus the groups and the open ticket page's
-  `get`: rows keep their DOM, `watch` keeps running, and the dock stays
+  DOM identity. A `lagged` on `watch` (SCALE-5) is answered over the same
+  socket by asking again for what is shown — the groups, the extents, the
+  board's window, the open ticket page's ticket, children and the rows it
+  names: rows keep their DOM, `watch` keeps running, and the dock stays
   `live`. The port comes from `<meta name="menger-ws-port">`, which
   the shell substitutes wherever it serves the app's entrypoint (`/` and
   `/app/`), exactly as it always has for `web/index.html`.
 
-Rendering (MFE-12): the app holds every row but mounts only what can be
-seen. The board is a window — the rows on screen plus 100 either side,
+Rendering (MFE-12): the app mounts only what can be seen. The board is a
+window — the rows on screen plus 100 either side,
 between two spacer rows at the measured row pitch — so every board row is
 one line (a long title ends in an ellipsis; hover shows it whole); a store
 taller than a browser will lay out (about 888,000 rows in Chromium) is
 drawn at a fixed height with the scroll range mapped onto it. The nav
 mounts a node's children when it opens. j/k, the jump palette and the
 ticket menu work from the row store, so none of them needs a row to be
-mounted. At 10,000 tickets the page holds ~2,800 elements and is live in
-~0.7 s; 100,000 is live in ~5 s and 1,000,000 in ~50 s — the walk of the
-store is what is left.
+mounted.
+
+The board holds only its window (SCALE-26). `extents` gives each
+shortcode's last sequence, and sequences are dense, so row k of the board is
+a ticket id by arithmetic and the page that starts there is
+`list { after: <row k - 1> }` — a scroll or a jump anywhere asks for one page
+(~2 ms at 10^6) and draws a pending line for each row until it lands. The
+rows held stay within 1,000 of the window (about 2,400 at most, however far
+the board is scrolled); a `created` moves the count and the scrollbar and is
+held only inside a stretch the board holds; any other event is applied to a
+row some view holds and dropped otherwise. j/k, Home/End and Enter walk
+positions, so they cross the window and fetch on the way. At 10^6 the first
+rows and `live` come together in ~0.22 s, and the page's wasm memory is
+~5.6 MB (the walk held 682 MB).
 
 The nav (SCALE-24) needs no walk: its shortcode rows are the server's
 roll-ups (`groups`, kept by `group_changed`), a shortcode opens on its
@@ -191,8 +203,7 @@ in one row cache — a signal per ticket, held while a view shows it — that
 the board, the nav and the ticket page share. The jump palette (SCALE-25)
 asks the server: `find` once the typing pauses (80 ms), only the newest
 question's answer shown, its count the answer's rows plus `remaining` —
-`map-12` shows MAP-12 first ~0.26 s after the last keystroke at 10^6, with
-the walk still running.
+`map-12` shows MAP-12 first ~0.26 s after the last keystroke at 10^6.
 
 ## Surface
 
@@ -335,7 +346,8 @@ far enough behind loses changes. It is told: one
 `{"type": "lagged", "missed": N}` data item where they were (SCALE-5),
 then the stream continues. A client that ignores event types it does not
 know is unaffected; one that keeps a copy should treat it as "fetch again
-what you show" — the Leptos app re-walks `list`, as after a reconnect.
+what you show" — the Leptos app asks `extents` and its board's window again
+(SCALE-26), as after a reconnect.
 
 ## Diagrams — the `diagrams` service (COMPILE-4)
 

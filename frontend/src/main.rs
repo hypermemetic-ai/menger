@@ -142,6 +142,25 @@
 //! and the menu find their ticket in the cache by id instead of scanning the
 //! board's list (an O(N) scan per row change at 10^6).
 
+//! SCALE-26: the board loads by window; the walk ends. The board's rows were
+//! still every ticket the session's walk had found — 43.2 s of it to `live`
+//! at 10^6, again on every reconnect and `lagged`, 682 MB of wasm memory —
+//! though it mounted a window of them. Now the board holds a window too
+//! (src/board.rs): `extents` says where every ticket sits (sequences are
+//! dense, so row k of shortcode E is `E-k`), a scroll or a jump turns the
+//! window's first missing row into the cursor before it and asks for that
+//! page, and the rows held stay near what is shown — about 2,400 at most,
+//! wherever the board has been. The board draws the window's rows it holds
+//! and, for the ones on their way, a pending line of the row's height
+//! (`tr.pending`); the scrollbar, `aria-rowcount` and the dock's count are
+//! the extents' sum. Nothing reads a list of every row any more: the board's
+//! `Vec<Row>` and its helpers are gone, j/k/Home/End walk positions by the
+//! same arithmetic (src/keys.rs), and the ticket page holds what it names by
+//! id — its ancestors (the crumb), its blockers and its unlocks, which the
+//! walk used to put in the store for it — and takes a newborn it was waiting
+//! for (a dangling blocker) from `created`. The menu holds what it opens on.
+
+mod board;
 mod cache;
 mod dom;
 mod keys;
@@ -153,6 +172,8 @@ mod nav;
 mod mermaid;
 mod session;
 mod theme;
+
+use std::collections::HashSet;
 
 use leptos::prelude::*;
 use menger_tickets_api::{Status, TicketSummary};
@@ -206,164 +227,6 @@ pub(crate) enum Conn {
     Connecting,
     Live,
     Reconnecting,
-}
-
-/// One board row. `id`/`epic`/`seq` are immutable for a ticket's
-/// lifetime (they define its identity and sort position), so they live
-/// outside the signal; everything mutable renders through `ticket`.
-///
-/// SCALE-24: `ticket` is a handle on the row cache's signal for the id, and
-/// the board's list holds one hold per row it has (released when the walk
-/// drops it) — so the board, the nav and the ticket page draw one ticket
-/// through one signal.
-#[derive(Clone)]
-pub(crate) struct Row {
-    pub(crate) id: String,
-    pub(crate) epic: String,
-    pub(crate) seq: u32,
-    /// MFE-9: a row is the server's `TicketSummary` — every ticket field
-    /// except the body, which no row shows. The one body the app holds is
-    /// the open ticket page's, fetched by `get`.
-    pub(crate) ticket: RwSignal<TicketSummary>,
-}
-
-impl Row {
-    /// A row of the board's list: one hold on the ticket's row in the cache.
-    fn of(t: TicketSummary) -> Self {
-        let (id, epic, seq) = (t.id.clone(), t.epic.clone(), t.seq);
-        Self::held(id, epic, seq, cache::hold(t))
-    }
-
-    fn held(id: String, epic: String, seq: u32, sig: cache::RowSignal) -> Self {
-        Self { id, epic, seq, ticket: RwSignal::from(sig) }
-    }
-
-    /// The row's position in the store's total order — MNG-9's
-    /// `(epic, seq)`, which the schema keeps unique. Immutable for a
-    /// ticket's lifetime, which is what makes the list a sorted vector a
-    /// binary search can address.
-    fn key(&self) -> (&str, u32) {
-        (self.epic.as_str(), self.seq)
-    }
-}
-
-fn key_of(t: &TicketSummary) -> (&str, u32) {
-    (t.epic.as_str(), t.seq)
-}
-
-/// MFE-12: where the ticket `id` sits in the store, in O(log n). Every id
-/// the server allocates is `{epic}-{seq}` — exactly the key the vector is
-/// sorted by — so an id names its own position; one that is not shaped
-/// like that, or that the search misses, falls back to a scan, so the
-/// answer is never wrong, only slower. The nav mounts thousands of leaves
-/// in one expand and the keyboard asks per keystroke; a scan each was
-/// O(N) per leaf.
-pub(crate) fn row_index(v: &[Row], id: &str) -> Option<usize> {
-    let key = id
-        .rsplit_once('-')
-        .and_then(|(epic, seq)| Some((epic, seq.parse::<u32>().ok()?)));
-    if let Some(key) = key {
-        let pos = v.partition_point(|r| r.key() < key);
-        if v.get(pos).is_some_and(|r| r.id == id) {
-            return Some(pos);
-        }
-    }
-    v.iter().position(|r| r.id == id)
-}
-
-/// Fine-grained upsert of one ticket. An existing ticket updates its row's
-/// inner signal in place — the list signal never fires, `<For>` never
-/// re-runs, and every other row's DOM survives untouched. A new ticket
-/// inserts at its `(epic, seq)` position, found by binary search over the
-/// order the store already keeps.
-///
-/// This is the `watch` path: one event, one ticket. The board's initial
-/// walk uses [`upsert_page`] instead — see why there.
-pub(crate) fn upsert(rows: RwSignal<Vec<Row>>, t: TicketSummary) {
-    let existing = rows.with_untracked(|v| {
-        let pos = v.partition_point(|r| r.key() < key_of(&t));
-        v.get(pos).is_some_and(|r| r.id == t.id)
-    });
-    match existing {
-        // SCALE-24: the row's signal is the cache's.
-        true => {
-            cache::put(t);
-        }
-        false => rows.update(|v| {
-            let pos = v.partition_point(|r| r.key() < key_of(&t));
-            v.insert(pos, Row::of(t));
-        }),
-    }
-}
-
-/// MFE-9: one page of MNG-9's walk, merged in **one** list update.
-///
-/// Why this exists rather than a loop over [`upsert`]: each summary
-/// arrives as its own WebSocket notification, so a per-row insert would
-/// notify the list signal 10,000 times, and each notification re-diffs the
-/// board's `<For>` and recomputes the nav's forest memo over every row
-/// held so far. That is quadratic with an enormous constant — measured at
-/// `--seed-synthetic 10000`, the tab stopped answering entirely. Batching
-/// the page makes it one notification per page: 20 re-diffs at 10^4
-/// instead of 10,000.
-///
-/// Rows already present still update through their own inner signals and
-/// never touch the list — the property AGS-20's DOM identity rests on. The
-/// new ones are merged with the existing order in one pass (both sides are
-/// sorted by `(epic, seq)`: the store's walk is in that order and the list
-/// is kept in it).
-pub(crate) fn upsert_page(rows: RwSignal<Vec<Row>>, page: Vec<TicketSummary>) {
-    if page.is_empty() {
-        return;
-    }
-    let mut fresh: Vec<TicketSummary> = Vec::new();
-    let mut held: Vec<TicketSummary> = Vec::new();
-    rows.with_untracked(|v| {
-        for t in page {
-            let pos = v.partition_point(|r| r.key() < key_of(&t));
-            match v.get(pos) {
-                Some(r) if r.id == t.id => held.push(t),
-                _ => fresh.push(t),
-            }
-        }
-    });
-    // SCALE-24: a row already on the board is the cache's signal — and one
-    // `watch` wrote since the walk began is newer than this page.
-    for t in held {
-        if !session::touched(&t.id) {
-            cache::put(t);
-        }
-    }
-    let fresh: Vec<TicketSummary> = fresh
-        .into_iter()
-        .map(|t| match cache::get(&t.id).filter(|_| session::touched(&t.id)) {
-            Some(newer) => newer.get_untracked(),
-            None => t,
-        })
-        .collect();
-    if fresh.is_empty() {
-        return;
-    }
-    // One hold per new row, their arrival announced once for the page.
-    let keys: Vec<(String, String, u32)> = fresh.iter().map(|t| (t.id.clone(), t.epic.clone(), t.seq)).collect();
-    let sigs = cache::hold_page(fresh);
-    let fresh: Vec<Row> = keys
-        .into_iter()
-        .zip(sigs)
-        .map(|((id, epic, seq), sig)| Row::held(id, epic, seq, sig))
-        .collect();
-    rows.update(|v| {
-        let mut merged: Vec<Row> = Vec::with_capacity(v.len() + fresh.len());
-        let mut incoming = fresh.into_iter().peekable();
-        for row in v.drain(..) {
-            while incoming.peek().is_some_and(|r| r.key() < row.key()) {
-                merged.push(incoming.next().expect("peeked"));
-            }
-            merged.push(row);
-        }
-        merged.extend(incoming);
-        *v = merged;
-    });
 }
 
 // ---------------------------------------------------------------------
@@ -471,7 +334,7 @@ pub(crate) struct Geom {
 }
 
 impl Geom {
-    fn pitch(self) -> f64 {
+    pub(crate) fn pitch(self) -> f64 {
         if self.pitch > 1.0 {
             self.pitch
         } else {
@@ -601,12 +464,18 @@ fn measure_board(body: &web_sys::Element, pitch: f64) -> Option<Geom> {
 /// `n`) on screen — `nearest`, like `scrollIntoView` — the way the
 /// keyboard reaches a row outside the window. Pure geometry: the row need
 /// not be mounted, and once the scroll lands the window moves to mount it.
-pub(crate) fn scroll_board_to(index: usize, n: usize) {
+///
+/// SCALE-26: `pitch` is the pitch the board last measured, for when no row
+/// is mounted to measure — a window run ahead of its pages (j held down past
+/// what is fetched) holds only pending lines. The first frame's guess (38 px
+/// against a measured 37.78) put row 50,000 288 rows off, and the scroll
+/// overshot by that much.
+pub(crate) fn scroll_board_to(index: usize, n: usize, pitch: f64) {
     let Some(body) = dom::window().document().and_then(|d| d.get_element_by_id("board")) else {
         return;
     };
     let Some(scroller) = body.closest(".content").ok().flatten() else { return };
-    let Some(g) = measure_board(&body, BOARD_PITCH_GUESS) else { return };
+    let Some(g) = measure_board(&body, pitch) else { return };
     let top = g.row_at(n, g.above);
     let fits = g.viewport / g.pitch();
     let i = index as f64;
@@ -636,25 +505,33 @@ pub(crate) fn scroll_board_to(index: usize, n: usize) {
 /// ([`board_layout`]) — so a status change, which moves neither, re-runs
 /// nothing here, mounted row or not. Rows that stay in the window keep
 /// their `<tr>` (the `<For>` is keyed by id as before).
+///
+/// SCALE-26: the store's length is the extents' sum, and the window's rows
+/// are the ones the board holds ([`board::Board::slots`]) — the rest of the
+/// window, on its way, drawn as pending lines at the row pitch. The geometry
+/// is the board model's, so the window can be asked for before the view has
+/// drawn a row (the session's first page) and stays where it was while the
+/// view is away (a ticket page open). A row's signal handle is made in its
+/// own `<tr>`'s owner and goes with it: a row the board gives back leaves
+/// nothing behind in the arena.
 #[component]
 fn Board(
-    rows: RwSignal<Vec<Row>>,
+    board: board::Board,
     last_error: RwSignal<Option<String>>,
     viewport: Trigger,
 ) -> impl IntoView {
     let body = NodeRef::<leptos::html::Tbody>::new();
-    let geom = RwSignal::new(Geom {
-        above: 0.0,
-        viewport: dom::window()
-            .inner_height()
-            .ok()
-            .and_then(|h| h.as_f64())
-            .unwrap_or(900.0),
-        pitch: BOARD_PITCH_GUESS,
-    });
-    let layout = Memo::new(move |_| board_layout(rows.with(Vec::len), geom.get()));
+    // SCALE-26: the focused row keeps focus when the window moves it.
+    body.on_load(|tb| keys::keep_board_focus(tb.as_ref()));
+    let geom = board.geom;
+    let n = Memo::new(move |_| board.n());
+    let layout = Memo::new(move |_| board_layout(n.get(), geom.get()));
     let range = Memo::new(move |_| layout.with(|l| (l.start, l.end)));
-    let scaled = Memo::new(move |_| geom.get().scaled(rows.with(Vec::len)));
+    let scaled = Memo::new(move |_| geom.get().scaled(n.get()));
+    let slots = Memo::new(move |_| {
+        let (start, end) = range.get();
+        board.slots(start, end)
+    });
 
     // Read the geometry off the DOM. `try_` throughout: the deferred call
     // below can land after the board has unmounted.
@@ -679,7 +556,7 @@ fn Board(
     // after it renders, and re-reads the geometry off the rows it drew.
     Effect::new(move |_| {
         range.track();
-        rows.with(|v| v.len());
+        slots.track();
         spawn_local(async move {
             dom::sleep_ms(0).await;
             measure();
@@ -706,7 +583,7 @@ fn Board(
     view! {
         // ARIA's virtualized-table contract: the table says how many rows
         // it has, each mounted row says which one it is (1 is the head).
-        <table class="board" aria-rowcount=move || rows.with(Vec::len) + 1>
+        <table class="board" aria-rowcount=move || n.get() + 1>
             <thead>
                 <tr aria-rowindex="1">
                     <th class="c-id">"id"</th><th class="c-title">"title"</th><th class="c-kind">"kind"</th>
@@ -721,36 +598,47 @@ fn Board(
                 // a scroll of its own.
                 class:scaled=move || scaled.get()
                 on:focusin=move |ev| {
-                    let id = ev
+                    let tr = ev
                         .target()
                         .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                        .and_then(|el| el.closest("tr[data-ticket-id]").ok().flatten())
-                        .and_then(|tr| tr.get_attribute("data-ticket-id"));
-                    if let Some(id) = id {
-                        keys::note_board_focus(id);
+                        .and_then(|el| el.closest("tr[data-ticket-id]").ok().flatten());
+                    if let Some(tr) = tr {
+                        if let Some(id) = tr.get_attribute("data-ticket-id") {
+                            keys::note_board_focus(id, tr.dyn_into::<web_sys::HtmlElement>().ok());
+                        }
                     }
                 }
             >
                 {spacer(|l| l.top_px)}
                 <For
-                    each=move || {
-                        let (start, end) = range.get();
-                        rows.with(|v| v[start.min(v.len())..end.min(v.len())].to_vec())
-                    }
+                    each=move || slots.get()
                     // id alone: mutations re-render fields inside the
-                    // row; the <tr> itself is never replaced.
-                    key=|row| row.id.clone()
-                    children=move |row: Row| {
-                        let ticket = row.ticket;
-                        let id = row.id.clone();
-                        let nav_id = row.id.clone();
-                        let href_id = row.id.clone();
-                        let index_id = row.id.clone();
+                    // row; the <tr> itself is never replaced. SCALE-26: a
+                    // pending stretch by where it starts and how long it is.
+                    key=board::Slot::key
+                    children=move |slot: board::Slot| {
+                        let (row_id, sig) = match slot {
+                            board::Slot::Row(id, sig) => (id, sig),
+                            board::Slot::Gap(_, len) => {
+                                return view! {
+                                    <tr class="pending" aria-hidden="true">
+                                        <td colspan="6" style:height=move || format!("{}px", len as f64 * geom.with(|g| g.pitch()))>"…"</td>
+                                    </tr>
+                                }
+                                .into_any();
+                            }
+                        };
+                        // SCALE-26: this row's handle, owned by this <tr>.
+                        let ticket = RwSignal::from(sig);
+                        let id = row_id.clone();
+                        let nav_id = row_id.clone();
+                        let href_id = row_id.clone();
+                        let index_id = row_id.clone();
                         view! {
                             <tr
-                                data-ticket-id=row.id.clone()
+                                data-ticket-id=row_id.clone()
                                 tabindex="-1"
-                                aria-rowindex=move || rows.with(|v| row_index(v, &index_id)).map(|i| i + 2)
+                                aria-rowindex=move || board.pos_of(&index_id).map(|i| i + 2)
                                 on:click=move |ev| {
                                     // The select (and its options) keep their own
                                     // behavior; the id link handles itself.
@@ -765,7 +653,7 @@ fn Board(
                                 }
                             >
                                 <td class="id">
-                                    <a href=format!("#/ticket/{href_id}")>{row.id.clone()}</a>
+                                    <a href=format!("#/ticket/{href_id}")>{row_id.clone()}</a>
                                     // AGS-20: no `parent` column — just the
                                     // mark that this row decomposes, and how
                                     // far (the nav is where the tree is).
@@ -841,6 +729,7 @@ fn Board(
                                 <td title=move || ticket.with(|t| t.blocked_by.join(" "))>{move || ticket.with(|t| t.blocked_by.join(" "))}</td>
                             </tr>
                         }
+                        .into_any()
                     }
                 />
                 {spacer(|l| l.bottom_px)}
@@ -905,9 +794,21 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>) -> impl IntoView
 /// cycle cannot spin the crumb. SCALE-24: from the row cache, by id, so a
 /// parent that arrives later (the nav's chain, the walk) fills itself in.
 fn ancestors(id: &str) -> Vec<String> {
+    let (mut chain, _) = chain_of(id);
+    chain.reverse();
+    chain
+}
+
+/// The parent chain of `id` as far as the row cache holds it, nearest
+/// first, and the next one up that it does not hold — the id the ticket page
+/// asks for to grow its crumb (SCALE-26: no walk will bring it).
+fn chain_of(id: &str) -> (Vec<String>, Option<String>) {
     let mut chain: Vec<String> = Vec::new();
     let mut cur = id.to_string();
-    while let Some(row) = cache::find(&cur) {
+    loop {
+        let Some(row) = cache::find(&cur) else {
+            return (chain, (cur != id).then_some(cur));
+        };
         let Some(p) = row.with(|t| t.parent.clone()) else { break };
         if p == id || chain.contains(&p) {
             break;
@@ -915,8 +816,7 @@ fn ancestors(id: &str) -> Vec<String> {
         chain.push(p.clone());
         cur = p;
     }
-    chain.reverse();
-    chain
+    (chain, None)
 }
 
 /// SDLC-9: a commit reference as the ticket page shows it — git's short
@@ -1140,6 +1040,11 @@ fn ticket_view(
     }
 }
 
+/// SCALE-26: the most ids a ticket page asks for beyond its own calls — a
+/// ticket that names thousands (a blocker of everything) shows the rest as
+/// plain links.
+const WANT_MAX: usize = 400;
+
 /// The ticket page (MFE-7). `get` + `blockers` fetch on entry and upsert
 /// into the shared row store; the page renders THROUGH the store's
 /// signals, so the watch stream keeps it live exactly like the board —
@@ -1206,6 +1111,49 @@ fn TicketPage(
         Memo::new(move |_| cache::find(&id))
     };
 
+    // SCALE-26: what the page names by id that its own calls do not bring —
+    // the chain above it (the crumb), its unlocks, and its blockers again.
+    // The walk used to put every one of them in the store; nothing else will
+    // now. So the page holds each the cache has, asks for each it does not
+    // (`get`), asks again for all of them after a reconnect or a `lagged`
+    // (they may be stale), and takes one it asked for that did not exist yet
+    // — a dangling blocker — from `created` when it is born.
+    let asked = StoredValue::new(HashSet::<String>::new());
+    session::watch_wanted(asked, holder.get_value());
+    {
+        let id = id.clone();
+        let stale = session::stale();
+        Effect::new(move |seen: Option<(u32, u32)>| {
+            let epoch = (socket.get(), stale.get());
+            if epoch.0 == 0 {
+                return epoch; // no connection yet
+            }
+            let again = seen.is_some_and(|s| s != epoch);
+            let Some(row) = ticket.get() else { return epoch };
+            let (blocked, unlocks) = row.with(|t| (t.blocked_by.clone(), t.unlocks.clone()));
+            let (chain, next) = chain_of(&id);
+            let mut want: Vec<String> = Vec::new();
+            for w in chain.into_iter().chain(next).chain(blocked).chain(unlocks) {
+                if w != id && !want.contains(&w) && want.len() < WANT_MAX {
+                    want.push(w);
+                }
+            }
+            let holder = holder.get_value();
+            if again {
+                asked.update_value(HashSet::clear);
+            }
+            let ask: Vec<String> = want
+                .into_iter()
+                .filter(|w| again || !(holder.holds(w) || asked.with_value(|a| a.contains(w)) || holder.hold_id(w)))
+                .collect();
+            if !ask.is_empty() {
+                asked.update_value(|a| a.extend(ask.iter().cloned()));
+                session::load_rows(ask, holder);
+            }
+            epoch
+        });
+    }
+
     // AGS-20: the crumb is the ancestor chain — the decomposition read
     // downward, root first — resolved through the same row store, so a
     // parent that arrives later fills itself in.
@@ -1255,7 +1203,10 @@ fn TicketPage(
 
 #[component]
 fn App() -> impl IntoView {
-    let rows = RwSignal::new(Vec::<Row>::new());
+    // SCALE-26: the board's model of the store — the extents, the window's
+    // rows it holds — asked for by the session and kept by its own effect.
+    let board = board::Board::new();
+    board.drive();
     let dock = RwSignal::new(None::<Dock>);
     let conn = RwSignal::new(Conn::Connecting);
     let socket = RwSignal::new(0u32);
@@ -1269,18 +1220,26 @@ fn App() -> impl IntoView {
     // (session.rs) — `watch` first, then MNG-9's summary pages walked with
     // `after = next`, then live. ~1s retry keeps a server restart to a few
     // seconds of "reconnecting…" (MFE-2 criterion 3). It runs regardless of
-    // route: the ticket page's liveness is this same stream.
-    session::drive(rows, dock, conn, socket, last_error, tree);
+    // route: the ticket page's liveness is this same stream. SCALE-26: no
+    // walk — `extents` and the board's one window, then live.
+    session::drive(board, dock, conn, socket, last_error, tree);
 
     let conn_view = move || match conn.get() {
         Conn::Connecting => ("", "connecting…"),
         Conn::Live => ("live", "live · WS"),
         Conn::Reconnecting => ("reconnecting", "reconnecting…"),
     };
+    // SCALE-26: the count is the board's extent once the extents are in —
+    // kept by every `created` and asked again after a `lagged`, so it is the
+    // store's; `health`'s until then.
     let health_view = move || {
-        dock.get()
-            .map(|h| format!("menger v{} · {} tickets", h.version, h.ticket_count))
+        dock.get().map(|h| {
+            let count = if board.ready() { board.n() as u64 } else { h.ticket_count };
+            format!("menger v{} · {} tickets", h.version, count)
+        })
     };
+    // SCALE-26: how many rows the client holds, for the harnesses.
+    let held = cache::held_signal();
 
     // AGS-12: the nav's hidden/shown state, persisted. The nav stays
     // mounted either way (a class hides it), so its rows keep their DOM
@@ -1292,7 +1251,7 @@ fn App() -> impl IntoView {
     // the overlay it opens. Both are additive — every existing pointer
     // path is untouched.
     let overlay = RwSignal::new(keys::Overlay::None);
-    keys::install(overlay, rows);
+    keys::install(overlay, board);
 
     // MFE-12: the content column is the board's viewport. Its scroll and
     // the window's resize are the two things that move which rows are on
@@ -1301,7 +1260,7 @@ fn App() -> impl IntoView {
     window_event_listener(leptos::ev::resize, move |_| viewport.notify());
 
     view! {
-        <div id="app" class:nonav=move || nav_hidden.get()>
+        <div id="app" class:nonav=move || nav_hidden.get() data-rows-held=move || held.get()>
             <nav::Nav tree route hidden=nav_hidden />
             <div class="content" on:scroll=move |_| viewport.notify()>
                 <header>
@@ -1338,7 +1297,7 @@ fn App() -> impl IntoView {
                         })
                     }}
                     {move || match route.get() {
-                        Route::Board => view! { <Board rows last_error viewport /> }.into_any(),
+                        Route::Board => view! { <Board board last_error viewport /> }.into_any(),
                         Route::Ticket(id) => {
                             view! { <TicketPage id socket last_error /> }.into_any()
                         }
@@ -1360,10 +1319,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        board_layout, board_window, row_index, st_class, Geom, Row, BOARD_MARGIN, BOARD_MAX_PX,
-        BOARD_STEP, STATUSES,
-    };
+    use super::{board_layout, board_window, st_class, Geom, BOARD_MARGIN, BOARD_MAX_PX, BOARD_STEP, STATUSES};
 
     /// MFE-12: the window is the viewport plus a margin either side,
     /// snapped outward to the step, inside the store — and it holds still
@@ -1465,44 +1421,6 @@ mod tests {
         let r = g(span / 2.0).row_at(n, span / 2.0);
         assert_eq!((mid.start, mid.end), board_window(n, r.floor() as usize, (vp / p).ceil() as usize + 1));
         assert!((r - (n as f64 - vp / p) / 2.0).abs() < 1.0, "halfway down the scroll range is halfway down the store: {r}");
-    }
-
-    fn row(id: &str) -> Row {
-        let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
-        Row::of(menger_tickets_api::TicketSummary {
-            id: id.to_string(),
-            epic: epic.to_string(),
-            seq: seq.parse().expect("seq"),
-            title: String::new(),
-            status: menger_tickets_api::Status::Pending,
-            kind: menger_tickets_api::Kind::Build,
-            severity: None,
-            parent: None,
-            child_count: 0,
-            blocked_by: Vec::new(),
-            unlocks: Vec::new(),
-            commits: Vec::new(),
-            created_unix: 0,
-            updated_unix: 0,
-        })
-    }
-
-    /// MFE-12: an id is its own `(epic, seq)` key, so it finds its row by
-    /// binary search — across epics, multi-digit seqs and a dashed epic —
-    /// and an id the store does not hold is `None`, never a neighbor.
-    #[test]
-    fn row_index_finds_a_ticket_by_its_own_key() {
-        let v: Vec<Row> = ["AGS-1", "AGS-2", "AGS-10", "MFE-3", "SUB-X-4", "TRANSPORT-2"]
-            .into_iter()
-            .map(row)
-            .collect();
-        for (i, r) in v.iter().enumerate() {
-            assert_eq!(row_index(&v, &r.id), Some(i), "{}", r.id);
-        }
-        assert_eq!(row_index(&v, "AGS-3"), None);
-        assert_eq!(row_index(&v, "ZZZ-1"), None);
-        assert_eq!(row_index(&v, "no-dash-seq"), None);
-        assert_eq!(row_index(&[], "AGS-1"), None);
     }
 
     fn index_html() -> String {

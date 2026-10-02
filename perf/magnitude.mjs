@@ -10,6 +10,7 @@
 // Leptos app in Playwright's chromium (load -> live, first rows, nav
 // shortcodes, scroll to the last ticket, ticket page, a created ticket
 // appearing, expanding the largest group — MFE-12's windowed definitions,
+// redefined again where SCALE-24 and SCALE-26 changed what they wait for,
 // perf/notes.md), measures create -> watch push latency over SSE,
 // then stops the server and deletes the database. Every measurement has
 // its own timeout and is recorded as a failure row when it exceeds it —
@@ -719,14 +720,16 @@ async function runMagnitude(m, opts, browser) {
     // `children` array was AGS-19's, added after this harness was written:
     // without it in the pattern the blockers sample never matched and the
     // `REST blockers` row failed as "no multi-blocker sample" — found by
-    // MNG-9's re-run, fixed here. SCALE-4 replaced it with `child_count`.)
+    // MNG-9's re-run, fixed here. SCALE-4 replaced it with `child_count`.
+    // SDLC-9 then put `commits` between `child_count` and `created_unix`,
+    // and the row failed the same way — found by SCALE-26's re-run.)
     const epicCounts = new Map();
     const multi = [];
     let scanned = false;
     const scanner = (carry, text) => {
       for (const mm of newMatches(/"epic":"([A-Z]+)"/g, carry, text)) epicCounts.set(mm[1], (epicCounts.get(mm[1]) || 0) + 1);
       if (multi.length < 20) {
-        for (const mm of newMatches(/"blocked_by":\["([^\]]*)"\],"body":"(?:[^"\\]|\\.)*","child_count":\d+,"created_unix":\d+,"epic":"[A-Z]+","id":"([A-Z]+-\d+)"/g, carry, text)) {
+        for (const mm of newMatches(/"blocked_by":\["([^\]]*)"\],"body":"(?:[^"\\]|\\.)*","child_count":\d+,(?:"commits":\[[^\]]*\],)?"created_unix":\d+,"epic":"[A-Z]+","id":"([A-Z]+-\d+)"/g, carry, text)) {
           const blockers = mm[1].split('","');
           if (blockers.length >= 2 && !multi.some((x) => x.id === mm[2])) multi.push({ id: mm[2], blockers });
         }
@@ -834,11 +837,25 @@ async function runMagnitude(m, opts, browser) {
         if (/session ended|panicked|RuntimeError|out of memory/i.test(t) && pageErrors.length < 5) pageErrors.push(t.slice(0, 200));
       });
       // First board row, from inside the page (navigation start is its
-      // time origin), the way MFE-9-numbers.js takes it.
+      // time origin), the way MFE-9-numbers.js takes it. SCALE-26: and the
+      // WebSocket frames the page sent while the dock did not yet read
+      // `live` (plans/MFE/artifacts/SCALE-26-board.js counts them the same
+      // way), and the wasm module's memory (trunk hands the page its exports).
       await page.addInitScript(() => {
-        window.__perf = { firstRow: null };
+        const p = (window.__perf = { firstRow: null, frames: [], mem: null });
+        const send = WebSocket.prototype.send;
+        WebSocket.prototype.send = function (data) {
+          let m = "?";
+          try { m = JSON.parse(data).params?.method ?? "?"; } catch { /* not JSON */ }
+          p.frames.push({ m, live: !!document.querySelector("#conn.live") });
+          return send.call(this, data);
+        };
+        addEventListener("TrunkApplicationStarted", (e) => { p.mem = e.detail?.wasm?.memory ?? null; });
+        p.preLive = () => p.frames.filter((f) => !f.live).map((f) => f.m.replace("tickets.", ""));
+        p.held = () => { const a = document.querySelector("#app")?.dataset.rowsHeld; return a == null ? null : Number(a); };
+        p.wasm = () => p.mem?.buffer?.byteLength ?? null;
         const obs = () => {
-          if (document.querySelector("tbody#board tr[data-ticket-id]")) window.__perf.firstRow = performance.now();
+          if (document.querySelector("tbody#board tr[data-ticket-id]")) p.firstRow = performance.now();
           else requestAnimationFrame(obs);
         };
         requestAnimationFrame(obs);
@@ -881,7 +898,8 @@ async function runMagnitude(m, opts, browser) {
         await page.waitForSelector("#conn.live", { timeout: B("browser"), state: "attached" });
         const since = sinceGoto();
         const health = await page.textContent("#health").catch(() => null);
-        return { since_goto_ms: since, health_text: health };
+        const pre = await page.evaluate(() => window.__perf.preLive()).catch(() => null);
+        return { since_goto_ms: since, health_text: health, frames: pre?.length ?? null, frame_methods: pre };
       }));
       if (r.status !== "ok") {
         const why = await diagnose();
@@ -897,7 +915,12 @@ async function runMagnitude(m, opts, browser) {
         if (first == null) throw new Error("no board row was ever painted");
         const dom = await page.evaluate(() => document.getElementsByTagName("*").length);
         const mounted = await page.evaluate(() => document.querySelectorAll("tbody#board tr[data-ticket-id]").length);
-        return { ms: +first.toFixed(1), dom_nodes: dom, rows: mounted };
+        // SCALE-26: the rows the client holds (the row cache's size; an app
+        // before SCALE-26 has no such attribute and held every row it had
+        // walked) and the wasm module's memory, at live.
+        const held = await page.evaluate(() => window.__perf.held()).catch(() => null);
+        const wasm = await page.evaluate(() => window.__perf.wasm()).catch(() => null);
+        return { ms: +first.toFixed(1), dom_nodes: dom, rows: mounted, held, wasm_bytes: wasm };
       });
       rows("board_first_rows").push(r);
       const boardMem = await browserMemory(page).catch(() => null);
@@ -937,7 +960,8 @@ async function runMagnitude(m, opts, browser) {
           });
           const ms = +(now() - t0).toFixed(1);
           const mounted = await page.evaluate(() => document.querySelectorAll("tbody#board tr[data-ticket-id]").length);
-          return { ms, id: lastRow.id, rows: mounted };
+          const held = await page.evaluate(() => window.__perf.held()).catch(() => null);
+          return { ms, id: lastRow.id, rows: mounted, held };
         }))) && rows("board_scroll_end").at(-1);
         log(`  board scroll to the end: ${r.status} ${fmtMs(r.ms)}${r.id ? ` (${r.id}; ${r.rows} rows mounted)` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
         if (i === 0) await page.screenshot({ path: path.join(shots, `${label}-board.png`), timeout: 60000 }).catch((e) => R.notes.push(`screenshot failed: ${e.message.split("\n")[0]}`));
@@ -978,6 +1002,13 @@ async function runMagnitude(m, opts, browser) {
             await page.click(`#nav .node[data-node-key="${key}"] > .row .toggle.clickable`, { force: true });
           }
           await page.waitForFunction((g) => ![...document.querySelectorAll(`#nav .group[data-group="${g}"] > .kids > .node > .row[aria-expanded]`)].some((r) => r.getAttribute("aria-expanded") !== "true"), g, { timeout: B("browser") });
+          // SCALE-24: an open node of more than a page is a window over its
+          // children, so the user waiting for a birth at its end scrolls the
+          // nav there first (SCALE-24-nav.js's `created_open`).
+          await page.evaluate(async () => {
+            const sc = document.querySelector("#nav .tree-scroll");
+            for (let k = 0; k < 10 && sc; k++) { sc.scrollTop = sc.scrollHeight; await new Promise((r) => setTimeout(r, 50)); }
+          });
           const t0 = now();
           const { tool, body } = await createViaCurl(server, { epic: g, title: `live probe ${label} run ${i + 1}` });
           const id = body?.data?.[0]?.ticket?.id;
@@ -990,11 +1021,13 @@ async function runMagnitude(m, opts, browser) {
         }))) && rows("live_create_appears").at(-1);
         log(`  created ticket appears: ${r.status} ${fmtMs(r.ms)}${r.id ? ` (${r.id} via ${r.tool}, create ${fmtMs(r.create_ms)})` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
 
-        // expand the largest group until every ticket of it is mounted —
-        // last in the run because at the top of the ladder it is the one
-        // measurement that can take the page down with it
+        // expand the largest group: its first children, and its last a scroll
+        // away — last in the run because at the top of the ladder it was the
+        // one measurement that could take the page down with it. SCALE-24
+        // made an open node of more than a page a window over its children,
+        // so "until every ticket of it is mounted" (MFE-12's definition)
+        // never comes; this is SCALE-24-nav.js's criterion 2.
         const target = largest?.epic ?? (await page.evaluate(() => document.querySelector("#nav .group")?.getAttribute("data-group")));
-        const targetSize = largest?.size ?? null;
         r = rows("nav_expand_largest").push(withPageErrors(await measure("nav_expand_largest", B("browser"), async () => {
           const group = `#nav .group[data-group="${target}"]`;
           await page.waitForSelector(`${group} > .grouprow`, { timeout: B("browser"), state: "attached" });
@@ -1014,13 +1047,38 @@ async function runMagnitude(m, opts, browser) {
           for (const key of await page.$$eval(`${group} > .kids > .node`, (ns) => ns.filter((n) => n.querySelector(":scope > .row[aria-expanded]")).map((n) => n.dataset.nodeKey))) {
             await page.click(`#nav .node[data-node-key="${key}"] > .row .toggle.clickable`, { timeout: B("browser"), force: true });
           }
-          await page.waitForFunction(({ g, size }) => {
-            const leaves = document.querySelectorAll(`#nav .group[data-group="${g}"] .kids .leaf`);
-            const first = leaves[0];
-            return leaves.length >= (size ?? 1) && first && first.getClientRects().length > 0;
-          }, { g: target, size: targetSize }, { timeout: B("browser"), polling: 50 });
+          // The first of the root's children (the group's own first leaf is
+          // the root).
+          await page.waitForFunction((g) => {
+            const first = document.querySelector(`#nav .group[data-group="${g}"] > .kids > .node > .kids .leaf`);
+            return first && first.getClientRects().length > 0;
+          }, target, { timeout: B("browser"), polling: 50 });
+          const ms = +(now() - t0).toFixed(1);
           const leaves = await page.evaluate((g) => document.querySelectorAll(`#nav .group[data-group="${g}"] .kids .leaf`).length, target);
-          return { ms: +(now() - t0).toFixed(1), group_ms: groupMs, epic: target, leaves, dom_nodes: await page.evaluate(() => document.getElementsByTagName("*").length) };
+          const dom = await page.evaluate(() => document.getElementsByTagName("*").length);
+          // …and the last child of the open list it hangs from is a scroll
+          // away: on screen, saying it is the last of its siblings.
+          const t1 = now();
+          const last = await page.evaluate(async (g) => {
+            const sc = document.querySelector("#nav .tree-scroll");
+            const kids = document.querySelector(`#nav .group[data-group="${g}"] > .kids > .node > .kids`);
+            for (let k = 0; k < 120 && sc && kids; k++) {
+              const want = kids.getBoundingClientRect().bottom - sc.getBoundingClientRect().bottom;
+              if (Math.abs(want) > 1) sc.scrollTop += want;
+              const a = sc.getBoundingClientRect();
+              // A windowed list's rows say where they are; one of up to a
+              // page (200) is mounted whole, and its last row is the last.
+              const direct = [...kids.querySelectorAll(":scope > .node > .leaf")];
+              const windowed = direct.some((el) => el.hasAttribute("aria-posinset"));
+              const lastKid = windowed ? direct.find((el) => el.getAttribute("aria-posinset") === el.getAttribute("aria-setsize")) : direct.at(-1);
+              const b = lastKid?.getBoundingClientRect();
+              if (b && b.top >= a.top - 1 && b.bottom <= a.bottom + 1) return { id: lastKid.dataset.navId, of: windowed ? Number(lastKid.getAttribute("aria-setsize")) : direct.length };
+              await new Promise((res) => setTimeout(res, 50));
+            }
+            return null;
+          }, target);
+          if (!last) throw new Error(`the open list's last child never came on screen (${leaves} leaves mounted)`);
+          return { ms, group_ms: groupMs, epic: target, leaves, dom_nodes: dom, last_ms: +(now() - t1).toFixed(1), children: last.of, dom_end: await page.evaluate(() => document.getElementsByTagName("*").length) };
         }))) && rows("nav_expand_largest").at(-1);
         log(`  expand ${target}: ${r.status} ${fmtMs(r.ms)}${r.leaves ? ` (${fmtInt(r.leaves)} leaves; the group row alone ${fmtMs(r.group_ms)})` : ""}${r.reason ? ` — ${r.reason}` : ""}`);
         if (i === 0) await page.screenshot({ path: path.join(shots, `${label}-nav-open.png`), timeout: 60000 }).catch(() => {});
@@ -1129,14 +1187,18 @@ const MEASUREMENTS = [
   // MFE-12: the browser rows as a windowed, socket-based app makes them
   // true — `board_render` ("all rows in the DOM") is gone, the two rows
   // that replace it and the redefined ones are in perf/notes.md.
-  { key: "app_load_live", label: "browser: app load → live · WS", extra: [] },
-  { key: "board_first_rows", label: "browser: board first rows painted", extra: ["dom_nodes", "nodes", "rows"] },
+  // SCALE-26: `live` is the session's five calls (no walk); its detail is
+  // the frames sent before it, first rows' the rows held and wasm memory,
+  // and the expand row waits for the first children and the last a scroll
+  // away (SCALE-24's window), not for every ticket — perf/notes.md.
+  { key: "app_load_live", label: "browser: app load → live · WS", extra: ["frames"] },
+  { key: "board_first_rows", label: "browser: board first rows painted", extra: ["dom_nodes", "nodes", "rows", "held", "wasm_bytes"] },
   { key: "nav_groups_visible", label: "browser: nav shortcodes visible", extra: ["groups"] },
-  { key: "board_scroll_end", label: "browser: board scroll to the last ticket", extra: ["rows"] },
+  { key: "board_scroll_end", label: "browser: board scroll to the last ticket", extra: ["rows", "held"] },
   { key: "ticket_page_from_board", label: "browser: open ticket page (from board)", extra: [] },
   { key: "ticket_page_cold", label: "browser: ticket page cold deep link", extra: [] },
   { key: "live_create_appears", label: "browser: created ticket appears (board + open nav)", extra: ["create_ms"] },
-  { key: "nav_expand_largest", label: "browser: expand largest nav group (every ticket)", extra: ["leaves", "group_ms", "dom_nodes"] },
+  { key: "nav_expand_largest", label: "browser: expand largest nav group (first children; the last a scroll away)", extra: ["leaves", "group_ms", "dom_nodes", "last_ms", "children"] },
 ];
 
 function cell(s) {
@@ -1161,9 +1223,13 @@ function detail(key, s) {
   if (s.create_ack_ms != null) bits.push(`create ack ${fmtMs(s.create_ack_ms)}`);
   if (s.create_ms != null) bits.push(`create call ${fmtMs(s.create_ms)}`);
   if (s.groups != null) bits.push(`${s.groups} groups`);
+  if (s.frames != null) bits.push(`${fmtInt(Math.round(s.frames))} WebSocket frames sent before live`);
   if (s.leaves != null) bits.push(`${fmtInt(s.leaves)} leaves`);
+  if (s.children != null) bits.push(`the last of ${fmtInt(s.children)} children on screen ${fmtMs(s.last_ms)} after`);
   if (s.group_ms != null) bits.push(`the group row alone ${fmtMs(s.group_ms)}`);
   if (s.rows != null) bits.push(`${fmtInt(Math.round(s.rows))} board rows mounted`);
+  if (s.held != null) bits.push(`${fmtInt(Math.round(s.held))} rows held`);
+  if (s.wasm_bytes != null) bits.push(`wasm memory ${fmtBytes(s.wasm_bytes)}`);
   if (s.dom_nodes != null) bits.push(`${fmtInt(Math.round(s.dom_nodes))} DOM elements`);
   if (s.nodes != null) bits.push(`${fmtInt(Math.round(s.nodes))} DOM nodes (CDP)`);
   if (s.count != null) bits.push(`${s.count} blockers`);
@@ -1202,7 +1268,7 @@ function writeReport(opts, all, specs, notesPath) {
   L.push("");
   L.push(`## Method`);
   L.push("");
-  L.push(`Per magnitude, a fresh database seeded with \`--seed-synthetic 10^m --seed-value ${opts.seedValue}\` (PERF-2): Zipf-sized epics, every status and kind, ~25 % of tickets with 1–3 acyclic \`blocked_by\` edges mirrored in \`unlocks\`, ~500-byte markdown bodies. The seed server is stopped, the WAL checkpointed (what a clean close does), and the server restarted to measure the load; the same process then serves every REST and browser measurement. \`list\` is also streamed over the WebSocket transport (one item per notification, what \`web/index.html\` speaks) as the control for the REST gateway's collect-then-respond envelope. Runs per measurement: ${ms.map((r) => `10^${r.magnitude}: ${r.runs}`).join(", ")}; medians reported. Every measurement has a per-magnitude budget and is recorded as **FAIL** with the reason when it exceeds it. Browser timings are from navigation start (load → live, first rows, nav) or from the triggering action (scroll to the end, ticket page from board, a create, the expand); since MFE-12 the app mounts a window of the board and a nav node's children only when it opens, and each browser row's exact definition is in the notes below ("What MFE-12 changed"). The server runs on ephemeral ports; the production server on 4455–4457 and its database were never touched.`);
+  L.push(`Per magnitude, a fresh database seeded with \`--seed-synthetic 10^m --seed-value ${opts.seedValue}\` (PERF-2): Zipf-sized epics, every status and kind, ~25 % of tickets with 1–3 acyclic \`blocked_by\` edges mirrored in \`unlocks\`, ~500-byte markdown bodies. The seed server is stopped, the WAL checkpointed (what a clean close does), and the server restarted to measure the load; the same process then serves every REST and browser measurement. \`list\` is also streamed over the WebSocket transport (one item per notification, what \`web/index.html\` speaks) as the control for the REST gateway's collect-then-respond envelope. Runs per measurement: ${ms.map((r) => `10^${r.magnitude}: ${r.runs}`).join(", ")}; medians reported. Every measurement has a per-magnitude budget and is recorded as **FAIL** with the reason when it exceeds it. Browser timings are from navigation start (load → live, first rows, nav) or from the triggering action (scroll to the end, ticket page from board, a create, the expand); since MFE-12 the app mounts a window of the board and a nav node's children only when it opens, and since SCALE-26 it holds only what it shows — each browser row's exact definition is in the notes below ("What MFE-12 changed", "What SCALE-26 changed"). The server runs on ephemeral ports; the production server on 4455–4457 and its database were never touched.`);
   L.push("");
 
   L.push(`## The ladder at a glance (medians)`);
@@ -1218,6 +1284,10 @@ function writeReport(opts, all, specs, notesPath) {
   L.push(`| database file | ${ms.map((r) => fmtBytes(r.db_bytes)).join(" | ")} |`);
   L.push(`| page DOM elements at live, board open | ${ms.map((r) => fmtInt(r.summary?.board_first_rows?.dom_nodes)).join(" | ")} |`);
   L.push(`| board rows mounted at live | ${ms.map((r) => fmtInt(r.summary?.board_first_rows?.rows)).join(" | ")} |`);
+  L.push(`| WebSocket frames sent before live | ${ms.map((r) => fmtInt(r.summary?.app_load_live?.frames)).join(" | ")} |`);
+  L.push(`| rows the client holds at live | ${ms.map((r) => fmtInt(r.summary?.board_first_rows?.held)).join(" | ")} |`);
+  L.push(`| … after scrolling to the last ticket | ${ms.map((r) => fmtInt(r.summary?.board_scroll_end?.held)).join(" | ")} |`);
+  L.push(`| wasm memory at live | ${ms.map((r) => fmtBytes(r.summary?.board_first_rows?.wasm_bytes)).join(" | ")} |`);
   L.push(`| largest epic | ${ms.map((r) => (r.samples?.largest_epic ? `${fmtInt(r.samples.largest_epic.size)}` : "—")).join(" | ")} |`);
   L.push("");
 
