@@ -346,6 +346,9 @@ cargo run -p menger-diagrams            # WebSocket :4458
 synapse -P 4458 diagrams mermaid parse --source 'graph LR
   A --> B'
 synapse -P 4458 diagrams mermaid check --markdown "$(cat ticket-body.md)"
+# a body that begins with `--` (frontmatter's `---`) is read by synapse <= 3.14
+# as a flag (SYNAPSE-4); until that is fixed, pass such a body as JSON:
+synapse -P 4458 -p "$(jq -Rs '{markdown: .}' ticket-body.md)" diagrams mermaid check
 ```
 
 | method | yields |

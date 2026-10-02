@@ -45,7 +45,10 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   machine has it; on an older binary `a,b` is silently one string). An
   element that itself holds a comma is double-quoted inside the value, and
   the shell must not eat the quotes: `'"a,b","c"'`. A multi-line `--body`
-  is an ordinary quoted argument: `--body "$(cat body.md)"`.
+  is an ordinary quoted argument: `--body "$(cat body.md)"` — unless the
+  value begins with `--` (a body opening with frontmatter's `---`), which
+  synapse ≤ 3.14 reads as a flag and refuses (SYNAPSE-4); pass that one
+  with `-p "$(jq -Rs '{id: "MNG-1", body: .}' body.md)"`.
 
   Global options go **before** the backend name — after the path they are
   read as a subcommand ("Method 'create' cannot have subcommands"). `-j`
