@@ -8,3 +8,6 @@
 # scratch output stay out; its lockfile IS committed.
 /perf/node_modules
 /perf/out
+# The diagrams service's Node program (COMPILE-4): `npm ci --prefix
+# diagrams/node` installs jsdom from the committed lockfile.
+/diagrams/node/node_modules

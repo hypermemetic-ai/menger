@@ -17,7 +17,9 @@ cargo test         # unit tests + wire tests (tests/wire.rs speaks the real prot
 Everything menger does is a Plexus RPC method on the `menger` hub
 (WebSocket :4455) — there is no side door, and nothing an agent needs is
 off the wire. The activation publishes its schema; every client below is
-derived from it or from the declaration that produces it. Pick by consumer:
+derived from it or from the declaration that produces it. (Mermaid is
+checked by a separate service, `diagrams` on :4458 — `diagrams/`,
+COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
 
 - **`synapse`** (`../synapse`; on PATH) — the CLI over any Plexus backend.
   This is how an agent, a worker or a shell script reads and writes

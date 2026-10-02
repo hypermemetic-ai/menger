@@ -1,0 +1,97 @@
+# COMPILE-4: `diagrams` — a Plexus RPC service that parses mermaid by driving
+# a Node program. Its own process, hub and port (4458), not an activation
+# inside menger: a diagram checker has nothing to do with tickets, a
+# JavaScript engine should not share menger's address space or its failures,
+# and menger must keep running when it is absent.
+#
+# One crate, two builds — tickets-api's split (MFE-11), for the same reason:
+#
+#   menger-diagrams (the service)  default features (`server`) -> the
+#                                  vocabulary + the activation (the Node
+#                                  driver, the markdown scan) + the binary +
+#                                  the generated client
+#   a client (menger, an agent)    default-features = false -> the vocabulary
+#                                  and `MermaidClient<T>`, nothing that will
+#                                  not build for wasm32 (no tokio, process,
+#                                  jsonrpsee, plexus-core, pulldown-cmark)
+#
+# `plexus-macros` and `plexus-client` are not optional: the macro runs, and
+# emits the client, in a build with no server dependencies at all.
+[package]
+name = "menger-diagrams"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "The diagrams service: mermaid parsed by the vendored bundle under Node, over Plexus RPC"
+publish = false
+
+[lib]
+name = "menger_diagrams"
+path = "src/lib.rs"
+
+[[bin]]
+name = "menger-diagrams"
+path = "src/main.rs"
+required-features = ["server"]
+
+[features]
+default = ["server"]
+# The service: the activation's real bodies, the Node child it owns, the
+# markdown scan `check` runs, the binary. A client turns it off.
+server = [
+    "dep:plexus-core",
+    "dep:plexus-transport",
+    "dep:async-trait",
+    "dep:jsonrpsee",
+    "dep:tokio",
+    "dep:uuid",
+    "dep:serde_json",
+    "dep:async-stream",
+    "dep:pulldown-cmark",
+    "dep:clap",
+    "dep:anyhow",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+schemars = { version = "1.1", features = ["derive"] }
+futures = "0.3"
+
+# The 0.6 line, by sibling path (unpublished — MFE-10), exactly as
+# tickets-api takes it. `plexus-client` without a transport: a consumer adds
+# the backend it runs on (`ws-native`, `ws-web`).
+plexus-macros = { path = "../../plexus-macros" }
+plexus-client = { path = "../../plexus-macros/plexus-client", default-features = false }
+
+# Server-only. None of these builds for wasm32-unknown-unknown.
+plexus-core = { path = "../../plexus-core", optional = true }
+# Slim, as menger takes it — no MCP stack, and no REST bridge either: the
+# service is reached over the WebSocket (or stdio).
+plexus-transport = { path = "../../plexus-transport", default-features = false, optional = true }
+async-trait = { version = "0.1", optional = true }
+jsonrpsee = { version = "0.26", features = ["server", "macros"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
+serde_json = { version = "1", optional = true }
+async-stream = { version = "0.3", optional = true }
+# `check` finds mermaid blocks with the parser the app renders them with —
+# the same crate, the same minor line as frontend/Cargo.toml, the same
+# options; src/blocks.rs's tests hold the two lockfiles to one version.
+pulldown-cmark = { version = "0.13", default-features = false, optional = true }
+clap = { version = "4", features = ["derive", "env"], optional = true }
+anyhow = { version = "1", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+
+[dev-dependencies]
+# tests/wire.rs drives the generated MermaidClient over the native WebSocket
+# transport against the in-process service.
+plexus-client = { path = "../../plexus-macros/plexus-client", features = ["ws-native"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"
+# The kill tests wait until the killed program could be reaped — waitid
+# with WNOWAIT, which looks without reaping it — before the next call.
+libc = "0.2"

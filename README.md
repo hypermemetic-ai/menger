@@ -330,6 +330,67 @@ then the stream continues. A client that ignores event types it does not
 know is unaffected; one that keeps a copy should treat it as "fetch again
 what you show" — the Leptos app re-walks `list`, as after a reconnect.
 
+## Diagrams — the `diagrams` service (COMPILE-4)
+
+A second Plexus service beside menger, in `diagrams/` (`menger-diagrams`):
+mermaid diagrams checked by the very bundle the app draws them with
+(`frontend/vendor/mermaid/mermaid-11.17.2.min.js`), loaded into a jsdom
+window under Node — COMPILE-3 found it gives the browser's verdict on every
+live diagram. Its own binary, process and hub (`diagrams`, WebSocket
+:4458): menger does not call it, does not need it, and `cargo build` /
+`cargo test` never need Node.
+
+```sh
+npm ci --prefix diagrams/node           # once: jsdom, pinned by the lockfile
+cargo run -p menger-diagrams            # WebSocket :4458
+synapse -P 4458 diagrams mermaid parse --source 'graph LR
+  A --> B'
+synapse -P 4458 diagrams mermaid check --markdown "$(cat ticket-body.md)"
+```
+
+| method | yields |
+|---|---|
+| `mermaid.parse { source }` | exactly one of `parsed { diagram_type }` (`flowchart-v2`, `sequence`, `pie`, …); `parse_error { message, line }` — `message` is mermaid's, verbatim, `line` the 1-based line within `source` (null when mermaid names none); `error { message }` — the service could not ask (a missing piece, the program died, the 5 s limit) |
+| `mermaid.check { markdown }` | one `diagram { index, line, result }` per mermaid block, in order, then the end — `index` from 1, `line` the block's first source line in the markdown, `result` what `parse` would answer — so an error at `result.line` L is markdown line `line + L - 1`. No blocks, no items. A missing piece is one `error` in place of everything |
+
+A mermaid block is the app's: a fenced block whose info string's first word
+is exactly `mermaid`, frontmatter excluded — `diagrams/src/blocks.rs` copies
+`frontend/src/md.rs`'s rule and its tests hold the copy to the original
+(same functions word for word, same pulldown-cmark version and options,
+every case md.rs's tests name). `line` within `source` can differ from the
+number in mermaid's message: mermaid numbers the text it parsed, after
+dropping frontmatter, directives, `%%` comments and leading blank lines;
+the Node program maps it back with mermaid 11.17.2's own regular
+expressions.
+
+**What it needs.** Node.js ^22.22.2, ^24.15.0 or >=26 (jsdom 30's range)
+on `PATH`, jsdom (`npm ci --prefix diagrams/node`; `node_modules` is not
+committed), and the vendored bundle (in the checkout). Each missing piece
+degrades, never crashes: the service starts and serves, and a call answers
+one `error` naming the piece and the command that provides it. Flags (and
+env): `--port` (4458), `--bundle` (`MENGER_DIAGRAMS_BUNDLE`), `--node`
+(`MENGER_DIAGRAMS_NODE`, default `node`), `--node-dir`
+(`MENGER_DIAGRAMS_NODE_DIR`, default `diagrams/node`), `--stdio`.
+
+**The Node program** (`diagrams/node/mermaid-parse.js`) is the service's
+child, speaking one JSON request per line on stdin and one answer per line
+on stdout (its stderr goes to the log, never into the protocol). It starts
+on the first call (~0.6 s; ~300 MB resident, the service ~10 MB) and is
+kept; one diagram is in flight at a time, each answer matched to its
+request by id. Dead between calls, it is replaced before the next is
+written; dead mid-call, or past the 5 s limit, that diagram's result is an
+`error` and a fresh one starts. It only ever calls `mermaid.parse`, under
+`securityLevel: 'strict'`, in a window that runs no scripts and fetches
+nothing. Warm, a `parse` round trip over the WebSocket is ~4 ms.
+
+Tests: `diagrams/tests/lifecycle.rs` drives the lifecycle against a shell
+stand-in (no Node needed); `wire.rs` and `binary.rs` run the real program
+and skip, printing `SKIPPED … <what is missing>`, without Node or jsdom.
+Upgrading mermaid: the app's `ASSET_URL` and `diagrams/src/node.rs`'s
+`BUNDLE` move together (a test fails until they agree), and the
+preprocessing regular expressions in `mermaid-parse.js` are re-read from
+the new bundle.
+
 ## Layout
 
 ```
@@ -391,6 +452,11 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/)
+diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub
+                       (WS :4458); the `mermaid` activation and the client it
+                       emits, the Node child it owns (src/node.rs), the app's
+                       mermaid-block rule (src/blocks.rs); node/ is the Node
+                       program and its lockfile
 plans/MNG/             the backend epic; plans/MFE/ the frontend epic
 ```
 

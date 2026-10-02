@@ -4,7 +4,13 @@
 # `cargo test --workspace` covers its wire-casing guards; `frontend/` stays
 # out of it — its empty [workspace] table detaches it, so `cargo build` here
 # still never needs the wasm toolchain.
-members = [".", "tickets-api"]
+#
+# COMPILE-4: `diagrams/` (`menger-diagrams`) is a separate service — its own
+# binary, process and hub — that parses mermaid under Node. A member so the
+# workspace test run covers it; menger neither depends on it nor needs Node
+# to build or test (its Node-backed tests skip, saying so, where there is
+# none).
+members = [".", "tickets-api", "diagrams"]
 
 [package]
 name = "menger"

@@ -1,0 +1,14 @@
+{
+  "name": "menger-diagrams-node",
+  "private": true,
+  "version": "0.1.0",
+  "description": "COMPILE-4: the Node half of the diagrams service — the vendored mermaid in a jsdom window, mermaid.parse over line-delimited JSON on stdio",
+  "license": "MIT",
+  "main": "mermaid-parse.js",
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
+  "dependencies": {
+    "jsdom": "30.1.1"
+  }
+}
