@@ -49,6 +49,12 @@
 //! `unlink_commits` through the same `commit()` then `apply()` as every
 //! other write. A database written before SDLC-9 gains the column, durably,
 //! once, on first open, every ticket with none linked.
+//! MNG-20 makes a write run to its end whatever becomes of its caller:
+//! commit, apply and broadcast run together in one task nothing cancels
+//! ([`Store::write`]), holding the write-serial lock until the broadcast,
+//! and the caller only waits for the answer. Before it, a caller that went
+//! away while its write was committing left the database ahead of the
+//! cache — and the next `create` in that shortcode overwrote the row.
 
 use crate::types::TicketSummary;
 use rusqlite::{Connection, OpenFlags};
@@ -60,7 +66,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use tokio::sync::broadcast;
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedMutexGuard, Semaphore};
 
 /// MFE-9: the ticket vocabulary itself now lives in `menger-tickets-api`
 /// so the browser app can consume the same declarations instead of a
@@ -122,6 +128,27 @@ fn whole(row: Row, body: String) -> Ticket {
 /// one; the read says so rather than answer a ticket without its body.
 fn missing(id: &str) -> StoreError {
     StoreError::Db(format!("{id} is in the cache but not in the database"))
+}
+
+/// SCALE-14: puts a committed write into the cache — and counts it there,
+/// in the same critical section, so a reader that sees the rows sees the
+/// count that says they are this write's. Every write applies through
+/// here, once per commit ([`Store::write`]); so does a seed.
+fn apply<T>(tickets: &RwLock<Cache>, f: impl FnOnce(&mut Cache) -> T) -> T {
+    let mut cache = tickets.write().expect("store lock poisoned");
+    let out = f(&mut cache);
+    cache.written += 1;
+    out
+}
+
+/// MNG-10: the roll-up half of a mutation's broadcast, sent last — after
+/// every ticket change of the same mutation, so the established order
+/// (`Created` first, …) is untouched and a client meets the cause before
+/// the count it moved.
+fn broadcast_groups(tx: &broadcast::Sender<Change>, groups: Vec<Group>) {
+    for group in groups {
+        let _ = tx.send(Change::GroupChanged { group });
+    }
 }
 
 /// MNG-9: the store's total order over tickets — `(epic, seq)`, which the
@@ -1203,8 +1230,10 @@ pub struct Store {
     /// The cache. Every read in the process starts here; the lock is
     /// synchronous and never held across an await. SCALE-14: it holds
     /// rows, and a read that answers whole tickets takes their bodies from
-    /// `readers` after it has let go of it.
-    tickets: RwLock<Cache>,
+    /// `readers` after it has let go of it. MNG-20: shared with the write in
+    /// flight ([`Store::write`]), which applies itself whether or not its
+    /// caller is still there to do it.
+    tickets: Arc<RwLock<Cache>>,
     tx: broadcast::Sender<Change>,
     /// The system of record. Private to this module — nothing else in the
     /// application holds a database handle. Only touched off-runtime, via
@@ -1221,8 +1250,11 @@ pub struct Store {
     /// the cache update, and the broadcast happen atomically with respect
     /// to other writers, so ids are unique under concurrent creates and
     /// `watch` subscribers see changes in acknowledgment order. Readers
-    /// never take this lock.
-    write_serial: AsyncMutex<()>,
+    /// never take this lock. MNG-20: a write takes it owned and hands it to
+    /// [`Store::write`], which lets it go only once the write has been
+    /// broadcast — so the caller going away does not let the next write in
+    /// before the cache holds this one.
+    write_serial: Arc<AsyncMutex<()>>,
 }
 
 impl Default for Store {
@@ -1289,59 +1321,98 @@ impl Store {
         };
         let (tx, _) = broadcast::channel(256);
         Ok(Self {
-            tickets: RwLock::new(Cache::new(rows)),
+            tickets: Arc::new(RwLock::new(Cache::new(rows))),
             tx,
             db,
             readers: Arc::new(readers),
             committing: Arc::new(AtomicU64::new(0)),
-            write_serial: AsyncMutex::new(()),
+            write_serial: Arc::new(AsyncMutex::new(())),
         })
     }
 
-    /// Makes one write durable, in one transaction, off the async runtime:
-    /// `f` changes the rows and reads back what the broadcast will need
-    /// (SCALE-14: the bodies of the tickets it carries whole, which the
-    /// cache no longer holds — a point read in the transaction that is
-    /// about to fsync anyway), and then it commits. On `Err` nothing has
-    /// been acknowledged: the cache is untouched and no event is emitted.
+    /// MNG-20: the write-serial lock, owned — what a write takes first and
+    /// hands to [`Store::write`] with the rest of it.
+    async fn serial(&self) -> OwnedMutexGuard<()> {
+        Arc::clone(&self.write_serial).lock_owned().await
+    }
+
+    /// One write, from its commit to its broadcast, run to the end whether
+    /// or not its caller is still waiting for it (MNG-20).
     ///
-    /// SCALE-14: the write is counted in `committing` before it starts and
-    /// in the cache's `written` when [`Store::apply`] puts it there — what
-    /// a reader compares to know the database it read is the cache's.
-    async fn commit<T, F>(&self, f: F) -> Result<T, StoreError>
+    /// A write is three steps, in this order: `commit` makes it durable in
+    /// one transaction, off the async runtime — changing the rows and
+    /// reading back what its events carry (SCALE-14: the bodies of the
+    /// tickets they carry whole, a point read in the transaction that is
+    /// about to fsync anyway); `apply` puts it into the cache, under the
+    /// cache's lock, where it is counted ([`apply`]); `publish` broadcasts
+    /// it, the lock let go, and makes the caller's answer. Each runs once,
+    /// or — when the commit fails, and nothing has been acknowledged — only
+    /// the first: the cache is untouched and nothing is emitted.
+    ///
+    /// Until MNG-20 only the commit ran off the caller: the caller awaited
+    /// it, then applied and broadcast the write itself. A caller that went
+    /// away during that await — a dropped socket, a cancelled request —
+    /// dropped the write there: the commit landed, and the cache and
+    /// `watch` never heard of it. The database was then ahead of the cache
+    /// until a restart, and because ids are allocated from the cache, the
+    /// next `create` in that shortcode was handed the same id and its
+    /// upsert overwrote the stored row (`tests_detached` reproduced it).
+    /// Now all three run in one blocking task, which nothing cancels once
+    /// it is spawned, and `serial` — the write-serial guard the write was
+    /// prepared under — goes with them, let go only once the write is
+    /// broadcast. The caller waits for the answer and may stop waiting;
+    /// what it loses is the answer. Everything a write does before it gets
+    /// here — the lock, its reads, its checks — changes nothing, so a
+    /// caller that goes away there leaves no trace either.
+    ///
+    /// SCALE-14: the write is counted in `committing` before its commit
+    /// starts and in the cache's `written` when `apply` puts it there —
+    /// what a reader compares to know the database it read is the cache's.
+    /// Both now happen whatever becomes of the caller, so the two counts
+    /// agree again after every write.
+    async fn write<T, U, R>(
+        &self,
+        serial: OwnedMutexGuard<()>,
+        commit: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError> + Send + 'static,
+        apply: impl FnOnce(&mut Cache, &T) -> U + Send + 'static,
+        publish: impl FnOnce(T, U, &broadcast::Sender<Change>) -> R + Send + 'static,
+    ) -> Result<R, StoreError>
     where
         T: Send + 'static,
-        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError> + Send + 'static,
+        U: Send + 'static,
+        R: Send + 'static,
     {
-        let db = self.db.clone();
-        self.committing.fetch_add(1, Ordering::SeqCst);
-        let out = tokio::task::spawn_blocking(move || {
-            let mut conn = db.lock().expect("db lock poisoned");
-            let tx = conn.transaction()?;
-            let out = f(&tx)?;
-            tx.commit()?;
-            Ok(out)
+        let (db, tickets, tx) = (Arc::clone(&self.db), Arc::clone(&self.tickets), self.tx.clone());
+        let committing = Arc::clone(&self.committing);
+        // Counted and spawned in one poll: there is no await between them
+        // for a caller to be dropped at.
+        committing.fetch_add(1, Ordering::SeqCst);
+        tokio::task::spawn_blocking(move || {
+            let _serial = serial;
+            let durable = {
+                let mut conn = db.lock().expect("db lock poisoned");
+                conn.transaction()
+                    .map_err(StoreError::from)
+                    .and_then(|txn| {
+                        let out = commit(&txn)?;
+                        txn.commit()?;
+                        Ok(out)
+                    })
+            };
+            let out = match durable {
+                Ok(out) => out,
+                Err(e) => {
+                    // Nothing committed, so nothing is on its way to the
+                    // cache: a reader may trust its rows again.
+                    committing.fetch_sub(1, Ordering::SeqCst);
+                    return Err(e);
+                }
+            };
+            let applied = self::apply(&tickets, |cache| apply(cache, &out));
+            Ok(publish(out, applied, &tx))
         })
         .await
-        .map_err(|e| StoreError::Db(format!("write task failed: {e}")))
-        .and_then(|out| out);
-        if out.is_err() {
-            // Nothing committed, so nothing is on its way to the cache: a
-            // reader may trust its rows again.
-            self.committing.fetch_sub(1, Ordering::SeqCst);
-        }
-        out
-    }
-
-    /// SCALE-14: puts a committed write into the cache — and counts it
-    /// there, in the same critical section, so a reader that sees the rows
-    /// sees the count that says they are this write's. Every write applies
-    /// through here, once per [`Store::commit`].
-    fn apply<T>(&self, f: impl FnOnce(&mut Cache) -> T) -> T {
-        let mut cache = self.tickets.write().expect("store lock poisoned");
-        let out = f(&mut cache);
-        cache.written += 1;
-        out
+        .map_err(|e| StoreError::Db(format!("write task failed: {e}")))?
     }
 
     /// SCALE-14: whole tickets for `rows`, which the cache answered while it
@@ -1436,17 +1507,19 @@ impl Store {
         Ok((row, cache.written))
     }
 
-    /// SCALE-14: a write after birth that changes a ticket's row and not its
-    /// body (`set_status`, `set_parent`): the row is written, the body left
-    /// as stored and read back in the same transaction — the event carries
-    /// the ticket whole.
-    async fn commit_row(&self, row: Row) -> Result<(Row, String), StoreError> {
-        self.commit(move |tx| {
+    /// SCALE-14: the commit of a write after birth that changes a ticket's
+    /// row and not its body (`set_status`, `set_parent`, `link_commits`,
+    /// `unlink_commits`): the row is written, the body left as stored and
+    /// read back in the same transaction — the event carries the ticket
+    /// whole.
+    fn row_commit(
+        row: Row,
+    ) -> impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(Row, String), StoreError> + Send + 'static {
+        move |tx| {
             db::update_row(tx, &row)?;
             let body = db::body(tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
             Ok((row, body))
-        })
-        .await
+        }
     }
 
     /// Allocates the next `EPIC-N` id, maintains the DAG, writes through
@@ -1484,7 +1557,7 @@ impl Store {
             .map(|p| p.trim().to_ascii_uppercase())
             .filter(|p| !p.is_empty());
 
-        let _serial = self.write_serial.lock().await;
+        let serial = self.serial().await;
         // Under the write-serial lock the cache mirrors the database
         // exactly, so the shortcode's highest seq + 1 is the next id —
         // monotonic across restarts (the cache was loaded from the
@@ -1620,9 +1693,11 @@ impl Store {
         // in their `UnlocksChanged`, so their bodies are read back in the
         // same transaction.
         let born = ticket.clone();
+        let newborn = Row::from(&ticket);
         let rows: Vec<Row> = touched.values().cloned().collect();
-        let blockers: HashMap<String, Ticket> = self
-            .commit(move |tx| {
+        self.write(
+            serial,
+            move |tx| {
                 db::upsert(tx, &born)?;
                 rows.into_iter()
                     .map(|row| {
@@ -1630,43 +1705,34 @@ impl Store {
                         let body = db::body(tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
                         Ok((row.id.clone(), whole(row, body)))
                     })
-                    .collect()
-            })
-            .await?;
-
-        let (groups, child_count) =
-            self.apply(|cache| cache.created(Row::from(&ticket), touched.into_values()));
-        let _ = self.tx.send(Change::Created {
-            ticket: ticket.clone(),
-        });
-        if let (Some(parent_id), Some(epic), Some(child_count)) =
-            (&ticket.parent, parent_epic, child_count)
-        {
-            let _ = self.tx.send(Change::ChildrenChanged {
-                id: parent_id.clone(),
-                epic,
-                added: ticket.id.clone(),
-                child_count,
-            });
-        }
-        for blocker_id in unlocks_added {
-            let _ = self.tx.send(Change::UnlocksChanged {
-                ticket: blockers[&blocker_id].clone(),
-                added: ticket.id.clone(),
-            });
-        }
-        self.broadcast_groups(groups);
-        Ok(ticket)
-    }
-
-    /// MNG-10: the roll-up half of a mutation's broadcast, sent last — after
-    /// every ticket change of the same mutation, so the established order
-    /// (`Created` first, …) is untouched and a client meets the cause
-    /// before the count it moved.
-    fn broadcast_groups(&self, groups: Vec<Group>) {
-        for group in groups {
-            let _ = self.tx.send(Change::GroupChanged { group });
-        }
+                    .collect::<Result<HashMap<String, Ticket>, StoreError>>()
+            },
+            move |cache, _| cache.created(newborn, touched.into_values()),
+            move |blockers, (groups, child_count), tx| {
+                let _ = tx.send(Change::Created {
+                    ticket: ticket.clone(),
+                });
+                if let (Some(parent_id), Some(epic), Some(child_count)) =
+                    (&ticket.parent, parent_epic, child_count)
+                {
+                    let _ = tx.send(Change::ChildrenChanged {
+                        id: parent_id.clone(),
+                        epic,
+                        added: ticket.id.clone(),
+                        child_count,
+                    });
+                }
+                for blocker_id in unlocks_added {
+                    let _ = tx.send(Change::UnlocksChanged {
+                        ticket: blockers[&blocker_id].clone(),
+                        added: ticket.id.clone(),
+                    });
+                }
+                broadcast_groups(tx, groups);
+                ticket
+            },
+        )
+        .await
     }
 
     /// MNG-10: one roll-up per shortcode row the nav draws, in shortcode
@@ -2008,21 +2074,27 @@ impl Store {
     /// `GroupChanged` per group, innermost first. Any other change moves
     /// no count and broadcasts no group.
     pub async fn set_status(&self, id: &str, status: Status) -> Result<Change, StoreError> {
-        let _serial = self.write_serial.lock().await;
+        let serial = self.serial().await;
         let (mut row, _) = self.row(id)?;
         let previous = row.status;
         row.status = status;
         row.updated_unix = chrono::Utc::now().timestamp();
 
-        let (row, body) = self.commit_row(row).await?;
-        let groups = self.apply(|cache| cache.status_changed(row.clone(), previous));
-        let change = Change::StatusChanged {
-            ticket: whole(row, body),
-            previous,
-        };
-        let _ = self.tx.send(change.clone());
-        self.broadcast_groups(groups);
-        Ok(change)
+        self.write(
+            serial,
+            Self::row_commit(row),
+            move |cache, (row, _)| cache.status_changed(row.clone(), previous),
+            move |(row, body), groups, tx| {
+                let change = Change::StatusChanged {
+                    ticket: whole(row, body),
+                    previous,
+                };
+                let _ = tx.send(change.clone());
+                broadcast_groups(tx, groups);
+                change
+            },
+        )
+        .await
     }
 
     /// MNG-12: files an existing ticket as an output of `parent` — the
@@ -2042,7 +2114,7 @@ impl Store {
     pub async fn set_parent(&self, id: &str, parent: &str) -> Result<Change, StoreError> {
         let id = id.trim().to_ascii_uppercase();
         let parent = parent.trim().to_ascii_uppercase();
-        let _serial = self.write_serial.lock().await;
+        let serial = self.serial().await;
         // The parent it already has: no write. SCALE-14: the answer still
         // carries the child whole, so its body is read — after the lock on
         // the cache is let go.
@@ -2092,31 +2164,36 @@ impl Store {
             (child, parent_ticket.epic.clone(), old_epic, previous)
         };
 
-        let (child, body) = self.commit_row(child).await?;
-
-        let (groups, joined, left) =
-            self.apply(|cache| cache.reparented(child.clone(), previous.as_deref()));
-        let change = Change::ParentChanged {
-            ticket: whole(child, body),
-            previous: previous.clone(),
-        };
-        let _ = self.tx.send(change.clone());
-        let _ = self.tx.send(Change::ChildrenChanged {
-            id: parent,
-            epic: new_epic,
-            added: id.clone(),
-            child_count: joined,
-        });
-        if let (Some(old), Some(epic)) = (previous, old_epic) {
-            let _ = self.tx.send(Change::ChildRemoved {
-                id: old,
-                epic,
-                removed: id,
-                child_count: left,
-            });
-        }
-        self.broadcast_groups(groups);
-        Ok(change)
+        let left_behind = previous.clone();
+        self.write(
+            serial,
+            Self::row_commit(child),
+            move |cache, (child, _)| cache.reparented(child.clone(), left_behind.as_deref()),
+            move |(child, body), (groups, joined, left), tx| {
+                let change = Change::ParentChanged {
+                    ticket: whole(child, body),
+                    previous: previous.clone(),
+                };
+                let _ = tx.send(change.clone());
+                let _ = tx.send(Change::ChildrenChanged {
+                    id: parent,
+                    epic: new_epic,
+                    added: id.clone(),
+                    child_count: joined,
+                });
+                if let (Some(old), Some(epic)) = (previous, old_epic) {
+                    let _ = tx.send(Change::ChildRemoved {
+                        id: old,
+                        epic,
+                        removed: id,
+                        child_count: left,
+                    });
+                }
+                broadcast_groups(tx, groups);
+                change
+            },
+        )
+        .await
     }
 
     /// MNG-16: replaces a ticket's title and/or body — whole values, last
@@ -2149,7 +2226,7 @@ impl Store {
         if title.as_deref().is_some_and(|t| t.trim().is_empty()) {
             return Err(StoreError::EmptyTitle { id });
         }
-        let _serial = self.write_serial.lock().await;
+        let serial = self.serial().await;
         let mut ticket = self.get(&id).await?;
         let mut changed: Vec<String> = Vec::new();
         if let Some(title) = title.filter(|t| *t != ticket.title) {
@@ -2167,22 +2244,26 @@ impl Store {
 
         let row = Row::from(&ticket);
         let body = changed.iter().any(|c| c == "body").then(|| ticket.body.clone());
-        let row = self
-            .commit(move |tx| {
+        self.write(
+            serial,
+            move |tx| {
                 db::update_row(tx, &row)?;
                 if let Some(body) = body {
                     db::set_body(tx, &row.id, &body)?;
                 }
                 Ok(row)
-            })
-            .await?;
-        // Rows only, deliberately: what an amend changes is counted by no
-        // roll-up and indexed by no id index (see above), so there is no
-        // mutation-shaped `Cache` method to go through.
-        self.apply(|cache| cache.insert(row));
-        let change = Change::Amended { ticket, changed };
-        let _ = self.tx.send(change.clone());
-        Ok(change)
+            },
+            // Rows only, deliberately: what an amend changes is counted by
+            // no roll-up and indexed by no id index (see above), so there
+            // is no mutation-shaped `Cache` method to go through.
+            |cache, row| cache.insert(row.clone()),
+            move |_, (), tx| {
+                let change = Change::Amended { ticket, changed };
+                let _ = tx.send(change.clone());
+                change
+            },
+        )
+        .await
     }
 
     /// SDLC-9: links `entries` to the ticket `id` — the record of which
@@ -2204,7 +2285,7 @@ impl Store {
     pub async fn link_commits(&self, id: &str, entries: Vec<String>) -> Result<Change, StoreError> {
         let id = id.trim().to_ascii_uppercase();
         let refs = Self::references(&id, &entries)?;
-        let _serial = self.write_serial.lock().await;
+        let serial = self.serial().await;
         let (mut row, written) = self.row(&id)?;
         let mut known: HashSet<String> = row.commits.iter().cloned().collect();
         let added: Vec<String> = refs.into_iter().filter(|r| known.insert(r.clone())).collect();
@@ -2224,14 +2305,20 @@ impl Store {
         row.commits.extend(added.iter().cloned());
         row.updated_unix = chrono::Utc::now().timestamp();
 
-        let (row, body) = self.commit_row(row).await?;
-        self.apply(|cache| cache.insert(row.clone()));
-        let change = Change::CommitsLinked {
-            ticket: whole(row, body),
-            added,
-        };
-        let _ = self.tx.send(change.clone());
-        Ok(change)
+        self.write(
+            serial,
+            Self::row_commit(row),
+            |cache, (row, _)| cache.insert(row.clone()),
+            move |(row, body), (), tx| {
+                let change = Change::CommitsLinked {
+                    ticket: whole(row, body),
+                    added,
+                };
+                let _ = tx.send(change.clone());
+                change
+            },
+        )
+        .await
     }
 
     /// SDLC-9: unlinks `entries` from the ticket `id` — every entry the
@@ -2245,7 +2332,7 @@ impl Store {
     pub async fn unlink_commits(&self, id: &str, entries: Vec<String>) -> Result<Change, StoreError> {
         let id = id.trim().to_ascii_uppercase();
         let refs = Self::references(&id, &entries)?;
-        let _serial = self.write_serial.lock().await;
+        let serial = self.serial().await;
         let (mut row, written) = self.row(&id)?;
         let mut removed: Vec<String> = Vec::new();
         for r in refs {
@@ -2263,14 +2350,20 @@ impl Store {
         }
         row.updated_unix = chrono::Utc::now().timestamp();
 
-        let (row, body) = self.commit_row(row).await?;
-        self.apply(|cache| cache.insert(row.clone()));
-        let change = Change::CommitsUnlinked {
-            ticket: whole(row, body),
-            removed,
-        };
-        let _ = self.tx.send(change.clone());
-        Ok(change)
+        self.write(
+            serial,
+            Self::row_commit(row),
+            |cache, (row, _)| cache.insert(row.clone()),
+            move |(row, body), (), tx| {
+                let change = Change::CommitsUnlinked {
+                    ticket: whole(row, body),
+                    removed,
+                };
+                let _ = tx.send(change.clone());
+                change
+            },
+        )
+        .await
     }
 
     /// SDLC-9: every entry of a link or an unlink as the reference it is
@@ -2422,7 +2515,7 @@ impl Store {
         }
         let persist = persist_started.elapsed();
 
-        self.apply(|tickets| {
+        apply(&self.tickets, |tickets| {
             tickets.at.reserve(generated.len());
             // SCALE-14: into the cache as rows — each body is dropped as its
             // ticket goes in, as a load never reads one.
@@ -2616,3 +2709,9 @@ mod tests_bodies;
 /// the bound, and a database from before the column.
 #[cfg(test)]
 mod tests_commits;
+
+/// MNG-20: every write dropped by its caller mid-commit — reproduced first,
+/// then held to the fix: the write reaches the cache and `watch` anyway,
+/// the store mirrors its database, and the next id is the next one.
+#[cfg(test)]
+mod tests_detached;

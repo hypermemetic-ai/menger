@@ -329,6 +329,9 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
     tests_commits.rs   link_commits / unlink_commits: the grammar, every row of
                        the table, the bound, the column added to an old file
                        (SDLC-9)
+    tests_detached.rs  every write dropped by its caller mid-commit still
+                       reaches the cache and watch; the next id is the next
+                       one (MNG-20)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell
