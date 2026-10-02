@@ -10,7 +10,22 @@ use std::path::Path;
 /// SCALE-32 (B3) is form 2: each ticket's count of unsatisfied blockers (a
 /// column), the ready set (the file's index over it), each shortcode's
 /// count of each status and its share of the ready set.
-const FORM: i64 = 2;
+///
+/// SDLC-11 is form 3: the roll-ups count docs apart from the work — a
+/// `docs` beside each `(total, done)` of a group and of a cross tree — so a
+/// file in form 2 is built again, once, on its first open (it holds no doc,
+/// so every `docs` is 0 and every other number is what it was).
+const FORM: i64 = 3;
+
+/// SDLC-11: the columns form 3 adds to the roll-up tables, `(table,
+/// column)` — what a build gives a file from an older form, as it gives one
+/// `child_count` and `unsatisfied`.
+const DOCS_COLUMNS: [(&str, &str); 4] = [
+    ("rollup_groups", "base_docs"),
+    ("rollup_groups", "own_docs"),
+    ("rollup_groups", "docs"),
+    ("rollup_cross", "docs"),
+];
 
 /// The tables the derived state is stored in, and the index children are
 /// read from — each keyed the way the read that will answer from it asks
@@ -28,7 +43,9 @@ const FORM: i64 = 2;
 ///   `groups` is `total`, `done`, `root` and `host` of every row with an
 ///   `own_total`, in key order. The rest is the state the roll-ups are kept
 ///   with (the pool of trees with no parent, what the row draws before any
-///   nested group, the group it is drawn inside).
+///   nested group, the group it is drawn inside). SDLC-11: each tally's
+///   docs beside it (`base_docs`, `own_docs`, `docs`) — a doc is in no
+///   `total` and no `done` — and a row with `own_docs` alone is drawn.
 /// - `rollup_cross` — the tally of each tree whose top hangs in another
 ///   shortcode (every sub-shortcode's root), and the group it is drawn in.
 /// - `rollup_marks` — what only a hand edit makes: tickets on a parent cycle
@@ -78,13 +95,17 @@ const SCHEMA: &str = "
             own_total  INTEGER NOT NULL,
             own_done   INTEGER NOT NULL,
             total      INTEGER NOT NULL,
-            done       INTEGER NOT NULL
+            done       INTEGER NOT NULL,
+            base_docs  INTEGER NOT NULL DEFAULT 0,
+            own_docs   INTEGER NOT NULL DEFAULT 0,
+            docs       INTEGER NOT NULL DEFAULT 0
         ) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS rollup_cross (
             id    TEXT PRIMARY KEY,
             total INTEGER NOT NULL,
             done  INTEGER NOT NULL,
-            home  TEXT NOT NULL
+            home  TEXT NOT NULL,
+            docs  INTEGER NOT NULL DEFAULT 0
         ) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS rollup_marks (
             mark TEXT NOT NULL CHECK (mark IN ('cycle', 'dangling')),
@@ -151,22 +172,22 @@ pub(super) type RunRow = (u32, u32, u64);
 pub(super) type RefKey = (String, OrderKey);
 
 /// A shortcode's roll-up as stored: every field the roll-ups keep for it.
-/// Each tally is `(total, done)`.
+/// Each tally is `(total, done, docs)` (SDLC-11: `docs` since form 3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct GroupRow {
     pub(super) root: Option<String>,
     pub(super) host: Option<String>,
     pub(super) up: Option<String>,
-    pub(super) base: (u64, u64),
+    pub(super) base: (u64, u64, u64),
     pub(super) base_tops: u64,
-    pub(super) own: (u64, u64),
-    pub(super) roll: (u64, u64),
+    pub(super) own: (u64, u64, u64),
+    pub(super) roll: (u64, u64, u64),
 }
 
 /// A cross top's tree as stored: its tally and the group it is drawn in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CrossRow {
-    pub(super) tally: (u64, u64),
+    pub(super) tally: (u64, u64, u64),
     pub(super) home: String,
 }
 
@@ -389,27 +410,30 @@ fn put_group(conn: &Connection, epic: &str, g: &GroupRow) -> rusqlite::Result<()
     conn.prepare_cached(
         "INSERT INTO rollup_groups
                  (epic, root, host, up, base_total, base_done, base_tops,
-                  own_total, own_done, total, done)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                  own_total, own_done, total, done, base_docs, own_docs, docs)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT (epic) DO UPDATE SET
                  root = excluded.root, host = excluded.host, up = excluded.up,
                  base_total = excluded.base_total, base_done = excluded.base_done,
                  base_tops = excluded.base_tops, own_total = excluded.own_total,
-                 own_done = excluded.own_done, total = excluded.total, done = excluded.done",
+                 own_done = excluded.own_done, total = excluded.total, done = excluded.done,
+                 base_docs = excluded.base_docs, own_docs = excluded.own_docs, docs = excluded.docs",
     )?
     .execute(params![
         epic, g.root, g.host, g.up, g.base.0, g.base.1, g.base_tops, g.own.0, g.own.1, g.roll.0, g.roll.1,
+        g.base.2, g.own.2, g.roll.2,
     ])?;
     Ok(())
 }
 
 fn put_cross(conn: &Connection, id: &str, c: &CrossRow) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO rollup_cross (id, total, done, home) VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO rollup_cross (id, total, done, home, docs) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (id) DO UPDATE SET
-                 total = excluded.total, done = excluded.done, home = excluded.home",
+                 total = excluded.total, done = excluded.done, home = excluded.home,
+                 docs = excluded.docs",
     )?
-    .execute(params![id, c.tally.0, c.tally.1, c.home])?;
+    .execute(params![id, c.tally.0, c.tally.1, c.home, c.tally.2])?;
     Ok(())
 }
 
@@ -488,6 +512,13 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
         }
     }
     tx.execute_batch(SCHEMA)?;
+    // SDLC-11: a roll-up table from an older form gains its `docs` columns
+    // (a new one was just created with them); `write_all` fills them.
+    for (table, column) in DOCS_COLUMNS {
+        if !db::has_column(&tx, table, column)? {
+            tx.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"), [])?;
+        }
+    }
     create_children_index(&tx)?;
     drop_ready_index(&tx)?;
     let cache = Cache::new(db::load_rows(&tx)?);
@@ -628,7 +659,8 @@ fn read_tables(conn: &Connection) -> rusqlite::Result<Form> {
         form.refs.insert((r.get(0)?, key), r.get(3)?);
     }
     let mut stmt = conn.prepare(
-        "SELECT epic, root, host, up, base_total, base_done, base_tops, own_total, own_done, total, done
+        "SELECT epic, root, host, up, base_total, base_done, base_tops, own_total, own_done, total, done,
+                base_docs, own_docs, docs
              FROM rollup_groups",
     )?;
     let mut rows = stmt.query([])?;
@@ -639,20 +671,20 @@ fn read_tables(conn: &Connection) -> rusqlite::Result<Form> {
                 root: r.get(1)?,
                 host: r.get(2)?,
                 up: r.get(3)?,
-                base: (r.get(4)?, r.get(5)?),
+                base: (r.get(4)?, r.get(5)?, r.get(11)?),
                 base_tops: r.get(6)?,
-                own: (r.get(7)?, r.get(8)?),
-                roll: (r.get(9)?, r.get(10)?),
+                own: (r.get(7)?, r.get(8)?, r.get(12)?),
+                roll: (r.get(9)?, r.get(10)?, r.get(13)?),
             },
         );
     }
-    let mut stmt = conn.prepare("SELECT id, total, done, home FROM rollup_cross")?;
+    let mut stmt = conn.prepare("SELECT id, total, done, home, docs FROM rollup_cross")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         form.cross.insert(
             r.get(0)?,
             CrossRow {
-                tally: (r.get(1)?, r.get(2)?),
+                tally: (r.get(1)?, r.get(2)?, r.get(4)?),
                 home: r.get(3)?,
             },
         );

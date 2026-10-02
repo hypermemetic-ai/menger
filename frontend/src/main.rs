@@ -90,10 +90,20 @@
 //! by id (src/keys.rs, src/menu.rs).
 
 //! SDLC-7: the vocabulary is nine — the worker states `Coding` and `In
-//! Review` joined it. Every chooser renders `Status::ALL`, so both appeared
+//! Review` joined it. Every chooser renders the vocabulary from the type
+//! (`Status::ALL` then; `Status::LIFECYCLE` since SDLC-11), so both appeared
 //! in the board's control and the menu's Set status with no edit here; what
 //! this crate adds is their rows in index.html's status table, light and
 //! dark, and a class name for the one status with a space ([`st_class`]).
+
+//! SDLC-11: a sixth kind, `doc`, outside the lifecycle — born in `Doc` and
+//! never moved from it. Every chooser renders `Status::LIFECYCLE`, which
+//! does not hold `Doc`; a doc's row on the board shows its status as a
+//! neutral chip where the control would be, and the menu offers it no
+//! status moves (src/menu.rs). `Doc` has its row in index.html's status
+//! table like every status. The nav draws a shortcode of docs alone (a doc
+//! collection, rooted at a doc), its roll-up counting docs apart from the
+//! work's `done/total` (src/nav.rs).
 
 //! MNG-16: a ticket's title and body can change after birth
 //! (`tickets.amend`). `amended` upserts its row like any other event, so the
@@ -183,15 +193,24 @@ use wasm_bindgen_futures::spawn_local;
 
 /// The closed status vocabulary, from the type that owns it
 /// (`menger_tickets_api::Status::ALL`) rather than from a literal list the
-/// server could out-grow. The server remains the validator; anything else
-/// it receives comes back as an in-band `error` event.
-pub(crate) const STATUSES: [&str; Status::ALL.len()] = statuses();
+/// server could out-grow — every status a ticket can hold, so every one has
+/// a row in index.html's status table. The server remains the validator;
+/// anything else it receives comes back as an in-band `error` event.
+/// SDLC-11: what the status table is held to; no view renders the whole
+/// of it as a list any more (a chooser renders [`LIFECYCLE`]).
+#[cfg(test)]
+pub(crate) const STATUSES: [&str; Status::ALL.len()] = names(Status::ALL);
 
-const fn statuses() -> [&'static str; Status::ALL.len()] {
-    let mut out = [""; Status::ALL.len()];
+/// SDLC-11: the lifecycle (`Status::LIFECYCLE`) — what the board's status
+/// control offers. `Doc` is a status a ticket holds, never one it is moved
+/// to, so no chooser offers it.
+pub(crate) const LIFECYCLE: [&str; Status::LIFECYCLE.len()] = names(Status::LIFECYCLE);
+
+const fn names<const N: usize>(all: [Status; N]) -> [&'static str; N] {
+    let mut out = [""; N];
     let mut i = 0;
-    while i < Status::ALL.len() {
-        out[i] = Status::ALL[i].as_str();
+    while i < N {
+        out[i] = all[i].as_str();
         i += 1;
     }
     out
@@ -634,6 +653,9 @@ fn Board(
                         let nav_id = row_id.clone();
                         let href_id = row_id.clone();
                         let index_id = row_id.clone();
+                        // SDLC-11: a doc has no lifecycle — its status is a
+                        // chip, not a control. A kind is fixed at birth.
+                        let is_doc = ticket.with_untracked(|t| !t.kind.has_lifecycle());
                         view! {
                             <tr
                                 data-ticket-id=row_id.clone()
@@ -680,50 +702,62 @@ fn Board(
                                 <td title=move || ticket.with(|t| t.title.clone())>{move || ticket.with(|t| t.title.clone())}</td>
                                 <td class="kind">{move || ticket.with(|t| t.kind.to_string())}</td>
                                 <td class="status">
-                                    <select
-                                        // The control is the chip: it wears the
-                                        // server-confirmed status's color (AGS-15).
-                                        class=move || format!("status {}", ticket.with(|t| st_class(t.status.as_str())))
-                                        prop:value=move || ticket.with(|t| t.status.as_str())
-                                        on:change=move |ev| {
-                                            let Some(sel) = ev
-                                                .target()
-                                                .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok())
-                                            else {
-                                                return;
-                                            };
-                                            let current = ticket.with_untracked(|t| t.status);
-                                            // The control only ever offers the closed
-                                            // vocabulary, so a value it cannot parse is
-                                            // a browser doing something we did not ask
-                                            // for — leave the ticket alone.
-                                            let Ok(chosen) = sel.value().parse::<Status>() else {
-                                                sel.set_value(current.as_str());
-                                                return;
-                                            };
-                                            if chosen != current {
-                                                session::request_set_status(id.clone(), chosen, last_error, move || {
-                                                    sel.set_value(current.as_str())
-                                                });
-                                            }
+                                    {if is_doc {
+                                        view! {
+                                            <span class=move || format!("status chip {}", ticket.with(|t| st_class(t.status.as_str())))>
+                                                {move || ticket.with(|t| t.status.to_string())}
+                                            </span>
                                         }
-                                    >
-                                        {STATUSES
-                                            .iter()
-                                            .map(|s| {
-                                                let s = *s;
-                                                view! {
-                                                    <option
-                                                        value=s
-                                                        class=st_class(s)
-                                                        selected=move || ticket.with(|t| t.status.as_str() == s)
-                                                    >
-                                                        {s}
-                                                    </option>
+                                            .into_any()
+                                    } else {
+                                        view! {
+                                            <select
+                                                // The control is the chip: it wears the
+                                                // server-confirmed status's color (AGS-15).
+                                                class=move || format!("status {}", ticket.with(|t| st_class(t.status.as_str())))
+                                                prop:value=move || ticket.with(|t| t.status.as_str())
+                                                on:change=move |ev| {
+                                                    let Some(sel) = ev
+                                                        .target()
+                                                        .and_then(|t| t.dyn_into::<web_sys::HtmlSelectElement>().ok())
+                                                    else {
+                                                        return;
+                                                    };
+                                                    let current = ticket.with_untracked(|t| t.status);
+                                                    // The control only ever offers the closed
+                                                    // vocabulary, so a value it cannot parse is
+                                                    // a browser doing something we did not ask
+                                                    // for — leave the ticket alone.
+                                                    let Ok(chosen) = sel.value().parse::<Status>() else {
+                                                        sel.set_value(current.as_str());
+                                                        return;
+                                                    };
+                                                    if chosen != current {
+                                                        session::request_set_status(id.clone(), chosen, last_error, move || {
+                                                            sel.set_value(current.as_str())
+                                                        });
+                                                    }
                                                 }
-                                            })
-                                            .collect_view()}
-                                    </select>
+                                            >
+                                                {LIFECYCLE
+                                                    .iter()
+                                                    .map(|s| {
+                                                        let s = *s;
+                                                        view! {
+                                                            <option
+                                                                value=s
+                                                                class=st_class(s)
+                                                                selected=move || ticket.with(|t| t.status.as_str() == s)
+                                                            >
+                                                                {s}
+                                                            </option>
+                                                        }
+                                                    })
+                                                    .collect_view()}
+                                            </select>
+                                        }
+                                            .into_any()
+                                    }}
                                 </td>
                                 <td>{move || ticket.with(|t| t.severity.map(|s| s.to_string()).unwrap_or_default())}</td>
                                 <td title=move || ticket.with(|t| t.blocked_by.join(" "))>{move || ticket.with(|t| t.blocked_by.join(" "))}</td>

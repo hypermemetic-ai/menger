@@ -5,7 +5,9 @@
 //! `resolved_parent`, `place`, `nests_inside`, `plan`) with only the
 //! parts a roll-up needs kept — `top`, `kids`, `subtree`, `sub_of` — plus
 //! the group row's count (`group_row`: `done` is `Status::Complete`, over
-//! `subtree`). The frontend is its own cargo unit (leptos, wasm), so the
+//! `subtree`). SDLC-11: a doc is drawn as any ticket is, may root a
+//! shortcode as a scope may, and counts in a row's `docs` — never in its
+//! `done/total`, since a doc has no completion. The frontend is its own cargo unit (leptos, wasm), so the
 //! server's tests cannot call the nav's function; this is the same
 //! function, line for line, so they can call *it*. A change to the nav's
 //! rule is a change here, and then the roll-ups' tests say whether the
@@ -134,7 +136,7 @@ pub fn plan(facts: &[Facts]) -> Plan {
         .collect();
 
     let mut scope_root: BTreeMap<&str, &Facts> = BTreeMap::new();
-    for f in facts.iter().filter(|f| f.kind == "scope") {
+    for f in facts.iter().filter(|f| roots(f)) {
         scope_root
             .entry(f.epic.as_str())
             .and_modify(|cur| {
@@ -211,14 +213,21 @@ pub fn plan(facts: &[Facts]) -> Plan {
     }
 }
 
+/// SDLC-11: a kind that may root a shortcode — a scope, or a doc.
+fn roots(f: &Facts) -> bool {
+    f.kind == "scope" || f.kind == "doc"
+}
+
 /// One group row as the nav draws it: `done/total` over the row's subtree
-/// (`group_row`'s rollup), the shortcode's lowest-seq scope, and the host
-/// its row nests under.
+/// (`group_row`'s rollup) — SDLC-11: its work, with its docs counted apart
+/// in `docs` — the shortcode's lowest-seq scope (or doc), and the host its
+/// row nests under.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     pub epic: String,
     pub total: u64,
     pub done: u64,
+    pub docs: u64,
     pub root: Option<String>,
     pub host: Option<String>,
 }
@@ -229,19 +238,22 @@ pub struct Row {
 pub fn rows(facts: &[Facts], complete: &BTreeSet<String>) -> Vec<Row> {
     let p = plan(facts);
     let mut root: BTreeMap<&str, &Facts> = BTreeMap::new();
-    for f in facts.iter().filter(|f| f.kind == "scope") {
+    for f in facts.iter().filter(|f| roots(f)) {
         root.entry(f.epic.as_str()).or_insert(f);
     }
+    let docs: BTreeSet<&str> = facts.iter().filter(|f| f.kind == "doc").map(|f| f.id.as_str()).collect();
     let mut out: Vec<Row> = p
         .top
         .iter()
         .chain(p.sub_of.keys())
         .map(|g| {
             let ids = &p.subtree[g];
+            let (doc_ids, work): (Vec<&String>, Vec<&String>) = ids.iter().partition(|id| docs.contains(id.as_str()));
             Row {
                 epic: g.clone(),
-                total: ids.len() as u64,
-                done: ids.iter().filter(|id| complete.contains(*id)).count() as u64,
+                total: work.len() as u64,
+                done: work.iter().filter(|id| complete.contains(**id)).count() as u64,
+                docs: doc_ids.len() as u64,
                 root: root.get(g.as_str()).map(|f| f.id.clone()),
                 host: p.sub_of.get(g).cloned(),
             }

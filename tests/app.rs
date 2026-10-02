@@ -595,3 +595,26 @@ async fn vanilla_page_rows_link_to_app_ticket_pages() {
         "per-row status select is still rendered"
     );
 }
+
+/// SDLC-11: the vanilla page renders a doc — its kind offered by the create
+/// form, its status a neutral chip where a work ticket's status control is,
+/// and that control offering the lifecycle, never `Doc`.
+#[tokio::test]
+async fn vanilla_page_renders_a_doc_with_a_chip_not_a_status_control() {
+    let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let s = spawn_server(empty.path(), true).await;
+
+    let (status, _, body) = fetch(s.shell_port, Method::GET, "/vanilla", "").await;
+    assert_eq!(status, StatusCode::OK);
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("<option>doc</option>"), "the create form offers the sixth kind");
+    assert!(
+        text.contains(r#"t.kind === "doc""#) && text.contains(r#"<span class="doc-chip">"#),
+        "a doc's row shows its status as a chip"
+    );
+    let statuses = text
+        .lines()
+        .find(|l| l.starts_with("const STATUSES"))
+        .expect("the status control's vocabulary");
+    assert!(statuses.contains("\"Superseded\"") && !statuses.contains("\"Doc\""), "{statuses}");
+}

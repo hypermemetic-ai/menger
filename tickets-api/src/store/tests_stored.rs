@@ -112,11 +112,12 @@ fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
         .form
         .groups
         .iter()
-        .filter(|(_, g)| g.own.0 > 0)
+        .filter(|(_, g)| g.own.0 > 0 || g.own.2 > 0)
         .map(|(epic, g)| Group {
             epic: epic.clone(),
             total: g.roll.0,
             done: g.roll.1,
+            docs: g.roll.2,
             root: g.root.clone(),
             host: g.host.clone(),
         })
@@ -149,6 +150,9 @@ struct Tally {
     links: usize,
     unlinks: usize,
     forward: usize,
+    /// SDLC-11: docs born, and creates tried (what picks a doc).
+    docs: usize,
+    attempts: usize,
 }
 
 /// One random write — any of the six, legal or refused — against the store
@@ -171,6 +175,11 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
             let epic = epics[rng.below(epics.len())];
             let exists = extents.contains_key(epic);
             let kind = if !exists || rng.below(5) == 0 { Kind::Scope } else { Kind::Build };
+            // SDLC-11: every ninth create a doc — a new shortcode's root, or a
+            // ticket inside one — with its roll-ups, counts and refusals. By a
+            // count, not a draw: the walk's draws stay the ones it had.
+            tally.attempts += 1;
+            let kind = if tally.attempts % 9 == 4 { Kind::Doc } else { kind };
             let mine: Vec<&Row> = all.iter().filter(|t| t.epic == epic).collect();
             let parent = match (exists, rng.below(4)) {
                 // A new shortcode's root: top level, or a sub-shortcode
@@ -196,12 +205,18 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
                     _ => "NEVER-0".to_string(),
                 });
             }
+            // A doc takes no blocked_by: most of the time it is born without
+            // one, and otherwise refused.
+            if kind == Kind::Doc && !tally.attempts.is_multiple_of(4) {
+                blocked_by.clear();
+            }
             let forward = blocked_by.iter().any(|b| !all.iter().any(|t| &t.id == b));
             let what = format!("create {epic} {kind} under {parent:?} blocked by {blocked_by:?}");
             match store.create(new_ticket(epic, kind, parent, blocked_by)).await {
                 Ok(_) => {
                     tally.created += 1;
                     tally.forward += usize::from(forward);
+                    tally.docs += usize::from(kind == Kind::Doc);
                 }
                 Err(_) => tally.refused += 1,
             }
@@ -214,10 +229,20 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
             } else {
                 Status::ALL[rng.below(Status::ALL.len())]
             };
-            let before = store.row(&id).unwrap().0.status;
-            store.set_status(&id, status).await.unwrap();
-            tally.statuses += 1;
-            tally.crossings += usize::from((before == Status::Complete) != (status == Status::Complete));
+            let (before, kind) = {
+                let row = store.row(&id).unwrap().0;
+                (row.status, row.kind)
+            };
+            // SDLC-11: a doc's status never moves, and Doc is a doc's alone.
+            match store.set_status(&id, status).await {
+                Ok(_) => {
+                    tally.statuses += 1;
+                    tally.crossings += usize::from((before == Status::Complete) != (status == Status::Complete));
+                }
+                Err(StoreError::DocHasNoLifecycle { .. }) if kind == Kind::Doc => tally.refused += 1,
+                Err(StoreError::DocStatusOnWork { .. }) if status == Status::Doc => tally.refused += 1,
+                Err(e) => panic!("set_status {id} {status}: {e}"),
+            }
             format!("set_status {id} {status}")
         }
         11..=13 => {
@@ -285,7 +310,8 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, epics: &[&str
             && tally.amends > 0
             && tally.links > 0
             && tally.unlinks > 0
-            && tally.forward > 0,
+            && tally.forward > 0
+            && tally.docs > 0,
         "every kind of write, and enough of them: {tally:?}"
     );
     let (form, groups, extents) = {
@@ -481,7 +507,7 @@ async fn verify_names_an_altered_number_and_writes_nothing() {
     };
     assert_eq!(found.len(), 1, "{found:#?}");
     assert!(found[0].starts_with("roll-up group SUBV: stored "), "{}", found[0]);
-    assert!(found[0].contains("roll: (1, 1)") && found[0].contains("roll: (1, 0)"), "{}", found[0]);
+    assert!(found[0].contains("roll: (1, 1, 0)") && found[0].contains("roll: (1, 0, 0)"), "{}", found[0]);
     assert_eq!(bytes(), altered, "verifying an inconsistent file wrote nothing either");
     drop(store);
 }

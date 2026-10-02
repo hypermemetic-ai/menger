@@ -39,6 +39,8 @@
   th { color: var(--dim); font-weight: 500; font-size: .8rem; }
   td.id { color: var(--accent); white-space: nowrap; }
   td.status { white-space: nowrap; }
+  /* SDLC-11: a doc's status is a neutral chip, not a control. */
+  .doc-chip { color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: .1rem .5rem; }
   /* MFE-7 universal click-through: row links to the app's ticket page. */
   #board a { color: inherit; text-decoration: none; }
   #board a:hover { text-decoration: underline; }
@@ -58,7 +60,7 @@
     <input id="title" placeholder="title" required>
     <select id="ttype">
       <option>build</option><option>scope</option><option>execution</option>
-      <option>gap</option><option>spike</option>
+      <option>gap</option><option>spike</option><option>doc</option>
     </select>
     <button>create</button>
   </form>
@@ -73,6 +75,8 @@
 // ("menger.call") per logical call; events arrive as "result"
 // notifications carrying PlexusStreamItem ({type: "data", content: ...}).
 const WS_PORT = "{{WS_PORT}}";
+// The lifecycle — what a status control offers. SDLC-11: a doc has none; its
+// one status, Doc, is shown, never offered.
 const STATUSES = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded"];
 const ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
 let nextId = 1;
@@ -99,10 +103,12 @@ function render() {
       // MFE-7 universal click-through: every rendered ticket links to the
       // app's ticket page at its deep-link URL (/app/#/ticket/{id}).
       const href = `/app/#/ticket/${t.id}`;
+      const status = t.kind === "doc"
+        ? `<span class="doc-chip">${esc(t.status)}</span>`
+        : `<select data-id="${t.id}">${opts}</select>`;
       return `<tr${flash}><td class="id"><a href="${href}">${t.id}</a></td>` +
              `<td><a href="${href}">${esc(t.title)}</a></td>` +
-             `<td>${t.kind}</td><td class="status">` +
-             `<select data-id="${t.id}">${opts}</select></td></tr>`;
+             `<td>${t.kind}</td><td class="status">${status}</td></tr>`;
     });
   document.getElementById("board").innerHTML = rows.join("");
 }

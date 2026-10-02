@@ -234,7 +234,20 @@ pub(crate) fn kind_glyph(kind: &str) -> &'static str {
         "build" => "■",
         "gap" => "○",
         "spike" => "△",
+        // SDLC-11: a document — the pilcrow.
+        "doc" => "¶",
         _ => "·",
+    }
+}
+
+/// A shortcode row's roll-up as the nav shows it: the work's `done/total`
+/// (MNG-10). SDLC-11: a doc has no completion, so docs are not in it; a row
+/// of docs alone — a doc collection — shows how many docs it holds instead.
+pub(crate) fn rollup_label(g: &Group) -> String {
+    match (g.total, g.docs) {
+        (0, 1) => "1 doc".to_string(),
+        (0, docs) if docs > 0 => format!("{docs} docs"),
+        (total, _) => format!("{}/{total}", g.done),
     }
 }
 
@@ -763,16 +776,17 @@ impl Tree {
     }
 
     /// `groups {}` answered: every row the nav draws. A row with `total: 0`
-    /// is drawn by no one.
+    /// is drawn by no one — SDLC-11: and `docs: 0`; a row of docs alone (a
+    /// doc collection) is a row ([`Group::drawn`]).
     pub(crate) fn set_groups(self, all: Vec<Group>) {
-        let map = all.into_iter().filter(|g| g.total > 0).map(|g| (g.epic.clone(), g)).collect();
+        let map = all.into_iter().filter(Group::drawn).map(|g| (g.epic.clone(), g)).collect();
         self.groups.set(Some(map));
         self.epoch.update(|e| *e += 1);
     }
 
     /// `group_changed`: one row's roll-up as it is now — its `done/total`
-    /// move in place, a changed `host` moves the row; `total: 0` is a row
-    /// no longer drawn.
+    /// move in place, a changed `host` moves the row; `total: 0` (SDLC-11:
+    /// with `docs: 0`) is a row no longer drawn.
     pub(crate) fn group_changed(self, g: Group) {
         let same = self.groups.with_untracked(|m| m.as_ref().and_then(|m| m.get(&g.epic)) == Some(&g));
         if same {
@@ -780,7 +794,7 @@ impl Tree {
         }
         self.groups.update(|m| {
             if let Some(m) = m {
-                if g.total == 0 {
+                if !g.drawn() {
                     m.remove(&g.epic);
                 } else {
                     m.insert(g.epic.clone(), g);
@@ -1468,7 +1482,7 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
         let k = key.clone();
         Memo::new(move |_| match ticket {
             Some(t) => t.with(|t| t.child_count > 0) || tree.hosted.with(|h| h.contains_key(&k)),
-            None => tree.groups.with(|m| m.as_ref().and_then(|m| m.get(&k)).is_some_and(|g| g.total > 0)),
+            None => tree.groups.with(|m| m.as_ref().and_then(|m| m.get(&k)).is_some_and(Group::drawn)),
         })
     };
     let child_ancestry: Ancestry = {
@@ -1993,7 +2007,7 @@ fn group_row(
     let rollup = {
         let k = key.clone();
         let tree = ctx.tree;
-        Memo::new(move |_| tree.group(&k).map(|g| format!("{}/{}", g.done, g.total)).unwrap_or_default())
+        Memo::new(move |_| tree.group(&k).map(|g| rollup_label(&g)).unwrap_or_default())
     };
     let code = key.clone();
     view! {
@@ -2087,14 +2101,15 @@ fn leaf_row(
 
 #[cfg(test)]
 mod tests {
-    use super::{chunks, kind_glyph, offset_of, span, Ask, Geom, List, CHUNK, PAGE, WHOLE};
+    use super::{chunks, kind_glyph, offset_of, rollup_label, span, Ask, Geom, List, CHUNK, PAGE, WHOLE};
+    use menger_tickets_api::{Group, Kind};
     use std::collections::BTreeMap;
 
-    /// The five kinds each get their own glyph; the neutral dot is
-    /// reserved for whatever the table does not know.
+    /// The six kinds (SDLC-11: the doc's `¶` too) each get their own glyph;
+    /// the neutral dot is reserved for whatever the table does not know.
     #[test]
     fn every_kind_has_a_distinct_glyph_and_unknown_is_the_neutral_dot() {
-        let kinds = ["scope", "execution", "build", "gap", "spike"];
+        let kinds = ["scope", "execution", "build", "gap", "spike", "doc"];
         let glyphs: std::collections::BTreeSet<&str> = kinds.iter().map(|k| kind_glyph(k)).collect();
         assert_eq!(glyphs.len(), kinds.len(), "distinct: {glyphs:?}");
         assert!(!glyphs.contains("·"));
@@ -2104,6 +2119,19 @@ mod tests {
         for k in kinds {
             assert_eq!(kind_glyph(k).chars().count(), 1, "{k}");
         }
+        // …and the list is the type's, every kind of it.
+        assert_eq!(kinds.to_vec(), Kind::ALL.map(Kind::as_str).to_vec());
+    }
+
+    /// SDLC-11: a row's roll-up is the work's `done/total`, whatever docs
+    /// it holds; a row of docs alone counts its docs.
+    #[test]
+    fn a_rollup_shows_the_works_done_over_total_and_a_doc_collection_its_docs() {
+        let g = |total, done, docs| Group { epic: "G".into(), total, done, docs, root: None, host: None };
+        assert_eq!(rollup_label(&g(5, 2, 0)), "2/5");
+        assert_eq!(rollup_label(&g(4, 4, 3)), "4/4", "docs do not hold a row open");
+        assert_eq!(rollup_label(&g(0, 0, 1)), "1 doc");
+        assert_eq!(rollup_label(&g(0, 0, 7)), "7 docs");
     }
 
     fn ids(epic: &str, seqs: std::ops::Range<u32>) -> Vec<String> {

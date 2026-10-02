@@ -353,6 +353,9 @@ struct Tally {
     left: usize,
     moves: usize,
     others: usize,
+    /// SDLC-11: docs born, and creates tried (what picks a doc).
+    docs: usize,
+    attempts: usize,
 }
 
 /// One random write against the store as it stands, weighted to what moves
@@ -368,6 +371,12 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
             let epic = epics[rng.below(epics.len())];
             let exists = extents.contains_key(epic);
             let kind = if exists { Kind::Build } else { Kind::Scope };
+            // SDLC-11: every eighth create a doc — never ready, never blocked,
+            // never a blocker: what names one, or would be named before it,
+            // is refused. By a count, not a draw: the walk's draws stay the
+            // ones it had.
+            tally.attempts += 1;
+            let kind = if tally.attempts % 8 == 3 { Kind::Doc } else { kind };
             let mine: Vec<&Row> = all.iter().filter(|t| t.epic == epic).collect();
             let parent = match rng.below(4) {
                 0 if !mine.is_empty() => Some(mine[rng.below(mine.len())].id.clone()),
@@ -389,6 +398,9 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
                     _ => blocked_by.last().cloned().unwrap_or_else(|| "NEVER-0".into()),
                 });
             }
+            if kind == Kind::Doc && !tally.attempts.is_multiple_of(3) {
+                blocked_by.clear();
+            }
             let next = format!("{}-{}", epic.to_ascii_uppercase(), extents.get(epic).copied().unwrap_or(0) + 1);
             let resolves = !store.tickets.read().unwrap().ids.waiting_on(&next).is_empty();
             let forward = blocked_by.iter().any(|b| !all.iter().any(|t| &t.id == b));
@@ -396,6 +408,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
             // A refusal (a parent outside the shortcode) is a write too.
             if store.create(new_ticket(epic, kind, parent, blocked_by.clone())).await.is_ok() {
                 tally.created += 1;
+                tally.docs += usize::from(kind == Kind::Doc);
                 tally.with_blockers += usize::from(!blocked_by.is_empty());
                 tally.forward += usize::from(forward);
                 tally.resolved += usize::from(resolves);
@@ -417,10 +430,16 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
                 _ => Status::ALL[rng.below(Status::ALL.len())],
             };
             let row = store.row(&id).unwrap().0;
-            store.set_status(&id, status).await.unwrap();
-            if done(row.status) != done(status) {
-                tally.crossings += 1;
-                tally.fanned += usize::from(!row.unlocks.is_empty());
+            match store.set_status(&id, status).await {
+                Ok(_) if done(row.status) != done(status) => {
+                    tally.crossings += 1;
+                    tally.fanned += usize::from(!row.unlocks.is_empty());
+                }
+                Ok(_) => {}
+                // SDLC-11: a doc's status never moves; Doc is a doc's alone.
+                Err(StoreError::DocHasNoLifecycle { .. }) if row.kind == Kind::Doc => tally.others += 1,
+                Err(StoreError::DocStatusOnWork { .. }) if status == Status::Doc => tally.others += 1,
+                Err(e) => panic!("set_status {id} {status}: {e}"),
             }
             format!("set_status {id} {} -> {status}", row.status)
         }
@@ -486,7 +505,8 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, pages: usize,
             && tally.joined > 0
             && tally.left > 0
             && tally.moves > 0
-            && tally.others > 0,
+            && tally.others > 0
+            && tally.docs > 0,
         "every kind of write, and enough of those that move the ready set: {tally:?}"
     );
     let before = kept(&store);

@@ -118,8 +118,18 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   directory integration, no file-based ticket store. The status
   vocabulary matches `skills/skills/ticketing/SKILL.md` (`Pending`, …);
   the kind vocabulary is the owner's closed five (AGS-13): `scope`,
-  `execution`, `build`, `gap`, `spike`. Don't invent a second vocabulary
-  for either.
+  `execution`, `build`, `gap`, `spike` — and a sixth, `doc` (owner,
+  2026-10-02, SDLC-11), which is not work. Docs "are documents and are
+  thus connected to a different set of sdlc movements. namely, none":
+  a doc simply exists in its state, so it has no lifecycle — it is born
+  in the status `Doc`, which only a doc holds, and nothing moves it
+  (`set_status` on a doc is refused, and `Doc` on any other kind); it is
+  never blocked, never a blocker, never ready, and a roll-up's
+  `done/total` ignores it (`docs` counts it apart). File findings,
+  manifests and references as docs — a child of the ticket that
+  produced them, or under a doc collection's root (a doc may root a
+  shortcode, as a scope may) — not as work that will never close.
+  Don't invent a second vocabulary for either.
 - Architecture (owner-pinned): a service-wide in-memory cache
   (`src/store.rs`) is the ONLY interface the application has to tickets.
   Reads hit the cache, never storage; reads are async-safe (no lock

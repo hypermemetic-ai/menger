@@ -746,9 +746,9 @@ fn frontmatter_parent_reads_only_a_leading_block() {
 }
 
 #[test]
-fn unknown_kind_error_names_the_five() {
+fn unknown_kind_error_names_the_six() {
     let err = "bug".parse::<Kind>().unwrap_err();
-    for name in ["scope", "execution", "build", "gap", "spike"] {
+    for name in ["scope", "execution", "build", "gap", "spike", "doc"] {
         assert!(err.contains(name), "{err}");
     }
     assert!(err.contains("'bug'"), "{err}");
@@ -1279,6 +1279,7 @@ pub(super) fn nav(store: &Store) -> Vec<Group> {
             epic: r.epic,
             total: r.total,
             done: r.done,
+            docs: r.docs,
             root: r.root,
             host: r.host,
         })
@@ -1307,6 +1308,7 @@ fn moved(before: &[Group], after: &[Group]) -> Vec<Group> {
             out.push(Group {
                 total: 0,
                 done: 0,
+                docs: 0,
                 host: None,
                 ..g.clone()
             });
@@ -1321,6 +1323,7 @@ fn group(epic: &str, total: u64, done: u64, root: &str, host: Option<&str>) -> G
         epic: epic.into(),
         total,
         done,
+        docs: 0,
         root: Some(root.into()),
         host: host.map(Into::into),
     }
@@ -1685,7 +1688,13 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
         let what = match rng.below(10) {
             0..=3 => {
                 let epic = EPICS[rng.below(EPICS.len())];
-                let kind = if rng.below(3) == 0 { Kind::Scope } else { Kind::Build };
+                // SDLC-11: docs too — roots of new shortcodes, children of
+                // work, parents of work — counted in `docs`, never `total`.
+                let kind = match rng.below(6) {
+                    0 | 1 => Kind::Scope,
+                    2 => Kind::Doc,
+                    _ => Kind::Build,
+                };
                 let mine: Vec<&Ticket> = all.iter().filter(|t| t.epic == epic).collect();
                 let parent = match rng.below(5) {
                     0 | 1 => None,
@@ -1710,8 +1719,15 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
                 } else {
                     Status::ALL[rng.below(Status::ALL.len())]
                 };
-                store.set_status(&id, status).await.unwrap();
-                writes += 1;
+                // SDLC-11: a doc's status never moves, and Doc is no other
+                // kind's — both refused, and nothing is drawn differently.
+                let kind = store.get(&id).await.unwrap().kind;
+                match store.set_status(&id, status).await {
+                    Ok(_) => writes += 1,
+                    Err(StoreError::DocHasNoLifecycle { .. }) => assert_eq!(kind, Kind::Doc, "{id}"),
+                    Err(StoreError::DocStatusOnWork { .. }) => assert_eq!(status, Status::Doc, "{id}"),
+                    Err(e) => panic!("set_status {id} {status}: {e}"),
+                }
                 format!("set_status {id} {status}")
             }
             _ => {
@@ -1749,6 +1765,10 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
         assert_eq!(got, moved(&before, &after), "step {step}: {what}");
     }
     assert!(writes > 400 && moves > 40 && rehosts > 5, "{writes} writes, {moves} moves, {rehosts} re-hosts");
+    // SDLC-11: docs were born, and are drawn — counted apart from the work.
+    let docs = store.list(None, Some(Status::Doc), None).await.unwrap();
+    assert!(docs.len() > 10 && docs.iter().all(|t| t.kind == Kind::Doc), "{} docs", docs.len());
+    assert!(store.groups().iter().any(|g| g.docs > 0));
 
     let kept = store.groups();
     drop(store);

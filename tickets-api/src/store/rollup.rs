@@ -1,42 +1,77 @@
 use super::stored::{Changes, CrossRow, GroupRow, Mark};
-use super::{Group, Kind, Row, Rows, Status};
+use super::{Group, Row, Rows, Status};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Tickets counted: how many, and how many `Complete` (the nav's
-/// `done` — `Superseded` is not done).
+/// `done` — `Superseded` is not done). SDLC-11: and the docs, apart — a
+/// doc has no completion, so it is in neither `total` nor `done` (a
+/// scope's done-ness ignores doc children), and counts in `docs` alone.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Tally {
     total: u64,
     done: u64,
+    docs: u64,
 }
 
 impl Tally {
     /// One completion, gained or lost — all a status change moves.
-    const DONE: Self = Self { total: 0, done: 1 };
+    const DONE: Self = Self {
+        total: 0,
+        done: 1,
+        docs: 0,
+    };
 
+    /// One ticket: a doc whatever its status says (only a hand edit gives
+    /// one a status but `Doc`), work otherwise.
     fn of(t: &Row) -> Self {
-        Self {
-            total: 1,
-            done: u64::from(t.status == Status::Complete),
+        if t.kind.has_lifecycle() {
+            Self {
+                total: 1,
+                done: u64::from(t.status == Status::Complete),
+                docs: 0,
+            }
+        } else {
+            Self {
+                total: 0,
+                done: 0,
+                docs: 1,
+            }
         }
+    }
+
+    /// Nothing counted: a row that draws no ticket.
+    fn is_empty(self) -> bool {
+        self == Self::default()
     }
 
     fn shift(&mut self, by: Tally, gain: bool) {
         if gain {
             self.total += by.total;
             self.done += by.done;
+            self.docs += by.docs;
         } else {
             self.total -= by.total;
             self.done -= by.done;
+            self.docs -= by.docs;
         }
+    }
+
+    /// As stored: `(total, done, docs)`.
+    fn stored(self) -> (u64, u64, u64) {
+        (self.total, self.done, self.docs)
+    }
+
+    fn from_stored((total, done, docs): (u64, u64, u64)) -> Self {
+        Self { total, done, docs }
     }
 }
 
 /// One shortcode's half of the roll-up.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct Shortcode {
-    /// Its lowest-seq `scope` ticket. Fixed once set: kinds never
-    /// change and every later ticket has a higher seq.
+    /// Its lowest-seq `scope` ticket — SDLC-11: or `doc`, which may root a
+    /// shortcode as a scope may. Fixed once set: kinds never change and
+    /// every later ticket has a higher seq.
     root: Option<String>,
     /// The trees whose top has no parent — drawn in this row whatever
     /// moves elsewhere.
@@ -52,8 +87,8 @@ struct Shortcode {
     /// one is drawn inside.
     up: Option<String>,
     /// The tickets drawn under this row before any nested group: `base`
-    /// plus the cross trees homed here. Zero means the nav draws no
-    /// row for this shortcode.
+    /// plus the cross trees homed here. Empty — no work and no doc — means
+    /// the nav draws no row for this shortcode.
     own: Tally,
     /// `own` plus every nested group's — the row's `done/total`.
     roll: Tally,
@@ -195,7 +230,8 @@ impl Rollups {
                 }
             }
             // (epic, seq) order: the first scope met is the lowest-seq.
-            if t.kind == Kind::Scope && s.root.is_none() {
+            // SDLC-11: or doc — a doc collection's root.
+            if t.kind.roots_a_shortcode() && s.root.is_none() {
                 s.root = Some(t.id.clone());
             }
         }
@@ -253,7 +289,7 @@ impl Rollups {
         cross: BTreeMap<String, CrossRow>,
         marks: BTreeSet<(Mark, String)>,
     ) -> Self {
-        let tally = |(total, done): (u64, u64)| Tally { total, done };
+        let tally = Tally::from_stored;
         let mut r = Self {
             shortcodes: groups
                 .into_iter()
@@ -305,16 +341,16 @@ impl Rollups {
             root: s.root.clone(),
             host: s.host.clone(),
             up: s.up.clone(),
-            base: (s.base.total, s.base.done),
+            base: s.base.stored(),
             base_tops: s.base_tops,
-            own: (s.own.total, s.own.done),
-            roll: (s.roll.total, s.roll.done),
+            own: s.own.stored(),
+            roll: s.roll.stored(),
         }
     }
 
     fn cross_row(c: &Cross) -> CrossRow {
         CrossRow {
-            tally: (c.tally.total, c.tally.done),
+            tally: c.tally.stored(),
             home: c.home.clone(),
         }
     }
@@ -385,7 +421,7 @@ impl Rollups {
             .is_some_and(|p| p.epic != t.epic)
             .then(|| self.snapshot());
         let s = self.shortcodes.entry(t.epic.clone()).or_default();
-        let new_root = t.kind == Kind::Scope && s.root.is_none();
+        let new_root = t.kind.roots_a_shortcode() && s.root.is_none();
         if new_root {
             s.root = Some(t.id.clone());
         }
@@ -728,7 +764,7 @@ impl Rollups {
         }
         for epic in &epics {
             let own = self.shortcodes[epic].own;
-            if own.total == 0 {
+            if own.is_empty() {
                 continue;
             }
             for up in self.chain(epic).into_iter().skip(1) {
@@ -775,13 +811,14 @@ impl Rollups {
 
     /// The group `epic`'s row shows, or `None` when the nav draws no
     /// row for it (every one of its tickets is drawn under another
-    /// shortcode's).
+    /// shortcode's). SDLC-11: a row of docs alone is a row.
     fn view(&self, epic: &str) -> Option<Group> {
         let s = self.shortcodes.get(epic)?;
-        (s.own.total > 0).then(|| Group {
+        (!s.own.is_empty()).then(|| Group {
             epic: epic.to_string(),
             total: s.roll.total,
             done: s.roll.done,
+            docs: s.roll.docs,
             root: s.root.clone(),
             host: s.host.clone(),
         })
@@ -813,6 +850,7 @@ impl Rollups {
                         epic: epic.clone(),
                         total: 0,
                         done: 0,
+                        docs: 0,
                         root: s.root.clone(),
                         host: None,
                     },

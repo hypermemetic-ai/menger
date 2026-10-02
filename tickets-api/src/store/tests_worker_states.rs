@@ -30,7 +30,7 @@ async fn all_nine_statuses_round_trip_through_the_database_and_filter() {
     {
         let store = Store::open(&path).unwrap();
         store.create(ticket("ST", Kind::Scope, &[])).await.unwrap(); // ST-1, the root
-        for s in Status::ALL {
+        for s in Status::LIFECYCLE {
             let id = store.create(ticket("ST", Kind::Build, &[])).await.unwrap().id;
             match store.set_status(&id, s).await.unwrap() {
                 Change::StatusChanged { ticket, previous } => {
@@ -50,11 +50,11 @@ async fn all_nine_statuses_round_trip_through_the_database_and_filter() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(stored, Status::ALL.map(|s| s.as_str().to_string()), "the column holds the wire text");
+    assert_eq!(stored, Status::LIFECYCLE.map(|s| s.as_str().to_string()), "the column holds the wire text");
     assert_eq!(stored[3], "In Review");
 
     let store = Store::open(&path).unwrap();
-    for (i, s) in Status::ALL.into_iter().enumerate() {
+    for (i, s) in Status::LIFECYCLE.into_iter().enumerate() {
         let id = format!("ST-{}", i + 2);
         assert_eq!(store.get(&id).await.unwrap().status, s, "{id} after a reopen");
         let found: Vec<String> = store

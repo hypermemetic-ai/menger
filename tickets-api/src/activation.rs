@@ -178,25 +178,30 @@ impl Tickets {
 
     /// Creates a ticket in an epic. The store allocates the next `EPIC-N`
     /// id; status starts at `Pending` (only a human promotes to `Ready`);
-    /// `kind` defaults to `build`, and one outside the five yields the
-    /// in-band error naming them. `parent` (AGS-19) files the ticket as an
+    /// `kind` defaults to `build`, and one outside the six yields the
+    /// in-band error naming them. SDLC-11: a `doc` starts — and stays — in
+    /// `Doc`; it may be a shortcode's first ticket, as a scope may; a doc
+    /// with a `blocked_by`, a `blocked_by` naming a doc, and a doc born as
+    /// an id some `blocked_by` already names are in-band errors (a doc never
+    /// completes, so nothing may wait on one). `parent` (AGS-19) files the ticket as an
     /// output of an existing ticket in any epic; one that names no ticket,
     /// or that would make the newborn its own ancestor, is an in-band error
     /// naming the reason. MNG-14: omitted, `parent` defaults to the
     /// shortcode's scope root; given, it must be inside the same shortcode
     /// — except for the scope root itself, whose parent is the shortcode
-    /// it hangs under. Every shortcode starts with a scope (MNG-12):
-    /// the first ticket of a prefix must be `kind: scope`, and anything
-    /// else is an in-band error naming the rule, with nothing allocated.
+    /// it hangs under. Every shortcode starts with a scope (MNG-12) or a
+    /// doc (SDLC-11): the first ticket of a prefix must be `kind: scope` or
+    /// `kind: doc`, and anything else is an in-band error naming the rule,
+    /// with nothing allocated.
     /// Yields exactly one event: `Created` or `Error`.
     #[plexus_macros::method(
-        description = "Create a ticket; allocates the next EPIC-N id, status starts Pending; the first ticket of a prefix must be a scope",
+        description = "Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc",
         params(
             epic = "Epic prefix, e.g. MNG (case-insensitive, stored uppercase)",
             title = "Short description",
-            kind = "scope | execution | build | gap | spike (default: build; the first ticket of a prefix must be scope)",
+            kind = "scope | execution | build | gap | spike | doc (default: build; the first ticket of a prefix must be scope or doc; a doc has no lifecycle and takes no blocked_by)",
             severity = "Critical | High | Medium | Low (optional)",
-            blocked_by = "Ticket ids that must complete first (optional)",
+            blocked_by = "Ticket ids that must complete first (optional; never a doc, and not for a doc)",
             body = "Markdown body (optional)",
             parent = "Id of the ticket this one is an output of; must exist and be in the same shortcode (default: the shortcode's scope root). The shortcode's own scope root may name a ticket in another shortcode: the one it hangs under"
         )
@@ -280,7 +285,7 @@ impl Tickets {
         description = "List tickets, optionally filtered by epic, status and/or parent; paged with after + limit",
         params(
             epic = "Epic prefix filter (optional)",
-            status = "Status filter: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded (optional)",
+            status = "Status filter: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Doc (optional)",
             parent = "Only this ticket's children, e.g. PERF-3 (optional)",
             after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
             limit = "At most this many tickets; the page event carries the next cursor (optional)",
@@ -330,12 +335,15 @@ impl Tickets {
     /// Yields exactly one event: `StatusChanged`, `NotFound`, or `Error`.
     /// SDLC-7: the vocabulary is nine — the worker states `Coding` and
     /// `In Review` included — and the write is free: any status to any
-    /// other, nothing gated (SDLC-4 owns transitions).
+    /// other, nothing gated (SDLC-4 owns transitions). SDLC-11: a doc has no
+    /// lifecycle — `set_status` on one is an in-band `Error`, whatever the
+    /// status — and `Doc` is a doc's own: setting it on any other kind is an
+    /// in-band `Error` too. Neither writes anything.
     #[plexus_macros::method(
-        description = "Set a ticket's status",
+        description = "Set a ticket's status (not a doc's: a doc has no lifecycle)",
         params(
             id = "Ticket id, e.g. MNG-2",
-            status = "New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded (case-insensitive; `active` is Coding)"
+            status = "New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded (case-insensitive; `active` is Coding; never Doc, a doc's own)"
         )
     )]
     pub async fn set_status(
@@ -490,7 +498,8 @@ impl Tickets {
 
     /// The DAG query: which tickets can start now? Yields one row event
     /// per member of the ready set — status `Ready` and every
-    /// `blocked_by` entry `Complete` or `Superseded` — ordered by
+    /// `blocked_by` entry `Complete` or `Superseded`; never a doc (SDLC-11),
+    /// whose status is `Doc` for good — ordered by
     /// (epic, seq), then one `page` event. A dangling blocker keeps its
     /// ticket out (use `blockers` to see which ids dangle). The epic
     /// filter applies to membership; blockers resolve globally.
@@ -564,14 +573,15 @@ impl Tickets {
 
     /// MNG-10: the nav's tree without its rows. Yields one `Group` per
     /// shortcode row the nav draws, in shortcode order — `done/total` over
-    /// the row's whole subtree, its scope `root`, and the `host` ticket it
+    /// the row's whole subtree (SDLC-11: its work; `docs` counts its docs,
+    /// which have no completion), its scope (or doc) `root`, and the `host` ticket it
     /// nests under when it is a sub-shortcode — exactly as AGS-20's
     /// `plan()` computes them from every row. Nothing trails the groups:
     /// unlike `list` there is no cursor to hand back, so the stream's own
     /// `done` is the whole answer, as for `blockers`. `watch` keeps a
     /// client's copy current with `GroupChanged`.
     #[plexus_macros::method(
-        description = "One roll-up per shortcode: done/total over its subtree, its scope root, and the host it nests under"
+        description = "One roll-up per shortcode: done/total over its subtree's work, its docs, its root, and the host it nests under"
     )]
     pub async fn groups(&self) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
@@ -741,7 +751,7 @@ mod tests {
     /// outside the five (`bug` — rim's name for gap) is the in-band error
     /// that names all five, and nothing is created.
     #[tokio::test]
-    async fn create_defaults_kind_to_build_accepts_gap_and_rejects_unknown_naming_the_five() {
+    async fn create_defaults_kind_to_build_accepts_gap_and_rejects_unknown_naming_the_six() {
         let hub = hub();
         // MNG-12: the prefix's scope root first; the default is measured
         // on the ticket after it.
@@ -764,7 +774,7 @@ mod tests {
         match ev {
             TicketsEvent::Error { message } => {
                 assert!(message.contains("'bug'"), "{message}");
-                for name in ["scope", "execution", "build", "gap", "spike"] {
+                for name in ["scope", "execution", "build", "gap", "spike", "doc"] {
                     assert!(message.contains(name), "names {name}: {message}");
                 }
             }
@@ -774,6 +784,51 @@ mod tests {
             one(hub.get("MNG-4".into()).await).await,
             TicketsEvent::NotFound { .. }
         ));
+    }
+
+    /// SDLC-11 over the activation: a doc is created in `Doc` (and may root
+    /// a shortcode); `set_status` on it is one in-band `error` saying it has
+    /// no lifecycle; `Doc` on work is one in-band `error`; a doc with a
+    /// `blocked_by`, and a `blocked_by` naming a doc, are in-band `error`s;
+    /// `list { status: Doc }` finds the doc.
+    #[tokio::test]
+    async fn a_doc_over_the_activation_refuses_every_lifecycle_write_in_band() {
+        let hub = hub();
+        match one(hub.create("DOCS".into(), "the manifest".into(), Some("doc".into()), None, None, None, None).await).await {
+            TicketsEvent::Created { ticket } => {
+                assert_eq!((ticket.id.as_str(), ticket.kind, ticket.status), ("DOCS-1", Kind::Doc, Status::Doc));
+            }
+            other => panic!("expected Created, got {other:?}"),
+        }
+        one(hub.create("DOCS".into(), "work".into(), None, None, None, None, None).await).await; // DOCS-2
+        for status in ["Ready", "Complete", "Doc", "active"] {
+            match one(hub.set_status("DOCS-1".into(), status.into()).await).await {
+                TicketsEvent::Error { message } => assert!(message.contains("a doc has no lifecycle"), "{message}"),
+                other => panic!("{status}: expected Error, got {other:?}"),
+            }
+        }
+        match one(hub.set_status("DOCS-2".into(), "doc".into()).await).await {
+            TicketsEvent::Error { message } => assert!(message.contains("Doc is a doc's own status"), "{message}"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+        let blocked = Some(vec!["DOCS-2".to_string()]);
+        match one(hub.create("DOCS".into(), "x".into(), Some("doc".into()), None, blocked, None, None).await).await {
+            TicketsEvent::Error { message } => assert!(message.contains("a doc is never blocked"), "{message}"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+        let on_doc = Some(vec!["DOCS-1".to_string()]);
+        match one(hub.create("DOCS".into(), "x".into(), None, None, on_doc, None, None).await).await {
+            TicketsEvent::Error { message } => assert!(message.contains("'DOCS-1' is a doc"), "{message}"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+        match one(hub.list(None, Some("Doc".into()), None, None, None, Some(true)).await).await {
+            TicketsEvent::Summary { summary } => assert_eq!((summary.id.as_str(), summary.status), ("DOCS-1", Status::Doc)),
+            other => panic!("expected Summary, got {other:?}"),
+        }
+        match one(hub.get("DOCS-1".into()).await).await {
+            TicketsEvent::Ticket { ticket } => assert_eq!(ticket.status, Status::Doc, "nothing moved it"),
+            other => panic!("expected Ticket, got {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -158,7 +158,7 @@ async fn health_create_list_watch_over_the_wire() {
     // …and, after it, the new shortcode's row (MNG-10)
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
-    assert_eq!(ev["group"], json!({"epic": "WIRE", "total": 1, "done": 0, "root": "WIRE-1", "host": null}));
+    assert_eq!(ev["group"], json!({"epic": "WIRE", "total": 1, "done": 0, "docs": 0, "root": "WIRE-1", "host": null}));
 
     // set_status → watch sees the transition too (Pending → Ready moves no
     // count, so no group follows it)
@@ -736,10 +736,10 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     assert_eq!(
         groups,
         vec![
-            json!({"epic": "DEEP", "total": 2, "done": 1, "root": "DEEP-1", "host": "SUB-3"}),
-            json!({"epic": "HUB", "total": 8, "done": 3, "root": "HUB-1", "host": null}),
-            json!({"epic": "LONE", "total": 2, "done": 0, "root": "LONE-1", "host": null}),
-            json!({"epic": "SUB", "total": 5, "done": 2, "root": "SUB-1", "host": "HUB-2"}),
+            json!({"epic": "DEEP", "total": 2, "done": 1, "docs": 0, "root": "DEEP-1", "host": "SUB-3"}),
+            json!({"epic": "HUB", "total": 8, "done": 3, "docs": 0, "root": "HUB-1", "host": null}),
+            json!({"epic": "LONE", "total": 2, "done": 0, "docs": 0, "root": "LONE-1", "host": null}),
+            json!({"epic": "SUB", "total": 5, "done": 2, "docs": 0, "root": "SUB-1", "host": "HUB-2"}),
         ]
     );
 
@@ -766,7 +766,7 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
         .collect();
     let nav: Vec<Value> = nav_plan::rows(&facts, &complete)
         .into_iter()
-        .map(|r| json!({"epic": r.epic, "total": r.total, "done": r.done, "root": r.root, "host": r.host}))
+        .map(|r| json!({"epic": r.epic, "total": r.total, "done": r.done, "docs": r.docs, "root": r.root, "host": r.host}))
         .collect();
     assert_eq!(groups, nav, "the server's roll-ups are the nav's");
 
@@ -778,7 +778,7 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     assert_eq!(ev["type"], "status_changed");
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
-    assert_eq!(ev["group"], json!({"epic": "LONE", "total": 2, "done": 1, "root": "LONE-1", "host": null}));
+    assert_eq!(ev["group"], json!({"epic": "LONE", "total": 2, "done": 1, "docs": 0, "root": "LONE-1", "host": null}));
     // Nothing else came of it: the next item is the next write's.
     collect(call(&client, "tickets.set_status", json!({"id": "HUB-1", "status": "Ready"})).await).await;
     let ev = content(watch.next().await.unwrap().unwrap());
@@ -802,7 +802,7 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     assert_eq!((ev["type"].as_str(), ev["ticket"]["id"].as_str()), (Some("status_changed"), Some("HUB-1")));
     let ev = content(hub_only.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
-    assert_eq!(ev["group"], json!({"epic": "HUB", "total": 8, "done": 4, "root": "HUB-1", "host": null}));
+    assert_eq!(ev["group"], json!({"epic": "HUB", "total": 8, "done": 4, "docs": 0, "root": "HUB-1", "host": null}));
 }
 
 /// SCALE-16 over the real wire. `extents {}` answers one `extent` item per
@@ -1160,4 +1160,97 @@ async fn scope_first_default_parent_and_set_parent_over_the_wire() {
     let evs = collect(call(&client, "tickets.set_parent",
         json!({"id": "SC-7", "parent": "SC-1"})).await).await;
     assert_eq!(evs[0]["type"], "not_found");
+}
+
+/// SDLC-11 over the wire, the ticket's "done when": a doc root, a doc child
+/// and a work child under the doc. The doc is born `Doc` (and `watch` says
+/// so); `set_status` on a doc — any status — is one in-band `error` that
+/// changes nothing, and `Doc` on work is one too; `ready_set` holds the work
+/// once it is `Ready` and never a doc, whole or summarized; `list { status:
+/// Doc }` finds the docs; the group counts the work in `done/total` and the
+/// docs apart; and nothing may be blocked by a doc, nor a doc by anything.
+#[tokio::test]
+async fn docs_root_a_shortcode_refuse_set_status_in_band_and_are_never_ready() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+
+    let mut created = Vec::new();
+    for params in [
+        json!({"epic": "MANIFEST", "title": "the findings", "kind": "doc"}), // MANIFEST-1, the root
+        json!({"epic": "MANIFEST", "title": "finding one", "kind": "doc"}),  // MANIFEST-2 → MANIFEST-1
+        json!({"epic": "MANIFEST", "title": "act on it", "kind": "build", "parent": "MANIFEST-2"}), // MANIFEST-3
+    ] {
+        let evs = collect(call(&client, "tickets.create", params).await).await;
+        assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("created")), "{evs:?}");
+        created.push(evs[0]["ticket"].clone());
+    }
+    let shape: Vec<(Value, Value, Value, Value)> = created
+        .iter()
+        .map(|t| (t["id"].clone(), t["kind"].clone(), t["status"].clone(), t["parent"].clone()))
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (json!("MANIFEST-1"), json!("doc"), json!("Doc"), Value::Null),
+            (json!("MANIFEST-2"), json!("doc"), json!("Doc"), json!("MANIFEST-1")),
+            (json!("MANIFEST-3"), json!("build"), json!("Pending"), json!("MANIFEST-2")),
+        ]
+    );
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!((ev["type"].as_str(), ev["ticket"]["status"].as_str()), (Some("created"), Some("Doc")));
+
+    // set_status on a doc: one in-band error, whatever the status.
+    for (id, status) in [("MANIFEST-1", "Ready"), ("MANIFEST-2", "Complete"), ("MANIFEST-2", "active"), ("MANIFEST-2", "Doc")] {
+        let evs = collect(call(&client, "tickets.set_status", json!({"id": id, "status": status})).await).await;
+        assert_eq!(evs.len(), 1, "{id} {status}: one event, {evs:?}");
+        assert_eq!(evs[0]["type"], "error", "{id} {status}");
+        let message = evs[0]["message"].as_str().unwrap();
+        assert!(message.contains(id) && message.contains("a doc has no lifecycle"), "{message}");
+    }
+    // …and Doc on work.
+    let evs = collect(call(&client, "tickets.set_status", json!({"id": "MANIFEST-3", "status": "Doc"})).await).await;
+    assert_eq!(evs[0]["type"], "error");
+    assert!(evs[0]["message"].as_str().unwrap().contains("Doc is a doc's own status"), "{evs:?}");
+
+    // The work is promoted; the ready set holds it, and never a doc.
+    let evs = collect(call(&client, "tickets.set_status", json!({"id": "MANIFEST-3", "status": "Ready"})).await).await;
+    assert_eq!(evs[0]["type"], "status_changed");
+    for params in [json!({}), json!({"summary": true}), json!({"epic": "MANIFEST", "summary": true})] {
+        let (evs, page) = paged(call(&client, "tickets.ready_set", params.clone()).await).await;
+        let ids: Vec<&str> = evs
+            .iter()
+            .map(|ev| ev["ticket"]["id"].as_str().or(ev["summary"]["id"].as_str()).unwrap())
+            .collect();
+        assert_eq!(ids, ["MANIFEST-3"], "{params}");
+        assert_eq!(page["remaining"], 0);
+    }
+
+    // The docs stand where they were born.
+    let docs = rows(call(&client, "tickets.list", json!({"status": "Doc", "summary": true})).await).await;
+    let docs: Vec<(&str, &str)> = docs
+        .iter()
+        .map(|ev| (ev["summary"]["id"].as_str().unwrap(), ev["summary"]["status"].as_str().unwrap()))
+        .collect();
+    assert_eq!(docs, [("MANIFEST-1", "Doc"), ("MANIFEST-2", "Doc")]);
+
+    // One piece of work, two docs, rooted at the doc.
+    let items = collect(call(&client, "tickets.groups", json!({})).await).await;
+    let groups: Vec<Value> = items.into_iter().map(|ev| ev["group"].clone()).collect();
+    assert_eq!(
+        groups,
+        [json!({"epic": "MANIFEST", "total": 1, "done": 0, "docs": 2, "root": "MANIFEST-1", "host": null})]
+    );
+
+    // Nothing waits on a doc; a doc waits on nothing.
+    for (params, says) in [
+        (json!({"epic": "MANIFEST", "title": "x", "blocked_by": ["MANIFEST-2"]}), "'MANIFEST-2' is a doc"),
+        (json!({"epic": "MANIFEST", "title": "x", "kind": "doc", "blocked_by": ["MANIFEST-3"]}), "a doc is never blocked"),
+    ] {
+        let evs = collect(call(&client, "tickets.create", params).await).await;
+        assert_eq!(evs[0]["type"], "error", "{evs:?}");
+        assert!(evs[0]["message"].as_str().unwrap().contains(says), "{evs:?}");
+    }
+    let mut sub = call(&client, "tickets.health", json!({})).await;
+    assert_eq!(content(sub.next().await.unwrap().unwrap())["ticket_count"], 3, "nothing else was created");
 }

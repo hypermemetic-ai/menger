@@ -80,7 +80,9 @@
      the two worker states, each in a hue the table had not used, each
      pair over 4.5:1 in both themes (Coding 5.78 light / 7.80 dark, In
      Review 6.29 / 7.79). `In Review` is the one status with a space; its
-     row is `st-in-review` (st_class in src/main.rs hyphenates). */
+     row is `st-in-review` (st_class in src/main.rs hyphenates). SDLC-11
+     adds `Doc`, a doc's one status, outside the lifecycle: neutral — no
+     hue, nothing to act on — and over 4.5:1 in both themes too. */
   .st-pending    { --st-bg: #f3e8c8; --st-fg: #7a5d00; }
   .st-ready      { --st-bg: #e3ecf7; --st-fg: #2b5b8c; }
   .st-coding     { --st-bg: #fde0c5; --st-fg: #8f3f00; }
@@ -90,6 +92,7 @@
   .st-idea       { --st-bg: #efe9e0; --st-fg: #72644c; } /* fg darkened from manifest's parked #8a7a5c (3.47:1) to clear AA */
   .st-epic       { --st-bg: #e6dcf5; --st-fg: #5b3a8c; }
   .st-superseded { --st-bg: #f3d9d9; --st-fg: #aa2222; --st-deco: line-through; }
+  .st-doc        { --st-bg: #e8e8ec; --st-fg: #4a4a55; }
   .st, #nav .tag.st, select.status.st {
     background: var(--st-bg); color: var(--st-fg); border-color: transparent;
     font-weight: var(--st-weight, inherit); text-decoration: var(--st-deco, none);
@@ -132,6 +135,7 @@
     :root:not([data-theme="light"]) .st-idea       { --st-bg: #2b2721; --st-fg: #c9b99a; }
     :root:not([data-theme="light"]) .st-epic       { --st-bg: #2e2143; --st-fg: #cdb4f2; }
     :root:not([data-theme="light"]) .st-superseded { --st-bg: #3b2224; --st-fg: #dea3a3; }
+    :root:not([data-theme="light"]) .st-doc        { --st-bg: #26262c; --st-fg: #b8b8c4; }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
@@ -156,6 +160,7 @@
   :root[data-theme="dark"] .st-idea       { --st-bg: #2b2721; --st-fg: #c9b99a; }
   :root[data-theme="dark"] .st-epic       { --st-bg: #2e2143; --st-fg: #cdb4f2; }
   :root[data-theme="dark"] .st-superseded { --st-bg: #3b2224; --st-fg: #dea3a3; }
+  :root[data-theme="dark"] .st-doc        { --st-bg: #26262c; --st-fg: #b8b8c4; }
 
   * { box-sizing: border-box; }
   body {
@@ -227,6 +232,14 @@
      height follows the face it is set in — Blocked's bold one is 4px
      taller — so its box is pinned: every row the same pitch. */
   tbody#board select.status { height: 1.5rem; }
+  /* SDLC-11: a doc has no lifecycle, so its status is no control — a
+     neutral chip (the st-doc row) in the control's place, the control's
+     box, so the row keeps the board's pitch. */
+  span.status.chip {
+    display: inline-block; box-sizing: border-box; border: 1px solid var(--line);
+    border-radius: 6px; font-size: .85rem; padding: 0 .4rem;
+  }
+  tbody#board span.status.chip { height: 1.5rem; line-height: calc(1.5rem - 2px); }
   /* AGS-20: a board row that decomposes says so (no parent column). */
   td.id .haskids {
     margin-left: .35rem; font-size: 10.5px; color: var(--muted);

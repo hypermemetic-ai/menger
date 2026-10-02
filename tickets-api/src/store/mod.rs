@@ -76,6 +76,16 @@
 //! the count of every ticket its `unlocks` names. Stored as SCALE-28 stores
 //! the rest: a column, an index over it, two tables, in the write's
 //! transaction, compared by `--verify-derived`.
+//! SDLC-11 holds a ticket outside the lifecycle: a doc ([`Kind::Doc`]) is
+//! born in [`Status::Doc`] and `set_status` refuses to move it, or to move
+//! anything else into `Doc` — so a doc's status is fixed at birth and is
+//! never `Ready`: the ready set never holds one, by the rule it already has.
+//! `create` keeps docs out of the `blocked_by` graph at both ends (a doc is
+//! never blocked and never a blocker), so no count of unsatisfied blockers
+//! hangs on one. The status counts keep `Doc` as a bucket of its own; the
+//! roll-ups count a doc in `docs`, never in `done/total` ([`rollup`]) — the
+//! derived state's form 3, built once on a file's first open. Everything
+//! else is a doc's as any ticket's: amend, parenthood, commits, the pages.
 
 use crate::types::TicketSummary;
 use rusqlite::{Connection, OpenFlags};
@@ -649,10 +659,27 @@ pub enum StoreError {
     /// AGS-19: the requested parent chain would make `id` its own
     /// ancestor; `path` is the chain from the parent back to `id`.
     ParentCycle { id: String, path: Vec<String> },
-    /// MNG-12: every shortcode starts with a scope. The first ticket of a
-    /// prefix that has none yet must be `kind: scope`; `kind` is what was
-    /// asked for instead. Nothing was stored and no id was allocated.
+    /// MNG-12: every shortcode starts with a scope — SDLC-11: or a doc. The
+    /// first ticket of a prefix that has none yet must be `kind: scope` or
+    /// `kind: doc`; `kind` is what was asked for instead. Nothing was stored
+    /// and no id was allocated.
     FirstMustBeScope { epic: String, kind: Kind },
+    /// SDLC-11: a doc was asked to be born with a `blocked_by`. A doc has no
+    /// lifecycle — nothing for a blocker to hold back. Nothing was stored.
+    DocBlocked { epic: String, blocked_by: Vec<String> },
+    /// SDLC-11: the `blocked_by` of `id` names `docs`, each a doc. A doc
+    /// never completes, so it can never unblock anything. Nothing was stored.
+    BlockedByDoc { id: String, docs: Vec<String> },
+    /// SDLC-11: a doc would be born as `id`, which tickets already name in
+    /// their `blocked_by` (`by`, a forward reference) — they would wait on
+    /// it forever. Nothing was stored and the id stays unallocated.
+    DocAwaited { id: String, by: Vec<String> },
+    /// SDLC-11: `set_status` on a doc. A doc has no lifecycle: it exists in
+    /// its state, `Doc`, and nothing moves it. Nothing changed.
+    DocHasNoLifecycle { id: String },
+    /// SDLC-11: `set_status … Doc` on a ticket of another kind. `Doc` is a
+    /// doc's own status and no other kind's. Nothing changed.
+    DocStatusOnWork { id: String, kind: Kind },
     /// MNG-14: a ticket's parent must be inside its own shortcode; only a
     /// shortcode's scope root may hang under another shortcode (its host).
     /// Nothing changed.
@@ -705,9 +732,43 @@ impl std::fmt::Display for StoreError {
             ),
             Self::FirstMustBeScope { epic, kind } => write!(
                 f,
-                "every shortcode starts with a scope: '{epic}' has no tickets yet, so its \
-                 first ticket must be kind 'scope' (got '{}'); create the scope root first",
+                "every shortcode starts with a scope or a doc: '{epic}' has no tickets yet, so \
+                 its first ticket must be kind 'scope' (or 'doc', for a doc collection) (got \
+                 '{}'); create the root first",
                 db::enum_str(kind)
+            ),
+            Self::DocBlocked { epic, blocked_by } => write!(
+                f,
+                "a doc is never blocked: it has no lifecycle, so there is nothing for {} to hold \
+                 back — create the doc without blocked_by (nothing was created in '{epic}')",
+                blocked_by.join(", ")
+            ),
+            Self::BlockedByDoc { id, docs } => {
+                let named: Vec<String> = docs.iter().map(|d| format!("'{d}'")).collect();
+                let verb = if docs.len() == 1 { "is a doc" } else { "are docs" };
+                write!(
+                    f,
+                    "{} {verb}: a doc never completes, so it can never unblock anything — \
+                     '{id}' cannot be blocked by it (nothing was created)",
+                    named.join(", ")
+                )
+            }
+            Self::DocAwaited { id, by } => write!(
+                f,
+                "'{id}' cannot be born a doc: {} already name it in blocked_by, and a doc never \
+                 completes, so it would never unblock them (nothing was created)",
+                by.join(", ")
+            ),
+            Self::DocHasNoLifecycle { id } => write!(
+                f,
+                "'{id}' is a doc: a doc has no lifecycle — it exists in its state, Doc, and no \
+                 status is set on it (nothing changed)"
+            ),
+            Self::DocStatusOnWork { id, kind } => write!(
+                f,
+                "Doc is a doc's own status: '{id}' is a {}, so it cannot be set to Doc (nothing \
+                 changed)",
+                kind.as_str()
             ),
             Self::ParentOutsideShortcode { id, parent } => write!(
                 f,
@@ -1860,10 +1921,24 @@ impl Store {
     /// broadcasts follow the commit in acknowledgment order: `Created`,
     /// then `ChildrenChanged` for the parent (its id and new count), then
     /// one `UnlocksChanged` per blocker.
+    ///
+    /// SDLC-11: a doc is born in `Doc` (every other kind in `Pending`), may
+    /// be a shortcode's first ticket as a scope may, and stands outside the
+    /// `blocked_by` graph at both ends — refused, before anything persists:
+    /// a doc with a `blocked_by` ([`StoreError::DocBlocked`]), a `blocked_by`
+    /// naming a doc ([`StoreError::BlockedByDoc`]), and a doc born as an id
+    /// some `blocked_by` already names ([`StoreError::DocAwaited`]) — so no
+    /// ticket ever waits on a doc, which never completes.
     pub async fn create(&self, new: NewTicket) -> Result<Ticket, StoreError> {
         let epic = new.epic.trim().to_ascii_uppercase();
         if epic.is_empty() || !epic.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(StoreError::InvalidEpic(new.epic));
+        }
+        if !new.kind.has_lifecycle() && !new.blocked_by.is_empty() {
+            return Err(StoreError::DocBlocked {
+                epic,
+                blocked_by: new.blocked_by,
+            });
         }
         let requested_parent = new
             .parent
@@ -1889,11 +1964,35 @@ impl Store {
             // MNG-12: every shortcode starts with a scope. `seq == 1` is
             // exactly "this prefix has no tickets yet" (ids are never
             // reused), so the newborn would be the shortcode's root.
-            if seq == 1 && new.kind != Kind::Scope {
+            // SDLC-11: or a doc — a doc collection's root.
+            if seq == 1 && !new.kind.roots_a_shortcode() {
                 return Err(StoreError::FirstMustBeScope {
                     epic,
                     kind: new.kind,
                 });
+            }
+
+            // SDLC-11: a doc never completes, so nothing may wait on one —
+            // neither by naming a doc that exists, nor by having named, before
+            // it was born, the id a doc would now take.
+            let docs: Vec<String> = new
+                .blocked_by
+                .iter()
+                .filter(|b| tickets.get(b).is_some_and(|bt| !bt.kind.has_lifecycle()))
+                .fold(Vec::new(), |mut seen, b| {
+                    if !seen.contains(b) {
+                        seen.push(b.clone());
+                    }
+                    seen
+                });
+            if !docs.is_empty() {
+                return Err(StoreError::BlockedByDoc { id, docs });
+            }
+            if !new.kind.has_lifecycle() {
+                let by = tickets.ids.waiting_on(&id);
+                if !by.is_empty() {
+                    return Err(StoreError::DocAwaited { id, by });
+                }
             }
 
             if let Some(path) = find_cycle(tickets, &id, &new.blocked_by) {
@@ -1941,7 +2040,8 @@ impl Store {
                 epic,
                 seq,
                 title: new.title,
-                status: Status::Pending,
+                // SDLC-11: `Doc` for a doc, which it never leaves.
+                status: Status::at_birth(new.kind),
                 kind: new.kind,
                 severity: new.severity,
                 blocked_by: new.blocked_by,
@@ -2428,9 +2528,21 @@ impl Store {
     /// and every group around it (MNG-10): `StatusChanged`, then one
     /// `GroupChanged` per group, innermost first. Any other change moves
     /// no count and broadcasts no group.
+    ///
+    /// SDLC-11: a doc has no lifecycle — `set_status` on one is refused
+    /// ([`StoreError::DocHasNoLifecycle`]), whatever status is asked for —
+    /// and `Doc` is a doc's own status, refused for any other kind
+    /// ([`StoreError::DocStatusOnWork`]). Both before anything is written:
+    /// a doc stays in the state it was born in, and only a doc is in it.
     pub async fn set_status(&self, id: &str, status: Status) -> Result<Change, StoreError> {
         let serial = self.serial().await;
         let (mut row, _) = self.row(id)?;
+        if !row.kind.has_lifecycle() {
+            return Err(StoreError::DocHasNoLifecycle { id: row.id });
+        }
+        if !Status::LIFECYCLE.contains(&status) {
+            return Err(StoreError::DocStatusOnWork { id: row.id, kind: row.kind });
+        }
         let previous = row.status;
         row.status = status;
         row.updated_unix = chrono::Utc::now().timestamp();
@@ -3134,6 +3246,12 @@ mod children;
 /// are built. Stored by SCALE-28's form: the count a column on the ticket's
 /// row, the ready set a partial index over it and the status, the status
 /// counts and each shortcode's share of the ready set two small tables.
+///
+/// SDLC-11: a doc is never in the ready set, by the rule as it stands — its
+/// status is `Doc` from birth and `set_status` never moves it, so it is never
+/// `Ready` — and no count is kept for one or hangs on one: `create` refuses a
+/// doc a `blocked_by` and a `blocked_by` a doc. Its status is counted in the
+/// `Doc` bucket of its shortcode, as every status is counted in its own.
 mod ready;
 
 /// SDLC-9: what a commit reference is — the grammar `link_commits` and
@@ -3210,6 +3328,13 @@ mod tests_detached;
 /// the seed's marker and `--verify-derived`.
 #[cfg(test)]
 mod tests_stored;
+
+/// SDLC-11: docs — each row of the ticket's table (born in `Doc`, rooting
+/// a shortcode, no `blocked_by` either way, `set_status` refused both ways,
+/// never ready, roll-ups that count them apart, everything else as any
+/// ticket), a file with docs verified and reopened, and form 2's first open.
+#[cfg(test)]
+mod tests_docs;
 
 /// SCALE-32: the counts of unsatisfied blockers, the ready set and the
 /// status counts against a scan after every write, in the cache and read

@@ -33,6 +33,12 @@ use std::str::FromStr;
 /// interim answer, not the final vocabulary — SDLC-2 owns that, and must
 /// keep or explicitly map these two. `set_status` stays a free write: no
 /// transition is gated (SDLC-4).
+///
+/// SDLC-11 adds `Doc`, the one status outside the lifecycle: the state a
+/// [`Kind::Doc`] is born in and never leaves, and that no other kind ever
+/// holds. It is in [`Status::ALL`] (a ticket can hold it, `list` filters on
+/// it, every count has a bucket for it) and not in [`Status::LIFECYCLE`]
+/// (nothing moves a ticket into or out of it, so no chooser offers it).
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -51,15 +57,35 @@ pub enum Status {
     Idea,
     Epic,
     Superseded,
+    /// SDLC-11: a doc's, and only a doc's — set at its birth, never changed.
+    Doc,
 }
 
 impl Status {
-    /// The closed vocabulary, in the order a chooser should offer it. The
-    /// browser app's status control renders exactly this — so a status
-    /// added here appears in the UI without a second edit, and one removed
-    /// cannot linger in it. SDLC-7: the worker states sit where a ticket
-    /// passes through them, between `Ready` and `Complete`.
-    pub const ALL: [Status; 9] = [
+    /// Every status a ticket can hold — the lifecycle's nine, then a doc's
+    /// one (SDLC-11). What a status count keeps a bucket for, what `list`
+    /// filters on, and what the browser app's status table paints.
+    pub const ALL: [Status; 10] = [
+        Status::Pending,
+        Status::Ready,
+        Status::Coding,
+        Status::InReview,
+        Status::Blocked,
+        Status::Complete,
+        Status::Idea,
+        Status::Epic,
+        Status::Superseded,
+        Status::Doc,
+    ];
+
+    /// The lifecycle: the statuses a ticket that has one moves between, in
+    /// the order a chooser should offer them. The browser app's status
+    /// control and its menu render exactly this — so a status added here
+    /// appears in the UI without a second edit, and one removed cannot
+    /// linger in it. SDLC-7: the worker states sit where a ticket passes
+    /// through them, between `Ready` and `Complete`. SDLC-11: `Doc` is not
+    /// here — no ticket moves into it or out of it, so no chooser offers it.
+    pub const LIFECYCLE: [Status; 9] = [
         Status::Pending,
         Status::Ready,
         Status::Coding,
@@ -83,6 +109,18 @@ impl Status {
             Status::Idea => "Idea",
             Status::Epic => "Epic",
             Status::Superseded => "Superseded",
+            Status::Doc => "Doc",
+        }
+    }
+
+    /// The status a ticket of `kind` is born in (SDLC-11): a doc in `Doc`,
+    /// which it never leaves; anything else in `Pending`, which only a human
+    /// moves on (to `Ready`).
+    pub const fn at_birth(kind: Kind) -> Status {
+        if kind.has_lifecycle() {
+            Status::Pending
+        } else {
+            Status::Doc
         }
     }
 }
@@ -100,7 +138,8 @@ impl fmt::Display for Status {
 /// calls the claimed state that, and a worker following it to the letter
 /// must not be refused. What is *written* is single-sourced in the enum:
 /// every spelling parses to one variant, which serializes as `Coding` or
-/// `In Review`.
+/// `In Review`. SDLC-11: `Doc` parses too — `list` filters on it; that
+/// `set_status` never writes it is the store's rule, not the parser's.
 impl FromStr for Status {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -114,17 +153,19 @@ impl FromStr for Status {
             "idea" => Ok(Self::Idea),
             "epic" => Ok(Self::Epic),
             "superseded" => Ok(Self::Superseded),
+            "doc" => Ok(Self::Doc),
             other => Err(format!(
                 "unknown status '{other}' (expected Pending, Ready, Coding, In Review, Blocked, \
-                 Complete, Idea, Epic, or Superseded)"
+                 Complete, Idea, Epic, or Superseded — or Doc, a doc's own)"
             )),
         }
     }
 }
 
 /// What shape of work a ticket is (AGS-13): the owner's closed five-value
-/// set, one vocabulary owning the slot. Serialized lowercase (`kind:
-/// build`) on the wire and in the store.
+/// set, one vocabulary owning the slot — and, since SDLC-11 (owner,
+/// 2026-10-02), a sixth that is not work at all: `doc`. Serialized
+/// lowercase (`kind: build`) on the wire and in the store.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -143,11 +184,28 @@ pub enum Kind {
     Gap,
     /// A binary investigation that answers a question.
     Spike,
+    /// SDLC-11: a document — a finding, a manifest, a reference. Outside the
+    /// lifecycle: born in [`Status::Doc`] and never moved from it, never
+    /// blocked and never a blocker, never ready, never done, and not
+    /// counted in a roll-up's `done/total`. It keeps everything else a
+    /// ticket has: a body and `amend`, a parent and children (docs or work),
+    /// commits. It may root a shortcode, as a scope may.
+    Doc,
 }
 
 impl Kind {
-    /// The phrase every "unknown kind" error ends with — the five, named.
-    pub const EXPECTED: &'static str = "scope, execution, build, gap, or spike";
+    /// Every kind — the owner's five, then the doc (SDLC-11).
+    pub const ALL: [Kind; 6] = [
+        Kind::Scope,
+        Kind::Execution,
+        Kind::Build,
+        Kind::Gap,
+        Kind::Spike,
+        Kind::Doc,
+    ];
+
+    /// The phrase every "unknown kind" error ends with — the six, named.
+    pub const EXPECTED: &'static str = "scope, execution, build, gap, spike, or doc";
 
     /// The wire spelling (lowercase).
     pub const fn as_str(self) -> &'static str {
@@ -157,7 +215,22 @@ impl Kind {
             Kind::Build => "build",
             Kind::Gap => "gap",
             Kind::Spike => "spike",
+            Kind::Doc => "doc",
         }
+    }
+
+    /// SDLC-11: whether a ticket of this kind moves through the lifecycle
+    /// ([`Status::LIFECYCLE`]) — every kind but `doc`, which simply exists
+    /// in its state.
+    pub const fn has_lifecycle(self) -> bool {
+        !matches!(self, Kind::Doc)
+    }
+
+    /// MNG-12 / SDLC-11: whether a ticket of this kind may be the first of
+    /// a shortcode, and so its root: a scope, or a doc (a doc collection's
+    /// root).
+    pub const fn roots_a_shortcode(self) -> bool {
+        matches!(self, Kind::Scope | Kind::Doc)
     }
 }
 
@@ -176,6 +249,7 @@ impl FromStr for Kind {
             "build" => Ok(Self::Build),
             "gap" => Ok(Self::Gap),
             "spike" => Ok(Self::Spike),
+            "doc" => Ok(Self::Doc),
             other => Err(format!(
                 "unknown kind '{other}' (expected {})",
                 Kind::EXPECTED
@@ -334,7 +408,8 @@ impl From<&Ticket> for TicketSummary {
 /// every ticket.
 ///
 /// The numbers are the nav's, exactly (`frontend/src/nav.rs`, `plan()` and
-/// the group row's rollup): `total` counts every ticket in the shortcode
+/// the group row's rollup): `total` counts every ticket (SDLC-11: but the
+/// docs) in the shortcode
 /// row's subtree as the nav nests it — its own tickets, a ticket of another
 /// shortcode filed under one of them, and every sub-shortcode hosted
 /// beneath it, at any depth — and `done` counts the `Complete` ones among
@@ -346,14 +421,32 @@ impl From<&Ticket> for TicketSummary {
 ///
 /// Like [`TicketSummary`], the optional fields are written out as `null`
 /// rather than skipped: every group has the same keys.
+///
+/// SDLC-11: a doc has no completion, so `done/total` is the work alone —
+/// `total` counts every ticket of the subtree but its docs, and a scope's
+/// done-ness ignores doc children. `docs` counts the docs beside it, so a
+/// shortcode that holds only docs (a doc collection, rooted at a doc) is
+/// still a row: a group is drawn when it holds anything ([`Group::drawn`]),
+/// and one that arrives with `total: 0` and `docs: 0` is a row no longer
+/// drawn. `root` is the shortcode's lowest-seq scope — or doc: a doc may
+/// root a shortcode as a scope may.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Group {
     /// The shortcode (epic prefix), uppercase.
     pub epic: String,
     pub total: u64,
     pub done: u64,
+    /// SDLC-11: the docs in the row's subtree, which `total` leaves out.
+    pub docs: u64,
     pub root: Option<String>,
     pub host: Option<String>,
+}
+
+impl Group {
+    /// Whether the nav draws this row: it holds a ticket, work or doc.
+    pub fn drawn(&self) -> bool {
+        self.total > 0 || self.docs > 0
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -452,7 +545,7 @@ pub enum TicketsEvent {
     /// `set_parent` reshaped it. Carries the whole group as it is now; it
     /// follows the ticket events of the same mutation, innermost group
     /// first. A group whose shortcode no longer draws a row of its own
-    /// arrives once with `total: 0`.
+    /// arrives once with `total: 0` (SDLC-11: and `docs: 0`).
     GroupChanged { group: Group },
     /// SCALE-16: where one shortcode ends in the store's order — its
     /// highest sequence (yielded per shortcode by `extents`, in shortcode
@@ -510,8 +603,8 @@ mod tests {
     /// that writes them canonically. The refusal names all nine.
     #[test]
     fn the_nine_statuses_round_trip_and_the_worker_states_parse_leniently() {
-        assert_eq!(Status::ALL.len(), 9);
-        for s in Status::ALL {
+        assert_eq!(Status::LIFECYCLE.len(), 9);
+        for s in Status::LIFECYCLE {
             let json = serde_json::to_string(&s).unwrap();
             assert_eq!(json, format!("\"{}\"", s.as_str()), "{s:?}");
             assert_eq!(serde_json::from_str::<Status>(&json).unwrap(), s, "{json}");
@@ -538,14 +631,67 @@ mod tests {
         }
     }
 
+    /// SDLC-11: `Doc` is a status a ticket holds — every status, `Doc`
+    /// included, round-trips through serde and `FromStr` — and is not one a
+    /// ticket moves to: `ALL` is the lifecycle and then `Doc`, and the
+    /// lifecycle (what a chooser offers) does not hold it. A doc is born in
+    /// it and every other kind in `Pending`.
+    #[test]
+    fn doc_is_a_status_outside_the_lifecycle_and_a_docs_birth_status() {
+        assert_eq!(Status::ALL.len(), 10);
+        assert_eq!(Status::ALL[..9], Status::LIFECYCLE, "the lifecycle, then Doc");
+        assert_eq!(Status::ALL[9], Status::Doc);
+        assert!(!Status::LIFECYCLE.contains(&Status::Doc), "no chooser offers Doc");
+        for s in Status::ALL {
+            let json = serde_json::to_string(&s).unwrap();
+            assert_eq!(serde_json::from_str::<Status>(&json).unwrap(), s, "{json}");
+            assert_eq!(s.as_str().parse::<Status>(), Ok(s), "{s:?}");
+        }
+        assert_eq!(serde_json::to_string(&Status::Doc).unwrap(), "\"Doc\"");
+        for spelling in ["Doc", "doc", "DOC"] {
+            assert_eq!(spelling.parse::<Status>(), Ok(Status::Doc), "{spelling}");
+        }
+        for k in Kind::ALL {
+            let want = if k == Kind::Doc { Status::Doc } else { Status::Pending };
+            assert_eq!(Status::at_birth(k), want, "{k:?}");
+            assert_eq!(k.has_lifecycle(), k != Kind::Doc, "{k:?}");
+            assert_eq!(k.roots_a_shortcode(), matches!(k, Kind::Scope | Kind::Doc), "{k:?}");
+        }
+    }
+
+    /// SDLC-11: the sixth kind, `doc`, on the wire as `doc`; the error for
+    /// an unknown kind names all six.
+    #[test]
+    fn doc_is_the_sixth_kind_and_the_unknown_kind_error_names_it() {
+        assert_eq!(serde_json::to_string(&Kind::Doc).unwrap(), "\"doc\"");
+        assert_eq!(serde_json::from_str::<Kind>("\"doc\"").unwrap(), Kind::Doc);
+        assert_eq!("Doc".parse::<Kind>(), Ok(Kind::Doc));
+        let err = "memo".parse::<Kind>().unwrap_err();
+        for k in Kind::ALL {
+            assert!(err.contains(k.as_str()), "names {k}: {err}");
+        }
+    }
+
+    /// SDLC-11: a group is drawn when it holds anything — work or docs — so
+    /// a doc collection is a row; `total: 0, docs: 0` is a row no longer
+    /// drawn.
+    #[test]
+    fn a_group_is_drawn_when_it_holds_work_or_docs() {
+        let g = |total, docs| Group { epic: "G".into(), total, done: 0, docs, root: None, host: None };
+        assert!(g(1, 0).drawn());
+        assert!(g(0, 3).drawn(), "a doc collection");
+        assert!(!g(0, 0).drawn());
+    }
+
     #[test]
     fn kind_and_severity_render_as_their_wire_spellings() {
-        for k in [Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike] {
+        for k in Kind::ALL {
             assert_eq!(
                 serde_json::to_value(k).unwrap(),
                 serde_json::Value::String(k.as_str().to_string()),
                 "{k:?}"
             );
+            assert_eq!(k.as_str().parse::<Kind>(), Ok(k), "{k:?}");
         }
         for s in [
             Severity::Critical,

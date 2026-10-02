@@ -384,7 +384,8 @@ pub(crate) fn TicketMenu(last_error: RwSignal<Option<String>>) -> impl IntoView 
 }
 
 /// One open menu: header (code chip · status chip · title), the four
-/// items, and the inline status list under **Set status**. Built fresh
+/// items, and the inline status list under **Set status** — SDLC-11: three
+/// items for a doc, which has no status to set. Built fresh
 /// per open, so a second right-click starts with the list closed and the
 /// keyboard cursor on the menu itself.
 fn menu_view(
@@ -408,6 +409,9 @@ fn menu_view(
     // Live through the row's signal: a status change arriving over watch
     // while the menu is open moves the mark.
     let status = Memo::new(move |_| ticket.get().map(|s| s.with(|x| x.status)));
+    // SDLC-11: a doc has no lifecycle, so the menu offers it no status
+    // moves — no Set status at all. Until the row is held, none either.
+    let moves = Memo::new(move |_| ticket.get().is_some_and(|s| s.with(|x| x.kind.has_lifecycle())));
     let title = move || ticket.get().map(|s| s.with(|x| x.title.clone())).unwrap_or_default();
     let sub = RwSignal::new(false);
     let root = NodeRef::<leptos::html::Div>::new();
@@ -494,7 +498,8 @@ fn menu_view(
             let id = id.clone();
             // MFE-9: the closed vocabulary from the type that owns it, so
             // the chips and what `set_status` sends cannot disagree.
-            Status::ALL
+            // SDLC-11: the lifecycle — `Doc` is held, never moved to.
+            Status::LIFECYCLE
                 .into_iter()
                 .map(|s| {
                     let id = id.clone();
@@ -545,17 +550,24 @@ fn menu_view(
                 "Open in new tab"
             </a>
             <button class="item" role="menuitem" on:click=copy>"Copy code"</button>
-            <button
-                class="item"
-                role="menuitem"
-                aria-haspopup="menu"
-                aria-expanded=move || sub.get().to_string()
-                on:click=move |_| sub.update(|s| *s = !*s)
-            >
-                "Set status "
-                <span class="arrow" aria-hidden="true">{move || if sub.get() { "▾" } else { "▸" }}</span>
-            </button>
-            {move || sub.get().then(|| view! { <div class="sub" role="group">{status_items()}</div> })}
+            {move || {
+                let status_items = status_items.clone();
+                moves.get().then(|| {
+                    view! {
+                        <button
+                            class="item"
+                            role="menuitem"
+                            aria-haspopup="menu"
+                            aria-expanded=move || sub.get().to_string()
+                            on:click=move |_| sub.update(|s| *s = !*s)
+                        >
+                            "Set status "
+                            <span class="arrow" aria-hidden="true">{move || if sub.get() { "▾" } else { "▸" }}</span>
+                        </button>
+                        {move || sub.get().then(|| view! { <div class="sub" role="group">{status_items()}</div> })}
+                    }
+                })
+            }}
         </div>
     }
 }
