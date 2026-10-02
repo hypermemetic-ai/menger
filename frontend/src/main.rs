@@ -1348,7 +1348,7 @@ fn App() -> impl IntoView {
             // AGS-16: mounted once, outside every ticket element, so a
             // right-click inside the menu itself never re-targets it.
             <menu::TicketMenu last_error />
-            <keys::Overlays rows overlay />
+            <keys::Overlays overlay />
         </div>
     }
 }

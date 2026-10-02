@@ -41,6 +41,24 @@
 //! wheel scroll, a scrollbar drag) takes the focus with it, so the board
 //! remembers which row that was, and j/k resume there rather than at the
 //! top. The palette was always the store's, not the DOM's.
+//!
+//! SCALE-25: **the palette asks the server.** It filtered every row the
+//! client held on every keystroke — right only once the whole store had
+//! been walked, and the last reader of "every row" besides the board. Now it
+//! asks `tickets.find` (SCALE-6), the palette's own rule answered by the
+//! server ([`palette_match`] stays here, unchanged, as the rule's statement
+//! and the server's test oracle): the head of the store when it opens
+//! (`find { query: "" }`), then each query once the typing pauses
+//! ([`DEBOUNCE_MS`]), the 50-row cap as `find`'s `limit`, and the count as
+//! the answer's rows plus its `remaining`. Every question is numbered and
+//! only the answer to the newest is shown ([`Found`]), so an answer that
+//! comes back late never replaces a newer one. While a question is out the
+//! list shows what the last answer has that the new query still matches —
+//! exactly the head of the new answer when the query only grew ([`narrows`]),
+//! nothing otherwise — and Enter on an empty list waits for the answer and
+//! opens its first row. With no connection it says so and shows no matches.
+//! Its rows are its own: they are not put in the row cache, and the ticket
+//! opened from one is fetched by its page, as any.
 
 use std::cell::{Cell, RefCell};
 
@@ -49,15 +67,23 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{dom, navigate_to_ticket, row_index, st_class, Row};
+use crate::{dom, navigate_to_ticket, row_index, session, st_class, Row};
+use menger_tickets_api::{TicketSummary, TicketsEvent};
 
 /// How long a `g` stays armed as the first key of a `g …` sequence.
 const GO_WINDOW_MS: f64 = 1500.0;
 
 /// How many matches the jump palette renders at once. The list is
 /// rebuilt per keystroke, so this is a rendering budget, not a filter
-/// limit anyone can observe on a store of menger's size.
+/// limit anyone can observe on a store of menger's size. SCALE-25: and the
+/// `limit` it asks `find` for.
 const PALETTE_MAX: usize = 50;
+
+/// SCALE-25: how long the typing must pause before the palette asks `find`
+/// — short enough to feel immediate, long enough that a word typed at speed
+/// is one question, not one per letter (a non-empty `find` counts its
+/// matches across the store: 52–155 ms at 10^6, SCALE-21).
+pub(crate) const DEBOUNCE_MS: i32 = 80;
 
 /// Which overlay is up. Exactly one at a time — the signal *is* the
 /// mutual exclusion.
@@ -104,6 +130,93 @@ fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     // UTF-8 is self-synchronizing, so a byte-window scan cannot match
     // across a character boundary by accident.
     n.len() <= h.len() && h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
+}
+
+/// SCALE-25: whether every ticket `query` matches is one `before` matched —
+/// true when the query only grew (the trimmed `before` is inside the trimmed
+/// `query`). Then the rows of `before`'s answer that `query` matches are
+/// the head of `query`'s own answer, in order: a match of `query` that sorts
+/// before the last row `before` answered with was a match of `before`, so it
+/// is among those rows.
+pub(crate) fn narrows(before: &str, query: &str) -> bool {
+    // An empty `before` (the palette's opening question) matched everything;
+    // the scan itself is never handed an empty needle.
+    let before = before.trim();
+    before.is_empty() || contains_ignore_ascii_case(query.trim(), before)
+}
+
+/// SCALE-25: what the palette shows — the newest answer it took, and
+/// whether a newer question is out. Questions are numbered as they are
+/// asked; an answer is taken only if it is to the newest, so one that comes
+/// back after a newer question was asked is dropped, whatever order the
+/// server answers in.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Found {
+    /// The query the rows answer — `None` before any answer.
+    pub(crate) query: Option<String>,
+    pub(crate) rows: Vec<TicketSummary>,
+    /// The answer's rows plus its `remaining`: every match.
+    pub(crate) total: u64,
+    /// The newest question's number, and the shown answer's.
+    pub(crate) asked: u32,
+    pub(crate) took: u32,
+    /// The newest question found no connection: nothing is shown as current.
+    pub(crate) offline: bool,
+}
+
+impl Found {
+    /// A new question; its number.
+    pub(crate) fn ask(&mut self) -> u32 {
+        self.asked = self.asked.wrapping_add(1);
+        self.asked
+    }
+
+    /// Whether an answer to the newest question is still to come.
+    pub(crate) fn pending(&self) -> bool {
+        self.took != self.asked && !self.offline
+    }
+
+    /// The answer to question `n`: taken if `n` is still the newest.
+    pub(crate) fn take(&mut self, n: u32, query: String, rows: Vec<TicketSummary>, remaining: u64) -> bool {
+        if n != self.asked {
+            return false;
+        }
+        self.total = rows.len() as u64 + remaining;
+        self.query = Some(query);
+        self.rows = rows;
+        self.took = n;
+        self.offline = false;
+        true
+    }
+
+    /// Question `n` found no connection.
+    pub(crate) fn lost(&mut self, n: u32) {
+        if n == self.asked {
+            self.offline = true;
+        }
+    }
+
+    /// The rows to show for what is typed now: the answer, once it is the
+    /// newest question's; while one is out, the rows of the last answer the
+    /// typed query still matches if it only grew from that answer's query
+    /// (the head of the coming answer), else none; offline, none.
+    pub(crate) fn shown(&self, typed: &str) -> Vec<TicketSummary> {
+        if self.offline {
+            return Vec::new();
+        }
+        if !self.pending() {
+            return self.rows.clone();
+        }
+        match &self.query {
+            Some(q) if narrows(q, typed) => self
+                .rows
+                .iter()
+                .filter(|t| palette_match(&t.id, &t.title, typed))
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -526,14 +639,45 @@ fn trap_tab(shift: bool) {
 
 /// Whichever overlay is up, mounted once beside the app's columns.
 #[component]
-pub(crate) fn Overlays(rows: RwSignal<Vec<Row>>, overlay: RwSignal<Overlay>) -> impl IntoView {
+pub(crate) fn Overlays(overlay: RwSignal<Overlay>) -> impl IntoView {
     view! {
         {move || match overlay.get() {
             Overlay::None => ().into_any(),
-            Overlay::Palette => view! { <Palette rows overlay /> }.into_any(),
+            Overlay::Palette => view! { <Palette overlay /> }.into_any(),
             Overlay::Cheats => view! { <Cheats overlay /> }.into_any(),
         }}
     }
+}
+
+/// SCALE-25: ask `find` question `n` (`query`), and take the answer if it is
+/// still the newest; with no connection, say so. `then` runs when an answer
+/// is taken (Enter, pressed while it was on its way).
+fn ask_find(found: RwSignal<Found>, n: u32, query: String, then: impl FnOnce() + 'static) {
+    spawn_local(async move {
+        let Some(client) = session::client() else {
+            found.try_update(|f| f.lost(n));
+            return;
+        };
+        match client.find_all(query.clone(), None, Some(PALETTE_MAX as u32)).await {
+            Ok(events) => {
+                let mut rows = Vec::new();
+                let mut remaining = 0;
+                for ev in events {
+                    match ev {
+                        TicketsEvent::Summary { summary } => rows.push(summary),
+                        TicketsEvent::Page { remaining: r, .. } => remaining = r,
+                        _ => {}
+                    }
+                }
+                if found.try_update(|f| f.take(n, query, rows, remaining)) == Some(true) {
+                    then();
+                }
+            }
+            Err(_) => {
+                found.try_update(|f| f.lost(n));
+            }
+        }
+    });
 }
 
 /// The jump palette: an input over a listbox of matches. The input keeps
@@ -541,34 +685,54 @@ pub(crate) fn Overlays(rows: RwSignal<Vec<Row>>, overlay: RwSignal<Overlay>) -> 
 /// `aria-activedescendant`, never focused), so typing and moving are the
 /// same gesture.
 #[component]
-fn Palette(rows: RwSignal<Vec<Row>>, overlay: RwSignal<Overlay>) -> impl IntoView {
+fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     let query = RwSignal::new(String::new());
     let hi = RwSignal::new(0usize);
-    let results = move || {
+    // SCALE-25: the server's answers, numbered; what is shown is derived
+    // from the newest one and what is typed now.
+    let found = RwSignal::new(Found::default());
+    let results = Memo::new(move |_| {
         let q = query.get();
-        rows.with(|v| {
-            v.iter()
-                .filter(|r| r.ticket.with(|t| palette_match(&r.id, &t.title, &q)))
-                .take(PALETTE_MAX)
-                .cloned()
-                .collect::<Vec<Row>>()
-        })
-    };
-    let total = move || {
-        let q = query.get();
-        rows.with(|v| {
-            v.iter()
-                .filter(|r| r.ticket.with(|t| palette_match(&r.id, &t.title, &q)))
-                .count()
-        })
-    };
+        found.with(|f| f.shown(&q))
+    });
+    // Enter pressed while the answer was on its way, with nothing to open.
+    let enter_waits = StoredValue::new(false);
     let open_at = move |i: usize| {
-        let hit = results().get(i).map(|r| r.id.clone());
+        let hit = results.with_untracked(|r| r.get(i).map(|t| t.id.clone()));
         if let Some(id) = hit {
             close_overlay(overlay);
             navigate_to_ticket(&id);
         }
     };
+    let answered = move || {
+        if enter_waits.try_get_value() == Some(true) {
+            enter_waits.set_value(false);
+            let at = hi.get_untracked();
+            let len = results.with_untracked(Vec::len);
+            if len > 0 {
+                open_at(at.min(len - 1));
+            }
+        }
+    };
+    // Opening is the head of the store, asked at once.
+    let first = found.try_update(Found::ask).unwrap_or(0);
+    ask_find(found, first, String::new(), answered);
+    // The connection: lost, the palette says so and shows nothing as
+    // current; back, it asks the newest question again.
+    let link = session::link();
+    Effect::new(move |was: Option<bool>| {
+        let up = link.get();
+        if !up {
+            found.update(|f| {
+                let n = f.ask();
+                f.lost(n);
+            });
+        } else if was == Some(false) {
+            let n = found.try_update(Found::ask).unwrap_or(0);
+            ask_find(found, n, query.get_untracked(), answered);
+        }
+        up
+    });
 
     let input_ref = NodeRef::<leptos::html::Input>::new();
     input_ref.on_load(|el: web_sys::HtmlInputElement| {
@@ -577,7 +741,7 @@ fn Palette(rows: RwSignal<Vec<Row>>, overlay: RwSignal<Overlay>) -> impl IntoVie
 
     let on_key = move |ev: web_sys::KeyboardEvent| {
         let key = ev.key();
-        let len = results().len();
+        let len = results.with_untracked(Vec::len);
         let cur = hi.get_untracked().min(len.saturating_sub(1));
         match key.as_str() {
             "Escape" => {
@@ -588,6 +752,9 @@ fn Palette(rows: RwSignal<Vec<Row>>, overlay: RwSignal<Overlay>) -> impl IntoVie
                 ev.prevent_default();
                 if len > 0 {
                     open_at(cur);
+                } else if found.with_untracked(Found::pending) {
+                    // SCALE-25: the answer is on its way — open its first.
+                    enter_waits.set_value(true);
                 }
             }
             "ArrowDown" => {
@@ -647,21 +814,46 @@ fn Palette(rows: RwSignal<Vec<Row>>, overlay: RwSignal<Overlay>) -> impl IntoVie
                     on:input=move |ev| {
                         query.set(event_target_value(&ev));
                         hi.set(0);
+                        // SCALE-25: a question per pause in the typing — and
+                        // every answer to an earlier one is no longer wanted.
+                        let n = found.try_update(Found::ask).unwrap_or(0);
+                        spawn_local(async move {
+                            dom::sleep_ms(DEBOUNCE_MS).await;
+                            if found.try_with_untracked(|f| f.asked) == Some(n) {
+                                if let Some(q) = query.try_get_untracked() {
+                                    ask_find(found, n, q, answered);
+                                }
+                            }
+                        });
                     }
                 />
-                <ul id="palette-list" role="listbox" aria-label="matching tickets">
+                <ul
+                    id="palette-list"
+                    role="listbox"
+                    aria-label="matching tickets"
+                    aria-busy=move || found.with(Found::pending).to_string()
+                >
                     {move || {
-                        let found = results();
-                        if found.is_empty() {
-                            return view! { <li class="empty">"no ticket matches"</li> }.into_any();
+                        let shown = results.get();
+                        if shown.is_empty() {
+                            let word = found.with(|f| {
+                                if f.offline {
+                                    "offline — reconnecting…"
+                                } else if f.pending() {
+                                    "searching…"
+                                } else {
+                                    "no ticket matches"
+                                }
+                            });
+                            return view! { <li class="empty">{word}</li> }.into_any();
                         }
-                        let cur = hi.get().min(found.len() - 1);
-                        found
+                        let cur = hi.get().min(shown.len() - 1);
+                        shown
                             .into_iter()
                             .enumerate()
-                            .map(|(i, r)| {
-                                let ticket = r.ticket;
-                                let id = r.id.clone();
+                            .map(|(i, t)| {
+                                let id = t.id.clone();
+                                let (title, status) = (t.title.clone(), t.status);
                                 view! {
                                     <li
                                         id=format!("pal-{i}")
@@ -672,12 +864,8 @@ fn Palette(rows: RwSignal<Vec<Row>>, overlay: RwSignal<Overlay>) -> impl IntoVie
                                         on:click=move |_| open_at(i)
                                     >
                                         <span class="code">{id.clone()}</span>
-                                        <span class="label">
-                                            {move || ticket.with(|t| t.title.clone())}
-                                        </span>
-                                        <span class=move || {
-                                            format!("tag {}", ticket.with(|t| st_class(t.status.as_str())))
-                                        }>{move || ticket.with(|t| t.status.to_string())}</span>
+                                        <span class="label">{title}</span>
+                                        <span class=format!("tag {}", st_class(status.as_str()))>{status.to_string()}</span>
                                     </li>
                                 }
                             })
@@ -688,12 +876,23 @@ fn Palette(rows: RwSignal<Vec<Row>>, overlay: RwSignal<Overlay>) -> impl IntoVie
                 <div class="hint">
                     <span id="palette-count">
                         {move || {
-                            let (shown, all) = (results().len(), total());
-                            if all > shown {
-                                format!("{shown} of {all} matches")
-                            } else {
-                                format!("{all} matches")
-                            }
+                            // SCALE-25: the server's count — the answer's rows
+                            // plus its `remaining` — once it is the answer to
+                            // what is typed.
+                            found.with(|f| {
+                                if f.offline {
+                                    "offline".to_string()
+                                } else if f.pending() {
+                                    "… matches".to_string()
+                                } else {
+                                    let (shown, all) = (f.rows.len() as u64, f.total);
+                                    if all > shown {
+                                        format!("{shown} of {all} matches")
+                                    } else {
+                                        format!("{all} matches")
+                                    }
+                                }
+                            })
                         }}
                     </span>
                     " · ↑↓ move · Enter opens · Esc closes"
@@ -760,7 +959,8 @@ fn Cheats(overlay: RwSignal<Overlay>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{palette_match, SHORTCUTS};
+    use super::{narrows, palette_match, Found, SHORTCUTS};
+    use menger_tickets_api::{Kind, Status, TicketSummary};
 
     /// The palette's v1 filter: a case-insensitive substring of either
     /// the code or the title, and an empty query keeps everything.
@@ -792,6 +992,78 @@ mod tests {
         // character (ASCII case folding only, by design)
         assert!(palette_match("AGS-9", "manifest's palette — tokens", "—"));
         assert!(palette_match("AGS-9", "manifest's palette — tokens", "PALETTE"));
+    }
+
+    /// SCALE-25: a query narrows another when it only grew — then every
+    /// ticket it matches, the other matched.
+    #[test]
+    fn a_query_narrows_only_when_it_grew() {
+        assert!(narrows("", "map"));
+        assert!(narrows("map", "map-12"));
+        assert!(narrows("MAP", " map-1 "));
+        assert!(narrows("ap-1", "map-12"));
+        assert!(!narrows("map-12", "map-1"), "it shrank");
+        assert!(!narrows("map", "mop"), "it changed");
+    }
+
+    fn hit(id: &str, title: &str) -> TicketSummary {
+        let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
+        TicketSummary {
+            id: id.to_string(),
+            epic: epic.to_string(),
+            seq: seq.parse().expect("seq"),
+            title: title.to_string(),
+            status: Status::Pending,
+            kind: Kind::Build,
+            severity: None,
+            parent: None,
+            child_count: 0,
+            commits: Vec::new(),
+            blocked_by: Vec::new(),
+            unlocks: Vec::new(),
+            created_unix: 0,
+            updated_unix: 0,
+        }
+    }
+
+    fn ids(rows: Vec<TicketSummary>) -> Vec<String> {
+        rows.into_iter().map(|t| t.id).collect()
+    }
+
+    /// SCALE-25: only the newest question's answer is shown — one that comes
+    /// back after a newer question went out is dropped, whatever the order —
+    /// and the count is the answer's rows plus its `remaining`. While a
+    /// question is out, a query that grew shows what the last answer had
+    /// that it matches (the head of what is coming); one that changed shows
+    /// nothing; and with no connection nothing is shown as current.
+    #[test]
+    fn only_the_newest_answer_is_shown() {
+        let mut f = Found::default();
+        let open = f.ask();
+        assert!(f.pending() && f.shown("").is_empty());
+        assert!(f.take(open, String::new(), vec![hit("AAA-1", "x"), hit("MAP-1", "a map"), hit("MAP-12", "y")], 997));
+        assert_eq!((f.total, f.pending()), (1_000, false));
+        assert_eq!(ids(f.shown("")), ["AAA-1", "MAP-1", "MAP-12"]);
+
+        let map = f.ask();
+        let map12 = f.ask();
+        assert!(f.pending());
+        assert_eq!(ids(f.shown("map-12")), ["MAP-12"], "the head of what is coming");
+        assert_eq!(ids(f.shown("map")), ["MAP-1", "MAP-12"], "titles count, as the rule says");
+        assert!(!f.take(map, "map".into(), vec![hit("MAP-1", "a map")], 40), "an older question's answer");
+        assert!(f.pending(), "still waiting for the newest");
+        assert!(f.take(map12, "map-12".into(), vec![hit("MAP-12", "y"), hit("MAP-120", "z")], 5));
+        assert_eq!((f.total, f.pending()), (7, false));
+        assert!(!f.take(map, "map".into(), Vec::new(), 0), "late, and older still");
+        assert_eq!(ids(f.shown("map-12")), ["MAP-12", "MAP-120"]);
+
+        let shorter = f.ask();
+        assert!(f.shown("map-1").is_empty(), "it shrank: nothing until its own answer");
+        f.lost(shorter);
+        assert!(f.offline && !f.pending() && f.shown("map-1").is_empty());
+        let again = f.ask();
+        assert!(f.take(again, "map-1".into(), vec![hit("MAP-1", "a map")], 0));
+        assert!(!f.offline);
     }
 
     /// What `?` shows is the key map: every key the handlers implement

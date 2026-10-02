@@ -156,7 +156,11 @@ children shows its first page in ~70 ms and its last child is a scroll
 away. At 10^6 the shortcodes are on screen in ~160 ms and a cold deep link
 shows its leaf selected in the nav in ~0.4 s. Every row the app shows lives
 in one row cache — a signal per ticket, held while a view shows it — that
-the board, the nav and the ticket page share.
+the board, the nav and the ticket page share. The jump palette (SCALE-25)
+asks the server: `find` once the typing pauses (80 ms), only the newest
+question's answer shown, its count the answer's rows plus `remaining` —
+`map-12` shows MAP-12 first ~0.26 s after the last keystroke at 10^6, with
+the walk still running.
 
 ## Surface
 

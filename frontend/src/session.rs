@@ -141,6 +141,12 @@ thread_local! {
     /// call.
     static TRANSPORT: RefCell<Option<Rc<WsTransport>>> = const { RefCell::new(None) };
 
+    /// SCALE-25: whether there is a connection — true from the moment a
+    /// session's socket is up, false from the moment it ends. What a view
+    /// that asks the server for what it shows (the jump palette) follows, so
+    /// it can say it is offline rather than show its last answer as current.
+    static LINK: ArcRwSignal<bool> = ArcRwSignal::new(false);
+
     /// MNG-16: the open ticket page's id and its body signal, while it is
     /// mounted — how an `amended` event reaches the one body the app holds.
     /// A `thread_local` for the same reason as `TRANSPORT`.
@@ -251,6 +257,11 @@ fn kids_of(parent: &str, change: impl Fn(&mut Kids) -> bool) {
     }
 }
 
+/// SCALE-25: the connection as a signal — see `LINK`.
+pub(crate) fn link() -> ArcRwSignal<bool> {
+    LINK.with(Clone::clone)
+}
+
 /// A client over the live connection, or `None` before the first one is up.
 ///
 /// This is how a *view* reaches the server: it asks for the client, makes
@@ -291,6 +302,7 @@ pub(crate) fn drive(
                 .await
                 .expect_err("a session only returns on error");
             TRANSPORT.with(|t| *t.borrow_mut() = None);
+            LINK.with(|l| l.set(false));
             leptos::logging::log!("session ended: {err}; reconnecting");
             conn.set(Conn::Reconnecting);
             dom::sleep_ms(RETRY_MS).await;
@@ -313,6 +325,7 @@ async fn session(
             .map_err(|e| format!("connect {}: {e}", dom::ws_url()))?,
     );
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport.clone()));
+    LINK.with(|l| l.set(true));
     // A connection exists — announced here, before the walk, because an
     // open ticket page needs only two point queries and must not wait for
     // the board.
@@ -710,11 +723,16 @@ pub(crate) fn load_ticket(
             Ok(events) => {
                 for ev in events {
                     match ev {
+                        // `try_`: the page can have been left while `get`
+                        // was out (SCALE-25's palette opens one and moves on
+                        // in a breath), and its signals with it.
                         TicketsEvent::Ticket { ticket } => {
-                            body.set(Some(ticket.body.clone()));
+                            body.try_set(Some(ticket.body.clone()));
                             holder.hold(TicketSummary::from(&ticket));
                         }
-                        TicketsEvent::NotFound { .. } => not_found.set(true),
+                        TicketsEvent::NotFound { .. } => {
+                            not_found.try_set(true);
+                        }
                         TicketsEvent::Error { message } => {
                             last_error.set(Some(format!("get {id}: {message}")))
                         }
@@ -734,7 +752,7 @@ pub(crate) fn load_ticket(
             }
             Err(e) => last_error.set(Some(format!("blockers {id}: {}", describe(&e)))),
         }
-        blockers_loaded.set(true);
+        blockers_loaded.try_set(true);
     });
 }
 

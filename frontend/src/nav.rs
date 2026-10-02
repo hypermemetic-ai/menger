@@ -1606,7 +1606,10 @@ fn root_view(root: String, ctx: Ctx, ancestry: Ancestry) -> AnyView {
             let (root, holder) = (root.clone(), holder.clone());
             spawn_local(async move {
                 if let Some(t) = get_summary(&root).await {
-                    if holder.hold(t).is_some() {
+                    // Set once: a set notifies even when the value is the
+                    // same, and the root's node — its open list with it —
+                    // would be built again on every reconnect.
+                    if holder.hold(t).is_some() && ready.try_get_untracked() == Some(false) {
                         ready.try_set(true);
                     }
                 }
@@ -1823,14 +1826,16 @@ fn list_view(
             done.set_value(r.gen);
             holder.hold(child.clone());
             let (source, holder) = (source.clone(), holder.clone());
+            // `try_` throughout: the list can be gone (its node closed or
+            // rebuilt) by the time the page comes back.
             spawn_local(async move {
-                let known = list.with_untracked(|l| l.index_of(&child.id));
+                let Some(known) = list.try_with_untracked(|l| l.index_of(&child.id)) else { return };
                 let i = match known {
                     Some(i) => i,
                     None => {
                         let Asked::Page(rows, remaining) = ask_page(&source, Some(child.id.clone()), PAGE).await else { return };
                         let ids: Vec<String> = rows.iter().map(|t| t.id.clone()).collect();
-                        let n = list.with_untracked(|l| l.n);
+                        let Some(n) = list.try_with_untracked(|l| l.n) else { return };
                         let i = n.saturating_sub(remaining + ids.len() + 1);
                         if !holder.hold_page(rows) {
                             return;
