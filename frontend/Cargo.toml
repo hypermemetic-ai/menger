@@ -82,6 +82,8 @@ web-sys = { version = "0.3", features = [
   "HtmlHeadElement",
   "CssStyleDeclaration",
   "MouseEvent",
+  # AGS-25: `detail` — which click of a double-click this is.
+  "UiEvent",
   "KeyboardEvent",
   "DomRect",
   "Navigator",

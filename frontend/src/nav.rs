@@ -33,6 +33,12 @@
 //! ticket, Home/End jump. Selection still belongs to the route — the
 //! *focused* row and the *selected* row are two different things.
 //!
+//! AGS-25: **a double-click opens or closes a row** that has children —
+//! one toggle per double-click, on its text and on its `▸` alike. A single
+//! click is unchanged (a ticket row follows its link, so a double-click's
+//! first click still opens the ticket's page), and a double-click selects
+//! no text.
+//!
 //! AGS-20: **children nest.** The forest is no longer epic → tickets but
 //! a recursive tree, derived in one pure pass (`plan()`, until SCALE-24)
 //! from the flat row store's `parent` fields:
@@ -2210,7 +2216,14 @@ fn group_row(
             data-node-key=key
             aria-expanded=expanded_attr
             aria-owns=owns_attr
-            on:click=move |_| toggle()
+            // AGS-25: a click toggles, and a double-click is one toggle too —
+            // its second click is not another, and it selects no text.
+            on:click=move |ev: web_sys::MouseEvent| {
+                if ev.detail() <= 1 {
+                    toggle();
+                }
+            }
+            on:mousedown=no_select_on_multi_click
         >
             <span class="prefix">{prefix}</span>
             <span class="toggle clickable">{toggle_glyph}</span>
@@ -2220,6 +2233,14 @@ fn group_row(
         </div>
     }
     .into_any()
+}
+
+/// AGS-25: a double-click toggles a nav row; its second press must not also
+/// select a word of the row's text.
+fn no_select_on_multi_click(ev: web_sys::MouseEvent) {
+    if ev.detail() > 1 {
+        ev.prevent_default();
+    }
 }
 
 /// One ticket row: a real link (middle-click / copy-link friendly) whose
@@ -2242,7 +2263,7 @@ fn leaf_row(
     prefix: impl Fn() -> String + Send + Sync + 'static,
     toggle_glyph: impl Fn() -> &'static str + Send + Sync + 'static,
     toggle: impl Fn() + Send + Sync + 'static,
-    expanded_attr: impl Fn() -> Option<String> + Send + Sync + 'static,
+    expanded_attr: impl Fn() -> Option<String> + Copy + Send + Sync + 'static,
     owns_attr: impl Fn() -> Option<String> + Send + Sync + 'static,
 ) -> AnyView {
     let route = ctx.route;
@@ -2260,6 +2281,10 @@ fn leaf_row(
     // in none).
     let setsize = pos.map(|p| move || p.windowed.get().then(|| p.list.with(|l| l.n)));
     let posinset = pos.zip(index).map(|(p, ix)| move || p.windowed.get().then(|| ix.get().map(|i| i + 1)).flatten());
+    // AGS-25: the `▸`'s click and the row's double-click toggle the same
+    // node, so they share the one closure.
+    let toggle = std::sync::Arc::new(toggle);
+    let on_toggle = toggle.clone();
 
     view! {
         <a
@@ -2277,14 +2302,32 @@ fn leaf_row(
             data-ticket-id=id.clone()
             data-kind=kind
             href=href
+            // AGS-25: a double-click on a row with children opens or closes
+            // it. Its first click still follows the link; it selects no text.
+            on:dblclick=move |ev: web_sys::MouseEvent| {
+                if expanded_attr().is_some() {
+                    ev.prevent_default();
+                    toggle();
+                }
+            }
+            on:mousedown=no_select_on_multi_click
         >
             <span class="prefix">{prefix}</span>
             <span
                 class="toggle clickable"
+                // A double-click here is one toggle: the first click toggles,
+                // the second is not another, and the double-click stops here
+                // rather than reaching the row's.
                 on:click=move |ev: web_sys::MouseEvent| {
                     ev.prevent_default();
                     ev.stop_propagation();
-                    toggle();
+                    if ev.detail() <= 1 {
+                        on_toggle();
+                    }
+                }
+                on:dblclick=move |ev: web_sys::MouseEvent| {
+                    ev.prevent_default();
+                    ev.stop_propagation();
                 }
             >
                 {toggle_glyph}
