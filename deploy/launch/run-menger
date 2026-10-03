@@ -1,0 +1,11 @@
+#!/bin/sh
+# DEPLOY-2: start this release's menger with this release's app. Copied into
+# every release's bin/. The environment file supplies the ports and the
+# database (MENGER_DB_PATH, read by menger itself).
+set -eu
+here=$(dirname "$(readlink -f "$0")")
+exec "$here/menger" \
+  --port "$MENGER_WS_PORT" \
+  --shell-port "$MENGER_SHELL_PORT" \
+  --rest-port "$MENGER_REST_PORT" \
+  --app-dist "$here/../app"

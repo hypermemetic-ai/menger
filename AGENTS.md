@@ -8,9 +8,38 @@ online from the first commit — every noun visible the day it is written.
 ## Commands
 
 ```sh
-cargo run          # WS :4455, the app http://127.0.0.1:4456/ (day-one page: /vanilla)
 cargo test         # unit tests + wire tests (tests/wire.rs speaks the real protocol)
+# a development server: its own ports and its own database, never prod's
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 --db-path /tmp/menger-dev.db
 ```
+
+Bare `cargo run` takes prod's ports (4455–4457) **and prod's database**
+(the default `--db-path` is `~/.local/share/menger/tickets.db`) — never run
+it that way while prod is installed.
+
+## Deploying
+
+menger runs in two environments on this machine, **prod** (4455–4458) and
+**test** (4450–4453), both under `systemd --user`, both from immutable
+releases — never from a checkout. `deploy/README.md` defines the pipeline
+(DEPLOY-1); in short:
+
+```sh
+deploy/pipeline build          # master's tip → gate (cargo test --workspace + frontend tests) → release
+deploy/pipeline deploy test    # the release → test, on a fresh copy of prod's data; smoke checks
+deploy/pipeline promote        # the release test passed → prod; smoke; automatic rollback on failure
+deploy/pipeline status         # what each env runs and whether it is healthy
+```
+
+- **Production changes only through `promote`**, and only to a release that
+  passed the test environment. A `cargo build` or `trunk build` in a checkout
+  changes nothing that is serving.
+- Merging to master is not deploying: a ticket is `Complete` at the merge,
+  and reaches users when its release is promoted — say which release in the
+  ticket when it matters.
+- Check work on the test environment (http://127.0.0.1:4451/) or a throwaway
+  server — never on prod. The tracker itself is prod: `synapse -P 4455` is
+  still how tickets are read and written.
 
 ## Reaching the backend
 

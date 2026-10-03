@@ -1,0 +1,22 @@
+# DEPLOY-2: one menger per environment — menger@prod, menger@test.
+# Installed by `deploy/pipeline install`; do not edit the installed copy.
+[Unit]
+Description=menger (%i) — tickets over Plexus RPC
+Documentation=file://%h/.local/share/menger-deploy/README.md
+After=network.target
+
+[Service]
+Type=simple
+# Ports, database, registry: the environment's own file.
+EnvironmentFile=%h/.config/menger/%i.env
+# The release this environment runs: `current` is switched by the pipeline,
+# and the launcher resolves it when the service starts, so a running server
+# keeps the release it started with until it is restarted.
+ExecStart=%h/.local/share/menger-deploy/envs/%i/current/bin/run-menger
+Restart=on-failure
+RestartSec=2
+# A graceful stop before the kill: the store finishes its write.
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

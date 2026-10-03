@@ -1,0 +1,374 @@
+#!/usr/bin/env bash
+# DEPLOY-2: menger's deployment pipeline (DEPLOY-1 defines it; deploy/README.md
+# explains it). Build once from a commit, gate, release, deploy to test,
+# promote to prod — test and prod both running locally under systemd --user.
+#
+#   deploy/pipeline install                 units + env files; enable both envs
+#   deploy/pipeline build [REV]             gate + release (default REV: master)
+#   deploy/pipeline deploy test [RELEASE]   prod data → test; switch; restart; smoke
+#   deploy/pipeline promote [RELEASE] [--adopt]
+#                                           a TESTED release to prod; smoke;
+#                                           automatic rollback on failure
+#   deploy/pipeline rollback ENV [--restore BACKUP]
+#   deploy/pipeline smoke ENV               the smoke checks, on their own
+#   deploy/pipeline status                  what each env runs, and how it is
+#   deploy/pipeline releases                every release: tested? where?
+#   deploy/pipeline logs ENV [journalctl args…]
+set -euo pipefail
+
+# ── where things are ────────────────────────────────────────────────────────
+REPO=$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel)
+# The build checkout is a sibling of the repo: menger's plexus dependencies are
+# relative paths (../plexus-core …), so a checkout anywhere else cannot build.
+BUILD=$(dirname "$REPO")/menger-build
+HOME_DIR=${MENGER_DEPLOY_HOME:-$HOME/.local/share/menger-deploy}
+RELEASES=$HOME_DIR/releases
+LOG=$HOME_DIR/deployments.log
+CONFIG=$HOME/.config/menger
+UNITS=$HOME/.config/systemd/user
+BACKUPS=$HOME/.local/share/menger/backups
+KEEP_RELEASES=10
+
+say()  { printf '%s\n' "$*" >&2; }
+die()  { say "pipeline: $*"; exit 1; }
+step() { say "── $*"; }
+record() { # env action release result
+  mkdir -p "$HOME_DIR"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$1" "$2" "$3" "$4" >> "$LOG"
+}
+need() { command -v "$1" >/dev/null || die "needs $1 on PATH"; }
+
+env_file() { echo "$CONFIG/$1.env"; }
+load_env() { # ENV → exports the env file's variables
+  local f; f=$(env_file "$1")
+  [[ -f $f ]] || die "no $f — run: deploy/pipeline install"
+  set -a; # shellcheck disable=SC1090
+  source "$f"; set +a
+}
+check_env() { [[ $1 == prod || $1 == test ]] || die "unknown environment '$1' (prod or test)"; }
+envdir() { echo "$HOME_DIR/envs/$1"; }
+running_release() { local l; l=$(envdir "$1")/current; [[ -L $l ]] && basename "$(readlink -f "$l")" || true; }
+previous_release() { local l; l=$(envdir "$1")/previous; [[ -L $l ]] && basename "$(readlink -f "$l")" || true; }
+resolve_release() { # NAME or empty → a release directory name that exists
+  local r=${1:-}
+  if [[ -z $r ]]; then
+    r=$(ls -1 "$RELEASES" 2>/dev/null | grep -v '\.tmp$' | sort | tail -n 1 || true)
+    [[ -n $r ]] || die "no releases yet — run: deploy/pipeline build"
+  fi
+  [[ -d $RELEASES/$r && -f $RELEASES/$r/RELEASE ]] || die "no release '$r' (see: deploy/pipeline releases)"
+  echo "$r"
+}
+units_of() { echo "menger@$1.service menger-diagrams@$1.service"; }
+
+# ── install ─────────────────────────────────────────────────────────────────
+cmd_install() {
+  need systemctl; need sqlite3; need node
+  local node; node=$(command -v node)
+  mkdir -p "$CONFIG" "$UNITS" "$HOME_DIR/envs/prod" "$HOME_DIR/envs/test" "$RELEASES" "$BACKUPS" \
+           "$HOME/.local/share/menger-test"
+  for e in prod test; do
+    sed -e "s|@HOME@|$HOME|g" -e "s|@NODE@|$node|g" "$REPO/deploy/env/$e.env" > "$CONFIG/$e.env"
+  done
+  install -m 0644 "$REPO/deploy/systemd/menger@.service" "$REPO/deploy/systemd/menger-diagrams@.service" "$UNITS/"
+  install -m 0644 "$REPO/deploy/README.md" "$HOME_DIR/README.md"
+  systemctl --user daemon-reload
+  # Enabled means started at boot (lingering is on); an env with no release
+  # yet is enabled but not started.
+  systemctl --user enable menger@prod menger-diagrams@prod menger@test menger-diagrams@test >/dev/null 2>&1
+  say "installed: $CONFIG/{prod,test}.env, $UNITS/menger{,-diagrams}@.service; enabled for prod and test"
+}
+
+# ── build: commit → gate → release ──────────────────────────────────────────
+cmd_build() {
+  need cargo; need trunk; need npm
+  local rev=${1:-master} sha short id stage
+  sha=$(git -C "$REPO" rev-parse --verify "$rev^{commit}") || die "no commit '$rev'"
+  short=${sha:0:7}
+  step "build $short — $(git -C "$REPO" log -1 --format=%s "$sha")"
+
+  if [[ ! -d $BUILD/.git && ! -f $BUILD/.git ]]; then
+    git -C "$REPO" worktree add --detach "$BUILD" "$sha" >/dev/null
+  else
+    git -C "$BUILD" checkout --quiet --detach --force "$sha"
+  fi
+  # A clean tree at the commit; build outputs and installed node modules stay
+  # so a build is incremental.
+  git -C "$BUILD" clean -ffdxq -e /target/ -e /frontend/target/ -e /perf/node_modules/ -e /diagrams/node/node_modules/
+
+  step "gate: cargo test --workspace"
+  local gate_ws gate_fe
+  gate_ws=$(cd "$BUILD" && cargo test --workspace 2>&1 | tee "$BUILD/.gate-workspace.log" | grep -E '^test result' \
+            | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') \
+    || { record build test "$short" "gate failed"; die "gate failed — $BUILD/.gate-workspace.log"; }
+  grep -q '^test result: FAILED' "$BUILD/.gate-workspace.log" && { record build test "$short" "gate failed"; die "gate failed: $gate_ws"; }
+  step "gate: frontend tests"
+  gate_fe=$(cd "$BUILD/frontend" && cargo test 2>&1 | tee "$BUILD/.gate-frontend.log" | grep -E '^test result' \
+            | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') \
+    || { record build test "$short" "gate failed"; die "frontend gate failed — $BUILD/.gate-frontend.log"; }
+  grep -q '^test result: FAILED' "$BUILD/.gate-frontend.log" && { record build test "$short" "gate failed"; die "frontend gate failed: $gate_fe"; }
+  say "gate: workspace $gate_ws; frontend $gate_fe"
+
+  step "release build"
+  (cd "$BUILD" && cargo build --release -p menger -p menger-diagrams > "$BUILD/.build-release.log" 2>&1) \
+    || die "release build failed — $BUILD/.build-release.log"
+  (cd "$BUILD/frontend" && trunk build --release >/dev/null 2>&1) || die "trunk build failed"
+  (cd "$BUILD/diagrams/node" && npm ci --silent >/dev/null)
+
+  id=$(date -u +%Y%m%dT%H%M%SZ)-$short
+  stage=$RELEASES/$id.tmp
+  mkdir -p "$stage/bin" "$stage/diagrams-node"
+  cp "$BUILD/target/release/menger" "$BUILD/target/release/menger-diagrams" "$stage/bin/"
+  cp "$REPO/deploy/launch/run-menger" "$REPO/deploy/launch/run-diagrams" "$stage/bin/"
+  chmod 0755 "$stage/bin/"*
+  cp -r "$BUILD/frontend/dist" "$stage/app"
+  cp -r "$BUILD/diagrams/node/." "$stage/diagrams-node/"
+  {
+    echo "release:   $id"
+    echo "commit:    $sha"
+    echo "subject:   $(git -C "$REPO" log -1 --format=%s "$sha")"
+    echo "built:     $(date -u +%FT%TZ)"
+    echo "rustc:     $(rustc --version)"
+    echo "gate:      workspace $gate_ws; frontend $gate_fe"
+  } > "$stage/RELEASE"
+  chmod -R a-w "$stage"
+  mv "$stage" "$RELEASES/$id"
+  record build - "$id" ok
+  prune
+  say "release $id"
+  echo "$id"
+}
+
+prune() { # keep what an env runs or can roll back to, and the newest few
+  local keep; keep=$( { for e in prod test; do running_release $e; previous_release $e; done; \
+                        ls -1 "$RELEASES" | grep -v '\.tmp$' | sort | tail -n $KEEP_RELEASES; } | sort -u)
+  for r in $(ls -1 "$RELEASES" | grep -v '\.tmp$'); do
+    grep -qx "$r" <<<"$keep" || { chmod -R u+w "$RELEASES/$r"; rm -rf "${RELEASES:?}/$r"; say "pruned $r"; }
+  done
+}
+
+# ── switching and services ──────────────────────────────────────────────────
+switch_to() { # ENV RELEASE — current becomes previous
+  local d; d=$(envdir "$1"); mkdir -p "$d"
+  local cur; cur=$(running_release "$1")
+  if [[ -n $cur && $cur != "$2" ]]; then ln -sfn "$RELEASES/$cur" "$d/previous"; fi
+  ln -sfn "$RELEASES/$2" "$d/current"
+}
+restart() { systemctl --user enable $(units_of "$1") >/dev/null 2>&1 || true; systemctl --user restart $(units_of "$1"); }
+stop()    { systemctl --user stop $(units_of "$1") 2>/dev/null || true; }
+
+backup_db() { # ENV LABEL → path of the backup (empty when there is no db)
+  load_env "$1"
+  [[ -f $MENGER_DB_PATH ]] || { echo ""; return; }
+  local dir; [[ $1 == prod ]] && dir=$BACKUPS || dir=$(dirname "$MENGER_DB_PATH")/backups
+  mkdir -p "$dir"
+  local out=$dir/tickets.db.$(date -u +%Y%m%dT%H%M%SZ)-$2
+  sqlite3 "$MENGER_DB_PATH" ".backup '$out'"
+  echo "$out"
+}
+restore_db() { # ENV BACKUP — the env's services must be stopped
+  load_env "$1"
+  rm -f "$MENGER_DB_PATH" "$MENGER_DB_PATH-wal" "$MENGER_DB_PATH-shm"
+  cp "$2" "$MENGER_DB_PATH"
+}
+
+# ── smoke ───────────────────────────────────────────────────────────────────
+cmd_smoke() {
+  local env=$1; check_env "$env"; load_env "$env"
+  local rel; rel=$(running_release "$env"); [[ -n $rel ]] || { say "smoke $env: no release"; return 1; }
+  local bin=$RELEASES/$rel/bin fail=0
+  step "smoke $env ($rel)"
+  # A drill: DEPLOY_SMOKE_FAIL=ENV fails the first smoke of ENV in this run
+  # (so a promote rolls back), and only the first (so the rollback can pass).
+  if [[ ${DEPLOY_SMOKE_FAIL:-} == "$env" && -z ${SMOKE_DRILLED:-} ]]; then
+    SMOKE_DRILLED=1; say "smoke: DEPLOY_SMOKE_FAIL=$env — failing on purpose (a drill)"; return 1
+  fi
+  for u in $(units_of "$env"); do
+    systemctl --user is-active --quiet "$u" && say "ok   $u active" || { say "FAIL $u not active"; fail=1; }
+  done
+  local h=""
+  for _ in $(seq 1 60); do
+    h=$(timeout 5 synapse -P "$MENGER_WS_PORT" menger tickets health 2>/dev/null | grep -E 'ticket_count' || true)
+    [[ -n $h ]] && break; sleep 0.5
+  done
+  [[ -n $h ]] && say "ok   tickets.health on :$MENGER_WS_PORT —${h#*:} tickets" || { say "FAIL tickets.health on :$MENGER_WS_PORT"; fail=1; }
+  if "$bin/menger" --verify-derived --db-path "$MENGER_DB_PATH" >/dev/null 2>&1; then
+    say "ok   --verify-derived consistent"
+  else
+    say "FAIL --verify-derived"; fail=1
+  fi
+  if curl -fsS -m 5 "http://127.0.0.1:$MENGER_SHELL_PORT/" | grep -q "name=\"menger-ws-port\" content=\"$MENGER_WS_PORT\""; then
+    say "ok   app on :$MENGER_SHELL_PORT, stamped with :$MENGER_WS_PORT"
+  else
+    say "FAIL app on :$MENGER_SHELL_PORT"; fail=1
+  fi
+  local d=""
+  for _ in $(seq 1 20); do
+    d=$(timeout 10 synapse -P "$MENGER_DIAGRAMS_PORT" diagrams mermaid parse --source 'graph LR; a-->b' 2>/dev/null | grep -E 'diagram_type' || true)
+    [[ -n $d ]] && break; sleep 0.5
+  done
+  [[ -n $d ]] && say "ok   diagrams on :$MENGER_DIAGRAMS_PORT parses" || { say "FAIL diagrams on :$MENGER_DIAGRAMS_PORT"; fail=1; }
+  [[ -d $REPO/perf/node_modules/playwright ]] || (cd "$REPO/perf" && npm ci --silent >/dev/null)
+  if node "$REPO/deploy/smoke-browser.mjs" "http://127.0.0.1:$MENGER_SHELL_PORT/" >&2; then :; else fail=1; fi
+  return $fail
+}
+
+# ── deploy test ─────────────────────────────────────────────────────────────
+cmd_deploy() {
+  [[ ${1:-} == test ]] || die "only 'deploy test' — production changes through 'promote'"
+  local rel; rel=$(resolve_release "${2:-}")
+  load_env test; local test_db=$MENGER_DB_PATH
+  load_env prod; local prod_db=$MENGER_DB_PATH
+  step "deploy $rel to test"
+  stop test
+  mkdir -p "$(dirname "$test_db")"
+  rm -f "$test_db" "$test_db-wal" "$test_db-shm"
+  if [[ -f $prod_db ]]; then
+    sqlite3 "$prod_db" ".backup '$test_db'"
+    say "test data: a snapshot of prod's ($(sqlite3 "$test_db" 'select count(*) from tickets') tickets)"
+  else
+    say "test data: prod has no database yet; test starts empty"
+  fi
+  switch_to test "$rel"
+  restart test
+  if cmd_smoke test; then
+    chmod u+w "$RELEASES/$rel"; date -u +%FT%TZ > "$RELEASES/$rel/TESTED"; chmod a-w "$RELEASES/$rel"
+    record test deploy "$rel" ok
+    say "test runs $rel — smoke passed; the release is TESTED"
+  else
+    record test deploy "$rel" "smoke failed"
+    die "test runs $rel and its smoke FAILED — prod untouched; see: deploy/pipeline logs test"
+  fi
+}
+
+# ── promote ─────────────────────────────────────────────────────────────────
+# Moves an environment (prod; `--to test` exists for the rollback drill) to a
+# tested release, rolling back by itself if the smoke checks fail.
+cmd_promote() {
+  local rel="" adopt=0 to=prod
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --adopt) adopt=1 ;;
+      --to) to=$2; shift ;;
+      -*) die "unknown flag $1" ;;
+      *) rel=$1 ;;
+    esac; shift
+  done
+  check_env "$to"
+  [[ -n $rel ]] || rel=$(running_release test)
+  rel=$(resolve_release "$rel")
+  [[ -f $RELEASES/$rel/TESTED ]] || die "$rel has not passed the test environment — run: deploy/pipeline deploy test $rel"
+  load_env "$to"
+
+  # Whatever holds the env's ports must be the env's own services, unless
+  # adopting: the one-time retirement of a hand-started menger (DEPLOY-3).
+  local holders; holders=$(foreign_holders "$to")
+  if [[ -n $holders ]]; then
+    [[ $adopt == 1 ]] || die "ports held by processes outside systemd: $holders — pass --adopt to stop them"
+    for p in $holders; do
+      local comm; comm=$(ps -o comm= -p "$p")
+      [[ $comm == menger || $comm == menger-diagram* ]] || die "pid $p ($comm) holds a port and is not menger — not stopping it"
+      say "adopting: stopping pid $p ($comm, $(readlink -f /proc/$p/exe))"
+      kill -TERM "$p"; for _ in $(seq 1 40); do kill -0 "$p" 2>/dev/null || break; sleep 0.25; done
+      kill -0 "$p" 2>/dev/null && die "pid $p did not stop"
+    done
+  fi
+
+  local was; was=$(running_release "$to")
+  step "promote $rel to $to (was: ${was:-none})"
+  local backup; backup=$(backup_db "$to" "before-$rel")
+  [[ -n $backup ]] && say "backup: $backup"
+  switch_to "$to" "$rel"
+  restart "$to"
+  if cmd_smoke "$to"; then
+    record "$to" promote "$rel" ok
+    say "$to runs $rel — smoke passed"
+    return 0
+  fi
+  say "smoke FAILED on $to — rolling back"
+  stop "$to"
+  [[ -n $backup ]] && restore_db "$to" "$backup" && say "restored $backup"
+  if [[ -n $was ]]; then
+    ln -sfn "$RELEASES/$was" "$(envdir "$to")/current"
+    restart "$to"
+    if cmd_smoke "$to"; then
+      record "$to" promote "$rel" "smoke failed; rolled back to $was"
+      die "$to is back on $was (smoke passed); $rel was not promoted"
+    fi
+    record "$to" promote "$rel" "smoke failed; rollback to $was ALSO failed"
+    die "$to rollback to $was failed its smoke too — see: deploy/pipeline logs $to"
+  fi
+  record "$to" promote "$rel" "smoke failed; no previous release; $to stopped"
+  die "$to had no previous release to return to; its services are stopped and its database restored"
+}
+foreign_holders() { # ENV → pids listening on the env's ports that are not its units' main pids
+  load_env "$1"
+  local mine=" " p
+  for u in $(units_of "$1"); do mine+="$(systemctl --user show -p MainPID --value "$u" 2>/dev/null) "; done
+  for port in "$MENGER_WS_PORT" "$MENGER_SHELL_PORT" "$MENGER_REST_PORT" "$MENGER_DIAGRAMS_PORT"; do
+    for p in $(ss -ltnpH sport = :"$port" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
+      [[ $mine == *" $p "* ]] || echo "$p"
+    done
+  done | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+
+# ── rollback ────────────────────────────────────────────────────────────────
+cmd_rollback() {
+  local env=${1:-}; shift || true; check_env "$env"
+  local restore=""
+  [[ ${1:-} == --restore ]] && { restore=${2:-}; [[ -f $restore ]] || die "no backup '$restore'"; }
+  local prev; prev=$(previous_release "$env"); [[ -n $prev ]] || die "$env has no previous release"
+  local cur; cur=$(running_release "$env")
+  step "rollback $env: $cur → $prev"
+  stop "$env"
+  [[ -n $restore ]] && { restore_db "$env" "$restore"; say "restored $restore"; }
+  switch_to "$env" "$prev"
+  restart "$env"
+  if cmd_smoke "$env"; then record "$env" rollback "$prev" ok; say "$env runs $prev"
+  else record "$env" rollback "$prev" "smoke failed"; die "$env runs $prev but its smoke FAILED"; fi
+}
+
+# ── status, releases, logs ──────────────────────────────────────────────────
+cmd_status() {
+  for env in prod test; do
+    [[ -f $(env_file $env) ]] || { say "$env: not installed"; continue; }
+    load_env "$env"
+    local rel; rel=$(running_release "$env")
+    printf '%s\n' "$env"
+    printf '  release   %s%s\n' "${rel:-none}" "$([[ -n $rel && -f $RELEASES/$rel/TESTED ]] && echo '  (tested)')"
+    [[ -n $rel ]] && printf '  commit    %s\n' "$(sed -n 's/^subject: *//p' "$RELEASES/$rel/RELEASE" | cut -c1-90)"
+    printf '  previous  %s\n' "$(previous_release "$env" || true)"
+    for u in $(units_of "$env"); do
+      printf '  %-28s %s since %s\n' "$u" "$(systemctl --user is-active "$u" 2>/dev/null || true)" \
+        "$(systemctl --user show -p ActiveEnterTimestamp --value "$u" 2>/dev/null)"
+    done
+    local h; h=$(timeout 5 synapse -P "$MENGER_WS_PORT" menger tickets health 2>/dev/null | sed -n 's/^ *ticket_count: *//p')
+    if [[ -n $h ]]; then printf '  health    %s tickets on :%s\n' "$h" "$MENGER_WS_PORT"
+    else printf '  health    no answer on :%s\n' "$MENGER_WS_PORT"; fi
+    printf '  app       http://127.0.0.1:%s/\n' "$MENGER_SHELL_PORT"
+    local f; f=$(foreign_holders "$env"); [[ -n $f ]] && printf '  outside   pids %s hold its ports outside systemd\n' "$f"
+  done
+}
+cmd_releases() {
+  for r in $(ls -1 "$RELEASES" 2>/dev/null | grep -v '\.tmp$' | sort); do
+    local where=""
+    for e in prod test; do [[ $(running_release $e) == "$r" ]] && where+=" $e"; [[ $(previous_release $e) == "$r" ]] && where+=" $e(previous)"; done
+    printf '%s  %-6s %-22s %s\n' "$r" "$([[ -f $RELEASES/$r/TESTED ]] && echo tested || echo -)" "${where# }" \
+      "$(sed -n 's/^subject: *//p' "$RELEASES/$r/RELEASE" | cut -c1-70)"
+  done
+}
+cmd_logs() { local env=${1:-}; check_env "$env"; shift; journalctl --user -u "menger@$env" -u "menger-diagrams@$env" "$@"; }
+
+# ── dispatch ────────────────────────────────────────────────────────────────
+cmd=${1:-}; shift || true
+case $cmd in
+  install)  cmd_install "$@" ;;
+  build)    cmd_build "$@" ;;
+  deploy)   cmd_deploy "$@" ;;
+  promote)  cmd_promote "$@" ;;
+  rollback) cmd_rollback "$@" ;;
+  smoke)    cmd_smoke "$@" ;;
+  status)   cmd_status ;;
+  releases) cmd_releases ;;
+  logs)     cmd_logs "$@" ;;
+  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

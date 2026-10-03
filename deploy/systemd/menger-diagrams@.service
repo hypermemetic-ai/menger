@@ -1,0 +1,16 @@
+# DEPLOY-2: one diagrams service per environment — menger-diagrams@prod,
+# menger-diagrams@test. Installed by `deploy/pipeline install`.
+[Unit]
+Description=menger diagrams (%i) — mermaid parsed by the vendored bundle
+Documentation=file://%h/.local/share/menger-deploy/README.md
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/menger/%i.env
+ExecStart=%h/.local/share/menger-deploy/envs/%i/current/bin/run-diagrams
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

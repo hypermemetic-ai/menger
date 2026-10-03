@@ -1,0 +1,12 @@
+#!/bin/sh
+# DEPLOY-2: start this release's diagrams service, parsing with the very
+# mermaid bundle this release's app serves. Copied into every release's bin/.
+# The environment file supplies the port and the Node binary
+# (MENGER_DIAGRAMS_NODE, read by menger-diagrams itself).
+set -eu
+here=$(dirname "$(readlink -f "$0")")
+bundle=$(ls "$here"/../app/vendor/mermaid-*.min.js | head -n 1)
+exec "$here/menger-diagrams" \
+  --port "$MENGER_DIAGRAMS_PORT" \
+  --bundle "$bundle" \
+  --node-dir "$here/../diagrams-node"
