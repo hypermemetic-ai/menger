@@ -258,30 +258,111 @@
   #ticket-page .crumbs a:hover { color: var(--accent); }
   /* AGS-20: the ancestor chain, root first, after the board crumb. */
   #ticket-page .crumbs .sep { color: var(--muted); }
-  #ticket-page .crumbs .crumb, dd#t-parent .crumb { font-family: var(--mono); font-size: 12.5px; }
-  dd#t-parent .crumb { color: var(--accent); text-decoration: none; }
-  dd#t-parent .crumb:hover { text-decoration: underline; }
-  article.ticket h2 { font-size: 1.05rem; margin: .25rem 0 1rem; }
-  article.ticket h2 .id { color: var(--accent); margin-right: .6rem; }
-  dl.meta {
-    display: flex; flex-wrap: wrap; gap: .35rem 1.75rem; margin: 0 0 1rem;
-    padding: .6rem .8rem; background: var(--panel);
-    border: 1px solid var(--line); border-radius: 4px;
+  #ticket-page .crumbs .crumb { font-family: var(--mono); font-size: 12.5px; }
+  /* AGS-22: the issue layout — the prose in one column, the properties in
+     a quiet column beside it: the page's own background, a hairline to its
+     left, no box. The crumb spans both. Placement is explicit, so the two
+     items of the page's dynamic slot cannot auto-flow into the wrong cell. */
+  #ticket-page {
+    display: grid; grid-template-columns: minmax(0, 1fr) 260px;
+    column-gap: 1.75rem; align-items: start;
   }
-  dl.meta div { display: flex; gap: .5rem; }
+  #ticket-page .crumbs { grid-column: 1 / -1; grid-row: 1; }
+  #ticket-page article.ticket { grid-column: 1; grid-row: 2; min-width: 0; }
+  #ticket-page aside.props { grid-column: 2; grid-row: 2; min-width: 0; }
+  #ticket-page #notfound, #ticket-page .loading { grid-column: 1 / -1; }
+  aside.props {
+    border-left: 1px solid var(--line); padding: .15rem 0 0 1.25rem;
+    font-family: var(--sans); font-size: 13px; line-height: 1.5;
+  }
+  /* The narrow form (the content column under ~840px — a container query,
+     so hiding the nav widens the page rather than the viewport having to):
+     one column — the title, then the properties, then the body. The
+     article gives up its box so its title and its body can sit either side
+     of the aside; every selector into it still matches. */
+  @container (max-width: 840px) {
+    #ticket-page { grid-template-columns: minmax(0, 1fr); }
+    #ticket-page .crumbs, #ticket-page aside.props { grid-column: 1; grid-row: auto; }
+    #ticket-page article.ticket { display: contents; }
+    #ticket-page article.ticket > * { order: 3; }
+    #ticket-page article.ticket > h2 { order: 1; }
+    #ticket-page aside.props {
+      order: 2; border-left: 0; padding: 0 0 .9rem; margin-bottom: 1.25rem;
+      border-bottom: 1px solid var(--line);
+    }
+  }
+  /* The house code chip (`#nav .code`'s face, rule below) wherever the
+     page names an id or a shortcode; the page's chips set their own mono
+     face, and a linked one lights up like every other link. */
+  #ticket-page .code { font-family: var(--mono); text-decoration: none; }
+  #ticket-page a.code:hover { color: var(--accent); border-color: var(--accent); }
+  /* The title: the id as the chip, then the title in the sans face. The
+     title wraps inside its own slot rather than dropping under the chip. */
+  article.ticket h2 {
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: .55rem;
+    font-family: var(--sans); font-size: 20px; font-weight: 600;
+    letter-spacing: -.01em; line-height: 1.3; margin: .1rem 0 1rem;
+  }
+  #ticket-page article.ticket h2 .code { flex: none; font-size: 11.5px; padding: 1px 6px; }
+  article.ticket h2 .t { flex: 1 1 14rem; min-width: 0; }
+  /* The properties: a label/value grid. `display: contents` on each pair
+     lifts its dt/dd into the grid, so the labels form one column. */
+  dl.meta {
+    display: grid; grid-template-columns: 6.5em minmax(0, 1fr);
+    gap: .45rem .5rem; margin: 0; align-items: baseline;
+  }
+  dl.meta div { display: contents; }
   dl.meta dt { color: var(--muted); }
-  dl.meta dd { margin: 0; }
-  dd.status { padding: 0 .4rem; border: 1px solid var(--line); border-radius: 6px; }
+  dl.meta dd { margin: 0; min-width: 0; }
+  /* The status chip: its face is the status table's (AGS-15). */
+  dd.status {
+    justify-self: start; border: 1px solid transparent; border-radius: 6px;
+    font-size: 11.5px; padding: 0 .5rem;
+  }
+  dd.kind .glyph { margin-right: .4rem; }
   /* SDLC-9: the commits that finished the ticket — short, mono, in link order. */
   dd#t-commits { display: flex; flex-wrap: wrap; gap: 0 .6rem; }
-  dd#t-commits .commit { font-family: var(--mono); font-size: 12.5px; }
-  section.dag h3, section.bodysec h3 {
-    font-size: .8rem; color: var(--muted); font-weight: 500; margin: 1.1rem 0 .35rem;
+  dd#t-commits .commit { font-family: var(--mono); font-size: 12px; }
+  /* The stamps: relative, the exact time (fmt_unix) on hover. */
+  aside.props .stamps {
+    display: flex; flex-direction: column; margin: .9rem 0 0; padding-top: .7rem;
+    border-top: 1px solid var(--line); color: var(--muted); font-size: 11.5px;
   }
+  aside.props .stamps span { width: max-content; }
+  aside.props .stamps [title] { cursor: help; }
+  /* The relations, under a hairline; a doc's (which it never has) not drawn. */
+  aside.props section.dag { margin-top: .9rem; padding-top: .1rem; border-top: 1px solid var(--line); }
+  aside.props section.dag.empty { display: none; }
+  /* Section heads: the relations', and the Children header's. */
+  aside.props h3, section.kidsec h3 {
+    font-family: var(--sans); font-size: 11px; font-weight: 500;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+    margin: .9rem 0 .35rem;
+  }
+  aside.props .none { margin: 0; font-size: 12px; }
+  /* AGS-20/22: the children, under the body, with the nav's roll-up. */
+  section.kidsec { margin-top: 1.75rem; padding-top: .9rem; border-top: 1px solid var(--line); }
+  section.kidsec h3 { display: flex; align-items: center; gap: .5rem; margin: 0 0 .4rem; }
+  section.kidsec .roll {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0; text-transform: none;
+    font-variant-numeric: tabular-nums; color: var(--chip-fg);
+    background: var(--chip-bg); border: 1px solid var(--chip-line);
+    border-radius: 6px; padding: 0 5px;
+  }
+  section.kidsec .none, section.kidsec .loading { font-family: var(--sans); font-size: 13px; margin: 0; }
+  article.ticket > p.none, article.ticket > p.loading { font-family: var(--sans); font-size: 13px; }
+  /* Relation and child rows: kind glyph · code chip · title · status chip.
+     The title takes the slack and truncates (whole on hover); the chip is
+     pinned right at the nav's chip width, so a column of them aligns. */
   #blockers, #unlocks, #children { list-style: none; margin: 0; padding: 0; }
-  #blockers li, #unlocks li, #children li { padding: .15rem 0; }
-  #blockers a, #unlocks a, #children a { color: var(--accent); text-decoration: none; }
-  #blockers a:hover, #unlocks a:hover, #children a:hover { text-decoration: underline; }
+  #blockers li, #unlocks li, #children li {
+    display: flex; align-items: baseline; gap: 6px; min-width: 0; padding: .15rem 0;
+  }
+  ul#children { font-family: var(--sans); font-size: 13px; }
+  ul#children li { padding: .3rem .5rem; margin: 0 -.5rem; border-radius: 6px; }
+  ul#children li:hover { background: var(--hover); }
+  #blockers .glyph, #unlocks .glyph, #children .glyph { flex: none; width: 1ch; color: var(--muted); }
+  #blockers a, #unlocks a, #children a { flex: none; }
   /* SCALE-4: a large parent's children come a page at a time. */
   button.more {
     margin: .35rem 0 0; padding: .1rem .5rem; font: inherit; font-size: .8rem;
@@ -290,10 +371,15 @@
   }
   button.more:hover { color: var(--accent); border-color: var(--accent); }
   .bstatus {
-    margin-left: .6rem; padding: 0 .4rem; font-size: .8rem;
-    border: 1px solid var(--line); border-radius: 6px;
+    flex: none; margin-left: auto; width: 6.5em; text-align: center; box-sizing: border-box;
+    font-family: var(--mono); font-size: 10px; padding: 0 5px;
+    border: 1px solid transparent; border-radius: 6px; white-space: nowrap;
   }
-  .btitle { margin-left: .6rem; color: var(--muted); }
+  .btitle {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--muted);
+  }
+  ul#children .btitle { color: var(--ink); }
   .dangling { color: var(--err-fg); }
   .none, .loading { color: var(--muted); }
   #notfound h2 { color: var(--err-fg); font-size: 1.05rem; }
@@ -332,7 +418,10 @@
   #app { display: grid; grid-template-columns: 360px minmax(0, 1fr); height: 100vh; }
   #app.nonav { grid-template-columns: minmax(0, 1fr); }
   #app.nonav #nav { display: none; }
-  #app .content { min-width: 0; height: 100vh; overflow: auto; }
+  /* AGS-22: the content column is a query container, so the ticket page's
+     two-column form answers to the space it has (hiding the nav widens it
+     by 360px), not to the viewport. */
+  #app .content { min-width: 0; height: 100vh; overflow: auto; container-type: inline-size; }
   #nav {
     background: var(--panel); border-right: 1px solid var(--line);
     display: flex; flex-direction: column; height: 100vh; overflow: hidden;
@@ -366,7 +455,7 @@
   #nav .prefix { color: var(--tree-line); white-space: pre; user-select: none; }
   #nav .toggle { width: 1ch; color: var(--muted); }
   #nav .toggle.clickable { cursor: pointer; }
-  #nav .code, #tmenu .code, #toast .code {
+  #nav .code, #tmenu .code, #toast .code, #ticket-page .code {
     font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: var(--chip-fg);
     background: var(--chip-bg); border: 1px solid var(--chip-line); border-radius: 5px;
     padding: 0 5px; white-space: nowrap;
@@ -390,15 +479,18 @@
   #nav .kids > .spacer { pointer-events: none; }
   #nav .row.pending { cursor: default; color: var(--muted); }
   #nav .row.pending:hover { background: none; }
-  /* AGS-13: kinds. The board and the ticket page spell the word; the nav
-     marks each leaf with its kind's glyph, tinted per kind. */
-  td.kind, dd.kind { color: var(--muted); }
-  #nav .toggle.kind { color: var(--muted); }
-  #nav .leaf[data-kind="scope"] .toggle.kind { color: var(--kind-scope); }
-  #nav .leaf[data-kind="build"] .toggle.kind { color: var(--kind-build); }
-  #nav .leaf[data-kind="execution"] .toggle.kind { color: var(--kind-execution); }
-  #nav .leaf[data-kind="gap"] .toggle.kind { color: var(--kind-gap); }
-  #nav .leaf[data-kind="spike"] .toggle.kind { color: var(--kind-spike); }
+  /* AGS-13: kinds. The board spells the word; the nav marks each leaf
+     with its kind's glyph, tinted per kind — and AGS-22 gives the ticket
+     page the same glyph in the same tint: its Kind row (the word beside it
+     in ink) and every relation and child row. A doc's pilcrow, like any
+     kind outside the five, keeps the muted default. */
+  td.kind { color: var(--muted); }
+  #nav .toggle.kind, dd.kind .glyph { color: var(--muted); }
+  #nav .leaf[data-kind="scope"] .toggle.kind, #ticket-page [data-kind="scope"] .glyph { color: var(--kind-scope); }
+  #nav .leaf[data-kind="build"] .toggle.kind, #ticket-page [data-kind="build"] .glyph { color: var(--kind-build); }
+  #nav .leaf[data-kind="execution"] .toggle.kind, #ticket-page [data-kind="execution"] .glyph { color: var(--kind-execution); }
+  #nav .leaf[data-kind="gap"] .toggle.kind, #ticket-page [data-kind="gap"] .glyph { color: var(--kind-gap); }
+  #nav .leaf[data-kind="spike"] .toggle.kind, #ticket-page [data-kind="spike"] .glyph { color: var(--kind-spike); }
   /* AGS-18: the keyboard layer. Focus is visible wherever it can land —
      a 2px accent ring, deliberately unlike the selected row (which is a
      --row-sel tint with an inset accent bar), so "where I am" and "what

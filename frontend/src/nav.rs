@@ -279,10 +279,18 @@ pub(crate) fn kind_glyph(kind: &str) -> &'static str {
 /// (MNG-10). SDLC-11: a doc has no completion, so docs are not in it; a row
 /// of docs alone — a doc collection — shows how many docs it holds instead.
 pub(crate) fn rollup_label(g: &Group) -> String {
-    match (g.total, g.docs) {
+    roll_label(g.done, g.total, g.docs)
+}
+
+/// The roll-up's words for `done` of `total` work and `docs` docs — the one
+/// idiom the nav's shortcode rows and (AGS-22) the ticket page's Children
+/// header both show: the work's `done/total`, whatever docs sit beside it;
+/// docs alone, counted.
+pub(crate) fn roll_label(done: u64, total: u64, docs: u64) -> String {
+    match (total, docs) {
         (0, 1) => "1 doc".to_string(),
         (0, docs) if docs > 0 => format!("{docs} docs"),
-        (total, _) => format!("{}/{total}", g.done),
+        (total, _) => format!("{done}/{total}"),
     }
 }
 

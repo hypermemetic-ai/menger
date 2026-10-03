@@ -170,6 +170,15 @@
 //! walk used to put in the store for it — and takes a newborn it was waiting
 //! for (a dangling blocker) from `created`. The menu holds what it opens on.
 
+//! AGS-22: the ticket page reads like an issue, not like the wire struct.
+//! `#ticket-page` is two columns — the prose (title, body, children) and a
+//! quiet properties aside (status, kind, severity, parent, shortcode,
+//! commits; relative stamps, exact on hover; blocked by / unlocks) — and one
+//! column, title then properties then body, when the content column is
+//! narrow. Children sit under the body with the nav's roll-up; a doc's page
+//! shows the `Doc` chip, no relations, and its children's docs counted
+//! apart. Every id and selector the earlier tickets read is kept.
+
 mod board;
 mod cache;
 mod dom;
@@ -298,6 +307,56 @@ fn fmt_unix(unix: i64) -> String {
         .map(|s| format!("{s}Z"))
         .unwrap_or(iso);
     format!("{iso} ({unix})")
+}
+
+/// AGS-22: the page's clock, in unix seconds. Read when a stamp renders —
+/// the ticket page does not tick: "3h ago" is still true a minute later,
+/// and the exact time rides in the element's `title` regardless. A stamp
+/// re-renders (and so re-reads the clock) only when its ticket changes.
+fn now_unix() -> i64 {
+    (js_sys::Date::now() / 1000.0) as i64
+}
+
+/// AGS-22: a stamp as elapsed time, Linear's idiom — "just now", "17m ago",
+/// "3h ago", "2d ago", "5w ago", "7mo ago", "2y ago". Pure (`now` is a
+/// parameter, not a clock), so the ladder is pinned by a native test.
+///
+/// Truncating, with the count floored at one, so no rung ever prints
+/// "0m ago"; a `then` ahead of `now` (a browser clock behind the server's)
+/// reads "just now", never a negative count. A month is 30 days and a year
+/// 365 — approximations by construction; the exact stamp is one hover away.
+pub(crate) fn fmt_relative(now: i64, then: i64) -> String {
+    const MIN: i64 = 60;
+    const HOUR: i64 = 60 * MIN;
+    const DAY: i64 = 24 * HOUR;
+    const WEEK: i64 = 7 * DAY;
+    const MONTH: i64 = 30 * DAY;
+    const YEAR: i64 = 365 * DAY;
+    let d = now - then;
+    let (n, unit) = match d {
+        _ if d < 45 => return "just now".to_string(),
+        _ if d < HOUR => (d / MIN, "m"),
+        _ if d < DAY => (d / HOUR, "h"),
+        _ if d < WEEK => (d / DAY, "d"),
+        _ if d < MONTH => (d / WEEK, "w"),
+        _ if d < YEAR => (d / MONTH, "mo"),
+        _ => (d / YEAR, "y"),
+    };
+    format!("{}{unit} ago", n.max(1))
+}
+
+/// AGS-22: a ticket's children as the Children header counts them — `done`
+/// (Complete) of `total` work, and `docs` apart (SDLC-11: a doc has no
+/// completion) — from `(has_lifecycle, complete)` per child. What the nav's
+/// roll-up counts for a shortcode ([`nav::roll_label`] words both), over the
+/// children the page holds.
+pub(crate) fn tally(children: impl IntoIterator<Item = (bool, bool)>) -> (u64, u64, u64) {
+    children
+        .into_iter()
+        .fold((0, 0, 0), |(done, total, docs), (work, complete)| match (work, complete) {
+            (false, _) => (done, total, docs + 1),
+            (true, c) => (done + u64::from(c), total + 1, docs),
+        })
 }
 
 // ---------------------------------------------------------------------
@@ -772,15 +831,17 @@ fn Board(
     }
 }
 
-/// One entry of the blockers/unlocks lists. Present in the store → a
-/// live link (status and title re-render on watch events). Absent: for
-/// blockers, once the `blockers` call has resolved (`dangling_when`),
-/// the id is a dangling forward reference — visually distinct, unlinked;
-/// until then (and for unlocks entries the snapshot hasn't carried yet)
-/// a plain link. A `created` watch event upserts the store, so a
-/// dangling entry resolves live while the page is open. The entry carries
-/// `data-ticket-id` (the AGS-16 menu's attachment) exactly while it names
-/// a ticket — a dangling reference is not one.
+/// One entry of the blockers/unlocks/children lists. Present in the store →
+/// a live row (AGS-22: kind glyph · code chip · title · status chip, the
+/// title truncating and the chip pinned right; status, title and glyph
+/// re-render on watch events). Absent: for blockers, once the `blockers`
+/// call has resolved (`dangling_when`), the id is a dangling forward
+/// reference — visually distinct, unlinked; until then (and for
+/// unlocks/children entries not fetched yet) a plain link. A `created`
+/// watch event upserts the store, so a dangling entry resolves live while
+/// the page is open. The entry carries `data-ticket-id` (the AGS-16 menu's
+/// attachment) exactly while it names a ticket — a dangling reference is
+/// not one — and `data-kind` (the glyph's tint) once its ticket is known.
 fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>) -> impl IntoView {
     // SCALE-4: found by its key, as MFE-12's nav leaves are — a page of
     // children is up to 200 of these. SCALE-24: in the row cache, by id —
@@ -792,18 +853,28 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>) -> impl IntoView
     let dangling = move || found.get().is_none() && dangling_when.is_some_and(|loaded| loaded.get());
     let attr_id = id.clone();
     let menu_id = id.clone();
+    // The glyph's tint, once the row is known (a kind is fixed at birth).
+    let kind_attr = move || found.get().map(|t| t.with(|x| x.kind.as_str()));
     view! {
-        <li data-dag-id=attr_id data-ticket-id=move || (!dangling()).then(|| menu_id.clone())>
+        <li
+            data-dag-id=attr_id
+            data-ticket-id=move || (!dangling()).then(|| menu_id.clone())
+            data-kind=kind_attr
+        >
             {move || match found.get() {
                 Some(t) => {
                     let t = RwSignal::from(t);
                     let href = format!("#/ticket/{id}");
+                    let kind = t.with_untracked(|x| x.kind.as_str());
                     view! {
-                        <a href=href>{id.clone()}</a>
+                        <span class="glyph" title=kind aria-hidden="true">{nav::kind_glyph(kind)}</span>
+                        <a class="code" href=href>{id.clone()}</a>
+                        <span class="btitle" title=move || t.with(|x| x.title.clone())>
+                            {move || t.with(|x| x.title.clone())}
+                        </span>
                         <span class=move || format!("bstatus {}", t.with(|x| st_class(x.status.as_str())))>
                             {move || t.with(|x| x.status.to_string())}
                         </span>
-                        <span class="btitle">{move || t.with(|x| x.title.clone())}</span>
                     }
                         .into_any()
                 }
@@ -815,7 +886,7 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>) -> impl IntoView
                 }
                 None => {
                     let href = format!("#/ticket/{id}");
-                    view! { <a href=href>{id.clone()}</a> }.into_any()
+                    view! { <a class="code" href=href>{id.clone()}</a> }.into_any()
                 }
             }}
         </li>
@@ -869,12 +940,23 @@ fn short_commit(full: &str) -> String {
     }
 }
 
-/// The full ticket render: every wire-exposed field. The body is
-/// markdown, sanitized in md.rs; a leading YAML frontmatter block is
-/// collapsed behind a <details>, never painted raw. Body/blockers/
-/// unlocks render through memos so a status change re-renders the status
-/// text without rebuilding those sections (an open frontmatter fold
-/// survives a live update).
+/// The full ticket render: every wire-exposed field, in Linear's issue
+/// idiom (AGS-22). Two grid items of `#ticket-page`: the **article** —
+/// title, body, children — and the **properties aside** beside it, a quiet
+/// column on the page's own background with a hairline to its left (status,
+/// kind, severity, parent, shortcode, commits; the stamps at its foot; the
+/// relations under it). The crumb above spans both; a narrow content column
+/// stacks them — title, properties, body (index.html).
+///
+/// The body is markdown, sanitized in md.rs; a leading YAML frontmatter
+/// block is collapsed behind a <details>, never painted raw. Body /
+/// blockers / unlocks / children render through memos so a status change
+/// re-renders a chip without rebuilding those sections (an open
+/// frontmatter fold survives a live update).
+///
+/// SDLC-11: a doc's page shows its status as the `Doc` chip — there is
+/// nothing to move it to — and no relations, which a doc never has; its
+/// Children header counts docs apart, as the nav does.
 fn ticket_view(
     ticket: RwSignal<TicketSummary>,
     body_raw: RwSignal<Option<String>>,
@@ -917,7 +999,7 @@ fn ticket_view(
     let blockers = move || {
         let ids = blocked_by.get();
         if ids.is_empty() {
-            view! { <p class="none">"none"</p> }.into_any()
+            view! { <p class="none">"None"</p> }.into_any()
         } else {
             view! {
                 <ul id="blockers">
@@ -933,7 +1015,7 @@ fn ticket_view(
     let unlocks = move || {
         let ids = unlocks_ids.get();
         if ids.is_empty() {
-            view! { <p class="none">"none"</p> }.into_any()
+            view! { <p class="none">"None"</p> }.into_any()
         } else {
             view! {
                 <ul id="unlocks">
@@ -949,7 +1031,7 @@ fn ticket_view(
     let children = move || {
         let ids = children_ids.get();
         if ids.is_empty() {
-            let word = if kids.with(|k| k.loaded) { "none" } else { "loading…" };
+            let word = if kids.with(|k| k.loaded) { "None" } else { "loading…" };
             view! { <p class="none">{word}</p> }.into_any()
         } else {
             view! {
@@ -972,6 +1054,34 @@ fn ticket_view(
                     {format!("{n} more")}
                 </button>
             }
+        })
+    };
+    // AGS-22: the Children header's roll-up, the nav's idiom — the work's
+    // `done/total`, docs counted apart (SDLC-11) — over the children this
+    // page holds, read through their rows in the cache: a child's status
+    // change, a birth or a move moves the count with no fetch. A child not
+    // arrived yet is not counted until it is (its kind is not known).
+    let roll = Memo::new(move |_| {
+        let ids = children_ids.get();
+        let (done, total, docs) = tally(ids.iter().filter_map(|id| {
+            cache::find(id).map(|t| t.with(|x| (x.kind.has_lifecycle(), x.status == Status::Complete)))
+        }));
+        (ids.len(), done, total, docs)
+    });
+    let roll_view = move || {
+        let (held, done, total, docs) = roll.get();
+        (total + docs > 0).then(|| {
+            let docs_word = format!("{docs} doc{}", if docs == 1 { "" } else { "s" });
+            let mut tip = match (total, docs) {
+                (0, _) => docs_word,
+                (_, 0) => format!("{done} of {total} done"),
+                _ => format!("{done} of {total} done · {docs_word}"),
+            };
+            let unshown = unshown.get();
+            if unshown > 0 {
+                tip.push_str(&format!(" — of the {held} shown; {unshown} more"));
+            }
+            view! { <span class="roll" title=tip>{nav::roll_label(done, total, docs)}</span> }
         })
     };
     let body = move || {
@@ -1012,65 +1122,94 @@ fn ticket_view(
     };
 
     // The id never changes for a row's lifetime (see `Row`), so the
-    // header's menu attachment is static.
+    // header's menu attachment is static. SDLC-11: nor does a kind, so
+    // whether this is a doc is read once.
     let header_id = ticket.with_untracked(|t| t.id.clone());
+    let is_doc = ticket.with_untracked(|t| !t.kind.has_lifecycle());
+    // A doc is never blocked and never a blocker (SDLC-11): its relations
+    // are not drawn while they are empty, which they always are.
+    let no_relations = move || is_doc && blocked_by.with(Vec::is_empty) && unlocks_ids.with(Vec::is_empty);
     view! {
         <article class="ticket">
             <h2 data-ticket-id=header_id>
-                <span class="id">{move || ticket.with(|t| t.id.clone())}</span>
-                {move || ticket.with(|t| t.title.clone())}
+                <span class="id code">{move || ticket.with(|t| t.id.clone())}</span>
+                <span class="t">{move || ticket.with(|t| t.title.clone())}</span>
             </h2>
+            {body}
+            // AGS-20/22: decomposition, under the body — the relations in
+            // the aside are what this ticket waits on and frees; this is
+            // what it is made of, so it sits with the prose.
+            <section class="kidsec">
+                <h3>"Children"{roll_view}</h3>
+                {children}
+                {more_view}
+            </section>
+        </article>
+        <aside class="props">
             <dl class="meta">
                 <div>
-                    <dt>"status"</dt>
-                    <dd id="t-status" class=move || format!("status {}", ticket.with(|t| st_class(t.status.as_str())))>
+                    <dt>"Status"</dt>
+                    // SDLC-11: a doc's `Doc` is a status it holds, not one it
+                    // was moved to; the chip says so on hover.
+                    <dd
+                        id="t-status"
+                        class=move || format!("status {}", ticket.with(|t| st_class(t.status.as_str())))
+                        title=is_doc.then_some("A doc has no lifecycle: it is born Doc and nothing moves it")
+                    >
                         {move || ticket.with(|t| t.status.to_string())}
                     </dd>
                 </div>
-                <div><dt>"kind"</dt><dd id="t-kind" class="kind">{move || ticket.with(|t| t.kind.to_string())}</dd></div>
                 <div>
-                    <dt>"severity"</dt>
+                    <dt>"Kind"</dt>
+                    <dd id="t-kind" class="kind" data-kind=move || ticket.with(|t| t.kind.as_str())>
+                        <span class="glyph" aria-hidden="true">
+                            {move || nav::kind_glyph(ticket.with(|t| t.kind.as_str()))}
+                        </span>
+                        {move || ticket.with(|t| t.kind.to_string())}
+                    </dd>
+                </div>
+                <div>
+                    <dt>"Severity"</dt>
                     <dd>{move || ticket.with(|t| t.severity.map_or_else(|| "—".to_string(), |s| s.to_string()))}</dd>
                 </div>
                 // AGS-20: the ticket this one is an output of, as a link
                 // (the crumb above walks the whole chain).
                 <div>
-                    <dt>"parent"</dt>
+                    <dt>"Parent"</dt>
                     <dd id="t-parent">
                         {move || match parent_id.get() {
                             Some(p) => {
                                 let (href, code) = (format!("#/ticket/{p}"), p.clone());
-                                view! { <a class="crumb" data-ticket-id=p href=href>{code}</a> }
+                                view! { <a class="crumb code" data-ticket-id=p href=href>{code}</a> }
                                     .into_any()
                             }
                             None => view! { "—" }.into_any(),
                         }}
                     </dd>
                 </div>
-                <div><dt>"epic"</dt><dd>{move || ticket.with(|t| t.epic.clone())}</dd></div>
-                <div><dt>"seq"</dt><dd>{move || ticket.with(|t| t.seq)}</dd></div>
-                <div><dt>"created"</dt><dd>{move || ticket.with(|t| fmt_unix(t.created_unix))}</dd></div>
-                <div><dt>"updated"</dt><dd>{move || ticket.with(|t| fmt_unix(t.updated_unix))}</dd></div>
-                <div><dt>"commits"</dt><dd id="t-commits">{commits_view}</dd></div>
+                <div>
+                    <dt>"Shortcode"</dt>
+                    <dd><span class="code">{move || ticket.with(|t| t.epic.clone())}</span></dd>
+                </div>
+                <div><dt>"Commits"</dt><dd id="t-commits">{commits_view}</dd></div>
             </dl>
-            <section class="dag">
-                <h3>"blocked by"</h3>
+            // The stamps, relative; the exact time (fmt_unix) on hover.
+            <p class="stamps">
+                <span class="created" title=move || ticket.with(|t| fmt_unix(t.created_unix))>
+                    "Created "{move || ticket.with(|t| fmt_relative(now_unix(), t.created_unix))}
+                </span>
+                <span class="updated" title=move || ticket.with(|t| fmt_unix(t.updated_unix))>
+                    "Updated "{move || ticket.with(|t| fmt_relative(now_unix(), t.updated_unix))}
+                </span>
+                <span class="seq">"seq "{move || ticket.with(|t| t.seq)}</span>
+            </p>
+            <section class="dag" class:empty=no_relations>
+                <h3>"Blocked by"</h3>
                 {blockers}
-                <h3>"unlocks"</h3>
+                <h3>"Unlocks"</h3>
                 {unlocks}
             </section>
-            // AGS-20: decomposition, beneath the DAG — the DAG is what
-            // this ticket waits on and frees; this is what it is made of.
-            <section class="dag kidsec">
-                <h3>"children"</h3>
-                {children}
-                {more_view}
-            </section>
-            <section class="bodysec">
-                <h3>"body"</h3>
-                {body}
-            </section>
-        </article>
+        </aside>
     }
 }
 
@@ -1353,7 +1492,69 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{board_layout, board_window, st_class, Geom, BOARD_MARGIN, BOARD_MAX_PX, BOARD_STEP, STATUSES};
+    use super::{
+        board_layout, board_window, fmt_relative, st_class, tally, Geom, BOARD_MARGIN, BOARD_MAX_PX, BOARD_STEP, STATUSES,
+    };
+    use crate::nav::roll_label;
+
+    /// AGS-22: the relative-time ladder. Truncating, floored at one, so no
+    /// rung ever prints a zero; a `then` ahead of `now` (a browser clock
+    /// behind the server's) reads "just now", never a negative count.
+    #[test]
+    fn relative_time_climbs_the_ladder_and_never_reads_zero() {
+        const NOW: i64 = 1_800_000_000;
+        const DAY: i64 = 86_400;
+        let ago = |s: i64| fmt_relative(NOW, NOW - s);
+        // Each rung, and the second either side of every boundary.
+        assert_eq!(ago(0), "just now");
+        assert_eq!(ago(44), "just now");
+        assert_eq!(ago(45), "1m ago", "floored: 45s is not \"0m ago\"");
+        assert_eq!(ago(59), "1m ago");
+        assert_eq!(ago(60), "1m ago");
+        assert_eq!(ago(17 * 60), "17m ago");
+        assert_eq!(ago(3599), "59m ago");
+        assert_eq!(ago(3600), "1h ago");
+        assert_eq!(ago(3 * 3600 + 59 * 60), "3h ago", "truncating, not rounding");
+        assert_eq!(ago(DAY - 1), "23h ago");
+        assert_eq!(ago(DAY), "1d ago");
+        assert_eq!(ago(7 * DAY - 1), "6d ago");
+        assert_eq!(ago(7 * DAY), "1w ago");
+        assert_eq!(ago(29 * DAY), "4w ago");
+        assert_eq!(ago(30 * DAY), "1mo ago");
+        assert_eq!(ago(364 * DAY), "12mo ago");
+        assert_eq!(ago(365 * DAY), "1y ago");
+        assert_eq!(ago(800 * DAY), "2y ago");
+        // A clock behind the server's never reads a negative count.
+        assert_eq!(fmt_relative(NOW, NOW + 1), "just now");
+        assert_eq!(fmt_relative(NOW, NOW + 5_000), "just now");
+        // Nothing on the ladder, at any distance, prints a zero count.
+        for s in (0..800 * DAY).step_by(997) {
+            let out = ago(s);
+            assert!(out == "just now" || (out.ends_with(" ago") && !out.starts_with('0')), "{s}s -> {out}");
+        }
+    }
+
+    /// AGS-22 / SDLC-11: the Children header counts what the nav's roll-up
+    /// counts — Complete work over all the work, docs apart — and words it
+    /// the nav's way: `done/total` whenever there is work, `N docs` for a
+    /// doc's children (docs alone).
+    #[test]
+    fn the_children_roll_up_is_the_navs_and_counts_docs_apart() {
+        // (has_lifecycle, complete) per child.
+        let (work, done, doc) = ((true, false), (true, true), (false, false));
+        assert_eq!(tally([]), (0, 0, 0));
+        assert_eq!(tally([done]), (1, 1, 0));
+        let mixed = tally([done, work, doc, done]);
+        assert_eq!(mixed, (2, 3, 1), "a doc is not work: not in done/total");
+        assert_eq!(roll_label(mixed.0, mixed.1, mixed.2), "2/3");
+        // A doc's children are docs: counted, never a fraction.
+        let docs = tally([doc, doc, doc]);
+        assert_eq!(docs, (0, 0, 3));
+        assert_eq!(roll_label(docs.0, docs.1, docs.2), "3 docs");
+        assert_eq!(roll_label(0, 0, 1), "1 doc");
+        // A doc never reads as done, whatever it holds.
+        assert_eq!(tally([(false, true)]), (0, 0, 1));
+    }
 
     /// MFE-12: the window is the viewport plus a margin either side,
     /// snapped outward to the step, inside the store — and it holds still
