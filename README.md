@@ -231,6 +231,25 @@ asked only while a wave board is open. `#/waves`
 lists the boards; the header links to it, and a shortcode's row in the nav
 offers its board in the ticket menu.
 
+Below the board, in either layout, is its **annotation** (WAVE-11): a
+markdown document that discusses the board's waves, kept in the board's
+root shortcode at the reserved path `_MENGER/board` (WAVE-10) — `get { id:
+"PLEXUS/_MENGER/board" }` — a doc under the shortcode's scope root, hidden
+from the nav. The panel is titled with that address and folds; with none
+written yet it says "write notes for this board". `[ edit ]` opens a
+markdown textarea beside a live preview through the ticket page's renderer;
+save amends the document (`amend { id, body }`) — the first save creates it
+(`create { epic, kind: doc, path: _MENGER/board, title: "board: ROOT",
+body }`) — and cancel discards. An `amended` from elsewhere updates the
+panel, or, mid-edit, says "changed elsewhere — reload?" and leaves the
+draft alone. In any body — the annotation's or a ticket page's — a **wave
+reference** `{wave: RETURNS-6}` renders as that ticket's current ordinal:
+`wave 2` (on the board a link to the card's column), `done` or `missing
+blocker`, from the board's cards when the ticket is one, else from the
+ticket's row (its kept `placement`, fetched and held while shown); it moves
+live, and an id that is no ticket is left as written. A body without one
+renders byte for byte as before.
+
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service
@@ -544,8 +563,11 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        each status — what ready_set and list { status } page
                        and count from (SCALE-32)
     waves.rs           each ticket's wave in the order of work — MNG-4's rule
-                       over blocked_by, the whole graph — computed on demand
-                       per call from the rows, kept nowhere (WAVE-4)
+                       over blocked_by, the whole graph (WAVE-4); `waves`
+                       reads the kept placements (WAVE-6)
+    placements.rs      the placements kept on the rows: the re-placement pass
+                       a birth or a status change across the satisfied line
+                       runs before it commits, and the pass at open (WAVE-6)
     stored.rs          the derived state as stored beside the tickets — its
                        tables, what a write's transaction writes to them, the
                        read at start, the build on first open, and
@@ -582,10 +604,18 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        other shortcodes, docs, kinds, the yield order and the
                        tally, a hand-edited cycle, a chain past any call stack
                        (WAVE-4)
+    tests_placements.rs  the kept placements against the rule after random
+                       births and status changes, watch's mirror, the
+                       two-blockers-back case (WAVE-6)
+    tests_paths.rs     path addresses: create, refusals, get by address, the
+                       column added to an old file (WAVE-10)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell
-frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/)
+frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
+                       src/waves.rs the wave board (WAVE-5, WAVE-6),
+                       src/notes.rs its annotation and the body editor (WAVE-11)
+spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)
 diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub
                        (WS :4458); the `mermaid` activation and the client it
                        emits, the Node child it owns (src/node.rs), the app's

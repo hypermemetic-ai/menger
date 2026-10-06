@@ -194,6 +194,7 @@ mod kids;
 mod md;
 mod menu;
 mod nav;
+mod notes;
 
 mod mermaid;
 mod session;
@@ -977,6 +978,7 @@ fn ticket_view(
     blockers_loaded: RwSignal<bool>,
     kids: RwSignal<kids::Kids>,
     more: impl Fn() + Copy + Send + Sync + 'static,
+    refs: notes::Refs,
 ) -> impl IntoView {
     let blocked_by = Memo::new(move |_| ticket.with(|t| t.blocked_by.clone()));
     let unlocks_ids = Memo::new(move |_| ticket.with(|t| t.unlocks.clone()));
@@ -1108,31 +1110,13 @@ fn ticket_view(
         if raw.trim().is_empty() {
             return view! { <p class="none">"(no body)"</p> }.into_any();
         }
-        let (fm, md_src) = md::split_frontmatter(&raw);
-        let fm_view = fm.map(|f| {
-            let f = f.to_string();
-            view! {
-                <details class="frontmatter">
-                    <summary>"frontmatter"</summary>
-                    <pre>{f}</pre>
-                </details>
-            }
-        });
-        let md::Rendered { html, diagrams } = md::render_body(md_src);
-        // AGS-14: once this div is in the DOM, hand its mermaid
-        // placeholders to the renderer. `on_load` fires once per mounted
-        // div, and a body re-render makes a new div (and a new hook), so
-        // navigation never re-renders a stale one; a diagram-free body
-        // never touches the renderer at all.
-        let md_node = NodeRef::<leptos::html::Div>::new();
-        if diagrams > 0 {
-            md_node.on_load(move |el: web_sys::HtmlDivElement| mermaid::mount(&el));
-        }
-        view! {
-            {fm_view}
-            <div class="md" node_ref=md_node inner_html=html></div>
-        }
-            .into_any()
+        // AGS-14: the frontmatter folded, the markdown through `md.rs`, its
+        // mermaid placeholders handed to the renderer once the div is in the
+        // DOM — a body re-render makes a new div (and a new hook), so
+        // navigation never re-renders a stale one. WAVE-11: and each
+        // `{wave: ID}` placed from the named ticket's row (`refs`), live as
+        // its placement moves; a body with none renders as it always did.
+        notes::body_view(&raw, Some(refs))
     };
 
     // The id never changes for a row's lifetime (see `Row`), so the
@@ -1298,6 +1282,23 @@ fn TicketPage(
         Memo::new(move |_| cache::find(&id))
     };
 
+    // WAVE-11: the rows a `{wave: ID}` in the body names, held while the
+    // page is open — asked again after a reconnect or a lag.
+    let refs = notes::Refs::new(None, holder);
+    {
+        let stale = session::stale();
+        Effect::new(move |seen: Option<(u32, u32)>| {
+            let epoch = (socket.get(), stale.get());
+            if seen.is_some_and(|s| s != epoch) {
+                refs.forget();
+            }
+            if epoch.0 > 0 {
+                body.with(|b| b.as_deref().map(|b| refs.want(&md::wave_ids(b))));
+            }
+            epoch
+        });
+    }
+
     // SCALE-26: what the page names by id that its own calls do not bring —
     // the chain above it (the crumb), its unlocks, and its blockers again.
     // The walk used to put every one of them in the store; nothing else will
@@ -1365,7 +1366,7 @@ fn TicketPage(
         <div id="ticket-page">
             <p class="crumbs"><a href="#/">"← board"</a>{crumbs}</p>
             {move || match ticket.get() {
-                Some(t) => ticket_view(RwSignal::from(t), body, blockers_loaded, kids, more).into_any(),
+                Some(t) => ticket_view(RwSignal::from(t), body, blockers_loaded, kids, more, refs).into_any(),
                 None if not_found.get() => {
                     let id = id_view.clone();
                     view! {

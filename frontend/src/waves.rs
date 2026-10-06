@@ -46,7 +46,7 @@
 //! test, what an event does, how a change moves the cards, the coalescing,
 //! the stored layout — is a pure function here, pinned by native tests.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use leptos::prelude::*;
 use menger_tickets_api::{Group, Placement, Severity, Status, TicketSummary, TicketsEvent};
@@ -55,6 +55,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::nav::kind_glyph;
+use crate::notes::BoardNotes;
 use crate::{cache, dom, nav, session, st_class};
 
 // ---------------------------------------------------------------------
@@ -622,6 +623,12 @@ pub(crate) fn WaveBoard(
     let on_board = Memo::new(move |_| {
         ctx.answer.with(|a| a.iter().flat_map(|a| a.cards.iter()).map(|c| c.summary.id.clone()).collect::<HashSet<String>>())
     });
+    // WAVE-11: what the annotation's `{wave: ID}`s read for a card.
+    let placements = Memo::new(move |_| {
+        ctx.answer.with(|a| {
+            a.iter().flat_map(|a| a.cards.iter()).map(|c| (c.summary.id.clone(), c.placement)).collect::<HashMap<String, Placement>>()
+        })
+    });
     let cols = Memo::new(move |_| {
         let l = layout.get();
         ctx.answer.with(|a| a.as_ref().map(|a| columns(&a.cards, l)).unwrap_or_default())
@@ -670,6 +677,8 @@ pub(crate) fn WaveBoard(
                     children=move |lane: Lane| lane_view(lane, cols, on_board, done_open)
                 />
             </div>
+            // WAVE-11: the board's annotation, below it in either layout.
+            <BoardNotes root=sc.clone() cards=placements socket last_error />
         </section>
     }
     .into_any()
