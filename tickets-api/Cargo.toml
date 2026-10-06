@@ -46,6 +46,12 @@ server = [
 # spike's comparison (spike/WAVE-2/). Never enabled by anything that serves.
 wave3-no-replace = []
 
+# WAVE-3: the spike's program (spike/WAVE-2/) — an example, so it builds
+# against the store as it is; `spike/WAVE-2/run.sh` runs it.
+[[example]]
+name = "wave3"
+path = "../spike/WAVE-2/wave3.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 schemars = { version = "1.1", features = ["derive"] }
