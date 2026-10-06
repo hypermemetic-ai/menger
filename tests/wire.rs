@@ -1493,3 +1493,87 @@ async fn kept_placements_over_the_wire() {
     let ev = collect(call(&client, "tickets.get", json!({"id": "DN-3"})).await).await;
     assert_eq!(ev[0]["ticket"]["placement"], json!({"type": "wave", "n": 2}), "get reads the kept one");
 }
+
+/// COMP-3: a `watch`'s events up to and including the first of type `kind`.
+async fn watch_until(watch: &mut Subscription<Value>, kind: &str) -> Vec<Value> {
+    let mut seen = Vec::new();
+    loop {
+        let item = tokio::time::timeout(Duration::from_secs(10), watch.next())
+            .await
+            .unwrap_or_else(|_| panic!("no {kind} after {seen:?}"))
+            .expect("the watch is open")
+            .unwrap();
+        let ev = content(item);
+        let last = ev["type"] == kind;
+        seen.push(ev);
+        if last {
+            return seen;
+        }
+    }
+}
+
+/// COMP-3 acceptance 2: the component registry over the real protocol —
+/// define, reference, orphan, remove — each step seen by `components` and by
+/// `watch`: the component events end their write's events, carry the whole
+/// component, and reach a `watch { epic }` of another shortcode too. A second
+/// ticket defining the owned name is one in-band `error` naming the owner.
+#[tokio::test]
+async fn components_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let created = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "root", "kind": "scope"})).await).await;
+    assert_eq!(created[0]["type"], "created");
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    let mut elsewhere = call(&client, "tickets.watch", json!({"epic": "OTHER"})).await;
+    let components = || async { collect(call(&client, "tickets.components", json!({})).await).await };
+    assert_eq!(components().await, Vec::<Value>::new(), "an empty registry is an empty answer");
+
+    // Define.
+    let body = "Defines it.\n\n```component m-x\n<template><b>x</b></template>\n```\n";
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "owner", "body": body})).await).await;
+    assert_eq!((evs[0]["type"].as_str(), evs[0]["ticket"]["id"].as_str()), (Some("created"), Some("CMP-2")));
+    assert_eq!(evs[0]["ticket"]["body"], body, "stored as written");
+    let defined = json!({
+        "type": "component_changed",
+        "component": {"name": "m-x", "source": "<template><b>x</b></template>\n", "owner": "CMP-2", "references": []}
+    });
+    let heard = watch_until(&mut watch, "component_changed").await;
+    assert_eq!(heard[0]["type"], "created", "{heard:?}");
+    assert_eq!(heard.last(), Some(&defined), "after the write's other events");
+    assert_eq!(content(elsewhere.next().await.unwrap().unwrap()), defined, "past the epic filter");
+    assert_eq!(components().await, vec![json!({"type": "component", "component": defined["component"]})]);
+
+    // Reference.
+    collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "user", "body": "uses <m-x></m-x> twice <m-x/>"})).await).await;
+    let heard = watch_until(&mut watch, "component_changed").await;
+    assert_eq!(heard[0]["ticket"]["id"], "CMP-3");
+    assert_eq!(heard.last().unwrap()["component"]["references"], json!(["CMP-3"]), "a ticket counts once");
+    assert_eq!(content(elsewhere.next().await.unwrap().unwrap())["component"]["references"], json!(["CMP-3"]));
+
+    // A second owner is refused, naming the first; nothing allocated.
+    let evs = collect(
+        call(&client, "tickets.create", json!({"epic": "CMP", "title": "thief", "body": "```component m-x\n<template>mine</template>\n```\n"})).await,
+    )
+    .await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["type"], "error");
+    assert!(evs[0]["message"].as_str().unwrap().contains("CMP-2"), "names the owner: {}", evs[0]);
+
+    // Orphan: the owner's body loses the block; CMP-3 still uses it.
+    let evs = collect(call(&client, "tickets.amend", json!({"id": "CMP-2", "body": "no block now"})).await).await;
+    assert_eq!(evs[0]["type"], "amended");
+    let heard = watch_until(&mut watch, "component_changed").await;
+    assert_eq!(heard[0]["type"], "amended");
+    let orphan = json!({"name": "m-x", "source": "<template><b>x</b></template>\n", "owner": null, "references": ["CMP-3"]});
+    assert_eq!(heard.last().unwrap()["component"], orphan);
+    assert_eq!(content(elsewhere.next().await.unwrap().unwrap())["component"], orphan);
+    assert_eq!(components().await, vec![json!({"type": "component", "component": orphan})]);
+
+    // Remove: the last reference goes, and the orphan with it.
+    collect(call(&client, "tickets.amend", json!({"id": "CMP-3", "body": "plain"})).await).await;
+    let heard = watch_until(&mut watch, "component_removed").await;
+    assert_eq!(heard[0]["type"], "amended");
+    assert_eq!(heard.last(), Some(&json!({"type": "component_removed", "name": "m-x"})));
+    assert_eq!(content(elsewhere.next().await.unwrap().unwrap()), json!({"type": "component_removed", "name": "m-x"}));
+    assert_eq!(components().await, Vec::<Value>::new());
+}

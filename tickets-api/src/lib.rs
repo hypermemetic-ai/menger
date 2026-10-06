@@ -27,7 +27,7 @@
 
 pub mod types;
 pub use types::{
-    is_menger_path, path_address, Group, Kind, Placement, PlacementChange, RootRow, Severity, Status, Ticket, TicketSummary,
+    is_menger_path, path_address, Component, Group, Kind, Placement, PlacementChange, RootRow, Severity, Status, Ticket, TicketSummary,
     TicketsEvent, MENGER_PATH_PREFIX,
 };
 

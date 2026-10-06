@@ -558,6 +558,33 @@ pub struct PlacementChange {
     pub placement: Placement,
 }
 
+/// COMP-3: one entry of the **component registry** — a custom element some
+/// ticket defined in a ` ```component <name> ` block (COMP-1 decisions 2, 3,
+/// pins 6–8), as the server keeps it.
+///
+/// - `name` — the tag: a custom element's name, lowercase, with a hyphen
+///   (`m-wave-summary`).
+/// - `source` — the block's content, exactly as written between its fences
+///   (a `<template>`, an optional `<style>`, an optional `<script>`).
+/// - `owner` — the ticket whose body defines it; `null` for an **orphan**: a
+///   component whose definition left its ticket while something still
+///   references it. An orphan is read-only; a ticket that defines its name
+///   again **adopts** it.
+/// - `references` — what uses it: each ticket whose body holds `<name` as an
+///   HTML tag (outside code spans and fences, once per ticket), in the
+///   store's `(epic, seq)` order, then each component whose source holds it,
+///   by name.
+///
+/// Unlike [`Ticket`], `owner` is written out as `null` rather than skipped:
+/// every component has the same keys, and `null` is what "orphan" looks like.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Component {
+    pub name: String,
+    pub source: String,
+    pub owner: Option<String>,
+    pub references: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TicketsEvent {
@@ -701,6 +728,23 @@ pub enum TicketsEvent {
     /// `watch { epic }` keeps only the changes in that shortcode, and the
     /// event only when one is left.
     PlacementsChanged { changes: Vec<PlacementChange> },
+    /// COMP-3: one entry of the component registry (yielded per component by
+    /// `components`, in name order) — orphans included (`owner: null`).
+    Component { component: Component },
+    /// COMP-3: a component was registered, or its source, owner or
+    /// references moved (yielded by `watch`) — a `create` or `amend` whose
+    /// body gained, changed or lost a ` ```component ` block or a `<name`
+    /// tag. Carries the whole component as it is now, so applying it is one
+    /// upsert; one per component the write moved, in name order, after that
+    /// write's other events. A component belongs to no shortcode — any
+    /// ticket may use it — so `watch { epic }` passes it on whatever the
+    /// filter.
+    ComponentChanged { component: Component },
+    /// COMP-3: a component left the registry (yielded by `watch`) — an
+    /// orphan whose last reference went, in the write that took it. After
+    /// the write's `component_changed` events; past any `epic` filter, as
+    /// they are.
+    ComponentRemoved { name: String },
     /// One resolved blocker of the queried ticket, at its current status
     /// (yielded per-entry by `blockers`).
     Blocker { ticket: Ticket },

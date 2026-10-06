@@ -143,7 +143,7 @@ pub(super) fn frontmatter_parent(body: &str) -> Option<String> {
 /// them in, so of two frontmatter parents that would close a loop the
 /// earlier ticket's is the one kept. An id that is not `EPIC-N` sorts
 /// last, by name.
-fn by_epic_seq(id: &str) -> (String, u32, String) {
+pub(super) fn by_epic_seq(id: &str) -> (String, u32, String) {
     match id.rsplit_once('-').and_then(|(e, n)| {
         n.parse::<u32>().ok().map(|n| (e.to_string(), n))
     }) {

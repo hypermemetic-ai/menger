@@ -107,8 +107,21 @@
 //! never moved; only `_MENGER/…`, on a doc directly under its shortcode's
 //! scope root, for the documents menger keeps inside a shortcode. A database
 //! written before WAVE-10 gains the column, durably, once, on first open.
+//! COMP-3 keeps the **component registry** ([`components`]): every custom
+//! element a ticket defines in a ` ```component <tag> ` block — its source,
+//! its owner (or none: an orphan, kept while something live still uses it)
+//! and what references it. The two writes that change a body move it —
+//! `create` and an `amend` of the body — worked out under the write-serial
+//! lock from the new body in hand and the registry's own record of what the
+//! ticket defined and referenced (the old body is never read), stored in the
+//! write's transaction, taken by the cache with its rows, and announced
+//! last (`ComponentChanged`, `ComponentRemoved`). A definition of a name
+//! another ticket owns refuses the write. Held in the cache, sources and
+//! all (a component is a few KB, and there are few); stored in its own
+//! table, which a database written before COMP-3 gains — the registry built
+//! from every body — durably, once, on first open.
 
-use crate::types::{is_menger_path, path_address, Placement, PlacementChange, TicketSummary, MENGER_PATH_PREFIX};
+use crate::types::{is_menger_path, path_address, Component, Placement, PlacementChange, TicketSummary, MENGER_PATH_PREFIX};
 use rusqlite::{Connection, OpenFlags};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -604,6 +617,13 @@ pub enum Change {
     /// wire) — broadcast last, after the write's other events, once per
     /// write that moved any.
     PlacementsChanged { changes: Vec<(String, PlacementChange)> },
+    /// COMP-3: a component a write registered or moved — its source, owner
+    /// or references — as the write leaves it; one per component, in name
+    /// order, after every other event of the write (placements included).
+    ComponentChanged { component: Component },
+    /// COMP-3: a component the write took out of the registry (an orphan
+    /// nothing live uses any more) — after the write's `ComponentChanged`.
+    ComponentRemoved { name: String },
 }
 
 impl Change {
@@ -625,12 +645,16 @@ impl Change {
             Self::GroupChanged { group } => &group.epic,
             // WAVE-6: one per change, not per event — see `in_epic`.
             Self::PlacementsChanged { .. } => "",
+            // COMP-3: in no shortcode — see `in_epic`.
+            Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => "",
         }
     }
 
     /// What `watch { epic }` passes on of this change: the change itself
     /// when it is in `epic` (or no epic is asked for) — WAVE-6: and of a
-    /// `PlacementsChanged`, the changes in `epic`, when any is.
+    /// `PlacementsChanged`, the changes in `epic`, when any is. COMP-3: a
+    /// component's change whatever the epic — a component belongs to no
+    /// shortcode, and a ticket of any shortcode may use it.
     pub fn in_epic(self, epic: Option<&str>) -> Option<Change> {
         let Some(epic) = epic else { return Some(self) };
         match self {
@@ -638,8 +662,19 @@ impl Change {
                 let changes: Vec<_> = changes.into_iter().filter(|(e, _)| e == epic).collect();
                 (!changes.is_empty()).then_some(Self::PlacementsChanged { changes })
             }
+            Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => Some(self),
             other => (other.epic() == epic).then_some(other),
         }
+    }
+
+    /// COMP-3: a write's component events, in the order they are sent —
+    /// the components it moved, then the ones it removed, each in name order.
+    fn components(plan: components::Plan) -> Vec<Change> {
+        plan.changed
+            .into_iter()
+            .map(|component| Self::ComponentChanged { component })
+            .chain(plan.removed.into_iter().map(|name| Self::ComponentRemoved { name }))
+            .collect()
     }
 
     /// WAVE-6: the `PlacementsChanged` a write's pass makes — `None` when it
@@ -781,6 +816,36 @@ pub enum StoreError {
     /// WAVE-10: `create { path }` with a path `holder` already holds in
     /// `epic`. Nothing was stored and no id was allocated.
     PathTaken { epic: String, path: String, holder: String },
+    /// COMP-3: the body holds a ` ```component ` block whose tag, `name`, is
+    /// not a component name ([`components::is_component_name`]; `""`: it
+    /// names none). `id` is the amended ticket — `None` for a `create`, which
+    /// stored nothing and allocated no id. Nothing changed.
+    ComponentName { id: Option<String>, name: String },
+    /// COMP-3: the body defines `name` in two blocks. Nothing changed.
+    ComponentTwice { id: Option<String>, name: String },
+    /// COMP-3: the body defines `name`, which `owner` already defines — a
+    /// component has one owner. Nothing changed.
+    ComponentOwned { id: Option<String>, name: String, owner: String },
+}
+
+impl StoreError {
+    /// COMP-3: a body's refused ` ```component ` block, as the write that
+    /// carried it says so — `id` the amended ticket, `None` for a create.
+    fn component(id: Option<&str>, problem: components::Problem) -> Self {
+        let id = id.map(str::to_string);
+        match problem {
+            components::Problem::Name(name) => Self::ComponentName { id, name },
+            components::Problem::Twice(name) => Self::ComponentTwice { id, name },
+        }
+    }
+}
+
+/// COMP-3: the end of a component refusal — what did not happen.
+fn nothing(id: &Option<String>) -> String {
+    match id {
+        Some(id) => format!("nothing changed for '{id}'"),
+        None => "nothing was created".to_string(),
+    }
 }
 
 impl std::fmt::Display for StoreError {
@@ -908,6 +973,28 @@ impl std::fmt::Display for StoreError {
                 f,
                 "'{epic}/{path}' is taken: {holder} already holds the path '{path}' in {epic} (nothing \
                  was created)"
+            ),
+            Self::ComponentName { id, name } if name.is_empty() => write!(
+                f,
+                "a ```component block names its tag — ```component m-name — and this one names none ({})",
+                nothing(id)
+            ),
+            Self::ComponentName { id, name } => write!(
+                f,
+                "'{name}' is not a component name: a component is a custom element, named in lowercase \
+                 ASCII, starting with a letter and holding a hyphen — e.g. m-chart ({})",
+                nothing(id)
+            ),
+            Self::ComponentTwice { id, name } => write!(
+                f,
+                "the body defines the component '{name}' twice: one ```component block per name ({})",
+                nothing(id)
+            ),
+            Self::ComponentOwned { id, name, owner } => write!(
+                f,
+                "the component '{name}' is defined by {owner}: a component has one owner — change it in \
+                 {owner}, or give this one another name ({})",
+                nothing(id)
             ),
         }
     }
@@ -1121,6 +1208,10 @@ struct Cache {
     ids: ids::Ids,
     children: children::Children,
     ready: ready::Ready,
+    /// COMP-3: the component registry ([`components::Registry`]) — read from
+    /// its table at open, moved by a body's write in the same critical
+    /// section as the ticket's row.
+    components: components::Registry,
     written: u64,
 }
 
@@ -1385,6 +1476,9 @@ impl Cache {
             ids,
             children,
             ready,
+            // COMP-3: read beside the cache, never built from rows
+            // ([`Store::with_connection`]).
+            components: components::Registry::default(),
             written: 0,
         }
     }
@@ -1408,6 +1502,9 @@ impl Cache {
             ids,
             children,
             ready,
+            // COMP-3: read beside the cache, never built from rows
+            // ([`Store::with_connection`]).
+            components: components::Registry::default(),
             written: 0,
         }
     }
@@ -1922,6 +2019,10 @@ impl Store {
         // durably — every ticket without one; and the index that keeps a
         // path unique in its shortcode. No row is rewritten.
         db::migrate_add_path(&mut conn)?;
+        // COMP-3: a database written before COMP-3 — or a new one — gains the
+        // `components` table here, once, durably, with the registry built
+        // from every body; after it, every open reads the table.
+        components::migrate(&mut conn)?;
         // SCALE-28: the derived state is read from the file — each
         // shortcode's run, the dangling forward references, the roll-ups,
         // the children index — beside the rows, each carrying its stored
@@ -1941,6 +2042,8 @@ impl Store {
         // none can be stale after a restart.
         let mut cache = cache;
         cache.place_all();
+        // COMP-3: the registry, as stored.
+        cache.components = components::load(&conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
             Some(path) => Readers::open(path)?,
@@ -2222,6 +2325,14 @@ impl Store {
             .parent
             .map(|p| p.trim().to_ascii_uppercase())
             .filter(|p| !p.is_empty());
+        // COMP-3: what the body defines and references — read here, from the
+        // body in hand, before the lock; a malformed ```component block is
+        // refused now. Whether a name it defines is another ticket's is the
+        // registry's to say, under the lock.
+        let (uses, problems) = components::read(&new.body);
+        if let Some(problem) = problems.into_iter().next() {
+            return Err(StoreError::component(None, problem));
+        }
 
         let serial = self.serial().await;
         // Under the write-serial lock the cache mirrors the database
@@ -2233,7 +2344,7 @@ impl Store {
         // every ticket in the store. This read phase computes everything
         // and mutates nothing: a rejection leaves no trace, in the
         // tickets or in what is kept about them.
-        let (ticket, touched, unlocks_added, parent_epic, derived) = {
+        let (ticket, touched, unlocks_added, parent_epic, derived, registered) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let tickets = &cache;
             let seq = tickets.ids.next_seq(&epic);
@@ -2331,6 +2442,19 @@ impl Store {
                 }
             }
 
+            // COMP-3: what the body does to the registry — refused, nothing
+            // stored and no id spent, when it defines a name another ticket
+            // owns. Last of the checks: a body without components is refused
+            // for nothing it was not refused for before.
+            let registered = tickets
+                .components
+                .plan(&id, &uses)
+                .map_err(|o| StoreError::ComponentOwned {
+                    id: None,
+                    name: o.name,
+                    owner: o.owner,
+                })?;
+
             // Dangling forward references to this id resolve now: their
             // owners are the newborn's `unlocks` from birth. SCALE-3: the
             // cache keeps them by the id they name, already in (epic, seq)
@@ -2411,7 +2535,7 @@ impl Store {
             let derived = tickets.birth(&Row::from(&ticket));
             // WAVE-6: born placed — `created` carries it.
             ticket.placement = derived.moved.placement().flatten();
-            (ticket, touched, unlocks_added, parent_epic, derived)
+            (ticket, touched, unlocks_added, parent_epic, derived, registered)
         };
 
         // SCALE-14: the newborn is written whole — the one ticket a write
@@ -2426,6 +2550,11 @@ impl Store {
         let Derived { stored, moved } = derived;
         // WAVE-6: the placements it moved, said last.
         let placed = moved.placed.as_ref().and_then(Change::placed);
+        // COMP-3: and the registry it moved — stored in the transaction,
+        // taken by the cache with the rows, said after everything else.
+        let mut registered = registered;
+        let registry_moves = std::mem::take(&mut registered.moves);
+        let registry_rows = registry_moves.clone();
         self.write(
             serial,
             move |tx| {
@@ -2439,9 +2568,14 @@ impl Store {
                     })
                     .collect::<Result<HashMap<String, Ticket>, StoreError>>()?;
                 stored.write(tx)?;
+                components::store(tx, &registry_rows)?;
                 Ok(blockers)
             },
-            move |cache, _| cache.created(newborn, touched.into_values(), moved),
+            move |cache, _| {
+                let out = cache.created(newborn, touched.into_values(), moved);
+                cache.components.take(registry_moves);
+                out
+            },
             move |blockers, (groups, child_count), tx| {
                 let _ = tx.send(Change::Created {
                     ticket: ticket.clone(),
@@ -2465,6 +2599,9 @@ impl Store {
                 broadcast_groups(tx, groups);
                 if let Some(placed) = placed {
                     let _ = tx.send(placed);
+                }
+                for change in Change::components(registered) {
+                    let _ = tx.send(change);
                 }
                 ticket
             },
@@ -3076,6 +3213,10 @@ impl Store {
         if title.as_deref().is_some_and(|t| t.trim().is_empty()) {
             return Err(StoreError::EmptyTitle { id });
         }
+        // COMP-3: what a new body defines and references, read from the body
+        // in hand before the lock — and refused, if malformed, only once it
+        // is known to change the body (the same body again is still a no-op).
+        let uses = body.as_deref().map(components::read);
         let serial = self.serial().await;
         let mut ticket = self.get(&id).await?;
         let mut changed: Vec<String> = Vec::new();
@@ -3090,11 +3231,33 @@ impl Store {
         if changed.is_empty() {
             return Ok(Change::Amended { ticket, changed });
         }
+        // COMP-3: a new body moves the registry — the whole amend refused,
+        // title too, when a block is malformed or defines a name another
+        // ticket owns.
+        let mut registered = match uses.filter(|_| changed.iter().any(|c| c == "body")) {
+            None => components::Plan::default(),
+            Some((uses, problems)) => {
+                if let Some(problem) = problems.into_iter().next() {
+                    return Err(StoreError::component(Some(&id), problem));
+                }
+                let cache = self.tickets.read().expect("store lock poisoned");
+                cache
+                    .components
+                    .plan(&ticket.id, &uses)
+                    .map_err(|o| StoreError::ComponentOwned {
+                        id: Some(id.clone()),
+                        name: o.name,
+                        owner: o.owner,
+                    })?
+            }
+        };
         ticket.updated_unix = chrono::Utc::now().timestamp();
 
         let row = Row::from(&ticket);
         let body = changed.iter().any(|c| c == "body").then(|| ticket.body.clone());
         let title_changed = changed.iter().any(|c| c == "title");
+        let registry_moves = std::mem::take(&mut registered.moves);
+        let registry_rows = registry_moves.clone();
         self.write(
             serial,
             move |tx| {
@@ -3102,20 +3265,35 @@ impl Store {
                 if let Some(body) = body {
                     db::set_body(tx, &row.id, &body)?;
                 }
+                components::store(tx, &registry_rows)?;
                 Ok(row)
             },
             // Rows only: what an amend changes is counted by no roll-up and
             // indexed by no id index (see above). AGS-23: a root's new title
-            // is its group's, though — one `GroupChanged` after it.
-            move |cache, row| cache.amended(row.clone(), title_changed),
+            // is its group's, though — one `GroupChanged` after it. COMP-3:
+            // and a new body's registry, beside the row.
+            move |cache, row| {
+                let groups = cache.amended(row.clone(), title_changed);
+                cache.components.take(registry_moves);
+                groups
+            },
             move |_, groups, tx| {
                 let change = Change::Amended { ticket, changed };
                 let _ = tx.send(change.clone());
                 broadcast_groups(tx, groups);
+                for change in Change::components(registered) {
+                    let _ = tx.send(change);
+                }
                 change
             },
         )
         .await
+    }
+
+    /// COMP-3: every component in the registry, in name order — orphans
+    /// included (`owner: None`), waiting names not. From the cache alone.
+    pub fn components(&self) -> Vec<Component> {
+        self.tickets.read().expect("store lock poisoned").components.components()
     }
 
     /// SDLC-9: links `entries` to the ticket `id` — the record of which
@@ -3639,6 +3817,11 @@ mod commits;
 /// only ever sees the cache above.
 mod db;
 
+/// COMP-3: the component registry — what a body defines and references, the
+/// registry the cache keeps, the plan a write makes of it, its table and the
+/// first open that builds it.
+mod components;
+
 /// SCALE-28: the derived state, stored — the tables beside the tickets,
 /// what a write's transaction writes to them ([`stored::Changes`]), a start
 /// reads from them, a first open builds into them, and `--verify-derived`
@@ -3739,3 +3922,9 @@ mod tests_paths;
 /// moves, forward references, a hand-edited cycle, a reopen, `watch { epic }`.
 #[cfg(test)]
 mod tests_placements;
+
+/// COMP-3: the component registry — a test per row of the ticket's table,
+/// the code examples that are not definitions, the code span that is not a
+/// reference, durability, events, and a database from before the table.
+#[cfg(test)]
+mod tests_components;

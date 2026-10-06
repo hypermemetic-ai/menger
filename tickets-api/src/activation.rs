@@ -153,6 +153,9 @@ fn change_event(change: Change) -> TicketsEvent {
         Change::PlacementsChanged { changes } => TicketsEvent::PlacementsChanged {
             changes: changes.into_iter().map(|(_, change)| change).collect(),
         },
+        // COMP-3: past any `epic` filter — a component is in no shortcode.
+        Change::ComponentChanged { component } => TicketsEvent::ComponentChanged { component },
+        Change::ComponentRemoved { name } => TicketsEvent::ComponentRemoved { name },
     }
 }
 
@@ -203,6 +206,11 @@ impl Tickets {
     /// after it, `kind` is `doc`, and `parent` is the shortcode's scope root
     /// (or omitted, which defaults to it); a path another ticket of the
     /// shortcode already holds is an in-band error naming that ticket.
+    /// COMP-3: a body's ` ```component <tag> ` blocks register components
+    /// (`watch` says so after the rest of the birth); a block whose tag is
+    /// not a component name, a name defined twice, and a name another
+    /// ticket defines are in-band errors — the last naming that ticket —
+    /// with nothing stored or allocated.
     /// Yields exactly one event: `Created` or `Error`.
     #[plexus_macros::method(
         description = "Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc",
@@ -422,7 +430,11 @@ impl Tickets {
     /// did (neither given, or the values already there), which writes and
     /// broadcasts nothing — `NotFound` if `id` names no ticket, or an
     /// in-band `Error` for a title that is empty after trimming. `watch`
-    /// carries every `Amended` that changed something.
+    /// carries every `Amended` that changed something. COMP-3: a new body
+    /// moves the component registry — its ` ```component ` blocks and `<tag`
+    /// references — and `watch` says so after the `Amended`; a malformed
+    /// block, or a name another ticket defines, is an in-band `Error` (the
+    /// latter naming that ticket) and nothing is written, title included.
     #[plexus_macros::method(
         description = "Replace a ticket's title and/or body (whole values); yields amended { ticket, changed }",
         params(
@@ -611,6 +623,27 @@ impl Tickets {
         }
     }
 
+    /// COMP-3: the component registry. Yields one `Component` per component
+    /// a ticket defines or once defined, in name order — its `source` (the
+    /// ` ```component <name> ` block's content), its `owner` (`null` for an
+    /// orphan: no ticket defines it any more, and something still uses it)
+    /// and its `references` (the tickets whose bodies hold `<name` as an
+    /// HTML tag, in the store's order, then the components whose sources
+    /// do). Nothing trails them — the stream's own `done` is the whole
+    /// answer, as for `groups`. From the cache alone; `watch` keeps a
+    /// client's copy current with `ComponentChanged` and `ComponentRemoved`.
+    #[plexus_macros::method(
+        description = "Every component in the registry, in name order: its source, its owner (null: an orphan) and what references it"
+    )]
+    pub async fn components(&self) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            for component in store.components() {
+                yield TicketsEvent::Component { component };
+            }
+        }
+    }
+
     /// SCALE-16: where each shortcode ends in the store's order. Yields
     /// one `Extent` per shortcode that holds a ticket, in shortcode order
     /// — its highest sequence, read from the per-shortcode sequence
@@ -765,10 +798,17 @@ impl Tickets {
     /// parent's id, the child, and the parent's new `child_count` — the
     /// child's own `Created` / `ParentChanged` already says where it
     /// hangs. The `epic` filter applies to them by the parent's shortcode.
+    ///
+    /// COMP-3: a `create` or `amend` that moved the component registry ends
+    /// with one `ComponentChanged` per component it registered or moved
+    /// (source, owner, references — the whole component), in name order,
+    /// then one `ComponentRemoved` per component it took out — after every
+    /// other event of the write. A component is in no shortcode, so both
+    /// pass any `epic` filter.
     #[plexus_macros::method(
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes",
-        params(epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode)")
+        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved), until disconnect; Lagged { missed } where a slow subscriber lost changes",
+        params(epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; component changes always)")
     )]
     pub async fn watch(
         &self,
