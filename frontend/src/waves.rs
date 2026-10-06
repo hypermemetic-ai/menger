@@ -1,10 +1,11 @@
 //! WAVE-5: the wave board — `#/waves/<SHORTCODE>`, the order of work as a
 //! kanban derived from `blocked_by` (WAVE-1).
 //!
-//! The board is a shortcode and every shortcode hosted under it, at any
-//! depth (WAVE-1 decision 11: until views exist, the nav's `host` chain from
-//! `groups` is what a board is). It asks the server where each of their
-//! tickets sits — one `tickets.waves { epics, kinds }` per load (WAVE-4),
+//! The board is one shortcode's tickets (owner, 2026-10-06: "I don't want to
+//! see all boards on a given board" — until then a board took in every
+//! shortcode hosted under it). The shortcodes hosted directly under it — the
+//! nav's `host` chain from `groups` — are its sub-boards, linked from the bar.
+//! It asks the server where each of its tickets sits — one `tickets.waves { epics, kinds }` per load (WAVE-4),
 //! computed over the whole graph, never in the browser — and groups the
 //! answer into columns here, in one of two layouts a toggle apart:
 //!
@@ -66,24 +67,22 @@ pub(crate) fn epic_of(id: &str) -> Option<&str> {
     id.rsplit_once('-').map(|(epic, _)| epic)
 }
 
-/// The board for `root` (case-insensitive): `root` and every shortcode whose
-/// `host` ticket's shortcode is already in the set, transitively — a
-/// sub-shortcode hosted under a sub-shortcode joins as surely as one hosted
-/// under the root. In shortcode order.
-pub(crate) fn shortcode_set(root: &str, groups: &BTreeMap<String, Group>) -> BTreeSet<String> {
-    let mut set = BTreeSet::from([root.to_ascii_uppercase()]);
-    loop {
-        let joining: Vec<String> = groups
-            .values()
-            .filter(|g| !set.contains(&g.epic))
-            .filter(|g| g.host.as_deref().and_then(epic_of).is_some_and(|h| set.contains(h)))
-            .map(|g| g.epic.clone())
-            .collect();
-        if joining.is_empty() {
-            return set;
-        }
-        set.extend(joining);
-    }
+/// The board for `root` (case-insensitive) is that one shortcode — the
+/// shortcodes hosted under it are boards of their own ([`sub_boards`]).
+pub(crate) fn shortcode_set(root: &str) -> BTreeSet<String> {
+    BTreeSet::from([root.to_ascii_uppercase()])
+}
+
+/// The boards one level under `root` (case-insensitive): every shortcode
+/// whose `host` ticket is in `root`, in shortcode order. Each is a link on
+/// `root`'s bar; its own board links the ones under it.
+pub(crate) fn sub_boards(root: &str, groups: &BTreeMap<String, Group>) -> Vec<String> {
+    let root = root.to_ascii_uppercase();
+    groups
+        .values()
+        .filter(|g| g.epic != root && g.host.as_deref().and_then(epic_of) == Some(root.as_str()))
+        .map(|g| g.epic.clone())
+        .collect()
 }
 
 // ---------------------------------------------------------------------
@@ -561,7 +560,7 @@ pub(crate) fn WaveBoard(
     let sc = shortcode.to_ascii_uppercase();
     let set = {
         let sc = sc.clone();
-        Memo::new(move |_| tree.with_groups(|g| g.map(|g| shortcode_set(&sc, g))))
+        Memo::new(move |_| tree.with_groups(|g| g.map(|_| shortcode_set(&sc))))
     };
     let layout = RwSignal::new(load_layout(&sc));
     {
@@ -634,9 +633,9 @@ pub(crate) fn WaveBoard(
         ctx.answer.with(|a| a.as_ref().map(|a| columns(&a.cards, l)).unwrap_or_default())
     });
     let lanes = Memo::new(move |_| cols.with(|cs| cs.iter().map(|c| c.lane.clone()).collect::<Vec<_>>()));
-    let hosted = {
+    let subs = {
         let sc = sc.clone();
-        move || set.with(|s| s.iter().flatten().filter(|e| **e != sc).cloned().collect::<Vec<_>>().join(" · "))
+        Memo::new(move |_| tree.with_groups(|g| g.map(|g| sub_boards(&sc, g)).unwrap_or_default()))
     };
     // Owner, 2026-10-06: the columns are the page's height, all of them, and
     // scroll inside. The lanes row takes what the viewport has left below
@@ -681,7 +680,18 @@ pub(crate) fn WaveBoard(
         <section id="waves" data-shortcode=sc.clone() data-layout=move || layout.get().as_str()>
             <div class="wbar">
                 <span class="code">{sc.clone()}</span>
-                <span class="hosted" title="the shortcodes hosted under it">{hosted}</span>
+                {move || {
+                    let subs = subs.get();
+                    (!subs.is_empty()).then(|| view! {
+                        <span class="hosted" title="the shortcodes hosted under this one — each its own board">
+                            "boards under it: "
+                            {subs.into_iter().map(|b| {
+                                let href = format!("#/waves/{b}");
+                                view! { <a class="code" href=href>{b}</a>" " }
+                            }).collect_view()}
+                        </span>
+                    })
+                }}
                 <span class="layout" role="group" aria-label="layout">"[ "{seg(Layout::Waves)}" | "{seg(Layout::Stages)}" ]"</span>
                 <label class="wide">
                     <input
@@ -855,7 +865,7 @@ fn WaveIndex(tree: nav::Tree) -> impl IntoView {
     view! {
         <section id="waves-index">
             <h2>"Wave boards"</h2>
-            <p class="none">"A board is a shortcode and every shortcode hosted under it."</p>
+            <p class="none">"A board is one shortcode's tickets; the shortcodes hosted under it are boards of their own."</p>
             <ul>
                 <For
                     each=move || top.get()
@@ -928,21 +938,24 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
-    /// Acceptance 1: the shortcode set for PLEXUS — every shortcode hosted
-    /// under one of its tickets, and those hosted under them, transitively;
-    /// nothing hosted elsewhere. Case-insensitive.
+    /// Owner, 2026-10-06: a board is its own shortcode only; the shortcodes
+    /// hosted directly under it are its sub-boards, each its own board.
     #[test]
-    fn the_shortcode_set_follows_the_host_chain() {
+    fn a_board_is_one_shortcode_and_links_the_boards_under_it() {
         let g = platform();
-        let want = set(&[
-            "CODEGEN", "CONTEXT", "GEN", "HYPERFORGE", "MACRO", "PLEXUS", "RETURNS", "STARTER", "SYNAPSE", "TRANSPORT",
-        ]);
-        assert_eq!(shortcode_set("PLEXUS", &g), want);
-        assert_eq!(shortcode_set("plexus", &g), want, "case-insensitive");
-        assert_eq!(shortcode_set("MACRO", &g), set(&["CODEGEN", "GEN", "MACRO"]), "a sub-shortcode's board is its subtree");
-        assert_eq!(shortcode_set("MNG", &g), set(&["LOOSE", "MNG"]));
-        assert_eq!(shortcode_set("WAVE", &g), set(&["WAVE"]));
-        assert_eq!(shortcode_set("NOPE", &g), set(&["NOPE"]), "an unknown shortcode is a board of one");
+        assert_eq!(shortcode_set("PLEXUS"), set(&["PLEXUS"]));
+        assert_eq!(shortcode_set("plexus"), set(&["PLEXUS"]), "case-insensitive");
+        assert_eq!(
+            sub_boards("PLEXUS", &g),
+            ["CONTEXT", "HYPERFORGE", "MACRO", "RETURNS", "STARTER", "SYNAPSE", "TRANSPORT"],
+            "hosted under any PLEXUS ticket, one level only"
+        );
+        assert_eq!(sub_boards("plexus", &g), sub_boards("PLEXUS", &g), "case-insensitive");
+        assert_eq!(sub_boards("MACRO", &g), ["CODEGEN"], "a sub-board links the one under it");
+        assert_eq!(sub_boards("CODEGEN", &g), ["GEN"]);
+        assert_eq!(sub_boards("MNG", &g), ["LOOSE"]);
+        assert!(sub_boards("WAVE", &g).is_empty());
+        assert!(sub_boards("NOPE", &g).is_empty(), "an unknown shortcode has no sub-boards");
         assert_eq!(epic_of("PLEXUS-12"), Some("PLEXUS"));
         assert_eq!(epic_of("PLEXUS"), None);
     }
