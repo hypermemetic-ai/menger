@@ -539,3 +539,52 @@ async fn the_wire_assertions_through_the_generated_client() {
         other => panic!("expected `health`, got {other:?}"),
     }
 }
+
+/// WAVE-4: the `waves` events through the generated client — the call the
+/// board makes — decode to the activation's own types: `Placed` with its
+/// internally tagged `Placement` nested inside the tagged event, then one
+/// `WaveCounts`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn waves_decode_typed_through_the_generated_client() {
+    use menger_tickets_api::Placement;
+    let port = start_server().await;
+    let transport = connect(port).await;
+    let client = TicketsClient::new(&transport);
+    for (epic, kind, blocked_by) in [
+        ("TY", "scope", None),
+        ("TY", "build", None),
+        ("TY", "build", Some(vec!["TY-2".to_string()])),
+        ("TY", "gap", Some(vec!["TY-77".to_string()])),
+    ] {
+        created(
+            client
+                .create_all(epic.into(), "t".into(), Some(kind.into()), None, blocked_by, None, None)
+                .await
+                .expect("create"),
+        );
+    }
+    let events = client.waves_all(vec!["ty".into()], None).await.expect("waves");
+    let placed: Vec<(String, Placement, Vec<String>)> = events
+        .iter()
+        .filter_map(|e| match e {
+            TicketsEvent::Placed { summary, placement, waiting_on } => {
+                Some((summary.id.clone(), *placement, waiting_on.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        placed,
+        vec![
+            ("TY-2".to_string(), Placement::Wave { n: 1 }, vec![]),
+            ("TY-3".to_string(), Placement::Wave { n: 2 }, vec!["TY-2".to_string()]),
+            ("TY-4".to_string(), Placement::MissingBlocker, vec!["TY-77".to_string()]),
+        ]
+    );
+    match events.last() {
+        Some(TicketsEvent::WaveCounts { waves, missing, done }) => {
+            assert_eq!((waves.as_slice(), *missing, *done), (&[1u64, 1][..], 1, 0));
+        }
+        other => panic!("expected wave_counts last, got {other:?}"),
+    }
+}

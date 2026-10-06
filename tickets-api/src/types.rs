@@ -469,6 +469,28 @@ impl Group {
     }
 }
 
+/// WAVE-4: where a ticket sits in the order of work — what `waves` says of
+/// each ticket it places, derived from `blocked_by` over the whole graph by
+/// MNG-4's rule (a blocker is satisfied iff it is a `Complete` or
+/// `Superseded` ticket; an id naming no ticket never is).
+///
+/// - `Wave { n }` — unfinished, and `n` is 1 when every blocker is
+///   satisfied, else 1 + the highest wave among its unsatisfied blockers.
+/// - `Done` — the ticket itself is `Complete` or `Superseded`.
+/// - `MissingBlocker` — it, or something it waits on, names a blocker that
+///   is no ticket: no wave can be given until that id exists.
+///
+/// Internally tagged like the events (`{"type": "wave", "n": 2}`,
+/// `{"type": "done"}`, `{"type": "missing_blocker"}`). Nothing stores it:
+/// the store computes it on demand, per call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Placement {
+    Wave { n: u32 },
+    Done,
+    MissingBlocker,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TicketsEvent {
@@ -583,6 +605,25 @@ pub enum TicketsEvent {
     /// it: `created` carries the newborn's `epic` and `seq`, which is its
     /// shortcode's new `last_seq`.
     Extent { epic: String, last_seq: u32 },
+    /// WAVE-4: one ticket's place in the order of work (yielded per ticket
+    /// by `waves`): its row, its [`Placement`] — computed over the whole
+    /// `blocked_by` graph, whatever shortcodes were asked for — and
+    /// `waiting_on`, its unsatisfied direct blockers (ids that name no
+    /// ticket included) in `blocked_by` order, distinct; empty for `Done`.
+    Placed {
+        summary: TicketSummary,
+        placement: Placement,
+        waiting_on: Vec<String>,
+    },
+    /// WAVE-4: the tally that closes a `waves` answer, exactly once, after
+    /// every `placed`: `waves[i]` is how many of the placed tickets sit in
+    /// wave `i + 1` (as long as the highest wave placed; `[]` when none is),
+    /// `missing` how many are `missing_blocker`, `done` how many are done.
+    WaveCounts {
+        waves: Vec<u64>,
+        missing: u64,
+        done: u64,
+    },
     /// One resolved blocker of the queried ticket, at its current status
     /// (yielded per-entry by `blockers`).
     Blocker { ticket: Ticket },
@@ -703,6 +744,58 @@ mod tests {
         assert!(g(1, 0).drawn());
         assert!(g(0, 3).drawn(), "a doc collection");
         assert!(!g(0, 0).drawn());
+    }
+
+    /// WAVE-4: `Placement` and the two `waves` events on the wire — tagged
+    /// like every event, snake_case, and back again.
+    #[test]
+    fn placements_and_the_waves_events_render_tagged_and_snake_cased() {
+        use serde_json::json;
+        for (p, want) in [
+            (Placement::Wave { n: 3 }, json!({"type": "wave", "n": 3})),
+            (Placement::Done, json!({"type": "done"})),
+            (Placement::MissingBlocker, json!({"type": "missing_blocker"})),
+        ] {
+            assert_eq!(serde_json::to_value(p).unwrap(), want, "{p:?}");
+            assert_eq!(serde_json::from_value::<Placement>(want).unwrap(), p);
+        }
+        let counts = TicketsEvent::WaveCounts { waves: vec![2, 0, 1], missing: 1, done: 4 };
+        assert_eq!(
+            serde_json::to_value(&counts).unwrap(),
+            json!({"type": "wave_counts", "waves": [2, 0, 1], "missing": 1, "done": 4})
+        );
+        let summary = TicketSummary {
+            id: "W-2".into(),
+            epic: "W".into(),
+            seq: 2,
+            title: "t".into(),
+            status: Status::Pending,
+            kind: Kind::Build,
+            severity: None,
+            parent: Some("W-1".into()),
+            child_count: 0,
+            blocked_by: vec!["W-3".into()],
+            unlocks: vec![],
+            commits: vec![],
+            created_unix: 1,
+            updated_unix: 1,
+        };
+        let placed = TicketsEvent::Placed {
+            summary,
+            placement: Placement::Wave { n: 2 },
+            waiting_on: vec!["W-3".into()],
+        };
+        let wire = serde_json::to_value(&placed).unwrap();
+        assert_eq!(wire["type"], "placed");
+        assert_eq!(wire["summary"]["id"], "W-2");
+        assert_eq!(wire["placement"], json!({"type": "wave", "n": 2}));
+        assert_eq!(wire["waiting_on"], json!(["W-3"]));
+        match serde_json::from_value::<TicketsEvent>(wire).unwrap() {
+            TicketsEvent::Placed { placement, waiting_on, .. } => {
+                assert_eq!((placement, waiting_on), (Placement::Wave { n: 2 }, vec!["W-3".to_string()]));
+            }
+            other => panic!("expected Placed, got {other:?}"),
+        }
     }
 
     #[test]

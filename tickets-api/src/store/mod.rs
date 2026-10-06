@@ -86,6 +86,10 @@
 //! roll-ups count a doc in `docs`, never in `done/total` ([`rollup`]) — the
 //! derived state's form 3, built once on a file's first open. Everything
 //! else is a doc's as any ticket's: amend, parenthood, commits, the pages.
+//! WAVE-4 reads the order of work off the rows ([`waves`]): each ticket's
+//! wave, derived from `blocked_by` over the whole graph by MNG-4's rule, on
+//! demand — computed under the read lock for the one call, memoized for it,
+//! and kept nowhere: no write moves it, nothing stores it.
 
 use crate::types::TicketSummary;
 use rusqlite::{Connection, OpenFlags};
@@ -2236,6 +2240,20 @@ impl Store {
             .collect()
     }
 
+    /// WAVE-4: every ticket of the shortcodes `epics` (case-insensitive;
+    /// one with no tickets contributes nothing) whose kind is in `kinds` —
+    /// never a doc — placed in the order of work, with what it waits on,
+    /// and the tally ([`waves::Waves`]). Blockers are followed into every
+    /// shortcode, asked for or not, so a ticket's wave is the same whatever
+    /// board shows it. Rows only, under the read lock and nothing else —
+    /// no await, no body, no write — memoized for the call, so the cost is
+    /// the yielded tickets and their blocker closure.
+    pub fn waves(&self, epics: &[String], kinds: &[Kind]) -> waves::Waves {
+        let epics: std::collections::BTreeSet<String> = epics.iter().map(|e| e.to_ascii_uppercase()).collect();
+        let cache = self.tickets.read().expect("store lock poisoned");
+        waves::waves(cache.rows(), &epics, kinds)
+    }
+
     /// One ticket, whole. SCALE-14: its row from the cache and its body from
     /// the database ([`Store::full`]); [`StoreError::NotFound`] when `id`
     /// names no ticket — answered by the cache, with no read.
@@ -3302,6 +3320,12 @@ mod children;
 /// `Doc` bucket of its shortcode, as every status is counted in its own.
 mod ready;
 
+/// WAVE-4: the order of work, read off the rows on demand — each ticket's
+/// wave (MNG-4's rule over `blocked_by`, the whole graph), `Done`, or the
+/// missing-blocker lane, and what it waits on. Nothing kept: a call places
+/// what it yields and the blockers behind it, once each, and forgets them.
+pub mod waves;
+
 /// SDLC-9: what a commit reference is — the grammar `link_commits` and
 /// `unlink_commits` hold every entry to, and the text a reference is stored
 /// and compared as — and how many one ticket may carry.
@@ -3318,6 +3342,7 @@ mod db;
 mod stored;
 
 pub use stored::Verdict;
+pub use waves::{Placed, Waves};
 
 #[cfg(test)]
 mod tests;
@@ -3391,3 +3416,10 @@ mod tests_docs;
 /// from before it; and `--verify-derived` naming what differs.
 #[cfg(test)]
 mod tests_ready;
+
+/// WAVE-4: `waves` — chains, diamonds, completion and supersession moving
+/// waves left, the missing-blocker lane, blockers in shortcodes not asked
+/// for, docs never placed, `kinds` filtering the yield and not the walk,
+/// the yield order and the tally, and a hand-edited cycle that terminates.
+#[cfg(test)]
+mod tests_waves;

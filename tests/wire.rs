@@ -1301,3 +1301,84 @@ async fn docs_root_a_shortcode_refuse_set_status_in_band_and_are_never_ready() {
     let mut sub = call(&client, "tickets.health", json!({})).await;
     assert_eq!(content(sub.next().await.unwrap().unwrap())["ticket_count"], 3, "nothing else was created");
 }
+
+/// WAVE-4 acceptance 3: `tickets.waves` over the real protocol — `epics` a
+/// JSON list, case-insensitive; one `placed { summary, placement,
+/// waiting_on }` per ticket (a summary row: no body), the placement tagged
+/// `{"type": "wave", "n": …}` / `{"type": "missing_blocker"}` /
+/// `{"type": "done"}`; a blocker followed into a shortcode not asked for;
+/// then exactly one `wave_counts`, then `done`. A completion moves a
+/// dependent left on the next ask. The errors are in-band data items.
+#[tokio::test]
+async fn waves_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let create = |epic: &str, kind: &str, blocked_by: Value| {
+        json!({"epic": epic, "title": format!("a {kind}"), "kind": kind, "blocked_by": blocked_by})
+    };
+    for params in [
+        create("UP", "scope", json!([])),           // UP-1
+        create("UP", "build", json!([])),           // UP-2: wave 1
+        create("WV", "scope", json!([])),           // WV-1
+        create("WV", "build", json!(["UP-2"])),     // WV-2: wave 2, its blocker off-board
+        create("WV", "spike", json!(["WV-2"])),     // WV-3: wave 3
+        create("WV", "gap", json!(["WV-404"])),     // WV-4: missing
+        create("WV", "build", json!([])),           // WV-5: done
+        create("WV", "doc", json!([])),             // WV-6: a doc, never placed
+    ] {
+        let evs = collect(call(&client, "tickets.create", params.clone()).await).await;
+        assert_eq!(evs[0]["type"], "created", "{params}: {evs:?}");
+    }
+    collect(call(&client, "tickets.set_status", json!({"id": "WV-5", "status": "Complete"})).await).await;
+
+    let mut evs = collect(call(&client, "tickets.waves", json!({"epics": ["wv"]})).await).await;
+    let counts = evs.pop().expect("a waves answer ends with the tally");
+    assert_eq!(counts, json!({"type": "wave_counts", "waves": [0, 1, 1], "missing": 1, "done": 1}));
+    assert!(evs.iter().all(|e| e["type"] == "placed"), "{evs:?}");
+    let got: Vec<(String, Value, Value)> = evs
+        .iter()
+        .map(|e| (e["summary"]["id"].as_str().unwrap().to_string(), e["placement"].clone(), e["waiting_on"].clone()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("WV-2".into(), json!({"type": "wave", "n": 2}), json!(["UP-2"])),
+            ("WV-3".into(), json!({"type": "wave", "n": 3}), json!(["WV-2"])),
+            ("WV-4".into(), json!({"type": "missing_blocker"}), json!(["WV-404"])),
+            ("WV-5".into(), json!({"type": "done"}), json!([])),
+        ]
+    );
+    assert!(evs[0]["summary"].get("body").is_none(), "a summary row: {}", evs[0]);
+    assert_eq!(evs[0]["summary"]["kind"], "build");
+
+    // UP-2 completes: everything behind it moves one wave left.
+    collect(call(&client, "tickets.set_status", json!({"id": "UP-2", "status": "Complete"})).await).await;
+    let evs = collect(call(&client, "tickets.waves", json!({"epics": ["WV", "UP"], "kinds": ["build", "spike"]})).await).await;
+    let placed: Vec<(&str, &Value)> = evs
+        .iter()
+        .filter(|e| e["type"] == "placed")
+        .map(|e| (e["summary"]["id"].as_str().unwrap(), &e["placement"]))
+        .collect();
+    assert_eq!(
+        placed,
+        vec![
+            ("WV-2", &json!({"type": "wave", "n": 1})),
+            ("WV-3", &json!({"type": "wave", "n": 2})),
+            ("UP-2", &json!({"type": "done"})),
+            ("WV-5", &json!({"type": "done"})),
+        ],
+        "kinds: the gap is not asked for; the done in store order"
+    );
+    assert_eq!(evs.last().unwrap(), &json!({"type": "wave_counts", "waves": [1, 1], "missing": 0, "done": 2}));
+
+    // In-band errors: one data item, then done.
+    for (params, needle) in [
+        (json!({"epics": []}), "epics"),
+        (json!({"epics": ["WV"], "kinds": ["bug"]}), "'bug'"),
+    ] {
+        let evs = collect(call(&client, "tickets.waves", params.clone()).await).await;
+        assert_eq!(evs.len(), 1, "{params}: {evs:?}");
+        assert_eq!(evs[0]["type"], "error");
+        assert!(evs[0]["message"].as_str().unwrap().contains(needle), "{params}: {}", evs[0]);
+    }
+}

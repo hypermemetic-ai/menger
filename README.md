@@ -315,6 +315,13 @@ synapse -P 4455 menger tickets link_commits --id MNG-10 --commits 77df9a0
 synapse -P 4455 menger tickets link_commits --id SCALE-4 --commits 0bb28b2 --commits 090cdec
 ```
 
+The order of work for a shortcode tree — the platform's, here — is one call
+(WAVE-4); the app's wave board (`#/waves/<SHORTCODE>`) makes the same one:
+
+```sh
+synapse -P 4455 menger tickets waves --epics PLEXUS,MACRO,SYNAPSE,TRANSPORT,STARTER,HYPERFORGE,RETURNS,CONTEXT
+```
+
 | method | yields |
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
@@ -330,6 +337,7 @@ synapse -P 4455 menger tickets link_commits --id SCALE-4 --commits 0bb28b2 --com
 | `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's row is written, and it leaves the old parent's children and joins the new one's (SCALE-4: neither parent's row is rewritten — SCALE-28 stores each one's new `child_count` on it, in the move's transaction; `watch` carries `children_changed` and `child_removed` with each parent's new `child_count`); the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, docs, root, root_row, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only; SDLC-11: the work only — `docs` counts the docs, and a row of docs alone is drawn), `root` is the lowest-seq `scope` (or `doc`), `root_row` the root's `{ title, status, kind }` (AGS-23: the nav draws the shortcode as the root's row; `null` with no root), `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
 | `tickets.extents {}` | one `extent { epic, last_seq }` per shortcode that holds a ticket, in shortcode order (the store's), then the stream's own `done` (SCALE-16) — where each shortcode ends: ids are allocated highest-plus-one and never deleted, so a shortcode holds `last_seq` tickets, row k of it is `EPIC-k`, and a position in the store's order becomes a `list { after }` cursor without a walk; every `last_seq` together sums to `health.ticket_count` (a hand-edited database with a hole still reports the highest sequence; `after` naming the missing id is `list`'s cursor error). Not a roll-up: the shortcode's own tickets only, and every shortcode has one whether or not the nav draws it a row. Read from the sequence `create` allocates from (SCALE-3), so the cost is the number of shortcodes; no `watch` event — `created` carries the shortcode's new `last_seq` as its `seq` |
+| `tickets.waves { epics, kinds? }` | the order of work (WAVE-4): one `placed { summary, placement, waiting_on }` per ticket of the shortcodes `epics` (case-insensitive; one with no tickets contributes nothing) whose kind is in `kinds` (default `build`, `spike`, `gap`; a doc is never placed), then exactly one `wave_counts { waves, missing, done }` — `waves[i]` counts the placed tickets in wave `i + 1`. `placement` is computed over the **whole** `blocked_by` graph by `ready_set`'s rule (MNG-4), blockers followed into any shortcode, asked for or not: `{"type": "done"}` when the ticket is `Complete` or `Superseded`; `{"type": "missing_blocker"}` when it, or anything it waits on, names a blocker that is no ticket (or, only by a hand edit, sits on or behind a `blocked_by` cycle); otherwise `{"type": "wave", "n": n}` — 1 with every blocker satisfied, else 1 + the highest wave among its unsatisfied blockers. `parent` orders nothing, and a `Blocked` status is a marker, not an edge. `waiting_on` is the ticket's unsatisfied direct blockers (missing ids included), in `blocked_by` order, distinct; `[]` when done. Order: waves ascending, inside a wave `Coding`, `In Review`, `Ready`, `Pending`, `Blocked`, `Idea`, `Epic`, then (epic, seq); then the missing lane; then the done — each in (epic, seq). `epics` empty, or a kind outside the six, is one in-band `error` and nothing else. Computed on demand from the cache's rows under its read lock, memoized for the call — the cost is the placed tickets and their blocker closure — and stored nowhere |
 | `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `commits_linked` / `commits_unlinked` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`) — AGS-23: so is a shortcode root's status change (any, not only across `Complete`) or new title, which moves its group's `root_row`; `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
 
 Paging (MNG-9). `(epic, seq)` is a total order the schema keeps unique, so
@@ -448,7 +456,7 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        typed Plexus client it emits — ONE declaration, shared by
                        the server (default features: `server`) and the app
                        (default-features = false, wasm32)
-  types.rs             Ticket · Status · Kind · Severity · TicketSummary · Group · TicketsEvent
+  types.rs             Ticket · Status · Kind · Severity · TicketSummary · Group · Placement · TicketsEvent
   store/               the service-wide cache (SQLite system of record behind it)
     mod.rs             the Store: the cache of rows, reads (a body from the
                        database on read-only connections — SCALE-14), the
@@ -467,6 +475,9 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        set it decides (store order), each shortcode's count of
                        each status — what ready_set and list { status } page
                        and count from (SCALE-32)
+    waves.rs           each ticket's wave in the order of work — MNG-4's rule
+                       over blocked_by, the whole graph — computed on demand
+                       per call from the rows, kept nowhere (WAVE-4)
     stored.rs          the derived state as stored beside the tickets — its
                        tables, what a write's transaction writes to them, the
                        read at start, the build on first open, and
@@ -499,6 +510,10 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        a scan after every write, in the cache and the file;
                        every ready_set and list { status } page against the
                        code before it (SCALE-32)
+    tests_waves.rs     waves: chains, diamonds, the missing lane, blockers in
+                       other shortcodes, docs, kinds, the yield order and the
+                       tally, a hand-edited cycle, a chain past any call stack
+                       (WAVE-4)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
 web/index.html         the day-one reactive shell

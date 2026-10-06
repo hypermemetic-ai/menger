@@ -26,7 +26,7 @@
 //! ```
 
 pub mod types;
-pub use types::{Group, Kind, RootRow, Severity, Status, Ticket, TicketSummary, TicketsEvent};
+pub use types::{Group, Kind, Placement, RootRow, Severity, Status, Ticket, TicketSummary, TicketsEvent};
 
 /// The cache and its storage — the server's system of record (MNG-2).
 #[cfg(feature = "server")]

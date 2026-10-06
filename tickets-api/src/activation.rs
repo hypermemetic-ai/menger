@@ -618,6 +618,68 @@ impl Tickets {
         }
     }
 
+    /// WAVE-4: the order of work, for a board. Yields one `Placed` per
+    /// ticket of the shortcodes `epics` (case-insensitive; one with no
+    /// tickets contributes nothing) whose kind is in `kinds` — default
+    /// `build`, `spike`, `gap`; never a doc — then exactly one
+    /// `WaveCounts`. Each ticket's placement is computed over the whole
+    /// `blocked_by` graph by MNG-4's rule, following blockers into any
+    /// shortcode: `done` when it is `Complete` or `Superseded`;
+    /// `missing_blocker` when it, or anything it waits on, names a blocker
+    /// that is no ticket; otherwise `wave { n }` — 1 with every blocker
+    /// satisfied, else 1 + the highest wave among its unsatisfied ones.
+    /// `waiting_on` is its unsatisfied direct blockers, in `blocked_by`
+    /// order, distinct. Order: waves ascending, inside a wave Coding, In
+    /// Review, Ready, Pending, Blocked, Idea, Epic and then (epic, seq);
+    /// then the missing lane; then the done — each in (epic, seq). `epics`
+    /// empty, or a kind outside the six, is one in-band `Error` and
+    /// nothing else. Rows only, computed for the call and kept nowhere.
+    #[plexus_macros::method(
+        description = "The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts",
+        params(
+            epics = "Shortcodes whose tickets are placed, e.g. [\"PLEXUS\", \"MACRO\"] (case-insensitive; at least one); blockers are followed into every shortcode",
+            kinds = "Kinds to place: scope | execution | build | gap | spike (optional; default build, spike, gap — a doc is never placed)"
+        )
+    )]
+    pub async fn waves(
+        &self,
+        epics: Vec<String>,
+        kinds: Option<Vec<String>>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            if epics.is_empty() {
+                yield TicketsEvent::Error {
+                    message: "waves: epics is empty — name at least one shortcode, e.g. [\"MNG\"]".into(),
+                };
+                return;
+            }
+            let kinds: Vec<Kind> = match kinds {
+                None => crate::store::waves::DEFAULT_KINDS.to_vec(),
+                Some(given) => match given.iter().map(|k| k.parse::<Kind>()).collect() {
+                    Ok(kinds) => kinds,
+                    Err(e) => {
+                        yield TicketsEvent::Error { message: e };
+                        return;
+                    }
+                },
+            };
+            let answer = store.waves(&epics, &kinds);
+            for p in answer.placed {
+                yield TicketsEvent::Placed {
+                    summary: p.summary,
+                    placement: p.placement,
+                    waiting_on: p.waiting_on,
+                };
+            }
+            yield TicketsEvent::WaveCounts {
+                waves: answer.waves,
+                missing: answer.missing,
+                done: answer.done,
+            };
+        }
+    }
+
     /// "Why can't this start?" in one call. Yields, in `blocked_by`
     /// order, one `Blocker` event per blocker that exists (the full
     /// ticket, at its current status) and one `DanglingBlocker` event per
@@ -1838,4 +1900,129 @@ mod tests {
         ));
     }
 
+    /// The `waves` stream, split the way the contract reads it: one
+    /// `(id, placement, waiting_on)` per `placed`, then the one closing
+    /// `wave_counts` — asserted last and alone.
+    #[allow(clippy::type_complexity)]
+    async fn placed_and_counts(
+        s: impl Stream<Item = TicketsEvent> + Send + 'static,
+    ) -> (Vec<(String, crate::types::Placement, Vec<String>)>, (Vec<u64>, u64, u64)) {
+        let evs: Vec<TicketsEvent> = Box::pin(s).collect().await;
+        let mut placed = Vec::new();
+        let mut counts = None;
+        for ev in evs {
+            assert!(counts.is_none(), "wave_counts is last: {ev:?}");
+            match ev {
+                TicketsEvent::Placed { summary, placement, waiting_on } => {
+                    placed.push((summary.id, placement, waiting_on))
+                }
+                TicketsEvent::WaveCounts { waves, missing, done } => counts = Some((waves, missing, done)),
+                other => panic!("expected placed or wave_counts, got {other:?}"),
+            }
+        }
+        (placed, counts.expect("every waves answer ends with wave_counts"))
+    }
+
+    /// WAVE-4 acceptance 2: the yield order exactly as specified — waves
+    /// ascending; inside a wave Coding, In Review, Ready, Pending, Blocked,
+    /// Idea, Epic, then (epic, seq); then the missing lane; then the done,
+    /// each in (epic, seq) — with the default kinds (the scope roots are not
+    /// work), a blocker followed into a shortcode not asked for, and the
+    /// tally after the rows, exactly once.
+    #[tokio::test]
+    async fn waves_yields_placements_in_the_specified_order_then_one_wave_counts() {
+        use crate::types::Placement::{Done, MissingBlocker, Wave};
+        let hub = hub();
+        let create = |epic: &str, kind: Option<&str>, blocked_by: &[&str]| {
+            let blocked_by = (!blocked_by.is_empty()).then(|| blocked_by.iter().map(|b| b.to_string()).collect());
+            let (epic, kind) = (epic.to_string(), kind.map(String::from));
+            let hub = hub.clone();
+            async move { one(hub.create(epic, "t".into(), kind, None, blocked_by, None, None).await).await }
+        };
+        let status = |id: &str, s: &str| {
+            let (id, s, hub) = (id.to_string(), s.to_string(), hub.clone());
+            async move { one(hub.set_status(id, s).await).await }
+        };
+        for epic in ["WA", "WB", "ELSE"] {
+            create(epic, Some("scope"), &[]).await; // X-1, each shortcode's root
+        }
+        create("ELSE", None, &[]).await; // ELSE-2, wave 1 — not asked for
+        create("WA", None, &["ELSE-2"]).await; // WA-2: wave 2, Pending
+        create("WB", Some("spike"), &[]).await; // WB-2: wave 1, Pending
+        create("WA", Some("gap"), &[]).await; // WA-3: wave 1, Ready
+        status("WA-3", "Ready").await;
+        create("WB", None, &[]).await; // WB-3: wave 1, Coding
+        status("WB-3", "active").await;
+        create("WA", None, &["WB-3"]).await; // WA-4: wave 2, In Review
+        status("WA-4", "in review").await;
+        create("WB", None, &["WB-9"]).await; // WB-4: missing (WB-9 is no ticket)
+        create("WA", None, &["WB-4"]).await; // WA-5: missing, behind WB-4
+        create("WA", None, &[]).await; // WA-6: done
+        status("WA-6", "Complete").await;
+        create("WA", Some("execution"), &[]).await; // WA-7: not work, not yielded
+        create("WB", None, &[]).await; // WB-5: wave 1, Blocked (a marker, not an edge)
+        status("WB-5", "Blocked").await;
+
+        let (placed, counts) = placed_and_counts(hub.waves(vec!["wa".into(), "WB".into()], None).await).await;
+        let want: Vec<(&str, crate::types::Placement, Vec<&str>)> = vec![
+            ("WB-3", Wave { n: 1 }, vec![]),
+            ("WA-3", Wave { n: 1 }, vec![]),
+            ("WB-2", Wave { n: 1 }, vec![]),
+            ("WB-5", Wave { n: 1 }, vec![]),
+            ("WA-4", Wave { n: 2 }, vec!["WB-3"]),
+            ("WA-2", Wave { n: 2 }, vec!["ELSE-2"]),
+            ("WA-5", MissingBlocker, vec!["WB-4"]),
+            ("WB-4", MissingBlocker, vec!["WB-9"]),
+            ("WA-6", Done, vec![]),
+        ];
+        let got: Vec<(&str, crate::types::Placement, Vec<&str>)> = placed
+            .iter()
+            .map(|(id, p, w)| (id.as_str(), *p, w.iter().map(String::as_str).collect()))
+            .collect();
+        assert_eq!(got, want);
+        assert_eq!(counts, (vec![4, 2], 2, 1));
+
+        // `kinds` names what is yielded: the scopes and the execution too.
+        let (placed, counts) = placed_and_counts(
+            hub.waves(vec!["WA".into()], Some(vec!["scope".into(), "Execution".into()])).await,
+        )
+        .await;
+        let ids: Vec<&str> = placed.iter().map(|(id, _, _)| id.as_str()).collect();
+        assert_eq!(ids, ["WA-1", "WA-7"]);
+        assert_eq!(counts, (vec![2], 0, 0));
+
+        // A shortcode with no tickets: nothing placed, the tally all zero.
+        let (placed, counts) = placed_and_counts(hub.waves(vec!["NONE".into()], None).await).await;
+        assert!(placed.is_empty());
+        assert_eq!(counts, (vec![], 0, 0));
+    }
+
+    /// WAVE-4 acceptance 2: the error cases are in-band — `epics` empty, and
+    /// a kind outside the six (the error `create` gives, naming them) — one
+    /// `Error` and nothing else, no tally.
+    #[tokio::test]
+    async fn waves_errors_are_in_band_and_alone() {
+        let hub = hub();
+        one(hub.create("ER".into(), "root".into(), Some("scope".into()), None, None, None, None).await).await;
+
+        let evs: Vec<TicketsEvent> = Box::pin(hub.waves(vec![], None).await).collect().await;
+        assert_eq!(evs.len(), 1, "{evs:?}");
+        match &evs[0] {
+            TicketsEvent::Error { message } => assert!(message.contains("epics"), "{message}"),
+            other => panic!("expected Error, got {other:?}"),
+        }
+
+        let evs: Vec<TicketsEvent> =
+            Box::pin(hub.waves(vec!["ER".into()], Some(vec!["build".into(), "bug".into()])).await).collect().await;
+        assert_eq!(evs.len(), 1, "{evs:?}");
+        match &evs[0] {
+            TicketsEvent::Error { message } => {
+                assert!(message.contains("'bug'"), "{message}");
+                for k in Kind::ALL {
+                    assert!(message.contains(k.as_str()), "names {k}: {message}");
+                }
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
 }
