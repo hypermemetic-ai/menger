@@ -285,6 +285,7 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
                     child_count: 0,
                     commits: Vec::new(),
                     path: None,
+                    placement: None,
                     body: String::new(),
                     created_unix: 0,
                     updated_unix: 0,

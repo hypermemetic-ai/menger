@@ -8,15 +8,21 @@
 //! that does — is `MissingBlocker`. `parent` orders nothing, and a ticket's
 //! own `Blocked` status is a marker on its card, not an edge.
 //!
-//! Nothing here is stored or kept: [`place`] reads the cache's rows under
-//! the read lock its caller holds, follows blockers into any shortcode
-//! whether or not it is asked for, and memoizes each placement for the rest
-//! of the one call — so a call costs the tickets it yields plus their
-//! blocker closure, each ticket placed once. The walk is iterative (an
-//! explicit stack, no recursion limit), and terminates on a `blocked_by`
-//! cycle — which `create` refuses, so only a hand edit makes one — by
-//! placing every ticket on or behind the cycle `MissingBlocker`: like a
-//! missing blocker, it is a wait that no status change can end.
+//! [`place`] is the rule: it reads the cache's rows under the read lock its
+//! caller holds, follows blockers into any shortcode whether or not it is
+//! asked for, and memoizes each placement for the rest of the one call — so
+//! a call costs the ticket plus its blocker closure, each ticket placed
+//! once. The walk is iterative (an explicit stack, no recursion limit), and
+//! terminates on a `blocked_by` cycle — which `create` refuses, so only a
+//! hand edit makes one — by placing every ticket on or behind the cycle
+//! `MissingBlocker`: like a missing blocker, it is a wait that no status
+//! change can end.
+//!
+//! WAVE-6: the placements are kept now, on the rows ([`super::placements`]),
+//! and [`waves`] reads them as they stand — its answer unchanged, its cost
+//! the yielded tickets alone; `waiting_on` is still worked out per row.
+//! [`place`] stays the rule: the store places every ticket by it at open,
+//! and it is what the kept placements are held equal to.
 
 use super::{satisfied, OrderKey, Row, Rows};
 use crate::types::{Kind, Placement, Status, TicketSummary};
@@ -77,16 +83,17 @@ fn waiting_on(rows: Rows<'_>, t: &Row) -> Vec<String> {
 }
 
 /// What a ticket's unsatisfied blockers come to, gathered one at a time.
+/// WAVE-6: the kept placements' pass gathers with it too.
 #[derive(Clone, Copy, Default)]
-struct Behind {
+pub(super) struct Behind {
     /// The highest wave among them, 0 with none.
     highest: u32,
     /// One of them is no ticket, or is `MissingBlocker` itself.
-    missing: bool,
+    pub(super) missing: bool,
 }
 
 impl Behind {
-    fn take(&mut self, p: Placement) {
+    pub(super) fn take(&mut self, p: Placement) {
         match p {
             Placement::Wave { n } => self.highest = self.highest.max(n),
             Placement::MissingBlocker => self.missing = true,
@@ -95,7 +102,7 @@ impl Behind {
         }
     }
 
-    fn placement(self) -> Placement {
+    pub(super) fn placement(self) -> Placement {
         if self.missing {
             Placement::MissingBlocker
         } else {
@@ -167,6 +174,10 @@ pub(super) fn place<'a>(rows: Rows<'a>, t: &'a Row, memo: &mut HashMap<&'a str, 
 /// Yield order: every `Wave` by `n`, inside a wave by [`rank`] and then the
 /// store's order `(epic, seq)`; then every `MissingBlocker`; then every
 /// `Done` — both in the store's order.
+///
+/// WAVE-6: each ticket's placement is the one the store keeps on its row; a
+/// row that has none kept (none the store makes: only a doc has none, and a
+/// doc is never yielded) is placed by the rule, as before.
 pub(super) fn waves(rows: Rows<'_>, epics: &BTreeSet<String>, kinds: &[Kind]) -> Waves {
     let mut memo: HashMap<&str, Placement> = HashMap::new();
     // (lane, wave, rank) — the sort key; the walk is already in the store's
@@ -179,7 +190,7 @@ pub(super) fn waves(rows: Rows<'_>, epics: &BTreeSet<String>, kinds: &[Kind]) ->
             if t.kind == Kind::Doc || !kinds.contains(&t.kind) {
                 continue;
             }
-            let placement = place(rows, t, &mut memo);
+            let placement = t.placement.unwrap_or_else(|| place(rows, t, &mut memo));
             let key = match placement {
                 Placement::Wave { n } => (0, n, rank(t.status)),
                 Placement::MissingBlocker => (1, 0, 0),

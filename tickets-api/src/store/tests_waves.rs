@@ -356,6 +356,9 @@ async fn a_hand_edited_cycle_terminates_in_the_missing_lane() {
             let key = cache.at[id.as_str()].clone();
             cache.order.get_mut(&key).unwrap().blocked_by = blocked_by;
         }
+        // WAVE-6: a hand edit reaches a store through its file, and the
+        // store places every ticket when it opens it — as here.
+        cache.place_all();
     }
     let p = placements(&store, &["CY"]);
     assert_eq!(p[&a], Placement::MissingBlocker);
@@ -394,6 +397,7 @@ fn a_chain_longer_than_any_call_stack_is_placed() {
         unlocks: vec![],
         commits: vec![],
         path: None,
+        placement: None,
         created_unix: 0,
         updated_unix: 0,
     };

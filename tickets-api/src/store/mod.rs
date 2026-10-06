@@ -90,6 +90,15 @@
 //! wave, derived from `blocked_by` over the whole graph by MNG-4's rule, on
 //! demand — computed under the read lock for the one call, memoized for it,
 //! and kept nowhere: no write moves it, nothing stores it.
+//! WAVE-6 keeps them ([`placements`]): every non-doc row carries its
+//! placement, equal at every moment to that rule — placed from the rows at
+//! open (nothing stores one, so none is stale after a restart), and moved by
+//! the two writes that can move one, in the write, before it commits: a
+//! birth (the newborn, and the tickets a forward reference to its id held
+//! missing) and a status change across `Complete` / `Superseded` (the ticket,
+//! and what moves downstream of it along `unlocks` — the walk stops where
+//! nothing moves). The moves are broadcast last, one `PlacementsChanged`
+//! per write that made any; `waves` reads the kept placements.
 //! WAVE-10 gives a ticket an optional **path address**: a `path` on its row,
 //! unique within its shortcode, which `get` resolves from `<SHORTCODE>/<path>`
 //! through an index the cache keeps beside the hash half ([`Paths`]) and the
@@ -99,7 +108,7 @@
 //! scope root, for the documents menger keeps inside a shortcode. A database
 //! written before WAVE-10 gains the column, durably, once, on first open.
 
-use crate::types::{is_menger_path, path_address, TicketSummary, MENGER_PATH_PREFIX};
+use crate::types::{is_menger_path, path_address, Placement, PlacementChange, TicketSummary, MENGER_PATH_PREFIX};
 use rusqlite::{Connection, OpenFlags};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -145,6 +154,7 @@ fn whole(row: Row, body: String) -> Ticket {
         unlocks,
         commits,
         path,
+        placement,
         created_unix,
         updated_unix,
     } = row;
@@ -162,6 +172,7 @@ fn whole(row: Row, body: String) -> Ticket {
         child_count,
         commits,
         path,
+        placement,
         body,
         created_unix,
         updated_unix,
@@ -588,6 +599,11 @@ pub enum Change {
     /// a client applying events in order meets the cause before the
     /// effect — one per group whose row changed, innermost first.
     GroupChanged { group: Group },
+    /// WAVE-6: the kept placements one write moved, each with its ticket's
+    /// shortcode (what `watch { epic }` filters by; it does not cross the
+    /// wire) — broadcast last, after the write's other events, once per
+    /// write that moved any.
+    PlacementsChanged { changes: Vec<(String, PlacementChange)> },
 }
 
 impl Change {
@@ -607,7 +623,31 @@ impl Change {
             | Self::ParentChanged { ticket, .. } => &ticket.epic,
             Self::ChildrenChanged { epic, .. } | Self::ChildRemoved { epic, .. } => epic,
             Self::GroupChanged { group } => &group.epic,
+            // WAVE-6: one per change, not per event — see `in_epic`.
+            Self::PlacementsChanged { .. } => "",
         }
+    }
+
+    /// What `watch { epic }` passes on of this change: the change itself
+    /// when it is in `epic` (or no epic is asked for) — WAVE-6: and of a
+    /// `PlacementsChanged`, the changes in `epic`, when any is.
+    pub fn in_epic(self, epic: Option<&str>) -> Option<Change> {
+        let Some(epic) = epic else { return Some(self) };
+        match self {
+            Self::PlacementsChanged { changes } => {
+                let changes: Vec<_> = changes.into_iter().filter(|(e, _)| e == epic).collect();
+                (!changes.is_empty()).then_some(Self::PlacementsChanged { changes })
+            }
+            other => (other.epic() == epic).then_some(other),
+        }
+    }
+
+    /// WAVE-6: the `PlacementsChanged` a write's pass makes — `None` when it
+    /// moved no placement.
+    fn placed(replaced: &placements::Replaced) -> Option<Change> {
+        (!replaced.shifts.is_empty()).then(|| Self::PlacementsChanged {
+            changes: replaced.shifts.iter().map(placements::Shift::change).collect(),
+        })
     }
 }
 
@@ -1198,6 +1238,17 @@ struct Moved {
     /// SCALE-32: the counts, the ready set and the status counts as a birth
     /// or a status change moves them.
     ready: Option<ready::Move>,
+    /// WAVE-6: the placements a birth or a status change across the
+    /// satisfied line moves, and the written ticket's own.
+    placed: Option<placements::Replaced>,
+}
+
+impl Moved {
+    /// WAVE-6: the written ticket's placement as the write leaves it, when
+    /// the write re-placed it.
+    fn placement(&self) -> Option<Option<Placement>> {
+        self.placed.as_ref().map(|r| r.placement)
+    }
 }
 
 impl Derived {
@@ -1222,6 +1273,7 @@ impl Derived {
                 rollups: Some(rollups),
                 groups,
                 ready: None,
+                placed: None,
             },
         }
     }
@@ -1394,6 +1446,35 @@ impl Cache {
         }
     }
 
+    /// WAVE-6: every row's placement from the rows alone
+    /// ([`placements::place_all`]) — at open and after a seed. Logged with
+    /// what it cost: the startup recompute WAVE-3 measures.
+    fn place_all(&mut self) {
+        if cfg!(feature = "wave3-no-replace") {
+            return;
+        }
+        let started = std::time::Instant::now();
+        let placed = placements::place_all(self.rows());
+        let (mut waves, mut missing, mut done) = (0usize, 0usize, 0usize);
+        for (t, p) in self.order.values_mut().zip(placed) {
+            match p {
+                Some(Placement::Wave { .. }) => waves += 1,
+                Some(Placement::MissingBlocker) => missing += 1,
+                Some(Placement::Done) => done += 1,
+                None => {}
+            }
+            t.placement = p;
+        }
+        tracing::info!(
+            target: "wave6",
+            micros = started.elapsed().as_micros() as u64,
+            "WAVE-6: placed {} tickets — {waves} in a wave, {missing} missing a blocker, {done} done — \
+             from the rows in {:.1} ms",
+            waves + missing + done,
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+
     /// SCALE-4: `id`'s kept `child_count` — set from the children index,
     /// on the one row it describes, every time the index moves for it. A
     /// parent that names no ticket (only a hand edit makes one) has no row
@@ -1421,7 +1502,9 @@ impl Cache {
     /// already one of its parent's children), and the roll-ups, worked out
     /// on a copy over the rows with the newborn among them (MNG-10).
     /// SCALE-32: and its own count of unsatisfied blockers and its status
-    /// counted ([`ready::Ready::born`]).
+    /// counted ([`ready::Ready::born`]). WAVE-6: and its placement, with the
+    /// placements of the tickets a forward reference to it held missing,
+    /// and theirs ([`placements::replace`]).
     fn birth(&self, newborn: &Row) -> Derived {
         let rows = self.rows().with(newborn);
         let birth = self.ids.birth(rows, newborn);
@@ -1433,7 +1516,23 @@ impl Cache {
             derived.stored.counts.push((p.clone(), self.children.count(p) + 1));
         }
         derived.moved.birth = Some(birth);
+        derived.moved.placed = Some(Self::replace(rows, newborn, true));
         derived
+    }
+
+    /// WAVE-6: the re-placement pass of a write ([`placements::replace`]),
+    /// unless WAVE-3's measurement build leaves it out.
+    fn replace(rows: Rows<'_>, written: &Row, born: bool) -> placements::Replaced {
+        #[cfg(feature = "wave3-no-replace")]
+        {
+            let _ = (rows, born);
+            return placements::Replaced {
+                placement: written.placement,
+                ..Default::default()
+            };
+        }
+        #[cfg(not(feature = "wave3-no-replace"))]
+        placements::replace(rows, written, born)
     }
 
     /// MNG-10: a create's rows — the newborn and every ticket it touched —
@@ -1473,6 +1572,9 @@ impl Cache {
     /// crosses `Complete`. SCALE-32: and to the status counts, the ready set
     /// and — across the satisfied line — the counts of the tickets it
     /// unlocks ([`ready::Ready::status_changed`]), whatever the roll-ups do.
+    /// WAVE-6: and, across the satisfied line, its placement and every one
+    /// downstream that moves with it ([`placements::replace`]) — on one side
+    /// of the line, no placement moves.
     fn status_change(&self, row: &Row, previous: Status) -> Derived {
         let rows = self.rows().with(row);
         let derived = if rollup::Rollups::crosses(previous, row.status) {
@@ -1482,7 +1584,11 @@ impl Cache {
         } else {
             Derived::none()
         };
-        derived.readied(self.ready.status_changed(rows, row, previous))
+        let mut derived = derived.readied(self.ready.status_changed(rows, row, previous));
+        if satisfied(previous) != satisfied(row.status) {
+            derived.moved.placed = Some(Self::replace(rows, row, false));
+        }
+        derived
     }
 
     /// MNG-10: a status change; only a crossing of `Complete` moves a count.
@@ -1584,6 +1690,15 @@ impl Cache {
     fn take(&mut self, moved: Moved) -> Vec<Group> {
         if let Some(birth) = moved.birth {
             self.ids.born(birth);
+        }
+        // WAVE-6: after the write's own rows went in, so a placement it
+        // moved is never undone by a row it carried.
+        if let Some(placed) = moved.placed {
+            for shift in placed.shifts {
+                if let Some(t) = self.order.get_mut(&shift.key) {
+                    t.placement = Some(shift.placement);
+                }
+            }
         }
         if let Some(rollups) = moved.rollups {
             self.rollups = rollups;
@@ -1822,6 +1937,10 @@ impl Store {
             }
             found => stored::build(&mut conn, found)?,
         };
+        // WAVE-6: every placement, from the rows — nothing stores them, so
+        // none can be stale after a restart.
+        let mut cache = cache;
+        cache.place_all();
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
             Some(path) => Readers::open(path)?,
@@ -1989,8 +2108,14 @@ impl Store {
                     } else {
                         #[cfg(test)]
                         tests_bodies::STORED_VERSION_READS.fetch_add(1, Ordering::Relaxed);
+                        // WAVE-6: a placement is the cache's alone — nothing
+                        // stores it — so the row's goes with the stored version.
                         rows.into_iter()
-                            .map(|row| db::ticket(&tx, &row.id)?.ok_or_else(|| missing(&row.id)))
+                            .map(|row| {
+                                let mut t = db::ticket(&tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
+                                t.placement = row.placement;
+                                Ok(t)
+                            })
                             .collect::<Result<Vec<Ticket>, StoreError>>()?
                     };
                     tx.commit()?;
@@ -2214,7 +2339,7 @@ impl Store {
             let unlocks = tickets.ids.waiting_on(&id);
 
             let now = chrono::Utc::now().timestamp();
-            let ticket = Ticket {
+            let mut ticket = Ticket {
                 id: id.clone(),
                 epic,
                 seq,
@@ -2234,6 +2359,8 @@ impl Store {
                 commits: Vec::new(),
                 // WAVE-10: checked above.
                 path: new.path,
+                // WAVE-6: placed below, with the derived state.
+                placement: None,
                 body: new.body,
                 created_unix: now,
                 updated_unix: now,
@@ -2282,6 +2409,8 @@ impl Store {
             // shortcode's run, the forward references, its parent's count,
             // the roll-ups — worked out now, while nothing has changed.
             let derived = tickets.birth(&Row::from(&ticket));
+            // WAVE-6: born placed — `created` carries it.
+            ticket.placement = derived.moved.placement().flatten();
             (ticket, touched, unlocks_added, parent_epic, derived)
         };
 
@@ -2295,6 +2424,8 @@ impl Store {
         let newborn = Row::from(&ticket);
         let rows: Vec<Row> = touched.values().cloned().collect();
         let Derived { stored, moved } = derived;
+        // WAVE-6: the placements it moved, said last.
+        let placed = moved.placed.as_ref().and_then(Change::placed);
         self.write(
             serial,
             move |tx| {
@@ -2332,6 +2463,9 @@ impl Store {
                     });
                 }
                 broadcast_groups(tx, groups);
+                if let Some(placed) = placed {
+                    let _ = tx.send(placed);
+                }
                 ticket
             },
         )
@@ -2766,6 +2900,13 @@ impl Store {
             .read()
             .expect("store lock poisoned")
             .status_change(&row, previous);
+        // WAVE-6: across the satisfied line, its own placement moves with it
+        // (its `status_changed` carries the new one), and the ones downstream
+        // that move are said last.
+        if let Some(placement) = moved.placement() {
+            row.placement = placement;
+        }
+        let placed = moved.placed.as_ref().and_then(Change::placed);
         let commit = Self::row_commit(row);
 
         self.write(
@@ -2783,6 +2924,9 @@ impl Store {
                 };
                 let _ = tx.send(change.clone());
                 broadcast_groups(tx, groups);
+                if let Some(placed) = placed {
+                    let _ = tx.send(placed);
+                }
                 change
             },
         )
@@ -3299,6 +3443,8 @@ impl Store {
             // a seed's tickets arrive with their statuses and blockers set.
             let ready = ready::Ready::build(tickets.rows());
             tickets.ready = ready;
+            // WAVE-6: and every placement, over the seeded store.
+            tickets.place_all();
             tickets.form()
         });
         // SCALE-28: and all of it stored, in one transaction, which also
@@ -3478,6 +3624,12 @@ mod ready;
 /// what it yields and the blockers behind it, once each, and forgets them.
 pub mod waves;
 
+/// WAVE-6: the placements kept — the pass a birth or a status change across
+/// the satisfied line runs before it commits, re-placing the written ticket
+/// and what moves downstream of it, and the pass that places every ticket at
+/// open.
+mod placements;
+
 /// SDLC-9: what a commit reference is — the grammar `link_commits` and
 /// `unlink_commits` hold every entry to, and the text a reference is stored
 /// and compared as — and how many one ticket may carry.
@@ -3581,3 +3733,9 @@ mod tests_waves;
 /// and a file from before the column.
 #[cfg(test)]
 mod tests_paths;
+
+/// WAVE-6: the placements kept — the property test against WAVE-4's rule
+/// and `watch`, the two-blockers-back case, the pass stopping where nothing
+/// moves, forward references, a hand-edited cycle, a reopen, `watch { epic }`.
+#[cfg(test)]
+mod tests_placements;

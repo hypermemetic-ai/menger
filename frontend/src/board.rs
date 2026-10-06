@@ -664,6 +664,7 @@ mod tests {
             unlocks: Vec::new(),
             commits: Vec::new(),
             path: None,
+            placement: None,
             created_unix: 0,
             updated_unix: 0,
         }

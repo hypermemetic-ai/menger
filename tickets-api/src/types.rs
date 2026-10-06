@@ -345,6 +345,15 @@ pub struct Ticket {
     /// (WAVE-1 decision 11). Omitted on the wire when there is none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// WAVE-6: where the ticket sits in the order of work ([`Placement`]),
+    /// kept by the store — equal at every moment to WAVE-4's rule over the
+    /// whole `blocked_by` graph, moved by the write that moves it (a birth
+    /// that resolves a forward reference, a status crossing `Complete` /
+    /// `Superseded`), and announced by `placements_changed`. `None` —
+    /// omitted on the wire — for a doc, which has no place in the order of
+    /// work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Placement>,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
     pub body: String,
     pub created_unix: i64,
@@ -384,6 +393,11 @@ pub struct TicketSummary {
     /// ticket but menger's own documents would carry a `null`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// WAVE-6: as on [`Ticket`] — the kept placement, on the row, so the
+    /// board, the nav and a body's `{wave: ID}` have it without a `get`;
+    /// omitted for a doc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Placement>,
     pub created_unix: i64,
     pub updated_unix: i64,
 }
@@ -404,6 +418,7 @@ impl From<Ticket> for TicketSummary {
             unlocks: t.unlocks,
             commits: t.commits,
             path: t.path,
+            placement: t.placement,
             created_unix: t.created_unix,
             updated_unix: t.updated_unix,
         }
@@ -524,14 +539,23 @@ impl Group {
 ///   is no ticket: no wave can be given until that id exists.
 ///
 /// Internally tagged like the events (`{"type": "wave", "n": 2}`,
-/// `{"type": "done"}`, `{"type": "missing_blocker"}`). Nothing stores it:
-/// the store computes it on demand, per call.
+/// `{"type": "done"}`, `{"type": "missing_blocker"}`). WAVE-6: the store
+/// keeps it — on every row ([`Ticket::placement`]), current after every
+/// write — and says when one moves ([`PlacementChange`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Placement {
     Wave { n: u32 },
     Done,
     MissingBlocker,
+}
+
+/// WAVE-6: one ticket whose kept placement a write moved — its id and the
+/// placement it has now (a `placements_changed` carries one per ticket).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PlacementChange {
+    pub id: String,
+    pub placement: Placement,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -667,6 +691,16 @@ pub enum TicketsEvent {
         missing: u64,
         done: u64,
     },
+    /// WAVE-6: the kept placements one write moved (yielded by `watch`) —
+    /// one event per write that moved any, after that write's other events,
+    /// each change the ticket's id and its placement now: the ticket a
+    /// status change crossed `Complete` / `Superseded` with, and every
+    /// ticket downstream of it along `unlocks` whose placement changed; or,
+    /// for a birth that resolved forward references, the tickets that were
+    /// waiting on its id and theirs (the newborn's own is on its `created`).
+    /// `watch { epic }` keeps only the changes in that shortcode, and the
+    /// event only when one is left.
+    PlacementsChanged { changes: Vec<PlacementChange> },
     /// One resolved blocker of the queried ticket, at its current status
     /// (yielded per-entry by `blockers`).
     Blocker { ticket: Ticket },
@@ -821,6 +855,7 @@ mod tests {
             unlocks: vec![],
             commits: vec![],
             path: None,
+            placement: Some(Placement::Wave { n: 2 }),
             created_unix: 1,
             updated_unix: 1,
         };
@@ -889,6 +924,7 @@ mod tests {
             child_count: 1,
             commits: vec!["77df9a0".into()],
             path: Some("_MENGER/board".into()),
+            placement: Some(Placement::MissingBlocker),
             body: "## Problem\n\nthe weight of a list".into(),
             created_unix: 1,
             updated_unix: 2,

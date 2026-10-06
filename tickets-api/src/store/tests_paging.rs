@@ -81,6 +81,7 @@ pub(super) fn write_runs(path: &Path, rows: &[(&str, u32)]) {
                 child_count: 0,
                 commits: Vec::new(),
                 path: None,
+                placement: None,
                 body: String::new(),
                 created_unix: 0,
                 updated_unix: 0,

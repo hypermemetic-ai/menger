@@ -71,11 +71,14 @@ fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
     assert_eq!(file.state, State::Current, "after {after}");
     // The file's tickets are the cache's — so an oracle run over the store's
     // rows is a scan of the stored tickets.
+    // WAVE-6: but for the placements, the cache's alone — held to the rule
+    // here instead.
     let cached: BTreeMap<String, Row> = {
         let cache = store.tickets.read().unwrap();
-        cache.order.values().map(|t| (t.id.clone(), t.clone())).collect()
+        cache.order.values().map(|t| (t.id.clone(), Row { placement: None, ..t.clone() })).collect()
     };
     assert_eq!(file.rows, cached, "the file's rows are the cache's, after {after}");
+    tests_placements::assert_kept_placements_are_the_rule(store, after);
 
     // SCALE-19's oracle: each shortcode's lowest and highest sequence and
     // how many it holds.

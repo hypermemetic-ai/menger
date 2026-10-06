@@ -388,6 +388,7 @@ fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, statu
         unlocks: Vec::new(),
         commits: Vec::new(),
         path: None,
+        placement: None,
         created_unix: 0,
         updated_unix: 0,
     }
@@ -2490,6 +2491,7 @@ mod tests {
             unlocks: Vec::new(),
             commits: Vec::new(),
             path: None,
+            placement: None,
             created_unix: 0,
             updated_unix: 0,
         }

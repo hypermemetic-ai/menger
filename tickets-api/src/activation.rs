@@ -148,6 +148,11 @@ fn change_event(change: Change) -> TicketsEvent {
             child_count,
         },
         Change::GroupChanged { group } => TicketsEvent::GroupChanged { group },
+        // WAVE-6: each change's shortcode filtered `watch { epic }` on the
+        // way here; the wire carries the id and the placement.
+        Change::PlacementsChanged { changes } => TicketsEvent::PlacementsChanged {
+            changes: changes.into_iter().map(|(_, change)| change).collect(),
+        },
     }
 }
 
@@ -644,7 +649,9 @@ impl Tickets {
     /// Review, Ready, Pending, Blocked, Idea, Epic and then (epic, seq);
     /// then the missing lane; then the done — each in (epic, seq). `epics`
     /// empty, or a kind outside the six, is one in-band `Error` and
-    /// nothing else. Rows only, computed for the call and kept nowhere.
+    /// nothing else. WAVE-6: each placement is the one the store keeps on the
+    /// row (the same rule, kept current by every write that moves one); rows
+    /// only.
     #[plexus_macros::method(
         description = "The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts",
         params(
@@ -773,7 +780,9 @@ impl Tickets {
             loop {
                 match rx.recv().await {
                     Ok(change) => {
-                        if epic.as_deref().is_none_or(|e| change.epic() == e) {
+                        // WAVE-6: of a `placements_changed`, the changes in
+                        // the epic.
+                        if let Some(change) = change.in_epic(epic.as_deref()) {
                             yield change_event(change);
                         }
                     }

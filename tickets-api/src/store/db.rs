@@ -580,6 +580,8 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         commits: parse_ids(12, &row.get::<_, String>(12)?)?,
         // WAVE-10: set at birth, never moved.
         path: row.get(14)?,
+        // WAVE-6: not stored — the cache places every row at open.
+        placement: None,
     })
 }
 

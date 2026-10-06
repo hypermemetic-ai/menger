@@ -305,6 +305,8 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> V
             commits: Vec::new(),
             // WAVE-10: no address — a seed makes work, not menger's documents.
             path: None,
+            // WAVE-6: placed once the whole seed is in.
+            placement: None,
             body: body_s,
             created_unix: created,
             updated_unix: updated,

@@ -1161,6 +1161,7 @@ mod tests {
             child_count: 0,
             commits: Vec::new(),
             path: None,
+            placement: None,
             blocked_by: Vec::new(),
             unlocks: Vec::new(),
             created_unix: 0,

@@ -806,6 +806,9 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
         ev["group"],
         json!({"epic": "LONE", "total": 2, "done": 1, "docs": 0, "root": "LONE-1", "root_row": root_row("alone"), "host": null})
     );
+    // WAVE-6: and, last, the placement it moved.
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev, json!({"type": "placements_changed", "changes": [{"id": "LONE-2", "placement": {"type": "done"}}]}));
     // Nothing else came of it: the next item is the next write's.
     collect(call(&client, "tickets.set_status", json!({"id": "HUB-1", "status": "Ready"})).await).await;
     let ev = content(watch.next().await.unwrap().unwrap());
@@ -1432,4 +1435,61 @@ async fn a_path_address_over_the_wire() {
     let rows = rows(call(&client, "tickets.list", json!({"epic": "PLX", "summary": true})).await).await;
     assert_eq!(rows[1]["summary"]["path"], "_MENGER/board");
     assert!(rows[0]["summary"].get("path").is_none(), "{}", rows[0]);
+}
+
+/// WAVE-6 over the real protocol: every row carries its kept placement —
+/// tagged as `waves` tags it, omitted on a doc — and a completion two
+/// blockers back from a ticket moves it in one `placements_changed { changes
+/// }`, after the write's other events; `watch { epic }` carries only the
+/// changes in its shortcode.
+#[tokio::test]
+async fn kept_placements_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let mut created = Vec::new();
+    for params in [
+        json!({"epic": "UP", "title": "up", "kind": "scope"}),
+        json!({"epic": "UP", "title": "y"}),                                   // UP-2: wave 1
+        json!({"epic": "DN", "title": "down", "kind": "scope"}),
+        json!({"epic": "DN", "title": "x", "blocked_by": ["UP-2"]}),          // DN-2: wave 2
+        json!({"epic": "DN", "title": "c", "blocked_by": ["DN-2"]}),          // DN-3: wave 3
+        json!({"epic": "DN", "title": "notes", "kind": "doc"}),               // DN-4: a doc
+    ] {
+        let evs = collect(call(&client, "tickets.create", params.clone()).await).await;
+        assert_eq!(evs[0]["type"], "created", "{params}: {evs:?}");
+        created.push(evs[0]["ticket"].clone());
+    }
+    assert_eq!(created[1]["placement"], json!({"type": "wave", "n": 1}));
+    assert_eq!(created[4]["placement"], json!({"type": "wave", "n": 3}));
+    assert!(created[5].get("placement").is_none(), "a doc carries none: {}", created[5]);
+    let rows = rows(call(&client, "tickets.list", json!({"epic": "DN", "summary": true})).await).await;
+    assert_eq!(rows[2]["summary"]["placement"], json!({"type": "wave", "n": 3}), "on the summary row");
+
+    let mut all = call(&client, "tickets.watch", json!({})).await;
+    let mut down = call(&client, "tickets.watch", json!({"epic": "dn"})).await;
+    collect(call(&client, "tickets.set_status", json!({"id": "UP-2", "status": "Complete"})).await).await;
+    let ev = content(all.next().await.unwrap().unwrap());
+    assert_eq!((ev["type"].as_str(), ev["ticket"]["placement"].clone()), (Some("status_changed"), json!({"type": "done"})));
+    let ev = content(all.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "group_changed");
+    let ev = content(all.next().await.unwrap().unwrap());
+    assert_eq!(
+        ev,
+        json!({"type": "placements_changed", "changes": [
+            {"id": "UP-2", "placement": {"type": "done"}},
+            {"id": "DN-2", "placement": {"type": "wave", "n": 1}},
+            {"id": "DN-3", "placement": {"type": "wave", "n": 2}},
+        ]})
+    );
+    // DN's watch: nothing of UP's — its ticket, its group, its change.
+    let ev = content(down.next().await.unwrap().unwrap());
+    assert_eq!(
+        ev,
+        json!({"type": "placements_changed", "changes": [
+            {"id": "DN-2", "placement": {"type": "wave", "n": 1}},
+            {"id": "DN-3", "placement": {"type": "wave", "n": 2}},
+        ]})
+    );
+    let ev = collect(call(&client, "tickets.get", json!({"id": "DN-3"})).await).await;
+    assert_eq!(ev[0]["ticket"]["placement"], json!({"type": "wave", "n": 2}), "get reads the kept one");
 }

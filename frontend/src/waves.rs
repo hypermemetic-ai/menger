@@ -24,25 +24,33 @@
 //! ticket's page. The layout is remembered per shortcode in localStorage —
 //! every read and write allowed to fail, the board working without it.
 //!
-//! Live: the board lends the session an ear ([`session::listen`]). A
-//! `created` or `status_changed` for a ticket of one of its shortcodes, or
-//! for an id one of its cards waits on, asks `waves` again ([`reasks`]); so
-//! does a `lagged`, and a new connection. The asks are coalesced
-//! ([`Coalesce`]): one in flight, at most one queued behind it. An answer
-//! that is an in-band error, or a call that fails, goes to the app's error
-//! line and the last good board stays drawn. The cards' rows are held in the
-//! row cache (src/cache.rs) while they are shown, so a status or a title
-//! moves on the card the moment `watch` carries it, before the answer that
-//! may move the card between columns.
+//! Live: the board lends the session an ear ([`session::listen`]). WAVE-6:
+//! the server keeps every ticket's placement and says, once per write, which
+//! moved (`placements_changed`) — however far downstream of the write, so a
+//! card moves when a ticket two blockers back completes. The board applies
+//! that to the cards it shows ([`apply`]): each moves to its new column, the
+//! columns keep the server's order, and the tally (the `Done` count among
+//! it) follows. A `status_changed` is applied too — the card's own row (its
+//! stage, in the stages layout) and every card's `waiting_on`. `waves` is
+//! asked again only for a ticket born into one of the board's shortcodes (a
+//! card the board has not got), a `lagged`, or a new connection
+//! ([`heard`]) — and once more behind an answer in flight when a change
+//! lands while it is out, since that answer may predate it. The asks are
+//! coalesced ([`Coalesce`]): one in flight, at most one queued behind it.
+//! An answer that is an in-band error, or a call that fails, goes to the
+//! app's error line and the last good board stays drawn. The cards' rows are
+//! held in the row cache (src/cache.rs) while they are shown, so a title
+//! moves on the card the moment `watch` carries it.
 //!
 //! Everything that decides — the shortcode set, the columns, the off-board
-//! test, the re-ask predicate, the coalescing, the stored layout — is a pure
-//! function here, pinned by native tests.
+//! test, what an event does, how a change moves the cards, the coalescing,
+//! the stored layout — is a pure function here, pinned by native tests.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use leptos::prelude::*;
 use menger_tickets_api::{Group, Placement, Severity, Status, TicketSummary, TicketsEvent};
+use std::cmp::Ordering;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
@@ -252,19 +260,142 @@ pub(crate) fn off_board(card: &Card, on_board: &HashSet<String>) -> Vec<String> 
     card.waiting_on.iter().filter(|id| !on_board.contains(*id)).cloned().collect()
 }
 
-/// Whether `ev` may move what the board shows, so `waves` is asked again: a
-/// ticket born into, or changing status in, one of the board's shortcodes
-/// (`epics`); one any card waits on (`waiting` — a blocker on another board,
-/// or an id that is no ticket yet being born); or a `lagged`, after which
-/// anything may have.
-pub(crate) fn reasks(ev: &TicketsEvent, epics: &BTreeSet<String>, waiting: &HashSet<String>) -> bool {
+/// What a `watch` event does to an open board (WAVE-6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Heard {
+    /// Ask `waves` again: a ticket born into one of the board's shortcodes
+    /// (`epics`) — a card it has not got — or a `lagged`, after which
+    /// anything may have moved.
+    Ask,
+    /// Apply it to the cards ([`apply`]): a `placements_changed`, a
+    /// `status_changed`.
+    Apply,
+    /// Nothing the cards show.
+    Nothing,
+}
+
+/// What `ev` does to a board of the shortcodes `epics`. A birth elsewhere —
+/// even of an id a card waits on — asks nothing: the cards it moves out of
+/// the missing lane arrive in the `placements_changed` behind it.
+pub(crate) fn heard(ev: &TicketsEvent, epics: &BTreeSet<String>) -> Heard {
     match ev {
-        TicketsEvent::Created { ticket } | TicketsEvent::StatusChanged { ticket, .. } => {
-            epics.contains(&ticket.epic) || waiting.contains(&ticket.id)
-        }
-        TicketsEvent::Lagged { .. } => true,
-        _ => false,
+        TicketsEvent::Created { ticket } if epics.contains(&ticket.epic) => Heard::Ask,
+        TicketsEvent::Lagged { .. } => Heard::Ask,
+        TicketsEvent::PlacementsChanged { .. } | TicketsEvent::StatusChanged { .. } => Heard::Apply,
+        _ => Heard::Nothing,
     }
+}
+
+/// Where a status sorts inside a wave — the server's order (WAVE-4): the
+/// work under way, then what can start, then what waits.
+fn rank(status: Status) -> u8 {
+    match status {
+        Status::Coding => 0,
+        Status::InReview => 1,
+        Status::Ready => 2,
+        Status::Pending => 3,
+        Status::Blocked => 4,
+        Status::Idea => 5,
+        Status::Epic => 6,
+        Status::Complete | Status::Superseded | Status::Doc => 7,
+    }
+}
+
+/// The order `waves` yields cards in: waves ascending, inside a wave by
+/// [`rank`]; then the missing lane; then the done — each then in the store's
+/// order, `(epic, seq)`.
+fn yield_order(a: &Card, b: &Card) -> Ordering {
+    let key = |c: &Card| match c.placement {
+        Placement::Wave { n } => (0u8, n, rank(c.summary.status)),
+        Placement::MissingBlocker => (1, 0, 0),
+        Placement::Done => (2, 0, 0),
+    };
+    key(a)
+        .cmp(&key(b))
+        .then_with(|| a.summary.epic.cmp(&b.summary.epic))
+        .then_with(|| a.summary.seq.cmp(&b.summary.seq))
+}
+
+/// The tally of `cards`, as `wave_counts` gives it.
+fn retally(a: &mut Answer) {
+    let (mut waves, mut missing, mut done) = (Vec::<u64>::new(), 0, 0);
+    for c in &a.cards {
+        match c.placement {
+            Placement::Wave { n } => {
+                let i = n as usize - 1;
+                if waves.len() <= i {
+                    waves.resize(i + 1, 0);
+                }
+                waves[i] += 1;
+            }
+            Placement::MissingBlocker => missing += 1,
+            Placement::Done => done += 1,
+        }
+    }
+    (a.waves, a.missing, a.done) = (waves, missing, done);
+}
+
+/// Whether a status is done with — MNG-4's line: `Complete` or `Superseded`.
+fn satisfied(s: Status) -> bool {
+    matches!(s, Status::Complete | Status::Superseded)
+}
+
+/// WAVE-6: `ev` applied to the board's answer — each `placements_changed`
+/// card moved to where the server now keeps it; a `status_changed` card's
+/// row (its stage) taken, and the changed ticket added to or taken from
+/// every card's `waiting_on` as it crossed the line; then the cards back in
+/// the server's order and the tally recounted. True when a card moved.
+pub(crate) fn apply(a: &mut Answer, ev: &TicketsEvent) -> bool {
+    let mut moved = false;
+    match ev {
+        TicketsEvent::PlacementsChanged { changes } => {
+            for change in changes {
+                if let Some(card) = a.cards.iter_mut().find(|c| c.summary.id == change.id) {
+                    if card.placement != change.placement {
+                        card.placement = change.placement;
+                        card.summary.placement = Some(change.placement);
+                        moved = true;
+                    }
+                }
+            }
+        }
+        TicketsEvent::StatusChanged { ticket, .. } => {
+            let done = satisfied(ticket.status);
+            for card in &mut a.cards {
+                if card.summary.id == ticket.id {
+                    let placement = card.placement;
+                    card.summary = TicketSummary::from(ticket);
+                    // Its placement is the board's to move, from the
+                    // `placements_changed` behind this event.
+                    card.summary.placement = Some(placement);
+                    moved = true;
+                }
+                if card.summary.blocked_by.iter().any(|b| *b == ticket.id) {
+                    let waits = card.waiting_on.iter().any(|w| *w == ticket.id);
+                    if done && waits {
+                        card.waiting_on.retain(|w| *w != ticket.id);
+                        moved = true;
+                    } else if !done && !waits {
+                        // Back in `blocked_by` order, distinct.
+                        let mut next: Vec<String> = Vec::new();
+                        for b in &card.summary.blocked_by {
+                            if (*b == ticket.id || card.waiting_on.contains(b)) && !next.contains(b) {
+                                next.push(b.clone());
+                            }
+                        }
+                        card.waiting_on = next;
+                        moved = true;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    if moved {
+        a.cards.sort_by(yield_order);
+        retally(a);
+    }
+    moved
 }
 
 /// The asks, coalesced: at most one request in flight and one queued behind
@@ -286,6 +417,12 @@ impl Coalesce {
             self.inflight = true;
             true
         }
+    }
+
+    /// WAVE-6: a request is out — an answer may land that predates a change
+    /// applied meanwhile, so the change asks once more behind it.
+    pub(crate) fn busy(&self) -> bool {
+        self.inflight
     }
 
     /// The request in flight was answered: true when the queued one is to go
@@ -457,18 +594,28 @@ pub(crate) fn WaveBoard(
         ask(ctx);
     });
 
-    // Live: ask again when an event may move what is shown.
-    let waiting = Memo::new(move |_| {
-        ctx.answer.with(|a| {
-            a.iter().flat_map(|a| a.cards.iter()).flat_map(|c| c.waiting_on.iter().cloned()).collect::<HashSet<String>>()
-        })
-    });
+    // Live (WAVE-6): the cards move as the server says they do; a card the
+    // board has not got, or a lag, asks again.
     session::listen(move |ev| {
-        let (Some(Some(epics)), Some(waiting)) = (set.try_get_untracked(), waiting.try_get_untracked()) else {
+        let Some(Some(epics)) = set.try_get_untracked() else {
             return;
         };
-        if reasks(ev, &epics, &waiting) {
-            ask(ctx);
+        match heard(ev, &epics) {
+            Heard::Ask => ask(ctx),
+            Heard::Apply => {
+                let moved = ctx
+                    .answer
+                    .try_maybe_update(|a| {
+                        let moved = a.as_mut().is_some_and(|a| apply(a, ev));
+                        (moved, moved)
+                    })
+                    .unwrap_or(false);
+                // An answer out now may predate this change: one more behind it.
+                if moved && ctx.coalesce.try_with_value(Coalesce::busy) == Some(true) {
+                    ask(ctx);
+                }
+            }
+            Heard::Nothing => {}
         }
     });
 
@@ -756,13 +903,17 @@ mod tests {
             unlocks: Vec::new(),
             commits: Vec::new(),
             path: None,
+            placement: None,
             created_unix: 0,
             updated_unix: 0,
         }
     }
 
+    /// A card as `waves` answers it — what it waits on among what it names.
     fn card(id: &str, status: Status, placement: Placement, waiting_on: &[&str]) -> Card {
-        Card { summary: summary(id, status), placement, waiting_on: waiting_on.iter().map(|s| s.to_string()).collect() }
+        let waiting_on: Vec<String> = waiting_on.iter().map(|s| s.to_string()).collect();
+        let summary = TicketSummary { blocked_by: waiting_on.clone(), placement: Some(placement), ..summary(id, status) };
+        Card { summary, placement, waiting_on }
     }
 
     /// As `waves` yields them: wave 1 (Coding, Ready, Pending, Blocked,
@@ -873,32 +1024,130 @@ mod tests {
             child_count: 0,
             commits: vec![],
             path: None,
+            placement: None,
             body: String::new(),
             created_unix: 0,
             updated_unix: 0,
         }
     }
 
-    /// Acceptance 1: the re-ask predicate — a birth or a status change in
-    /// the board's shortcodes, or of an id a card waits on; a `lagged`;
-    /// nothing else.
+    /// WAVE-6: what an event does to a board — a birth in its shortcodes or
+    /// a lag asks `waves` again; a `placements_changed` or a
+    /// `status_changed`, anywhere, is applied to the cards; a birth
+    /// elsewhere (even of an id a card waits on — its moves follow it) and
+    /// everything else, nothing.
     #[test]
-    fn the_board_asks_again_for_its_shortcodes_its_waiting_on_and_a_lag() {
+    fn the_board_asks_only_for_a_card_it_has_not_got_and_applies_the_rest() {
         let epics = set(&["PLEXUS", "MACRO"]);
-        let waiting: HashSet<String> = ["MNG-4".to_string(), "GONE-1".to_string()].into();
         let created = |id: &str| TicketsEvent::Created { ticket: ticket(id) };
         let moved = |id: &str| TicketsEvent::StatusChanged { ticket: ticket(id), previous: Status::Ready };
-        assert!(reasks(&created("MACRO-12"), &epics, &waiting), "born on the board");
-        assert!(reasks(&moved("PLEXUS-3"), &epics, &waiting), "moved on the board");
-        assert!(reasks(&moved("MNG-4"), &epics, &waiting), "a card waits on it, off the board");
-        assert!(reasks(&created("GONE-1"), &epics, &waiting), "a missing blocker is born");
-        assert!(!reasks(&moved("MNG-5"), &epics, &waiting), "elsewhere, and nothing waits on it");
-        assert!(!reasks(&created("WAVE-9"), &epics, &waiting));
-        assert!(reasks(&TicketsEvent::Lagged { missed: 3 }, &epics, &waiting));
+        assert_eq!(heard(&created("MACRO-12"), &epics), Heard::Ask, "born on the board");
+        assert_eq!(heard(&TicketsEvent::Lagged { missed: 3 }, &epics), Heard::Ask);
+        assert_eq!(heard(&created("GONE-1"), &epics), Heard::Nothing, "a missing blocker is born: its moves follow");
+        assert_eq!(heard(&created("WAVE-9"), &epics), Heard::Nothing);
+        assert_eq!(heard(&moved("PLEXUS-3"), &epics), Heard::Apply, "moved on the board");
+        assert_eq!(heard(&moved("MNG-4"), &epics), Heard::Apply, "moved elsewhere: a card may wait on it");
+        let placed = TicketsEvent::PlacementsChanged { changes: vec![] };
+        assert_eq!(heard(&placed, &epics), Heard::Apply);
         let amended = TicketsEvent::Amended { ticket: ticket("PLEXUS-3"), changed: vec!["title".into()] };
-        assert!(!reasks(&amended, &epics, &waiting), "a new title moves no card (its row repaints in place)");
+        assert_eq!(heard(&amended, &epics), Heard::Nothing, "a new title moves no card (its row repaints in place)");
         let unlocks = TicketsEvent::UnlocksChanged { ticket: ticket("PLEXUS-3"), added: "PLEXUS-9".into() };
-        assert!(!reasks(&unlocks, &epics, &waiting), "the birth that caused it already asked");
+        assert_eq!(heard(&unlocks, &epics), Heard::Nothing);
+    }
+
+    fn change(id: &str, placement: Placement) -> menger_tickets_api::PlacementChange {
+        menger_tickets_api::PlacementChange { id: id.into(), placement }
+    }
+
+    fn answer(cards: Vec<Card>) -> Answer {
+        let mut a = Answer { cards, ..Answer::default() };
+        retally(&mut a);
+        a
+    }
+
+    fn lanes(a: &Answer) -> Vec<(Lane, Vec<String>)> {
+        columns(&a.cards, Layout::Waves)
+            .into_iter()
+            .map(|c| (c.lane, c.cards.into_iter().map(|p| p.card.summary.id).collect()))
+            .collect()
+    }
+
+    fn lane(l: Lane, ids: &[&str]) -> (Lane, Vec<String>) {
+        (l, ids.iter().map(|s| s.to_string()).collect())
+    }
+
+    /// WAVE-6 acceptance 2, on the board: C waits on X, X — off the board —
+    /// waits on Y. Y completes; the one `placements_changed` moves C a
+    /// column left (and X and Y, which the board does not show, change
+    /// nothing); the columns keep the server's order and the tally follows.
+    #[test]
+    fn a_placements_changed_moves_a_card_two_blockers_back() {
+        use Placement::{Done, Wave};
+        let mut a = answer(vec![
+            card("A-2", Status::Ready, Wave { n: 1 }, &[]),
+            card("A-4", Status::Pending, Wave { n: 2 }, &["A-2"]),
+            card("A-3", Status::Pending, Wave { n: 3 }, &["X-9"]),
+            card("A-5", Status::Complete, Done, &[]),
+        ]);
+        assert_eq!(tally(&a), "3 in 3 waves · 1 done");
+        let ev = TicketsEvent::PlacementsChanged {
+            changes: vec![change("Y-1", Done), change("X-9", Wave { n: 1 }), change("A-3", Wave { n: 2 })],
+        };
+        assert!(apply(&mut a, &ev));
+        assert_eq!(
+            lanes(&a),
+            vec![lane(Lane::Wave(1), &["A-2"]), lane(Lane::Wave(2), &["A-3", "A-4"]), lane(Lane::Done, &["A-5"])],
+            "A-3 joins wave 2 in the store's order"
+        );
+        assert_eq!(tally(&a), "3 in 2 waves · 1 done");
+        assert!(!apply(&mut a, &ev), "applied twice, nothing moves");
+
+        // A-2 completes: its own card goes to Done, A-4 loses it from what
+        // it waits on, and the move behind it takes A-4 to wave 1.
+        let mut done = ticket("A-2");
+        done.status = Status::Complete;
+        assert!(apply(&mut a, &TicketsEvent::StatusChanged { ticket: done, previous: Status::Ready }));
+        assert!(apply(&mut a, &TicketsEvent::PlacementsChanged { changes: vec![change("A-2", Done), change("A-4", Wave { n: 1 })] }));
+        assert_eq!(
+            lanes(&a),
+            vec![lane(Lane::Wave(1), &["A-4"]), lane(Lane::Wave(2), &["A-3"]), lane(Lane::Done, &["A-2", "A-5"])]
+        );
+        let a4 = a.cards.iter().find(|c| c.summary.id == "A-4").unwrap();
+        assert!(a4.waiting_on.is_empty(), "A-2 is done with");
+        assert_eq!(tally(&a), "2 in 2 waves · 2 done");
+    }
+
+    /// WAVE-6: a `status_changed` keeps the stages layout and the chips
+    /// right without asking — the card's stage moves, a wave keeps the
+    /// server's rank order, and a reopened blocker is waited on again in
+    /// `blocked_by` order.
+    #[test]
+    fn a_status_change_moves_the_stage_and_what_a_card_waits_on() {
+        use Placement::Wave;
+        let mut c = card("B-3", Status::Pending, Wave { n: 2 }, &["B-9"]);
+        c.summary.blocked_by = vec!["B-1".into(), "B-9".into()];
+        let mut a = answer(vec![
+            card("B-2", Status::Pending, Wave { n: 1 }, &[]),
+            card("B-4", Status::Ready, Wave { n: 1 }, &[]),
+            c,
+        ]);
+        assert_eq!(a.cards.iter().map(|c| c.summary.id.as_str()).collect::<Vec<_>>(), ["B-2", "B-4", "B-3"]);
+        let mut coding = ticket("B-2");
+        coding.status = Status::Coding;
+        assert!(apply(&mut a, &TicketsEvent::StatusChanged { ticket: coding, previous: Status::Pending }));
+        let stages = columns(&a.cards, Layout::Stages);
+        let coding_col = stages.iter().find(|c| c.lane == Lane::Stage(Status::Coding)).unwrap();
+        assert_eq!(coding_col.cards[0].card.summary.id, "B-2", "its stage moved");
+        assert_eq!(a.cards[0].summary.id, "B-2", "Coding first in its wave");
+
+        // B-1, which B-3 names first, is reopened: waited on again, first.
+        let mut reopened = ticket("B-1");
+        reopened.status = Status::Pending;
+        assert!(apply(&mut a, &TicketsEvent::StatusChanged { ticket: reopened, previous: Status::Complete }));
+        let b3 = a.cards.iter().find(|c| c.summary.id == "B-3").unwrap();
+        assert_eq!(b3.waiting_on, ["B-1", "B-9"]);
+        // A ticket nothing names, off the board: nothing moves.
+        assert!(!apply(&mut a, &TicketsEvent::StatusChanged { ticket: ticket("Q-1"), previous: Status::Ready }));
     }
 
     /// The asks coalesce: one in flight, one queued however many ask, and

@@ -41,6 +41,10 @@ server = [
     "dep:anyhow",
     "dep:tracing",
 ]
+# WAVE-3, measurement only: a build of the store without WAVE-6's
+# re-placement pass and its startup placement — the "without" half of the
+# spike's comparison (spike/WAVE-2/). Never enabled by anything that serves.
+wave3-no-replace = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

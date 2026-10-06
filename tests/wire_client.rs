@@ -588,3 +588,58 @@ async fn waves_decode_typed_through_the_generated_client() {
         other => panic!("expected wave_counts last, got {other:?}"),
     }
 }
+
+/// WAVE-6 and WAVE-10: what the board and the annotation read, through the
+/// generated client — `placement` on a created ticket and on a summary row,
+/// a `placements_changed` from `watch` decoding to its typed changes, and
+/// `get` by a path address — the activation's own types, no JSON in hand.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn placements_and_paths_decode_typed_through_the_generated_client() {
+    use futures::StreamExt;
+    use menger_tickets_api::{Placement, PlacementChange};
+    let port = start_server().await;
+    let transport = connect(port).await;
+    let client = TicketsClient::new(&transport);
+    let mut watch = client.watch(None);
+    let mut make = |kind: &str, blocked_by: Option<Vec<String>>, path: Option<&str>| {
+        client.create_all("PT".into(), "t".into(), Some(kind.into()), None, blocked_by, None, None, path.map(Into::into))
+    };
+    created(make("scope", None, None).await.expect("create")); // PT-1
+    let y = created(make("build", None, None).await.expect("create")); // PT-2
+    let x = created(make("build", Some(vec!["PT-2".into()]), None).await.expect("create")); // PT-3
+    let doc = created(make("doc", None, Some("_MENGER/board")).await.expect("create")); // PT-4
+    assert_eq!((y.placement, x.placement, doc.placement), (Some(Placement::Wave { n: 1 }), Some(Placement::Wave { n: 2 }), None));
+    assert_eq!(doc.path.as_deref(), Some("_MENGER/board"));
+
+    match one(client.get_all("pt/_MENGER/board".into()).await.expect("get")) {
+        TicketsEvent::Ticket { ticket } => assert_eq!(ticket.id, "PT-4"),
+        other => panic!("expected the ticket, got {other:?}"),
+    }
+    client.set_status_all("PT-2".into(), "Complete".into()).await.expect("set_status");
+    let mut changes = None;
+    while changes.is_none() {
+        let ev = tokio::time::timeout(Duration::from_secs(5), watch.next()).await.expect("watch").expect("open");
+        if let Ok(plexus_client::ClientEvent::Data(TicketsEvent::PlacementsChanged { changes: c })) = ev {
+            changes = Some(c);
+        }
+    }
+    assert_eq!(
+        changes.unwrap(),
+        vec![
+            PlacementChange { id: "PT-2".into(), placement: Placement::Done },
+            PlacementChange { id: "PT-3".into(), placement: Placement::Wave { n: 1 } },
+        ]
+    );
+    let rows: Vec<_> = client
+        .list_all(Some("PT".into()), None, None, None, None, Some(true))
+        .await
+        .expect("list")
+        .into_iter()
+        .filter_map(|e| match e {
+            TicketsEvent::Summary { summary } => Some((summary.id, summary.placement)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rows[2], ("PT-3".to_string(), Some(Placement::Wave { n: 1 })), "on the row");
+    assert_eq!(rows[3], ("PT-4".to_string(), None), "a doc is placed nowhere");
+}

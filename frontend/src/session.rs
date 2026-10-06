@@ -129,9 +129,12 @@
 //! An open wave board (src/waves.rs) asks `waves` for its shortcodes and
 //! asks again when what it shows may have moved. It lends the session an ear
 //! for as long as it is mounted ([`listen`]): every `watch` event is offered
-//! to it before the loop applies it, and the board decides (its re-ask
-//! predicate) whether to ask again. Nothing else about the session changes —
-//! `waves` is asked only while a wave board is open, never at startup.
+//! to it before the loop applies it, and the board decides what it does to
+//! its cards. Nothing else about the session changes — `waves` is asked only
+//! while a wave board is open, never at startup. WAVE-6: the server keeps
+//! every placement and says when one moves (`placements_changed`); the board
+//! moves its cards from that, and the session sets each moved placement on
+//! the rows views hold.
 
 use crate::kids::Kids;
 use crate::{board, cache, dom, nav, Conn, Dock};
@@ -489,6 +492,13 @@ async fn session(
             }
             // SCALE-24 (MNG-10): a shortcode row's roll-up moved.
             ClientEvent::Data(TicketsEvent::GroupChanged { group }) => tree.group_changed(group),
+            // WAVE-6: kept placements a write moved — on each row a view
+            // holds (an open wave board heard it first, and moved its cards).
+            ClientEvent::Data(TicketsEvent::PlacementsChanged { changes }) => {
+                for c in changes {
+                    cache::set_placement(&c.id, c.placement);
+                }
+            }
             // MNG-16: the row's title in place; the open page's body too.
             ClientEvent::Data(TicketsEvent::Amended { ticket, .. }) => {
                 show_body(&ticket);

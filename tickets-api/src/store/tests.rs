@@ -1453,6 +1453,8 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
         Change::GroupChanged { group: g } => assert_eq!(bare(vec![g]), [group("SOLO", 2, 1, "SOLO-1", None)]),
         other => panic!("expected GroupChanged, got {other:?}"),
     }
+    // WAVE-6: and, last, the placement the completion moved.
+    assert!(matches!(rx.try_recv().unwrap(), Change::PlacementsChanged { .. }));
     assert!(rx.try_recv().is_err(), "one group moved, one event");
 
     // Not a crossing of Complete: nothing moves.
@@ -1607,6 +1609,7 @@ pub(super) fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)])
                 child_count: 0,
                 commits: Vec::new(),
                 path: None,
+                placement: None,
                 body: String::new(),
                 created_unix: 0,
                 updated_unix: 0,
@@ -1978,6 +1981,7 @@ fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
                 child_count: 0,
                 commits: Vec::new(),
                 path: None,
+                placement: None,
                 body: String::new(),
                 created_unix: 0,
                 updated_unix: 0,

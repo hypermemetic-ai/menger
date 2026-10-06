@@ -57,7 +57,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use leptos::prelude::*;
-use menger_tickets_api::TicketSummary;
+use menger_tickets_api::{Placement, TicketSummary};
 
 /// A row as the cache keeps it — and as a view reads it, through a handle.
 pub(crate) type RowSignal = ArcRwSignal<TicketSummary>;
@@ -202,6 +202,16 @@ pub(crate) fn set_child_count(id: &str, count: u64) {
     if let Some(sig) = get(id) {
         if sig.with_untracked(|t| t.child_count != count) {
             sig.update(|t| t.child_count = count);
+        }
+    }
+}
+
+/// WAVE-6: a ticket's kept placement moved (`placements_changed`) — set
+/// on its row, if held, in place.
+pub(crate) fn set_placement(id: &str, placement: Placement) {
+    if let Some(sig) = get(id) {
+        if sig.with_untracked(|t| t.placement != Some(placement)) {
+            sig.update(|t| t.placement = Some(placement));
         }
     }
 }
@@ -382,6 +392,7 @@ mod tests {
             child_count: 0,
             commits: Vec::new(),
             path: None,
+            placement: None,
             blocked_by: Vec::new(),
             unlocks: Vec::new(),
             created_unix: 0,
