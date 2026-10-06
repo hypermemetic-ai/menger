@@ -195,6 +195,7 @@ mod board;
 mod cache;
 mod dom;
 mod filter;
+mod frame;
 mod keys;
 mod kids;
 mod md;
@@ -1110,23 +1111,31 @@ fn ticket_view(
             view! { <span class="roll" title=tip>{nav::roll_label(done, total, docs)}</span> }
         })
     };
-    let body = move || {
-        // MFE-9: the body is not a row field — it arrives with this page's
-        // own `get` and lives here. `None` is "not fetched yet"; an empty
-        // string is a ticket that genuinely has no body.
-        let Some(raw) = body_raw.get() else {
-            return view! { <p class="loading">"loading body…"</p> }.into_any();
-        };
-        if raw.trim().is_empty() {
-            return view! { <p class="none">"(no body)"</p> }.into_any();
-        }
+    // MFE-9: the body is not a row field — it arrives with this page's own
+    // `get` and lives here. `None` is "not fetched yet"; an empty string is a
+    // ticket that genuinely has no body. A memo, so a change to the body
+    // re-renders the body and not this choice (COMP-4: a framed body's frame
+    // re-renders in place, without a flash).
+    let body_state = Memo::new(move |_| {
+        body_raw.with(|b| match b.as_deref() {
+            None => None,
+            Some(raw) => Some(!raw.trim().is_empty()),
+        })
+    });
+    let body = move || match body_state.get() {
+        None => view! { <p class="loading">"loading body…"</p> }.into_any(),
+        Some(false) => view! { <p class="none">"(no body)"</p> }.into_any(),
         // AGS-14: the frontmatter folded, the markdown through `md.rs`, its
         // mermaid placeholders handed to the renderer once the div is in the
         // DOM — a body re-render makes a new div (and a new hook), so
         // navigation never re-renders a stale one. WAVE-11: and each
         // `{wave: ID}` placed from the named ticket's row (`refs`), live as
         // its placement moves; a body with none renders as it always did.
-        notes::body_view(&raw, Some(refs))
+        // COMP-4: a body that holds HTML renders in a sandboxed frame.
+        Some(true) => view! {
+            <notes::BodyView body=Signal::derive(move || body_raw.get().unwrap_or_default()) refs=Some(refs) />
+        }
+        .into_any(),
     };
 
     // The id never changes for a row's lifetime (see `Row`), so the
@@ -1985,6 +1994,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// COMP-4 (COMP-1 pin 10): a framed body receives the app's theme
+    /// tokens by name (src/frame.rs) — exactly the custom properties the
+    /// light `:root` block defines, the type tokens included; a token added
+    /// to the palette and not sent would be missing inside every frame.
+    #[test]
+    fn frames_receive_every_token_the_light_block_defines() {
+        let scan = scan(&app_css());
+        let defined: std::collections::BTreeSet<String> =
+            declarations(&scan.light).into_iter().map(|(name, _)| name).filter(|n| n.starts_with("--")).collect();
+        let sent: std::collections::BTreeSet<String> = crate::frame::THEME_TOKENS.iter().map(|t| t.to_string()).collect();
+        assert_eq!(sent.len(), crate::frame::THEME_TOKENS.len(), "a token listed twice");
+        assert_eq!(sent, defined, "frame::THEME_TOKENS vs index.html's light :root block");
     }
 
     /// AGS-17: the two dark mechanisms — the media query (guarded) and the

@@ -22,6 +22,12 @@
 //!   The editor takes an id and a body signal and nothing of the board's,
 //!   so the ticket page can adopt it.
 //!
+//! - **Framed** (COMP-4): a note that holds HTML renders in a sandboxed
+//!   frame below the board ([`BodyView`], src/frame.rs), and so does the
+//!   editor's preview of one. A wave reference in a framed note is a link
+//!   that opens the ticket in a new tab: the board cannot see a click inside
+//!   the frame, so it does not scroll to the card.
+//!
 //! What decides — the address, how a reference is placed, create or amend —
 //! is pure and pinned by native tests.
 
@@ -32,6 +38,7 @@ use menger_tickets_api::{Placement, Ticket, TicketsEvent};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::frame::Frame;
 use crate::md::{self, WaveRef};
 use crate::{cache, dom, mermaid, session};
 
@@ -183,6 +190,53 @@ pub(crate) fn body_view(raw: &str, refs: Option<Refs>) -> AnyView {
     .into_any()
 }
 
+/// COMP-4: a body, framed or not — the one renderer the ticket page, the
+/// board's notes and the editor's preview share. A body that holds HTML
+/// (`md::is_framed`, frontmatter split off first) renders in a sandboxed
+/// [`Frame`]: its frontmatter folded outside it as ever, its markup from
+/// `md::render_body_framed` with each `{wave: ID}` placed here, by `refs`.
+/// While a body stays framed the frame persists, and each change of the
+/// body (an `amended`, a keystroke, a reference placed) re-renders inside it
+/// without a flash. Any other body is [`body_view`]'s — the markup it always
+/// was, rebuilt on each change as it always was.
+#[component]
+pub(crate) fn BodyView(#[prop(into)] body: Signal<String>, refs: Option<Refs>) -> impl IntoView {
+    let framed = Memo::new(move |_| body.with(|b| md::is_framed(md::split_frontmatter(b).1)));
+    move || {
+        if framed.get() {
+            framed_view(body, refs)
+        } else {
+            body.with(|b| body_view(b, refs))
+        }
+    }
+}
+
+/// A framed body: the frontmatter fold, then the frame. Reads `body` only
+/// inside its own reactive children, so the caller's closure re-runs only
+/// when the body stops being framed.
+fn framed_view(body: Signal<String>, refs: Option<Refs>) -> AnyView {
+    let fm = Memo::new(move |_| body.with(|b| md::split_frontmatter(b).0.map(str::to_string)));
+    let html = Memo::new(move |_| {
+        body.with(|b| {
+            let src = md::split_frontmatter(b).1;
+            match refs {
+                Some(refs) => md::render_body_framed(src, &|id| refs.resolve(id)).html,
+                None => md::render_body_framed(src, &|_| None).html,
+            }
+        })
+    });
+    view! {
+        {move || fm.get().map(|f| view! {
+            <details class="frontmatter">
+                <summary>"frontmatter"</summary>
+                <pre>{f}</pre>
+            </details>
+        })}
+        <Frame html />
+    }
+    .into_any()
+}
+
 /// The first event of a call that answers with a ticket: the ticket, or
 /// what the server said instead.
 fn ticket_of(events: Vec<TicketsEvent>) -> Result<Ticket, String> {
@@ -283,7 +337,7 @@ pub(crate) fn BodyEditor(
                     prop:value=move || seed.get()
                     on:input=move |ev| draft.set(event_target_value(&ev))
                 ></textarea>
-                <div class="preview">{move || draft.with(|d| body_view(d, Some(refs)))}</div>
+                <div class="preview"><BodyView body=Signal::derive(move || draft.get()) refs=Some(refs) /></div>
             </div>
             <div class="actions">
                 <button class="save" on:click=save disabled=move || saving.get()>
@@ -426,15 +480,19 @@ pub(crate) fn BoardNotes(
         }
     });
 
+    // Whether there is anything to show — a memo, so the panel is rebuilt
+    // when that flips and not on every edit of the body (COMP-4: a framed
+    // note's frame re-renders in place).
+    let has_body = Memo::new(move |_| body.with(|b| b.as_deref().map(str::trim).is_some_and(|b| !b.is_empty())));
     let content = {
         let root = root.clone();
         move || {
             if editing.get() {
                 return view! { <BodyEditor id body editing refs create=Create::board(&root) /> }.into_any();
             }
-            match (doc.get(), body.with(|b| b.as_deref().map(str::trim).is_some_and(|b| !b.is_empty()))) {
+            match (doc.get(), has_body.get()) {
                 (Doc::Loading, _) => view! { <p class="loading">"loading the board's notes…"</p> }.into_any(),
-                (_, true) => body.with(|b| body_view(b.as_deref().unwrap_or_default(), Some(refs))),
+                (_, true) => view! { <BodyView body=Signal::derive(move || body.get().unwrap_or_default()) refs=Some(refs) /> }.into_any(),
                 (Doc::Here, false) => view! { <p class="none">"(no notes yet — " <button class="link" on:click=move |_| editing.set(true)>"write some"</button>")"</p> }.into_any(),
                 (Doc::Missing, false) => view! {
                     <p class="none"><button class="link" on:click=move |_| editing.set(true)>"write notes for this board"</button></p>

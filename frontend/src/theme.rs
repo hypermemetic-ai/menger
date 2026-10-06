@@ -23,13 +23,14 @@
 //! system preference flipping while the choice is System — redraws every
 //! mounted diagram ([`crate::mermaid::rerender_all`]). A toggle that
 //! leaves the painted mode as it was (system → light on a light system)
-//! redraws nothing.
+//! redraws nothing. COMP-4: the same change re-themes every framed body
+//! ([`crate::frame::retheme_all`]) — a frame's tokens are sent, not shared.
 
 use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
-use crate::{dom, mermaid};
+use crate::{dom, frame, mermaid};
 
 /// The localStorage key; the value is `"light"` or `"dark"`, and the key
 /// is absent for the system default. index.html's pre-paint script reads
@@ -174,6 +175,9 @@ pub(crate) fn Toggle() -> impl IntoView {
         apply(t);
         if prev.is_some_and(|p| p != mode) {
             mermaid::rerender_all();
+            // COMP-4: a framed body takes the new tokens (and redraws its
+            // own diagrams) — the frame cannot read the app's CSS.
+            frame::retheme_all();
         }
         mode
     });

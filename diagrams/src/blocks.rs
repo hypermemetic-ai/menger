@@ -267,12 +267,22 @@ fn is_mermaid_fence(info: &str) -> bool {
     /// frontmatter is never searched for diagrams here either. WAVE-11: the
     /// ticket page draws its body through `notes::body_view`, which splits
     /// it and renders the rest, with or without its wave references.
+    /// COMP-4: through `notes::BodyView`, which renders an unframed body
+    /// with `body_view` and a framed one (a body holding HTML) in a frame —
+    /// split first all the same, and drawn from the same placeholders
+    /// (`render_body_framed` is `render`'s fence rule too), so the set of
+    /// diagrams a body shows is unchanged.
     #[test]
     fn the_page_splits_the_frontmatter_first() {
-        assert!(APP_MAIN_RS.contains("notes::body_view(&raw, Some(refs))"));
+        assert!(APP_MAIN_RS.contains("<notes::BodyView body="));
+        assert!(APP_NOTES_RS.contains("md::is_framed(md::split_frontmatter(b).1)"));
+        assert!(APP_NOTES_RS.contains("body.with(|b| body_view(b, refs))"));
         assert!(APP_NOTES_RS.contains("let (fm, md_src) = md::split_frontmatter(raw);"));
         assert!(APP_NOTES_RS.contains("md::render_body_with(md_src, "));
         assert!(APP_NOTES_RS.contains("md::render_body(md_src)"));
+        assert!(APP_NOTES_RS.contains("let src = md::split_frontmatter(b).1;"));
+        assert!(APP_NOTES_RS.contains("md::render_body_framed(src, "));
+        assert!(MD_RS.contains("pub fn render_body_framed(") && MD_RS.contains("render(src, Some(resolve), true)"));
     }
 
     // -- the app's own cases -------------------------------------------------

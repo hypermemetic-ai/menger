@@ -15,6 +15,9 @@
      file only. Deliberately NOT a <script> here: src/mermaid.rs injects one
      the first time a rendered body holds a mermaid fence. -->
 <link data-trunk rel="copy-file" href="vendor/mermaid/mermaid-11.17.2.min.js" data-target-path="vendor" />
+<!-- COMP-4: the SDK shell a framed body runs (src/frame.rs inlines it into
+     each frame's srcdoc); served at /app/sdk/ as the app's published copy. -->
+<link data-trunk rel="copy-file" href="sdk/menger-sdk.js" data-target-path="sdk" />
 <!-- AGS-17: stamp a stored theme choice before first paint, so a reload
      never flashes the system theme; src/theme.rs owns the key and
      re-applies it once mounted (a native test pins the two agree). -->
@@ -728,6 +731,15 @@
   .editor button.save:hover, .editor button.cancel:hover { color: var(--accent); border-color: var(--accent); }
   .editor .notice { background: var(--sel); border: 1px solid var(--line); border-radius: 4px; padding: .25rem .5rem; }
   .editor .problem { color: var(--err-fg); background: var(--err-bg); border: 1px solid var(--err-line); border-radius: 4px; padding: .25rem .5rem; }
+  /* COMP-4: a framed body — its HTML in a sandboxed frame (src/frame.rs),
+     sized to its content by the frame's SDK, so it never scrolls inside. A
+     re-render loads beside the frame on screen, invisible, and replaces it
+     once drawn: an amended body never flashes. The frame's own background
+     is transparent (its color-scheme follows the app's), so it sits on
+     whatever surface hosts it. */
+  .mframe { position: relative; max-width: 56rem; }
+  .mframe > iframe { display: block; width: 100%; border: 0; }
+  .mframe > iframe[data-state="pending"] { position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none; }
   .md .wave-ref {
     font-family: var(--mono); font-size: .85em; white-space: nowrap; text-decoration: none;
     border: 1px solid var(--chip-line); background: var(--chip-bg); color: var(--chip-fg); border-radius: 6px; padding: 0 5px;
