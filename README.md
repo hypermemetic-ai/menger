@@ -332,6 +332,36 @@ synapse -P 4455 menger tickets link_commits --id MNG-10 --commits 77df9a0
 synapse -P 4455 menger tickets link_commits --id SCALE-4 --commits 0bb28b2 --commits 090cdec
 ```
 
+A ticket may also carry a **path address** (WAVE-10): an optional
+**`path`**, unique within its shortcode, so that `<SHORTCODE>/<path>`
+names it — `get { id: "PLEXUS/_MENGER/board" }` answers the one ticket of
+`PLEXUS` holding the path `_MENGER/board` (the shortcode in any case, the
+path exactly as written; an address that names nothing is `not_found`
+carrying the address). A path is an address, not an id: the ticket keeps
+its `EPIC-N`, and the store's order, extents, paging and readiness never
+read it. **`_MENGER/` is reserved** for the documents menger itself keeps
+inside a shortcode (WAVE-1 decision 11 — the board's annotation,
+`_MENGER/board`, is the first), and is the only prefix accepted for now:
+`create { …, path }` takes a path only when it starts with `_MENGER/` and
+names something after it, the ticket is a `doc`, and its `parent` is the
+shortcode's scope root (or is omitted, which defaults to it); a path
+another ticket of the shortcode already holds is an in-band `error` naming
+that ticket. A path is set at birth and never moves; it is on the row and
+the ticket, omitted when there is none. The nav hides tickets whose path is
+under `_MENGER/` unless its "menger docs" toggle is on (remembered in the
+browser). A database written before WAVE-10 gains the column, and the
+unique index on `(epic, path)`, on first open, durably — `ADD COLUMN` with
+no default rewrites no row, so it is instant at any size, and a binary from
+before it still opens the file.
+
+```sh
+# synapse expands any parameter named `path` as a filesystem path (`--path
+# _MENGER/board` arrives as `$PWD/_MENGER/board`, which `create` refuses):
+# pass a path address's `path` in the params object instead.
+synapse -P 4455 -p '{"epic": "PLEXUS", "kind": "doc", "path": "_MENGER/board", "title": "board: PLEXUS"}' menger tickets create
+synapse -P 4455 menger tickets get --id PLEXUS/_MENGER/board
+```
+
 The order of work for a shortcode tree — the platform's, here — is one call
 (WAVE-4); the app's wave board (`#/waves/<SHORTCODE>`) makes the same one:
 
@@ -342,8 +372,8 @@ synapse -P 4455 menger tickets waves --epics PLEXUS,MACRO,SYNAPSE,TRANSPORT,STAR
 | method | yields |
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
-| `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the six is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12) **or a doc** (SDLC-11): the first ticket of a prefix must be `kind: scope` or `kind: doc`, anything else is an in-band `error` naming the rule and nothing is allocated; a `doc` starts — and stays — in `Doc`, and a doc with a `blocked_by`, a `blocked_by` naming a doc, or a doc born as an id a `blocked_by` already names is an in-band `error` (SDLC-11); **`parent` defaults to the shortcode's scope root and must stay inside the shortcode** (MNG-14): omitted, a non-root hangs under its prefix's root; named, it must be in the same prefix, else an in-band `error` — the scope root itself is the exception, its parent (if any) is the shortcode it hangs under, a sub-shortcode |
-| `tickets.get { id }` | `ticket` or `not_found` |
+| `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent?, path? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the six is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12) **or a doc** (SDLC-11): the first ticket of a prefix must be `kind: scope` or `kind: doc`, anything else is an in-band `error` naming the rule and nothing is allocated; a `doc` starts — and stays — in `Doc`, and a doc with a `blocked_by`, a `blocked_by` naming a doc, or a doc born as an id a `blocked_by` already names is an in-band `error` (SDLC-11); **`parent` defaults to the shortcode's scope root and must stay inside the shortcode** (MNG-14): omitted, a non-root hangs under its prefix's root; named, it must be in the same prefix, else an in-band `error` — the scope root itself is the exception, its parent (if any) is the shortcode it hangs under, a sub-shortcode; **`path`** (WAVE-10) gives the ticket a path address in its shortcode — only `_MENGER/…` with something after it, only on a `doc`, only with the shortcode's scope root as `parent` (the default); one another ticket of the shortcode holds is an in-band `error` naming it, as is each other refusal, and nothing is allocated |
+| `tickets.get { id }` | `ticket` or `not_found` — `id` is an `EPIC-N`, or (WAVE-10) a path address `SHORTCODE/path` (`PLEXUS/_MENGER/board`; the shortcode case-insensitive, the path exact), and `not_found` carries the id or address as given |
 | `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children — the one way to read them (SCALE-4), from an index the store keeps, so a page of a root's 163,530 children costs the page (1.3 ms at 10⁶ over REST, first page or deep) and its `remaining` is arithmetic; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page — `after` naming no ticket is one in-band `error` |
 | `tickets.ready_set { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete or Superseded — never a doc), ordered (epic, seq), then one `page { next, remaining }` |
 | `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |

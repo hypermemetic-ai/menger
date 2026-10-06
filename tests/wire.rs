@@ -1382,3 +1382,54 @@ async fn waves_over_the_wire() {
         assert!(evs[0]["message"].as_str().unwrap().contains(needle), "{params}: {}", evs[0]);
     }
 }
+
+/// WAVE-10 acceptance 2: a path address over the real protocol — a
+/// `PLEXUS/_MENGER/board`-style doc created with `path`, the path on the
+/// `created` ticket (and absent from a ticket without one), `get` by the
+/// address (the shortcode in any case) answering the same ticket as `get`
+/// by its id, `not_found` naming an address that names nothing, and a
+/// second holder of the path refused in-band.
+#[tokio::test]
+async fn a_path_address_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let root = collect(call(&client, "tickets.create", json!({"epic": "PLX", "title": "the platform", "kind": "scope"})).await).await;
+    assert!(root[0]["ticket"].get("path").is_none(), "no path, no key: {}", root[0]);
+    let evs = collect(
+        call(
+            &client,
+            "tickets.create",
+            json!({"epic": "PLX", "title": "board: PLX", "kind": "doc", "path": "_MENGER/board", "body": "notes"}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(evs[0]["type"], "created", "{evs:?}");
+    let born = &evs[0]["ticket"];
+    assert_eq!((born["id"].as_str(), born["parent"].as_str()), (Some("PLX-2"), Some("PLX-1")));
+    assert_eq!(born["path"], "_MENGER/board");
+
+    let by_id = collect(call(&client, "tickets.get", json!({"id": "PLX-2"})).await).await;
+    for address in ["PLX/_MENGER/board", "plx/_MENGER/board"] {
+        let evs = collect(call(&client, "tickets.get", json!({"id": address})).await).await;
+        assert_eq!(evs, by_id, "{address}");
+        assert_eq!(evs[0]["ticket"]["body"], "notes");
+    }
+    let evs = collect(call(&client, "tickets.get", json!({"id": "PLX/_MENGER/nothing"})).await).await;
+    assert_eq!(evs, vec![json!({"type": "not_found", "id": "PLX/_MENGER/nothing"})]);
+
+    let evs = collect(
+        call(&client, "tickets.create", json!({"epic": "PLX", "title": "again", "kind": "doc", "path": "_MENGER/board"})).await,
+    )
+    .await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["type"], "error");
+    assert!(evs[0]["message"].as_str().unwrap().contains("PLX-2"), "names the holder: {}", evs[0]);
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "PLX", "title": "x", "path": "_MENGER/x"})).await).await;
+    assert_eq!(evs[0]["type"], "error", "a build carries no path: {evs:?}");
+
+    // The summary row carries it too.
+    let rows = rows(call(&client, "tickets.list", json!({"epic": "PLX", "summary": true})).await).await;
+    assert_eq!(rows[1]["summary"]["path"], "_MENGER/board");
+    assert!(rows[0]["summary"].get("path").is_none(), "{}", rows[0]);
+}

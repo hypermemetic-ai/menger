@@ -437,6 +437,14 @@
     border-radius: 4px; cursor: pointer;
   }
   #nav .nav-hide { margin-left: auto; }
+  /* WAVE-10: the "menger docs" toggle, and a _MENGER/ document while it is off. */
+  #nav .menger-docs {
+    margin-left: auto; background: var(--bg); border: 1px solid var(--line); color: var(--muted);
+    font: inherit; font-size: 11px; line-height: 1.3; padding: 0 6px; border-radius: 4px; cursor: pointer;
+  }
+  #nav .menger-docs + .nav-hide { margin-left: 0; }
+  #nav .menger-docs.on, #nav .menger-docs:hover { color: var(--accent); border-color: var(--accent); }
+  #nav .node.menger-off { display: none; }
   #nav .nav-hide:hover, header .nav-reveal:hover { color: var(--accent); border-color: var(--accent); }
   /* SCALE-24: no scroll anchoring — a windowed list keeps its spacers at
      the height of what they stand for, so content above the viewport never

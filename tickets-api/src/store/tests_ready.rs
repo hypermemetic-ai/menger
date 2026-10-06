@@ -34,6 +34,7 @@ impl Rng {
 
 fn new_ticket(epic: &str, kind: Kind, parent: Option<String>, blocked_by: Vec<String>) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: format!("a {} in {epic}", kind.as_str()),
         kind,

@@ -303,6 +303,8 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> V
             // SDLC-9: none — a commit is linked after birth, as `create`
             // leaves it; the generator stays byte-identical per seed value.
             commits: Vec::new(),
+            // WAVE-10: no address — a seed makes work, not menger's documents.
+            path: None,
             body: body_s,
             created_unix: created,
             updated_unix: updated,

@@ -4,6 +4,7 @@ use super::tests_children::children;
 
 fn new_ticket(epic: &str, title: &str) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: title.into(),
         kind: Kind::Build,
@@ -18,6 +19,7 @@ fn new_ticket(epic: &str, title: &str) -> NewTicket {
 /// with one (MNG-12).
 fn scope(epic: &str, title: &str) -> NewTicket {
     NewTicket {
+        path: None,
         kind: Kind::Scope,
         ..new_ticket(epic, title)
     }
@@ -26,6 +28,7 @@ fn scope(epic: &str, title: &str) -> NewTicket {
 /// `new_ticket`, filed as an output of `parent`.
 fn child_of(epic: &str, title: &str, parent: &str) -> NewTicket {
     NewTicket {
+        path: None,
         parent: Some(parent.into()),
         ..new_ticket(epic, title)
     }
@@ -227,6 +230,7 @@ async fn the_ready_set_pages_on_its_own_membership() {
     }
     store
         .create(NewTicket {
+            path: None,
             blocked_by: vec!["RD-1".into()],
             ..new_ticket("RD", "blocked")
         })
@@ -523,6 +527,7 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
     // Three deep, the middle link in another epic (its scope root).
     store
         .create(NewTicket {
+            path: None,
             kind: Kind::Scope,
             ..child_of("OTHER", "middle", "CHAIN-1")
         })
@@ -580,6 +585,7 @@ async fn a_parent_that_is_also_a_blocker_gets_both_edges() {
     let mut rx = store.subscribe();
     let child = store
         .create(NewTicket {
+            path: None,
             blocked_by: vec!["BOTH-1".into()],
             ..child_of("BOTH", "report", "BOTH-1")
         })
@@ -617,6 +623,7 @@ async fn list_filters_by_parent() {
     store.create(child_of("LP", "child a", "LP-1")).await.unwrap();
     store
         .create(NewTicket {
+            path: None,
             kind: Kind::Scope,
             ..child_of("ZZ", "child b", "LP-1")
         })
@@ -764,6 +771,7 @@ async fn reopen_round_trips_every_field_and_continues_seq() {
         let store = Store::open(&path).unwrap();
         store
             .create(NewTicket {
+                path: None,
                 epic: "rt".into(),
                 title: "first — ünïcode ✓".into(),
                 kind: Kind::Scope,
@@ -1091,6 +1099,7 @@ async fn a_parent_stays_inside_the_shortcode_except_for_the_root() {
     // A new shortcode's root may hang under HOST-1 …
     let sub = store
         .create(NewTicket {
+            path: None,
             kind: Kind::Scope,
             ..child_of("SUB", "a sub-shortcode", "HOST-1")
         })
@@ -1410,6 +1419,7 @@ fn the_oracle_draws_the_navs_own_fixtures() {
 async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     let store = Store::new();
     let sub = |epic: &str, title: &str, host: &str| NewTicket {
+        path: None,
         kind: Kind::Scope,
         ..child_of(epic, title, host)
     };
@@ -1596,6 +1606,7 @@ pub(super) fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)])
                 parent: parent.map(Into::into),
                 child_count: 0,
                 commits: Vec::new(),
+                path: None,
                 body: String::new(),
                 created_unix: 0,
                 updated_unix: 0,
@@ -1785,6 +1796,7 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
                 };
                 let what = format!("create {epic} {kind} under {parent:?}");
                 let new = NewTicket {
+                    path: None,
                     kind,
                     parent,
                     ..new_ticket(epic, "walked")
@@ -1965,6 +1977,7 @@ fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
                 parent: None,
                 child_count: 0,
                 commits: Vec::new(),
+                path: None,
                 body: String::new(),
                 created_unix: 0,
                 updated_unix: 0,
@@ -1987,6 +2000,7 @@ async fn a_reopened_store_resolves_forward_references_at_birth_as_the_scan_did()
         let store = Store::open(&path).unwrap();
         store
             .create(NewTicket {
+                path: None,
                 blocked_by: vec!["FWD-3".into()],
                 ..scope("FWD", "names its third ticket")
             })
@@ -1994,6 +2008,7 @@ async fn a_reopened_store_resolves_forward_references_at_birth_as_the_scan_did()
             .unwrap();
         store
             .create(NewTicket {
+                path: None,
                 blocked_by: vec!["FWD-3".into(), "FWD-3".into(), "ZZZ-1".into()],
                 ..new_ticket("FWD", "names it twice, and an unborn shortcode")
             })
@@ -2001,6 +2016,7 @@ async fn a_reopened_store_resolves_forward_references_at_birth_as_the_scan_did()
             .unwrap();
         store
             .create(NewTicket {
+                path: None,
                 blocked_by: vec!["FWD-3".into()],
                 ..scope("AAA", "sorts before FWD, born after it")
             })
@@ -2008,6 +2024,7 @@ async fn a_reopened_store_resolves_forward_references_at_birth_as_the_scan_did()
             .unwrap();
         store
             .create(NewTicket {
+                path: None,
                 blocked_by: vec!["FWD-3".into()],
                 ..scope("ZZZ", "sorts after")
             })
@@ -2079,24 +2096,29 @@ async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_par
     let before = kept(&store);
     let refused = [
         NewTicket {
+            path: None,
             blocked_by: vec!["WAIT-2".into()],
             ..new_ticket("WAIT", "names itself") // would be WAIT-2
         },
         NewTicket {
+            path: None,
             blocked_by: vec!["WAIT-1".into(), "NEVER-1".into()],
             ..new_ticket("WAIT", "closes WAIT-2 -> WAIT-1 -> WAIT-2")
         },
         NewTicket {
+            path: None,
             blocked_by: vec!["NEVER-2".into()],
             parent: Some("NOWHERE-1".into()),
             ..new_ticket("WAIT", "a parent that is no ticket")
         },
         NewTicket {
+            path: None,
             blocked_by: vec!["NEVER-3".into()],
             parent: Some("GAP-1".into()),
             ..new_ticket("WAIT", "a parent outside the shortcode")
         },
         NewTicket {
+            path: None,
             blocked_by: vec!["NEVER-4".into()],
             ..new_ticket("FRESH", "a build first")
         },
@@ -2121,6 +2143,7 @@ async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_par
     // New forward references, and a create that is both blocker and parent.
     store
         .create(NewTicket {
+            path: None,
             blocked_by: vec!["WAIT-5".into(), "LATE-3".into(), "WAIT-2".into()],
             ..new_ticket("WAIT", "WAIT-3")
         })
@@ -2129,6 +2152,7 @@ async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_par
     assert_kept_is_a_scan(&store, "a create naming two unborn ids");
     store
         .create(NewTicket {
+            path: None,
             blocked_by: vec!["WAIT-1".into()],
             parent: Some("WAIT-1".into()),
             ..new_ticket("WAIT", "WAIT-4")
@@ -2180,6 +2204,7 @@ async fn the_id_indexes_are_a_scan_after_a_seed_with_and_without_into_existing()
     store.create(scope("REAL", "already here")).await.unwrap();
     store
         .create(NewTicket {
+            path: None,
             blocked_by: vec![seeded.clone(), "REAL-9".into()],
             ..new_ticket("REAL", "names an id the seed will make")
         })
@@ -2389,6 +2414,7 @@ async fn every_create_gets_the_id_and_unlocks_a_scan_would_give_it() {
         let what = format!("step {step}: create {epic}-{seq} {kind} blocked_by {blocked_by:?} under {parent:?}");
         let before = kept(&store);
         let new = NewTicket {
+            path: None,
             kind,
             blocked_by,
             parent,

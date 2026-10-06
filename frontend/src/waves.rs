@@ -755,6 +755,7 @@ mod tests {
             blocked_by: Vec::new(),
             unlocks: Vec::new(),
             commits: Vec::new(),
+            path: None,
             created_unix: 0,
             updated_unix: 0,
         }
@@ -871,6 +872,7 @@ mod tests {
             parent: None,
             child_count: 0,
             commits: vec![],
+            path: None,
             body: String::new(),
             created_unix: 0,
             updated_unix: 0,

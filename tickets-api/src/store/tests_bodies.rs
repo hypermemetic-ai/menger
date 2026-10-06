@@ -18,6 +18,7 @@ pub(super) static STORED_VERSION_READS: AtomicU64 = AtomicU64::new(0);
 
 fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str], body: &str) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: format!("a {} in {epic}", kind.as_str()),
         kind,

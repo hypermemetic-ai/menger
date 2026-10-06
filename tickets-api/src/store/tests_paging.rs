@@ -30,6 +30,7 @@ impl Rng {
 
 fn scope(epic: &str) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: "t".into(),
         kind: Kind::Scope,
@@ -42,6 +43,7 @@ fn scope(epic: &str) -> NewTicket {
 
 fn build(epic: &str) -> NewTicket {
     NewTicket {
+        path: None,
         kind: Kind::Build,
         ..scope(epic)
     }
@@ -78,6 +80,7 @@ pub(super) fn write_runs(path: &Path, rows: &[(&str, u32)]) {
                 parent: None,
                 child_count: 0,
                 commits: Vec::new(),
+                path: None,
                 body: String::new(),
                 created_unix: 0,
                 updated_unix: 0,

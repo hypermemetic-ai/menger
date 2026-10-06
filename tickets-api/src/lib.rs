@@ -26,7 +26,10 @@
 //! ```
 
 pub mod types;
-pub use types::{Group, Kind, Placement, RootRow, Severity, Status, Ticket, TicketSummary, TicketsEvent};
+pub use types::{
+    is_menger_path, path_address, Group, Kind, Placement, RootRow, Severity, Status, Ticket, TicketSummary, TicketsEvent,
+    MENGER_PATH_PREFIX,
+};
 
 /// The cache and its storage — the server's system of record (MNG-2).
 #[cfg(feature = "server")]

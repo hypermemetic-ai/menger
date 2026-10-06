@@ -381,6 +381,7 @@ mod tests {
             parent: None,
             child_count: 0,
             commits: Vec::new(),
+            path: None,
             blocked_by: Vec::new(),
             unlocks: Vec::new(),
             created_unix: 0,

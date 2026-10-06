@@ -663,6 +663,7 @@ mod tests {
             blocked_by: Vec::new(),
             unlocks: Vec::new(),
             commits: Vec::new(),
+            path: None,
             created_unix: 0,
             updated_unix: 0,
         }

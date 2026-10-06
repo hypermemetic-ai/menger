@@ -16,6 +16,7 @@ use crate::types::Placement;
 
 fn new(epic: &str, kind: Kind, blocked_by: &[&str]) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
@@ -392,11 +393,12 @@ fn a_chain_longer_than_any_call_stack_is_placed() {
         blocked_by: if seq > 1 { vec![format!("LONG-{}", seq - 1)] } else { vec![] },
         unlocks: vec![],
         commits: vec![],
+        path: None,
         created_unix: 0,
         updated_unix: 0,
     };
     let loaded: HashMap<String, Row> = (1..=N).map(|s| (format!("LONG-{s}"), row(s))).collect();
-    let (order, at) = ordered(loaded);
+    let (order, at, _) = ordered(loaded);
     let children = children::Children::build(order.values());
     let rows = Rows { order: &order, at: &at, children: &children, patch: None };
     let epics: std::collections::BTreeSet<String> = ["LONG".to_string()].into();

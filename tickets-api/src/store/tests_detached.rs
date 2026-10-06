@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 fn new(epic: &str, kind: Kind, title: &str) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: title.into(),
         kind,

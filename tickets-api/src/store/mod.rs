@@ -90,8 +90,16 @@
 //! wave, derived from `blocked_by` over the whole graph by MNG-4's rule, on
 //! demand — computed under the read lock for the one call, memoized for it,
 //! and kept nowhere: no write moves it, nothing stores it.
+//! WAVE-10 gives a ticket an optional **path address**: a `path` on its row,
+//! unique within its shortcode, which `get` resolves from `<SHORTCODE>/<path>`
+//! through an index the cache keeps beside the hash half ([`Paths`]) and the
+//! file keeps as a unique index on `(epic, path)`. An address, not an id —
+//! the order, extents, paging and readiness never read it — set at birth and
+//! never moved; only `_MENGER/…`, on a doc directly under its shortcode's
+//! scope root, for the documents menger keeps inside a shortcode. A database
+//! written before WAVE-10 gains the column, durably, once, on first open.
 
-use crate::types::TicketSummary;
+use crate::types::{is_menger_path, path_address, TicketSummary, MENGER_PATH_PREFIX};
 use rusqlite::{Connection, OpenFlags};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -136,6 +144,7 @@ fn whole(row: Row, body: String) -> Ticket {
         blocked_by,
         unlocks,
         commits,
+        path,
         created_unix,
         updated_unix,
     } = row;
@@ -152,6 +161,7 @@ fn whole(row: Row, body: String) -> Ticket {
         parent,
         child_count,
         commits,
+        path,
         body,
         created_unix,
         updated_unix,
@@ -619,6 +629,10 @@ pub struct NewTicket {
     /// AGS-19: the ticket this one is an output of. Must already exist
     /// (any epic) and must not make the newborn its own ancestor.
     pub parent: Option<String>,
+    /// WAVE-10: the newborn's path address in its shortcode — only a
+    /// `_MENGER/…` path, only on a doc, only directly under the shortcode's
+    /// scope root, and only one no ticket of the shortcode already holds.
+    pub path: Option<String>,
     pub body: String,
 }
 
@@ -709,6 +723,24 @@ pub enum StoreError {
     /// to resume from. Distinct from `NotFound`: the miss is the cursor,
     /// not the thing asked for, and the message says so.
     CursorNotFound(String),
+    /// WAVE-10: `create { path }` with a path outside `_MENGER/` (or
+    /// `_MENGER/` and nothing after it) — the one prefix menger accepts.
+    /// Nothing was stored.
+    PathNotReserved { path: String },
+    /// WAVE-10: `create { path }` for a ticket that is not a doc — a path
+    /// names one of menger's own documents. Nothing was stored.
+    PathOnWork { path: String, kind: Kind },
+    /// WAVE-10: `create { path }` with a `parent` other than the shortcode's
+    /// scope root, `root`, which is where a `_MENGER/` document lives.
+    /// Nothing was stored.
+    PathParent { path: String, parent: String, root: String },
+    /// WAVE-10: `create { path }` in a shortcode with no scope root yet (its
+    /// first ticket, or a legacy prefix that never had one) — nowhere for
+    /// the document to live. Nothing was stored.
+    PathNoRoot { epic: String, path: String },
+    /// WAVE-10: `create { path }` with a path `holder` already holds in
+    /// `epic`. Nothing was stored and no id was allocated.
+    PathTaken { epic: String, path: String, holder: String },
 }
 
 impl std::fmt::Display for StoreError {
@@ -810,6 +842,33 @@ impl std::fmt::Display for StoreError {
                  and seeding into an existing database was not explicitly allowed"
             ),
             Self::CursorNotFound(id) => write!(f, "after: no ticket {id}"),
+            Self::PathNotReserved { path } => write!(
+                f,
+                "a path must start with {MENGER_PATH_PREFIX} — the prefix menger reserves for its own \
+                 documents — and name something after it (got '{path}'); nothing was created"
+            ),
+            Self::PathOnWork { path, kind } => write!(
+                f,
+                "only a doc carries a path: '{path}' names one of menger's own documents, and a {} is \
+                 work — create it with kind doc (nothing was created)",
+                kind.as_str()
+            ),
+            Self::PathParent { path, parent, root } => write!(
+                f,
+                "a {MENGER_PATH_PREFIX} document lives directly under its shortcode's scope root, {root}: \
+                 '{path}' cannot be filed under {parent} — omit parent, or name {root} (nothing was \
+                 created)"
+            ),
+            Self::PathNoRoot { epic, path } => write!(
+                f,
+                "'{epic}' has no scope root for '{path}' to live under — create the shortcode's root \
+                 first (nothing was created)"
+            ),
+            Self::PathTaken { epic, path, holder } => write!(
+                f,
+                "'{epic}/{path}' is taken: {holder} already holds the path '{path}' in {epic} (nothing \
+                 was created)"
+            ),
         }
     }
 }
@@ -1016,6 +1075,8 @@ impl Needle {
 struct Cache {
     order: BTreeMap<OrderKey, Row>,
     at: HashMap<String, OrderKey>,
+    /// WAVE-10: the path addresses ([`Paths`]).
+    paths: Paths,
     rollups: rollup::Rollups,
     ids: ids::Ids,
     children: children::Children,
@@ -1179,11 +1240,29 @@ impl Derived {
 /// rather than inserted one at a time — `BTreeMap`'s `FromIterator` sorts
 /// and bulk-builds the tree instead of rebalancing n times — and the hash
 /// half that says where each id sits.
-fn ordered(loaded: HashMap<String, Row>) -> (BTreeMap<OrderKey, Row>, HashMap<String, OrderKey>) {
+///
+/// WAVE-10: and the path addresses, from the same pass as the hash half —
+/// the few tickets that carry a path ([`Paths`]).
+fn ordered(loaded: HashMap<String, Row>) -> (BTreeMap<OrderKey, Row>, HashMap<String, OrderKey>, Paths) {
     let order: BTreeMap<OrderKey, Row> = loaded.into_values().map(|t| (OrderKey::of(&t), t)).collect();
-    let at = order.values().map(|t| (t.id.clone(), OrderKey::of(t))).collect();
-    (order, at)
+    let mut paths = Paths::new();
+    let at = order
+        .values()
+        .map(|t| {
+            if let Some(p) = &t.path {
+                paths.insert((t.epic.clone(), p.clone()), t.id.clone());
+            }
+            (t.id.clone(), OrderKey::of(t))
+        })
+        .collect();
+    (order, at, paths)
 }
+
+/// WAVE-10: every path address the store holds — `(shortcode, path)` to
+/// the id that holds it. Only menger's own documents carry a path, so this
+/// is a few entries a shortcode at most; a path is set at birth and never
+/// moves, so only a birth adds one and nothing takes one away.
+type Paths = HashMap<(String, String), String>;
 
 impl Cache {
     /// Builds the cache from the tickets alone: their rows put in order
@@ -1200,7 +1279,7 @@ impl Cache {
     /// and nothing else, every count included — a row's stored
     /// `child_count` is set aside, and the count is the parents'.
     fn new(loaded: HashMap<String, Row>) -> Self {
-        let (mut order, at) = ordered(loaded);
+        let (mut order, at, paths) = ordered(loaded);
         for t in order.values_mut() {
             t.child_count = 0;
         }
@@ -1249,6 +1328,7 @@ impl Cache {
         Self {
             order,
             at,
+            paths,
             rollups,
             ids,
             children,
@@ -1267,10 +1347,11 @@ impl Cache {
         children: children::Children,
         ready: ready::Ready,
     ) -> Self {
-        let (order, at) = ordered(loaded);
+        let (order, at, paths) = ordered(loaded);
         Self {
             order,
             at,
+            paths,
             rollups,
             ids,
             children,
@@ -1373,6 +1454,11 @@ impl Cache {
         }
         let key = OrderKey::of(&ticket);
         let parent = ticket.parent.clone();
+        // WAVE-10: its address, if it has one — checked free under the
+        // write-serial lock before the commit.
+        if let Some(p) = &ticket.path {
+            self.paths.insert((ticket.epic.clone(), p.clone()), ticket.id.clone());
+        }
         self.insert(ticket);
         let count = parent.map(|p| {
             let count = self.children.add(&p, &key);
@@ -1717,6 +1803,10 @@ impl Store {
         // durably — every ticket with none linked. Adding a column with a
         // constant default rewrites no row, so this is instant at any size.
         db::migrate_add_commits(&mut conn)?;
+        // WAVE-10: a database written before WAVE-10 gains `path` here, once,
+        // durably — every ticket without one; and the index that keeps a
+        // path unique in its shortcode. No row is rewritten.
+        db::migrate_add_path(&mut conn)?;
         // SCALE-28: the derived state is read from the file — each
         // shortcode's run, the dangling forward references, the roll-ups,
         // the children index — beside the rows, each carrying its stored
@@ -1989,6 +2079,20 @@ impl Store {
                 blocked_by: new.blocked_by,
             });
         }
+        // WAVE-10: a path is an address menger keeps for its own documents —
+        // `_MENGER/…`, on a doc; where it lives and whether it is free are
+        // checked under the lock, with the rest.
+        if let Some(path) = &new.path {
+            if !is_menger_path(path) {
+                return Err(StoreError::PathNotReserved { path: path.clone() });
+            }
+            if new.kind != Kind::Doc {
+                return Err(StoreError::PathOnWork {
+                    path: path.clone(),
+                    kind: new.kind,
+                });
+            }
+        }
         let requested_parent = new
             .parent
             .map(|p| p.trim().to_ascii_uppercase())
@@ -2076,6 +2180,32 @@ impl Store {
                 (None, _) => shortcode_root(tickets, &epic).map(|r| r.id.clone()),
             };
 
+            // WAVE-10: a `_MENGER/` document lives directly under its
+            // shortcode's scope root — which it cannot be itself (`seq == 1`)
+            // — and its path is one no ticket of the shortcode holds yet.
+            if let Some(path) = &new.path {
+                let Some(root) = (seq > 1).then(|| shortcode_root(tickets, &epic)).flatten() else {
+                    return Err(StoreError::PathNoRoot {
+                        epic,
+                        path: path.clone(),
+                    });
+                };
+                if parent.as_deref() != Some(root.id.as_str()) {
+                    return Err(StoreError::PathParent {
+                        path: path.clone(),
+                        parent: parent.unwrap_or_default(),
+                        root: root.id.clone(),
+                    });
+                }
+                if let Some(holder) = tickets.paths.get(&(epic.clone(), path.clone())) {
+                    return Err(StoreError::PathTaken {
+                        epic,
+                        path: path.clone(),
+                        holder: holder.clone(),
+                    });
+                }
+            }
+
             // Dangling forward references to this id resolve now: their
             // owners are the newborn's `unlocks` from birth. SCALE-3: the
             // cache keeps them by the id they name, already in (epic, seq)
@@ -2102,6 +2232,8 @@ impl Store {
                 child_count: tickets.children.count(&id),
                 // SDLC-9: linked after birth, by `link_commits`.
                 commits: Vec::new(),
+                // WAVE-10: checked above.
+                path: new.path,
                 body: new.body,
                 created_unix: now,
                 updated_unix: now,
@@ -2257,9 +2389,29 @@ impl Store {
     /// One ticket, whole. SCALE-14: its row from the cache and its body from
     /// the database ([`Store::full`]); [`StoreError::NotFound`] when `id`
     /// names no ticket — answered by the cache, with no read.
+    ///
+    /// WAVE-10: `id` may be a path address, `<SHORTCODE>/<path>` (the
+    /// shortcode case-insensitive, the path exact) — the one ticket of that
+    /// shortcode that holds the path; `NotFound` names the address as given.
     pub async fn get(&self, id: &str) -> Result<Ticket, StoreError> {
-        let (row, written) = self.row(id)?;
+        let (row, written) = match path_address(id) {
+            Some((epic, path)) => self.addressed(&epic, path, id)?,
+            None => self.row(id)?,
+        };
         self.full_one(row, written).await
+    }
+
+    /// WAVE-10: the row a path address names, and the cache's count of
+    /// writes — [`Store::row`] by address.
+    fn addressed(&self, epic: &str, path: &str, address: &str) -> Result<(Row, u64), StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let row = cache
+            .paths
+            .get(&(epic.to_string(), path.to_string()))
+            .and_then(|id| cache.get(id))
+            .cloned()
+            .ok_or_else(|| StoreError::NotFound(address.to_string()))?;
+        Ok((row, cache.written))
     }
 
     /// Tickets ordered by (epic, seq), optionally filtered. The `parent`
@@ -3423,3 +3575,9 @@ mod tests_ready;
 /// the yield order and the tally, and a hand-edited cycle that terminates.
 #[cfg(test)]
 mod tests_waves;
+
+/// WAVE-10: path addresses — `create { path }` on each row of the ticket's
+/// table, `get` by `SHORTCODE/path`, uniqueness in the cache and the file,
+/// and a file from before the column.
+#[cfg(test)]
+mod tests_paths;

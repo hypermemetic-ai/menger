@@ -335,6 +335,16 @@ pub struct Ticket {
     /// verified: the server has no repository. At most 256 (SCALE-4's
     /// lesson — a list on a row is bounded).
     pub commits: Vec<String>,
+    /// WAVE-10: the ticket's **path address** inside its shortcode, if it
+    /// has one — `<SHORTCODE>/<path>` names it (`get { id:
+    /// "PLEXUS/_MENGER/board" }`), and no other ticket of the shortcode
+    /// holds the same path. An address, not an id: the ticket keeps its
+    /// `EPIC-N`, and the store's order, extents, paging and readiness never
+    /// read it. Only the reserved prefix `_MENGER/` is accepted, on a doc
+    /// filed under its shortcode's scope root — menger's own documents
+    /// (WAVE-1 decision 11). Omitted on the wire when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
     pub body: String,
     pub created_unix: i64,
@@ -368,6 +378,12 @@ pub struct TicketSummary {
     /// SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
     /// the ticket page all have it without a `get`.
     pub commits: Vec<String>,
+    /// WAVE-10: as on [`Ticket`] — on the row, so the nav can hide
+    /// `_MENGER/` documents without a `get`. Unlike `severity` and
+    /// `parent`, omitted when there is none (the ticket's contract): every
+    /// ticket but menger's own documents would carry a `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     pub created_unix: i64,
     pub updated_unix: i64,
 }
@@ -387,10 +403,37 @@ impl From<Ticket> for TicketSummary {
             blocked_by: t.blocked_by,
             unlocks: t.unlocks,
             commits: t.commits,
+            path: t.path,
             created_unix: t.created_unix,
             updated_unix: t.updated_unix,
         }
     }
+}
+
+/// WAVE-10: the reserved prefix of every path menger accepts — the
+/// documents menger itself keeps inside a shortcode (WAVE-1 decision 11),
+/// hidden from the nav unless asked for.
+pub const MENGER_PATH_PREFIX: &str = "_MENGER/";
+
+/// WAVE-10: whether `path` is one menger keeps for itself — `_MENGER/` and
+/// at least one character after it. The one rule `create { path }` accepts
+/// and the nav hides by.
+pub fn is_menger_path(path: &str) -> bool {
+    path.len() > MENGER_PATH_PREFIX.len() && path.starts_with(MENGER_PATH_PREFIX)
+}
+
+/// WAVE-10: a **path address** — `<SHORTCODE>/<path>` — split into the
+/// shortcode (upper-cased: shortcodes are case-insensitive) and the path
+/// (exactly as written). `None` for anything else — an `EPIC-N` id has no
+/// `/`, and an address needs a shortcode and a path on either side of the
+/// first one.
+pub fn path_address(id: &str) -> Option<(String, &str)> {
+    let (shortcode, path) = id.split_once('/')?;
+    let shortcode = shortcode.trim();
+    if shortcode.is_empty() || path.is_empty() || !shortcode.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some((shortcode.to_ascii_uppercase(), path))
 }
 
 /// MFE-9: the same narrowing from a borrowed ticket, for a consumer that
@@ -777,6 +820,7 @@ mod tests {
             blocked_by: vec!["W-3".into()],
             unlocks: vec![],
             commits: vec![],
+            path: None,
             created_unix: 1,
             updated_unix: 1,
         };
@@ -844,6 +888,7 @@ mod tests {
             parent: Some("SUM-4".into()),
             child_count: 1,
             commits: vec!["77df9a0".into()],
+            path: Some("_MENGER/board".into()),
             body: "## Problem\n\nthe weight of a list".into(),
             created_unix: 1,
             updated_unix: 2,
