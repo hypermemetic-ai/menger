@@ -123,6 +123,16 @@
 //! body signal to the session while it is mounted ([`hold_body`]), so the
 //! body still lives in exactly one place and the event needs no `get`.
 
+//!
+//! # The wave board listens (WAVE-5)
+//!
+//! An open wave board (src/waves.rs) asks `waves` for its shortcodes and
+//! asks again when what it shows may have moved. It lends the session an ear
+//! for as long as it is mounted ([`listen`]): every `watch` event is offered
+//! to it before the loop applies it, and the board decides (its re-ask
+//! predicate) whether to ask again. Nothing else about the session changes —
+//! `waves` is asked only while a wave board is open, never at startup.
+
 use crate::kids::Kids;
 use crate::{board, cache, dom, nav, Conn, Dock};
 use futures::StreamExt;
@@ -183,6 +193,33 @@ thread_local! {
     /// the walk used to put every newborn in the store, which is how a
     /// dangling blocker resolved live (MFE-7).
     static WANTED: RefCell<Vec<(StoredValue<HashSet<String>>, cache::Holder)>> = const { RefCell::new(Vec::new()) };
+
+    /// WAVE-5: the open wave boards' ears on `watch`, each with the number
+    /// it was lent under — offered every event before the loop applies it.
+    static EARS: RefCell<Vec<(u64, Rc<dyn Fn(&TicketsEvent)>)>> = const { RefCell::new(Vec::new()) };
+    static NEXT_EAR: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// WAVE-5: lend the session an ear on `watch` until the current owner (a
+/// wave board) is cleaned up — `ear` is offered every event the stream
+/// carries, before it is applied.
+pub(crate) fn listen(ear: impl Fn(&TicketsEvent) + 'static) {
+    let n = NEXT_EAR.with(|c| {
+        let n = c.get();
+        c.set(n.wrapping_add(1));
+        n
+    });
+    EARS.with(|e| e.borrow_mut().push((n, Rc::new(ear))));
+    on_cleanup(move || EARS.with(|e| e.borrow_mut().retain(|(m, _)| *m != n)));
+}
+
+/// Every ear, offered `ev` — taken out of the list first, so an ear that
+/// lends or returns one (a view mounting or leaving) never meets a borrow.
+fn hear(ev: &TicketsEvent) {
+    let ears: Vec<Rc<dyn Fn(&TicketsEvent)>> = EARS.with(|e| e.borrow().iter().map(|(_, f)| f.clone()).collect());
+    for ear in ears {
+        ear(ev);
+    }
 }
 
 /// SCALE-26: the `lagged` count, as a signal — see `STALE`.
@@ -397,6 +434,11 @@ async fn session(
     conn.set(Conn::Live);
     while let Some(ev) = live.next().await {
         let ev = ev.map_err(|e| describe(&e))?;
+        // WAVE-5: an open wave board hears it first (it only decides
+        // whether to ask `waves` again).
+        if let ClientEvent::Data(data) = &ev {
+            hear(data);
+        }
         match ev {
             // Every mutation event carries the full updated ticket —
             // AGS-19's `children_changed` carries the full *parent*, which

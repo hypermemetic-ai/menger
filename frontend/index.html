@@ -614,6 +614,77 @@
     font: inherit; font-size: .8rem; border-radius: 4px; padding: 0 .5rem; cursor: pointer;
   }
   #toast button:hover { color: var(--accent); border-color: var(--accent); }
+  /* WAVE-5: the wave board — a column per wave (or per stage), cards in
+     the house chip idiom. The board takes the content column's whole
+     width; its columns scroll sideways when they outgrow it. */
+  header .hlink { color: var(--muted); font-size: .8rem; text-decoration: none; }
+  header .hlink:hover, header .hlink[aria-current] { color: var(--accent); }
+  main:has(#waves) { max-width: none; }
+  #waves .wbar {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 1rem;
+    margin: 0 0 .9rem; font-size: .85rem;
+  }
+  #waves .code, #waves-index .code, #waves .card .off {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: var(--chip-fg);
+    background: var(--chip-bg); border: 1px solid var(--chip-line); border-radius: 5px;
+    padding: 0 5px; white-space: nowrap; text-decoration: none;
+  }
+  #waves a.code:hover, #waves-index a.code:hover, #waves .card .off:hover { color: var(--accent); border-color: var(--accent); }
+  #waves .hosted { color: var(--muted); font-size: .75rem; }
+  #waves .layout { color: var(--muted); white-space: nowrap; }
+  #waves button.seg {
+    background: none; border: 0; padding: 0 .2rem; font: inherit; color: var(--muted); cursor: pointer;
+  }
+  #waves button.seg:hover { color: var(--accent); }
+  #waves button.seg.on { color: var(--ink); font-weight: 600; text-decoration: underline; }
+  #waves label.wide { color: var(--muted); cursor: pointer; white-space: nowrap; }
+  #waves .tally { margin-left: auto; color: var(--muted); font-size: .75rem; }
+  #waves .lanes { display: flex; align-items: flex-start; gap: .75rem; overflow-x: auto; padding-bottom: .5rem; }
+  #waves .lane {
+    flex: 0 0 16.5rem; min-width: 0; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px; padding: .5rem;
+  }
+  #waves .lane.collapsed { flex: 0 0 auto; }
+  #waves .lane-h {
+    display: flex; align-items: baseline; gap: .4rem; margin: 0 0 .45rem; padding: 0 .15rem;
+    font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  #waves .lane-h .n { margin-left: auto; font-family: var(--mono); font-weight: 400; letter-spacing: 0; }
+  #waves button.lane-h { background: none; border: 0; cursor: pointer; width: 100%; margin: 0; white-space: nowrap; }
+  #waves button.lane-h:hover { color: var(--accent); }
+  #waves .lane:not(.collapsed) button.lane-h { margin-bottom: .45rem; }
+  #waves ul.cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
+  #waves .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+    padding: .35rem .5rem .4rem; font-size: 12px; line-height: 1.45;
+  }
+  #waves .card { cursor: pointer; }
+  #waves .card:hover { border-color: var(--accent); }
+  #waves .card .top { display: flex; align-items: baseline; gap: .4rem; }
+  #waves .card .kind { color: var(--muted); font-size: 10.5px; }
+  #waves .card[data-kind="scope"] .kind { color: var(--kind-scope); }
+  #waves .card[data-kind="build"] .kind { color: var(--kind-build); }
+  #waves .card[data-kind="execution"] .kind { color: var(--kind-execution); }
+  #waves .card[data-kind="gap"] .kind { color: var(--kind-gap); }
+  #waves .card[data-kind="spike"] .kind { color: var(--kind-spike); }
+  #waves .card .sev { color: var(--muted); font-weight: 700; }
+  #waves .card .sev[data-sev="Critical"], #waves .card .sev[data-sev="High"] { color: var(--err-fg); }
+  #waves .card .blocked-mark { color: var(--err-fg); font-weight: 700; }
+  #waves .card .badge {
+    margin-left: auto; font-size: 10px; color: var(--chip-fg); background: var(--chip-bg);
+    border: 1px solid var(--chip-line); border-radius: 6px; padding: 0 5px;
+  }
+  #waves .card a.title {
+    display: block; margin: .15rem 0 .3rem; color: var(--ink); text-decoration: none;
+    font-family: var(--sans); font-size: 13px; overflow-wrap: anywhere;
+  }
+  #waves .card a.title:hover { color: var(--accent); }
+  #waves .card .foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem; }
+  #waves .card .foot .tag { font-size: 10px; padding: 0 5px; border-radius: 6px; border: 1px solid transparent; }
+  #waves .card .off { font-weight: 400; }
+  #waves-index h2 { font-size: 1rem; margin: 0 0 .4rem; }
+  #waves-index ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem; }
 </style>
 </head>
 <body></body>

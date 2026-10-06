@@ -994,6 +994,19 @@ impl Tree {
         self.groups.with(|m| m.as_ref().and_then(|m| m.get(epic)).map(f))
     }
 
+    /// WAVE-5: `f` of every group the nav holds, tracked — `None` until the
+    /// session's first `groups {}`. What the wave board finds a shortcode's
+    /// tree in (each group's `host`).
+    pub(crate) fn with_groups<T>(self, f: impl FnOnce(Option<&BTreeMap<String, Group>>) -> T) -> T {
+        self.groups.with(|m| f(m.as_ref()))
+    }
+
+    /// WAVE-5: the top-level shortcodes, in shortcode order — what `#/waves`
+    /// lists.
+    pub(crate) fn top(self) -> Memo<Vec<String>> {
+        self.top
+    }
+
     /// AGS-23: the nodes these shortcodes are drawn as, tracked — each its
     /// root's row, or its shortcode row with no root ([`shortcode_node`]).
     /// One list for a keyed `<For>`: a node is built once, and again only if
@@ -1764,7 +1777,20 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
     // value; the two row shapes are otherwise unrelated.
     let row = match ticket {
         None => group_row(key.clone(), rollup.expect("a shortcode row"), prefix, toggle_glyph, toggle, expanded_attr, owns_attr),
-        Some(t) => leaf_row(key.clone(), t, rollup, ctx, pos, index, prefix, toggle_glyph, toggle, expanded_attr, owns_attr),
+        Some(t) => leaf_row(
+            key.clone(),
+            t,
+            rollup,
+            shortcode.clone(),
+            ctx,
+            pos,
+            index,
+            prefix,
+            toggle_glyph,
+            toggle,
+            expanded_attr,
+            owns_attr,
+        ),
     };
 
     let kids_ref = NodeRef::<leptos::html::Div>::new();
@@ -2251,12 +2277,15 @@ fn no_select_on_multi_click(ev: web_sys::MouseEvent) {
 /// opens the row instead of following the link. SCALE-24: in a windowed
 /// list it says where it is among all of its siblings. AGS-23: a shortcode
 /// drawn as its root's row is one of these, drawn from its group and
-/// carrying the shortcode's roll-up (`rollup`) beside the root's status.
+/// carrying the shortcode's roll-up (`rollup`) beside the root's status —
+/// WAVE-5: and the shortcode (`data-shortcode`), which the ticket menu reads
+/// to offer the shortcode's wave board.
 #[allow(clippy::too_many_arguments)]
 fn leaf_row(
     id: String,
     ticket: Signal<TicketSummary>,
     rollup: Option<Memo<String>>,
+    shortcode: Option<String>,
     ctx: Ctx,
     pos: Option<Pos>,
     index: Option<Memo<Option<usize>>>,
@@ -2300,6 +2329,9 @@ fn leaf_row(
             data-node-key=id.clone()
             data-nav-id=id.clone()
             data-ticket-id=id.clone()
+            // WAVE-5: a shortcode's row says which shortcode it stands for —
+            // what the ticket menu offers its wave board by.
+            data-shortcode=shortcode
             data-kind=kind
             href=href
             // AGS-25: a double-click on a row with children opens or closes

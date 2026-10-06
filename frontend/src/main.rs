@@ -179,6 +179,13 @@
 //! shows the `Doc` chip, no relations, and its children's docs counted
 //! apart. Every id and selector the earlier tickets read is kept.
 
+//! WAVE-5: the wave board (src/waves.rs) — `#/waves/<SHORTCODE>`, the
+//! order of work as columns derived from `blocked_by` by the server
+//! (`tickets.waves`, WAVE-4): a column per wave, or per stage, one toggle
+//! apart. `#/waves` lists the boards; the header links to it beside the
+//! board, and a shortcode's row in the nav offers its board in the ticket
+//! menu. `waves` is asked only while a wave board is open.
+
 mod board;
 mod cache;
 mod dom;
@@ -191,6 +198,7 @@ mod nav;
 mod mermaid;
 mod session;
 mod theme;
+mod waves;
 
 use std::collections::HashSet;
 
@@ -261,10 +269,14 @@ pub(crate) enum Conn {
 // Routing (MFE-7). The deep-link contract this ticket owns, recorded in
 // MFE-1: a ticket's page is `/app/#/ticket/{id}`.
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Route {
     Board,
     Ticket(String),
+    /// WAVE-5: `#/waves/<SHORTCODE>` — the wave board for the shortcode (held
+    /// upper case: the route is case-insensitive) and every shortcode hosted
+    /// under it; `#/waves` alone (an empty shortcode) lists the boards.
+    Waves(String),
 }
 
 fn parse_route(hash: &str) -> Route {
@@ -272,6 +284,8 @@ fn parse_route(hash: &str) -> Route {
     let path = path.strip_prefix('/').unwrap_or(path);
     match path.split_once('/') {
         Some(("ticket", id)) if !id.is_empty() => Route::Ticket(id.to_string()),
+        Some(("waves", sc)) => Route::Waves(sc.trim_end_matches('/').to_ascii_uppercase()),
+        None if path == "waves" => Route::Waves(String::new()),
         _ => Route::Board,
     }
 }
@@ -1449,10 +1463,19 @@ fn App() -> impl IntoView {
                         })
                     }}
                     <h1><a href="#/">"menger"</a></h1>
+                    // WAVE-5: the wave boards, beside the board.
+                    <a
+                        class="hlink"
+                        href="#/waves"
+                        aria-current=move || matches!(route.get(), Route::Waves(_)).then_some("page")
+                    >
+                        "waves"
+                    </a>
                     <span class="tag">
                         {move || match route.get() {
                             Route::Board => "the live board (MFE-3)",
                             Route::Ticket(_) => "ticket (MFE-7)",
+                            Route::Waves(_) => "the wave board (WAVE-5)",
                         }}
                     </span>
                     <span id="conn" class=move || conn_view().0>{move || conn_view().1}</span>
@@ -1474,6 +1497,9 @@ fn App() -> impl IntoView {
                         Route::Ticket(id) => {
                             view! { <TicketPage id socket last_error /> }.into_any()
                         }
+                        Route::Waves(shortcode) => {
+                            view! { <waves::WaveBoard shortcode tree socket last_error /> }.into_any()
+                        }
                     }}
                 </main>
             </div>
@@ -1493,8 +1519,26 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        board_layout, board_window, fmt_relative, st_class, tally, Geom, BOARD_MARGIN, BOARD_MAX_PX, BOARD_STEP, STATUSES,
+        board_layout, board_window, fmt_relative, parse_route, st_class, tally, Geom, Route, BOARD_MARGIN, BOARD_MAX_PX,
+        BOARD_STEP, STATUSES,
     };
+
+    /// WAVE-5: `#/waves/<SHORTCODE>` is the wave board, case-insensitive;
+    /// `#/waves` lists the boards; the board's and the ticket page's routes
+    /// are as they were.
+    #[test]
+    fn the_wave_board_has_its_route_and_the_others_keep_theirs() {
+        assert_eq!(parse_route("#/waves/PLEXUS"), Route::Waves("PLEXUS".into()));
+        assert_eq!(parse_route("#/waves/plexus"), Route::Waves("PLEXUS".into()));
+        assert_eq!(parse_route("#/waves/Plexus/"), Route::Waves("PLEXUS".into()));
+        assert_eq!(parse_route("#/waves"), Route::Waves(String::new()));
+        assert_eq!(parse_route("#/waves/"), Route::Waves(String::new()));
+        assert_eq!(parse_route("#/ticket/MNG-4"), Route::Ticket("MNG-4".into()));
+        assert_eq!(parse_route("#/ticket/"), Route::Board);
+        assert_eq!(parse_route("#/"), Route::Board);
+        assert_eq!(parse_route(""), Route::Board);
+        assert_eq!(parse_route("#/wavesX"), Route::Board);
+    }
     use crate::nav::roll_label;
 
     /// AGS-22: the relative-time ladder. Truncating, floored at one, so no

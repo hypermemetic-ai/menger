@@ -210,6 +210,23 @@ asks the server: `find` once the typing pauses (80 ms), only the newest
 question's answer shown, its count the answer's rows plus `remaining` —
 `map-12` shows MAP-12 first ~0.26 s after the last keystroke at 10^6.
 
+The wave board (WAVE-5) is `#/waves/<SHORTCODE>` — e.g.
+`http://127.0.0.1:4456/app/#/waves/PLEXUS`, the platform's work in order:
+the shortcode and every shortcode hosted under it (the nav's `host` chain
+from `groups`), placed by one `tickets.waves` (WAVE-4) and grouped here into
+columns — a column per non-empty wave, then `missing blocker`, then `Done`
+collapsed to its count; or, one toggle away, the stages (`Blocked`, holding
+wave 2 and later with a `w<n>` badge, then the wave-1 tickets by status and
+`Done`). The layout is remembered per shortcode in localStorage. A card
+names each ticket it waits on that the board does not show (an off-board
+blocker, a chip linking to it); a checkbox adds scopes and executions to
+the default build, spike, gap. It asks `waves` again — coalesced, one in
+flight and one queued — when `watch` carries a `created` or `status_changed`
+in its shortcodes or of an id a card waits on, on a `lagged` and on a
+reconnect; `waves` is asked only while a wave board is open. `#/waves`
+lists the boards; the header links to it, and a shortcode's row in the nav
+offers its board in the ticket menu.
+
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service
