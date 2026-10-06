@@ -624,7 +624,10 @@
   #toast button:hover { color: var(--accent); border-color: var(--accent); }
   /* WAVE-5: the wave board — a column per wave (or per stage), cards in
      the house chip idiom. The board takes the content column's whole
-     width; its columns scroll sideways when they outgrow it. */
+     width; its columns scroll sideways when they outgrow it. Owner,
+     2026-10-06: every column is the page's height and scrolls inside —
+     the row's height is measured in waves.rs (what the viewport leaves
+     below it); the fallback here only covers the first frame. */
   header .hlink { color: var(--muted); font-size: .8rem; text-decoration: none; }
   header .hlink:hover, header .hlink[aria-current] { color: var(--accent); }
   main:has(#waves) { max-width: none; }
@@ -647,11 +650,16 @@
   #waves button.seg.on { color: var(--ink); font-weight: 600; text-decoration: underline; }
   #waves label.wide { color: var(--muted); cursor: pointer; white-space: nowrap; }
   #waves .tally { margin-left: auto; color: var(--muted); font-size: .75rem; }
-  #waves .lanes { display: flex; align-items: flex-start; gap: .75rem; overflow-x: auto; padding-bottom: .5rem; }
+  #waves .lanes {
+    display: flex; align-items: stretch; gap: .75rem; overflow-x: auto; overflow-y: hidden;
+    padding-bottom: .5rem; height: calc(100dvh - 8rem); box-sizing: border-box;
+  }
   #waves .lane {
     flex: 0 0 16.5rem; min-width: 0; background: var(--panel);
     border: 1px solid var(--line); border-radius: 8px; padding: .5rem;
+    display: flex; flex-direction: column; min-height: 0; box-sizing: border-box;
   }
+  #waves .lane > .lane-h { flex: none; }
   #waves .lane.collapsed { flex: 0 0 auto; }
   #waves .lane-h {
     display: flex; align-items: baseline; gap: .4rem; margin: 0 0 .45rem; padding: 0 .15rem;
@@ -662,7 +670,11 @@
   #waves button.lane-h { background: none; border: 0; cursor: pointer; width: 100%; margin: 0; white-space: nowrap; }
   #waves button.lane-h:hover { color: var(--accent); }
   #waves .lane:not(.collapsed) button.lane-h { margin-bottom: .45rem; }
-  #waves ul.cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
+  #waves ul.cards {
+    list-style: none; margin: 0; padding: 0 2px 0 0; display: flex; flex-direction: column; gap: .4rem;
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  }
+  #waves ul.cards > li { flex: none; }
   #waves .card {
     background: var(--card); border: 1px solid var(--line); border-radius: 6px;
     padding: .35rem .5rem .4rem; font-size: 12px; line-height: 1.45;

@@ -638,6 +638,32 @@ pub(crate) fn WaveBoard(
         let sc = sc.clone();
         move || set.with(|s| s.iter().flatten().filter(|e| **e != sc).cloned().collect::<Vec<_>>().join(" · "))
     };
+    // Owner, 2026-10-06: the columns are the page's height, all of them, and
+    // scroll inside. The lanes row takes what the viewport has left below
+    // the header and the bar (which wraps on a narrow window, so it is
+    // measured, not assumed); the annotation stays below, one scroll away.
+    let lanes_ref = NodeRef::<leptos::html::Div>::new();
+    let lanes_h = RwSignal::new(None::<f64>);
+    let measure = move || {
+        let Some(el) = lanes_ref.get_untracked() else { return };
+        let el: &web_sys::Element = el.as_ref();
+        // The content pane is the scroller and starts at the viewport's top,
+        // so the lanes sit `top + scrolled` into the page.
+        let scrolled = el.closest(".content").ok().flatten().map_or(0.0, |c| f64::from(c.scroll_top()));
+        let top = el.get_bounding_client_rect().top() + scrolled;
+        let vh = dom::window().inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
+        lanes_h.set(Some(lane_height(vh, top)));
+    };
+    Effect::new(move |_| {
+        // Whatever moves the lanes' top: the answer (the "placing…" line
+        // above them comes and goes) and the layout.
+        ctx.answer.track();
+        layout.track();
+        request_animation_frame(measure);
+    });
+    let resize = window_event_listener(leptos::ev::resize, move |_| measure());
+    on_cleanup(move || resize.remove());
+
     let seg = move |l: Layout| {
         view! {
             <button
@@ -670,7 +696,11 @@ pub(crate) fn WaveBoard(
             {move || {
                 ctx.answer.with(Option::is_none).then(|| view! { <p class="loading">"placing the work…"</p> })
             }}
-            <div class="lanes">
+            <div
+                class="lanes"
+                node_ref=lanes_ref
+                style=move || lanes_h.get().map(|h| format!("height: {h:.0}px")).unwrap_or_default()
+            >
                 <For
                     each=move || lanes.get()
                     key=Lane::slug
@@ -682,6 +712,17 @@ pub(crate) fn WaveBoard(
         </section>
     }
     .into_any()
+}
+
+/// Air left under the lanes row, and the shortest it may be — a viewport too
+/// small for the bar still shows a few cards per column.
+const LANE_AIR: f64 = 16.0;
+const LANE_MIN: f64 = 240.0;
+
+/// The lanes row's height: what the viewport has left below the lanes'
+/// top, less a little air — every column is this tall and scrolls inside.
+fn lane_height(viewport: f64, top: f64) -> f64 {
+    (viewport - top - LANE_AIR).max(LANE_MIN)
 }
 
 /// One column: its heading and its cards. `Done` is collapsed to its count
@@ -833,6 +874,16 @@ fn WaveIndex(tree: nav::Tree) -> impl IntoView {
 mod tests {
     use super::*;
     use menger_tickets_api::{Kind, Ticket};
+
+    /// Owner, 2026-10-06: every column is the page's height and scrolls
+    /// inside — the row takes what the viewport leaves below its top.
+    #[test]
+    fn the_lanes_take_what_the_viewport_leaves_below_them() {
+        assert_eq!(lane_height(1000.0, 200.0), 1000.0 - 200.0 - LANE_AIR);
+        assert_eq!(lane_height(1100.0, 96.5), 1100.0 - 96.5 - LANE_AIR);
+        // A viewport the bar nearly fills still leaves a usable column.
+        assert_eq!(lane_height(300.0, 200.0), LANE_MIN);
+    }
 
     fn group(epic: &str, host: Option<&str>) -> (String, Group) {
         (
