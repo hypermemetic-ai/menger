@@ -219,8 +219,18 @@ collapsed to its count; or, one toggle away, the stages (`Blocked`, holding
 wave 2 and later with a `w<n>` badge, then the wave-1 tickets by status and
 `Done`). The layout is remembered per shortcode in localStorage. A card
 names each ticket it waits on that the board does not show (an off-board
-blocker, a chip linking to it); a checkbox adds scopes and executions to
-the default build, spike, gap. WAVE-6: it moves its cards as `watch` says
+blocker, a chip linking to it). WAVE-12: that tree and the kinds build,
+spike, gap are the board's default; its **filter** builds any other — a
+`Filter` button (or `f`) opens a Linear-style menu: a search over the
+categories and their values, then Shortcode (the hosting tree, the route's
+first, tri-state), Status, Wave, Kind, Severity, Readiness, Off-board
+blockers, Title contains — each value with its count on the board's answer.
+Applied clauses are pills, `[Category] [is any of | is not] [values +n]
+[×]`; `reset` returns to the default. Shortcode and Kind are what `waves` is
+asked for; the rest narrow the answer in the browser. The filter is the
+route's query, rewritten in place — `#/waves/PLEXUS?sc=is:RETURNS&
+status=not:Pending` — so a reload or a pasted link restores the board.
+WAVE-6: it moves its cards as `watch` says
 they move — each `placements_changed` takes a card to its new column
 (however far upstream the write was: a completion two blockers back moves
 it), each `status_changed` its stage and what the cards wait on — and asks
@@ -614,6 +624,7 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
 web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
                        src/waves.rs the wave board (WAVE-5, WAVE-6),
+                       src/filter.rs its filter and menu (WAVE-12),
                        src/notes.rs its annotation and the body editor (WAVE-11)
 spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)
 diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub

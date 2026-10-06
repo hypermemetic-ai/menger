@@ -186,9 +186,15 @@
 //! board, and a shortcode's row in the nav offers its board in the ticket
 //! menu. `waves` is asked only while a wave board is open.
 
+//! WAVE-12: the board's filter (src/filter.rs) — a Linear-style menu that
+//! builds any board; a board opens on its shortcode tree, and the filter is
+//! the route's query (`#/waves/PLEXUS?status=not:Complete`), which the route
+//! itself ignores.
+
 mod board;
 mod cache;
 mod dom;
+mod filter;
 mod keys;
 mod kids;
 mod md;
@@ -277,12 +283,16 @@ pub(crate) enum Route {
     /// WAVE-5: `#/waves/<SHORTCODE>` — the wave board for the shortcode (held
     /// upper case: the route is case-insensitive) and every shortcode hosted
     /// under it; `#/waves` alone (an empty shortcode) lists the boards.
+    /// WAVE-12: a query after it (`?sc=…&status=…`) is the board's filter —
+    /// the board's to read, not the route's.
     Waves(String),
 }
 
 fn parse_route(hash: &str) -> Route {
     let path = hash.strip_prefix('#').unwrap_or(hash);
     let path = path.strip_prefix('/').unwrap_or(path);
+    // WAVE-12: the query is the wave board's filter, not part of the route.
+    let path = path.split_once('?').map_or(path, |(p, _)| p);
     match path.split_once('/') {
         Some(("ticket", id)) if !id.is_empty() => Route::Ticket(id.to_string()),
         Some(("waves", sc)) => Route::Waves(sc.trim_end_matches('/').to_ascii_uppercase()),
@@ -1539,6 +1549,10 @@ mod tests {
         assert_eq!(parse_route("#/"), Route::Board);
         assert_eq!(parse_route(""), Route::Board);
         assert_eq!(parse_route("#/wavesX"), Route::Board);
+        // WAVE-12: the board's filter rides in the query; the route ignores it.
+        assert_eq!(parse_route("#/waves/PLEXUS?sc=is:RETURNS&status=not:Complete"), Route::Waves("PLEXUS".into()));
+        assert_eq!(parse_route("#/waves/plexus/?all"), Route::Waves("PLEXUS".into()));
+        assert_eq!(parse_route("#/waves?all"), Route::Waves(String::new()));
     }
     use crate::nav::roll_label;
 

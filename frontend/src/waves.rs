@@ -1,13 +1,17 @@
 //! WAVE-5: the wave board — `#/waves/<SHORTCODE>`, the order of work as a
 //! kanban derived from `blocked_by` (WAVE-1).
 //!
-//! The board is one shortcode's tickets (owner, 2026-10-06: "I don't want to
-//! see all boards on a given board" — until then a board took in every
-//! shortcode hosted under it). The shortcodes hosted directly under it — the
-//! nav's `host` chain from `groups` — are its sub-boards, linked from the bar.
-//! It asks the server where each of its tickets sits — one `tickets.waves { epics, kinds }` per load (WAVE-4),
-//! computed over the whole graph, never in the browser — and groups the
-//! answer into columns here, in one of two layouts a toggle apart:
+//! A board opens on its shortcode tree — the shortcode and every shortcode
+//! hosted under it, at any depth (the nav's `host` chain from `groups`), kinds
+//! build, spike and gap — and its filter builds any other (WAVE-12, WAVE-1
+//! decision 16; src/filter.rs): a Linear-style menu whose Shortcode and Kind
+//! say what `waves` is asked for, whose other categories narrow the answer
+//! in the browser, and which lives in the route's query. (`f528177` made a
+//! board one shortcode with the ones under it as links; the owner rejected
+//! it.) The board asks the server where each of its tickets sits — one
+//! `tickets.waves { epics, kinds }` per load (WAVE-4), computed over the
+//! whole graph, never in the browser — and groups the answer into columns
+//! here, in one of two layouts a toggle apart:
 //!
 //! - **waves**: a column per non-empty wave, ascending, then `missing
 //!   blocker` when anything waits on an id that is no ticket, then `Done`,
@@ -22,8 +26,10 @@
 //! title, kind, status, severity when set, a marker when its status is
 //! `Blocked`, and a chip for each ticket it waits on that this board does
 //! not show (an **off-board blocker**); the card and every chip link to the
-//! ticket's page. The layout is remembered per shortcode in localStorage —
-//! every read and write allowed to fail, the board working without it.
+//! ticket's page. The columns, the tally and the Done count are the cards
+//! the filter admits; an off-board blocker is one the answer holds no card
+//! for. The layout is remembered per shortcode in localStorage — every read
+//! and write allowed to fail, the board working without it.
 //!
 //! Live: the board lends the session an ear ([`session::listen`]). WAVE-6:
 //! the server keeps every ticket's placement and says, once per write, which
@@ -43,46 +49,31 @@
 //! held in the row cache (src/cache.rs) while they are shown, so a title
 //! moves on the card the moment `watch` carries it.
 //!
-//! Everything that decides — the shortcode set, the columns, the off-board
-//! test, what an event does, how a change moves the cards, the coalescing,
-//! the stored layout — is a pure function here, pinned by native tests.
+//! Everything that decides — the columns, the off-board test, what an event
+//! does, how a change moves the cards, the coalescing, the stored layout —
+//! is a pure function here (the filter's, in src/filter.rs), pinned by
+//! native tests.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use leptos::prelude::*;
-use menger_tickets_api::{Group, Placement, Severity, Status, TicketSummary, TicketsEvent};
+use menger_tickets_api::{Placement, Severity, Status, TicketSummary, TicketsEvent};
 use std::cmp::Ordering;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::filter::{self, BoardFilter, FilterCtx, ScTree};
 use crate::nav::kind_glyph;
 use crate::notes::BoardNotes;
 use crate::{cache, dom, nav, session, st_class};
 
 // ---------------------------------------------------------------------
-// The shortcode set
+// The shortcodes
 
-/// The shortcode a ticket id is in: what comes before its last `-`.
+/// The shortcode a ticket id is in: what comes before its last `-`. (A
+/// board's shortcodes are its filter's — src/filter.rs.)
 pub(crate) fn epic_of(id: &str) -> Option<&str> {
     id.rsplit_once('-').map(|(epic, _)| epic)
-}
-
-/// The board for `root` (case-insensitive) is that one shortcode — the
-/// shortcodes hosted under it are boards of their own ([`sub_boards`]).
-pub(crate) fn shortcode_set(root: &str) -> BTreeSet<String> {
-    BTreeSet::from([root.to_ascii_uppercase()])
-}
-
-/// The boards one level under `root` (case-insensitive): every shortcode
-/// whose `host` ticket is in `root`, in shortcode order. Each is a link on
-/// `root`'s bar; its own board links the ones under it.
-pub(crate) fn sub_boards(root: &str, groups: &BTreeMap<String, Group>) -> Vec<String> {
-    let root = root.to_ascii_uppercase();
-    groups
-        .values()
-        .filter(|g| g.epic != root && g.host.as_deref().and_then(epic_of) == Some(root.as_str()))
-        .map(|g| g.epic.clone())
-        .collect()
 }
 
 // ---------------------------------------------------------------------
@@ -317,7 +308,7 @@ fn yield_order(a: &Card, b: &Card) -> Ordering {
 }
 
 /// The tally of `cards`, as `wave_counts` gives it.
-fn retally(a: &mut Answer) {
+pub(crate) fn retally(a: &mut Answer) {
     let (mut waves, mut missing, mut done) = (Vec::<u64>::new(), 0, 0);
     for c in &a.cards {
         match c.placement {
@@ -438,10 +429,6 @@ impl Coalesce {
     }
 }
 
-/// The kinds asked for with the checkbox ticked: the work, and the scopes
-/// and executions beside it (WAVE-1 decision 9: docs never).
-const WIDE_KINDS: [&str; 5] = ["build", "spike", "gap", "scope", "execution"];
-
 /// One answer of `waves`: the cards in yield order, and the tally.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub(crate) struct Answer {
@@ -488,8 +475,10 @@ pub(crate) fn tally(a: &Answer) -> String {
 /// effects and the request each take their own.
 #[derive(Clone, Copy)]
 struct Ctx {
+    /// The shortcodes and the kinds asked for — the filter's (WAVE-12);
+    /// `None` until the groups are in.
     set: Memo<Option<BTreeSet<String>>>,
-    wide: RwSignal<bool>,
+    kinds: Memo<Option<Vec<String>>>,
     answer: RwSignal<Option<Answer>>,
     coalesce: StoredValue<Coalesce>,
     holder: StoredValue<cache::Holder>,
@@ -507,16 +496,25 @@ fn ask(ctx: Ctx) {
 async fn fetch(ctx: Ctx) {
     loop {
         // `try_`: the board can have been left while a request was out.
-        let (Some(Some(epics)), Some(wide)) = (ctx.set.try_get_untracked(), ctx.wide.try_get_untracked()) else {
+        let (Some(Some(epics)), Some(Some(kinds))) = (ctx.set.try_get_untracked(), ctx.kinds.try_get_untracked()) else {
+            ctx.coalesce.try_update_value(|c| *c = Coalesce::default());
             return;
         };
+        // WAVE-12: a filter that leaves no shortcode or no kind is an empty
+        // board — nothing to ask (`waves` refuses an empty `epics`).
+        if epics.is_empty() || kinds.is_empty() {
+            take(ctx, Answer::default());
+            if ctx.coalesce.try_update_value(Coalesce::answered) != Some(true) {
+                return;
+            }
+            continue;
+        }
         let Some(client) = session::client() else {
             // Not connected: the next connection asks (the socket ticks).
             ctx.coalesce.try_update_value(|c| *c = Coalesce::default());
             return;
         };
-        let kinds = wide.then(|| WIDE_KINDS.iter().map(|k| k.to_string()).collect());
-        match client.waves_all(epics.into_iter().collect(), kinds).await {
+        match client.waves_all(epics.into_iter().collect(), Some(kinds)).await {
             Ok(events) => match answer_of(events) {
                 Ok(a) => take(ctx, a),
                 Err(message) => {
@@ -544,7 +542,9 @@ fn take(ctx: Ctx, a: Answer) {
 }
 
 /// `#/waves/<SHORTCODE>` — or, with no shortcode, `#/waves`: the top-level
-/// shortcodes, each a link to its board.
+/// shortcodes, each a link to its board. WAVE-12: the board's filter is the
+/// route's query (`#/waves/PLEXUS?status=not:Complete`), read once here —
+/// a new hash mounts a new board — and rewritten in place on every change.
 #[component]
 pub(crate) fn WaveBoard(
     shortcode: String,
@@ -558,10 +558,38 @@ pub(crate) fn WaveBoard(
         return view! { <WaveIndex tree /> }.into_any();
     }
     let sc = shortcode.to_ascii_uppercase();
+    // WAVE-12: the filter — what the URL says, or (no query, or a malformed
+    // one) the board's default, which follows the groups.
+    let chosen = RwSignal::new(BoardFilter::parse_query(filter::query_of(&dom::window().location().hash().unwrap_or_default())));
+    let sctree = Memo::new(move |_| tree.with_groups(|g| g.map(ScTree::of)));
+    let default = {
+        let sc = sc.clone();
+        Memo::new(move |_| sctree.with(|t| t.as_ref().map(|t| BoardFilter::default_for(&sc, t))))
+    };
+    let filter = Memo::new(move |_| chosen.get().or_else(|| default.get()));
     let set = {
         let sc = sc.clone();
-        Memo::new(move |_| tree.with_groups(|g| g.map(|_| shortcode_set(&sc))))
+        Memo::new(move |_| {
+            filter.with(|f| sctree.with(|t| match (f, t) {
+                (Some(f), Some(t)) => Some(f.epics(&sc, t)),
+                _ => None,
+            }))
+        })
     };
+    let kinds = Memo::new(move |_| filter.with(|f| f.as_ref().map(BoardFilter::kinds)));
+    // The URL holds the board: rewritten in place (no history entry) on
+    // every change — no query while it is the default.
+    Effect::new(move |_| {
+        let Some(default) = default.get() else { return };
+        let query = chosen.with(|c| match c {
+            Some(f) if *f != default => f.to_query(),
+            _ => String::new(),
+        });
+        if chosen.with_untracked(|c| c.as_ref() == Some(&default)) {
+            chosen.set(None);
+        }
+        write_query(&query);
+    });
     let layout = RwSignal::new(load_layout(&sc));
     {
         let sc = sc.clone();
@@ -573,11 +601,10 @@ pub(crate) fn WaveBoard(
             now
         });
     }
-    let wide = RwSignal::new(false);
     let done_open = RwSignal::new(false);
     let ctx = Ctx {
         set,
-        wide,
+        kinds,
         answer: RwSignal::new(None),
         coalesce: StoredValue::new(Coalesce::default()),
         holder: StoredValue::new(cache::Holder::new()),
@@ -585,12 +612,13 @@ pub(crate) fn WaveBoard(
     };
 
     // A load: on entry once the groups say what the set is, on a new
-    // connection, and when the set or the kinds change.
+    // connection, and when the set or the kinds change (a filter's Shortcode
+    // or Kind — its other categories ask nothing).
     Effect::new(move |_| {
         if socket.get() == 0 || set.with(Option::is_none) {
             return; // no connection, or no groups yet: this re-runs when there are
         }
-        wide.track();
+        kinds.track();
         ask(ctx);
     });
 
@@ -628,14 +656,27 @@ pub(crate) fn WaveBoard(
             a.iter().flat_map(|a| a.cards.iter()).map(|c| (c.summary.id.clone(), c.placement)).collect::<HashMap<String, Placement>>()
         })
     });
+    // WAVE-12: what the filter admits — the columns, the tally, the Done
+    // count; live changes to the answer re-filter.
+    let shown = Memo::new(move |_| {
+        ctx.answer.with(|a| {
+            a.as_ref().map(|a| filter.with(|f| f.as_ref().map_or_else(|| a.clone(), |f| filter::narrow(a, f))))
+        })
+    });
     let cols = Memo::new(move |_| {
         let l = layout.get();
-        ctx.answer.with(|a| a.as_ref().map(|a| columns(&a.cards, l)).unwrap_or_default())
+        shown.with(|a| a.as_ref().map(|a| columns(&a.cards, l)).unwrap_or_default())
     });
     let lanes = Memo::new(move |_| cols.with(|cs| cs.iter().map(|c| c.lane.clone()).collect::<Vec<_>>()));
-    let subs = {
-        let sc = sc.clone();
-        Memo::new(move |_| tree.with_groups(|g| g.map(|g| sub_boards(&sc, g)).unwrap_or_default()))
+    let fx = FilterCtx {
+        route: StoredValue::new(sc.clone()),
+        tree: sctree,
+        chosen,
+        default,
+        filter,
+        epics: set,
+        answer: ctx.answer,
+        counts: Memo::new(move |_| ctx.answer.with(|a| a.as_ref().map(filter::counts).unwrap_or_default())),
     };
     // Owner, 2026-10-06: the columns are the page's height, all of them, and
     // scroll inside. The lanes row takes what the viewport has left below
@@ -655,9 +696,11 @@ pub(crate) fn WaveBoard(
     };
     Effect::new(move |_| {
         // Whatever moves the lanes' top: the answer (the "placing…" line
-        // above them comes and goes) and the layout.
+        // above them comes and goes), the layout, and the filter (its pills
+        // can wrap the bar).
         ctx.answer.track();
         layout.track();
+        filter.track();
         request_animation_frame(measure);
     });
     let resize = window_event_listener(leptos::ev::resize, move |_| measure());
@@ -679,32 +722,17 @@ pub(crate) fn WaveBoard(
     view! {
         <section id="waves" data-shortcode=sc.clone() data-layout=move || layout.get().as_str()>
             <div class="wbar">
-                <span class="code">{sc.clone()}</span>
-                {move || {
-                    let subs = subs.get();
-                    (!subs.is_empty()).then(|| view! {
-                        <span class="hosted" title="the shortcodes hosted under this one — each its own board">
-                            "boards under it: "
-                            {subs.into_iter().map(|b| {
-                                let href = format!("#/waves/{b}");
-                                view! { <a class="code" href=href>{b}</a>" " }
-                            }).collect_view()}
-                        </span>
-                    })
-                }}
+                {filter::filter_bar(fx)}
                 <span class="layout" role="group" aria-label="layout">"[ "{seg(Layout::Waves)}" | "{seg(Layout::Stages)}" ]"</span>
-                <label class="wide">
-                    <input
-                        type="checkbox"
-                        prop:checked=move || wide.get()
-                        on:change=move |ev| wide.set(event_target_checked(&ev))
-                    />
-                    " scopes & executions"
-                </label>
-                <span class="tally">{move || ctx.answer.with(|a| a.as_ref().map(tally))}</span>
+                <span class="tally">{move || shown.with(|a| a.as_ref().map(tally))}</span>
             </div>
             {move || {
                 ctx.answer.with(Option::is_none).then(|| view! { <p class="loading">"placing the work…"</p> })
+            }}
+            {move || {
+                shown.with(|a| a.as_ref().is_some_and(|a| a.cards.is_empty())).then(|| view! {
+                    <p class="none">"no card matches this filter"</p>
+                })
             }}
             <div
                 class="lanes"
@@ -722,6 +750,23 @@ pub(crate) fn WaveBoard(
         </section>
     }
     .into_any()
+}
+
+/// The route's query rewritten to `q` in place — `replaceState`, so no
+/// history entry per click and no `hashchange` (the board stays mounted) —
+/// and only while the hash is still a wave board's.
+fn write_query(q: &str) {
+    let win = dom::window();
+    let hash = win.location().hash().unwrap_or_default();
+    if !hash.starts_with("#/waves/") {
+        return;
+    }
+    let next = filter::with_query(&hash, q);
+    if next != hash {
+        if let Ok(history) = win.history() {
+            let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&next));
+        }
+    }
 }
 
 /// Air left under the lanes row, and the shortest it may be — a viewport too
@@ -865,7 +910,7 @@ fn WaveIndex(tree: nav::Tree) -> impl IntoView {
     view! {
         <section id="waves-index">
             <h2>"Wave boards"</h2>
-            <p class="none">"A board is one shortcode's tickets; the shortcodes hosted under it are boards of their own."</p>
+            <p class="none">"A board opens on a shortcode and every shortcode hosted under it; its filter builds any other."</p>
             <ul>
                 <For
                     each=move || top.get()
@@ -895,69 +940,8 @@ mod tests {
         assert_eq!(lane_height(300.0, 200.0), LANE_MIN);
     }
 
-    fn group(epic: &str, host: Option<&str>) -> (String, Group) {
-        (
-            epic.to_string(),
-            Group {
-                epic: epic.into(),
-                total: 3,
-                done: 0,
-                docs: 0,
-                root: Some(format!("{epic}-1")),
-                root_row: None,
-                host: host.map(Into::into),
-            },
-        )
-    }
-
-    /// The platform as the tracker holds it: PLEXUS hosts seven shortcodes
-    /// under its root and its tickets; CODEGEN is hosted under a MACRO
-    /// ticket (two levels down) and GEN under CODEGEN (three); MNG and WAVE
-    /// are boards of their own, and LOOSE hangs under an MNG ticket.
-    fn platform() -> BTreeMap<String, Group> {
-        [
-            group("PLEXUS", None),
-            group("MACRO", Some("PLEXUS-1")),
-            group("SYNAPSE", Some("PLEXUS-1")),
-            group("TRANSPORT", Some("PLEXUS-1")),
-            group("STARTER", Some("PLEXUS-1")),
-            group("HYPERFORGE", Some("PLEXUS-1")),
-            group("RETURNS", Some("PLEXUS-4")),
-            group("CONTEXT", Some("PLEXUS-1")),
-            group("CODEGEN", Some("MACRO-7")),
-            group("GEN", Some("CODEGEN-2")),
-            group("MNG", None),
-            group("WAVE", None),
-            group("LOOSE", Some("MNG-3")),
-        ]
-        .into_iter()
-        .collect()
-    }
-
     fn set(v: &[&str]) -> BTreeSet<String> {
         v.iter().map(|s| s.to_string()).collect()
-    }
-
-    /// Owner, 2026-10-06: a board is its own shortcode only; the shortcodes
-    /// hosted directly under it are its sub-boards, each its own board.
-    #[test]
-    fn a_board_is_one_shortcode_and_links_the_boards_under_it() {
-        let g = platform();
-        assert_eq!(shortcode_set("PLEXUS"), set(&["PLEXUS"]));
-        assert_eq!(shortcode_set("plexus"), set(&["PLEXUS"]), "case-insensitive");
-        assert_eq!(
-            sub_boards("PLEXUS", &g),
-            ["CONTEXT", "HYPERFORGE", "MACRO", "RETURNS", "STARTER", "SYNAPSE", "TRANSPORT"],
-            "hosted under any PLEXUS ticket, one level only"
-        );
-        assert_eq!(sub_boards("plexus", &g), sub_boards("PLEXUS", &g), "case-insensitive");
-        assert_eq!(sub_boards("MACRO", &g), ["CODEGEN"], "a sub-board links the one under it");
-        assert_eq!(sub_boards("CODEGEN", &g), ["GEN"]);
-        assert_eq!(sub_boards("MNG", &g), ["LOOSE"]);
-        assert!(sub_boards("WAVE", &g).is_empty());
-        assert!(sub_boards("NOPE", &g).is_empty(), "an unknown shortcode has no sub-boards");
-        assert_eq!(epic_of("PLEXUS-12"), Some("PLEXUS"));
-        assert_eq!(epic_of("PLEXUS"), None);
     }
 
     fn summary(id: &str, status: Status) -> TicketSummary {
