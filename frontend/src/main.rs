@@ -196,6 +196,12 @@
 //! from the header beside `waves`. `#/components/<tag>` is one, its source
 //! open.
 
+//! MFE-21: `#/settings` (src/settings.rs) — the app's settings, linked from
+//! the header beside `components`; the first is the backend's WebSocket URL.
+//! The session connects to the override when one is saved, else to this
+//! page's server as before, and while it does the header's status names the
+//! URL (`live · ws://…`, highlighted) on every page.
+
 mod board;
 mod bridge;
 mod cache;
@@ -213,6 +219,7 @@ mod notes;
 mod mermaid;
 mod registry;
 mod session;
+mod settings;
 mod theme;
 mod waves;
 
@@ -299,6 +306,8 @@ pub(crate) enum Route {
     /// `#/components/<tag>` — that one (its name folded to lowercase, as
     /// HTML folds a tag).
     Components(Option<String>),
+    /// MFE-21: `#/settings`.
+    Settings,
 }
 
 fn parse_route(hash: &str) -> Route {
@@ -315,6 +324,7 @@ fn parse_route(hash: &str) -> Route {
             Route::Components((!tag.is_empty()).then_some(tag))
         }
         None if path == "components" => Route::Components(None),
+        _ if path.trim_end_matches('/') == "settings" => Route::Settings,
         _ => Route::Board,
     }
 }
@@ -1448,10 +1458,25 @@ fn App() -> impl IntoView {
     // walk — `extents` and the board's one window, then live.
     session::drive(board, dock, conn, socket, last_error, tree);
 
-    let conn_view = move || match conn.get() {
-        Conn::Connecting => ("", "connecting…"),
-        Conn::Live => ("live", "live · WS"),
-        Conn::Reconnecting => ("reconnecting", "reconnecting…"),
+    // MFE-21: the backend this page's app talks to — when it is not this
+    // page's server (an override from #/settings), the status names it.
+    let over = settings::backend().over().map(str::to_string);
+    let overridden = over.is_some();
+    let conn_class = move || {
+        let class = match conn.get() {
+            Conn::Connecting => "",
+            Conn::Live => "live",
+            Conn::Reconnecting => "reconnecting",
+        };
+        if overridden { format!("{class} override") } else { class.to_string() }
+    };
+    let conn_words = move || {
+        let (state, live) = match conn.get() {
+            Conn::Connecting => ("connecting…", false),
+            Conn::Live => ("live", true),
+            Conn::Reconnecting => ("reconnecting…", false),
+        };
+        settings::conn_text(state, live, over.as_deref())
     };
     // SCALE-26: the count is the board's extent once the extents are in —
     // kept by every `created` and asked again after a `lagged`, so it is the
@@ -1516,15 +1541,32 @@ fn App() -> impl IntoView {
                     >
                         "components"
                     </a>
+                    // MFE-21: the settings, beside them.
+                    <a
+                        class="hlink"
+                        href="#/settings"
+                        aria-current=move || matches!(route.get(), Route::Settings).then_some("page")
+                    >
+                        "settings"
+                    </a>
                     <span class="tag">
                         {move || match route.get() {
                             Route::Board => "the live board (MFE-3)",
                             Route::Ticket(_) => "ticket (MFE-7)",
                             Route::Waves(_) => "the wave board (WAVE-5)",
                             Route::Components(_) => "components (COMP-6)",
+                            Route::Settings => "settings (MFE-21)",
                         }}
                     </span>
-                    <span id="conn" class=move || conn_view().0>{move || conn_view().1}</span>
+                    // MFE-21: `override` marks a backend other than this
+                    // page's server (highlighted, its URL in the words).
+                    <span
+                        id="conn"
+                        class=conn_class
+                        title=overridden.then_some("not this page's server — set in #/settings")
+                    >
+                        {conn_words}
+                    </span>
                     // AGS-17: the theme toggle (system → light → dark).
                     <theme::Toggle />
                 </header>
@@ -1547,6 +1589,7 @@ fn App() -> impl IntoView {
                             view! { <waves::WaveBoard shortcode tree socket last_error /> }.into_any()
                         }
                         Route::Components(only) => view! { <components::ComponentsPage only /> }.into_any(),
+                        Route::Settings => view! { <settings::SettingsPage /> }.into_any(),
                     }}
                 </main>
             </div>
@@ -1595,6 +1638,10 @@ mod tests {
         assert_eq!(parse_route("#/components/m-wave-summary"), Route::Components(Some("m-wave-summary".into())));
         assert_eq!(parse_route("#/components/M-Wave-Summary/"), Route::Components(Some("m-wave-summary".into())));
         assert_eq!(parse_route("#/componentsX"), Route::Board);
+        // MFE-21: the settings page.
+        assert_eq!(parse_route("#/settings"), Route::Settings);
+        assert_eq!(parse_route("#/settings/"), Route::Settings);
+        assert_eq!(parse_route("#/settingsX"), Route::Board);
     }
     use crate::nav::roll_label;
 

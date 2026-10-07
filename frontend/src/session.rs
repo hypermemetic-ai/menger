@@ -137,7 +137,7 @@
 //! the rows views hold.
 
 use crate::kids::Kids;
-use crate::{board, cache, dom, frame, nav, registry, Conn, Dock};
+use crate::{board, cache, dom, frame, nav, registry, settings, Conn, Dock};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::{TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
@@ -150,7 +150,7 @@ use wasm_bindgen_futures::spawn_local;
 /// menger's hub namespace — `DynamicHub::new("menger")` server-side. A
 /// property of the server, not of the activation, which is why it is a
 /// constructor argument and not part of a `MethodRef`.
-const HUB: &str = "menger";
+pub(crate) const HUB: &str = "menger";
 
 /// The retry gap after a session ends. A server restart costs a few
 /// seconds of `reconnecting…`, never a reload.
@@ -388,10 +388,13 @@ async fn session(
     last_error: RwSignal<Option<String>>,
     tree: nav::Tree,
 ) -> Result<(), String> {
+    // MFE-21: the override from #/settings when one is set, else this
+    // page's server (`dom::ws_url()`) as before — fixed for the page's life.
+    let url = settings::effective_ws_url();
     let transport = Rc::new(
-        WsTransport::connect(&dom::ws_url(), HUB)
+        WsTransport::connect(&url, HUB)
             .await
-            .map_err(|e| format!("connect {}: {e}", dom::ws_url()))?,
+            .map_err(|e| format!("connect {url}: {e}"))?,
     );
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport.clone()));
     LINK.with(|l| l.set(true));
