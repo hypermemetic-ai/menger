@@ -120,8 +120,24 @@
 //! all (a component is a few KB, and there are few); stored in its own
 //! table, which a database written before COMP-3 gains — the registry built
 //! from every body — durably, once, on first open.
+//! INPUT-3 keeps the **inputs store** ([`inputs`]): every input a body
+//! declares (`<m-decision id>`, `<m-input id kind>` — [`crate::inputs`]) and
+//! every answer and state change it has been through, with who and when. The
+//! same two writes move the declarations — `create` and an `amend` of the
+//! body, worked out under the write-serial lock from the new body and the
+//! store's own record (an input the body no longer declares is `removed`,
+//! history kept), stored in the write's transaction, taken by the cache with
+//! its rows, and announced last of all (`InputChanged`, after the
+//! components'). Four writes of their own move the answers — `answer`,
+//! `clear_answer`, `close_input`, `reopen_input`: one history entry each,
+//! never a body. Held in the cache, histories and all; stored in two tables
+//! of its own, which a database written before INPUT-3 gains — every body's
+//! inputs read in — durably, once, on first open.
 
-use crate::types::{is_menger_path, path_address, Component, Placement, PlacementChange, TicketSummary, MENGER_PATH_PREFIX};
+use crate::types::{
+    is_menger_path, path_address, AnswerSource, Component, Input, InputState, InputValue, Placement, PlacementChange,
+    TicketSummary, MENGER_PATH_PREFIX,
+};
 use rusqlite::{Connection, OpenFlags};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -624,6 +640,11 @@ pub enum Change {
     /// COMP-3: a component the write took out of the registry (an orphan
     /// nothing live uses any more) — after the write's `ComponentChanged`.
     ComponentRemoved { name: String },
+    /// INPUT-3: an input a write moved — answered, cleared, closed, reopened;
+    /// or declared, re-declared, removed or restored by a body — as it leaves
+    /// it, after every other event of the write. `epic` is its ticket's
+    /// shortcode, what `watch { epic }` filters by; it does not cross the wire.
+    InputChanged { epic: String, input: Input },
 }
 
 impl Change {
@@ -647,6 +668,8 @@ impl Change {
             Self::PlacementsChanged { .. } => "",
             // COMP-3: in no shortcode — see `in_epic`.
             Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => "",
+            // INPUT-3: its ticket's.
+            Self::InputChanged { epic, .. } => epic,
         }
     }
 
@@ -677,6 +700,19 @@ impl Change {
             .collect()
     }
 
+    /// INPUT-3: a write's input events, in the order they are sent — the
+    /// plan's: the body's inputs it moved, in the body's order, then the ones
+    /// it removed.
+    fn inputs(epic: &str, plan: inputs::Plan) -> Vec<Change> {
+        plan.changed
+            .into_iter()
+            .map(|input| Self::InputChanged {
+                epic: epic.to_string(),
+                input,
+            })
+            .collect()
+    }
+
     /// WAVE-6: the `PlacementsChanged` a write's pass makes — `None` when it
     /// moved no placement.
     fn placed(replaced: &placements::Replaced) -> Option<Change> {
@@ -684,6 +720,16 @@ impl Change {
             changes: replaced.shifts.iter().map(placements::Shift::change).collect(),
         })
     }
+}
+
+/// INPUT-3: what a write to one input did — `Changed`: the input as it
+/// leaves it, broadcast as `InputChanged`; `Unchanged`: nothing to do
+/// (closing a closed input, reopening one not closed, clearing one with no
+/// answer) — the input as it is, nothing written or broadcast.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputWrite {
+    Changed(Input),
+    Unchanged(Input),
 }
 
 /// One entry of a ticket's `blocked_by`, resolved against current state.
@@ -829,6 +875,24 @@ pub enum StoreError {
     /// COMP-8: the body's definition of `name` holds a malformed `<docs>` —
     /// `problem` says what. Nothing changed.
     ComponentDocs { id: Option<String>, name: String, problem: String },
+    /// INPUT-3: the body's input markup is refused — two inputs with one id,
+    /// a kind the element does not take, an option without a value or
+    /// declared twice, a text input with options ([`crate::inputs::Problem`],
+    /// which names the input). `id` as for a component's refusal. Nothing
+    /// changed.
+    InputMarkup { id: Option<String>, problem: crate::inputs::Problem },
+    /// INPUT-3: `ticket` declares no input `input` — `known` the ids it does
+    /// declare (removed ones included). Nothing changed.
+    InputUnknown { ticket: String, input: String, known: Vec<String> },
+    /// INPUT-3: the value does not answer the input — `reason` says why
+    /// ([`crate::inputs::check`]). Nothing changed.
+    InputInvalid { ticket: String, input: String, reason: String },
+    /// INPUT-3: the input is closed — an answer or a clear waits for
+    /// `reopen_input`. Nothing changed.
+    InputClosed { ticket: String, input: String },
+    /// INPUT-3: the input's body no longer declares it — it takes no change
+    /// until the body declares it again. Nothing changed.
+    InputRemoved { ticket: String, input: String },
 }
 
 impl StoreError {
@@ -1004,6 +1068,30 @@ impl std::fmt::Display for StoreError {
                 f,
                 "the component '{name}' has a malformed <docs>: {problem} ({})",
                 nothing(id)
+            ),
+            Self::InputMarkup { id, problem } => write!(f, "{problem} ({})", nothing(id)),
+            Self::InputUnknown { ticket, input, known } if known.is_empty() => write!(
+                f,
+                "{ticket} declares no input '{input}' — its body holds none (an input is an <m-decision id> or an \
+                 <m-input id kind>; nothing changed)"
+            ),
+            Self::InputUnknown { ticket, input, known } => write!(
+                f,
+                "{ticket} declares no input '{input}' — its inputs are {} (nothing changed)",
+                known.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(", ")
+            ),
+            Self::InputInvalid { ticket, input, reason } => write!(
+                f,
+                "not an answer to {ticket}'s '{input}': {reason} (nothing changed)"
+            ),
+            Self::InputClosed { ticket, input } => write!(
+                f,
+                "{ticket}'s '{input}' is closed: its answer is frozen — reopen_input it first (nothing changed)"
+            ),
+            Self::InputRemoved { ticket, input } => write!(
+                f,
+                "{ticket}'s '{input}' was removed from its body: its history is kept, and it takes no change until \
+                 the body declares it again (nothing changed)"
             ),
         }
     }
@@ -1221,6 +1309,10 @@ struct Cache {
     /// its table at open, moved by a body's write in the same critical
     /// section as the ticket's row.
     components: components::Registry,
+    /// INPUT-3: every ticket's inputs, histories and all ([`inputs::Inputs`])
+    /// — read from their tables at open, moved by a body's write with its
+    /// row and by an answer's write alone.
+    inputs: inputs::Inputs,
     written: u64,
 }
 
@@ -1488,6 +1580,8 @@ impl Cache {
             // COMP-3: read beside the cache, never built from rows
             // ([`Store::with_connection`]).
             components: components::Registry::default(),
+            // INPUT-3: so are the inputs.
+            inputs: inputs::Inputs::default(),
             written: 0,
         }
     }
@@ -1514,6 +1608,8 @@ impl Cache {
             // COMP-3: read beside the cache, never built from rows
             // ([`Store::with_connection`]).
             components: components::Registry::default(),
+            // INPUT-3: so are the inputs.
+            inputs: inputs::Inputs::default(),
             written: 0,
         }
     }
@@ -2032,6 +2128,10 @@ impl Store {
         // `components` table here, once, durably, with the registry built
         // from every body; after it, every open reads the table.
         components::migrate(&mut conn)?;
+        // INPUT-3: a database written before INPUT-3 — or a new one — gains
+        // the `inputs` and `answers` tables here, once, durably, with every
+        // body's inputs read in; after it, every open reads them.
+        inputs::migrate(&mut conn)?;
         // SCALE-28: the derived state is read from the file — each
         // shortcode's run, the dangling forward references, the roll-ups,
         // the children index — beside the rows, each carrying its stored
@@ -2053,6 +2153,8 @@ impl Store {
         cache.place_all();
         // COMP-3: the registry, as stored.
         cache.components = components::load(&conn)?;
+        // INPUT-3: the inputs and their histories, as stored.
+        cache.inputs = inputs::load(&conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
             Some(path) => Readers::open(path)?,
@@ -2342,6 +2444,12 @@ impl Store {
         if let Some(problem) = problems.into_iter().next() {
             return Err(StoreError::component(None, problem));
         }
+        // INPUT-3: and the inputs it declares — refused now, naming the input,
+        // when the markup is malformed or two share an id.
+        let (declared, problems) = crate::inputs::read(&new.body);
+        if let Some(problem) = problems.into_iter().next() {
+            return Err(StoreError::InputMarkup { id: None, problem });
+        }
 
         let serial = self.serial().await;
         // Under the write-serial lock the cache mirrors the database
@@ -2353,7 +2461,7 @@ impl Store {
         // every ticket in the store. This read phase computes everything
         // and mutates nothing: a rejection leaves no trace, in the
         // tickets or in what is kept about them.
-        let (ticket, touched, unlocks_added, parent_epic, derived, registered) = {
+        let (ticket, touched, unlocks_added, parent_epic, derived, registered, asked) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let tickets = &cache;
             let seq = tickets.ids.next_seq(&epic);
@@ -2463,6 +2571,8 @@ impl Store {
                     name: o.name,
                     owner: o.owner,
                 })?;
+            // INPUT-3: the newborn's inputs, born open.
+            let asked = tickets.inputs.plan(&id, declared);
 
             // Dangling forward references to this id resolve now: their
             // owners are the newborn's `unlocks` from birth. SCALE-3: the
@@ -2544,7 +2654,7 @@ impl Store {
             let derived = tickets.birth(&Row::from(&ticket));
             // WAVE-6: born placed — `created` carries it.
             ticket.placement = derived.moved.placement().flatten();
-            (ticket, touched, unlocks_added, parent_epic, derived, registered)
+            (ticket, touched, unlocks_added, parent_epic, derived, registered, asked)
         };
 
         // SCALE-14: the newborn is written whole — the one ticket a write
@@ -2564,10 +2674,18 @@ impl Store {
         let mut registered = registered;
         let registry_moves = std::mem::take(&mut registered.moves);
         let registry_rows = registry_moves.clone();
+        // INPUT-3: and its inputs — stored, taken, said last of all.
+        let mut asked = asked;
+        let input_list = asked.list.take();
+        let input_rows = input_list.clone();
+        let born_id = ticket.id.clone();
         self.write(
             serial,
             move |tx| {
                 db::upsert(tx, &born)?;
+                if let Some(list) = &input_rows {
+                    inputs::store(tx, &born.id, list)?;
+                }
                 let blockers = rows
                     .into_iter()
                     .map(|row| {
@@ -2583,6 +2701,9 @@ impl Store {
             move |cache, _| {
                 let out = cache.created(newborn, touched.into_values(), moved);
                 cache.components.take(registry_moves);
+                if let Some(list) = input_list {
+                    cache.inputs.take(&born_id, list);
+                }
                 out
             },
             move |blockers, (groups, child_count), tx| {
@@ -2610,6 +2731,9 @@ impl Store {
                     let _ = tx.send(placed);
                 }
                 for change in Change::components(registered) {
+                    let _ = tx.send(change);
+                }
+                for change in Change::inputs(&ticket.epic, asked) {
                     let _ = tx.send(change);
                 }
                 ticket
@@ -3226,6 +3350,8 @@ impl Store {
         // in hand before the lock — and refused, if malformed, only once it
         // is known to change the body (the same body again is still a no-op).
         let uses = body.as_deref().map(components::read);
+        // INPUT-3: and the inputs it declares, the same way.
+        let declares = body.as_deref().map(crate::inputs::read);
         let serial = self.serial().await;
         let mut ticket = self.get(&id).await?;
         let mut changed: Vec<String> = Vec::new();
@@ -3260,6 +3386,20 @@ impl Store {
                     })?
             }
         };
+        // INPUT-3: and its inputs — the whole amend refused, title too, when
+        // the markup is malformed.
+        let mut asked = match declares.filter(|_| changed.iter().any(|c| c == "body")) {
+            None => inputs::Plan::default(),
+            Some((declared, problems)) => {
+                if let Some(problem) = problems.into_iter().next() {
+                    return Err(StoreError::InputMarkup {
+                        id: Some(id.clone()),
+                        problem,
+                    });
+                }
+                self.tickets.read().expect("store lock poisoned").inputs.plan(&ticket.id, declared)
+            }
+        };
         ticket.updated_unix = chrono::Utc::now().timestamp();
 
         let row = Row::from(&ticket);
@@ -3267,6 +3407,8 @@ impl Store {
         let title_changed = changed.iter().any(|c| c == "title");
         let registry_moves = std::mem::take(&mut registered.moves);
         let registry_rows = registry_moves.clone();
+        let input_list = asked.list.take();
+        let input_rows = input_list.clone();
         self.write(
             serial,
             move |tx| {
@@ -3275,6 +3417,9 @@ impl Store {
                     db::set_body(tx, &row.id, &body)?;
                 }
                 components::store(tx, &registry_rows)?;
+                if let Some(list) = &input_rows {
+                    inputs::store(tx, &row.id, list)?;
+                }
                 Ok(row)
             },
             // Rows only: what an amend changes is counted by no roll-up and
@@ -3284,13 +3429,20 @@ impl Store {
             move |cache, row| {
                 let groups = cache.amended(row.clone(), title_changed);
                 cache.components.take(registry_moves);
+                if let Some(list) = input_list {
+                    cache.inputs.take(&row.id, list);
+                }
                 groups
             },
             move |_, groups, tx| {
+                let asked = Change::inputs(&ticket.epic, asked);
                 let change = Change::Amended { ticket, changed };
                 let _ = tx.send(change.clone());
                 broadcast_groups(tx, groups);
                 for change in Change::components(registered) {
+                    let _ = tx.send(change);
+                }
+                for change in asked {
                     let _ = tx.send(change);
                 }
                 change
@@ -3303,6 +3455,111 @@ impl Store {
     /// included (`owner: None`), waiting names not. From the cache alone.
     pub fn components(&self) -> Vec<Component> {
         self.tickets.read().expect("store lock poisoned").components.components()
+    }
+
+    /// INPUT-3: every input of `ticket` (every ticket's, without one) whose
+    /// ticket is in the shortcode `epic` and which is in `state` — each with
+    /// its kind, its declaration, its answer and its history — in the store's
+    /// order of tickets and each ticket's order (the body's, then the
+    /// removed). A `ticket` naming no ticket is [`StoreError::NotFound`]; one
+    /// declaring none answers nothing. Ids and shortcodes fold to upper case.
+    /// From the cache alone.
+    pub fn inputs(
+        &self,
+        ticket: Option<&str>,
+        epic: Option<&str>,
+        state: Option<InputState>,
+    ) -> Result<Vec<Input>, StoreError> {
+        let ticket = ticket.map(|t| t.trim().to_ascii_uppercase());
+        let epic = epic.map(|e| e.trim().to_ascii_uppercase());
+        let cache = self.tickets.read().expect("store lock poisoned");
+        if let Some(t) = ticket.as_ref().filter(|t| cache.get(t).is_none()) {
+            return Err(StoreError::NotFound(t.clone()));
+        }
+        Ok(cache.inputs.query(ticket.as_deref(), epic.as_deref(), state))
+    }
+
+    /// INPUT-3: records `value` as the answer to `ticket`'s input `input` —
+    /// checked against its kind and options ([`crate::inputs::check`]; a
+    /// `multi`'s set kept in the declared order), with `rationale` (a blank
+    /// one is none), `source` and the time; one history entry, every call,
+    /// the same value again included. Refused when `ticket` names no ticket
+    /// ([`StoreError::NotFound`]), the input is not declared, removed or
+    /// closed, or the value does not answer it — nothing written. The body
+    /// is never touched, nor the ticket's row.
+    pub async fn answer(
+        &self,
+        ticket: &str,
+        input: &str,
+        value: InputValue,
+        rationale: Option<String>,
+        source: AnswerSource,
+    ) -> Result<InputWrite, StoreError> {
+        self.input_write(ticket, input, inputs::Op::Answer { value, rationale, source }).await
+    }
+
+    /// INPUT-3: clears the input's answer — `open` again, the clear in its
+    /// history. One holding no answer is [`InputWrite::Unchanged`]: nothing
+    /// written. Refused as `answer` is, but for the value: closed, removed.
+    pub async fn clear_answer(&self, ticket: &str, input: &str) -> Result<InputWrite, StoreError> {
+        self.input_write(ticket, input, inputs::Op::Clear).await
+    }
+
+    /// INPUT-3: closes the input — frozen, with its answer or without one;
+    /// an answer or a clear is refused until it is reopened. A closed one is
+    /// [`InputWrite::Unchanged`]. Refused when removed.
+    pub async fn close_input(&self, ticket: &str, input: &str) -> Result<InputWrite, StoreError> {
+        self.input_write(ticket, input, inputs::Op::Close).await
+    }
+
+    /// INPUT-3: reopens a closed input — `answered` again when it holds an
+    /// answer, else `open`. One not closed is [`InputWrite::Unchanged`].
+    /// Refused when removed.
+    pub async fn reopen_input(&self, ticket: &str, input: &str) -> Result<InputWrite, StoreError> {
+        self.input_write(ticket, input, inputs::Op::Reopen).await
+    }
+
+    /// INPUT-3: one change to one input, through the write path every write
+    /// takes (MNG-20): worked out under the write-serial lock from the
+    /// cache's record of the input, one history row and the input's state
+    /// committed, the cache moved, `InputChanged` broadcast. A change that
+    /// changes nothing writes and says nothing.
+    async fn input_write(&self, ticket: &str, input: &str, op: inputs::Op) -> Result<InputWrite, StoreError> {
+        let ticket = ticket.trim().to_ascii_uppercase();
+        let input = input.trim().to_string();
+        let serial = self.serial().await;
+        let (epic, current) = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let row = cache.get(&ticket).ok_or_else(|| StoreError::NotFound(ticket.clone()))?;
+            let current = cache.inputs.get(&ticket, &input).cloned().ok_or_else(|| StoreError::InputUnknown {
+                ticket: ticket.clone(),
+                input: input.clone(),
+                known: cache.inputs.of(&ticket).iter().map(|i| i.id.clone()).collect(),
+            })?;
+            (row.epic.clone(), current)
+        };
+        let moved = inputs::apply(&current, op, chrono::Utc::now().timestamp()).map_err(|refused| match refused {
+            inputs::Refused::Removed => StoreError::InputRemoved { ticket, input },
+            inputs::Refused::Closed => StoreError::InputClosed { ticket, input },
+            inputs::Refused::Invalid(reason) => StoreError::InputInvalid { ticket, input, reason },
+        })?;
+        let Some((next, entry)) = moved else {
+            return Ok(InputWrite::Unchanged(current));
+        };
+        let (stored, kept) = (next.clone(), next.clone());
+        self.write(
+            serial,
+            move |tx| Ok(inputs::record(tx, &stored, &entry)?),
+            move |cache, _| cache.inputs.put(kept),
+            move |(), (), tx| {
+                let _ = tx.send(Change::InputChanged {
+                    epic,
+                    input: next.clone(),
+                });
+                InputWrite::Changed(next)
+            },
+        )
+        .await
     }
 
     /// SDLC-9: links `entries` to the ticket `id` — the record of which
@@ -3830,6 +4087,9 @@ mod db;
 /// registry the cache keeps, the plan a write makes of it, its table and the
 /// first open that builds it.
 mod components;
+/// INPUT-3: the inputs store — each ticket's inputs as its body declares
+/// them, their answers and state changes, the tables and the migration.
+mod inputs;
 
 /// SCALE-28: the derived state, stored — the tables beside the tickets,
 /// what a write's transaction writes to them ([`stored::Changes`]), a start
@@ -3937,3 +4197,9 @@ mod tests_placements;
 /// reference, durability, events, and a database from before the table.
 #[cfg(test)]
 mod tests_components;
+/// INPUT-3: the inputs store — every row of the ticket's table: parsed on
+/// write (and refused), answered (and refused), cleared, closed, reopened,
+/// removed and restored; the query; the events and their place; durability;
+/// the tables added to an old file.
+#[cfg(test)]
+mod tests_inputs;

@@ -34,9 +34,15 @@ pub mod component_docs;
 /// body's `##` headings read through ought's field set — the piece COMPILE
 /// checks. Wasm-safe, like `component_docs`.
 pub mod fields;
+/// INPUT-3: a body's inputs — `<m-decision id>` and `<m-input id kind>` with
+/// their options, question and recommendation — read as the app renders the
+/// body, and an answer's value checked against them. Wasm-safe, like
+/// `fields`, whose scan it reads with.
+pub mod inputs;
 pub use types::{
-    is_menger_path, path_address, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, KnowNothing, Known, SlotDoc, Kind, Placement, PlacementChange, RootRow, Severity, Status, Ticket, TicketSummary,
-    TicketsEvent, MENGER_PATH_PREFIX,
+    is_menger_path, path_address, Answer, AnswerSource, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, Input,
+    InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, SlotDoc, Kind, Placement,
+    PlacementChange, RootRow, Severity, Status, Ticket, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
 };
 
 /// The cache and its storage — the server's system of record (MNG-2).

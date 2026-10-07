@@ -823,6 +823,257 @@ impl fmt::Display for AttrKind {
     }
 }
 
+/// INPUT-3: what an **input** asks for (INPUT-1 decision 2, the owner's
+/// fixed set): `choice` — one of its options (an `<m-decision>`); `multi` —
+/// any of its options, a set; `text` — a free reply (both an `<m-input>`).
+/// Lowercase on the wire, as [`Kind`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputKind {
+    Choice,
+    Multi,
+    Text,
+}
+
+impl InputKind {
+    /// The wire spelling — also how a body's `kind="…"` writes it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            InputKind::Choice => "choice",
+            InputKind::Multi => "multi",
+            InputKind::Text => "text",
+        }
+    }
+}
+
+impl fmt::Display for InputKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Case-insensitive and trimmed, as a body's `kind` attribute is read.
+impl FromStr for InputKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "choice" => Ok(Self::Choice),
+            "multi" => Ok(Self::Multi),
+            "text" => Ok(Self::Text),
+            other => Err(format!("unknown input kind '{other}' (expected choice, multi, or text)")),
+        }
+    }
+}
+
+/// INPUT-3: where an input stands (INPUT-1 decision 4): `open` — waiting
+/// for an answer; `answered` — it holds one, which may change; `closed` —
+/// frozen, with or without an answer (DECIDED, for a decision); `removed` —
+/// its body no longer declares it, and its history is kept. The state is
+/// what the history says (the last answer or clear, the last close or
+/// reopen) while the body declares the input, and `removed` when it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputState {
+    Open,
+    Answered,
+    Closed,
+    Removed,
+}
+
+impl InputState {
+    pub const ALL: [InputState; 4] = [InputState::Open, InputState::Answered, InputState::Closed, InputState::Removed];
+
+    /// The wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            InputState::Open => "open",
+            InputState::Answered => "answered",
+            InputState::Closed => "closed",
+            InputState::Removed => "removed",
+        }
+    }
+}
+
+impl fmt::Display for InputState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for InputState {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "open" => Ok(Self::Open),
+            "answered" => Ok(Self::Answered),
+            "closed" => Ok(Self::Closed),
+            "removed" => Ok(Self::Removed),
+            other => Err(format!("unknown input state '{other}' (expected open, answered, closed, or removed)")),
+        }
+    }
+}
+
+/// INPUT-3: who made a change to an input (INPUT-1's language) — `app`, a
+/// viewer's click, which the host says on its `answer`; `api`, everything
+/// else (synapse, an agent). The only "who" until CONTEXT adds identity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerSource {
+    App,
+    #[default]
+    Api,
+}
+
+impl AnswerSource {
+    /// The wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            AnswerSource::App => "app",
+            AnswerSource::Api => "api",
+        }
+    }
+}
+
+impl fmt::Display for AnswerSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for AnswerSource {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "app" => Ok(Self::App),
+            "api" => Ok(Self::Api),
+            other => Err(format!("unknown answer source '{other}' (expected app or api)")),
+        }
+    }
+}
+
+/// INPUT-3: an answer's value, typed by its input's kind — internally
+/// tagged, as [`Placement`] is: `{"type": "choice", "option": "archive"}`
+/// (one option's `value`), `{"type": "multi", "options": ["a", "b"]}` (a set
+/// of them — stored in the order the body declares them, each once; it may
+/// be empty: none ticked), `{"type": "text", "text": "…"}` (a reply, not
+/// blank). Through synapse, a param's fields are dotted flags:
+/// `--value.type choice --value.option archive`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InputValue {
+    Choice { option: String },
+    Multi { options: Vec<String> },
+    Text { text: String },
+}
+
+impl InputValue {
+    /// The kind of input this value answers.
+    pub const fn kind(&self) -> InputKind {
+        match self {
+            InputValue::Choice { .. } => InputKind::Choice,
+            InputValue::Multi { .. } => InputKind::Multi,
+            InputValue::Text { .. } => InputKind::Text,
+        }
+    }
+}
+
+/// INPUT-3: one option an input declares — `value` is what an answer names
+/// (an `<m-option>`'s `value`, else its `name`; an `<m-choice>`'s `value`),
+/// `label` what a reader sees (the `name`, else the value; an `<m-choice>`'s
+/// text, else its value), `recommended` whether the option is marked so.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InputOption {
+    pub value: String,
+    pub label: String,
+    pub recommended: bool,
+}
+
+/// INPUT-3: an input's current answer — the value, its rationale (`null`
+/// when none was given), who gave it and when (unix seconds). The latest
+/// `answered` of its history, unless a `cleared` came after it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Answer {
+    pub value: InputValue,
+    pub rationale: Option<String>,
+    pub source: AnswerSource,
+    pub at_unix: i64,
+}
+
+/// INPUT-3: what one entry of an input's history did — an answer recorded
+/// (`answered`), the answer cleared (`cleared`), the input frozen
+/// (`closed`) or unfrozen (`reopened`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputAction {
+    Answered,
+    Cleared,
+    Closed,
+    Reopened,
+}
+
+impl InputAction {
+    /// The wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            InputAction::Answered => "answered",
+            InputAction::Cleared => "cleared",
+            InputAction::Closed => "closed",
+            InputAction::Reopened => "reopened",
+        }
+    }
+}
+
+impl FromStr for InputAction {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "answered" => Ok(Self::Answered),
+            "cleared" => Ok(Self::Cleared),
+            "closed" => Ok(Self::Closed),
+            "reopened" => Ok(Self::Reopened),
+            other => Err(format!("unknown input action '{other}'")),
+        }
+    }
+}
+
+/// INPUT-3: one change an input went through, oldest first — the action,
+/// the value and rationale of an `answered` (`null` for the others), who
+/// made it and when (unix seconds). Every change is kept, a removed input's
+/// included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InputHistoryEntry {
+    pub action: InputAction,
+    pub value: Option<InputValue>,
+    pub rationale: Option<String>,
+    pub source: AnswerSource,
+    pub at_unix: i64,
+}
+
+/// INPUT-3: one **input** — a component in a ticket's body that asks for an
+/// answer (INPUT-1), as the store keeps it: the ticket it is in, its `id`
+/// (unique in that ticket), its kind, what the body declares of it — the
+/// question (`null` without an `<m-question>`), the options in the body's
+/// order, the recommendation (the `<m-recommendation>`'s text, else the
+/// label of the option marked `recommended`; `null` with neither) — and
+/// what has been answered: its state, its current answer (`null` when it
+/// holds none) and its whole history, oldest first.
+///
+/// The declaration follows the body: every write of the body re-reads it.
+/// An answer stays what was recorded when a later body changes the options
+/// it named — the history is a record, never rewritten.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Input {
+    pub ticket: String,
+    pub id: String,
+    pub kind: InputKind,
+    pub question: Option<String>,
+    pub options: Vec<InputOption>,
+    pub recommendation: Option<String>,
+    pub state: InputState,
+    pub answer: Option<Answer>,
+    pub history: Vec<InputHistoryEntry>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TicketsEvent {
@@ -983,6 +1234,20 @@ pub enum TicketsEvent {
     /// the write's `component_changed` events; past any `epic` filter, as
     /// they are.
     ComponentRemoved { name: String },
+    /// INPUT-3: one input, as it is now (yielded per input by `inputs`, in
+    /// the store's order of tickets and the body's order inside one — a
+    /// removed input after the ones its body declares; and by a
+    /// `clear_answer`, `close_input` or `reopen_input` that changed nothing).
+    Input { input: Input },
+    /// INPUT-3: an input changed (yielded by `answer`, `clear_answer`,
+    /// `close_input` and `reopen_input`, and by `watch`) — answered, cleared,
+    /// closed, reopened; or, by a `create` or `amend` of its ticket's body,
+    /// declared, re-declared (its kind, question, options or recommendation),
+    /// removed from the body, or declared again. Carries the whole input —
+    /// its state, its answer and its history — so applying it is one upsert;
+    /// after every other event of its write. `watch { epic }` filters it by
+    /// its ticket's shortcode.
+    InputChanged { input: Input },
     /// One resolved blocker of the queried ticket, at its current status
     /// (yielded per-entry by `blockers`).
     Blocker { ticket: Ticket },

@@ -3,14 +3,20 @@
 
 import type { RpcClient } from '../rpc';
 import { extractData, collectOne } from '../rpc';
-import type { TicketsEvent } from './types';
+import type { InputValue, TicketsEvent } from './types';
 
 /** Typed client interface for tickets plugin */
 export interface TicketsClient {
   /** Replace a ticket's title and/or body (whole values); yields amended { ticket, changed } */
   amend(id: string, body?: string | null, title?: string | null): AsyncGenerator<TicketsEvent>;
+  /** Answer an input: record a value (checked against its kind and options) with a rationale, a source and the time; yields input_changed */
+  answer(input: string, ticket: string, value: InputValue, rationale?: string | null, source?: string | null): AsyncGenerator<TicketsEvent>;
   /** One ticket's blockers resolved to current statuses; dangling ids marked */
   blockers(id: string): AsyncGenerator<TicketsEvent>;
+  /** Clear an input's answer (open again; kept in its history); yields input_changed */
+  clearAnswer(input: string, ticket: string): AsyncGenerator<TicketsEvent>;
+  /** Close an input: freeze its answer (or its lack of one); yields input_changed */
+  closeInput(input: string, ticket: string): AsyncGenerator<TicketsEvent>;
   /** Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes */
   components(): AsyncGenerator<TicketsEvent>;
   /** Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc */
@@ -25,12 +31,16 @@ export interface TicketsClient {
   groups(): AsyncGenerator<TicketsEvent>;
   /** Heartbeat — version, unix time, ticket count */
   health(): AsyncGenerator<TicketsEvent>;
+  /** Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode and state */
+  inputs(epic?: string | null, state?: string | null, ticket?: string | null): AsyncGenerator<TicketsEvent>;
   /** Link commits to a ticket (the commits that finished it); yields commits_linked { ticket, added } */
   linkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
   /** List tickets, optionally filtered by epic, status and/or parent; paged with after + limit */
   list(after?: string | null, epic?: string | null, limit?: number | null, parent?: string | null, status?: string | null, summary?: boolean | null): AsyncGenerator<TicketsEvent>;
   /** Tickets that can start now: Ready, with every blocker Complete or Superseded */
   readySet(after?: string | null, epic?: string | null, limit?: number | null, summary?: boolean | null): AsyncGenerator<TicketsEvent>;
+  /** Reopen a closed input; yields input_changed */
+  reopenInput(input: string, ticket: string): AsyncGenerator<TicketsEvent>;
   /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
   schema(): Promise<unknown>;
   /** Set a ticket's parent — the ticket it is an output of; adopts a parentless ticket or moves one */
@@ -39,7 +49,7 @@ export interface TicketsClient {
   setStatus(id: string, status: string): AsyncGenerator<TicketsEvent>;
   /** Unlink commits from a ticket; yields commits_unlinked { ticket, removed } */
   unlinkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
-  /** Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved), until disconnect; Lagged { missed } where a slow subscriber lost changes */
+  /** Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes */
   watch(epic?: string | null): AsyncGenerator<TicketsEvent>;
   /** The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts */
   waves(epics: string[], kinds?: string[] | null): AsyncGenerator<TicketsEvent>;
@@ -55,8 +65,23 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
+  async *answer(input: string, ticket: string, value: InputValue, rationale?: string | null, source?: string | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.answer', { input, rationale, source, ticket, value });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
   async *blockers(id: string): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.blockers', { id });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *clearAnswer(input: string, ticket: string): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.clear_answer', { input, ticket });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *closeInput(input: string, ticket: string): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.close_input', { input, ticket });
     yield* extractData<TicketsEvent>(stream);
   }
 
@@ -95,6 +120,11 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
+  async *inputs(epic?: string | null, state?: string | null, ticket?: string | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.inputs', { epic, state, ticket });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
   async *linkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.link_commits', { commits, id });
     yield* extractData<TicketsEvent>(stream);
@@ -107,6 +137,11 @@ class TicketsClientImpl implements TicketsClient {
 
   async *readySet(after?: string | null, epic?: string | null, limit?: number | null, summary?: boolean | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.ready_set', { after, epic, limit, summary });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *reopenInput(input: string, ticket: string): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.reopen_input', { input, ticket });
     yield* extractData<TicketsEvent>(stream);
   }
 
