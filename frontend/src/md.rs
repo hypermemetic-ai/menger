@@ -119,7 +119,7 @@ fn dest_allowed(dest: &str, allow_mailto: bool) -> bool {
 /// Render a ticket body to HTML that is safe to inject via `inner_html`,
 /// plus the count of mermaid placeholders it holds.
 pub fn render_body(src: &str) -> Rendered {
-    render(src, None)
+    render(src, None, false)
 }
 
 /// WAVE-11: what a `{wave: ID}` renders as — the ticket's placement, as the
@@ -234,15 +234,92 @@ pub fn render_body_with(src: &str, resolve: &dyn Fn(&str) -> Option<WaveRef>) ->
     if !src.contains(WAVE_OPEN) {
         return render_body(src);
     }
-    render(src, Some(resolve))
+    render(src, Some(resolve), false)
 }
 
-fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>) -> Rendered {
+/// COMP-4: a framed body's markup — [`render_body_with`]'s, raw HTML passed
+/// through (block and inline) instead of downgraded to text. Mermaid fences
+/// still become placeholders (the frame's SDK draws them), `{wave: ID}`s in
+/// prose are placed by `resolve` here, on the host, and markdown links and
+/// images keep their scheme allow-list. Only for the sandboxed frame: this
+/// HTML is never safe for `inner_html`.
+pub fn render_body_framed(src: &str, resolve: &dyn Fn(&str) -> Option<WaveRef>) -> Rendered {
+    if !src.contains(WAVE_OPEN) {
+        return render(src, None, true);
+    }
+    render(src, Some(resolve), true)
+}
+
+/// COMP-4: does this body (its frontmatter already split off) render in a
+/// frame? Yes when the markdown holds HTML outside code — a block or inline
+/// tag naming an HTML element or a custom element, or a comment (see the
+/// module doc for why a placeholder like `<org>` is not one). Code spans,
+/// fences (mermaid's included) and indented code never frame: what is in
+/// them is text, and the parser never reports it as HTML.
+pub fn is_framed(src: &str) -> bool {
+    if !src.contains('<') {
+        return false;
+    }
+    Parser::new_ext(src, options()).any(|ev| match ev {
+        Event::Html(s) | Event::InlineHtml(s) => holds_markup(&s),
+        _ => false,
+    })
+}
+
+/// The HTML elements (WHATWG's list, obsolete ones a page still renders
+/// included) and the two foreign roots a body may embed.
+const HTML_ELEMENTS: &[&str] = &[
+    "a", "abbr", "acronym", "address", "area", "article", "aside", "audio", "b", "base", "bdi", "bdo", "big",
+    "blockquote", "body", "br", "button", "canvas", "caption", "center", "cite", "code", "col", "colgroup",
+    "data", "datalist", "dd", "del", "details", "dfn", "dialog", "dir", "div", "dl", "dt", "em", "embed",
+    "fieldset", "figcaption", "figure", "font", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "head",
+    "header", "hgroup", "hr", "html", "i", "iframe", "img", "input", "ins", "kbd", "label", "legend", "li",
+    "link", "main", "map", "mark", "marquee", "math", "menu", "meta", "meter", "nav", "noscript", "object",
+    "ol", "optgroup", "option", "output", "p", "param", "picture", "pre", "progress", "q", "rp", "rt", "ruby",
+    "s", "samp", "script", "search", "section", "select", "slot", "small", "source", "span", "strike",
+    "strong", "style", "sub", "summary", "sup", "svg", "table", "tbody", "td", "template", "textarea",
+    "tfoot", "th", "thead", "time", "title", "tr", "track", "tt", "u", "ul", "var", "video", "wbr",
+];
+
+/// Does this stretch of raw HTML (one inline tag, or an HTML block's lines)
+/// hold real markup: a comment, or an open or close tag whose name is an
+/// HTML element or a custom element?
+fn holds_markup(raw: &str) -> bool {
+    let mut rest = raw;
+    while let Some(i) = rest.find('<') {
+        rest = &rest[i + 1..];
+        if rest.starts_with("!--") {
+            return true;
+        }
+        let tag = rest.strip_prefix('/').unwrap_or(rest);
+        let end = tag.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap_or(tag.len());
+        let name = &tag[..end];
+        let closes = tag[end..].chars().next().map_or(true, |c| c.is_ascii_whitespace() || c == '>' || c == '/');
+        if name.is_empty() || !name.starts_with(|c: char| c.is_ascii_alphabetic()) || !closes {
+            continue;
+        }
+        let name = name.to_ascii_lowercase();
+        if name.contains('-') || HTML_ELEMENTS.contains(&name.as_str()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The markdown dialect every body is read in.
+fn options() -> Options {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TASKLISTS);
     opts.insert(Options::ENABLE_FOOTNOTES);
+    opts
+}
+
+/// `framed`: raw HTML passes through (COMP-4's frame) rather than becoming
+/// text (MFE-7) — the one difference between the two modes.
+fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: bool) -> Rendered {
+    let opts = options();
 
     // Depth counters for dropped tags, so each End pairs with its Start.
     let mut dropped_links = 0u32;
@@ -275,8 +352,9 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>) -> Rende
                 mermaid_src = Some(String::new());
                 None
             }
-            // Raw HTML renders as inert, visible text (push_html escapes Text).
-            Event::Html(s) | Event::InlineHtml(s) => Some(Event::Text(s)),
+            // Raw HTML renders as inert, visible text (push_html escapes Text)
+            // — unless the body is framed (COMP-4), where it is the point.
+            Event::Html(s) | Event::InlineHtml(s) if !framed => Some(Event::Text(s)),
             Event::Start(Tag::Link {
                 link_type,
                 dest_url,
@@ -647,6 +725,130 @@ mod tests {
         assert!(!r.html.contains("<script"), "{}", r.html);
         assert_eq!(r.diagrams, 1);
         assert!(r.html.contains("wave 2</a>"), "{}", r.html);
+    }
+
+    // -- framed bodies (COMP-4) ----------------------------------------
+
+    /// COMP-4 acceptance 1: what frames — a raw HTML block, an inline tag, a
+    /// custom element (`<m-x>`), a comment — and what does not: HTML inside
+    /// a code span, a fence (mermaid's included) or indented code, an
+    /// autolink, and the angle-bracketed placeholder prose is full of.
+    #[test]
+    fn a_body_frames_when_it_holds_html_outside_code() {
+        for framed in [
+            "<details>\n<summary>more</summary>\n\nhidden *markdown*\n\n</details>\n",
+            "<table><tr><td>1</td></tr></table>\n",
+            "text with <b>bold</b> inline",
+            "a line<br>broken",
+            "| a | b |\n|---|---|\n| x<br>y | z |\n",
+            "uses <m-x></m-x> here",
+            "<m-wave-summary board=PLEXUS>\n",
+            "see <M-Wave-Summary board=PLEXUS/>",
+            "<!-- a note -->\n\nprose",
+            "<style>p { color: red }</style>\n",
+            "<script>document.body.append('x')</script>\n",
+            "<svg width=\"10\"></svg>",
+            "</div>",
+        ] {
+            assert!(is_framed(framed), "should frame: {framed:?}");
+        }
+        for unframed in [
+            "",
+            "plain *markdown* — `code` and **bold**",
+            "a code span: `<b>bold</b>` and `<m-x>`",
+            "```html\n<div><script>x()</script></div>\n```\n",
+            "```mermaid\ngraph LR\n  A[\"a<br/>b\"] --> B\n```\n",
+            "    <div>indented code</div>\n",
+            "an autolink <https://example.com> and <a@b.co>",
+            "repo@<org>, Vec<String>, Option<T>, --id <id> --path <path>",
+            "1 < 2 and 3 > 2, a <- b, <=>",
+            "<!DOCTYPE html>",
+        ] {
+            assert!(!is_framed(unframed), "should not frame: {unframed:?}");
+        }
+    }
+
+    /// COMP-4: the snapshot's one body CommonMark reads as raw HTML (SDLC-3,
+    /// a `<org>` placeholder) stays unframed and renders as it always did.
+    #[test]
+    fn a_placeholder_is_not_html_and_its_body_renders_as_before() {
+        let src = "Use `repo@<org>` or repo@<org> and Vec<String>.";
+        assert!(!is_framed(src));
+        assert_eq!(
+            render_body(src).html,
+            "<p>Use <code>repo@&lt;org&gt;</code> or repo@&lt;org&gt; and Vec&lt;String&gt;.</p>\n"
+        );
+    }
+
+    /// COMP-4 acceptance 1: pass-through — raw HTML, block and inline, is the
+    /// markup itself; the markdown around it renders as ever; markdown inside
+    /// an HTML block (after a blank line) is still markdown.
+    #[test]
+    fn a_framed_body_passes_its_html_through() {
+        let src = "# Title\n\n<details>\n<summary>more</summary>\n\nhidden *markdown*\n\n</details>\n\n<style>p { color: red }</style>\n\n<script>document.body.append('ran')</script>\n\nA <b>bold</b> word and <m-x a=\"1\"></m-x>.\n";
+        let r = render_body_framed(src, &|_| None);
+        assert_eq!(
+            r.html,
+            "<h1>Title</h1>\n<details>\n<summary>more</summary>\n<p>hidden <em>markdown</em></p>\n</details>\n<style>p { color: red }</style>\n<script>document.body.append('ran')</script>\n<p>A <b>bold</b> word and <m-x a=\"1\"></m-x>.</p>\n"
+        );
+        assert_eq!(r.diagrams, 0);
+        // The same body unframed is MFE-7's: every tag is text.
+        let inert = render_body(src).html;
+        assert!(!inert.contains("<script") && !inert.contains("<details") && !inert.contains("<b>"), "{inert}");
+    }
+
+    /// COMP-4: inside a frame a mermaid fence is still a placeholder (the
+    /// SDK draws it), a `{wave: ID}` in prose is still placed — by the host,
+    /// before the frame sees it — and a markdown link keeps its allow-list.
+    #[test]
+    fn a_framed_body_keeps_mermaid_wave_references_and_the_link_rules() {
+        let src = "<div class=\"x\">box</div>\n\n{wave: RETURNS-6} and {wave: NOPE-1}\n\n```mermaid\ngraph LR\n  A --> B\n```\n\n[bad](javascript:alert(1)) [good](https://e.com)\n";
+        let r = render_body_framed(src, &placed);
+        assert_eq!(r.diagrams, 1);
+        assert!(r.html.starts_with("<div class=\"x\">box</div>\n"), "{}", r.html);
+        assert!(r.html.contains("<div class=\"mermaid\" data-state=\"pending\"><pre class=\"mermaid-src\"><code>graph LR\n  A --&gt; B\n</code></pre></div>"), "{}", r.html);
+        assert!(r.html.contains(">wave 2</a> and {wave: NOPE-1}</p>"), "{}", r.html);
+        assert!(!r.html.contains("javascript:") && r.html.contains("bad <a href=\"https://e.com\">good</a>"), "{}", r.html);
+        // Without a reference, the resolver is never asked.
+        let never = |_: &str| -> Option<WaveRef> { panic!("nothing to resolve") };
+        assert_eq!(render_body_framed("<b>x</b>", &never).html, "<p><b>x</b></p>\n");
+    }
+
+    /// COMP-4 acceptance 1, "unframed output unchanged": the HTML md.rs gave
+    /// for these fixtures before COMP-4, recorded byte for byte from the
+    /// pre-COMP-4 renderer — the MFE-7, AGS-14 and WAVE-11 fixtures, plus the
+    /// markdown features they did not cover. None of them frames.
+    #[test]
+    fn unframed_bodies_render_byte_for_byte_as_before_comp_4() {
+        let golden: &[(&str, &str)] = &[
+            (FLOW, "<h1>Title</h1>\n<div class=\"mermaid\" data-state=\"pending\"><pre class=\"mermaid-src\"><code>flowchart LR\n  A[start] --&gt; B{ok?}\n</code></pre></div>\n<p>tail text</p>\n"),
+            ("# T\n\n- a\n- *b* `c`\n\n> q\n\n| x | y |\n|---|---|\n| 1 | 2 |\n", "<h1>T</h1>\n<ul>\n<li>a</li>\n<li><em>b</em> <code>c</code></li>\n</ul>\n<blockquote>\n<p>q</p>\n</blockquote>\n<table><thead><tr><th>x</th><th>y</th></tr></thead><tbody>\n<tr><td>1</td><td>2</td></tr>\n</tbody></table>\n"),
+            ("# Title\n\nSome *emphasis* and **bold**.\n\n- one\n- two\n\nA `code span`.", "<h1>Title</h1>\n<p>Some <em>emphasis</em> and <strong>bold</strong>.</p>\n<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n<p>A <code>code span</code>.</p>\n"),
+            ("[click me](javascript:alert(1)) [a](https://example.com) [b](/app/#/ticket/MNG-2) ![x](data:text/html,<script>1</script>) ![y](https://e.com/i.png)", "<p>click me <a href=\"https://example.com\">a</a> <a href=\"/app/#/ticket/MNG-2\">b</a> x <img src=\"https://e.com/i.png\" alt=\"y\" /></p>\n"),
+            ("```rust\nfn main() {}\n```\n\n```\nplain\n```\n\n    indented mermaid\n", "<pre><code class=\"language-rust\">fn main() {}\n</code></pre>\n<pre><code>plain\n</code></pre>\n<pre><code>indented mermaid\n</code></pre>\n"),
+            ("Use `mermaid` here.\n\n```text\nmermaid\n```\n", "<p>Use <code>mermaid</code> here.</p>\n<pre><code class=\"language-text\">mermaid\n</code></pre>\n"),
+            ("intro\n\n```mermaid\nflowchart LR\n  A -->", "<p>intro</p>\n<div class=\"mermaid\" data-state=\"pending\"><pre class=\"mermaid-src\"><code>flowchart LR\n  A --&gt;</code></pre></div>\n"),
+            ("- [ ] task\n- [x] done\n\n~~gone~~ and a footnote[^1].\n\n[^1]: the note\n\n---\n\n1. one\n2. two\n", "<ul>\n<li><input disabled=\"\" type=\"checkbox\"/>\ntask</li>\n<li><input disabled=\"\" type=\"checkbox\" checked=\"\"/>\ndone</li>\n</ul>\n<p><del>gone</del> and a footnote<sup class=\"footnote-reference\"><a href=\"#1\">1</a></sup>.</p>\n<div class=\"footnote-definition\" id=\"1\"><sup class=\"footnote-definition-label\">1</sup>\n<p>the note</p>\n</div>\n<hr />\n<ol>\n<li>one</li>\n<li>two</li>\n</ol>\n"),
+        ];
+        for (src, html) in golden {
+            assert!(!is_framed(src), "a golden fixture frames: {src:?}");
+            assert_eq!(render_body(src).html, *html, "{src:?}");
+            assert_eq!(render_body_with(src, &placed).html, *html, "{src:?}");
+        }
+        let golden_with: &[(&str, &str)] = &[
+            ("The envelope work is {wave: RETURNS-6}, after {wave:RETURNS-4}; {wave:  GAP-3 } waits.", "<p>The envelope work is <a class=\"wave-ref\" data-wave-ref=\"RETURNS-6\" data-wave=\"2\" href=\"#/ticket/RETURNS-6\" title=\"RETURNS-6: wave 2\">wave 2</a>, after <span class=\"wave-ref done\" data-wave-ref=\"RETURNS-4\" title=\"RETURNS-4: done\">done</span>; <span class=\"wave-ref missing\" data-wave-ref=\"GAP-3\" title=\"GAP-3: waits on a ticket that does not exist\">missing blocker</span> waits.</p>\n"),
+            ("`{wave: RETURNS-6}`\n\n```\n{wave: RETURNS-6}\n```\n\n[{wave: RETURNS-6}](https://e.com) ![{wave: RETURNS-6}](https://e.com/i.png) {wave: RETURNS-6}", "<p><code>{wave: RETURNS-6}</code></p>\n<pre><code>{wave: RETURNS-6}\n</code></pre>\n<p><a href=\"https://e.com\">{wave: RETURNS-6}</a> <img src=\"https://e.com/i.png\" alt=\"{wave: RETURNS-6}\" /> <a class=\"wave-ref\" data-wave-ref=\"RETURNS-6\" data-wave=\"2\" href=\"#/ticket/RETURNS-6\" title=\"RETURNS-6: wave 2\">wave 2</a></p>\n"),
+        ];
+        for (src, html) in golden_with {
+            assert!(!is_framed(src), "{src:?}");
+            assert_eq!(render_body_with(src, &placed).html, *html, "{src:?}");
+        }
+        // MFE-7's own fixture still renders inert through render_body — a
+        // body like it is framed in the app, which never paints this HTML.
+        assert_eq!(
+            render_body("before\n\n<script>window.__pwned = 1</script>\n\nafter").html,
+            "<p>before</p>\n&lt;script&gt;window.__pwned = 1&lt;/script&gt;\n<p>after</p>\n"
+        );
     }
 
     #[test]

@@ -102,6 +102,10 @@ web-sys = { version = "0.3", features = [
   # WAVE-12: the wave board's filter rewrites the route's query in place
   # (history.replaceState — no history entry, no hashchange).
   "History",
+  # COMP-4: a framed body is a sandboxed <iframe srcdoc> (src/frame.rs), and
+  # its SDK shell talks to the app over postMessage.
+  "HtmlIFrameElement",
+  "MessageEvent",
 ] }
 
 console_error_panic_hook = "0.1"
