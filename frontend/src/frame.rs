@@ -20,7 +20,8 @@
 //! - the SDK shell, inline: `frontend/sdk/menger-sdk.js` (also served at
 //!   [`SDK_URL`]), whose header is the protocol's reference — base
 //!   typography, theme tokens that follow a flip, mermaid drawn inside, the
-//!   document's height reported, `window.menger = { version }`.
+//!   document's height reported, `window.menger` (COMP-5: `{ version, call,
+//!   on }`) and every registered component defined.
 //!
 //! The host half of the handshake is here: one `message` listener for every
 //! frame ([`install_listener`]) accepts a `menger:*` message only from a
@@ -34,6 +35,19 @@
 //! screen, which is replaced only once the new one reports `settled` (its
 //! diagrams drawn) — so the page never flashes.
 //!
+//! COMP-5: **components in frames.** Every frame is handed the component
+//! registry (src/registry.rs): in its srcdoc's init block when the app
+//! holds it, again in answer to `menger:ready` (`menger:components` — what
+//! moved while the frame loaded), and to every open frame when a fetch
+//! lands ([`broadcast_registry`]). Every `watch` event the session hears
+//! reaches every frame as `menger:change { event }` ([`broadcast_change`]):
+//! the SDK applies `component_changed` / `component_removed` to its
+//! definitions, then hands the event to `menger.on('change')`. And the
+//! frame's `menger:call { id, method, params }` is answered here —
+//! `menger:result { id, items }` or `{ id, error }` — by the read-only
+//! bridge (src/bridge.rs) over the app's own connection. A frame that asks
+//! for the registry ([`Frame`]) makes the app keep it.
+//!
 //! What decides — the srcdoc, the theme block, the init block, which
 //! messages count — is pure and pinned by native tests; the rest is DOM.
 
@@ -41,15 +55,18 @@ use std::cell::Cell;
 
 use js_sys::{Object, Reflect};
 use leptos::prelude::*;
+use menger_tickets_api::{Component, TicketsEvent};
+use serde::Serialize;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{dom, mermaid};
+use crate::{bridge, dom, mermaid, registry, session};
 
-/// The SDK shell's version — `window.menger.version` inside every frame
-/// (pinned equal to the script's own `VERSION` by a native test).
-pub(crate) const SDK_VERSION: &str = "0.1.0";
+/// The SDK's version — `window.menger.version` inside every frame (pinned
+/// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
+/// `version`, `call`, `on`, and the components defined.
+pub(crate) const SDK_VERSION: &str = "1.0.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -125,6 +142,9 @@ pub(crate) struct Shell<'a> {
     /// The vendored mermaid bundle, absolute (the frame's origin is opaque;
     /// a classic script loads across origins).
     pub(crate) mermaid_url: &'a str,
+    /// COMP-5: the component registry as the app holds it now — `None`
+    /// before the app has fetched it (the frame is handed it once it has).
+    pub(crate) components: Option<&'a [Component]>,
 }
 
 /// A token name the frame will take: `--` and lowercase ASCII words.
@@ -167,6 +187,9 @@ pub(crate) fn init_json(shell: &Shell) -> String {
             // The SDK sets `theme` per draw, from the scheme.
             "config": mermaid::config_json("default"),
         },
+        // COMP-5: the SDK defines each before the body is parsed, so a
+        // component's first paint is its own.
+        "components": shell.components,
     });
     init.to_string().replace('<', "\\u003c")
 }
@@ -203,12 +226,16 @@ pub(crate) enum Msg {
     /// The document's height in CSS px (clamped), and whether its first
     /// paint is complete.
     Size { height: u32, settled: bool },
+    /// COMP-5: `menger.call` — its id, method and params are read by the
+    /// bridge's caller.
+    Call,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
 pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) -> Option<Msg> {
     match kind {
         "menger:ready" => Some(Msg::Ready),
+        "menger:call" => Some(Msg::Call),
         "menger:size" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Size { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32, settled: settled.unwrap_or(false) })
@@ -279,6 +306,83 @@ fn post(frame: &web_sys::HtmlIFrameElement, msg: &JsValue) {
     }
 }
 
+/// A typed value as the plain JS data a frame takes (wire spelling): what
+/// serde writes, parsed by the browser. Nothing here is untyped.
+fn to_js<T: Serialize + ?Sized>(value: &T) -> JsValue {
+    serde_json::to_string(value)
+        .ok()
+        .and_then(|json| js_sys::JSON::parse(&json).ok())
+        .unwrap_or(JsValue::NULL)
+}
+
+/// `{ type, channel }`, the rest of the message to be set.
+fn message(kind: &str, channel: &str) -> Object {
+    let msg = Object::new();
+    set(&msg, "type", &kind.into());
+    set(&msg, "channel", &channel.into());
+    msg
+}
+
+/// COMP-5: the registry as the app holds it, to every open frame — after a
+/// fetch lands (the first, a reconnect's, a `lagged`'s). A frame diffs it
+/// against what it has: a changed source re-renders, a name gone is gone.
+pub(crate) fn broadcast_registry() {
+    let Some(list) = registry::snapshot() else { return };
+    let all = frames();
+    if all.is_empty() {
+        return;
+    }
+    let components = to_js(&list);
+    for f in all {
+        if let Some(channel) = f.get_attribute("data-channel") {
+            let msg = message("menger:components", &channel);
+            set(&msg, "components", &components);
+            post(&f, &msg.into());
+        }
+    }
+}
+
+/// COMP-5: a `watch` event, to every open frame as a change notice — the
+/// SDK applies a component event to its definitions, then hands every
+/// event to `menger.on('change')`. Called by the session for each event.
+pub(crate) fn broadcast_change(ev: &TicketsEvent) {
+    let all = frames();
+    if all.is_empty() {
+        return;
+    }
+    let event = to_js(ev);
+    for f in all {
+        if let Some(channel) = f.get_attribute("data-channel") {
+            let msg = message("menger:change", &channel);
+            set(&msg, "event", &event);
+            post(&f, &msg.into());
+        }
+    }
+}
+
+/// COMP-5: answer a frame's `menger.call` — the bridge parses it (a read,
+/// or refused), makes it over the app's connection, and the frame gets
+/// `menger:result { id, items }` or `{ id, error }`. A frame replaced
+/// meanwhile has no window to answer, and is not answered.
+fn answer_call(frame: web_sys::HtmlIFrameElement, channel: String, id: JsValue, method: String, params: Result<String, String>) {
+    spawn_local(async move {
+        let reply = match params.and_then(|p| bridge::parse_call(&method, &p)) {
+            Err(e) => Err(e),
+            Ok(call) => match session::client() {
+                Some(client) => bridge::run(&client, call).await,
+                None => Err(format!("{method}: not connected")),
+            },
+        };
+        let msg = message("menger:result", &channel);
+        set(&msg, "id", &id);
+        match reply {
+            Ok(items) => set(&msg, "items", &to_js(&items)),
+            Err(error) => set(&msg, "error", &error.into()),
+        }
+        post(&frame, &msg.into());
+    });
+}
+
 /// Every frame in the document.
 fn frames() -> Vec<web_sys::HtmlIFrameElement> {
     let Some(list) = dom::window()
@@ -346,7 +450,27 @@ fn on_message(ev: web_sys::MessageEvent) {
         return;
     }
     match parse_msg(&kind, field("height").and_then(|v| v.as_f64()), field("settled").and_then(|v| v.as_bool())) {
-        Some(Msg::Ready) => post(&frame, &theme_message(&channel)),
+        Some(Msg::Ready) => {
+            post(&frame, &theme_message(&channel));
+            // COMP-5: what moved since the srcdoc was built.
+            if let Some(list) = registry::snapshot() {
+                let msg = message("menger:components", &channel);
+                set(&msg, "components", &to_js(&list));
+                post(&frame, &msg.into());
+            }
+        }
+        Some(Msg::Call) => {
+            let id = field("id").filter(|v| v.as_f64().is_some()).unwrap_or(JsValue::NULL);
+            let method = field("method").and_then(|v| v.as_string()).unwrap_or_default();
+            let params = match field("params").filter(|v| !v.is_undefined() && !v.is_null()) {
+                None => Ok(String::new()),
+                Some(v) => js_sys::JSON::stringify(&v)
+                    .ok()
+                    .and_then(|s| s.as_string())
+                    .ok_or_else(|| format!("{method}: params are not plain data")),
+            };
+            answer_call(frame, channel, id, method, params);
+        }
         Some(Msg::Size { height, settled }) => {
             let _ = web_sys::HtmlElement::style(&frame).set_property("height", &format!("{height}px"));
             // A first frame shows at once; a re-render waits until drawn.
@@ -377,7 +501,11 @@ fn load(container: &web_sys::Element, body_html: &str) {
     let channel = next_channel();
     let (scheme, tokens) = read_theme();
     let mermaid_url = format!("{}{}", w.location().origin().unwrap_or_default(), mermaid::ASSET_URL);
-    let html = srcdoc(body_html, &Shell { channel: &channel, scheme, tokens: &tokens, mermaid_url: &mermaid_url });
+    let components = registry::snapshot();
+    let html = srcdoc(
+        body_html,
+        &Shell { channel: &channel, scheme, tokens: &tokens, mermaid_url: &mermaid_url, components: components.as_deref() },
+    );
     // A re-render still loading is superseded by this one.
     if let Ok(list) = container.query_selector_all(":scope > iframe[data-state=\"pending\"]") {
         for i in 0..list.length() {
@@ -411,6 +539,8 @@ fn load(container: &web_sys::Element, body_html: &str) {
 #[component]
 pub(crate) fn Frame(#[prop(into)] html: Signal<String>) -> impl IntoView {
     install_listener();
+    // COMP-5: a frame defines the components — the app keeps the registry.
+    registry::want();
     let host = NodeRef::<leptos::html::Div>::new();
     // The newest body asked for: a debounced re-render loads only if it is
     // still the newest when its wait ends (and the frame still mounted).
@@ -462,7 +592,7 @@ mod tests {
     #[test]
     fn the_srcdoc_is_the_shell_then_the_body() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js" };
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", components: None };
         let doc = srcdoc("<details><summary>s</summary><p>x</p></details>", &shell);
         assert!(doc.starts_with("<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta charset=\"utf-8\">"), "{doc}");
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
@@ -480,7 +610,7 @@ mod tests {
     #[test]
     fn the_init_block_is_json_that_cannot_close_its_script() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f1", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//" };
+        let shell = Shell { channel: "f1", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", components: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -491,6 +621,32 @@ mod tests {
         // The app's strict mermaid posture rides along unchanged.
         assert_eq!(v["mermaid"]["config"]["securityLevel"], "strict");
         assert_eq!(v["mermaid"]["config"]["htmlLabels"], false);
+        // COMP-5: no registry held yet is `null` — the SDK waits for one.
+        assert!(v["components"].is_null());
+    }
+
+    /// COMP-5: the registry rides in the init block whole, in the wire's
+    /// spelling — and a source is HTML with scripts in it, which must not
+    /// end the init block's `<script>` either.
+    #[test]
+    fn the_init_block_carries_the_registry_and_cannot_be_closed_by_a_source() {
+        let tokens = shell_tokens();
+        let source = "<template><b>x</b></template>\n<script>this.root.append('</script><script>alert(1)</script>')</script>\n<!-- c -->";
+        let components = [
+            Component { name: "m-a".into(), source: source.into(), owner: Some("A-2".into()), references: vec!["A-3".into()] },
+            Component { name: "m-b".into(), source: "<i>b</i>".into(), owner: None, references: vec!["m-a".into()] },
+        ];
+        let shell = Shell { channel: "f2", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: Some(&components) };
+        let json = init_json(&shell);
+        assert!(!json.contains('<'), "{json}");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["components"][0]["name"], "m-a");
+        assert_eq!(v["components"][0]["source"], source);
+        assert_eq!(v["components"][0]["owner"], "A-2");
+        assert_eq!(v["components"][1]["owner"], serde_json::Value::Null);
+        assert_eq!(v["components"][1]["references"][0], "m-a");
+        let doc = srcdoc("<m-a></m-a>", &shell);
+        assert_eq!(doc.matches("</script>").count(), 2, "the init block's and the SDK's own");
     }
 
     /// A token the frame cannot take whole is dropped, never spliced.
@@ -521,7 +677,7 @@ mod tests {
         assert_eq!(Scheme::from_color_scheme(""), Scheme::Light);
     }
 
-    /// Only the protocol's two inbound kinds count; a size is a finite,
+    /// Only the protocol's three inbound kinds count; a size is a finite,
     /// clamped height.
     #[test]
     fn the_host_reads_ready_and_size_and_nothing_else() {
@@ -532,7 +688,10 @@ mod tests {
         assert_eq!(parse_msg("menger:size", Some(1e12), Some(true)), Some(Msg::Size { height: 50_000, settled: true }));
         assert_eq!(parse_msg("menger:size", Some(f64::NAN), Some(true)), None);
         assert_eq!(parse_msg("menger:size", None, Some(true)), None);
-        assert_eq!(parse_msg("menger:theme", None, None), None, "outbound only");
+        assert_eq!(parse_msg("menger:call", None, None), Some(Msg::Call));
+        for outbound in ["menger:theme", "menger:result", "menger:components", "menger:change"] {
+            assert_eq!(parse_msg(outbound, None, None), None, "{outbound}: outbound only");
+        }
         assert_eq!(parse_msg("lavish:queuePrompt", None, None), None);
     }
 
@@ -543,7 +702,7 @@ mod tests {
     #[test]
     fn the_sdk_shell_is_versioned_served_and_inlinable() {
         assert!(SDK_JS.contains(&format!("var VERSION = \"{SDK_VERSION}\";")), "the script's VERSION");
-        assert!(SDK_JS.contains("Object.freeze({ version: VERSION })"), "window.menger = {{ version }}");
+        assert!(SDK_JS.contains("Object.freeze({ version: VERSION, call: call, on: on })"), "window.menger = {{ version, call, on }}");
         let lower = SDK_JS.to_ascii_lowercase();
         assert!(!lower.contains("</script") && !lower.contains("<!--"), "inlinable");
         let name = SDK_URL.rsplit('/').next().unwrap();
@@ -556,7 +715,9 @@ mod tests {
             "index.html copy-files the SDK into dist/sdk/"
         );
         // Every message the script sends or takes is one the protocol names.
-        for kind in ["menger:ready", "menger:size", "menger:theme"] {
+        for kind in [
+            "menger:ready", "menger:size", "menger:theme", "menger:call", "menger:result", "menger:components", "menger:change",
+        ] {
             assert!(SDK_JS.contains(&format!("\"{kind}\"")), "{kind}");
         }
         // Base typography paints through the app's tokens only.

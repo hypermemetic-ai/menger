@@ -1,4 +1,5 @@
-/* menger SDK shell (COMP-4) — the script every framed body runs first.
+/* menger SDK (COMP-4 shell, COMP-5 components) — the script every framed
+ * body runs first.
  *
  * A framed body (frontend/src/frame.rs) is one sandboxed iframe —
  * `sandbox="allow-scripts allow-forms allow-popups
@@ -8,12 +9,41 @@
  * frame's whole contract with the app (lavish-axi's injected SDK, in
  * menger's idiom):
  *
- *   - `window.menger` — `{ version }` today; COMP-5 adds `call` and `on`.
+ *   - `window.menger` (1.0, frozen) — `version`;
+ *     `call(method, params)` → a Promise of the call's items (an array: the
+ *     stream's data events, as the wire spells them — `{ type: "placed",
+ *     … }`, an in-band `{ type: "error", message }` included), answered by
+ *     the app over its own connection; read-only — `get`, `list`, `find`,
+ *     `waves`, `groups`, `extents`, `blockers`, `health`, `components`, with
+ *     the activation's parameter names; anything else rejects with an Error
+ *     whose message starts "read-only", and unknown or missing params
+ *     reject naming them; `on('change', cb)` → `cb(event)` for every
+ *     `watch` event the app hears (`amended`, `status_changed`,
+ *     `component_changed`, …), returning a function that stops it.
+ *   - **components** — every name in the app's component registry is a
+ *     custom element here (COMP-1 decisions 2, 4). A custom element cannot
+ *     be redefined, so each name's class only delegates: an instance renders
+ *     whatever source the name has now, and a changed source re-renders
+ *     every live instance in place — no reload. A source (the ` ```component
+ *     m-name ` block's content) is a `<template>` (or, without one, its
+ *     markup), any `<style>`s and any `<script>`s. An instance: an open
+ *     shadow root (`this.root`) holding the styles, then the template's
+ *     content (`<slot>`s take the element's children); then the scripts,
+ *     run as one function with the element as `this`, which has
+ *     `this.menger` (window.menger itself), `this.attr(name)` (the
+ *     attribute, or null — an attribute read this way re-renders the
+ *     instance when it changes) and `this.root`. What the script returns,
+ *     if a function, runs before the instance's next render and when it
+ *     leaves the document; so does the end of every `menger.on` it made
+ *     while it ran. A component no longer in the registry renders
+ *     "unknown component m-x" (its children still slotted after it); a
+ *     script that throws shows its error inside the instance.
  *   - base typography matching the app's ticket text (the `.md` rules), at
  *     zero specificity (`:where`), so any rule the body writes wins;
  *   - the app's theme tokens (`--bg`, `--ink`, …, `--sans`, `--mono`) on the
  *     frame's `:root`, and `color-scheme` + `<html data-theme>`, following
- *     the app's light/dark flips;
+ *     the app's light/dark flips (custom properties inherit into a
+ *     component's shadow root);
  *   - mermaid placeholders (md.rs) drawn here, with the vendored bundle,
  *     in the theme's mermaid palette, redrawn on a flip;
  *   - the document's height, reported to the host (ResizeObserver), which
@@ -30,21 +60,32 @@
  *   frame → host  menger:ready  { version }               once, at start
  *   host → frame  menger:theme  { scheme, tokens }        on ready, and on
  *                                                         every theme flip
+ *   host → frame  menger:components { components }        on ready, and
+ *                 whenever the app (re)fetches the registry — the whole
+ *                 registry (`[{ name, source, owner, references }]`); what
+ *                 the frame has and this lacks has left it
+ *   host → frame  menger:change { event }                 every `watch`
+ *                 event; a `component_changed` / `component_removed` moves
+ *                 the definitions first, then `on('change')` hears it
+ *   frame → host  menger:call   { id, method, params }    menger.call
+ *   host → frame  menger:result { id, items } | { id, error }
  *   frame → host  menger:size   { height, settled }       whenever the
  *                 height changes; `settled` turns true once the first
- *                 paint is complete (diagrams drawn) and stays true — the
- *                 host swaps a re-rendered frame in only then, so an
+ *                 paint is complete (diagrams drawn, the registry in hand,
+ *                 and the calls made meanwhile answered) and stays true —
+ *                 the host swaps a re-rendered frame in only then, so an
  *                 amended body never flashes.
  *
  * The init block (#menger-init, JSON) carries
- * `{ channel, version, scheme, mermaid: { url, config } }`. The first
+ * `{ channel, version, scheme, mermaid: { url, config }, components }` —
+ * `components` the registry as the app held it (null: not yet). The first
  * theme is already in the srcdoc (<style id="menger-theme">, <html
  * data-theme>), so the first paint is right before any message arrives.
  */
 (function () {
   "use strict";
 
-  var VERSION = "0.1.0";
+  var VERSION = "1.0.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -78,9 +119,104 @@
     }
   }
 
+  function describe(e) {
+    return e && e.message ? e.message : String(e);
+  }
+
+  function logError(e) {
+    try {
+      console.error(e);
+    } catch (_) {
+      /* no console */
+    }
+  }
+
+  // -- menger.call: the bridge's frame side -----------------------------------
+
+  var calls = Object.create(null);
+  var nextCall = 0;
+  var inflight = 0;
+  var idleWaiters = [];
+
+  function call(method, params) {
+    return new Promise(function (resolve, reject) {
+      var id = ++nextCall;
+      var msg = {
+        type: "menger:call",
+        channel: channel,
+        id: id,
+        method: String(method),
+        params: params === undefined ? null : params,
+      };
+      try {
+        host.postMessage(msg, "*");
+      } catch (e) {
+        reject(new TypeError("menger.call: params must be plain data — " + describe(e)));
+        return;
+      }
+      calls[id] = { resolve: resolve, reject: reject };
+      inflight++;
+    });
+  }
+
+  function answered(m) {
+    var c = calls[m.id];
+    if (!c) return;
+    delete calls[m.id];
+    inflight--;
+    if (typeof m.error === "string") c.reject(new Error(m.error));
+    else c.resolve(Array.isArray(m.items) ? m.items : []);
+    if (!inflight && idleWaiters.length) {
+      var waiting = idleWaiters;
+      idleWaiters = [];
+      // After the callers' own handlers have run.
+      setTimeout(function () {
+        for (var i = 0; i < waiting.length; i++) waiting[i]();
+      }, 0);
+    }
+  }
+
+  function whenIdle() {
+    return new Promise(function (resolve) {
+      if (inflight) idleWaiters.push(resolve);
+      else setTimeout(resolve, 0);
+    });
+  }
+
+  // -- menger.on: change notices ------------------------------------------------
+
+  var listeners = [];
+  // The component instance whose script is running: a subscription made
+  // then ends with that render.
+  var rendering = null;
+
+  function on(kind, cb) {
+    if (kind !== "change") throw new TypeError("menger.on: no event '" + kind + "' — there is 'change'");
+    if (typeof cb !== "function") throw new TypeError("menger.on: the listener must be a function");
+    var entry = { cb: cb };
+    listeners.push(entry);
+    if (rendering) rendering.subs.push(entry);
+    return function off() {
+      var i = listeners.indexOf(entry);
+      if (i >= 0) listeners.splice(i, 1);
+    };
+  }
+
+  function notify(event) {
+    var now = listeners.slice();
+    for (var i = 0; i < now.length; i++) {
+      if (listeners.indexOf(now[i]) < 0) continue; // stopped by an earlier one
+      try {
+        now[i].cb(event);
+      } catch (e) {
+        logError(e);
+      }
+    }
+  }
+
   // -- window.menger ------------------------------------------------------
 
-  var api = Object.freeze({ version: VERSION });
+  var api = Object.freeze({ version: VERSION, call: call, on: on });
   try {
     Object.defineProperty(window, "menger", { value: api, enumerable: true, writable: false, configurable: false });
   } catch (e) {
@@ -169,8 +305,292 @@
     if (!m || typeof m !== "object" || m.channel !== channel) return;
     if (m.type === "menger:theme") {
       applyTheme(m.scheme === "dark" ? "dark" : "light", m.tokens && typeof m.tokens === "object" ? m.tokens : {});
+    } else if (m.type === "menger:result") {
+      answered(m);
+    } else if (m.type === "menger:components") {
+      if (Array.isArray(m.components)) sync(m.components);
+    } else if (m.type === "menger:change") {
+      if (m.event && typeof m.event === "object") changed(m.event);
     }
   });
+
+  // -- components (COMP-5) ------------------------------------------------------
+  // `defs[name]`: what the name renders now — a compiled source, or null once
+  // it has left the registry. `classes[name]`: this script defined the name
+  // (a body that defined it first keeps its own). `live[name]`: the
+  // instances in the document now. An instance's state (its shadow root,
+  // what its last render left running) is kept beside it, never on it.
+
+  var CE = window.customElements;
+  var defs = Object.create(null);
+  var classes = Object.create(null);
+  var live = Object.create(null);
+  var states = new WeakMap();
+  var known = false;
+  var knownWaiters = [];
+
+  // A custom element's name as the registry takes one (COMP-3): lowercase
+  // ASCII, a letter first, a hyphen in it.
+  var COMPONENT_NAME = /^[a-z][a-z0-9._-]*$/;
+
+  function nameOk(name) {
+    return typeof name === "string" && COMPONENT_NAME.test(name) && name.indexOf("-") > 0;
+  }
+
+  // A source, taken apart once: the template's content (or, with no
+  // <template>, the source's other markup), its styles, its scripts as one
+  // function. Parsed inside a <template>, so nothing in it runs or loads.
+  function compile(name, source) {
+    var def = { source: source, content: null, styles: [], fn: null, error: null };
+    var t = doc.createElement("template");
+    t.innerHTML = source;
+    var top = Array.prototype.slice.call(t.content.childNodes);
+    var rest = [];
+    var scripts = [];
+    for (var i = 0; i < top.length; i++) {
+      var n = top[i];
+      var tag = n.nodeType === 1 ? n.localName : "";
+      if (tag === "template" && !def.content) def.content = n.content;
+      else if (tag === "style") def.styles.push(n.textContent);
+      else if (tag === "script") scripts.push(n.textContent);
+      else rest.push(n);
+    }
+    if (!def.content) {
+      def.content = t.content;
+      for (var j = 0; j < top.length; j++) if (rest.indexOf(top[j]) < 0) t.content.removeChild(top[j]);
+    }
+    if (scripts.length) {
+      try {
+        def.fn = new Function(scripts.join("\n;\n"));
+      } catch (e) {
+        def.error = name + ": " + describe(e);
+      }
+    }
+    return def;
+  }
+
+  var NOTICE_CSS =
+    ".menger-notice{font:12px/1.5 var(--mono);color:var(--err-fg);background:var(--err-bg);" +
+    "border:1px solid var(--err-line);border-radius:3px;padding:0 .35em}" +
+    "pre.menger-notice{white-space:pre-wrap;margin:.25em 0;padding:.25em .5em}";
+
+  function notice(root, tagName, text) {
+    if (!root.querySelector("style[data-menger]")) {
+      var s = doc.createElement("style");
+      s.setAttribute("data-menger", "");
+      s.textContent = NOTICE_CSS;
+      root.insertBefore(s, root.firstChild);
+    }
+    var el = doc.createElement(tagName);
+    el.className = "menger-notice";
+    el.setAttribute("part", "menger-notice");
+    el.textContent = text;
+    root.appendChild(el);
+  }
+
+  // What the instance's last render left running: its cleanup, its
+  // subscriptions.
+  function teardown(st) {
+    var subs = st.subs;
+    var cleanups = st.cleanups;
+    st.subs = [];
+    st.cleanups = [];
+    st.reads = Object.create(null);
+    for (var i = 0; i < subs.length; i++) {
+      var k = listeners.indexOf(subs[i]);
+      if (k >= 0) listeners.splice(k, 1);
+    }
+    for (var j = 0; j < cleanups.length; j++) {
+      try {
+        cleanups[j]();
+      } catch (e) {
+        logError(e);
+      }
+    }
+  }
+
+  function render(el) {
+    var st = states.get(el);
+    if (!st || !el.isConnected) return;
+    teardown(st);
+    var root = st.root;
+    while (root.firstChild) root.removeChild(root.firstChild);
+    var def = defs[st.name];
+    if (!def) {
+      notice(root, "span", "unknown component " + st.name);
+      root.appendChild(doc.createElement("slot"));
+      return;
+    }
+    for (var i = 0; i < def.styles.length; i++) {
+      var s = doc.createElement("style");
+      s.textContent = def.styles[i];
+      root.appendChild(s);
+    }
+    root.appendChild(doc.importNode(def.content, true));
+    if (def.error) {
+      notice(root, "pre", def.error);
+      return;
+    }
+    if (!def.fn) return;
+    var outer = rendering;
+    rendering = st;
+    try {
+      var out = def.fn.call(el);
+      if (typeof out === "function") st.cleanups.push(out);
+    } catch (e) {
+      notice(root, "pre", st.name + ": " + describe(e));
+      logError(e);
+    } finally {
+      rendering = outer;
+    }
+  }
+
+  function connect(el, name) {
+    var st = states.get(el);
+    if (!st) {
+      var root = el.shadowRoot;
+      if (!root) {
+        try {
+          root = el.attachShadow({ mode: "open" });
+        } catch (e) {
+          logError(e);
+          return;
+        }
+      }
+      st = { name: name, root: root, subs: [], cleanups: [], reads: Object.create(null), observer: null };
+      states.set(el, st);
+    }
+    (live[name] || (live[name] = new Set())).add(el);
+    if (!st.observer && window.MutationObserver) {
+      st.observer = new MutationObserver(function (records) {
+        for (var i = 0; i < records.length; i++) {
+          if (st.reads[records[i].attributeName]) {
+            render(el);
+            return;
+          }
+        }
+      });
+      st.observer.observe(el, { attributes: true });
+    }
+    render(el);
+  }
+
+  function disconnect(el, name) {
+    var st = states.get(el);
+    if (live[name]) live[name].delete(el);
+    if (!st) return;
+    if (st.observer) {
+      st.observer.disconnect();
+      st.observer = null;
+    }
+    teardown(st);
+  }
+
+  // The name's class: it holds nothing but the name — every instance asks
+  // `defs` what to render.
+  function defineName(name) {
+    if (classes[name] || !CE || !nameOk(name)) return;
+    if (CE.get(name)) {
+      classes[name] = "the body's";
+      return;
+    }
+    var Delegate = class extends HTMLElement {
+      connectedCallback() {
+        connect(this, name);
+      }
+      disconnectedCallback() {
+        disconnect(this, name);
+      }
+      get menger() {
+        return api;
+      }
+      get root() {
+        var st = states.get(this);
+        return st ? st.root : null;
+      }
+      attr(attribute) {
+        var a = String(attribute).toLowerCase();
+        var st = states.get(this);
+        if (st) st.reads[a] = true;
+        return this.getAttribute(a);
+      }
+    };
+    try {
+      CE.define(name, Delegate);
+      classes[name] = true;
+    } catch (e) {
+      classes[name] = "refused";
+      logError(e);
+    }
+  }
+
+  function rerender(name) {
+    var set = live[name];
+    if (!set) return;
+    set.forEach(function (el) {
+      render(el);
+    });
+  }
+
+  // `source` null: the name left the registry.
+  function setDef(name, source) {
+    if (!nameOk(name)) return;
+    var cur = defs[name];
+    if (source === null) {
+      if (cur === null) return;
+      defs[name] = null;
+    } else if (cur && cur.source === source) {
+      defineName(name);
+      return;
+    } else {
+      defs[name] = compile(name, source);
+    }
+    defineName(name);
+    rerender(name);
+  }
+
+  function becomeKnown() {
+    if (known) return;
+    known = true;
+    var waiting = knownWaiters;
+    knownWaiters = [];
+    for (var i = 0; i < waiting.length; i++) waiting[i]();
+  }
+
+  function whenKnown() {
+    return known
+      ? Promise.resolve()
+      : new Promise(function (resolve) {
+          knownWaiters.push(resolve);
+        });
+  }
+
+  // The whole registry: each name's source now; a name this frame has and
+  // the registry lacks has left it.
+  function sync(list) {
+    var seen = Object.create(null);
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (c && typeof c.name === "string" && typeof c.source === "string") {
+        seen[c.name] = true;
+        setDef(c.name, c.source);
+      }
+    }
+    for (var name in defs) if (!seen[name] && defs[name]) setDef(name, null);
+    becomeKnown();
+  }
+
+  function changed(event) {
+    if (event.type === "component_changed" && event.component && typeof event.component.source === "string") {
+      setDef(event.component.name, event.component.source);
+    } else if (event.type === "component_removed") {
+      setDef(event.name, null);
+    }
+    notify(event);
+  }
+
+  // Defined before the body is parsed: an instance renders as it is created.
+  if (Array.isArray(init.components)) sync(init.components);
 
   // -- links ------------------------------------------------------------------
   // Every link opens a new top-level tab (<base target="_blank"> in the
@@ -314,7 +734,9 @@
       });
     }
     report(true);
-    mountDiagrams().then(settle, settle);
+    // Settled: diagrams drawn, the registry in hand, and what the
+    // components asked for meanwhile answered.
+    Promise.all([mountDiagrams(), whenKnown()]).then(whenIdle).then(settle, settle);
     setTimeout(settle, SETTLE_MS);
   }
 

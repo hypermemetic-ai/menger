@@ -471,6 +471,35 @@ written in its body, usable as a tag in any ticket. The server keeps the
 synapse -P 4455 menger tickets components
 ```
 
+**In the app** (COMP-4, COMP-5) a body holding HTML or a component tag
+renders in a sandboxed frame (no `allow-same-origin`) under menger's SDK
+(`frontend/sdk/menger-sdk.js`, whose header is the protocol's reference),
+and every component in the registry is a custom element there. A custom
+element cannot be redefined, so each name's class delegates to its current
+source: amending a definition re-renders every live instance in every open
+frame, without a reload; an orphan keeps rendering; a component that left
+the registry renders `unknown component m-x`. An instance is an open shadow
+root holding the source's `<style>`s and its `<template>`'s content
+(`<slot>`s take the element's children); the source's `<script>`s then run
+as one function with the element as `this`:
+
+| in a component script | |
+| -- | -- |
+| `this.root` | its shadow root |
+| `this.attr(name)` | the attribute, or `null` — an attribute read this way re-renders the instance when it changes |
+| `this.menger` | `window.menger` itself |
+| `return () => …` | runs before the next render and when the element leaves the document; so does the end of every `menger.on` made while the script ran |
+
+`window.menger` (1.0, frozen): `version`; **`call(method, params)`** → a
+Promise of the call's items (the stream's data events as the wire spells
+them, an in-band `error` included), answered by the app over its own
+connection — **read-only**: `get`, `list`, `find`, `waves`, `groups`,
+`extents`, `blockers`, `health`, `components`, with the activation's
+parameter names (`menger.call('waves', { epics: ['PLEXUS'] })`); any other
+method rejects with `read-only: …`, a parameter the method does not take
+rejects naming it; **`on('change', cb)`** → `cb(event)` for every `watch`
+event the app hears, and returns the function that stops it.
+
 The order of work for a shortcode tree — the platform's, here — is one call
 (WAVE-4); the app's wave board (`#/waves/<SHORTCODE>`) makes the same one:
 
@@ -692,7 +721,12 @@ web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
                        src/waves.rs the wave board (WAVE-5, WAVE-6),
                        src/filter.rs its filter and menu (WAVE-12),
-                       src/notes.rs its annotation and the body editor (WAVE-11)
+                       src/notes.rs its annotation and the body editor (WAVE-11),
+                       src/frame.rs framed bodies and their messages (COMP-4,
+                       COMP-5), sdk/menger-sdk.js the SDK every frame runs,
+                       src/registry.rs the app's copy of the component
+                       registry, src/bridge.rs menger.call's read-only host
+                       side (COMP-5)
 spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)
 diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub
                        (WS :4458); the `mermaid` activation and the client it

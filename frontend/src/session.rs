@@ -137,7 +137,7 @@
 //! the rows views hold.
 
 use crate::kids::Kids;
-use crate::{board, cache, dom, nav, Conn, Dock};
+use crate::{board, cache, dom, frame, nav, registry, Conn, Dock};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::{TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
@@ -404,6 +404,9 @@ async fn session(
     // 1. `watch` first — subscribed eagerly, so a ticket born while the
     //    calls below are out arrives behind them (MNG-9 acceptance 5).
     let mut live = client.watch(None);
+    // COMP-5: the component registry, if a view wants it — after `watch`,
+    // so nothing it misses is lost (src/registry.rs).
+    registry::refresh();
 
     // 2. The dock.
     for ev in client.health_all().await.map_err(|e| describe(&e))? {
@@ -441,6 +444,10 @@ async fn session(
         // whether to ask `waves` again).
         if let ClientEvent::Data(data) = &ev {
             hear(data);
+            // COMP-5: the app's registry takes a component event, then
+            // every open frame hears the event as a change notice.
+            registry::heard(data);
+            frame::broadcast_change(data);
         }
         match ev {
             // Every mutation event carries the full updated ticket —
@@ -531,6 +538,7 @@ async fn session(
                 board.refresh(&client).await?;
                 refetch_open_body(&client, last_error).await;
                 refetch_open_children(last_error);
+                registry::refresh();
                 STALE.with(|s| s.update(|n| *n = n.wrapping_add(1)));
             }
             // Future event kinds: ignore, stay live.

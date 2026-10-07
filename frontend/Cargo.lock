@@ -970,6 +970,7 @@ dependencies = [
  "plexus-client",
  "pulldown-cmark",
  "pulldown-cmark-escape",
+ "serde",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",

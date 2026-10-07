@@ -192,6 +192,7 @@
 //! itself ignores.
 
 mod board;
+mod bridge;
 mod cache;
 mod dom;
 mod filter;
@@ -204,6 +205,7 @@ mod nav;
 mod notes;
 
 mod mermaid;
+mod registry;
 mod session;
 mod theme;
 mod waves;
