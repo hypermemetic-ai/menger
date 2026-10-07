@@ -6,6 +6,7 @@
 #   deploy/pipeline install                 units + env files; enable both envs
 #   deploy/pipeline build [REV]             gate + release (default REV: master)
 #   deploy/pipeline deploy test [RELEASE]   prod data → test; switch; restart; smoke
+#   deploy/pipeline sync test               prod data → test, same release; restart; smoke
 #   deploy/pipeline promote [RELEASE] [--adopt]
 #                                           a TESTED release to prod; smoke;
 #                                           automatic rollback on failure
@@ -213,13 +214,12 @@ cmd_smoke() {
 }
 
 # ── deploy test ─────────────────────────────────────────────────────────────
-cmd_deploy() {
-  [[ ${1:-} == test ]] || die "only 'deploy test' — production changes through 'promote'"
-  local rel; rel=$(resolve_release "${2:-}")
+# Test's database becomes a live snapshot of prod's: SQLite's online backup,
+# consistent while prod keeps running. Test's services must be stopped.
+# `deploy test` and `sync test` both take it here.
+snapshot_prod_into_test() {
   load_env test; local test_db=$MENGER_DB_PATH
   load_env prod; local prod_db=$MENGER_DB_PATH
-  step "deploy $rel to test"
-  stop test
   mkdir -p "$(dirname "$test_db")"
   rm -f "$test_db" "$test_db-wal" "$test_db-shm"
   if [[ -f $prod_db ]]; then
@@ -228,6 +228,14 @@ cmd_deploy() {
   else
     say "test data: prod has no database yet; test starts empty"
   fi
+}
+
+cmd_deploy() {
+  [[ ${1:-} == test ]] || die "only 'deploy test' — production changes through 'promote'"
+  local rel; rel=$(resolve_release "${2:-}")
+  step "deploy $rel to test"
+  stop test
+  snapshot_prod_into_test
   switch_to test "$rel"
   restart test
   if cmd_smoke test; then
@@ -237,6 +245,34 @@ cmd_deploy() {
   else
     record test deploy "$rel" "smoke failed"
     die "test runs $rel and its smoke FAILED — prod untouched; see: deploy/pipeline logs test"
+  fi
+}
+
+# ── sync ────────────────────────────────────────────────────────────────────
+# DEPLOY-4: test's data refreshed from prod on demand — the snapshot `deploy
+# test` takes, keeping the release test runs. One way only: a sync never
+# writes prod. Test's previous data is backed up first (the newest few kept).
+SYNC_BACKUPS_KEPT=5
+cmd_sync() {
+  [[ ${1:-} == test ]] || die "only 'sync test' — prod's data is never overwritten by a sync"
+  local rel; rel=$(running_release test)
+  [[ -n $rel ]] || die "test runs no release yet — 'deploy/pipeline deploy test' first"
+  step "sync test from prod's data (test keeps $rel)"
+  stop test
+  local backup; backup=$(backup_db test before-sync)
+  if [[ -n $backup ]]; then
+    say "test's previous data: $backup"
+    ls -1t "$(dirname "$backup")"/tickets.db.*-before-sync 2>/dev/null \
+      | tail -n +$((SYNC_BACKUPS_KEPT + 1)) | xargs -r rm -f
+  fi
+  snapshot_prod_into_test
+  restart test
+  if cmd_smoke test; then
+    record test sync "$rel" ok
+    say "test runs $rel on a fresh snapshot of prod's data — smoke passed"
+  else
+    record test sync "$rel" "smoke failed"
+    die "test's smoke FAILED after the sync — prod untouched; previous data: ${backup:-none}; see: deploy/pipeline logs test"
   fi
 }
 
@@ -364,6 +400,7 @@ case $cmd in
   install)  cmd_install "$@" ;;
   build)    cmd_build "$@" ;;
   deploy)   cmd_deploy "$@" ;;
+  sync)     cmd_sync "$@" ;;
   promote)  cmd_promote "$@" ;;
   rollback) cmd_rollback "$@" ;;
   smoke)    cmd_smoke "$@" ;;
