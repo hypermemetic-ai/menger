@@ -32,9 +32,18 @@
 //! image's text is text. The markup is a fixed wrapper around escaped text,
 //! the mermaid placeholder's discipline; and a body without `{wave:` takes
 //! [`render_body`]'s path, so it renders byte for byte as before.
+//!
+//! COMP-9: a **definition** — a ` ```component m-x ` fence — frames its body
+//! ([`is_framed`]), and in the frame ([`render_body_framed`]) it is not a
+//! code block: it renders as the component's docs card (src/card.rs), built
+//! from the block itself — its docs parsed with the server's own parser
+//! (`menger_tickets_api::component_docs`), its help through this module.
 
+use menger_tickets_api::component_docs;
 use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
 use pulldown_cmark_escape::{escape_href, escape_html};
+
+use crate::card;
 
 /// The class the mounter queries for — the one name both sides share.
 pub const MERMAID_CLASS: &str = "mermaid";
@@ -119,7 +128,7 @@ fn dest_allowed(dest: &str, allow_mailto: bool) -> bool {
 /// Render a ticket body to HTML that is safe to inject via `inner_html`,
 /// plus the count of mermaid placeholders it holds.
 pub fn render_body(src: &str) -> Rendered {
-    render(src, None, false)
+    render(src, None, false, false)
 }
 
 /// WAVE-11: what a `{wave: ID}` renders as — the ticket's placement, as the
@@ -234,7 +243,7 @@ pub fn render_body_with(src: &str, resolve: &dyn Fn(&str) -> Option<WaveRef>) ->
     if !src.contains(WAVE_OPEN) {
         return render_body(src);
     }
-    render(src, Some(resolve), false)
+    render(src, Some(resolve), false, false)
 }
 
 /// COMP-4: a framed body's markup — [`render_body_with`]'s, raw HTML passed
@@ -245,9 +254,29 @@ pub fn render_body_with(src: &str, resolve: &dyn Fn(&str) -> Option<WaveRef>) ->
 /// HTML is never safe for `inner_html`.
 pub fn render_body_framed(src: &str, resolve: &dyn Fn(&str) -> Option<WaveRef>) -> Rendered {
     if !src.contains(WAVE_OPEN) {
-        return render(src, None, true);
+        return render(src, None, true, true);
     }
-    render(src, Some(resolve), true)
+    render(src, Some(resolve), true, true)
+}
+
+/// COMP-9: a docs card's help — markdown rendered as a framed body is (its
+/// HTML passes through; mermaid becomes a placeholder the frame draws), but
+/// a definition inside it is a code block: a card holds no card.
+pub fn render_help(src: &str) -> String {
+    render(src, None, true, false).html
+}
+
+/// COMP-9: the card a definition block renders as in a framed body — the
+/// block's tag and preview from its info string, its docs parsed from its
+/// content (src/card.rs).
+fn definition_card(info: &str, source: &str) -> String {
+    let (name, preview) = component_docs::definition(info).unwrap_or(("", Vec::new()));
+    let parsed = component_docs::parse(source);
+    let docs = match &parsed {
+        Ok(d) => Ok(d.as_ref()),
+        Err(problem) => Err(problem.as_str()),
+    };
+    card::card_html(&card::Card { name, preview: &preview, docs, source, in_body: true }, &render_help)
 }
 
 /// COMP-4: does this body (its frontmatter already split off) render in a
@@ -257,11 +286,13 @@ pub fn render_body_framed(src: &str, resolve: &dyn Fn(&str) -> Option<WaveRef>) 
 /// fences (mermaid's included) and indented code never frame: what is in
 /// them is text, and the parser never reports it as HTML.
 pub fn is_framed(src: &str) -> bool {
-    if !src.contains('<') {
+    if !src.contains('<') && !src.contains("component") {
         return false;
     }
     Parser::new_ext(src, options()).any(|ev| match ev {
         Event::Html(s) | Event::InlineHtml(s) => holds_markup(&s),
+        // COMP-9: a definition renders as its card, in the frame.
+        Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => component_docs::definition(&info).is_some(),
         _ => false,
     })
 }
@@ -317,8 +348,9 @@ fn options() -> Options {
 }
 
 /// `framed`: raw HTML passes through (COMP-4's frame) rather than becoming
-/// text (MFE-7) — the one difference between the two modes.
-fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: bool) -> Rendered {
+/// text (MFE-7) — the one difference between the two modes. `cards`
+/// (framed only, COMP-9): a definition block renders as its docs card.
+fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: bool, cards: bool) -> Rendered {
     let opts = options();
 
     // Depth counters for dropped tags, so each End pairs with its Start.
@@ -328,7 +360,24 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
     // own Start/Text/End events are swallowed; the End emits the placeholder.
     let mut mermaid_src: Option<String> = None;
     let mut diagrams = 0usize;
+    // COMP-9: inside a definition's fence (framed, with cards): its info
+    // string and the source collected so far; the End emits the card.
+    let mut definition: Option<(String, String)> = None;
+    let cards = framed && cards;
     let events = Parser::new_ext(src, opts).filter_map(|ev| {
+        if definition.is_some() {
+            return match ev {
+                Event::Text(t) => {
+                    definition.as_mut().expect("checked").1.push_str(&t);
+                    None
+                }
+                Event::End(TagEnd::CodeBlock) => {
+                    let (info, source) = definition.take().expect("checked");
+                    Some(Event::Html(definition_card(&info, &source).into()))
+                }
+                _ => None,
+            };
+        }
         if mermaid_src.is_some() {
             return match ev {
                 Event::Text(t) => {
@@ -350,6 +399,12 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
                 if is_mermaid_fence(info) =>
             {
                 mermaid_src = Some(String::new());
+                None
+            }
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref info)))
+                if cards && component_docs::definition(info).is_some() =>
+            {
+                definition = Some((info.to_string(), String::new()));
                 None
             }
             // Raw HTML renders as inert, visible text (push_html escapes Text)
@@ -849,6 +904,40 @@ mod tests {
             render_body("before\n\n<script>window.__pwned = 1</script>\n\nafter").html,
             "<p>before</p>\n&lt;script&gt;window.__pwned = 1&lt;/script&gt;\n<p>after</p>\n"
         );
+    }
+
+    /// COMP-9: a definition frames its body, and in the frame renders as
+    /// its docs card — built from the block: its docs, its preview line,
+    /// its source folded; the help through this module, holding no card of
+    /// its own. Outside a frame (never reached for such a body) it is the
+    /// code block it always was; in an example fence or indented code it
+    /// is text and frames nothing.
+    #[test]
+    fn a_definition_frames_and_renders_as_its_card() {
+        let body = "Defines it.\n\n```component m-x board=RETURNS\n<template>x</template>\n<docs>\n  <summary>Says x.</summary>\n  <attr name=\"board\" type=\"shortcode\" required>Which.</attr>\n  Help with a **bold** word.\n\n  ~~~component m-nested\n  y\n  ~~~\n</docs>\n```\n\nAfter.\n";
+        assert!(is_framed(body), "a definition frames");
+        let html = render_body_framed(body, &|_| None).html;
+        assert!(html.contains("<p>Defines it.</p>") && html.contains("<p>After.</p>"), "{html}");
+        assert!(html.contains("<section class=\"menger-card\" data-menger-card=\"m-x\">"), "{html}");
+        assert!(html.contains("<span class=\"mc-summary\">Says x.</span>"), "{html}");
+        assert!(html.contains("<m-x board=\"RETURNS\"></m-x>"), "the live preview: {html}");
+        assert!(html.contains("<td><code>board</code></td><td><code>shortcode</code></td>"), "{html}");
+        assert!(html.contains("<strong>bold</strong>"), "the help as markdown: {html}");
+        assert!(html.contains("<pre><code class=\"language-component\">y\n</code></pre>"), "a definition in the help is a code block: {html}");
+        assert_eq!(html.matches("class=\"menger-card\"").count(), 1, "no card in a card");
+        assert!(html.contains("<details class=\"mc-source\">"), "{html}");
+        assert!(!html.contains("<pre><code class=\"language-component\">&lt;template"), "the block is not a code block: {html}");
+        // Unframed, the block is the code block it was.
+        assert!(render_body(body).html.contains("<pre><code class=\"language-component\">"));
+        // A definition shown as an example, or indented, frames nothing.
+        assert!(!is_framed("````markdown\n```component m-x\nx\n```\n````\n"));
+        assert!(!is_framed("Write:\n\n    ```component m-x\n    x\n    ```\n"));
+        assert!(!is_framed("```rust\nlet component = 1;\n```\n"));
+        // A draft's malformed docs, and a bad tag, render as said problems.
+        let bad = render_body_framed("```component m-x\n<docs><summary>a</summary><summary>b</summary></docs>\n```\n", &|_| None).html;
+        assert!(bad.contains("malformed &lt;docs&gt;: two &lt;summary&gt; elements"), "{bad}");
+        let unnamed = render_body_framed("```component Chart\nx\n```\n", &|_| None).html;
+        assert!(unnamed.contains("is not a component name") && !unnamed.contains("<Chart"), "{unnamed}");
     }
 
     #[test]

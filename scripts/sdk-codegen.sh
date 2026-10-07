@@ -115,6 +115,7 @@ export async function script(this: MengerElement): Promise<number> {
   const raw: WireEvent[] = await menger.call('waves', { epics: ['RETURNS'] });
   const off: () => void = menger.on('change', (e: WireEvent) => void e.type);
   off();
+  menger.navigate('#/components/m-wave-summary');
   const v: string = window.menger.version;
   return n + raw.length + v.length + (this.attr('board') ?? '').length + this.root.childElementCount;
 }

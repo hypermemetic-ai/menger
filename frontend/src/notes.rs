@@ -362,14 +362,27 @@ fn scroll_to_ref(ev: web_sys::MouseEvent) {
     };
     let id = a.get_attribute("data-wave-ref").unwrap_or_default();
     let n = a.get_attribute("data-wave").unwrap_or_default();
-    let Some(doc) = dom::window().document() else { return };
+    if reveal_on_board(&id, &n) {
+        ev.prevent_default();
+    }
+}
+
+/// The card of the ticket `id` on the board on screen — or, for one it does
+/// not show, its wave `n`'s column — scrolled into view and flashed; whether
+/// there was one. COMP-9: also what a `{wave: ID}` clicked inside a framed
+/// board note does (src/frame.rs, `menger:navigate` with `reveal`).
+pub(crate) fn reveal_on_board(id: &str, n: &str) -> bool {
+    let ok = |s: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if !ok(id) || !ok(n) {
+        return false;
+    }
+    let Some(doc) = dom::window().document() else { return false };
     let target = doc
         .query_selector(&format!("#waves .card[data-ticket-id=\"{id}\"]"))
         .ok()
         .flatten()
         .or_else(|| doc.query_selector(&format!("#waves .lane[data-lane=\"wave-{n}\"]")).ok().flatten());
-    let Some(el) = target else { return };
-    ev.prevent_default();
+    let Some(el) = target else { return false };
     let opts = web_sys::ScrollIntoViewOptions::new();
     opts.set_block(web_sys::ScrollLogicalPosition::Center);
     opts.set_inline(web_sys::ScrollLogicalPosition::Center);
@@ -379,6 +392,7 @@ fn scroll_to_ref(ev: web_sys::MouseEvent) {
         dom::sleep_ms(1200).await;
         let _ = el.class_list().remove_1("flash");
     });
+    true
 }
 
 /// Where the annotation stands.

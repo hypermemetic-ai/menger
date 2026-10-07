@@ -536,7 +536,7 @@ as one function with the element as `this`:
 | `this.menger` | `window.menger` itself |
 | `return () => …` | runs before the next render and when the element leaves the document; so does the end of every `menger.on` made while the script ran |
 
-`window.menger` (1.1, frozen): `version`; **`tickets`** (COMP-10) — the
+`window.menger` (1.2, frozen): `version`; **`tickets`** (COMP-10) — the
 `tickets` activation's typed client (below); **`call(method, params)`** → a
 Promise of the call's items (the stream's data events as the wire spells
 them, an in-band `error` included), answered by the app over its own
@@ -545,7 +545,8 @@ connection — **read-only**: `get`, `list`, `find`, `waves`, `groups`,
 parameter names (`menger.call('waves', { epics: ['PLEXUS'] })`); any other
 method rejects with `read-only: …`, a parameter the method does not take
 rejects naming it; **`on('change', cb)`** → `cb(event)` for every `watch`
-event the app hears, and returns the function that stops it. Its types are
+event the app hears, and returns the function that stops it;
+**`navigate(route)`** (COMP-9, below). Its types are
 `frontend/sdk/menger.d.ts`, published at `/app/sdk/menger.d.ts`.
 
 **The typed SDK** (COMP-10, COMP-1 decision 7). `menger.tickets` is the
@@ -601,9 +602,49 @@ scripts/sdk-codegen.sh        # needs Docker and the plexus-codegen image
 ```
 
 **`#/components`** (COMP-6; linked from the header beside `waves`) lists
-the registry live: a row per component — its tag, its owner (a ticket
-link) or **orphan**, its reference count with each referrer as a link, its
-source folded. `#/components/<tag>` is one component, its source open.
+the registry live: a row per component — its tag and (COMP-9) its summary
+or "no docs yet", its owner (a ticket link) or **orphan**, its reference
+count with each referrer as a link, its source folded. `#/components/<tag>`
+is one component — COMP-9: its **help page**: its docs card (below,
+framed, examples and preview live), then what references it, then its
+source, open.
+
+**Definitions render, instances link to them** (COMP-9, COMP-1 decisions
+5–6):
+
+- **The docs card.** A body holding a definition frames, and the
+  ` ```component m-x ` block renders inside the frame as its card
+  (`frontend/src/card.rs`, built from the block itself — a draft's docs
+  show as they are typed, a malformed one as the problem): `<m-x>` and its
+  summary · "N references ↗" (to the help page, kept live by the SDK) · a
+  **live preview** with the opening line's preview attributes · the
+  attributes (name, type, required, description) · the slots · each
+  example rendered live beside its markup · the help prose (markdown) · the
+  source, folded. The card is addressable: **`#/ticket/<OWNER>?component=m-x`**
+  scrolls the app to it and flashes it.
+- **Badges and tooltips.** Every component instance in a frame wears a
+  small corner badge, `m-x ↗`, shown on hover or keyboard focus and laid
+  over the page (absolutely placed at the instance's top-left corner — it
+  moves nothing). Hovering or focusing the badge opens a tooltip: the name,
+  its owner (or orphan), the summary, and each declared attribute with this
+  instance's value — a missing required one, or a value that does not fit
+  its `AttrKind` (a number; a boolean; a shortcode that exists; a ticket id
+  that exists; one of an enum's values), flagged with the reason (`no
+  shortcode 'NOPE'`) and the badge turned to the error colour — with
+  "definition ↗" (the owner's card; for an orphan, the help page) and
+  "docs ↗" (the help page). A component without docs: its name and "no docs
+  yet". The badge is focusable: Enter (or a click) follows "definition",
+  Esc closes the tooltip. The host fills the tooltip (`menger:inspect` →
+  `menger:inspected`, `frontend/src/inspect.rs`): the registry and the
+  board's extents say what exists, and the checks are
+  `AttrKind::check` / `AttrDoc::state` in `tickets-api` (wasm-safe).
+- **`menger.navigate(route)`** (SDK 1.2) moves the app to an app route —
+  `#/ticket/<id>` (with `?component=<tag>`), `#/components`,
+  `#/components/<tag>`, `#/waves`, `#/waves/<SHORTCODE>` (with a board's
+  query); anything else is ignored. The badge and the tooltip's links use
+  it, and so does a click on any `#/…` link in a framed body; a `{wave: ID}`
+  clicked in a framed board note reveals the card on the board, as in an
+  unframed note.
 
 The order of work for a shortcode tree — the platform's, here — is one call
 (WAVE-4); the app's wave board (`#/waves/<SHORTCODE>`) makes the same one:
@@ -782,9 +823,6 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        references, the plan a create or amend makes of it
                        (orphans, adoption, the sweep), its table, and the
                        build from every body on first open (COMP-3)
-    component_docs.rs  a component's help: its source's <docs> parsed
-                       (summary, typed attributes, slots, examples, help)
-                       and the preview line (COMP-8)
     synthetic.rs       the --seed-synthetic generator (PERF-2)
     tests.rs           the store's unit tests
     tests_paging.rs    page.remaining against a count, on every shape (SCALE-19)
@@ -823,6 +861,10 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
     tests_components.rs  the component registry: each row of its table, code
                        examples and code spans, events, durability, the
                        table built from the bodies of an old file (COMP-3)
+  component_docs.rs    a component's help: its source's <docs> parsed
+                       (summary, typed attributes, slots, examples, help)
+                       and the preview line (COMP-8) — wasm-safe, shared
+                       with the app's docs card (COMP-9)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
   tests/sdk_manifest.rs  COMP-10's drift guard: the activation's methods and
@@ -841,6 +883,9 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        src/registry.rs the app's copy of the component
                        registry, src/bridge.rs menger.call's read-only host
                        side (COMP-5), src/components.rs #/components (COMP-6)
+                       and the help pages, src/card.rs a definition's docs
+                       card, src/inspect.rs the tooltip's checks and
+                       menger.navigate's routes (COMP-9)
 spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)
 diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub
                        (WS :4458); the `mermaid` activation and the client it

@@ -700,6 +700,116 @@ impl FromStr for AttrKind {
     }
 }
 
+/// COMP-9: what a caller knows exists, for checking a `shortcode` or
+/// `ticket` value — `None` when it cannot say (nothing loaded yet), and the
+/// check then passes the value as far as the form goes.
+pub trait Known {
+    /// Whether a shortcode holds a ticket (`epic` upper case).
+    fn shortcode(&self, epic: &str) -> Option<bool>;
+    /// Whether a ticket has this id (upper case).
+    fn ticket(&self, id: &str) -> Option<bool>;
+}
+
+/// COMP-9: knowing nothing — only the form of a value is checked.
+pub struct KnowNothing;
+
+impl Known for KnowNothing {
+    fn shortcode(&self, _: &str) -> Option<bool> {
+        None
+    }
+    fn ticket(&self, _: &str) -> Option<bool> {
+        None
+    }
+}
+
+/// A shortcode's form: ASCII letters and digits (the server folds case).
+fn is_shortcode(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+impl AttrKind {
+    /// COMP-9: whether an instance's attribute `value` fits — `Err` says
+    /// why not. `string`: anything. `number`: a finite decimal number.
+    /// `boolean`: present is true, so `""`, `true` or `false` (any case).
+    /// `shortcode`: letters and digits naming a shortcode that holds a
+    /// ticket; `ticket`: `SHORTCODE-N` naming a ticket that exists (both
+    /// case-insensitive, as the server reads them; existence as `known`
+    /// says). `enum(a|b)`: exactly one of the values.
+    pub fn check(&self, value: &str, known: &dyn Known) -> Result<(), String> {
+        let v = value.trim();
+        match self {
+            Self::String => Ok(()),
+            Self::Number => match v.parse::<f64>() {
+                Ok(n) if n.is_finite() => Ok(()),
+                _ => Err(format!("'{value}' is not a number")),
+            },
+            Self::Boolean => match v.to_ascii_lowercase().as_str() {
+                "" | "true" | "false" => Ok(()),
+                _ => Err(format!("'{value}' is not a boolean — write the attribute alone, or true / false")),
+            },
+            Self::Shortcode => {
+                if !is_shortcode(v) {
+                    return Err(format!("'{value}' is not a shortcode (letters and digits, e.g. RETURNS)"));
+                }
+                match known.shortcode(&v.to_ascii_uppercase()) {
+                    Some(false) => Err(format!("no shortcode '{}'", v.to_ascii_uppercase())),
+                    _ => Ok(()),
+                }
+            }
+            Self::Ticket => {
+                let id = v.to_ascii_uppercase();
+                let formed = id
+                    .rsplit_once('-')
+                    .is_some_and(|(epic, seq)| is_shortcode(epic) && !seq.is_empty() && seq.chars().all(|c| c.is_ascii_digit()));
+                if !formed {
+                    return Err(format!("'{value}' is not a ticket id (e.g. MNG-2)"));
+                }
+                match known.ticket(&id) {
+                    Some(false) => Err(format!("no ticket '{id}'")),
+                    _ => Ok(()),
+                }
+            }
+            Self::Enum { values } => {
+                if values.iter().any(|x| x == v) {
+                    Ok(())
+                } else {
+                    Err(format!("'{value}' is not one of {}", values.join(" | ")))
+                }
+            }
+        }
+    }
+}
+
+/// COMP-9: one declared attribute on one instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttrState {
+    /// Set, and its value fits.
+    Fits,
+    /// Not set, and not required.
+    Unset,
+    /// Required, and not set.
+    Missing,
+    /// Set to a value that does not fit — why.
+    Unfit(String),
+}
+
+impl AttrDoc {
+    /// COMP-9: this attribute on an instance that sets it to `value`
+    /// (`None`: not set). A boolean set to its own name
+    /// (`compact="compact"`) is true, as HTML has it.
+    pub fn state(&self, value: Option<&str>, known: &dyn Known) -> AttrState {
+        match value {
+            None if self.required => AttrState::Missing,
+            None => AttrState::Unset,
+            Some(v) if self.kind == AttrKind::Boolean && v.trim().eq_ignore_ascii_case(&self.name) => AttrState::Fits,
+            Some(v) => match self.kind.check(v, known) {
+                Ok(()) => AttrState::Fits,
+                Err(why) => AttrState::Unfit(why),
+            },
+        }
+    }
+}
+
 impl fmt::Display for AttrKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -890,6 +1000,68 @@ pub enum TicketsEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// COMP-9 acceptance 1: an instance's attribute checked against each
+    /// `AttrKind` — the form, and existence as the caller knows it.
+    #[test]
+    fn attribute_values_are_checked_per_kind() {
+        struct Board;
+        impl Known for Board {
+            fn shortcode(&self, epic: &str) -> Option<bool> {
+                Some(matches!(epic, "RETURNS" | "MNG"))
+            }
+            fn ticket(&self, id: &str) -> Option<bool> {
+                Some(matches!(id, "MNG-2" | "RETURNS-6"))
+            }
+        }
+        let fits = |k: &AttrKind, v: &str| k.check(v, &Board).is_ok();
+        let why = |k: &AttrKind, v: &str| k.check(v, &Board).unwrap_err();
+        assert!(fits(&AttrKind::String, "") && fits(&AttrKind::String, "anything <at> all"));
+        for n in ["0", "-3", "2.5", " 7 ", "1e3"] {
+            assert!(fits(&AttrKind::Number, n), "{n}");
+        }
+        for n in ["", "seven", "NaN", "inf", "1,5"] {
+            assert!(why(&AttrKind::Number, n).contains("is not a number"), "{n}");
+        }
+        for b in ["", "true", "FALSE", "False"] {
+            assert!(fits(&AttrKind::Boolean, b), "{b}");
+        }
+        assert!(why(&AttrKind::Boolean, "yes").contains("not a boolean"));
+        assert!(fits(&AttrKind::Shortcode, "RETURNS") && fits(&AttrKind::Shortcode, "mng"));
+        assert_eq!(why(&AttrKind::Shortcode, "NOPE"), "no shortcode 'NOPE'");
+        assert!(why(&AttrKind::Shortcode, "RE TURNS").contains("is not a shortcode"));
+        assert!(why(&AttrKind::Shortcode, "").contains("is not a shortcode"));
+        assert!(fits(&AttrKind::Ticket, "MNG-2") && fits(&AttrKind::Ticket, "returns-6"));
+        assert_eq!(why(&AttrKind::Ticket, "MNG-99"), "no ticket 'MNG-99'");
+        for bad in ["MNG", "MNG-", "-2", "MNG-x", "M N-2"] {
+            assert!(why(&AttrKind::Ticket, bad).contains("is not a ticket id"), "{bad}");
+        }
+        let size = AttrKind::Enum { values: vec!["s".into(), "m".into(), "l".into()] };
+        assert!(fits(&size, "m") && fits(&size, " l "));
+        assert_eq!(why(&size, "xl"), "'xl' is not one of s | m | l");
+        assert!(why(&size, "M").contains("not one of"), "enum values are exact");
+        // Knowing nothing, existence is not checked — only the form.
+        assert!(AttrKind::Shortcode.check("NOPE", &KnowNothing).is_ok());
+        assert!(AttrKind::Ticket.check("NOPE-1", &KnowNothing).is_ok());
+        assert!(AttrKind::Ticket.check("NOPE", &KnowNothing).is_err());
+    }
+
+    /// COMP-9: an attribute on an instance — set and fitting, unset,
+    /// required and missing, unfit; a boolean set to its own name is true.
+    #[test]
+    fn an_instances_attribute_state() {
+        let attr = |name: &str, kind: AttrKind, required: bool| AttrDoc { name: name.into(), kind, required, description: String::new() };
+        let board = attr("board", AttrKind::Shortcode, true);
+        let label = attr("label", AttrKind::String, false);
+        let compact = attr("compact", AttrKind::Boolean, false);
+        assert_eq!(board.state(None, &KnowNothing), AttrState::Missing);
+        assert_eq!(label.state(None, &KnowNothing), AttrState::Unset);
+        assert_eq!(board.state(Some("RETURNS"), &KnowNothing), AttrState::Fits);
+        assert_eq!(board.state(Some("no way"), &KnowNothing), AttrState::Unfit("'no way' is not a shortcode (letters and digits, e.g. RETURNS)".into()));
+        assert_eq!(compact.state(Some("compact"), &KnowNothing), AttrState::Fits);
+        assert_eq!(compact.state(Some(""), &KnowNothing), AttrState::Fits);
+        assert!(matches!(compact.state(Some("very"), &KnowNothing), AttrState::Unfit(_)));
+    }
 
     /// MFE-9: the browser app renders a status by its wire spelling and
     /// sends that spelling straight back to `set_status`. If `as_str` and

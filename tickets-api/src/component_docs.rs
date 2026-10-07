@@ -1,6 +1,9 @@
 //! COMP-8: a component's **help** — the one `<docs>` element its source may
 //! hold, and the preview attributes on its block's opening line — parsed
 //! into the wire's [`ComponentDocs`] and `preview` (COMP-1 decision 6).
+//! Wasm-safe (no server dependency): the store reads every definition with
+//! it, and the app renders a definition's card (COMP-9) from the block a
+//! body holds — a draft's included.
 //!
 //! ```html
 //! <docs>
@@ -50,15 +53,59 @@ const VOID: [&str; 14] = [
 
 /// The `<docs>` of a component's `source`, parsed — `Ok(None)` when it has
 /// none, `Err` naming what is malformed.
-pub(crate) fn parse(source: &str) -> Result<Option<ComponentDocs>, String> {
+pub fn parse(source: &str) -> Result<Option<ComponentDocs>, String> {
     let Some((start, end)) = find_docs(source)? else { return Ok(None) };
     docs(&source[start..end]).map(Some)
 }
 
 /// The attributes on a definition's opening line after the tag — see the
 /// module doc.
-pub(crate) fn preview(rest: &str) -> Vec<(String, String)> {
+pub fn preview(rest: &str) -> Vec<(String, String)> {
     attributes(rest).into_iter().map(|(k, v)| (k, v.unwrap_or_default())).collect()
+}
+
+/// A fence's info string, if it opens a definition — ` ```component m-x
+/// board=RETURNS ` — the tag as written (`""` when it names none) and its
+/// [`preview`] attributes; `None` for any other fence (its first word is not
+/// `component`). Whether the tag is a component name is the caller's to say.
+pub fn definition(info: &str) -> Option<(&str, Vec<(String, String)>)> {
+    let (first, rest) = word(info);
+    if first != "component" {
+        return None;
+    }
+    let (name, rest) = word(rest);
+    Some((name, preview(rest)))
+}
+
+/// The names HTML reserves among those a custom element could otherwise take
+/// (SVG's and MathML's hyphenated elements).
+const RESERVED: [&str; 8] = [
+    "annotation-xml",
+    "color-profile",
+    "font-face",
+    "font-face-src",
+    "font-face-uri",
+    "font-face-format",
+    "font-face-name",
+    "missing-glyph",
+];
+
+/// Whether `name` is a component's name: a valid custom element name, in
+/// ASCII — a lowercase letter, then lowercase letters, digits, `-`, `.` and
+/// `_`, with at least one hyphen, and not one of the reserved names.
+pub fn is_component_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | '_'))
+        && name.contains('-')
+        && !RESERVED.contains(&name)
+}
+
+/// The first whitespace-separated word of `s`, and what follows it.
+fn word(s: &str) -> (&str, &str) {
+    let s = s.trim_start();
+    let end = s.find(char::is_whitespace).unwrap_or(s.len());
+    (&s[..end], &s[end..])
 }
 
 /// The content range of the source's one top-level `<docs>`.
@@ -681,6 +728,19 @@ mod tests {
         assert_eq!(preview(""), vec![]);
         assert_eq!(preview("  a = \"x &amp; y\"  b"), vec![("a".into(), "x & y".into()), ("b".into(), String::new())]);
         assert_eq!(preview("label=\"unterminated"), vec![("label".into(), "unterminated".into())]);
+    }
+
+    #[test]
+    fn a_definitions_info_string() {
+        assert_eq!(
+            definition("component m-x board=RETURNS label=\"A b\""),
+            Some(("m-x", vec![("board".to_string(), "RETURNS".to_string()), ("label".to_string(), "A b".to_string())]))
+        );
+        assert_eq!(definition("component"), Some(("", vec![])));
+        assert_eq!(definition("  component   m-y  "), Some(("m-y", vec![])));
+        assert_eq!(definition("components m-x"), None);
+        assert_eq!(definition("rust"), None);
+        assert_eq!(definition(""), None);
     }
 
     #[test]

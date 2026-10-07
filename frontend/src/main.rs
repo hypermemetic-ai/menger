@@ -199,10 +199,12 @@
 mod board;
 mod bridge;
 mod cache;
+mod card;
 mod components;
 mod dom;
 mod filter;
 mod frame;
+mod inspect;
 mod keys;
 mod kids;
 mod md;
@@ -1430,6 +1432,9 @@ fn App() -> impl IntoView {
     // SCALE-26: the board's model of the store — the extents, the window's
     // rows it holds — asked for by the session and kept by its own effect.
     let board = board::Board::new();
+    // COMP-9: an instance's shortcode / ticket attributes are checked
+    // against the board's extents.
+    frame::know(board);
     board.drive();
     let dock = RwSignal::new(None::<Dock>);
     let conn = RwSignal::new(Conn::Connecting);

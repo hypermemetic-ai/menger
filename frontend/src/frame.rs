@@ -50,6 +50,20 @@
 //! bridge (src/bridge.rs) over the app's own connection. A frame that asks
 //! for the registry ([`Frame`]) makes the app keep it.
 //!
+//! COMP-9: **definitions, badges, tooltips, navigation.** A frame's SDK
+//! asks the host three more things, answered here: `menger:navigate {
+//! route, reveal? }` — `menger.navigate`, moving the app to an app route
+//! ([`crate::inspect::app_route`]'s allow-list; anything else ignored), or,
+//! for a `{wave: ID}` clicked in a framed board note (`reveal: { id, wave
+//! }`), revealing the card on the board as an unframed note does;
+//! `menger:inspect { id, name, attrs }` — an instance's badge hovered or
+//! focused — answered `menger:inspected { id, inspection }`
+//! ([`crate::inspect::inspect`], against the registry and the extents the
+//! board holds); and `menger:revealed { component, top }` — the answer to
+//! the host's `menger:reveal { component }`, sent to every frame while the
+//! route names a card (`#/ticket/<OWNER>?component=m-x`): the frame holding
+//! that card flashes it and says where it is, and the host scrolls there.
+//!
 //! What decides — the srcdoc, the theme block, the init block, which
 //! messages count — is pure and pinned by native tests; the rest is DOM.
 
@@ -63,13 +77,14 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{bridge, dom, mermaid, registry, session};
+use crate::{board, bridge, dom, inspect, mermaid, notes, registry, session};
 
 /// The SDK's version — `window.menger.version` inside every frame (pinned
 /// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
 /// `version`, `call`, `on`, and the components defined; COMP-10's 1.1 adds
-/// `tickets`, the generated typed client over the same bridge.
-pub(crate) const SDK_VERSION: &str = "1.1.0";
+/// `tickets`, the generated typed client over the same bridge; COMP-9's 1.2
+/// adds `navigate`, and the badges, tooltips and docs cards.
+pub(crate) const SDK_VERSION: &str = "1.2.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -232,6 +247,13 @@ pub(crate) enum Msg {
     /// COMP-5: `menger.call` — its id, method and params are read by the
     /// bridge's caller.
     Call,
+    /// COMP-9: `menger.navigate` (its route, and a wave reference's
+    /// `reveal`, are read by the caller).
+    Navigate,
+    /// COMP-9: an instance's badge asks for its tooltip.
+    Inspect,
+    /// COMP-9: the frame holding the card the route names says where it is.
+    Revealed,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -239,6 +261,9 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
     match kind {
         "menger:ready" => Some(Msg::Ready),
         "menger:call" => Some(Msg::Call),
+        "menger:navigate" => Some(Msg::Navigate),
+        "menger:inspect" => Some(Msg::Inspect),
+        "menger:revealed" => Some(Msg::Revealed),
         "menger:size" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Size { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32, settled: settled.unwrap_or(false) })
@@ -252,6 +277,31 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
 thread_local! {
     static NEXT_CHANNEL: Cell<u32> = const { Cell::new(0) };
     static LISTENING: Cell<bool> = const { Cell::new(false) };
+    /// COMP-9: the board's model of the store — whose extents say which
+    /// shortcodes and tickets exist ([`know`]).
+    static BOARD: Cell<Option<board::Board>> = const { Cell::new(None) };
+    /// COMP-9: the card the route names (`?component=m-x`), until a frame
+    /// says where it is.
+    static ANCHOR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// COMP-9: the app's board — what an instance's `shortcode` and `ticket`
+/// attributes are checked against. Called once by the App.
+pub(crate) fn know(board: board::Board) {
+    BOARD.with(|b| b.set(Some(board)));
+}
+
+/// What the app knows exists: the board's extents (nothing, before they
+/// are in — the checks then go by form alone).
+struct AppKnows;
+
+impl menger_tickets_api::Known for AppKnows {
+    fn shortcode(&self, epic: &str) -> Option<bool> {
+        BOARD.with(Cell::get).and_then(|b| b.has_shortcode_untracked(epic))
+    }
+    fn ticket(&self, id: &str) -> Option<bool> {
+        BOARD.with(Cell::get).and_then(|b| b.has_ticket_untracked(id))
+    }
 }
 
 fn next_channel() -> String {
@@ -480,20 +530,127 @@ fn on_message(ev: web_sys::MessageEvent) {
             if frame.get_attribute("data-state").as_deref() == Some("pending") && (settled || !has_live_sibling(&frame)) {
                 promote(&frame);
             }
+            // COMP-9: a card the route names may be in this frame.
+            if settled {
+                if let Some(name) = ANCHOR.with(|a| a.borrow().clone()) {
+                    post(&frame, &reveal_message(&channel, &name));
+                }
+            }
+        }
+        Some(Msg::Navigate) => {
+            let route = field("route").and_then(|v| v.as_string()).unwrap_or_default();
+            let reveal = field("reveal").filter(|v| v.is_object());
+            let on_board = frame.closest("#waves").ok().flatten().is_some();
+            if let (Some(r), true) = (reveal, on_board) {
+                let get = |k: &str| Reflect::get(&r, &JsValue::from_str(k)).ok().and_then(|v| v.as_string()).unwrap_or_default();
+                if notes::reveal_on_board(&get("id"), &get("wave")) {
+                    return;
+                }
+            }
+            navigate(&route);
+        }
+        Some(Msg::Inspect) => {
+            let id = field("id").filter(|v| v.as_f64().is_some()).unwrap_or(JsValue::NULL);
+            let name = field("name").and_then(|v| v.as_string()).unwrap_or_default().to_ascii_lowercase();
+            let attrs = field("attrs").map(read_pairs).unwrap_or_default();
+            let component = registry::snapshot().and_then(|list| list.into_iter().find(|c| c.name == name));
+            let inspection = inspect::inspect(&name, component.as_ref(), &attrs, &AppKnows);
+            let msg = message("menger:inspected", &channel);
+            set(&msg, "id", &id);
+            set(&msg, "inspection", &to_js(&inspection));
+            post(&frame, &msg.into());
+        }
+        Some(Msg::Revealed) => {
+            let name = field("component").and_then(|v| v.as_string()).unwrap_or_default();
+            let top = field("top").and_then(|v| v.as_f64()).filter(|t| t.is_finite()).unwrap_or(0.0);
+            let wanted = ANCHOR.with(|a| a.borrow().as_deref() == Some(name.as_str()));
+            if wanted {
+                ANCHOR.with(|a| *a.borrow_mut() = None);
+                scroll_into_frame(&frame, top);
+            }
         }
         None => {}
     }
 }
 
+/// `[[name, value], …]` (an instance's attributes, as the SDK sends them).
+fn read_pairs(v: JsValue) -> Vec<(String, String)> {
+    let Ok(list) = v.dyn_into::<js_sys::Array>() else { return Vec::new() };
+    list.iter()
+        .filter_map(|pair| {
+            let pair = pair.dyn_into::<js_sys::Array>().ok()?;
+            Some((pair.get(0).as_string()?, pair.get(1).as_string()?))
+        })
+        .take(256)
+        .collect()
+}
+
+/// `menger:reveal { component }` for the frame on `channel`.
+fn reveal_message(channel: &str, name: &str) -> JsValue {
+    let msg = message("menger:reveal", channel);
+    set(&msg, "component", &name.into());
+    msg.into()
+}
+
+/// COMP-9: `menger.navigate`'s route, if the allow-list takes it: the app
+/// goes there — or, already there, the card it names is revealed again.
+fn navigate(route: &str) {
+    let Some(hash) = inspect::app_route(route) else { return };
+    let w = dom::window();
+    if w.location().hash().unwrap_or_default() == hash {
+        anchor_changed(&hash);
+    } else {
+        let _ = w.location().set_hash(&hash);
+    }
+}
+
+/// The route's card anchor moved: remember it, and ask every frame on
+/// screen (a frame loading now asks once settled).
+fn anchor_changed(hash: &str) {
+    let anchor = inspect::card_anchor(hash);
+    ANCHOR.with(|a| *a.borrow_mut() = anchor.clone());
+    if let Some(name) = anchor {
+        for f in frames() {
+            if let Some(channel) = f.get_attribute("data-channel") {
+                post(&f, &reveal_message(&channel, &name));
+            }
+        }
+    }
+}
+
+/// Scroll the app so the point `top` px down `frame`'s document sits at the
+/// top of the view — a marker in the frame's container, scrolled into view.
+fn scroll_into_frame(frame: &web_sys::HtmlIFrameElement, top: f64) {
+    let Some(parent) = frame.parent_element() else { return };
+    let Some(doc) = dom::window().document() else { return };
+    let Ok(marker) = doc.create_element("div") else { return };
+    let offset = frame.offset_top() as f64 + top.max(0.0);
+    let _ = marker.set_attribute(
+        "style",
+        &format!("position:absolute;left:0;top:{offset}px;width:1px;height:1px;pointer-events:none;scroll-margin-top:1rem"),
+    );
+    let _ = parent.append_child(&marker);
+    let opts = web_sys::ScrollIntoViewOptions::new();
+    opts.set_block(web_sys::ScrollLogicalPosition::Start);
+    marker.scroll_into_view_with_scroll_into_view_options(&opts);
+    marker.remove();
+}
+
 /// The one `message` listener every frame's SDK talks to; installed by the
-/// first [`Frame`], for the app's lifetime.
+/// first [`Frame`], for the app's lifetime. COMP-9: with it, a `hashchange`
+/// listener that keeps the card anchor ([`anchor_changed`]).
 fn install_listener() {
     if LISTENING.with(|l| l.replace(true)) {
         return;
     }
+    let w = dom::window();
     let cb = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(on_message);
-    let _ = dom::window().add_event_listener_with_callback("message", cb.as_ref().unchecked_ref());
+    let _ = w.add_event_listener_with_callback("message", cb.as_ref().unchecked_ref());
     cb.forget();
+    let hash = Closure::<dyn FnMut()>::new(|| anchor_changed(&dom::window().location().hash().unwrap_or_default()));
+    let _ = w.add_event_listener_with_callback("hashchange", hash.as_ref().unchecked_ref());
+    hash.forget();
+    anchor_changed(&w.location().hash().unwrap_or_default());
 }
 
 /// Load `body_html` into a new frame in `container`, beside the one on
@@ -692,7 +849,10 @@ mod tests {
         assert_eq!(parse_msg("menger:size", Some(f64::NAN), Some(true)), None);
         assert_eq!(parse_msg("menger:size", None, Some(true)), None);
         assert_eq!(parse_msg("menger:call", None, None), Some(Msg::Call));
-        for outbound in ["menger:theme", "menger:result", "menger:components", "menger:change"] {
+        assert_eq!(parse_msg("menger:navigate", None, None), Some(Msg::Navigate));
+        assert_eq!(parse_msg("menger:inspect", None, None), Some(Msg::Inspect));
+        assert_eq!(parse_msg("menger:revealed", None, None), Some(Msg::Revealed));
+        for outbound in ["menger:theme", "menger:result", "menger:components", "menger:change", "menger:inspected", "menger:reveal"] {
             assert_eq!(parse_msg(outbound, None, None), None, "{outbound}: outbound only");
         }
         assert_eq!(parse_msg("lavish:queuePrompt", None, None), None);
@@ -706,8 +866,8 @@ mod tests {
     fn the_sdk_shell_is_versioned_served_and_inlinable() {
         assert!(SDK_JS.contains(&format!("var VERSION = \"{SDK_VERSION}\";")), "the script's VERSION");
         assert!(
-            SDK_JS.contains("Object.freeze({ version: VERSION, tickets: tickets, call: call, on: on })"),
-            "window.menger = {{ version, tickets, call, on }}"
+            SDK_JS.contains("Object.freeze({ version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate })"),
+            "window.menger = {{ version, tickets, call, on, navigate }}"
         );
         let lower = SDK_JS.to_ascii_lowercase();
         assert!(!lower.contains("</script") && !lower.contains("<!--"), "inlinable");
@@ -723,6 +883,7 @@ mod tests {
         // Every message the script sends or takes is one the protocol names.
         for kind in [
             "menger:ready", "menger:size", "menger:theme", "menger:call", "menger:result", "menger:components", "menger:change",
+            "menger:navigate", "menger:inspect", "menger:inspected", "menger:reveal", "menger:revealed",
         ] {
             assert!(SDK_JS.contains(&format!("\"{kind}\"")), "{kind}");
         }

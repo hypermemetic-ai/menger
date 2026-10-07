@@ -1,6 +1,6 @@
 /**
- * menger SDK 1.1 — the types of `window.menger` and of a component script's
- * `this`, inside every framed body (COMP-4, COMP-5, COMP-10).
+ * menger SDK 1.2 — the types of `window.menger` and of a component script's
+ * `this`, inside every framed body (COMP-4, COMP-5, COMP-10, COMP-9).
  *
  * Published by the app at /app/sdk/menger.d.ts, beside the SDK itself
  * (/app/sdk/menger-sdk.js) and the generated client's declarations
@@ -30,7 +30,7 @@ export interface WireEvent {
 
 /** `window.menger` — frozen; also `this.menger` in a component script. */
 export interface Menger {
-  /** "1.1.0". */
+  /** "1.2.0". */
   readonly version: string;
 
   /**
@@ -68,6 +68,15 @@ export interface Menger {
    * before that instance's next render.
    */
   on(kind: 'change', listener: (event: WireEvent) => void): () => void;
+
+  /**
+   * COMP-9: move the app to an app route — `#/ticket/<id>` (with
+   * `?component=<tag>` to scroll to and flash that docs card),
+   * `#/components`, `#/components/<tag>` (a component's help page),
+   * `#/waves`, `#/waves/<SHORTCODE>`. The host ignores any other route.
+   * (A click on a link to `#/…` in a body does the same.)
+   */
+  navigate(route: string): void;
 }
 
 /**

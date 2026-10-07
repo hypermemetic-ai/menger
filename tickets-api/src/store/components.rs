@@ -72,7 +72,7 @@
 //! owned component's read from its owner's body, an orphan's empty
 //! ([`migrate_preview`]).
 
-use super::component_docs;
+use crate::component_docs;
 use crate::types::{Component, ComponentDocs};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use rusqlite::{params, Connection};
@@ -89,29 +89,7 @@ const TABLE: &str = "
         ) WITHOUT ROWID;
     ";
 
-/// The names HTML reserves among those a custom element could otherwise take
-/// (SVG's and MathML's hyphenated elements).
-const RESERVED: [&str; 8] = [
-    "annotation-xml",
-    "color-profile",
-    "font-face",
-    "font-face-src",
-    "font-face-uri",
-    "font-face-format",
-    "font-face-name",
-    "missing-glyph",
-];
-
-/// Whether `name` is a component's name: a valid custom element name, in
-/// ASCII — a lowercase letter, then lowercase letters, digits, `-`, `.` and
-/// `_`, with at least one hyphen, and not one of the reserved names.
-pub(crate) fn is_component_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    chars.next().is_some_and(|c| c.is_ascii_lowercase())
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | '_'))
-        && name.contains('-')
-        && !RESERVED.contains(&name)
-}
+use crate::component_docs::is_component_name;
 
 /// One definition a body holds: the block's content, and what COMP-8 reads
 /// from it and from its opening line.
@@ -195,10 +173,8 @@ pub(crate) fn read(body: &str) -> (Uses, Vec<Problem>) {
     for event in Parser::new_ext(rendered(body), opts) {
         match event {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
-                let (first, rest) = word(&info);
-                if first == "component" {
-                    let (name, rest) = word(rest);
-                    block = Some((name.to_string(), component_docs::preview(rest), String::new()));
+                if let Some((name, preview)) = component_docs::definition(&info) {
+                    block = Some((name.to_string(), preview, String::new()));
                 }
             }
             Event::Text(text) => {
@@ -236,13 +212,6 @@ pub(crate) fn read(body: &str) -> (Uses, Vec<Problem>) {
         }
     }
     (uses, problems)
-}
-
-/// The first whitespace-separated word of `s`, and what follows it.
-fn word(s: &str) -> (&str, &str) {
-    let s = s.trim_start();
-    let end = s.find(char::is_whitespace).unwrap_or(s.len());
-    (&s[..end], &s[end..])
 }
 
 /// Every component name `html` opens a tag with — `<` then a name, which

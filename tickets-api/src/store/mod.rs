@@ -817,7 +817,7 @@ pub enum StoreError {
     /// `epic`. Nothing was stored and no id was allocated.
     PathTaken { epic: String, path: String, holder: String },
     /// COMP-3: the body holds a ` ```component ` block whose tag, `name`, is
-    /// not a component name ([`components::is_component_name`]; `""`: it
+    /// not a component name ([`crate::component_docs::is_component_name`]; `""`: it
     /// names none). `id` is the amended ticket — `None` for a `create`, which
     /// stored nothing and allocated no id. Nothing changed.
     ComponentName { id: Option<String>, name: String },
@@ -3830,10 +3830,6 @@ mod db;
 /// registry the cache keeps, the plan a write makes of it, its table and the
 /// first open that builds it.
 mod components;
-
-/// COMP-8: a component's help — its source's `<docs>`, and the preview
-/// attributes on its block's opening line.
-mod component_docs;
 
 /// SCALE-28: the derived state, stored — the tables beside the tickets,
 /// what a write's transaction writes to them ([`stored::Changes`]), a start

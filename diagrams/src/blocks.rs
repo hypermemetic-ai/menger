@@ -282,7 +282,9 @@ fn is_mermaid_fence(info: &str) -> bool {
         assert!(APP_NOTES_RS.contains("md::render_body(md_src)"));
         assert!(APP_NOTES_RS.contains("let src = md::split_frontmatter(b).1;"));
         assert!(APP_NOTES_RS.contains("md::render_body_framed(src, "));
-        assert!(MD_RS.contains("pub fn render_body_framed(") && MD_RS.contains("render(src, Some(resolve), true)"));
+        // COMP-9: `render`'s last argument, `cards`, turns a definition block
+        // into its docs card — a fence that is not mermaid either way.
+        assert!(MD_RS.contains("pub fn render_body_framed(") && MD_RS.contains("render(src, Some(resolve), true, true)"));
     }
 
     // -- the app's own cases -------------------------------------------------
