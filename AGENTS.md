@@ -115,6 +115,65 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
 - **REST + SSE** (:4457) — for curl and for scripts that cannot run
   synapse. Unary responses are capped at 10,000 items (TRANSPORT-2).
 
+## Inputs — asking the owner inside a ticket (INPUT)
+
+A ticket can ask the owner something and record the answer: a **decision**
+(pick one option), a **multi** (tick any) or a **text** reply. The reader
+answers in the ticket's own frame; every answer is stored with its history
+and is queryable. (INPUT-1; the house components are ART-9's.)
+
+**Declare an input** in a ticket body — an `id`, unique in that ticket, is
+what makes it an input (a decision without one is display only; a duplicate
+id refuses the write):
+
+```html
+<m-decision data-field="decision" id="landing">
+<m-question data-field="question">Expired events: archive or delete?</m-question>
+<m-option data-field="option" name="Archive" value="archive" recommended cost="a second store" benefit="holds honoured"></m-option>
+<m-option data-field="option" name="Delete" value="delete" cost="holds broken" benefit="nothing to run"></m-option>
+<m-recommendation data-field="recommendation">Archive: holds are real.</m-recommendation>
+</m-decision>
+
+<m-input id="checks" kind="multi"><m-question data-field="question">Which checks ran?</m-question>
+<m-choice value="unit">Unit tests</m-choice><m-choice value="wire">The wire test</m-choice></m-input>
+
+<m-input id="notes" kind="text"><m-question data-field="question">Anything else before this ships?</m-question></m-input>
+```
+
+An option's value is its `value`, else its `name`.
+
+**The owner answers; an agent doesn't** (ought: an agent never answers its
+own decision). A reader's click records the answer with source `app`; a
+reader may change or clear it until the input is closed.
+
+**Read what's waiting, act, then close:**
+
+```sh
+synapse -P 4455 menger tickets inputs --state open          # everything waiting, across tickets
+synapse -P 4455 menger tickets inputs --ticket RETURNS-13   # one ticket's inputs, answers and history
+synapse -P 4455 menger tickets close_input --ticket RETURNS-13 --input landing   # after acting on it
+synapse -P 4455 menger tickets reopen_input --ticket RETURNS-13 --input landing  # if it must be asked again
+```
+
+Act on an answer, then `close_input` it: closing freezes it (the reader can
+no longer change or clear it) and the component shows DECIDED. States are
+`open` · `answered` · `closed` · `removed` (gone from the body, history
+kept). An answer can be cleared by the reader while open — read the state
+before acting. `watch` carries `input_changed` (the whole input) for anything
+that follows live; the app's `#/inputs` page lists them all.
+
+**Answering through synapse** (the owner from a shell; source `api`):
+
+```sh
+synapse -P 4455 menger tickets answer --ticket T --input landing --value.type choice --value.option archive --rationale "why"
+synapse -P 4455 menger tickets answer --ticket T --input notes --value.type text --value.text "the reply"
+synapse -P 4455 -p '{"ticket":"T","input":"checks","value":{"type":"multi","options":["unit","wire"]}}' menger tickets answer
+synapse -P 4455 menger tickets clear_answer --ticket T --input landing
+```
+
+A `multi` answer goes through `-p` for now — synapse sends a list inside a
+nested parameter as one string (SYNAPSE-9).
+
 ## Conventions
 
 - Plexus crates come from the **0.6 line by sibling path** (MFE-10):
