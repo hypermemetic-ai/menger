@@ -46,8 +46,9 @@
 
 use crate::types::{AttrDoc, AttrKind, ComponentDocs, SlotDoc};
 
-/// HTML's void elements: an open tag with no close tag to look for.
-const VOID: [&str; 14] = [
+/// HTML's void elements: an open tag with no close tag to look for. (ART-5:
+/// [`crate::fields`] reads tags with these helpers too.)
+pub(crate) const VOID: [&str; 14] = [
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr",
 ];
 
@@ -247,7 +248,7 @@ fn docs(content: &str) -> Result<ComponentDocs, String> {
 
 /// Past an HTML comment opening at `at`, if one does (an unclosed one runs
 /// to the end).
-fn comment_end(s: &str, at: usize) -> Option<usize> {
+pub(crate) fn comment_end(s: &str, at: usize) -> Option<usize> {
     s[at..]
         .starts_with("<!--")
         .then(|| s[at + 4..].find("-->").map_or(s.len(), |j| at + 4 + j + 3))
@@ -271,7 +272,7 @@ fn code_span_end(s: &str, at: usize) -> usize {
 
 /// The tag `<name` opening at `lt` — its name, ASCII-lowercased, and where
 /// the name ends — if `lt` opens one (a letter after `<`; `</` closes).
-fn tag_name(s: &str, lt: usize) -> Option<(String, usize)> {
+pub(crate) fn tag_name(s: &str, lt: usize) -> Option<(String, usize)> {
     let start = lt + 1;
     if !s.as_bytes().get(start).is_some_and(u8::is_ascii_alphabetic) {
         return None;
@@ -285,7 +286,7 @@ fn tag_name(s: &str, lt: usize) -> Option<(String, usize)> {
 /// Past the `>` that ends an open tag whose name ends at `from`, outside
 /// quoted values — and whether it is self-closing (`/>`). `None` when a `<`
 /// comes first, or nothing ends it: not a tag.
-fn open_end(s: &str, from: usize) -> Option<(usize, bool)> {
+pub(crate) fn open_end(s: &str, from: usize) -> Option<(usize, bool)> {
     let mut quote: Option<u8> = None;
     let bytes = s.as_bytes();
     for (j, &b) in bytes.iter().enumerate().skip(from) {
@@ -350,7 +351,7 @@ fn close(s: &str, name: &str, from: usize) -> Option<(usize, usize)> {
 
 /// The close tag of a raw-text element (`script`, `style`): the first
 /// `</name`, nothing nested.
-fn raw_close(s: &str, name: &str, from: usize) -> Option<(usize, usize)> {
+pub(crate) fn raw_close(s: &str, name: &str, from: usize) -> Option<(usize, usize)> {
     let mut i = from;
     while let Some(off) = s[i..].find("</") {
         let lt = i + off;
@@ -365,7 +366,7 @@ fn raw_close(s: &str, name: &str, from: usize) -> Option<(usize, usize)> {
 /// The attributes of a tag's inside (after its name): `name`, `name=value`,
 /// `name="value"`, `name='value'` — names ASCII-lowercased, values with
 /// HTML's common entities decoded; `None` for a bare name.
-fn attributes(s: &str) -> Vec<(String, Option<String>)> {
+pub(crate) fn attributes(s: &str) -> Vec<(String, Option<String>)> {
     let mut out = Vec::new();
     let mut rest = s;
     loop {

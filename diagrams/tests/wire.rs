@@ -337,6 +337,84 @@ sequenceDiagram
     );
 }
 
+/// ART-5: an HTML body — ought's artifact form: mermaid in a `<pre
+/// class="mermaid">` inside a field element and inside a component, beside a
+/// fence in a field — is checked as a fenced body is: one item per diagram,
+/// in order, each `line` where its source starts; and the broken one is
+/// reported as the same diagram in a fence is — the same verdict, message
+/// and line — at markdown line `line + L - 1`, the broken line.
+#[tokio::test]
+async fn check_reports_an_error_inside_an_html_body_like_one_in_a_fence() {
+    needs_node!();
+    let (_driver, transport) = shared().await;
+    let client = MermaidClient::new(&transport);
+    let body = "\
+---
+status: Pending
+---
+<p data-field=\"confidence\"><em>confidence: medium</em></p>
+
+<figure data-field=\"dag\">
+  <pre class=\"mermaid\">
+graph TD
+  B1[\"B1 · types<br/>root\"] --&gt; B2[\"B2 · writers\"]
+  </pre>
+  <figcaption>The DAG.</figcaption>
+</figure>
+
+<section data-field=\"shape\">
+
+```mermaid
+graph LR
+  A --> B
+```
+
+</section>
+
+<m-dag data-field=\"lens\">
+<pre class=\"mermaid\">
+flowchart LR
+  A --&gt; B
+  C --&gt;&gt; [[[
+</pre>
+</m-dag>
+";
+    let diagrams: Vec<(u32, u32, Verdict)> = client
+        .check_all(body.into())
+        .await
+        .expect("check")
+        .into_iter()
+        .map(|e| match e {
+            MermaidEvent::Diagram { index, line, result } => (index, line, result),
+            other => panic!("check yields diagrams only: {other:?}"),
+        })
+        .collect();
+    let line_of = |needle: &str| body[..body.find(needle).unwrap()].matches('\n').count() as u32 + 1;
+    assert_eq!(
+        diagrams.iter().map(|d| (d.0, d.1)).collect::<Vec<_>>(),
+        [(1, line_of("graph TD")), (2, line_of("graph LR")), (3, line_of("flowchart LR"))]
+    );
+    let flowchart = Verdict::Parsed { diagram_type: "flowchart-v2".into() };
+    assert_eq!((&diagrams[0].2, &diagrams[1].2), (&flowchart, &flowchart), "{diagrams:?}");
+    let Verdict::ParseError { line: Some(at), .. } = &diagrams[2].2 else {
+        panic!("the component's diagram is the broken one: {:?}", diagrams[2]);
+    };
+    assert_eq!(
+        body.lines().nth((diagrams[2].1 + at - 1) as usize - 1),
+        Some("  C --&gt;&gt; [[["),
+        "the error's line is the body's broken line"
+    );
+    // The same diagram in a fence: the same verdict, word for word.
+    let fenced = client
+        .check_all("```mermaid\nflowchart LR\n  A --> B\n  C -->> [[[\n```\n".into())
+        .await
+        .expect("check");
+    let [MermaidEvent::Diagram { result, .. }] = fenced.as_slice() else {
+        panic!("one diagram: {fenced:?}");
+    };
+    assert_eq!(result, &diagrams[2].2, "reported as a fence's is");
+}
+
 // -- the wire, as JSON ------------------------------------------------------------------------
 
 /// The events as they travel — the ticket's "Provides" row, as JSON.

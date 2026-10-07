@@ -984,6 +984,7 @@ dependencies = [
  "futures",
  "plexus-client",
  "plexus-macros",
+ "pulldown-cmark",
  "schemars",
  "serde",
 ]
