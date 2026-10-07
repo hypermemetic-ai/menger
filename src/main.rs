@@ -33,6 +33,12 @@ struct Args {
     #[arg(long, env = "MENGER_APP_DIST", value_name = "DIR")]
     app_dist: Option<PathBuf>,
 
+    /// MFE-23: the environment's name (`prod`, `test`, …); the deploy env
+    /// files set `MENGER_ENV`. `test` titles the browser tab `menger.test`,
+    /// anything else (or none) `menger`.
+    #[arg(long, env = "MENGER_ENV", value_name = "NAME")]
+    env: Option<String>,
+
     /// Run in stdio mode (MCP-compatible); implies no web shell
     #[arg(long)]
     stdio: bool,
@@ -154,6 +160,7 @@ async fn main() -> anyhow::Result<()> {
                 // transport emits no CORS headers).
                 rest_port: (!args.no_rest).then_some(args.rest_port),
                 app_dist: args.app_dist.unwrap_or_else(shell::default_app_dist),
+                env: args.env.clone(),
             };
             tokio::spawn(async move {
                 if let Err(e) = shell::serve(cfg).await {

@@ -55,6 +55,28 @@ pub struct ShellConfig {
     pub rest_port: Option<u16>,
     /// Directory holding the Leptos app's build output.
     pub app_dist: PathBuf,
+    /// MFE-23: the environment's name (`MENGER_ENV`), which titles the
+    /// browser tab ([`tab_title`]).
+    pub env: Option<String>,
+}
+
+/// MFE-23: the tab's title — `menger.test` on the test environment,
+/// `menger` everywhere else (prod, a dev server, none named).
+pub fn tab_title(env: Option<&str>) -> &'static str {
+    match env {
+        Some("test") => "menger.test",
+        _ => "menger",
+    }
+}
+
+/// MFE-23: the tab's icon, a Menger-sponge face (the Sierpinski carpet,
+/// level 2), embedded so the binary alone always has it.
+const FAVICON: &str = include_str!("../web/favicon.svg");
+
+/// What both pages carry from the server: the WebSocket port (MFE-9) and
+/// the tab's title (MFE-23), stamped into `{{WS_PORT}}` / `{{TITLE}}`.
+fn stamp(text: &str, ws_port: u16, title: &str) -> String {
+    text.replace("{{WS_PORT}}", &ws_port.to_string()).replace("{{TITLE}}", title)
 }
 
 /// Where `trunk build` puts the app when run from a checkout. Overridable
@@ -74,16 +96,19 @@ struct ShellState {
     /// has always had it substituted into `web/index.html` — one
     /// convention, not two.
     ws_port: u16,
+    /// MFE-23: the tab's title, stamped into both pages.
+    title: &'static str,
     app_dist: PathBuf,
     client: ProxyClient,
 }
 
 pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
+    let title = tab_title(cfg.env.as_deref());
     let state = Arc::new(ShellState {
         rest_port: cfg.rest_port,
-        vanilla: include_str!("../web/index.html")
-            .replace("{{WS_PORT}}", &cfg.ws_port.to_string()),
+        vanilla: stamp(include_str!("../web/index.html"), cfg.ws_port, title),
         ws_port: cfg.ws_port,
+        title,
         app_dist: cfg.app_dist,
         client: hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
             .build_http(),
@@ -91,6 +116,7 @@ pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(root_index))
         .route("/vanilla", get(vanilla))
+        .route("/favicon.svg", get(favicon))
         .route("/app", get(app_index))
         .route("/app/", get(app_index))
         .route("/app/{*path}", get(app_asset))
@@ -125,18 +151,18 @@ fn not_built() -> Response {
 /// when `frontend/dist` holds no build. Separate from [`serve_dist_file`]
 /// because the two callers differ on what "missing" means: `/app/` says
 /// so (MFE-2), `/` falls back to the vanilla page (MFE-4).
-async fn app_entrypoint(dist: &std::path::Path, ws_port: u16) -> Option<String> {
+async fn app_entrypoint(dist: &std::path::Path, ws_port: u16, title: &str) -> Option<String> {
     let bytes = tokio::fs::read(dist.join("index.html")).await.ok()?;
     // MFE-9: the entrypoint carries the WebSocket port. The app's
     // index.html declares it as `{{WS_PORT}}` (see frontend/index.html);
     // every other asset is served byte-exact.
-    Some(String::from_utf8(bytes).ok()?.replace("{{WS_PORT}}", &ws_port.to_string()))
+    Some(stamp(&String::from_utf8(bytes).ok()?, ws_port, title))
 }
 
 /// MFE-4: the root is the app. No build output on disk is not an error
 /// here — it is the day-one page, which needs no build and works.
 async fn root_index(State(st): State<Arc<ShellState>>) -> Response {
-    match app_entrypoint(&st.app_dist, st.ws_port).await {
+    match app_entrypoint(&st.app_dist, st.ws_port, st.title).await {
         Some(html) => Html(html).into_response(),
         None => {
             tracing::debug!("no app build at {:?}: / degrades to the vanilla page", st.app_dist);
@@ -145,13 +171,22 @@ async fn root_index(State(st): State<Arc<ShellState>>) -> Response {
     }
 }
 
+/// MFE-23: the tab's icon, for both pages.
+async fn favicon() -> Response {
+    (
+        [(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "public, max-age=86400")],
+        FAVICON,
+    )
+        .into_response()
+}
+
 /// The day-one page, wherever the app stands.
 async fn vanilla(State(st): State<Arc<ShellState>>) -> Response {
     Html(st.vanilla.clone()).into_response()
 }
 
 async fn app_index(State(st): State<Arc<ShellState>>) -> Response {
-    match app_entrypoint(&st.app_dist, st.ws_port).await {
+    match app_entrypoint(&st.app_dist, st.ws_port, st.title).await {
         Some(html) => Html(html).into_response(),
         None => not_built(),
     }
@@ -161,10 +196,10 @@ async fn app_asset(
     State(st): State<Arc<ShellState>>,
     AxumPath(path): AxumPath<String>,
 ) -> Response {
-    serve_dist_file(&st.app_dist, &path, st.ws_port).await
+    serve_dist_file(&st.app_dist, &path, st.ws_port, st.title).await
 }
 
-async fn serve_dist_file(dist: &std::path::Path, rel: &str, ws_port: u16) -> Response {
+async fn serve_dist_file(dist: &std::path::Path, rel: &str, ws_port: u16, title: &str) -> Response {
     // No traversal: the wildcard must stay inside dist.
     if rel.split(['/', '\\']).any(|c| c == "..") || rel.contains('\0') {
         return (StatusCode::BAD_REQUEST, "bad path").into_response();
@@ -188,7 +223,7 @@ async fn serve_dist_file(dist: &std::path::Path, rel: &str, ws_port: u16) -> Res
             // frontend/index.html); every other asset is served byte-exact.
             let bytes = if rel == "index.html" {
                 match String::from_utf8(bytes) {
-                    Ok(text) => text.replace("{{WS_PORT}}", &ws_port.to_string()).into_bytes(),
+                    Ok(text) => stamp(&text, ws_port, title).into_bytes(),
                     Err(e) => e.into_bytes(),
                 }
             } else {
@@ -267,5 +302,34 @@ async fn proxy_rest(State(st): State<Arc<ShellState>>, mut req: Request) -> Resp
             format!("REST upstream unreachable: {e}"),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MFE-23: `menger.test` on the test environment, `menger` otherwise.
+    #[test]
+    fn the_tab_title_names_only_the_test_environment() {
+        assert_eq!(tab_title(Some("test")), "menger.test");
+        assert_eq!(tab_title(Some("prod")), "menger");
+        assert_eq!(tab_title(Some("dev")), "menger");
+        assert_eq!(tab_title(None), "menger");
+    }
+
+    #[test]
+    fn a_page_is_stamped_with_its_port_and_title() {
+        let page = "<title>{{TITLE}}</title><meta content=\"{{WS_PORT}}\">";
+        assert_eq!(stamp(page, 4450, "menger.test"), "<title>menger.test</title><meta content=\"4450\">");
+    }
+
+    #[test]
+    fn both_pages_carry_the_title_placeholder_and_the_icon() {
+        for page in [include_str!("../web/index.html"), include_str!("../frontend/index.html")] {
+            assert!(page.contains("<title>{{TITLE}}</title>"));
+            assert!(page.contains(r#"<link rel="icon" type="image/svg+xml" href="/favicon.svg">"#));
+        }
+        assert!(FAVICON.starts_with("<svg") && FAVICON.contains("viewBox"));
     }
 }

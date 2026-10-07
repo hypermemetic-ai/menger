@@ -70,6 +70,11 @@ impl Drop for Server {
 /// AND REST, confirm the child is still alive, and on any startup death
 /// retry from scratch with fresh ports.
 async fn spawn_server(app_dist: &Path, rest: bool) -> Server {
+    spawn_server_in(app_dist, rest, None).await
+}
+
+/// MFE-23: a server that believes it is the named environment.
+async fn spawn_server_in(app_dist: &Path, rest: bool, env: Option<&str>) -> Server {
     for attempt in 0..3 {
         let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
         let ws_port = free_port().await;
@@ -88,9 +93,13 @@ async fn spawn_server(app_dist: &Path, rest: bool) -> Server {
             .env_remove("MENGER_DB_PATH")
             .env_remove("MENGER_APP_DIST")
             .env_remove("RUST_LOG")
+            .env_remove("MENGER_ENV")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        if let Some(env) = env {
+            cmd.arg("--env").arg(env);
+        }
         if rest {
             cmd.arg("--rest-port").arg(rest_port.to_string());
         } else {
@@ -618,3 +627,23 @@ async fn vanilla_page_renders_a_doc_with_a_chip_not_a_status_control() {
         .expect("the status control's vocabulary");
     assert!(statuses.contains("\"Superseded\"") && !statuses.contains("\"Doc\""), "{statuses}");
 }
+
+/// MFE-23: the tab says which environment it is — `menger.test` on test,
+/// `menger` otherwise — and the icon is served from the binary.
+#[tokio::test]
+async fn the_tab_title_names_the_environment_and_the_icon_is_served() {
+    let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    for (env, want) in [(None, "<title>menger</title>"), (Some("test"), "<title>menger.test</title>"), (Some("prod"), "<title>menger</title>")] {
+        let s = spawn_server_in(empty.path(), false, env).await;
+        let (status, _, body) = fetch(s.shell_port, Method::GET, "/vanilla", "").await;
+        assert_eq!(status, StatusCode::OK);
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains(want), "{env:?}: wants {want}");
+        assert!(!text.contains("{{TITLE}}"), "{env:?}: no title placeholder left");
+        let (status, ctype, body) = fetch(s.shell_port, Method::GET, "/favicon.svg", "").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(ctype, "image/svg+xml");
+        assert!(body.starts_with(b"<svg"));
+    }
+}
+
