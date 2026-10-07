@@ -40,8 +40,19 @@
 //! `health`, shows `✓ menger <version> · <n> tickets` or the error, and drops
 //! the connection. Saving a URL that has not passed Test asks to confirm.
 //!
+//! # The test environment (MFE-22)
+//!
+//! The header links to the test environment (DEPLOY-1's test app,
+//! [`TEST_URL_DEFAULT`]) — `test ↗`, in a new tab, hidden on a page the test
+//! environment itself serves ([`shows_test_link`]). The second group here
+//! sets that URL ([`validate_link`]): `test_url` in the same record, still
+//! version 1 — omitted while it is the default, so a record saved before it
+//! existed reads, and writes, exactly as it did. Saving it moves the header's
+//! link at once: nothing about the connection changes, so nothing reloads.
+//!
 //! What decides — validation, the record's round trip, the effective URL, the
-//! recent list, the header's words — is pure and pinned by native tests.
+//! recent list, the header's words, the test link — is pure and pinned by
+//! native tests.
 
 use std::cell::OnceCell;
 use std::rc::Rc;
@@ -64,6 +75,8 @@ pub(crate) const VERSION: u32 = 1;
 pub(crate) const RECENT_MAX: usize = 5;
 /// How long Test waits for a connection and an answer.
 const TEST_TIMEOUT_MS: i32 = 8_000;
+/// MFE-22: the test environment's app (DEPLOY-1) when the record names none.
+pub(crate) const TEST_URL_DEFAULT: &str = "http://127.0.0.1:4451/";
 
 // ---------------------------------------------------------------------
 // Validation
@@ -89,6 +102,60 @@ pub(crate) fn validate(raw: &str) -> Result<String, String> {
     if rest.contains(['/', '?', '#', '@', '\\']) || rest.chars().any(char::is_whitespace) {
         return Err("only a host and an optional port — no path, query, user or spaces".into());
     }
+    Ok(match authority(&scheme, rest)? {
+        (host, Some(p)) => format!("{scheme}://{host}:{p}"),
+        (host, None) => format!("{scheme}://{host}"),
+    })
+}
+
+/// MFE-22: a page the header links to — `http://` or `https://`, a host, an
+/// optional port, and an optional path (a query or fragment kept as
+/// written). `Ok` is normalized as [`validate`] normalizes (trimmed, scheme
+/// and host lowercased), with the scheme's default port dropped and a bare
+/// origin given its `/`, so it compares with what a browser calls the page.
+pub(crate) fn validate_link(raw: &str) -> Result<String, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("enter an http:// or https:// URL".into());
+    }
+    let (scheme, rest) = raw
+        .split_once("://")
+        .ok_or_else(|| "a link begins with http:// or https://".to_string())?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return Err(format!("{scheme}:// is not a web page — use http:// or https://"));
+    }
+    if rest.contains(['@', '\\']) || rest.chars().any(char::is_whitespace) {
+        return Err("a host, an optional port and a path — no user, backslashes or spaces".into());
+    }
+    let cut = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (auth, tail) = rest.split_at(cut);
+    let (host, port) = authority(&scheme, auth)?;
+    let port = port.filter(|&p| !matches!((scheme.as_str(), p), ("http", 80) | ("https", 443)));
+    let tail = if tail.starts_with('/') { tail.to_string() } else { format!("/{tail}") };
+    Ok(match port {
+        Some(p) => format!("{scheme}://{host}:{p}{tail}"),
+        None => format!("{scheme}://{host}{tail}"),
+    })
+}
+
+/// The origin of a link [`validate_link`] accepted: `http://127.0.0.1:4451`.
+pub(crate) fn origin_of(link: &str) -> &str {
+    let after = link.find("://").map_or(0, |i| i + 3);
+    let end = link[after..].find(['/', '?', '#']).map_or(link.len(), |i| after + i);
+    &link[..end]
+}
+
+/// MFE-22: whether the header shows the test link on a page whose origin is
+/// `page_origin` — not on a page the test environment itself serves.
+pub(crate) fn shows_test_link(link: &str, page_origin: &str) -> bool {
+    !origin_of(link).eq_ignore_ascii_case(page_origin.trim_end_matches('/'))
+}
+
+/// A host (a name, an IPv4 address, or an IPv6 address in brackets) and an
+/// optional port — the part [`validate`] and [`validate_link`] share. The
+/// host comes back lowercased (brackets kept); `scheme` only words a hint.
+fn authority(scheme: &str, rest: &str) -> Result<(String, Option<u16>), String> {
     let (host, port) = if let Some(v6) = rest.strip_prefix('[') {
         let (addr, after) = v6.split_once(']').ok_or_else(|| "an IPv6 host needs its closing ]".to_string())?;
         if addr.is_empty() || !addr.chars().all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.') || !addr.contains(':') {
@@ -105,7 +172,7 @@ pub(crate) fn validate(raw: &str) -> Result<String, String> {
             None => (rest, None),
         };
         if port.is_some_and(|p| p.contains(':')) {
-            return Err("an IPv6 host goes in brackets: ws://[::1]:4455".into());
+            return Err(format!("an IPv6 host goes in brackets: {scheme}://[::1]:4455"));
         }
         if host.is_empty() {
             return Err("the URL needs a host".into());
@@ -130,10 +197,7 @@ pub(crate) fn validate(raw: &str) -> Result<String, String> {
             _ => return Err(format!("{p} is not a port (1–65535)")),
         },
     };
-    Ok(match port {
-        Some(p) => format!("{scheme}://{host}:{p}"),
-        None => format!("{scheme}://{host}"),
-    })
+    Ok((host, port))
 }
 
 // ---------------------------------------------------------------------
@@ -147,6 +211,9 @@ pub(crate) struct Settings {
     pub(crate) ws_url: Option<String>,
     /// The last URLs saved, newest first, at most [`RECENT_MAX`].
     pub(crate) recent: Vec<String>,
+    /// MFE-22: the test environment's URL when it is not
+    /// [`TEST_URL_DEFAULT`] (`None`: the default).
+    pub(crate) test_url: Option<String>,
 }
 
 /// The record as stored. Its own type, so the stored shape is one place.
@@ -157,6 +224,10 @@ struct Record {
     ws_url: Option<String>,
     #[serde(default)]
     recent: Vec<String>,
+    /// Omitted while it is the default, so a record without it is written
+    /// as it was before MFE-22.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    test_url: Option<String>,
 }
 
 /// Only the version — read first, so a record of another version reads as
@@ -187,7 +258,11 @@ impl Settings {
                 recent.push(url);
             }
         }
-        Settings { ws_url, recent }
+        let test_url = record
+            .test_url
+            .and_then(|u| validate_link(&u).ok())
+            .filter(|u| u != TEST_URL_DEFAULT);
+        Settings { ws_url, recent, test_url }
     }
 
     /// The stored string.
@@ -196,8 +271,31 @@ impl Settings {
             version: VERSION,
             ws_url: self.ws_url.clone(),
             recent: self.recent.clone(),
+            test_url: self.test_url.clone(),
         })
         .expect("a record of strings serializes")
+    }
+
+    /// MFE-22: where the header's `test ↗` goes — the record's URL, else
+    /// [`TEST_URL_DEFAULT`].
+    pub(crate) fn test_link(&self) -> String {
+        self.test_url
+            .as_deref()
+            .and_then(|u| validate_link(u).ok())
+            .unwrap_or_else(|| TEST_URL_DEFAULT.to_string())
+    }
+
+    /// The record after the test URL `url` (validated) is saved: none kept
+    /// when it is the default.
+    pub(crate) fn with_test_url(mut self, url: &str) -> Self {
+        self.test_url = (url != TEST_URL_DEFAULT).then(|| url.to_string());
+        self
+    }
+
+    /// The record after "reset to the default".
+    pub(crate) fn reset_test_url(mut self) -> Self {
+        self.test_url = None;
+        self
     }
 
     /// The URL the app connects to: the override, else `page` (this page's
@@ -266,6 +364,11 @@ pub(crate) fn health_line(version: &str, tickets: u64) -> String {
 /// throws comes back as `Err`, not as an exception.
 fn storage() -> Option<web_sys::Storage> {
     dom::window().local_storage().ok().flatten()
+}
+
+/// The origin this page was served from (`http://127.0.0.1:4456`).
+pub(crate) fn page_origin() -> String {
+    dom::window().location().origin().unwrap_or_default()
 }
 
 /// The stored record, or the defaults.
@@ -360,9 +463,10 @@ async fn probe(url: String) -> Probe {
     }
 }
 
-/// `#/settings`.
+/// `#/settings`. `test_link` is the header's `test ↗` target (MFE-22),
+/// moved here when the test URL is saved.
 #[component]
-pub(crate) fn SettingsPage() -> impl IntoView {
+pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
     let Backend { url, page } = backend();
     let overridden = url != page;
     let fills = load().fills(&page);
@@ -450,6 +554,31 @@ pub(crate) fn SettingsPage() -> impl IntoView {
         })
         .collect_view();
 
+    // MFE-22: the test environment's URL — the field opens on the link the
+    // header shows; Save moves that link at once.
+    let test_text = RwSignal::new(test_link.get_untracked());
+    let test_valid = Memo::new(move |_| test_text.with(|t| validate_link(t)));
+    // What the last Save or reset did: `Ok` said, `Err` why it was not kept.
+    let test_note = RwSignal::new(None::<Result<String, String>>);
+    let save_test = move || {
+        let Ok(link) = test_valid.get_untracked() else { return };
+        let next = load().with_test_url(&link);
+        test_link.set(next.test_link());
+        test_text.set(next.test_link());
+        test_note.set(Some(match store(&next) {
+            Ok(()) => Ok("saved — the header's test ↗ goes there now".to_string()),
+            Err(_) if next.test_url.is_none() => Ok("saved — the default".to_string()),
+            Err(e) => Err(format!("{e}; the link goes there until this page reloads")),
+        }));
+    };
+    let reset_test = move |_| {
+        let _ = store(&load().reset_test_url());
+        test_link.set(TEST_URL_DEFAULT.to_string());
+        test_text.set(TEST_URL_DEFAULT.to_string());
+        test_note.set(Some(Ok("reset to the default".to_string())));
+    };
+    let test_unchanged = move || test_valid.with(|v| v.as_ref().is_ok_and(|l| test_link.with(|t| t == l)));
+
     view! {
         <section id="settings">
             <h2>"Settings"</h2>
@@ -532,6 +661,74 @@ pub(crate) fn SettingsPage() -> impl IntoView {
                     <ul>{fill_views}</ul>
                 </div>
             </fieldset>
+            <fieldset class="group" id="settings-test">
+                <legend>"Test environment"</legend>
+                <p class="now" id="test-now">
+                    "The header's " <code>"test ↗"</code> " opens " <code>{move || test_link.get()}</code>
+                    {move || {
+                        if test_link.with(|l| l == TEST_URL_DEFAULT) {
+                            " — the default, DEPLOY-1's test app."
+                        } else {
+                            " — saved in this browser."
+                        }
+                    }}
+                </p>
+                <div class="field">
+                    <label for="test-url">"Test URL"</label>
+                    <div class="control">
+                        <div class="line">
+                            <input
+                                id="test-url"
+                                type="text"
+                                spellcheck="false"
+                                autocomplete="off"
+                                placeholder=TEST_URL_DEFAULT
+                                aria-invalid=move || test_valid.with(|v| v.is_err()).then_some("true")
+                                aria-describedby="test-status"
+                                prop:value=move || test_text.get()
+                                on:input=move |ev| {
+                                    test_text.set(event_target_value(&ev));
+                                    test_note.set(None);
+                                }
+                                on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                    if ev.key() == "Enter" {
+                                        ev.prevent_default();
+                                        save_test();
+                                    }
+                                }
+                            />
+                        </div>
+                        <p class="status" id="test-status" aria-live="polite">
+                            {move || match (test_valid.get(), test_note.get()) {
+                                (Err(why), _) => view! { <span class="invalid" id="test-invalid">{why}</span> }.into_any(),
+                                (Ok(_), Some(Ok(said))) => view! { <span class="probe ok" id="test-saved">{said}</span> }.into_any(),
+                                (Ok(_), Some(Err(why))) => view! { <span class="invalid" id="test-problem" role="alert">{why}</span> }.into_any(),
+                                (Ok(_), None) => view! { <span class="hint">"http:// or https://, a host, an optional port and path."</span> }.into_any(),
+                            }}
+                        </p>
+                        <div class="line actions">
+                            <button
+                                id="test-save"
+                                class="primary"
+                                disabled=move || test_valid.with(|v| v.is_err()) || test_unchanged()
+                                title="keep this URL in this browser; the header's test ↗ goes there"
+                                on:click=move |_| save_test()
+                            >
+                                "Save"
+                            </button>
+                            <button
+                                id="test-reset"
+                                class="link"
+                                disabled=move || test_link.with(|l| l == TEST_URL_DEFAULT)
+                                title=format!("back to {TEST_URL_DEFAULT}")
+                                on:click=reset_test
+                            >
+                                "reset to the default"
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </fieldset>
         </section>
     }
 }
@@ -603,6 +800,7 @@ mod tests {
         let s = Settings {
             ws_url: Some("ws://127.0.0.1:4450".into()),
             recent: vec!["ws://127.0.0.1:4450".into(), "ws://127.0.0.1:4460".into()],
+            test_url: None,
         };
         let raw = s.encode();
         assert_eq!(
@@ -646,10 +844,10 @@ mod tests {
     #[test]
     fn the_effective_url_is_the_override_else_the_page_s_server() {
         assert_eq!(Settings::default().effective(PAGE), PAGE);
-        let over = Settings { ws_url: Some("ws://127.0.0.1:4450".into()), recent: vec![] };
+        let over = Settings { ws_url: Some("ws://127.0.0.1:4450".into()), recent: vec![], test_url: None };
         assert_eq!(over.effective(PAGE), "ws://127.0.0.1:4450");
         // An override that does not validate is no override.
-        let bad = Settings { ws_url: Some("http://127.0.0.1:4450".into()), recent: vec![] };
+        let bad = Settings { ws_url: Some("http://127.0.0.1:4450".into()), recent: vec![], test_url: None };
         assert_eq!(bad.effective(PAGE), PAGE);
         // Through storage: what was saved is what is connected to.
         let saved = Settings::default().saved("ws://127.0.0.1:4472", PAGE);
@@ -686,7 +884,7 @@ mod tests {
     /// that are not it.
     #[test]
     fn the_fills_offer_the_page_s_server_then_the_recent_ones() {
-        let s = Settings { ws_url: None, recent: vec!["ws://127.0.0.1:4450".into(), PAGE.into()] };
+        let s = Settings { ws_url: None, recent: vec!["ws://127.0.0.1:4450".into(), PAGE.into()], test_url: None };
         assert_eq!(s.fills(PAGE), vec![(PAGE.to_string(), true), ("ws://127.0.0.1:4450".to_string(), false)]);
         assert_eq!(Settings::default().fills(PAGE), vec![(PAGE.to_string(), true)]);
     }
@@ -706,6 +904,95 @@ mod tests {
         assert_eq!(b.over(), None);
         let b = Backend { url: "ws://127.0.0.1:4450".into(), page: PAGE.into() };
         assert_eq!(b.over(), Some("ws://127.0.0.1:4450"));
+    }
+
+    /// MFE-22 acceptance 1: a link is `http://` or `https://`, a host, an
+    /// optional port and path — normalized; anything else an error.
+    #[test]
+    fn a_link_is_a_web_page_with_a_host_an_optional_port_and_a_path() {
+        for (raw, want) in [
+            ("http://127.0.0.1:4451/", "http://127.0.0.1:4451/"),
+            ("http://127.0.0.1:4451", "http://127.0.0.1:4451/"),
+            ("  HTTP://LocalHost:4451/app/  ", "http://localhost:4451/app/"),
+            ("https://menger.example.org/app/#/waves/PLEXUS", "https://menger.example.org/app/#/waves/PLEXUS"),
+            ("http://host:80/x", "http://host/x"),
+            ("https://host:443", "https://host/"),
+            ("https://host:80", "https://host:80/"),
+            ("http://[::1]:4451", "http://[::1]:4451/"),
+            ("http://host?x=1", "http://host/?x=1"),
+        ] {
+            assert_eq!(validate_link(raw).as_deref(), Ok(want), "{raw}");
+        }
+        for raw in [
+            "",
+            "127.0.0.1:4451",
+            "ws://127.0.0.1:4450",
+            "ftp://host",
+            "http://",
+            "http://:4451",
+            "http://host:0",
+            "http://host:99999",
+            "http://user@host",
+            "http://my host/",
+            "http://host/a b",
+            "http://host\\x",
+            "http://bad_host",
+            "http://::1:4451",
+        ] {
+            assert!(validate_link(raw).is_err(), "{raw:?} should not validate: {:?}", validate_link(raw));
+        }
+        assert!(validate_link("ws://x").unwrap_err().contains("http://"));
+        // The WebSocket rule is unchanged by sharing the host rule.
+        assert_eq!(validate("ws://[::1]:4455").as_deref(), Ok("ws://[::1]:4455"));
+        assert!(validate("wss://::1:4455").unwrap_err().contains("wss://[::1]"));
+    }
+
+    /// MFE-22 acceptance 1: a version-1 record without `test_url` reads as
+    /// it did (the default link) and is written as it was; a saved URL
+    /// round-trips; the default is never stored; reset clears it.
+    #[test]
+    fn the_test_url_rides_the_same_record_without_moving_the_rest() {
+        let before = r#"{"version":1,"ws_url":"ws://127.0.0.1:4450","recent":["ws://127.0.0.1:4450"]}"#;
+        let s = Settings::decode(Some(before));
+        assert_eq!(s.ws_url.as_deref(), Some("ws://127.0.0.1:4450"));
+        assert_eq!(s.test_url, None);
+        assert_eq!(s.test_link(), TEST_URL_DEFAULT);
+        assert_eq!(s.encode(), before, "an untouched record is written as it was");
+
+        let saved = s.clone().with_test_url("http://127.0.0.1:4471/");
+        assert_eq!(saved.test_link(), "http://127.0.0.1:4471/");
+        let raw = saved.encode();
+        assert!(raw.ends_with(r#","test_url":"http://127.0.0.1:4471/"}"#), "{raw}");
+        let back = Settings::decode(Some(&raw));
+        assert_eq!(back, saved);
+        assert_eq!(back.ws_url, s.ws_url);
+        assert_eq!(back.recent, s.recent);
+
+        assert_eq!(s.clone().with_test_url(TEST_URL_DEFAULT).test_url, None);
+        assert_eq!(saved.clone().reset_test_url().encode(), before);
+        // A stored URL that does not validate, or is the default, reads as
+        // the default.
+        for bad in ["ws://127.0.0.1:4450", "nonsense", "http://127.0.0.1:4451"] {
+            let raw = format!(r#"{{"version":1,"test_url":"{bad}"}}"#);
+            assert_eq!(Settings::decode(Some(&raw)).test_url, None, "{bad}");
+        }
+        assert_eq!(
+            Settings::decode(Some(r#"{"version":1,"test_url":"HTTP://Box:4471"}"#)).test_link(),
+            "http://box:4471/"
+        );
+    }
+
+    /// MFE-22 acceptance 1: the link hides on a page the test environment
+    /// serves, and shows everywhere else.
+    #[test]
+    fn the_test_link_hides_on_the_test_environment_itself() {
+        assert!(shows_test_link(TEST_URL_DEFAULT, "http://127.0.0.1:4456"));
+        assert!(shows_test_link(TEST_URL_DEFAULT, "http://localhost:4451"));
+        assert!(!shows_test_link(TEST_URL_DEFAULT, "http://127.0.0.1:4451"));
+        assert!(!shows_test_link(TEST_URL_DEFAULT, "http://127.0.0.1:4451/"));
+        assert!(!shows_test_link("https://test.example.org/app/", "https://TEST.example.org"));
+        assert_eq!(origin_of("http://127.0.0.1:4451/app/?x#y"), "http://127.0.0.1:4451");
+        assert_eq!(origin_of("https://host"), "https://host");
     }
 
     #[test]

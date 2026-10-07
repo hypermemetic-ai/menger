@@ -201,6 +201,10 @@
 //! The session connects to the override when one is saved, else to this
 //! page's server as before, and while it does the header's status names the
 //! URL (`live · ws://…`, highlighted) on every page.
+//!
+//! MFE-22: `test ↗` beside `settings` opens the test environment
+//! (`http://127.0.0.1:4451/` unless #/settings says otherwise) in a new tab;
+//! a page the test environment serves does not show it.
 
 mod board;
 mod bridge;
@@ -1513,6 +1517,10 @@ fn App() -> impl IntoView {
     let viewport = Trigger::new();
     window_event_listener(leptos::ev::resize, move |_| viewport.notify());
 
+    // MFE-22: where the header's `test ↗` goes — the settings page moves it.
+    let test_link = RwSignal::new(settings::load().test_link());
+    let page_origin = settings::page_origin();
+
     view! {
         <div id="app" class:nonav=move || nav_hidden.get() data-rows-held=move || held.get()>
             <nav::Nav tree route hidden=nav_hidden />
@@ -1554,6 +1562,19 @@ fn App() -> impl IntoView {
                     >
                         "settings"
                     </a>
+                    // MFE-22: the test environment, in a new tab — not on
+                    // the test environment itself.
+                    {move || {
+                        let link = test_link.get();
+                        settings::shows_test_link(&link, &page_origin).then(|| {
+                            let title = format!("the test environment — {link} (set in #/settings)");
+                            view! {
+                                <a class="hlink" id="test-link" href=link target="_blank" rel="noopener" title=title>
+                                    "test ↗"
+                                </a>
+                            }
+                        })
+                    }}
                     <span class="tag">
                         {move || match route.get() {
                             Route::Board => "the live board (MFE-3)",
@@ -1594,7 +1615,7 @@ fn App() -> impl IntoView {
                             view! { <waves::WaveBoard shortcode tree socket last_error /> }.into_any()
                         }
                         Route::Components(only) => view! { <components::ComponentsPage only /> }.into_any(),
-                        Route::Settings => view! { <settings::SettingsPage /> }.into_any(),
+                        Route::Settings => view! { <settings::SettingsPage test_link /> }.into_any(),
                     }}
                 </main>
             </div>
