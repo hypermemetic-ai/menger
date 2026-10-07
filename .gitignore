@@ -1,5 +1,8 @@
 /target
 /.claude/
+# The store stays out of the source (DEPLOY-5): tickets live in the tracker's
+# database, never here; a local plans/ is the owner's, untracked.
+/plans/
 # The Leptos app (frontend/) is its own cargo unit; build products only —
 # its Cargo.lock IS committed (it's an application, not a library).
 /frontend/target

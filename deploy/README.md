@@ -5,9 +5,9 @@ under `systemd --user` (lingering is on: they start at boot and restart on
 failure). Production changes only through this pipeline (DEPLOY-1).
 
 ```
-commit on master → build → gate → release → deploy test → smoke → promote → smoke → live
-                             ↓ red            (prod data          ↓ red              ↓ red
-                         no release            snapshot)     prod untouched     automatic rollback
+commit on main → build → gate → release → deploy test → smoke → promote → smoke → live
+                           ↓ red            (prod data          ↓ red              ↓ red
+                       no release            snapshot)     prod untouched     automatic rollback
 ```
 
 ## The environments
@@ -25,14 +25,14 @@ commit on master → build → gate → release → deploy test → smoke → pr
 
 ```sh
 deploy/pipeline install              # once, and after a change to deploy/: units + env files, enable both envs
-deploy/pipeline build                # master's tip → gate → release (prints its name)
+deploy/pipeline build                # main's tip → gate → release (prints its name)
 deploy/pipeline deploy test          # the newest release → test, with a fresh copy of prod's data
 deploy/pipeline sync test            # test's data refreshed from prod; test keeps its release
 deploy/pipeline promote              # the release test runs → prod
 deploy/pipeline status               # what each env runs, whether it is up, its health
 ```
 
-1. **Build** (`build [REV]`, default `master`). A commit, never a working
+1. **Build** (`build [REV]`, default `main`). A commit, never a working
    tree: `../menger-build` — a sibling checkout, so menger's relative plexus
    dependencies resolve — is moved to the commit and cleaned, keeping only
    build outputs.

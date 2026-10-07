@@ -4,7 +4,7 @@
 # promote to prod — test and prod both running locally under systemd --user.
 #
 #   deploy/pipeline install                 units + env files; enable both envs
-#   deploy/pipeline build [REV]             gate + release (default REV: master)
+#   deploy/pipeline build [REV]             gate + release (default REV: main)
 #   deploy/pipeline deploy test [RELEASE]   prod data → test; switch; restart; smoke
 #   deploy/pipeline sync test               prod data → test, same release; restart; smoke
 #   deploy/pipeline promote [RELEASE] [--adopt]
@@ -82,7 +82,7 @@ cmd_install() {
 # ── build: commit → gate → release ──────────────────────────────────────────
 cmd_build() {
   need cargo; need trunk; need npm
-  local rev=${1:-master} sha short id stage
+  local rev=${1:-main} sha short id stage
   sha=$(git -C "$REPO" rev-parse --verify "$rev^{commit}") || die "no commit '$rev'"
   short=${sha:0:7}
   step "build $short — $(git -C "$REPO" log -1 --format=%s "$sha")"
