@@ -536,7 +536,7 @@ as one function with the element as `this`:
 | `this.menger` | `window.menger` itself |
 | `return () => …` | runs before the next render and when the element leaves the document; so does the end of every `menger.on` made while the script ran |
 
-`window.menger` (1.3, frozen): `version`; **`tickets`** (COMP-10) — the
+`window.menger` (1.4, frozen): `version`; **`tickets`** (COMP-10) — the
 `tickets` activation's typed client (below); **`call(method, params)`** → a
 Promise of the call's items (the stream's data events as the wire spells
 them, an in-band `error` included), answered by the app over its own
@@ -544,12 +544,13 @@ connection — **read-only**: `get`, `list`, `find`, `waves`, `groups`,
 `extents`, `blockers`, `health`, `components`, `inputs` (INPUT-4), with the
 activation's parameter names (`menger.call('waves', { epics: ['PLEXUS']
 })`, `menger.call('inputs', { ticket: 'INPUT-9' })`); any other method —
-`answer` included — rejects with `read-only: …`, which names the one write
-and how it is made (below), and a parameter the method does not take
-rejects naming it; **`on('change', cb)`** → `cb(event)` for every `watch`
-event the app hears (`input_changed` too), and returns the function that
-stops it; **`navigate(route)`** (COMP-9, below); **`input`** (INPUT-4,
-frozen) — `ticket` and `submit`, the one write (below). Its types are
+`answer` and `clear_answer` included — rejects with `read-only: …`, which
+names the two writes and how they are made (below), and a parameter the
+method does not take rejects naming it; **`on('change', cb)`** →
+`cb(event)` for every `watch` event the app hears (`input_changed` too),
+and returns the function that stops it; **`navigate(route)`** (COMP-9,
+below); **`input`** (INPUT-4, frozen) — `ticket`, `submit` and (INPUT-9,
+1.4) `clear`, the two writes (below). Its types are
 `frontend/sdk/menger.d.ts`, published at `/app/sdk/menger.d.ts`.
 
 **The typed SDK** (COMP-10, COMP-1 decision 7). `menger.tickets` is the
@@ -713,10 +714,11 @@ A reader can **answer a ticket in place** (INPUT-1): a body declares
 - **History**: every `answer`, `clear_answer`, `close_input` and
   `reopen_input` is one entry — `{ action, value, rationale, source,
   at_unix }`, oldest first; `source` is `app` (a viewer's click, which the
-  host says) or `api` (the default; `clear_answer`, `close_input` and
-  `reopen_input` are always `api`). Each `answer` is recorded, the same value
-  again included; a clear, close or reopen that changes nothing (no answer,
-  closed already, not closed) writes nothing and answers `input`.
+  host says on an `answer` or, INPUT-9, a `clear_answer`) or `api` (the
+  default; `close_input` and `reopen_input` are always `api`). Each
+  `answer` is recorded, the same value again included; a clear, close or
+  reopen that changes nothing (no answer, closed already, not closed)
+  writes nothing and answers `input`.
 - **Stored** in two tables, `inputs` (a row per input: `ticket`, `id`,
   `position`, `kind`, `question`, `options`, `recommendation`, `state`) and
   `answers` (a row per history entry), which a database written before
@@ -772,11 +774,13 @@ link wears the **open count** as a small badge from the first time the page
 is opened, live from then on, after the page is left too; before that it
 shows no count rather than add a startup request.
 
-**Answering from a frame** (INPUT-4, INPUT-1 decision 3). A frame is
-read-only but for one write: a viewer's click in a framed body records an
-answer to an input of **that body's own ticket**, through
-`tickets.answer` with source `app`, made by the host. It is the SDK's
-**`menger.input`** (1.3):
+**Answering and clearing from a frame** (INPUT-4, INPUT-9; INPUT-1
+decision 3, as amended). A frame is read-only but for two writes: a
+viewer's click in a framed body records an answer to an input of **that
+body's own ticket**, through `tickets.answer` with source `app`, or clears
+the answer it holds, through `tickets.clear_answer` with source `app` —
+each made by the host. They are the SDK's **`menger.input`** (1.3: `submit`;
+1.4: `clear`):
 
 ```js
 // in a component script — `this.menger` is `window.menger`
@@ -784,6 +788,10 @@ button.onclick = () =>
   this.menger.input.submit('landing', { type: 'choice', option: 'archive' }, 'holds are real')
     .then((answer) => show(answer), (e) => complain(e.message));
 // answer: { value, rationale, source: 'app', atUnix } — the generated `Answer`
+
+clear.onclick = () =>
+  this.menger.input.clear('landing').then((input) => show(input), (e) => complain(e.message));
+// input: the generated `Input`, `open`, its history ending { action: 'cleared', source: 'app', atUnix }
 
 // this ticket's inputs, typed (`ticket` is null in a frame that renders no ticket's body)
 for await (const ev of this.menger.tickets.inputs(undefined, undefined, this.menger.input.ticket)) { … }
@@ -820,14 +828,31 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, this.men
   the host's refusal or the server's own in-band one; the promise rejects
   with it. The answer reaches every frame, the one that made it included, as
   `input_changed` on `menger.on('change')`.
+- **`menger.input.clear(id)`** (INPUT-9, SDK 1.4) → a Promise of the input
+  as the clear left it — the generated `Input`: `open`, no answer, the
+  clear last in its history (as it was, when it held no answer: the server
+  writes nothing). Sent (`menger:clear { id, params: { input } }`) under
+  `submit`'s gesture rule, and checked by the host as a submit is, **but for
+  the value**: a gesture under way, a frame that renders a ticket, params
+  exactly `{ input }`, the input declared in that ticket's body and neither
+  closed nor removed. Then `tickets.clear_answer { ticket, input, source:
+  "app" }`, answered `menger:cleared { id, input }` or `{ id, error }`; the
+  clear reaches every frame as `input_changed`.
 - **Every other write stays refused**, through `call` and the typed client
-  alike — `answer` too: a frame answers only through `submit`.
+  alike — `answer` and `clear_answer` too: a frame answers only through
+  `submit` and clears only through `clear`.
+- **The house components** (ART-9's `m-decision`, `m-input`): **Submit**
+  calls `submit`; **Clear** calls `clear` when an answer is recorded (the
+  history then shows the `cleared` entry, via `app`) and only empties the
+  form when none is. On an app before SDK 1.4 (no `clear`), Clear empties
+  the form and says the recorded answer stays.
 - **The limit.** The gesture rule is the browser's: the host can know that
   the viewer is clicking or typing in the app now, not which control a
   click meant. A script in the frame (the body's, or a component's) can
-  post a `menger:submit` of its own while a gesture is under way — for an
-  input its ticket declares, with a value that answers it, recorded as
-  `app`. Who answers (identity, permissions) waits on CONTEXT.
+  post a `menger:submit` or `menger:clear` of its own while a gesture is
+  under way — for an input its ticket declares (with a value that answers
+  it, to submit), recorded as `app`. Who answers (identity, permissions)
+  waits on CONTEXT.
 
 | method | yields |
 |---|---|
@@ -846,7 +871,7 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, this.men
 | `tickets.components {}` | one `component { component: { name, source, owner, references, docs, preview } }` per component, in name order, then the stream's own `done` (COMP-3) — `source` the ` ```component name ` block's content, `owner` the defining ticket (`null`: an orphan), `references` the tickets whose bodies use `<name`, in the store's order, then the components whose sources do, by name; COMP-8: `docs` the source's `<docs>` parsed (`{ summary, attrs, slots, examples, help }`, `null` without one), `preview` the opening line's attributes (`[[name, value], …]`). From the cache; `watch` keeps it current with `component_changed` / `component_removed` |
 | `tickets.inputs { ticket?, epic?, state? }` | one `input { input: { ticket, id, kind, question, options, recommendation, state, answer, history } }` per input of `ticket` (every ticket's without one) whose ticket is in the shortcode `epic` and which is in `state` (`open` / `answered` / `closed` / `removed`), then the stream's own `done` (INPUT-3) — in the store's order of tickets, each ticket's inputs in its body's order and the removed after; `kind` `choice` / `multi` / `text`; `options` `[{ value, label, recommended }]`; `question` and `recommendation` `null` without one; `answer` `{ value, rationale, source, at_unix }` or `null`; `history` every change, oldest first. A ticket that is none is `not_found`; a state outside the four an in-band `error`. From the cache; `watch` keeps it current with `input_changed` |
 | `tickets.answer { ticket, input, value, rationale?, source? }` | `input_changed { input }` (INPUT-3) — records `value` (typed, above) against the input, checked against its kind and the options its body declares, with `rationale` (blank: none), `source` (`app` / `api`, default `api`) and the time; every call is one history entry. One in-band `error`, nothing written: the ticket declares no such input (naming those it does), the value does not answer it (naming why), it is closed, or it was removed; `not_found` for a ticket that is none. The body and the ticket's row are untouched |
-| `tickets.clear_answer { ticket, input }` | `input_changed { input }` — the answer cleared, `open` again, the clear in its history; `input { input }` when it held none (nothing written); in-band `error` when closed, removed or not declared (INPUT-3) |
+| `tickets.clear_answer { ticket, input, source? }` | `input_changed { input }` — the answer cleared, `open` again, the clear in its history with its `source` (`app` / `api`, default `api`; INPUT-9: the host says `app` for a frame's `menger.input.clear`); `input { input }` when it held none (nothing written); in-band `error` when closed, removed or not declared, or for a source outside the two (INPUT-3) |
 | `tickets.close_input { ticket, input }` | `input_changed { input }` — frozen, with or without an answer (a decision's DECIDED); `input { input }` when closed already; in-band `error` when removed or not declared (INPUT-3) |
 | `tickets.reopen_input { ticket, input }` | `input_changed { input }` — `answered` again when it holds an answer, else `open`; `input { input }` when it was not closed; in-band `error` when removed or not declared (INPUT-3) |
 | `tickets.extents {}` | one `extent { epic, last_seq }` per shortcode that holds a ticket, in shortcode order (the store's), then the stream's own `done` (SCALE-16) — where each shortcode ends: ids are allocated highest-plus-one and never deleted, so a shortcode holds `last_seq` tickets, row k of it is `EPIC-k`, and a position in the store's order becomes a `list { after }` cursor without a walk; every `last_seq` together sums to `health.ticket_count` (a hand-edited database with a hole still reports the highest sequence; `after` naming the missing id is `list`'s cursor error). Not a roll-up: the shortcode's own tickets only, and every shortcode has one whether or not the nav draws it a row. Read from the sequence `create` allocates from (SCALE-3), so the cost is the number of shortcodes; no `watch` event — `created` carries the shortcode's new `last_seq` as its `seq` |
@@ -1094,8 +1119,9 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        (COMP-10, scripts/sdk-codegen.sh),
                        src/registry.rs the app's copy of the component
                        registry, src/bridge.rs menger.call's read-only host
-                       side (COMP-5) and the one write's checks,
-                       menger.input.submit (INPUT-4), src/components.rs
+                       side (COMP-5) and the two writes' checks,
+                       menger.input.submit (INPUT-4) and
+                       menger.input.clear (INPUT-9), src/components.rs
                        #/components (COMP-6)
                        and the help pages, src/card.rs a definition's docs
                        card, src/inspect.rs the tooltip's checks and

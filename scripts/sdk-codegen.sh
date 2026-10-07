@@ -106,7 +106,7 @@ EOF
 # The SDK's own types, checked against the generated ones: menger.d.ts
 # resolves, and a component script written against it typechecks.
 cat >"$gen/check.ts" <<'EOF'
-import type { Answer, MengerElement, WireEvent } from './menger';
+import type { Answer, Input, MengerElement, WireEvent } from './menger';
 export async function script(this: MengerElement): Promise<number> {
   let n = 0;
   for await (const ev of this.menger.tickets.waves(['RETURNS'])) {
@@ -117,7 +117,7 @@ export async function script(this: MengerElement): Promise<number> {
   off();
   menger.navigate('#/components/m-wave-summary');
   const v: string = window.menger.version;
-  // INPUT-4: this ticket's inputs, read typed, and the one write.
+  // INPUT-4: this ticket's inputs, read typed, and the first write.
   const ticket: string | null = this.menger.input.ticket;
   for await (const ev of menger.tickets.inputs(undefined, 'open', ticket)) {
     if (ev.type === 'input') n += ev.input.history.length + (ev.input.answer?.atUnix ?? 0);
@@ -125,6 +125,9 @@ export async function script(this: MengerElement): Promise<number> {
   const answer: Answer = await menger.input.submit('landing', { type: 'choice', option: 'archive' }, 'holds are real');
   const multi: Answer = await this.menger.input.submit('checks', { type: 'multi', options: ['unit'] });
   n += answer.atUnix + multi.atUnix + (answer.source === 'app' ? 1 : 0);
+  // INPUT-9: the second write — the input as the clear left it.
+  const cleared: Input = await this.menger.input.clear('landing');
+  n += cleared.history.length + (cleared.history[0]?.atUnix ?? 0) + (cleared.state === 'open' ? 1 : 0);
   return n + raw.length + v.length + (this.attr('board') ?? '').length + this.root.childElementCount;
 }
 EOF

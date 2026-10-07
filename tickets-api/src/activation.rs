@@ -760,17 +760,36 @@ impl Tickets {
     }
 
     /// INPUT-3: clears an input's answer — `open` again, the clear in its
-    /// history (source `api`). Yields exactly one event: `InputChanged`;
-    /// `Input` when it held no answer (nothing written); `NotFound`; or an
-    /// in-band `Error` — no such input, closed, removed.
+    /// history, with its `source` (INPUT-9: `app`, a viewer's click, which
+    /// the host says for a frame's `menger.input.clear`; `api`, the default:
+    /// anything else). Yields exactly one event: `InputChanged`; `Input`
+    /// when it held no answer (nothing written); `NotFound`; or an in-band
+    /// `Error` — no such input, closed, removed, an unknown source.
     #[plexus_macros::method(
-        description = "Clear an input's answer (open again; kept in its history); yields input_changed",
-        params(ticket = "Ticket id, e.g. INPUT-9", input = "The input's id in that ticket's body")
+        description = "Clear an input's answer (open again; kept in its history, with a source); yields input_changed",
+        params(
+            ticket = "Ticket id, e.g. INPUT-9",
+            input = "The input's id in that ticket's body",
+            source = "app (a viewer's click, said by the host) | api (default)"
+        )
     )]
-    pub async fn clear_answer(&self, ticket: String, input: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn clear_answer(
+        &self,
+        ticket: String,
+        input: String,
+        source: Option<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
-            yield input_event(store.clear_answer(&ticket, &input).await, ticket);
+            let source = match source.as_deref().map(str::parse::<AnswerSource>) {
+                None => AnswerSource::Api,
+                Some(Ok(s)) => s,
+                Some(Err(e)) => {
+                    yield TicketsEvent::Error { message: e };
+                    return;
+                }
+            };
+            yield input_event(store.clear_answer(&ticket, &input, source).await, ticket);
         }
     }
 

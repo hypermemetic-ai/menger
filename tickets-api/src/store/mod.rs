@@ -3499,10 +3499,11 @@ impl Store {
     }
 
     /// INPUT-3: clears the input's answer — `open` again, the clear in its
-    /// history. One holding no answer is [`InputWrite::Unchanged`]: nothing
+    /// history, with `source` (INPUT-9: `app` when the host clears it for a
+    /// frame). One holding no answer is [`InputWrite::Unchanged`]: nothing
     /// written. Refused as `answer` is, but for the value: closed, removed.
-    pub async fn clear_answer(&self, ticket: &str, input: &str) -> Result<InputWrite, StoreError> {
-        self.input_write(ticket, input, inputs::Op::Clear).await
+    pub async fn clear_answer(&self, ticket: &str, input: &str, source: AnswerSource) -> Result<InputWrite, StoreError> {
+        self.input_write(ticket, input, inputs::Op::Clear { source }).await
     }
 
     /// INPUT-3: closes the input — frozen, with its answer or without one;

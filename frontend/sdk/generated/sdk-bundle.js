@@ -135,8 +135,8 @@
       const stream = this.rpc.call("tickets.blockers", { id });
       yield* extractData(stream);
     }
-    async* clearAnswer(input, ticket) {
-      const stream = this.rpc.call("tickets.clear_answer", { input, ticket });
+    async* clearAnswer(input, ticket, source) {
+      const stream = this.rpc.call("tickets.clear_answer", { input, source, ticket });
       yield* extractData(stream);
     }
     async* closeInput(input, ticket) {

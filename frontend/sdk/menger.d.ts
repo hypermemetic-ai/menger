@@ -1,7 +1,7 @@
 /**
- * menger SDK 1.3 — the types of `window.menger` and of a component script's
+ * menger SDK 1.4 — the types of `window.menger` and of a component script's
  * `this`, inside every framed body (COMP-4, COMP-5, COMP-10, COMP-9,
- * INPUT-4).
+ * INPUT-4, INPUT-9).
  *
  * Published by the app at /app/sdk/menger.d.ts, beside the SDK itself
  * (/app/sdk/menger-sdk.js) and the generated client's declarations
@@ -12,7 +12,7 @@
  */
 
 import type { TicketsClient } from './generated/tickets/client';
-import type { Answer, InputValue } from './generated/tickets/types';
+import type { Answer, Input, InputValue } from './generated/tickets/types';
 
 export type { TicketsClient } from './generated/tickets/client';
 export type * from './generated/tickets/types';
@@ -32,8 +32,8 @@ export interface WireEvent {
 
 /**
  * INPUT-4: `menger.input` — frozen. A frame answers its own ticket's inputs
- * (`<m-decision id>`, `<m-input id kind>`) and nothing else; this is the one
- * write it can make.
+ * (`<m-decision id>`, `<m-input id kind>`) and nothing else; `submit` and
+ * (INPUT-9, 1.4) `clear` are the two writes it can make.
  */
 export interface MengerInput {
   /**
@@ -69,11 +69,34 @@ export interface MengerInput {
    * ```
    */
   submit(id: string, value: InputValue, rationale?: string | null): Promise<Answer>;
+
+  /**
+   * INPUT-9 (1.4): clear the answer recorded on the input `id` of this
+   * frame's ticket — `tickets.clear_answer`, made by the host with source
+   * `app` — and resolve to the input as the clear left it (the typed
+   * client's spelling): `open`, no answer, the `cleared` entry last in its
+   * history. One that held no answer resolves as it is (nothing written).
+   * The change also reaches every frame as an `input_changed` on
+   * `on('change')`.
+   *
+   * Sent only inside a viewer's gesture, as `submit` is; otherwise it
+   * rejects and sends nothing. The host then rejects it, with the reason
+   * and nothing cleared, unless its own window is activated too and the
+   * input is declared in the ticket's body and neither closed nor removed.
+   * An app before 1.4 has no `clear`: test for it
+   * (`typeof menger.input.clear === 'function'`).
+   *
+   * ```js
+   * clearButton.onclick = () =>
+   *   menger.input.clear('landing').then((input) => show(input.history), (e) => complain(e.message));
+   * ```
+   */
+  clear(id: string): Promise<Input>;
 }
 
 /** `window.menger` — frozen; also `this.menger` in a component script. */
 export interface Menger {
-  /** "1.3.0". */
+  /** "1.4.0". */
   readonly version: string;
 
   /**
@@ -93,8 +116,9 @@ export interface Menger {
    * `components`, `inputs` (INPUT-4 — `inputs(epic?, state?, ticket?)`,
    * one `{ type: 'input', input }` per input, its answer and history
    * included). Every other method is present and throws a `PlexusError`
-   * whose message starts "read-only" when iterated — `answer` too: a frame
-   * answers through `input.submit`.
+   * whose message starts "read-only" when iterated — `answer` and
+   * `clearAnswer` too: a frame answers through `input.submit` and clears
+   * through `input.clear`.
    */
   readonly tickets: TicketsClient;
 
@@ -103,7 +127,8 @@ export interface Menger {
    * the activation's parameter names (`{ epics: ['PLEXUS'] }`) → the call's
    * items, as the wire spells them. Read-only, as `tickets` — `inputs`
    * with `{ ticket?, epic?, state? }`; a method outside the reads rejects
-   * with "read-only: …" (naming `input.submit` as the one write), a
+   * with "read-only: …" (naming `input.submit` and `input.clear` as the
+   * two writes), a
    * parameter the method does not take rejects naming it.
    */
   call(method: string, params?: Record<string, unknown> | null): Promise<WireEvent[]>;
@@ -125,7 +150,7 @@ export interface Menger {
    */
   navigate(route: string): void;
 
-  /** INPUT-4: the one write — this frame's ticket's inputs, answered. */
+  /** INPUT-4, INPUT-9: the two writes — this frame's ticket's inputs, answered and cleared. */
   readonly input: MengerInput;
 }
 

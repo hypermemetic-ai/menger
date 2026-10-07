@@ -15,10 +15,10 @@
 //!
 //! Read-only by construction: a method outside [`READ_METHODS`] is refused
 //! here, before anything is sent — `set_status`, `amend`, `create`, every
-//! other write, `answer` included, and `watch` (a frame hears the stream as
-//! change notices, not by subscribing).
+//! other write, `answer` and `clear_answer` included, and `watch` (a frame
+//! hears the stream as change notices, not by subscribing).
 //!
-//! INPUT-4: **the one write.** A frame records an answer to one of its own
+//! INPUT-4: **the first write.** A frame records an answer to one of its own
 //! ticket's inputs — `menger.input.submit(id, value, rationale?)`, sent as
 //! `menger:submit { id, params: { input, value, rationale? } }` — and never
 //! through `menger.call`. The host makes `tickets.answer` for it, with
@@ -31,6 +31,15 @@
 //! (`inputs::check`, what the server runs). A refusal is the frame's
 //! rejected promise, and nothing is sent; what the server answers
 //! ([`recorded`]) is the recorded answer, or its own in-band refusal.
+//!
+//! INPUT-9: **the second write.** `menger.input.clear(id)`, sent as
+//! `menger:clear { id, params: { input } }`, clears the answer recorded on
+//! one of the frame's own ticket's inputs: `tickets.clear_answer` with
+//! source `app`, under the same checks as a submit but for the value
+//! ([`admit`], [`parse_clear`], [`check_clear`]) — a gesture under way, a
+//! frame that renders a ticket, the input declared there and neither
+//! closed nor removed. The answer ([`cleared`]) is the input as the clear
+//! left it, or the server's refusal. Every other write stays refused.
 
 use menger_tickets_api::{inputs, Answer, AnswerSource, Input, InputState, InputValue, TicketsEvent};
 use serde::de::DeserializeOwned;
@@ -43,9 +52,12 @@ use crate::session::Client;
 pub(crate) const READ_METHODS: [&str; 10] =
     ["get", "list", "find", "waves", "groups", "extents", "blockers", "health", "components", "inputs"];
 
-/// INPUT-4: the SDK call a frame's one write is made by — named in every
+/// INPUT-4: the SDK call a frame's answer is made by — named in every
 /// refusal, so a component author finds it.
 pub(crate) const SUBMIT: &str = "menger.input.submit";
+
+/// INPUT-9: the SDK call a frame's clear is made by — its second write.
+pub(crate) const CLEAR: &str = "menger.input.clear";
 
 /// One read call, with the activation's parameters.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,11 +119,12 @@ struct InputsParams {
 #[serde(deny_unknown_fields)]
 struct NoParams {}
 
-/// The refusal for anything but a read — which names the one write a frame
-/// may make, and how (INPUT-4).
+/// The refusal for anything but a read — which names the two writes a
+/// frame may make, and how (INPUT-4, INPUT-9).
 pub(crate) fn read_only(method: &str) -> String {
     format!(
-        "read-only: a frame may call only {} — not `{method}`; its one write is `answer`, made by {SUBMIT} on a viewer's click",
+        "read-only: a frame may call only {} — not `{method}`; its only writes are `answer` and `clear_answer`, \
+         made by {SUBMIT} and {CLEAR} on a viewer's click",
         READ_METHODS.join(", ")
     )
 }
@@ -186,7 +199,7 @@ pub(crate) async fn run(client: &Client, call: Call) -> Result<Vec<TicketsEvent>
     answer.map_err(|e| crate::session::describe(&e))
 }
 
-// -- INPUT-4: the one write -------------------------------------------------
+// -- INPUT-4: the first write -----------------------------------------------
 
 /// `menger.input.submit(id, value, rationale?)` as the host reads it. No
 /// ticket: a frame answers only the ticket whose body it renders, which the
@@ -201,20 +214,21 @@ pub(crate) struct Submit {
     pub(crate) rationale: Option<String>,
 }
 
-/// Whether a submit may go on at all, before its params are read: a
-/// viewer's gesture is under way — `activated`, the app window's transient
-/// user activation (`None`: this browser cannot say, and the SDK's own check
+/// Whether a write — `sdk`, [`SUBMIT`] or (INPUT-9) [`CLEAR`], which every
+/// refusal names — may go on at all, before its params are read: a viewer's
+/// gesture is under way — `activated`, the app window's transient user
+/// activation (`None`: this browser cannot say, and the SDK's own check
 /// stands alone) — and the frame renders a ticket's stored body (`ticket`,
 /// the one the host stamped on the frame; none for an editor's preview or a
 /// help card). The ticket, or why not.
-pub(crate) fn admit(ticket: Option<&str>, activated: Option<bool>) -> Result<String, String> {
+pub(crate) fn admit(sdk: &str, ticket: Option<&str>, activated: Option<bool>) -> Result<String, String> {
     if activated == Some(false) {
-        return Err(format!("{SUBMIT}: only inside a viewer's click — the app saw no click or key just now (nothing sent)"));
+        return Err(format!("{sdk}: only inside a viewer's click — the app saw no click or key just now (nothing sent)"));
     }
     match ticket.map(str::trim).filter(|t| !t.is_empty()) {
         Some(t) => Ok(t.to_string()),
         None => Err(format!(
-            "{SUBMIT}: this frame shows no ticket's stored body (an editor's preview, a help card) — it has no input to answer (nothing sent)"
+            "{sdk}: this frame shows no ticket's stored body (an editor's preview, a help card) — it has no input to answer (nothing sent)"
         )),
     }
 }
@@ -231,47 +245,54 @@ pub(crate) fn parse_submit(params: &str) -> Result<Submit, String> {
     })
 }
 
-/// An `inputs { ticket }` answer: the ticket's inputs, or what the server
-/// said instead.
-pub(crate) fn inputs_of(events: Vec<TicketsEvent>) -> Result<Vec<Input>, String> {
+/// An `inputs { ticket }` answer, read for `sdk`'s write: the ticket's
+/// inputs, or what the server said instead.
+pub(crate) fn inputs_of(sdk: &str, events: Vec<TicketsEvent>) -> Result<Vec<Input>, String> {
     let mut held = Vec::new();
     for ev in events {
         match ev {
             TicketsEvent::Input { input } => held.push(input),
-            TicketsEvent::NotFound { id } => return Err(format!("{SUBMIT}: {id} is not a ticket (nothing sent)")),
-            TicketsEvent::Error { message } => return Err(format!("{SUBMIT}: {message} (nothing sent)")),
+            TicketsEvent::NotFound { id } => return Err(format!("{sdk}: {id} is not a ticket (nothing sent)")),
+            TicketsEvent::Error { message } => return Err(format!("{sdk}: {message} (nothing sent)")),
             _ => {}
         }
     }
     Ok(held)
 }
 
-/// The host's own checks, against `held` — the inputs the store holds for
-/// `ticket`, the frame's: the input is declared in its body (one another
-/// ticket declares is not this frame's to answer), it is not removed from
-/// it, not closed, and `submit.value` answers it — the value to send (a
-/// `multi`'s options in the declared order), or why not, in the server's
-/// words.
-pub(crate) fn check_submit(ticket: &str, submit: &Submit, held: &[Input]) -> Result<InputValue, String> {
+/// The checks both writes share, against `held` — the inputs the store
+/// holds for `ticket`, the frame's: the input `id` is declared in its body
+/// (one another ticket declares is not this frame's to write), it is not
+/// removed from it, and not closed. The input, or why not, in the server's
+/// words, naming `sdk`.
+fn open_input<'a>(sdk: &str, ticket: &str, id: &str, held: &'a [Input]) -> Result<&'a Input, String> {
     let mine: Vec<&Input> = held.iter().filter(|i| i.ticket == ticket).collect();
-    let id = submit.input.as_str();
     let Some(input) = mine.iter().find(|i| i.id == id) else {
         let declared: Vec<String> =
             mine.iter().filter(|i| i.state != InputState::Removed).map(|i| format!("'{}'", i.id)).collect();
         return Err(if declared.is_empty() {
-            format!("{SUBMIT}: {ticket} declares no input '{id}' — its body holds none (nothing sent)")
+            format!("{sdk}: {ticket} declares no input '{id}' — its body holds none (nothing sent)")
         } else {
-            format!("{SUBMIT}: {ticket} declares no input '{id}' — its inputs are {} (nothing sent)", declared.join(", "))
+            format!("{sdk}: {ticket} declares no input '{id}' — its inputs are {} (nothing sent)", declared.join(", "))
         });
     };
     match input.state {
-        InputState::Removed => Err(format!("{SUBMIT}: {ticket}'s '{id}' was removed from its body (nothing sent)")),
+        InputState::Removed => Err(format!("{sdk}: {ticket}'s '{id}' was removed from its body (nothing sent)")),
         InputState::Closed => {
-            Err(format!("{SUBMIT}: {ticket}'s '{id}' is closed: its answer is frozen until it is reopened (nothing sent)"))
+            Err(format!("{sdk}: {ticket}'s '{id}' is closed: its answer is frozen until it is reopened (nothing sent)"))
         }
-        InputState::Open | InputState::Answered => inputs::check(input.kind, &input.options, submit.value.clone())
-            .map_err(|why| format!("{SUBMIT}: not an answer to {ticket}'s '{id}': {why} (nothing sent)")),
+        InputState::Open | InputState::Answered => Ok(input),
     }
+}
+
+/// The host's own checks for a submit ([`open_input`]), and `submit.value`
+/// answers the input — the value to send (a `multi`'s options in the
+/// declared order), or why not, in the server's words.
+pub(crate) fn check_submit(ticket: &str, submit: &Submit, held: &[Input]) -> Result<InputValue, String> {
+    let id = submit.input.as_str();
+    let input = open_input(SUBMIT, ticket, id, held)?;
+    inputs::check(input.kind, &input.options, submit.value.clone())
+        .map_err(|why| format!("{SUBMIT}: not an answer to {ticket}'s '{id}': {why} (nothing sent)"))
 }
 
 /// `tickets.answer`'s reply: the answer it recorded, or its refusal.
@@ -294,10 +315,59 @@ pub(crate) fn recorded(events: Vec<TicketsEvent>) -> Result<Answer, String> {
 /// `tickets.answer` with source `app` — the recorded answer, or why not.
 pub(crate) async fn submit(client: &Client, ticket: String, submit: Submit) -> Result<Answer, String> {
     let described = |e: plexus_client::ClientError| format!("{SUBMIT}: {}", crate::session::describe(&e));
-    let held = inputs_of(client.inputs_all(Some(ticket.clone()), None, None).await.map_err(described)?)?;
+    let held = inputs_of(SUBMIT, client.inputs_all(Some(ticket.clone()), None, None).await.map_err(described)?)?;
     let value = check_submit(&ticket, &submit, &held)?;
     let source = Some(AnswerSource::App.as_str().to_string());
     recorded(client.answer_all(ticket, submit.input, value, submit.rationale, source).await.map_err(described)?)
+}
+
+// -- INPUT-9: the second write ----------------------------------------------
+
+/// `menger.input.clear(id)` as the host reads it — the input only; no
+/// ticket, as for a submit.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Clear {
+    /// The input's id in the ticket's body.
+    pub(crate) input: String,
+}
+
+/// The frame's params (JSON) as a [`Clear`], or why not — an unknown field
+/// (`ticket` included), a missing or mistyped `input`, each named.
+pub(crate) fn parse_clear(params: &str) -> Result<Clear, String> {
+    serde_json::from_str(params.trim()).map_err(|e| format!("{CLEAR}: {e} — it takes (id) (nothing sent)"))
+}
+
+/// The host's own checks for a clear: [`open_input`] — declared in the
+/// frame's ticket, neither removed nor closed. There is no value to check.
+pub(crate) fn check_clear(ticket: &str, clear: &Clear, held: &[Input]) -> Result<(), String> {
+    open_input(CLEAR, ticket, &clear.input, held).map(|_| ())
+}
+
+/// `tickets.clear_answer`'s reply: the input as the clear left it (`open`,
+/// the clear in its history; as it was when it held no answer), or the
+/// server's refusal.
+pub(crate) fn cleared(events: Vec<TicketsEvent>) -> Result<Input, String> {
+    for ev in events {
+        match ev {
+            TicketsEvent::InputChanged { input } | TicketsEvent::Input { input } => return Ok(input),
+            TicketsEvent::NotFound { id } => return Err(format!("{CLEAR}: {id} is not a ticket")),
+            TicketsEvent::Error { message } => return Err(format!("{CLEAR}: {message}")),
+            _ => {}
+        }
+    }
+    Err(format!("{CLEAR}: the server cleared nothing"))
+}
+
+/// Clear `clear` against `ticket`'s inputs over the app's connection: the
+/// store's inputs for it, the checks ([`check_clear`]), then
+/// `tickets.clear_answer` with source `app` — the input, or why not.
+pub(crate) async fn clear(client: &Client, ticket: String, clear: Clear) -> Result<Input, String> {
+    let described = |e: plexus_client::ClientError| format!("{CLEAR}: {}", crate::session::describe(&e));
+    let held = inputs_of(CLEAR, client.inputs_all(Some(ticket.clone()), None, None).await.map_err(described)?)?;
+    check_clear(&ticket, &clear, &held)?;
+    let source = Some(AnswerSource::App.as_str().to_string());
+    cleared(client.clear_answer_all(ticket, clear.input, source).await.map_err(described)?)
 }
 
 #[cfg(test)]
@@ -351,29 +421,41 @@ mod tests {
     }
 
     /// Every write — `answer` and the other input writes included: a frame
-    /// answers only through `menger.input.submit` — and `watch`,
-    /// `ready_set`, a name that is no method, is refused before anything is
-    /// sent, saying "read-only", what is allowed, and (INPUT-4) the one
-    /// write and how it is made.
+    /// answers only through `menger.input.submit`, and (INPUT-9) clears
+    /// only through `menger.input.clear` — and `watch`, `ready_set`, a name
+    /// that is no method, is refused before anything is sent, saying
+    /// "read-only", what is allowed, and the two writes and how they are
+    /// made.
     #[test]
     fn anything_else_is_read_only() {
         for m in [
             "set_status", "amend", "create", "set_parent", "link_commits", "unlink_commits", "watch", "ready_set", "answer",
             "clear_answer", "close_input", "reopen_input", "", "GET", "menger.tickets.get", "submit", "menger.input.submit",
+            "clear", "menger.input.clear",
         ] {
             let err = parse_call(m, "{}").unwrap_err();
             assert!(err.starts_with("read-only: "), "{m}: {err}");
             assert!(err.contains("get, list, find, waves, groups, extents, blockers, health, components, inputs"), "{err}");
-            assert!(err.contains("its one write is `answer`, made by menger.input.submit on a viewer's click"), "{err}");
+            assert!(
+                err.contains(
+                    "its only writes are `answer` and `clear_answer`, made by menger.input.submit and menger.input.clear \
+                     on a viewer's click"
+                ),
+                "{err}"
+            );
         }
         assert_eq!(
             parse_call("set_status", r#"{"id":"A-1","status":"Complete"}"#),
             Err("read-only: a frame may call only get, list, find, waves, groups, extents, blockers, health, components, inputs \
-                 — not `set_status`; its one write is `answer`, made by menger.input.submit on a viewer's click"
+                 — not `set_status`; its only writes are `answer` and `clear_answer`, made by menger.input.submit and \
+                 menger.input.clear on a viewer's click"
                 .into())
         );
         let err = parse_call("answer", r#"{"ticket":"A-1","input":"d1","value":{"type":"choice","option":"a"}}"#).unwrap_err();
         assert!(err.starts_with("read-only: ") && err.contains("not `answer`"), "{err}");
+        // INPUT-9: `clear_answer` too — a frame clears through menger.input.clear only.
+        let err = parse_call("clear_answer", r#"{"ticket":"A-1","input":"d1"}"#).unwrap_err();
+        assert!(err.starts_with("read-only: ") && err.contains("not `clear_answer`"), "{err}");
     }
 
     /// Params the method does not take are named, never dropped silently.
@@ -402,9 +484,9 @@ mod tests {
         assert!(err.starts_with("inputs: ") && err.contains("invalid type"), "{err}");
     }
 
-    // -- INPUT-4: the one write ------------------------------------------------
+    // -- INPUT-4: the first write ----------------------------------------------
 
-    use menger_tickets_api::{InputHistoryEntry, InputKind, InputOption};
+    use menger_tickets_api::{InputAction, InputHistoryEntry, InputKind, InputOption};
 
     fn option(value: &str) -> InputOption {
         InputOption { value: value.into(), label: value.to_uppercase(), recommended: false }
@@ -452,8 +534,8 @@ mod tests {
     /// send.
     #[test]
     fn a_submit_inside_a_click_for_this_tickets_input_is_sent() {
-        assert_eq!(admit(Some("DEMO-1"), Some(true)), Ok("DEMO-1".into()));
-        assert_eq!(admit(Some(" DEMO-1 "), None), Ok("DEMO-1".into()), "no userActivation API: the SDK's own check stands");
+        assert_eq!(admit(SUBMIT, Some("DEMO-1"), Some(true)), Ok("DEMO-1".into()));
+        assert_eq!(admit(SUBMIT, Some(" DEMO-1 "), None), Ok("DEMO-1".into()), "no userActivation API: the SDK's own check stands");
         let s = parse_submit(r#"{"input":"d1","value":{"type":"choice","option":"b"},"rationale":"holds are real"}"#).unwrap();
         assert_eq!(s, Submit { input: "d1".into(), value: choice("b"), rationale: Some("holds are real".into()) });
         assert_eq!(check_submit("DEMO-1", &s, &held()), Ok(choice("b")));
@@ -471,15 +553,15 @@ mod tests {
     /// stored body — before the params are read.
     #[test]
     fn a_submit_with_no_click_or_no_ticket_is_refused() {
-        let err = admit(Some("DEMO-1"), Some(false)).unwrap_err();
+        let err = admit(SUBMIT, Some("DEMO-1"), Some(false)).unwrap_err();
         assert!(err.starts_with("menger.input.submit: only inside a viewer's click"), "{err}");
         assert!(err.ends_with("(nothing sent)"), "{err}");
         for none in [None, Some(""), Some("  ")] {
-            let err = admit(none, Some(true)).unwrap_err();
+            let err = admit(SUBMIT, none, Some(true)).unwrap_err();
             assert!(err.contains("this frame shows no ticket's stored body"), "{none:?}: {err}");
         }
         // No gesture outranks no ticket: the first thing said is the click.
-        assert!(admit(None, Some(false)).unwrap_err().contains("only inside a viewer's click"));
+        assert!(admit(SUBMIT, None, Some(false)).unwrap_err().contains("only inside a viewer's click"));
     }
 
     /// A frame cannot name a ticket — the field is refused — so another
@@ -551,8 +633,89 @@ mod tests {
         assert_eq!(recorded(vec![TicketsEvent::NotFound { id: "DEMO-1".into() }]), Err("menger.input.submit: DEMO-1 is not a ticket".into()));
         assert!(recorded(vec![]).is_err());
         // `inputs { ticket }`: its inputs, or the server's refusal.
-        let held = inputs_of(held().into_iter().map(|input| TicketsEvent::Input { input }).collect()).unwrap();
+        let held = inputs_of(SUBMIT, held().into_iter().map(|input| TicketsEvent::Input { input }).collect()).unwrap();
         assert_eq!(held.len(), 6);
-        assert!(inputs_of(vec![TicketsEvent::NotFound { id: "NOPE-1".into() }]).unwrap_err().contains("NOPE-1 is not a ticket"));
+        assert!(inputs_of(SUBMIT, vec![TicketsEvent::NotFound { id: "NOPE-1".into() }]).unwrap_err().contains("NOPE-1 is not a ticket"));
+    }
+
+    // -- INPUT-9: the second write -----------------------------------------------
+
+    fn clearing(input: &str) -> Clear {
+        Clear { input: input.into() }
+    }
+
+    /// Accepted on a click for an open input of the frame's ticket — one
+    /// holding an answer, or none (the server then writes nothing) — with
+    /// the params the SDK sends.
+    #[test]
+    fn a_clear_inside_a_click_for_this_tickets_open_input_is_sent() {
+        assert_eq!(admit(CLEAR, Some("DEMO-1"), Some(true)), Ok("DEMO-1".into()));
+        assert_eq!(admit(CLEAR, Some("DEMO-1"), None), Ok("DEMO-1".into()), "no userActivation API: the SDK's own check stands");
+        assert_eq!(parse_clear(r#"{"input":"checks"}"#), Ok(clearing("checks")));
+        for id in ["d1", "checks", "notes"] {
+            assert_eq!(check_clear("DEMO-1", &clearing(id), &held()), Ok(()), "{id}");
+        }
+        assert_eq!(check_clear("DEMO-2", &clearing("other"), &held()), Ok(()), "DEMO-2's own frame clears it");
+    }
+
+    /// Refused without a click, in a frame that renders no ticket, for
+    /// another ticket's input (the frame cannot name one), and for a closed
+    /// or removed input — each naming `menger.input.clear`.
+    #[test]
+    fn a_clear_with_no_click_for_another_ticket_or_a_closed_input_is_refused() {
+        let err = admit(CLEAR, Some("DEMO-1"), Some(false)).unwrap_err();
+        assert_eq!(err, "menger.input.clear: only inside a viewer's click — the app saw no click or key just now (nothing sent)");
+        let err = admit(CLEAR, None, Some(true)).unwrap_err();
+        assert!(err.starts_with("menger.input.clear: this frame shows no ticket's stored body"), "{err}");
+        let err = parse_clear(r#"{"ticket":"DEMO-2","input":"other"}"#).unwrap_err();
+        assert!(err.starts_with("menger.input.clear: ") && err.contains("unknown field `ticket`"), "{err}");
+        assert_eq!(
+            check_clear("DEMO-1", &clearing("other"), &held()),
+            Err("menger.input.clear: DEMO-1 declares no input 'other' — its inputs are 'd1', 'checks', 'notes', 'frozen' \
+                 (nothing sent)"
+                .into())
+        );
+        assert_eq!(
+            check_clear("DEMO-1", &clearing("frozen"), &held()),
+            Err("menger.input.clear: DEMO-1's 'frozen' is closed: its answer is frozen until it is reopened (nothing sent)".into())
+        );
+        assert_eq!(
+            check_clear("DEMO-1", &clearing("gone"), &held()),
+            Err("menger.input.clear: DEMO-1's 'gone' was removed from its body (nothing sent)".into())
+        );
+        let err = check_clear("DEMO-3", &clearing("d1"), &held()).unwrap_err();
+        assert!(err.contains("DEMO-3 declares no input 'd1' — its body holds none"), "{err}");
+        // A value, a source, or anything else the SDK does not send is named.
+        for bad in [
+            r#"{"input":"d1","value":{"type":"choice","option":"a"}}"#,
+            r#"{"input":"d1","source":"api"}"#,
+            r#"{"input":5}"#,
+            "{}",
+            "null",
+            "",
+        ] {
+            let err = parse_clear(bad).unwrap_err();
+            assert!(err.starts_with("menger.input.clear: ") && err.ends_with("it takes (id) (nothing sent)"), "{bad}: {err}");
+        }
+    }
+
+    /// The server's reply: the input as the clear left it (or as it was,
+    /// holding no answer), or its own refusal.
+    #[test]
+    fn the_clears_reply_is_the_input_or_the_servers_refusal() {
+        let mut open = input("DEMO-1", "d1", InputKind::Choice, &["a", "b"], InputState::Open);
+        open.history = vec![
+            InputHistoryEntry { action: InputAction::Answered, value: Some(choice("a")), rationale: None, source: AnswerSource::App, at_unix: 1 },
+            InputHistoryEntry { action: InputAction::Cleared, value: None, rationale: None, source: AnswerSource::App, at_unix: 2 },
+        ];
+        assert_eq!(cleared(vec![TicketsEvent::InputChanged { input: open.clone() }]), Ok(open.clone()));
+        assert_eq!(cleared(vec![TicketsEvent::Input { input: open.clone() }]), Ok(open), "held no answer: nothing written");
+        assert_eq!(
+            cleared(vec![TicketsEvent::Error { message: "DEMO-1's 'd1' is closed".into() }]),
+            Err("menger.input.clear: DEMO-1's 'd1' is closed".into())
+        );
+        assert_eq!(cleared(vec![TicketsEvent::NotFound { id: "DEMO-1".into() }]), Err("menger.input.clear: DEMO-1 is not a ticket".into()));
+        assert_eq!(cleared(vec![]), Err("menger.input.clear: the server cleared nothing".into()));
+        assert!(inputs_of(CLEAR, vec![TicketsEvent::Error { message: "x".into() }]).unwrap_err().starts_with("menger.input.clear: x"));
     }
 }
