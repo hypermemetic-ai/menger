@@ -244,7 +244,11 @@
       }
     };
   }
+  async function* one(content) {
+    yield { type: "data", metadata: metadata("typed"), contentType: "typed", content };
+  }
   mengerTyped = {
-    tickets: (call) => createTicketsClient(bridgeRpc(call))
+    tickets: (call) => createTicketsClient(bridgeRpc(call)),
+    typed: (content) => collectOne(one(content))
   };
 })();

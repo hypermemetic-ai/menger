@@ -536,17 +536,20 @@ as one function with the element as `this`:
 | `this.menger` | `window.menger` itself |
 | `return () => …` | runs before the next render and when the element leaves the document; so does the end of every `menger.on` made while the script ran |
 
-`window.menger` (1.2, frozen): `version`; **`tickets`** (COMP-10) — the
+`window.menger` (1.3, frozen): `version`; **`tickets`** (COMP-10) — the
 `tickets` activation's typed client (below); **`call(method, params)`** → a
 Promise of the call's items (the stream's data events as the wire spells
 them, an in-band `error` included), answered by the app over its own
 connection — **read-only**: `get`, `list`, `find`, `waves`, `groups`,
-`extents`, `blockers`, `health`, `components`, with the activation's
-parameter names (`menger.call('waves', { epics: ['PLEXUS'] })`); any other
-method rejects with `read-only: …`, a parameter the method does not take
+`extents`, `blockers`, `health`, `components`, `inputs` (INPUT-4), with the
+activation's parameter names (`menger.call('waves', { epics: ['PLEXUS']
+})`, `menger.call('inputs', { ticket: 'INPUT-9' })`); any other method —
+`answer` included — rejects with `read-only: …`, which names the one write
+and how it is made (below), and a parameter the method does not take
 rejects naming it; **`on('change', cb)`** → `cb(event)` for every `watch`
-event the app hears, and returns the function that stops it;
-**`navigate(route)`** (COMP-9, below). Its types are
+event the app hears (`input_changed` too), and returns the function that
+stops it; **`navigate(route)`** (COMP-9, below); **`input`** (INPUT-4,
+frozen) — `ticket` and `submit`, the one write (below). Its types are
 `frontend/sdk/menger.d.ts`, published at `/app/sdk/menger.d.ts`.
 
 **The typed SDK** (COMP-10, COMP-1 decision 7). `menger.tickets` is the
@@ -567,8 +570,9 @@ parameters positionally (required first, in the generated order —
 `waves(epics, kinds?)`; the `.d.ts` says each), each an
 `AsyncGenerator<TicketsEvent>` (`schema()` a Promise) whose events' keys the
 generated runtime camelCases (`waitingOn`, `blockedBy`; `type` values stay
-as the wire spells them). A read is answered as `menger.call` is; every
-other method is present and throws a `PlexusError` "read-only: …" when
+as the wire spells them). A read is answered as `menger.call` is —
+`inputs(epic?, state?, ticket?)` among them (INPUT-4); every other method,
+`answer` included, is present and throws a `PlexusError` "read-only: …" when
 iterated — the host's allow-list is the only gate. `menger.call` stays, the
 untyped escape hatch.
 
@@ -767,6 +771,63 @@ asked again on every reconnect and every `lagged`. The header's `inputs`
 link wears the **open count** as a small badge from the first time the page
 is opened, live from then on, after the page is left too; before that it
 shows no count rather than add a startup request.
+
+**Answering from a frame** (INPUT-4, INPUT-1 decision 3). A frame is
+read-only but for one write: a viewer's click in a framed body records an
+answer to an input of **that body's own ticket**, through
+`tickets.answer` with source `app`, made by the host. It is the SDK's
+**`menger.input`** (1.3):
+
+```js
+// in a component script — `this.menger` is `window.menger`
+button.onclick = () =>
+  this.menger.input.submit('landing', { type: 'choice', option: 'archive' }, 'holds are real')
+    .then((answer) => show(answer), (e) => complain(e.message));
+// answer: { value, rationale, source: 'app', atUnix } — the generated `Answer`
+
+// this ticket's inputs, typed (`ticket` is null in a frame that renders no ticket's body)
+for await (const ev of this.menger.tickets.inputs(undefined, undefined, this.menger.input.ticket)) { … }
+```
+
+- **`menger.input.ticket`** — the ticket whose stored body the frame
+  renders: the ticket page's, a board note's doc. `null` in a frame that
+  renders none — the editor's preview of a draft, a component's help card —
+  where `submit` always rejects. The host stamps it on the `<iframe
+  data-ticket>` and in the init block; the frame cannot name another.
+- **`menger.input.submit(id, value, rationale?)`** → a Promise of the answer
+  recorded, in the typed client's spelling (the generated runtime's own
+  transform, `atUnix`); `value` is an `InputValue`, as `answer` takes it.
+  The SDK sends it (`menger:submit`) **only inside a viewer's gesture** —
+  the frame's transient user activation (`navigator.userActivation.isActive`,
+  the getter taken before the body's scripts run), or, in a browser without
+  that API, a trusted click or key the SDK saw in the last 5 s; otherwise it
+  rejects — `only inside a viewer's click … nothing was sent` — so a
+  component that calls it on load or from a timer learns so at once.
+- **The host checks, in order** (`frontend/src/bridge.rs`), and refuses with
+  the reason, sending nothing: **a gesture is under way** — the app window's
+  own transient activation, which a click or key in a frame grants its
+  ancestors too, read the moment the message arrives (a browser without the
+  API cannot say, and the SDK's check stands alone); **the frame renders a
+  ticket** (its `data-ticket`); the params are exactly `{ input, value,
+  rationale? }` (a `ticket` among them is refused); then, against that
+  ticket's inputs as the store holds them (`inputs { ticket }`), **the input
+  is declared in its body** — one only another ticket declares is not this
+  frame's to answer — **neither closed nor removed**, and **the value answers
+  it** (`inputs::check`, what the server runs: one of a choice's options,
+  any of a multi's, a reply that is not blank). Then it calls
+  `tickets.answer { ticket, input, value, rationale, source: "app" }` and
+  answers the frame `menger:submitted { id, answer }`, or `{ id, error }` —
+  the host's refusal or the server's own in-band one; the promise rejects
+  with it. The answer reaches every frame, the one that made it included, as
+  `input_changed` on `menger.on('change')`.
+- **Every other write stays refused**, through `call` and the typed client
+  alike — `answer` too: a frame answers only through `submit`.
+- **The limit.** The gesture rule is the browser's: the host can know that
+  the viewer is clicking or typing in the app now, not which control a
+  click meant. A script in the frame (the body's, or a component's) can
+  post a `menger:submit` of its own while a gesture is under way — for an
+  input its ticket declares, with a value that answers it, recorded as
+  `app`. Who answers (identity, permissions) waits on CONTEXT.
 
 | method | yields |
 |---|---|
@@ -1033,7 +1094,9 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        (COMP-10, scripts/sdk-codegen.sh),
                        src/registry.rs the app's copy of the component
                        registry, src/bridge.rs menger.call's read-only host
-                       side (COMP-5), src/components.rs #/components (COMP-6)
+                       side (COMP-5) and the one write's checks,
+                       menger.input.submit (INPUT-4), src/components.rs
+                       #/components (COMP-6)
                        and the help pages, src/card.rs a definition's docs
                        card, src/inspect.rs the tooltip's checks and
                        menger.navigate's routes (COMP-9), src/inputs.rs

@@ -1167,6 +1167,9 @@ fn ticket_view(
             Some(raw) => Some(!raw.trim().is_empty()),
         })
     });
+    // INPUT-4: the body is this ticket's stored one — a click in its frame
+    // may answer this ticket's inputs, and only them.
+    let body_ticket = ticket.with_untracked(|t| t.id.clone());
     let body = move || match body_state.get() {
         None => view! { <p class="loading">"loading body…"</p> }.into_any(),
         Some(false) => view! { <p class="none">"(no body)"</p> }.into_any(),
@@ -1178,7 +1181,7 @@ fn ticket_view(
         // its placement moves; a body with none renders as it always did.
         // COMP-4: a body that holds HTML renders in a sandboxed frame.
         Some(true) => view! {
-            <notes::BodyView body=Signal::derive(move || body_raw.get().unwrap_or_default()) refs=Some(refs) />
+            <notes::BodyView body=Signal::derive(move || body_raw.get().unwrap_or_default()) refs=Some(refs) ticket=Some(body_ticket.clone()) />
         }
         .into_any(),
     };

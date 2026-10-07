@@ -20,13 +20,19 @@
  * gate: a read is answered, a write (`setStatus`, `amend`, …) rejects with
  * "read-only: …", and nothing here knows which is which.
  *
+ * INPUT-4: and it hands the shell `typed` — a value the host sent in the
+ * wire's spelling, in the typed client's (`at_unix` → `atUnix`), by the
+ * generated runtime's own transform (`collectOne`), so what
+ * `menger.input.submit` resolves to is the generated `Answer`, spelled as
+ * `menger.tickets.inputs()` spells an input's answer.
+ *
  * scripts/sdk-codegen.sh bundles this file (bun, IIFE) with the generated
  * client into the region between the GENERATED markers of menger-sdk.js. The
  * bundle assigns the shell's own `mengerTyped` variable — it defines no
  * global: a body's scripts cannot reach it, only the frozen `window.menger`.
  */
 
-import type { RpcClient } from './generated/rpc';
+import { collectOne, type RpcClient } from './generated/rpc';
 import type { PlexusStreamItem, StreamMetadata } from './generated/types';
 import { createTicketsClient, type TicketsClient } from './generated/tickets/client';
 
@@ -38,6 +44,9 @@ export type BridgeCall = (method: string, params: unknown) => Promise<unknown[]>
 export interface Typed {
   /** The typed `tickets` client over `call`. */
   tickets(call: BridgeCall): TicketsClient;
+  /** INPUT-4: `content` (the wire's spelling) in the typed client's — the
+   *  generated runtime's key transform, as every typed event gets it. */
+  typed<T>(content: unknown): Promise<T>;
 }
 
 /** The activation the generated client addresses (`tickets.waves`, …); the
@@ -69,9 +78,15 @@ function bridgeRpc(call: BridgeCall): RpcClient {
   };
 }
 
+/** One data item, as the generated runtime reads a stream. */
+async function* one(content: unknown): AsyncGenerator<PlexusStreamItem> {
+  yield { type: 'data', metadata: metadata('typed'), contentType: 'typed', content };
+}
+
 /** The shell's variable (menger-sdk.js declares it just above the region). */
 declare let mengerTyped: Typed | null;
 
 mengerTyped = {
   tickets: (call: BridgeCall) => createTicketsClient(bridgeRpc(call)),
+  typed: <T>(content: unknown): Promise<T> => collectOne<T>(one(content)),
 };
