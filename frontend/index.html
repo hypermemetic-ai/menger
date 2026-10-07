@@ -175,8 +175,10 @@
     margin: 0; background: var(--bg); color: var(--ink);
     font: 14px/1.5 var(--mono);
   }
+  /* MFE-21: the header wraps rather than overflow — a fourth link, and an
+     overridden backend's URL in the status, outgrow a narrow column. */
   header {
-    display: flex; align-items: baseline; gap: 1rem;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem 1rem;
     padding: .75rem 1.25rem; border-bottom: 1px solid var(--line);
   }
   header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
@@ -192,6 +194,66 @@
     border-radius: 4px; cursor: pointer; white-space: nowrap;
   }
   header .theme:hover { color: var(--accent); border-color: var(--accent); }
+  /* MFE-21: the app talks to a backend other than this page's server (an
+     override from #/settings) — the status names it, highlighted, on every
+     page; its color still says the state. */
+  #conn.override {
+    background: var(--sel); border: 1px solid var(--accent); border-radius: 4px;
+    padding: 0 .45rem; font-weight: 600; overflow-wrap: anywhere;
+  }
+  /* MFE-21: #/settings — a group per concern (Backend first) in the panel
+     idiom: a label column and a control column, one column when the
+     content column is narrow (it is the query container). */
+  #settings { max-width: 52rem; }
+  #settings h2 { font-size: 1rem; margin: 0 0 .75rem; }
+  #settings fieldset.group {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    margin: 0 0 1rem; padding: .5rem 1rem 1rem; min-width: 0;
+  }
+  #settings legend {
+    padding: 0 .4rem; font-family: var(--sans); font-size: 11px; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  }
+  #settings p.now { margin: .25rem 0 .9rem; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
+  #settings p.now code { color: var(--ink); }
+  #settings .field { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: .4rem 1rem; align-items: baseline; }
+  #settings label { font-size: .85rem; }
+  #settings .control { min-width: 0; }
+  #settings .line { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+  #settings input#ws-url {
+    flex: 1 1 16rem; min-width: 0; font: inherit; padding: .25rem .5rem;
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; outline: none;
+  }
+  #settings input#ws-url:focus { border-color: var(--accent); }
+  #settings input#ws-url[aria-invalid="true"] { border-color: var(--err-fg); }
+  #settings button {
+    font: inherit; font-size: .8rem; padding: .1rem .65rem; cursor: pointer;
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 4px;
+  }
+  #settings button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+  #settings button:disabled { color: var(--muted); cursor: default; opacity: .65; }
+  #settings button.primary:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  #settings button.link { background: none; border: 0; padding: 0; color: var(--accent); }
+  #settings button.link:disabled { color: var(--muted); }
+  #settings button.link:hover:not(:disabled) { text-decoration: underline; }
+  #settings p.status { margin: .35rem 0 .6rem; font-size: .8rem; min-height: 1.5em; overflow-wrap: anywhere; }
+  #settings .hint, #settings .probe.testing { color: var(--muted); }
+  #settings .probe.ok { color: var(--live); }
+  #settings .probe.failed, #settings .invalid { color: var(--err-fg); }
+  #settings p.invalid { margin: .5rem 0 0; font-size: .8rem; }
+  #settings .recent {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .6rem;
+    margin-top: .9rem; padding-top: .6rem; border-top: 1px solid var(--line); font-size: .8rem;
+  }
+  #settings .recent .lbl { color: var(--muted); }
+  #settings .recent ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .25rem .9rem; }
+  #settings .recent button.fill {
+    background: none; border: 0; padding: 0; font-size: .8rem; color: var(--accent); overflow-wrap: anywhere;
+  }
+  #settings .recent button.fill:hover { text-decoration: underline; }
+  @container (max-width: 36rem) {
+    #settings .field { grid-template-columns: minmax(0, 1fr); }
+  }
   main { padding: 1rem 1.25rem; max-width: 72rem; margin: 0 auto; }
   #health { color: var(--muted); font-size: .8rem; margin-bottom: 1rem; }
   #error {
