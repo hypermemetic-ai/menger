@@ -25,7 +25,7 @@ releases — never from a checkout. `deploy/README.md` defines the pipeline
 (DEPLOY-1); in short:
 
 ```sh
-deploy/pipeline build          # master's tip → gate (cargo test --workspace + frontend tests) → release
+deploy/pipeline build          # main's tip → gate (cargo test --workspace + frontend tests) → release
 deploy/pipeline deploy test    # the release → test, on a fresh copy of prod's data; smoke checks
 deploy/pipeline sync test      # test's data refreshed from prod, same release (DEPLOY-4)
 deploy/pipeline promote        # the release test passed → prod; smoke; automatic rollback on failure
@@ -35,7 +35,7 @@ deploy/pipeline status         # what each env runs and whether it is healthy
 - **Production changes only through `promote`**, and only to a release that
   passed the test environment. A `cargo build` or `trunk build` in a checkout
   changes nothing that is serving.
-- Merging to master is not deploying: a ticket is `Complete` at the merge,
+- Merging to main is not deploying: a ticket is `Complete` at the merge,
   and reaches users when its release is promoted — say which release in the
   ticket when it matters.
 - Check work on the test environment (http://127.0.0.1:4451/) or a throwaway
@@ -208,7 +208,10 @@ nested parameter as one string (SYNAPSE-9).
   event enums use `#[serde(tag = "type", rename_all = "snake_case")]` with an
   in-band `Error { message }` variant.
 - menger is DB-first: the database is the system of record — no plans/
-  directory integration, no file-based ticket store. The status
+  directory integration, no file-based ticket store. The repository holds
+  the source and nothing of the store (owner, DEPLOY-5): no tickets, no
+  ticket artifacts, no snapshot of the live tracker as a fixture — test
+  data is synthetic, and `/plans/` is ignored. The status
   vocabulary matches `skills/skills/ticketing/SKILL.md` (`Pending`, …);
   the kind vocabulary is the owner's closed five (AGS-13): `scope`,
   `execution`, `build`, `gap`, `spike` — and a sixth, `doc` (owner,
@@ -232,9 +235,9 @@ nested parameter as one string (SYNAPSE-9).
 - A ticket's outputs are tickets (owner, 2026-09-06): a report, spike
   result, checkpoint, or evaluation memo is filed as a CHILD ticket of
   the ticket that generated it (`parent:` in frontmatter; typed once
-  AGS-19 lands), not as a file under `plans/*/artifacts/`. Files there
-  are history and attachments (raw data, screenshots) only.
-- Planning: `plans/MNG/` per the ticketing skill. Tickets are `Pending`
+  AGS-19 lands), not as a file in the repository.
+- Planning: in the tracker (`synapse -P 4455 menger tickets …`) per the
+  ticketing skill. Tickets are `Pending`
   until the human promotes them to `Ready`; implementation does not begin
   on `Pending` tickets.
 - Ticketing follows **ought** (`../ought`, the house methodology — its

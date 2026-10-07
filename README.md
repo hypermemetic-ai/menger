@@ -1135,13 +1135,12 @@ diagrams/              the `diagrams` service (COMPILE-4): its own binary and hu
                        mermaid-block rule (src/blocks.rs: fences, and ART-5's
                        <pre class="mermaid"> in a body's HTML); node/ is the
                        Node program and its lockfile
-plans/MNG/             the backend epic; plans/MFE/ the frontend epic
 ```
 
 ## Status
 
-Phase one of the backend epic is complete — see
-`plans/MNG/artifacts/CHECKPOINT.md` for the verified state map. Tickets
+Phase one of the backend epic (MNG) is complete; its checkpoint, the
+verified state map, is a ticket in the tracker. Tickets
 live in SQLite behind the service-wide cache (MNG-2); the DAG answers
 ready-set/blockers queries with cycle rejection at create (MNG-4); REST +
 SSE serve on :4457 via plexus-transport 0.2.3 (MNG-8 — consumed as a
@@ -1150,8 +1149,8 @@ git-tag patch until it's published to crates.io). The Leptos app at
 status control, pushed over SSE — read-and-status only, no creation
 form by design (tickets are created by agents/CLI/API). Parked as Idea:
 MNG-5/6 (schema-derivation and framework theses). Next: the default
-page swap and the ready-set view (`plans/MFE/`), and the HelixDB
-graph-store epic (`plans/HLX/`, spike-gated).
+page swap and the ready-set view (MFE), and the HelixDB graph-store epic
+(HLX, spike-gated).
 
 ## History
 

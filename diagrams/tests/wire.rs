@@ -21,18 +21,22 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use support::{connect, exits_within, kill9, shared_service, start_server};
 
-/// The 53 diagrams on the live tracker on 2026-10-01 (COMPILE-1/3), each
-/// with the verdict a real browser gave it.
-const LIVE: &str = include_str!("fixtures/live-diagrams-2026-10-01.json");
+/// Twenty synthetic diagrams in the shapes the house's tickets use (graph and
+/// flowchart with classDefs, subgraphs, html and edge labels, a gate, a
+/// sequence diagram) and two broken ones, each with the verdict a real
+/// browser gave it — the vendored mermaid in Chromium, recorded 2026-10-07
+/// (DEPLOY-5). They replace COMPILE-3's snapshot of the live tracker's
+/// diagrams: real tickets are the store, and the store stays out of the source.
+const SAMPLE: &str = include_str!("fixtures/sample-diagrams.json");
 /// One valid diagram of each type we could write one for, and the type
 /// mermaid names it.
 const EVERY_TYPE: &str = include_str!("fixtures/every-type.json");
 
 /// The fixture records each diagram's verdict, not its line. The two the
-/// browser rejected, it rejected with "Parse error on line 2" — COMPILE-3:
-/// the same message and line under jsdom — and line 2 is where each is
-/// broken in its source: these are those lines, recorded here.
-const BROWSER_LINES: [(&str, u32); 2] = [("DEMO-3#2", 2), ("SYNAPSE-2#1 (as first filed)", 2)];
+/// browser rejected, it rejected with "Parse error on line 3" and "… line 4"
+/// (mermaid reports the line after the break, where its input runs out) —
+/// COMPILE-3: the same message and line under jsdom — recorded here.
+const BROWSER_LINES: [(&str, u32); 2] = [("S-19", 3), ("S-20", 4)];
 
 #[derive(Deserialize)]
 struct Live {
@@ -92,13 +96,13 @@ fn line_in_message(message: &str) -> Option<u32> {
 // -- criterion 1: the browser's verdicts -------------------------------------------
 
 #[tokio::test]
-async fn the_live_diagrams_get_the_browsers_verdicts() {
+async fn the_sample_diagrams_get_the_browsers_verdicts() {
     needs_node!();
     let (_driver, transport) = shared().await;
     let client = MermaidClient::new(&transport);
 
-    let live: Vec<Live> = serde_json::from_str(LIVE).unwrap();
-    assert_eq!(live.len(), 53);
+    let live: Vec<Live> = serde_json::from_str(SAMPLE).unwrap();
+    assert_eq!(live.len(), 20);
     let (mut accepted, mut rejected) = (0, 0);
     for d in &live {
         match (d.expect.as_str(), parse(&client, &d.src).await) {
@@ -121,12 +125,12 @@ async fn the_live_diagrams_get_the_browsers_verdicts() {
             (expect, got) => panic!("{}: the browser said {expect}, the service {got:?}", d.id),
         }
     }
-    assert_eq!((accepted, rejected), (51, 2));
+    assert_eq!((accepted, rejected), (18, 2));
 }
 
 /// jsdom is not a browser: a valid `pie` or `radar` was reported broken
 /// until the program lent the window Node's `structuredClone`. None of the
-/// 53 live diagrams is one, so this is the guard — one diagram of every
+/// 20 sample diagrams is one, so this is the guard — one diagram of every
 /// type we could write, each accepted as the type it is.
 #[tokio::test]
 async fn every_type_is_accepted_as_itself() {
@@ -581,7 +585,7 @@ async fn fifty_at_once_then_warm_round_trips() {
     needs_node!();
     let driver = Driver::new(Config::default());
     let port = start_server(driver.clone()).await;
-    let live: Vec<Live> = serde_json::from_str(LIVE).unwrap();
+    let live: Vec<Live> = serde_json::from_str(SAMPLE).unwrap();
     let chosen: Vec<&Live> = live.iter().cycle().skip(5).take(50).collect();
     assert!(chosen.iter().any(|d| d.expect == "error"));
 

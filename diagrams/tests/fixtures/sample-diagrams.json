@@ -1,0 +1,102 @@
+[
+ {
+  "id": "S-1",
+  "src": "graph LR\n  A[\"a request\"] --> B[\"a handler\"]\n  B --> C[\"a reply\"]",
+  "expect": "ok"
+ },
+ {
+  "id": "S-2",
+  "src": "graph TD\n  A[\"intake\"]:::new --> B[\"review\"]\n  B --> C[\"done\"]:::done\n  classDef new fill:#cfe2f3,stroke:#0066cc,color:#111;\n  classDef done fill:#d9ead3,stroke:#38761d,color:#111;",
+  "expect": "ok"
+ },
+ {
+  "id": "S-3",
+  "src": "graph LR\n  subgraph S[\"a service\"]\n    A[\"reader\"] --> B[\"cache\"]\n  end\n  B --> C[\"store\"]",
+  "expect": "ok"
+ },
+ {
+  "id": "S-4",
+  "src": "graph LR\n  A[\"a first line<br/>and a second\"] --> B[\"one<br/>two<br/>three\"]",
+  "expect": "ok"
+ },
+ {
+  "id": "S-5",
+  "src": "graph LR\n  A -->|\"on write\"| B[\"index\"]\n  B -->|\"on read\"| C[\"page\"]",
+  "expect": "ok"
+ },
+ {
+  "id": "S-6",
+  "src": "graph TD\n  A[\"kept\"] -.->|\"measured by\"| B[\"spike\"]\n  A --> C[\"board\"]",
+  "expect": "ok"
+ },
+ {
+  "id": "S-7",
+  "src": "graph LR\n  A[\"old\"]:::gone --> B[\"new\"]:::new\n  classDef gone fill:#f4cccc,stroke:#cc0000,color:#111;\n  classDef new fill:#d9ead3,stroke:#38761d,color:#111;",
+  "expect": "ok"
+ },
+ {
+  "id": "S-8",
+  "src": "graph TD\n  A[\"build\"] --> G{{\"completion gate\"}}\n  B[\"distill\"] --> G",
+  "expect": "ok"
+ },
+ {
+  "id": "S-9",
+  "src": "graph LR\n  Q{\"one or many?\"} -->|\"one\"| O[\"a single reply\"]\n  Q -->|\"many\"| M[\"a stream\"]",
+  "expect": "ok"
+ },
+ {
+  "id": "S-10",
+  "src": "graph TD\n  subgraph OUT[\"outer\"]\n    direction LR\n    subgraph IN[\"inner\"]\n      A --> B\n    end\n    B --> C\n  end",
+  "expect": "ok"
+ },
+ {
+  "id": "S-11",
+  "src": "flowchart LR\n  A[start] --> B[middle] --> C[end]",
+  "expect": "ok"
+ },
+ {
+  "id": "S-12",
+  "src": "flowchart TD\n  A[queued]:::q --> B[running]\n  B --> C[finished]\n  classDef q fill:#fff2cc,stroke:#bf9000;",
+  "expect": "ok"
+ },
+ {
+  "id": "S-13",
+  "src": "sequenceDiagram\n  participant C as client\n  participant S as server\n  C->>S: call\n  S-->>C: items\n  S-->>C: done",
+  "expect": "ok"
+ },
+ {
+  "id": "S-14",
+  "src": "graph LR\n  A[\"a write \u00b7 any field\"] --> B[\"compiled \u2014 against its type\"]\n  B --> C[\"diagnostics \u2192 stored\"]",
+  "expect": "ok"
+ },
+ {
+  "id": "S-15",
+  "src": "graph LR\n  A --> B\n  B --> C\n  linkStyle 0 stroke:#0066cc,stroke-width:2px",
+  "expect": "ok"
+ },
+ {
+  "id": "S-16",
+  "src": "graph TD\n  %% a comment line\n  A[\"one\"] --> B[\"two\"]\n  %% another\n  B --> C[\"three\"]",
+  "expect": "ok"
+ },
+ {
+  "id": "S-17",
+  "src": "graph LR\n  A1 --> A2 --> A3 --> A4\n  A2 --> B1 --> B2\n  A3 --> C1\n  B2 --> D1\n  C1 --> D1",
+  "expect": "ok"
+ },
+ {
+  "id": "S-18",
+  "src": "graph TD\n  R[\"root\"] --> X[\"x\"]\n  R --> Y[\"y\"]\n  X & Y --> Z[\"joined\"]",
+  "expect": "ok"
+ },
+ {
+  "id": "S-19",
+  "src": "graph TD\n  A --> B\n  B -->> C\n  C --> D",
+  "expect": "error"
+ },
+ {
+  "id": "S-20",
+  "src": "flowchart LR\n  start([Start]) --> check{ok?}\n  check -->|yes| done\n  check -->|no| fix[[fix]\n  fix --> check",
+  "expect": "error"
+ }
+]
