@@ -189,7 +189,7 @@ pub(crate) fn ComponentsPage(only: Option<String>) -> impl IntoView {
     let card_view = move || {
         card.get().map(|_| {
             let html = Signal::derive(move || card.get().unwrap_or_default());
-            view! { <div class="help-card"><Frame html /></div> }
+            view! { <div class="help-card"><Frame html ticket=None /></div> }
         })
     };
     view! {

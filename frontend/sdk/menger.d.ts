@@ -1,6 +1,7 @@
 /**
- * menger SDK 1.2 — the types of `window.menger` and of a component script's
- * `this`, inside every framed body (COMP-4, COMP-5, COMP-10, COMP-9).
+ * menger SDK 1.3 — the types of `window.menger` and of a component script's
+ * `this`, inside every framed body (COMP-4, COMP-5, COMP-10, COMP-9,
+ * INPUT-4).
  *
  * Published by the app at /app/sdk/menger.d.ts, beside the SDK itself
  * (/app/sdk/menger-sdk.js) and the generated client's declarations
@@ -11,6 +12,7 @@
  */
 
 import type { TicketsClient } from './generated/tickets/client';
+import type { Answer, InputValue } from './generated/tickets/types';
 
 export type { TicketsClient } from './generated/tickets/client';
 export type * from './generated/tickets/types';
@@ -28,9 +30,50 @@ export interface WireEvent {
   [field: string]: unknown;
 }
 
+/**
+ * INPUT-4: `menger.input` — frozen. A frame answers its own ticket's inputs
+ * (`<m-decision id>`, `<m-input id kind>`) and nothing else; this is the one
+ * write it can make.
+ */
+export interface MengerInput {
+  /**
+   * The ticket whose stored body this frame renders — what `submit`
+   * answers against, and what to read this ticket's inputs with:
+   * `menger.tickets.inputs(undefined, undefined, menger.input.ticket)`.
+   * `null` in a frame that renders no ticket's stored body (an editor's
+   * preview, a component's help card), where `submit` always rejects.
+   */
+  readonly ticket: string | null;
+
+  /**
+   * Answer the input `id` of this frame's ticket — `tickets.answer`, made
+   * by the host with source `app` — and resolve to the answer recorded
+   * (the typed client's spelling: `atUnix`). The change also reaches every
+   * frame as an `input_changed` on `on('change')`.
+   *
+   * Sent only inside a viewer's gesture — call it from a click (or key)
+   * handler: the frame's transient user activation
+   * (`navigator.userActivation.isActive`), or, in a browser without it, a
+   * trusted click or key in the last 5 s. Otherwise it rejects and sends
+   * nothing. The host then rejects it, with the reason and nothing
+   * recorded, unless its own window is activated too, the input is declared
+   * in the ticket's body and neither closed nor removed, and `value`
+   * answers it — `{ type: 'choice', option }` one of its options,
+   * `{ type: 'multi', options }` any of them, `{ type: 'text', text }` not
+   * blank.
+   *
+   * ```js
+   * button.onclick = () =>
+   *   menger.input.submit('landing', { type: 'choice', option: 'archive' }, 'holds are real')
+   *     .then((answer) => show(answer.value), (e) => complain(e.message));
+   * ```
+   */
+  submit(id: string, value: InputValue, rationale?: string | null): Promise<Answer>;
+}
+
 /** `window.menger` — frozen; also `this.menger` in a component script. */
 export interface Menger {
-  /** "1.2.0". */
+  /** "1.3.0". */
   readonly version: string;
 
   /**
@@ -47,23 +90,27 @@ export interface Menger {
    *
    * Answered by the app over its own connection, read-only: `get`, `list`,
    * `find`, `waves`, `groups`, `extents`, `blockers`, `health`,
-   * `components`. Every other method is present and throws a
-   * `PlexusError` whose message starts "read-only" when iterated.
+   * `components`, `inputs` (INPUT-4 — `inputs(epic?, state?, ticket?)`,
+   * one `{ type: 'input', input }` per input, its answer and history
+   * included). Every other method is present and throws a `PlexusError`
+   * whose message starts "read-only" when iterated — `answer` too: a frame
+   * answers through `input.submit`.
    */
   readonly tickets: TicketsClient;
 
   /**
    * The untyped escape hatch: `method` by its bare wire name (`waves`) with
    * the activation's parameter names (`{ epics: ['PLEXUS'] }`) → the call's
-   * items, as the wire spells them. Read-only, as `tickets`; a method
-   * outside the reads rejects with "read-only: …", a parameter the method
-   * does not take rejects naming it.
+   * items, as the wire spells them. Read-only, as `tickets` — `inputs`
+   * with `{ ticket?, epic?, state? }`; a method outside the reads rejects
+   * with "read-only: …" (naming `input.submit` as the one write), a
+   * parameter the method does not take rejects naming it.
    */
   call(method: string, params?: Record<string, unknown> | null): Promise<WireEvent[]>;
 
   /**
    * Every `watch` event the app hears (`amended`, `status_changed`,
-   * `component_changed`, …), in the wire's spelling. Returns the function
+   * `component_changed`, `input_changed`, …), in the wire's spelling. Returns the function
    * that stops it; one made while a component script runs also stops
    * before that instance's next render.
    */
@@ -77,6 +124,9 @@ export interface Menger {
    * (A click on a link to `#/…` in a body does the same.)
    */
   navigate(route: string): void;
+
+  /** INPUT-4: the one write — this frame's ticket's inputs, answered. */
+  readonly input: MengerInput;
 }
 
 /**

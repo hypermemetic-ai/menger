@@ -64,6 +64,18 @@
 //! route names a card (`#/ticket/<OWNER>?component=m-x`): the frame holding
 //! that card flashes it and says where it is, and the host scrolls there.
 //!
+//! INPUT-4: **the one write.** A frame that renders a ticket's stored body
+//! knows which (`ticket` in its init block — `menger.input.ticket`), and
+//! the host stamps it on the `<iframe data-ticket>`, where nothing in the
+//! frame can change it. `menger.input.submit` sends `menger:submit { id,
+//! params }` — only inside a viewer's gesture, by the SDK's own check — and
+//! the host reads its own window's transient user activation at once (a
+//! click or a key in a frame activates its ancestors too), then answers
+//! `menger:submitted { id, answer }` or `{ id, error }` after the bridge's
+//! checks and `tickets.answer` with source `app` (src/bridge.rs). Every
+//! `watch` event, `input_changed` among them, reaches the frames as
+//! `menger:change` as ever.
+//!
 //! What decides — the srcdoc, the theme block, the init block, which
 //! messages count — is pure and pinned by native tests; the rest is DOM.
 
@@ -83,8 +95,10 @@ use crate::{board, bridge, dom, inspect, mermaid, notes, registry, session};
 /// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
 /// `version`, `call`, `on`, and the components defined; COMP-10's 1.1 adds
 /// `tickets`, the generated typed client over the same bridge; COMP-9's 1.2
-/// adds `navigate`, and the badges, tooltips and docs cards.
-pub(crate) const SDK_VERSION: &str = "1.2.0";
+/// adds `navigate`, and the badges, tooltips and docs cards; INPUT-4's 1.3
+/// adds `input` — `submit`, the one write, and `ticket` — and `inputs`
+/// among the reads.
+pub(crate) const SDK_VERSION: &str = "1.3.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -163,6 +177,9 @@ pub(crate) struct Shell<'a> {
     /// COMP-5: the component registry as the app holds it now — `None`
     /// before the app has fetched it (the frame is handed it once it has).
     pub(crate) components: Option<&'a [Component]>,
+    /// INPUT-4: the ticket whose stored body the frame renders — `None` for
+    /// one that renders none (an editor's preview, a help card).
+    pub(crate) ticket: Option<&'a str>,
 }
 
 /// A token name the frame will take: `--` and lowercase ASCII words.
@@ -208,6 +225,8 @@ pub(crate) fn init_json(shell: &Shell) -> String {
         // COMP-5: the SDK defines each before the body is parsed, so a
         // component's first paint is its own.
         "components": shell.components,
+        // INPUT-4: `menger.input.ticket` — what `submit` answers against.
+        "ticket": shell.ticket,
     });
     init.to_string().replace('<', "\\u003c")
 }
@@ -254,6 +273,9 @@ pub(crate) enum Msg {
     Inspect,
     /// COMP-9: the frame holding the card the route names says where it is.
     Revealed,
+    /// INPUT-4: `menger.input.submit` — its id and params are read by the
+    /// caller, with the app's activation read at once.
+    Submit,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -264,6 +286,7 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:navigate" => Some(Msg::Navigate),
         "menger:inspect" => Some(Msg::Inspect),
         "menger:revealed" => Some(Msg::Revealed),
+        "menger:submit" => Some(Msg::Submit),
         "menger:size" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Size { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32, settled: settled.unwrap_or(false) })
@@ -436,6 +459,50 @@ fn answer_call(frame: web_sys::HtmlIFrameElement, channel: String, id: JsValue, 
     });
 }
 
+/// INPUT-4: whether a viewer's gesture is under way — the app window's
+/// transient user activation, which a click or a key in a frame grants its
+/// ancestors too (HTML's activation notification), so a message posted
+/// from a click handler finds it on. `None`: this browser has no
+/// `navigator.userActivation` and cannot say. Read through `Reflect`, as
+/// the clipboard is: web-sys gates the binding.
+fn host_activated() -> Option<bool> {
+    let navigator = dom::window().navigator();
+    let ua = Reflect::get(&navigator, &JsValue::from_str("userActivation")).ok().filter(JsValue::is_object)?;
+    Reflect::get(&ua, &JsValue::from_str("isActive")).ok()?.as_bool()
+}
+
+/// INPUT-4: answer a frame's `menger.input.submit` — `menger:submitted {
+/// id, answer }` (the recorded answer, the wire's spelling) or `{ id, error
+/// }`: refused unless a gesture is under way (`activated`) and the frame
+/// renders a ticket (`ticket`, from its `data-ticket`), then the bridge's
+/// checks against that ticket's inputs, then `tickets.answer` with source
+/// `app`. A frame replaced meanwhile is not answered.
+fn answer_submit(
+    frame: web_sys::HtmlIFrameElement,
+    channel: String,
+    id: JsValue,
+    ticket: Option<String>,
+    activated: Option<bool>,
+    params: Result<String, String>,
+) {
+    spawn_local(async move {
+        let reply = async {
+            let ticket = bridge::admit(ticket.as_deref(), activated)?;
+            let submit = bridge::parse_submit(&params?)?;
+            let client = session::client().ok_or_else(|| format!("{}: not connected (nothing sent)", bridge::SUBMIT))?;
+            bridge::submit(&client, ticket, submit).await
+        }
+        .await;
+        let msg = message("menger:submitted", &channel);
+        set(&msg, "id", &id);
+        match reply {
+            Ok(answer) => set(&msg, "answer", &to_js(&answer)),
+            Err(error) => set(&msg, "error", &error.into()),
+        }
+        post(&frame, &msg.into());
+    });
+}
+
 /// Every frame in the document.
 fn frames() -> Vec<web_sys::HtmlIFrameElement> {
     let Some(list) = dom::window()
@@ -523,6 +590,19 @@ fn on_message(ev: web_sys::MessageEvent) {
                     .ok_or_else(|| format!("{method}: params are not plain data")),
             };
             answer_call(frame, channel, id, method, params);
+        }
+        Some(Msg::Submit) => {
+            // Now, while the gesture that sent it is still the app's too.
+            let activated = host_activated();
+            let id = field("id").filter(|v| v.as_f64().is_some()).unwrap_or(JsValue::NULL);
+            let params = field("params")
+                .filter(|v| !v.is_undefined() && !v.is_null())
+                .and_then(|v| js_sys::JSON::stringify(&v).ok())
+                .and_then(|s| s.as_string())
+                .ok_or_else(|| format!("{}: its params are missing or not plain data (nothing sent)", bridge::SUBMIT));
+            // The host's own stamp — nothing in the frame can move it.
+            let ticket = frame.get_attribute("data-ticket");
+            answer_submit(frame, channel, id, ticket, activated, params);
         }
         Some(Msg::Size { height, settled }) => {
             let _ = web_sys::HtmlElement::style(&frame).set_property("height", &format!("{height}px"));
@@ -654,8 +734,9 @@ fn install_listener() {
 }
 
 /// Load `body_html` into a new frame in `container`, beside the one on
-/// screen (if any), invisible until [`promote`]d.
-fn load(container: &web_sys::Element, body_html: &str) {
+/// screen (if any), invisible until [`promote`]d — INPUT-4: stamped with
+/// `ticket`, the ticket whose stored body it is (none: no input to answer).
+fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>) {
     let w = dom::window();
     let Some(doc) = w.document() else { return };
     let channel = next_channel();
@@ -664,7 +745,7 @@ fn load(container: &web_sys::Element, body_html: &str) {
     let components = registry::snapshot();
     let html = srcdoc(
         body_html,
-        &Shell { channel: &channel, scheme, tokens: &tokens, mermaid_url: &mermaid_url, components: components.as_deref() },
+        &Shell { channel: &channel, scheme, tokens: &tokens, mermaid_url: &mermaid_url, components: components.as_deref(), ticket },
     );
     // A re-render still loading is superseded by this one.
     if let Ok(list) = container.query_selector_all(":scope > iframe[data-state=\"pending\"]") {
@@ -681,6 +762,9 @@ fn load(container: &web_sys::Element, body_html: &str) {
     let _ = el.set_attribute("data-channel", &channel);
     let _ = el.set_attribute("data-state", "pending");
     let _ = el.set_attribute("data-sdk", SDK_VERSION);
+    if let Some(ticket) = ticket {
+        let _ = el.set_attribute("data-ticket", ticket);
+    }
     let _ = el.set_attribute("title", "ticket body");
     let Ok(frame) = el.dyn_into::<web_sys::HtmlIFrameElement>() else { return };
     frame.set_srcdoc(&html);
@@ -695,9 +779,12 @@ fn load(container: &web_sys::Element, body_html: &str) {
 
 /// COMP-4: a framed body — `html` (a framed body's markup) in a sandboxed
 /// frame with the SDK shell, re-rendered without a flash whenever it
-/// changes. The frontmatter is the caller's: it stays outside.
+/// changes. The frontmatter is the caller's: it stays outside. INPUT-4:
+/// `ticket` is the ticket whose stored body `html` is — the one a click in
+/// the frame may answer an input of; `None` where the markup is no
+/// ticket's stored body (an editor's draft, a help card).
 #[component]
-pub(crate) fn Frame(#[prop(into)] html: Signal<String>) -> impl IntoView {
+pub(crate) fn Frame(#[prop(into)] html: Signal<String>, ticket: Option<String>) -> impl IntoView {
     install_listener();
     // COMP-5: a frame defines the components — the app keeps the registry.
     registry::want();
@@ -711,13 +798,14 @@ pub(crate) fn Frame(#[prop(into)] html: Signal<String>) -> impl IntoView {
         let n = asked.with_value(|n| n.wrapping_add(1));
         asked.set_value(n);
         if el.query_selector(":scope > iframe").ok().flatten().is_none() {
-            load(&el, &body);
+            load(&el, &body, ticket.as_deref());
             return;
         }
+        let ticket = ticket.clone();
         spawn_local(async move {
             dom::sleep_ms(RERENDER_AFTER_MS).await;
             if asked.try_with_value(|v| *v == n) == Some(true) {
-                load(&el, &body);
+                load(&el, &body, ticket.as_deref());
             }
         });
     });
@@ -752,7 +840,7 @@ mod tests {
     #[test]
     fn the_srcdoc_is_the_shell_then_the_body() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", components: None };
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", components: None, ticket: None };
         let doc = srcdoc("<details><summary>s</summary><p>x</p></details>", &shell);
         assert!(doc.starts_with("<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta charset=\"utf-8\">"), "{doc}");
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
@@ -770,7 +858,7 @@ mod tests {
     #[test]
     fn the_init_block_is_json_that_cannot_close_its_script() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f1", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", components: None };
+        let shell = Shell { channel: "f1", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", components: None, ticket: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -783,6 +871,11 @@ mod tests {
         assert_eq!(v["mermaid"]["config"]["htmlLabels"], false);
         // COMP-5: no registry held yet is `null` — the SDK waits for one.
         assert!(v["components"].is_null());
+        // INPUT-4: no ticket's body — `menger.input.ticket` is null.
+        assert!(v["ticket"].is_null());
+        let shell = Shell { ticket: Some("INPUT-9"), ..shell };
+        let v: serde_json::Value = serde_json::from_str(&init_json(&shell)).unwrap();
+        assert_eq!(v["ticket"], "INPUT-9");
     }
 
     /// COMP-5: the registry rides in the init block whole, in the wire's
@@ -796,7 +889,7 @@ mod tests {
             Component { name: "m-a".into(), source: source.into(), owner: Some("A-2".into()), references: vec!["A-3".into()], docs: None, preview: vec![] },
             Component { name: "m-b".into(), source: "<i>b</i>".into(), owner: None, references: vec!["m-a".into()], docs: None, preview: vec![] },
         ];
-        let shell = Shell { channel: "f2", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: Some(&components) };
+        let shell = Shell { channel: "f2", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: Some(&components), ticket: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -852,7 +945,11 @@ mod tests {
         assert_eq!(parse_msg("menger:navigate", None, None), Some(Msg::Navigate));
         assert_eq!(parse_msg("menger:inspect", None, None), Some(Msg::Inspect));
         assert_eq!(parse_msg("menger:revealed", None, None), Some(Msg::Revealed));
-        for outbound in ["menger:theme", "menger:result", "menger:components", "menger:change", "menger:inspected", "menger:reveal"] {
+        assert_eq!(parse_msg("menger:submit", None, None), Some(Msg::Submit));
+        for outbound in [
+            "menger:theme", "menger:result", "menger:components", "menger:change", "menger:inspected", "menger:reveal",
+            "menger:submitted",
+        ] {
             assert_eq!(parse_msg(outbound, None, None), None, "{outbound}: outbound only");
         }
         assert_eq!(parse_msg("lavish:queuePrompt", None, None), None);
@@ -866,9 +963,13 @@ mod tests {
     fn the_sdk_shell_is_versioned_served_and_inlinable() {
         assert!(SDK_JS.contains(&format!("var VERSION = \"{SDK_VERSION}\";")), "the script's VERSION");
         assert!(
-            SDK_JS.contains("Object.freeze({ version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate })"),
-            "window.menger = {{ version, tickets, call, on, navigate }}"
+            SDK_JS.contains(
+                "Object.freeze({ version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input })"
+            ),
+            "window.menger = {{ version, tickets, call, on, navigate, input }}"
         );
+        // INPUT-4: `menger.input` is frozen too, and its one write.
+        assert!(SDK_JS.contains("var input = Object.freeze({ ticket: ticket, submit: submit });"), "menger.input");
         let lower = SDK_JS.to_ascii_lowercase();
         assert!(!lower.contains("</script") && !lower.contains("<!--"), "inlinable");
         let name = SDK_URL.rsplit('/').next().unwrap();
@@ -883,7 +984,8 @@ mod tests {
         // Every message the script sends or takes is one the protocol names.
         for kind in [
             "menger:ready", "menger:size", "menger:theme", "menger:call", "menger:result", "menger:components", "menger:change",
-            "menger:navigate", "menger:inspect", "menger:inspected", "menger:reveal", "menger:revealed",
+            "menger:navigate", "menger:inspect", "menger:inspected", "menger:reveal", "menger:revealed", "menger:submit",
+            "menger:submitted",
         ] {
             assert!(SDK_JS.contains(&format!("\"{kind}\"")), "{kind}");
         }
