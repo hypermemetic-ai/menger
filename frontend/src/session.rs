@@ -137,7 +137,7 @@
 //! the rows views hold.
 
 use crate::kids::Kids;
-use crate::{board, cache, dom, frame, nav, registry, settings, Conn, Dock};
+use crate::{board, cache, dom, frame, inputs, nav, registry, settings, Conn, Dock};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::{TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
@@ -410,6 +410,8 @@ async fn session(
     // COMP-5: the component registry, if a view wants it — after `watch`,
     // so nothing it misses is lost (src/registry.rs).
     registry::refresh();
+    // INPUT-6: the inputs, likewise — only once #/inputs has asked.
+    inputs::refresh();
 
     // 2. The dock.
     for ev in client.health_all().await.map_err(|e| describe(&e))? {
@@ -450,6 +452,8 @@ async fn session(
             // COMP-5: the app's registry takes a component event, then
             // every open frame hears the event as a change notice.
             registry::heard(data);
+            // INPUT-6: an `input_changed` upserts the app's inputs.
+            inputs::heard(data);
             frame::broadcast_change(data);
         }
         match ev {
@@ -542,6 +546,7 @@ async fn session(
                 refetch_open_body(&client, last_error).await;
                 refetch_open_children(last_error);
                 registry::refresh();
+                inputs::refresh();
                 STALE.with(|s| s.update(|n| *n = n.wrapping_add(1)));
             }
             // Future event kinds: ignore, stay live.

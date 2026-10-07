@@ -739,6 +739,35 @@ synapse -P 4455 -p '{"ticket": "INPUT-9", "input": "checks", "value": {"type": "
 synapse -P 4455 menger tickets close_input --ticket INPUT-9 --input landing
 ```
 
+**`#/inputs`** (INPUT-6; linked from the header beside `components`) is
+what is waiting on the owner across every ticket, live. Inputs are grouped
+by state — **open** first, then **answered**, then **closed**; the
+**removed** only behind the `removed` toggle, last — each group in the
+store's order. A row is one input: its ticket (a link to `#/ticket/<id>`)
+and id, its kind, its question, its options with the recommended one marked
+(★) and the chosen ones ticked (✓), the recommendation where it says more
+than that option's label, the current answer — value, rationale, source
+(`app` / `api`) and time (relative; exact on hover) — and its history,
+folded. The filter bar narrows by shortcode and by state, each value with
+its count; the filter is the route's query, rewritten in place —
+`#/inputs?sc=INPUT,MNG&state=open,answered&removed` (no query: every
+shortcode, the three states, the removed hidden; a malformed one is the
+default) — so a reload or a pasted link restores it.
+
+The page is the app's own copy of the inputs (`frontend/src/inputs.rs`),
+held to the component registry's rule (COMP-5): **nothing at startup asks
+for it** — the five startup requests are unchanged — and the page's first
+opening asks `inputs {}` once (every state, in the store's order; not
+`--state open` alone, since every group is shown and a row moves between
+them). From then on `watch` keeps it: an `input_changed` carries the whole
+input and is applied as an upsert — in place, or after its ticket's inputs
+when it is new — so a row moves between groups as the answer lands; the
+events heard while a fetch is out are replayed onto its answer, and it is
+asked again on every reconnect and every `lagged`. The header's `inputs`
+link wears the **open count** as a small badge from the first time the page
+is opened, live from then on, after the page is left too; before that it
+shows no count rather than add a startup request.
+
 | method | yields |
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
@@ -1007,7 +1036,9 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        side (COMP-5), src/components.rs #/components (COMP-6)
                        and the help pages, src/card.rs a definition's docs
                        card, src/inspect.rs the tooltip's checks and
-                       menger.navigate's routes (COMP-9)
+                       menger.navigate's routes (COMP-9), src/inputs.rs
+                       the app's copy of the inputs and src/inputs_page.rs
+                       #/inputs (INPUT-6)
 spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)
 diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub
                        (WS :4458); the `mermaid` activation and the client it
