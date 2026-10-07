@@ -104,7 +104,11 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   from a host install; `../plexus-starter`'s `scripts/codegen.sh` is the
   worked example of wiring that into `npm run build`, `cargo xtask` and
   CI. `synapse-cc` 0.3.4 and `hub-codegen` 0.4.1 are also installed in
-  `~/.local/bin` (2026-10-02); neither has been run against menger.
+  `~/.local/bin` (2026-10-02). menger's own use (COMP-10):
+  `scripts/sdk-codegen.sh` generates the frames' typed SDK
+  (`menger.tickets.*`) into `frontend/sdk/generated/` — rerun it whenever
+  the activation's surface changes; `tickets-api/tests/sdk_manifest.rs`
+  fails until it is.
 - **A new language target** is a new `hub-codegen` generator over the same
   IR — never a hand-written client that mirrors the wire.
 - **REST + SSE** (:4457) — for curl and for scripts that cannot run

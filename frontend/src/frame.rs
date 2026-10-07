@@ -21,7 +21,9 @@
 //!   [`SDK_URL`]), whose header is the protocol's reference — base
 //!   typography, theme tokens that follow a flip, mermaid drawn inside, the
 //!   document's height reported, `window.menger` (COMP-5: `{ version, call,
-//!   on }`) and every registered component defined.
+//!   on }`; COMP-10: and `tickets`, the client hub-codegen generates from
+//!   the activation — the script's GENERATED region, written by
+//!   `scripts/sdk-codegen.sh`) and every registered component defined.
 //!
 //! The host half of the handshake is here: one `message` listener for every
 //! frame ([`install_listener`]) accepts a `menger:*` message only from a
@@ -65,8 +67,9 @@ use crate::{bridge, dom, mermaid, registry, session};
 
 /// The SDK's version — `window.menger.version` inside every frame (pinned
 /// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
-/// `version`, `call`, `on`, and the components defined.
-pub(crate) const SDK_VERSION: &str = "1.0.0";
+/// `version`, `call`, `on`, and the components defined; COMP-10's 1.1 adds
+/// `tickets`, the generated typed client over the same bridge.
+pub(crate) const SDK_VERSION: &str = "1.1.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -702,7 +705,10 @@ mod tests {
     #[test]
     fn the_sdk_shell_is_versioned_served_and_inlinable() {
         assert!(SDK_JS.contains(&format!("var VERSION = \"{SDK_VERSION}\";")), "the script's VERSION");
-        assert!(SDK_JS.contains("Object.freeze({ version: VERSION, call: call, on: on })"), "window.menger = {{ version, call, on }}");
+        assert!(
+            SDK_JS.contains("Object.freeze({ version: VERSION, tickets: tickets, call: call, on: on })"),
+            "window.menger = {{ version, tickets, call, on }}"
+        );
         let lower = SDK_JS.to_ascii_lowercase();
         assert!(!lower.contains("</script") && !lower.contains("<!--"), "inlinable");
         let name = SDK_URL.rsplit('/').next().unwrap();
@@ -725,5 +731,39 @@ mod tests {
             assert!(SDK_JS.contains(token), "{token}");
         }
         assert!(!SDK_JS.contains("#fff") && !SDK_JS.contains("rgb("), "no color literal in the shell");
+    }
+
+    /// COMP-10: the shell's GENERATED region is the bundle the script wrote
+    /// — `frontend/sdk/generated/sdk-bundle.js`, byte for byte, never edited
+    /// in place — and that bundle holds the generated client's every method
+    /// the manifest names (the activation's, held to it by tickets-api's
+    /// drift guard). The SDK's types are published beside the SDK.
+    #[test]
+    fn the_generated_region_is_the_bundle_of_the_generated_client() {
+        const BEGIN: &str = "  // @generated-begin scripts/sdk-codegen.sh\n";
+        const END: &str = "  // @generated-end\n";
+        let a = SDK_JS.find(BEGIN).expect("the @generated-begin line") + BEGIN.len();
+        let b = SDK_JS.find(END).expect("the @generated-end line");
+        assert_eq!(SDK_JS.matches(BEGIN).count(), 1);
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("sdk");
+        let bundle = std::fs::read_to_string(dir.join("generated/sdk-bundle.js")).unwrap();
+        assert!(
+            SDK_JS[a..b] == bundle,
+            "menger-sdk.js's GENERATED region is not generated/sdk-bundle.js — run scripts/sdk-codegen.sh, never edit it by hand"
+        );
+        assert!(bundle.contains("mengerTyped = {"), "the bundle hands the shell its client");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("generated/manifest.json")).unwrap()).unwrap();
+        let methods = manifest["methods"].as_object().expect("methods");
+        assert!(methods.contains_key("waves") && methods.contains_key("set_status"), "{methods:?}");
+        for name in methods.keys() {
+            assert!(bundle.contains(&format!("\"tickets.{name}\"")), "the bundle calls tickets.{name}");
+        }
+        for published in ["menger.d.ts", "generated/tickets/client.d.ts", "generated/tickets/types.d.ts"] {
+            assert!(dir.join(published).is_file(), "{published}");
+        }
+        let index = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("index.html")).unwrap();
+        assert!(index.contains("<link data-trunk rel=\"copy-file\" href=\"sdk/menger.d.ts\" data-target-path=\"sdk\" />"));
+        assert!(index.contains("<link data-trunk rel=\"copy-dir\" href=\"sdk/generated\" data-target-path=\"sdk/generated\" />"));
     }
 }

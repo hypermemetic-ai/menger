@@ -18,6 +18,11 @@
 <!-- COMP-4: the SDK shell a framed body runs (src/frame.rs inlines it into
      each frame's srcdoc); served at /app/sdk/ as the app's published copy. -->
 <link data-trunk rel="copy-file" href="sdk/menger-sdk.js" data-target-path="sdk" />
+<!-- COMP-10: the SDK's types — menger.d.ts and the declarations of the client
+     generated into sdk/generated/ (scripts/sdk-codegen.sh), which it imports —
+     published beside it for whoever writes a component. -->
+<link data-trunk rel="copy-file" href="sdk/menger.d.ts" data-target-path="sdk" />
+<link data-trunk rel="copy-dir" href="sdk/generated" data-target-path="sdk/generated" />
 <!-- AGS-17: stamp a stored theme choice before first paint, so a reload
      never flashes the system theme; src/theme.rs owns the key and
      re-applies it once mounted (a native test pins the two agree). -->

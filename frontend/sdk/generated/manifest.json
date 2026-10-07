@@ -1,0 +1,74 @@
+{
+  "comment": "COMP-10: written by scripts/sdk-codegen.sh from the IR hub-codegen generated this client from — each method of the tickets activation and its parameter names. tickets-api/tests/sdk_manifest.rs holds the activation to it. Do not edit: run the script.",
+  "namespace": "tickets",
+  "methods": {
+    "amend": [
+      "body",
+      "id",
+      "title"
+    ],
+    "blockers": [
+      "id"
+    ],
+    "components": [],
+    "create": [
+      "blocked_by",
+      "body",
+      "epic",
+      "kind",
+      "parent",
+      "path",
+      "severity",
+      "title"
+    ],
+    "extents": [],
+    "find": [
+      "after",
+      "limit",
+      "query"
+    ],
+    "get": [
+      "id"
+    ],
+    "groups": [],
+    "health": [],
+    "link_commits": [
+      "commits",
+      "id"
+    ],
+    "list": [
+      "after",
+      "epic",
+      "limit",
+      "parent",
+      "status",
+      "summary"
+    ],
+    "ready_set": [
+      "after",
+      "epic",
+      "limit",
+      "summary"
+    ],
+    "schema": [],
+    "set_parent": [
+      "id",
+      "parent"
+    ],
+    "set_status": [
+      "id",
+      "status"
+    ],
+    "unlink_commits": [
+      "commits",
+      "id"
+    ],
+    "watch": [
+      "epic"
+    ],
+    "waves": [
+      "epics",
+      "kinds"
+    ]
+  }
+}

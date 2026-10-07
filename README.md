@@ -536,7 +536,8 @@ as one function with the element as `this`:
 | `this.menger` | `window.menger` itself |
 | `return () => …` | runs before the next render and when the element leaves the document; so does the end of every `menger.on` made while the script ran |
 
-`window.menger` (1.0, frozen): `version`; **`call(method, params)`** → a
+`window.menger` (1.1, frozen): `version`; **`tickets`** (COMP-10) — the
+`tickets` activation's typed client (below); **`call(method, params)`** → a
 Promise of the call's items (the stream's data events as the wire spells
 them, an in-band `error` included), answered by the app over its own
 connection — **read-only**: `get`, `list`, `find`, `waves`, `groups`,
@@ -544,7 +545,60 @@ connection — **read-only**: `get`, `list`, `find`, `waves`, `groups`,
 parameter names (`menger.call('waves', { epics: ['PLEXUS'] })`); any other
 method rejects with `read-only: …`, a parameter the method does not take
 rejects naming it; **`on('change', cb)`** → `cb(event)` for every `watch`
-event the app hears, and returns the function that stops it.
+event the app hears, and returns the function that stops it. Its types are
+`frontend/sdk/menger.d.ts`, published at `/app/sdk/menger.d.ts`.
+
+**The typed SDK** (COMP-10, COMP-1 decision 7). `menger.tickets` is the
+client the house generator writes from the activation's schema —
+`synapse-cc` → `hub-codegen`'s TypeScript target, never a hand-written
+mirror — over the same read-only bridge:
+
+```js
+for await (const ev of this.menger.tickets.waves(['RETURNS'])) {
+  if (ev.type === 'wave_counts') count = ev.waves[0] ?? 0;
+}
+const all = await Array.fromAsync(menger.tickets.components());
+```
+
+It is hub-codegen's surface as generated: every method of the activation,
+camelCased (`setStatus`, `linkCommits`, `readySet`), with the activation's
+parameters positionally (required first, in the generated order —
+`waves(epics, kinds?)`; the `.d.ts` says each), each an
+`AsyncGenerator<TicketsEvent>` (`schema()` a Promise) whose events' keys the
+generated runtime camelCases (`waitingOn`, `blockedBy`; `type` values stay
+as the wire spells them). A read is answered as `menger.call` is; every
+other method is present and throws a `PlexusError` "read-only: …" when
+iterated — the host's allow-list is the only gate. `menger.call` stays, the
+untyped escape hatch.
+
+The generated client's only seam is its `RpcClient` (Layer 1): the bridge
+transport (`frontend/sdk/bridge.ts`) implements it over the frame's
+postMessage channel — the call's items become `data` items and a `done`, a
+rejection an `error` item — so nothing generated is edited.
+**`scripts/sdk-codegen.sh`** produces it all: it builds menger, starts a
+throwaway server on its own ports (`SDK_CODEGEN_PORT`, default 4466–4468;
+never 4450–4462) over a temporary database, and in the `plexus-codegen`
+image runs `synapse-cc build` (generate, install, compile, smoke-test),
+emits the client's declarations with `tsc`, typechecks `bridge.ts` and
+`menger.d.ts` against them, and bundles the bridge transport with the
+client (`bun build`, IIFE). It writes the snapshot into
+`frontend/sdk/generated/` — the generated sources and `.d.ts`,
+`manifest.json` (each method's parameter names, from the IR) and
+`sdk-bundle.js` — and splices the bundle into `menger-sdk.js` between its
+`@generated-begin` / `@generated-end` lines, where it assigns the shell's
+own `mengerTyped` and defines no global. All of it is committed: `cargo
+build`, `trunk build` and the tests need neither Docker nor Node. A run
+takes ~4 s in the container (plus menger's build); a second run with
+nothing changed changes nothing. **Run it whenever the activation's surface
+changes** — the drift guard, `tickets-api/tests/sdk_manifest.rs`, holds the
+activation's methods and parameter names to `manifest.json` and fails
+`cargo test --workspace` with "run scripts/sdk-codegen.sh" until it is; a
+native test in `frontend/src/frame.rs` holds the spliced region to
+`sdk-bundle.js` (never edit it in place) and the bundle to the manifest.
+
+```sh
+scripts/sdk-codegen.sh        # needs Docker and the plexus-codegen image
+```
 
 **`#/components`** (COMP-6; linked from the header beside `waves`) lists
 the registry live: a row per component — its tag, its owner (a ticket
@@ -771,6 +825,9 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        table built from the bodies of an old file (COMP-3)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
+  tests/sdk_manifest.rs  COMP-10's drift guard: the activation's methods and
+                       parameters against frontend/sdk/generated/manifest.json
+scripts/sdk-codegen.sh the frames' typed SDK, generated (COMP-10; Docker)
 web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
                        src/waves.rs the wave board (WAVE-5, WAVE-6),
@@ -778,6 +835,9 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        src/notes.rs its annotation and the body editor (WAVE-11),
                        src/frame.rs framed bodies and their messages (COMP-4,
                        COMP-5), sdk/menger-sdk.js the SDK every frame runs,
+                       sdk/menger.d.ts its types, sdk/bridge.ts the bridge
+                       transport and sdk/generated/ the typed client
+                       (COMP-10, scripts/sdk-codegen.sh),
                        src/registry.rs the app's copy of the component
                        registry, src/bridge.rs menger.call's read-only host
                        side (COMP-5), src/components.rs #/components (COMP-6)

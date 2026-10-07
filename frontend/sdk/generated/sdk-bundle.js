@@ -1,0 +1,230 @@
+(() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  function __accessProp(key) {
+    return this[key];
+  }
+  var __toCommonJS = (from) => {
+    var entry = (__moduleCache ??= new WeakMap).get(from), desc;
+    if (entry)
+      return entry;
+    entry = __defProp({}, "__esModule", { value: true });
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (var key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(entry, key))
+          __defProp(entry, key, {
+            get: __accessProp.bind(from, key),
+            enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
+          });
+    }
+    __moduleCache.set(from, entry);
+    return entry;
+  };
+  var __moduleCache;
+
+  // bridge.ts
+  var exports_bridge = {};
+
+  // generated/types.ts
+  class PlexusError extends Error {
+    code;
+    recoverable;
+    metadata;
+    constructor(message, code, recoverable = false, metadata) {
+      super(message);
+      this.name = "PlexusError";
+      this.code = code;
+      this.recoverable = recoverable;
+      this.metadata = metadata;
+    }
+  }
+
+  class ForbiddenError extends PlexusError {
+    missingScope;
+    constructor(message, recoverable = false, metadata) {
+      super(message, "-32003", recoverable, metadata);
+      this.name = "ForbiddenError";
+      const m = /missing required scope '([^']+)'/.exec(message);
+      this.missingScope = m ? m[1] : undefined;
+    }
+  }
+
+  class UnauthenticatedError extends PlexusError {
+    constructor(message, recoverable = false, metadata) {
+      super(message, "-32001", recoverable, metadata);
+      this.name = "UnauthenticatedError";
+    }
+  }
+  function errorFromStreamItem(item) {
+    switch (item.code) {
+      case "-32003":
+        return new ForbiddenError(item.message, item.recoverable, item.metadata);
+      case "-32001":
+        return new UnauthenticatedError(item.message, item.recoverable, item.metadata);
+      default:
+        return new PlexusError(item.message, item.code, item.recoverable, item.metadata);
+    }
+  }
+
+  // generated/rpc.ts
+  function toCamelCase(str) {
+    return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+  }
+  function transformKeys(obj) {
+    if (obj === null || obj === undefined)
+      return obj;
+    if (typeof obj !== "object")
+      return obj;
+    if (Array.isArray(obj))
+      return obj.map(transformKeys);
+    const result = {};
+    for (const [key, value] of Object.entries(obj)) {
+      const camelKey = toCamelCase(key);
+      result[camelKey] = transformKeys(value);
+    }
+    return result;
+  }
+  async function* extractData(stream) {
+    for await (const item of stream) {
+      switch (item.type) {
+        case "data":
+          yield transformKeys(item.content);
+          break;
+        case "error":
+          throw errorFromStreamItem(item);
+        case "progress":
+          break;
+        case "done":
+          return;
+      }
+    }
+  }
+  async function collectOne(stream) {
+    for await (const item of stream) {
+      switch (item.type) {
+        case "data":
+          return transformKeys(item.content);
+        case "error":
+          throw errorFromStreamItem(item);
+        case "progress":
+          break;
+        case "done":
+          break;
+      }
+    }
+    throw new Error("No data received from method call");
+  }
+
+  // generated/tickets/client.ts
+  class TicketsClientImpl {
+    rpc;
+    constructor(rpc) {
+      this.rpc = rpc;
+    }
+    async* amend(id, body, title) {
+      const stream = this.rpc.call("tickets.amend", { body, id, title });
+      yield* extractData(stream);
+    }
+    async* blockers(id) {
+      const stream = this.rpc.call("tickets.blockers", { id });
+      yield* extractData(stream);
+    }
+    async* components() {
+      const stream = this.rpc.call("tickets.components", {});
+      yield* extractData(stream);
+    }
+    async* create(epic, title, blockedBy, body, kind, parent, path, severity) {
+      const stream = this.rpc.call("tickets.create", { blocked_by: blockedBy, body, epic, kind, parent, path, severity, title });
+      yield* extractData(stream);
+    }
+    async* extents() {
+      const stream = this.rpc.call("tickets.extents", {});
+      yield* extractData(stream);
+    }
+    async* find(query, after, limit) {
+      const stream = this.rpc.call("tickets.find", { after, limit, query });
+      yield* extractData(stream);
+    }
+    async* get(id) {
+      const stream = this.rpc.call("tickets.get", { id });
+      yield* extractData(stream);
+    }
+    async* groups() {
+      const stream = this.rpc.call("tickets.groups", {});
+      yield* extractData(stream);
+    }
+    async* health() {
+      const stream = this.rpc.call("tickets.health", {});
+      yield* extractData(stream);
+    }
+    async* linkCommits(commits, id) {
+      const stream = this.rpc.call("tickets.link_commits", { commits, id });
+      yield* extractData(stream);
+    }
+    async* list(after, epic, limit, parent, status, summary) {
+      const stream = this.rpc.call("tickets.list", { after, epic, limit, parent, status, summary });
+      yield* extractData(stream);
+    }
+    async* readySet(after, epic, limit, summary) {
+      const stream = this.rpc.call("tickets.ready_set", { after, epic, limit, summary });
+      yield* extractData(stream);
+    }
+    async schema() {
+      const stream = this.rpc.call("tickets.schema", {});
+      return collectOne(stream);
+    }
+    async* setParent(id, parent) {
+      const stream = this.rpc.call("tickets.set_parent", { id, parent });
+      yield* extractData(stream);
+    }
+    async* setStatus(id, status) {
+      const stream = this.rpc.call("tickets.set_status", { id, status });
+      yield* extractData(stream);
+    }
+    async* unlinkCommits(commits, id) {
+      const stream = this.rpc.call("tickets.unlink_commits", { commits, id });
+      yield* extractData(stream);
+    }
+    async* watch(epic) {
+      const stream = this.rpc.call("tickets.watch", { epic });
+      yield* extractData(stream);
+    }
+    async* waves(epics, kinds) {
+      const stream = this.rpc.call("tickets.waves", { epics, kinds });
+      yield* extractData(stream);
+    }
+  }
+  function createTicketsClient(rpc) {
+    return new TicketsClientImpl(rpc);
+  }
+
+  // bridge.ts
+  var NAMESPACE = "tickets.";
+  function metadata(method) {
+    return { provenance: ["menger", "bridge", method], plexusHash: "", timestamp: Math.floor(Date.now() / 1000) };
+  }
+  function bridgeRpc(call) {
+    return {
+      async* call(method, params) {
+        const name = method.startsWith(NAMESPACE) ? method.slice(NAMESPACE.length) : method;
+        let items;
+        try {
+          items = await call(name, params ?? null);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          yield { type: "error", metadata: metadata(method), message, recoverable: false };
+          return;
+        }
+        for (const content of items) {
+          yield { type: "data", metadata: metadata(method), contentType: method, content };
+        }
+        yield { type: "done", metadata: metadata(method) };
+      }
+    };
+  }
+  mengerTyped = {
+    tickets: (call) => createTicketsClient(bridgeRpc(call))
+  };
+})();

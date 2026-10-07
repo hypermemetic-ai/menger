@@ -1,0 +1,147 @@
+// Auto-generated typed client (Layer 2)
+// Wraps RPC layer and unwraps PlexusStreamItem to domain types
+
+import type { RpcClient } from '../rpc';
+import { extractData, collectOne } from '../rpc';
+import type { TicketsEvent } from './types';
+
+/** Typed client interface for tickets plugin */
+export interface TicketsClient {
+  /** Replace a ticket's title and/or body (whole values); yields amended { ticket, changed } */
+  amend(id: string, body?: string | null, title?: string | null): AsyncGenerator<TicketsEvent>;
+  /** One ticket's blockers resolved to current statuses; dangling ids marked */
+  blockers(id: string): AsyncGenerator<TicketsEvent>;
+  /** Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes */
+  components(): AsyncGenerator<TicketsEvent>;
+  /** Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc */
+  create(epic: string, title: string, blockedBy?: string[] | null, body?: string | null, kind?: string | null, parent?: string | null, path?: string | null, severity?: string | null): AsyncGenerator<TicketsEvent>;
+  /** Each shortcode's last sequence, in shortcode order — where each shortcode ends in the store's order */
+  extents(): AsyncGenerator<TicketsEvent>;
+  /** Find tickets whose id or title contains the query (case-insensitive); summary rows, paged with after + limit */
+  find(query: string, after?: string | null, limit?: number | null): AsyncGenerator<TicketsEvent>;
+  /** Get one ticket by id, or by path address SHORTCODE/path (e.g. PLEXUS/_MENGER/board) */
+  get(id: string): AsyncGenerator<TicketsEvent>;
+  /** One roll-up per shortcode: done/total over its subtree's work, its docs, its root (with the root's title, status and kind), and the host it nests under */
+  groups(): AsyncGenerator<TicketsEvent>;
+  /** Heartbeat — version, unix time, ticket count */
+  health(): AsyncGenerator<TicketsEvent>;
+  /** Link commits to a ticket (the commits that finished it); yields commits_linked { ticket, added } */
+  linkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
+  /** List tickets, optionally filtered by epic, status and/or parent; paged with after + limit */
+  list(after?: string | null, epic?: string | null, limit?: number | null, parent?: string | null, status?: string | null, summary?: boolean | null): AsyncGenerator<TicketsEvent>;
+  /** Tickets that can start now: Ready, with every blocker Complete or Superseded */
+  readySet(after?: string | null, epic?: string | null, limit?: number | null, summary?: boolean | null): AsyncGenerator<TicketsEvent>;
+  /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
+  schema(): Promise<unknown>;
+  /** Set a ticket's parent — the ticket it is an output of; adopts a parentless ticket or moves one */
+  setParent(id: string, parent: string): AsyncGenerator<TicketsEvent>;
+  /** Set a ticket's status (not a doc's: a doc has no lifecycle) */
+  setStatus(id: string, status: string): AsyncGenerator<TicketsEvent>;
+  /** Unlink commits from a ticket; yields commits_unlinked { ticket, removed } */
+  unlinkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
+  /** Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved), until disconnect; Lagged { missed } where a slow subscriber lost changes */
+  watch(epic?: string | null): AsyncGenerator<TicketsEvent>;
+  /** The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts */
+  waves(epics: string[], kinds?: string[] | null): AsyncGenerator<TicketsEvent>;
+}
+
+/** Typed client implementation for tickets plugin */
+class TicketsClientImpl implements TicketsClient {
+  private rpc: RpcClient;
+  constructor(rpc: RpcClient) { this.rpc = rpc; }
+
+  async *amend(id: string, body?: string | null, title?: string | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.amend', { body, id, title });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *blockers(id: string): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.blockers', { id });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *components(): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.components', {});
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *create(epic: string, title: string, blockedBy?: string[] | null, body?: string | null, kind?: string | null, parent?: string | null, path?: string | null, severity?: string | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.create', { blocked_by: blockedBy, body, epic, kind, parent, path, severity, title });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *extents(): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.extents', {});
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *find(query: string, after?: string | null, limit?: number | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.find', { after, limit, query });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *get(id: string): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.get', { id });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *groups(): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.groups', {});
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *health(): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.health', {});
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *linkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.link_commits', { commits, id });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *list(after?: string | null, epic?: string | null, limit?: number | null, parent?: string | null, status?: string | null, summary?: boolean | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.list', { after, epic, limit, parent, status, summary });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *readySet(after?: string | null, epic?: string | null, limit?: number | null, summary?: boolean | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.ready_set', { after, epic, limit, summary });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async schema(): Promise<unknown> {
+    const stream = this.rpc.call('tickets.schema', {});
+    return collectOne<unknown>(stream);
+  }
+
+  async *setParent(id: string, parent: string): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.set_parent', { id, parent });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *setStatus(id: string, status: string): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.set_status', { id, status });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *unlinkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.unlink_commits', { commits, id });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *watch(epic?: string | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.watch', { epic });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *waves(epics: string[], kinds?: string[] | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.waves', { epics, kinds });
+    yield* extractData<TicketsEvent>(stream);
+  }
+}
+
+/** Create a typed tickets client from an RPC client */
+export function createTicketsClient(rpc: RpcClient): TicketsClient {
+  return new TicketsClientImpl(rpc);
+}
