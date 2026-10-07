@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 fn new(epic: &str, kind: Kind, title: &str) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: title.into(),
         kind,
@@ -81,6 +82,12 @@ async fn heard(store: &Store, rx: &mut broadcast::Receiver<Change>) -> Vec<Chang
 
 /// The row a ticket's whole stored version makes — what the cache must
 /// hold for it. `child_count` is the cache's alone; the file keeps none.
+/// WAVE-6: a cache row as the file holds it — every field but the
+/// placement, which is the cache's alone.
+fn unplaced(row: Row) -> Row {
+    Row { placement: None, ..row }
+}
+
 fn row_of(stored: &Ticket, child_count: u64) -> Row {
     let mut row = Row::from(stored.clone());
     row.child_count = child_count;
@@ -117,7 +124,7 @@ async fn a_create_dropped_mid_commit_still_reaches_the_cache_and_watch_and_the_n
     drop_mid_commit(&store, store.create(new("AB", Kind::Build, "the dropped one"))).await;
     let stored = stored_when(&store, "AB-2", |_| true).await;
     let said = heard(&store, &mut rx).await;
-    let cached = store.row("AB-2").ok().map(|(row, _)| row);
+    let cached = store.row("AB-2").ok().map(|(row, _)| unplaced(row));
     let counts = counts_agree(&store);
     let next = store.create(new("AB", Kind::Build, "the next one")).await.unwrap();
     let ab2_after = db::ticket(&store.db.lock().unwrap(), "AB-2").unwrap().unwrap();
@@ -134,7 +141,7 @@ async fn a_create_dropped_mid_commit_still_reaches_the_cache_and_watch_and_the_n
         ab2_after.title
     );
     assert!(
-        matches!(said.first(), Some(Change::Created { ticket }) if ticket.id == "AB-2" && *ticket == stored),
+        matches!(said.first(), Some(Change::Created { ticket }) if ticket.id == "AB-2" && ticket.placement.is_some() && Ticket { placement: None, ..ticket.clone() } == stored),
         "watch carried created for AB-2: {:?}",
         kinds(&said)
     );
@@ -158,7 +165,7 @@ async fn a_set_status_dropped_mid_commit_still_reaches_the_cache_and_watch() {
     drop_mid_commit(&store, store.set_status("SS-2", Status::Complete)).await;
     let stored = stored_when(&store, "SS-2", |t| t.status == Status::Complete).await;
     let said = heard(&store, &mut rx).await;
-    let cached = store.row("SS-2").unwrap().0;
+    let cached = unplaced(store.row("SS-2").unwrap().0);
     let counts = counts_agree(&store);
 
     assert_eq!(
@@ -169,7 +176,11 @@ async fn a_set_status_dropped_mid_commit_still_reaches_the_cache_and_watch() {
         cached.status,
         kinds(&said)
     );
-    assert_eq!(kinds(&said), ["status_changed", "group_changed"], "watch carried it, and the roll-up it moved");
+    assert_eq!(
+        kinds(&said),
+        ["status_changed", "group_changed", "placements_changed"],
+        "watch carried it, the roll-up it moved and (WAVE-6) the placement"
+    );
     assert_eq!(counts.0, counts.1, "committing {} vs written {}", counts.0, counts.1);
     assert_eq!(store.groups()[0].done, 1, "the roll-up counts it");
 }
@@ -188,7 +199,7 @@ async fn a_set_parent_dropped_mid_commit_still_reaches_the_cache_and_watch() {
     drop_mid_commit(&store, store.set_parent("SP-3", "SP-2")).await;
     let stored = stored_when(&store, "SP-3", |t| t.parent.as_deref() == Some("SP-2")).await;
     let said = heard(&store, &mut rx).await;
-    let cached = store.row("SP-3").unwrap().0;
+    let cached = unplaced(store.row("SP-3").unwrap().0);
     let counts = counts_agree(&store);
 
     assert_eq!(
@@ -221,7 +232,7 @@ async fn an_amend_dropped_mid_commit_still_reaches_the_cache_and_watch() {
     drop_mid_commit(&store, store.amend("AM-1", Some("amended".into()), Some("a new body".into()))).await;
     let stored = stored_when(&store, "AM-1", |t| t.title == "amended").await;
     let said = heard(&store, &mut rx).await;
-    let cached = store.row("AM-1").unwrap().0;
+    let cached = unplaced(store.row("AM-1").unwrap().0);
     let counts = counts_agree(&store);
 
     assert_eq!(
@@ -237,7 +248,7 @@ async fn an_amend_dropped_mid_commit_still_reaches_the_cache_and_watch() {
         matches!(
             said.as_slice(),
             [Change::Amended { ticket, changed }, Change::GroupChanged { group }]
-                if *ticket == stored
+                if Ticket { placement: None, ..ticket.clone() } == stored
                     && changed == &["title", "body"]
                     && group.root_row.as_ref().is_some_and(|r| r.title == "amended")
         ),
@@ -259,14 +270,14 @@ async fn a_link_or_unlink_dropped_mid_commit_still_reaches_the_cache_and_watch()
     drop_mid_commit(&store, store.link_commits("LK-1", vec!["77df9a0".into(), "0bb28b2".into()])).await;
     let stored = stored_when(&store, "LK-1", |t| t.commits.len() == 2).await;
     let said = heard(&store, &mut rx).await;
-    let cached = store.row("LK-1").unwrap().0;
+    let cached = unplaced(store.row("LK-1").unwrap().0);
     assert_eq!(cached, row_of(&stored, 0), "link: the database holds {:?} and the cache {:?}", stored.commits, cached.commits);
     assert_eq!(kinds(&said), ["commits_linked"]);
 
     drop_mid_commit(&store, store.unlink_commits("LK-1", vec!["77df9a0".into()])).await;
     let stored = stored_when(&store, "LK-1", |t| t.commits.len() == 1).await;
     let said = heard(&store, &mut rx).await;
-    let cached = store.row("LK-1").unwrap().0;
+    let cached = unplaced(store.row("LK-1").unwrap().0);
     assert_eq!(cached, row_of(&stored, 0), "unlink: the database holds {:?} and the cache {:?}", stored.commits, cached.commits);
     assert_eq!(kinds(&said), ["commits_unlinked"]);
     let counts = counts_agree(&store);
@@ -284,7 +295,9 @@ async fn a_caller_that_stays_is_answered_after_all_three_and_a_failed_commit_cha
     let store = on_disk(&dir);
     let mut rx = store.subscribe();
     let t = store.create(new("ST", Kind::Scope, "stays")).await.unwrap();
-    assert_eq!(db::ticket(&store.db.lock().unwrap(), "ST-1").unwrap().as_ref(), Some(&t), "durable when answered");
+    // WAVE-6: the file holds everything but the placement, the cache's alone.
+    let unplaced = Ticket { placement: None, ..t.clone() };
+    assert_eq!(db::ticket(&store.db.lock().unwrap(), "ST-1").unwrap().as_ref(), Some(&unplaced), "durable when answered");
     assert!(store.row("ST-1").is_ok(), "in the cache when answered");
     assert!(matches!(rx.try_recv(), Ok(Change::Created { ticket }) if ticket == t), "broadcast when answered");
     assert!(matches!(rx.try_recv(), Ok(Change::GroupChanged { .. })), "all of it: the new shortcode's row");

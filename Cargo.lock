@@ -1330,6 +1330,7 @@ dependencies = [
  "plexus-client",
  "plexus-core",
  "plexus-macros",
+ "pulldown-cmark",
  "rusqlite",
  "schemars",
  "serde",

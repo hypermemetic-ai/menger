@@ -56,6 +56,8 @@ fn write_titled(path: &Path, rows: &[(&str, &str)]) {
                 parent: None,
                 child_count: 0,
                 commits: Vec::new(),
+                path: None,
+                placement: None,
                 body: format!("the body of {id} is not searched: needle"),
                 created_unix: 0,
                 updated_unix: 0,

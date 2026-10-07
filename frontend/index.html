@@ -15,6 +15,14 @@
      file only. Deliberately NOT a <script> here: src/mermaid.rs injects one
      the first time a rendered body holds a mermaid fence. -->
 <link data-trunk rel="copy-file" href="vendor/mermaid/mermaid-11.17.2.min.js" data-target-path="vendor" />
+<!-- COMP-4: the SDK shell a framed body runs (src/frame.rs inlines it into
+     each frame's srcdoc); served at /app/sdk/ as the app's published copy. -->
+<link data-trunk rel="copy-file" href="sdk/menger-sdk.js" data-target-path="sdk" />
+<!-- COMP-10: the SDK's types — menger.d.ts and the declarations of the client
+     generated into sdk/generated/ (scripts/sdk-codegen.sh), which it imports —
+     published beside it for whoever writes a component. -->
+<link data-trunk rel="copy-file" href="sdk/menger.d.ts" data-target-path="sdk" />
+<link data-trunk rel="copy-dir" href="sdk/generated" data-target-path="sdk/generated" />
 <!-- AGS-17: stamp a stored theme choice before first paint, so a reload
      never flashes the system theme; src/theme.rs owns the key and
      re-applies it once mounted (a native test pins the two agree). -->
@@ -167,8 +175,10 @@
     margin: 0; background: var(--bg); color: var(--ink);
     font: 14px/1.5 var(--mono);
   }
+  /* MFE-21: the header wraps rather than overflow — a fourth link, and an
+     overridden backend's URL in the status, outgrow a narrow column. */
   header {
-    display: flex; align-items: baseline; gap: 1rem;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem 1rem;
     padding: .75rem 1.25rem; border-bottom: 1px solid var(--line);
   }
   header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
@@ -184,6 +194,66 @@
     border-radius: 4px; cursor: pointer; white-space: nowrap;
   }
   header .theme:hover { color: var(--accent); border-color: var(--accent); }
+  /* MFE-21: the app talks to a backend other than this page's server (an
+     override from #/settings) — the status names it, highlighted, on every
+     page; its color still says the state. */
+  #conn.override {
+    background: var(--sel); border: 1px solid var(--accent); border-radius: 4px;
+    padding: 0 .45rem; font-weight: 600; overflow-wrap: anywhere;
+  }
+  /* MFE-21: #/settings — a group per concern (Backend first) in the panel
+     idiom: a label column and a control column, one column when the
+     content column is narrow (it is the query container). */
+  #settings { max-width: 52rem; }
+  #settings h2 { font-size: 1rem; margin: 0 0 .75rem; }
+  #settings fieldset.group {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    margin: 0 0 1rem; padding: .5rem 1rem 1rem; min-width: 0;
+  }
+  #settings legend {
+    padding: 0 .4rem; font-family: var(--sans); font-size: 11px; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  }
+  #settings p.now { margin: .25rem 0 .9rem; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
+  #settings p.now code { color: var(--ink); }
+  #settings .field { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: .4rem 1rem; align-items: baseline; }
+  #settings label { font-size: .85rem; }
+  #settings .control { min-width: 0; }
+  #settings .line { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+  #settings input#ws-url, #settings input#test-url {
+    flex: 1 1 16rem; min-width: 0; font: inherit; padding: .25rem .5rem;
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; outline: none;
+  }
+  #settings input#ws-url:focus, #settings input#test-url:focus { border-color: var(--accent); }
+  #settings input#ws-url[aria-invalid="true"], #settings input#test-url[aria-invalid="true"] { border-color: var(--err-fg); }
+  #settings button {
+    font: inherit; font-size: .8rem; padding: .1rem .65rem; cursor: pointer;
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 4px;
+  }
+  #settings button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+  #settings button:disabled { color: var(--muted); cursor: default; opacity: .65; }
+  #settings button.primary:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  #settings button.link { background: none; border: 0; padding: 0; color: var(--accent); }
+  #settings button.link:disabled { color: var(--muted); }
+  #settings button.link:hover:not(:disabled) { text-decoration: underline; }
+  #settings p.status { margin: .35rem 0 .6rem; font-size: .8rem; min-height: 1.5em; overflow-wrap: anywhere; }
+  #settings .hint, #settings .probe.testing { color: var(--muted); }
+  #settings .probe.ok { color: var(--live); }
+  #settings .probe.failed, #settings .invalid { color: var(--err-fg); }
+  #settings p.invalid { margin: .5rem 0 0; font-size: .8rem; }
+  #settings .recent {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .6rem;
+    margin-top: .9rem; padding-top: .6rem; border-top: 1px solid var(--line); font-size: .8rem;
+  }
+  #settings .recent .lbl { color: var(--muted); }
+  #settings .recent ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .25rem .9rem; }
+  #settings .recent button.fill {
+    background: none; border: 0; padding: 0; font-size: .8rem; color: var(--accent); overflow-wrap: anywhere;
+  }
+  #settings .recent button.fill:hover { text-decoration: underline; }
+  @container (max-width: 36rem) {
+    #settings .field { grid-template-columns: minmax(0, 1fr); }
+  }
   main { padding: 1rem 1.25rem; max-width: 72rem; margin: 0 auto; }
   #health { color: var(--muted); font-size: .8rem; margin-bottom: 1rem; }
   #error {
@@ -437,6 +507,14 @@
     border-radius: 4px; cursor: pointer;
   }
   #nav .nav-hide { margin-left: auto; }
+  /* WAVE-10: the "menger docs" toggle, and a _MENGER/ document while it is off. */
+  #nav .menger-docs {
+    margin-left: auto; background: var(--bg); border: 1px solid var(--line); color: var(--muted);
+    font: inherit; font-size: 11px; line-height: 1.3; padding: 0 6px; border-radius: 4px; cursor: pointer;
+  }
+  #nav .menger-docs + .nav-hide { margin-left: 0; }
+  #nav .menger-docs.on, #nav .menger-docs:hover { color: var(--accent); border-color: var(--accent); }
+  #nav .node.menger-off { display: none; }
   #nav .nav-hide:hover, header .nav-reveal:hover { color: var(--accent); border-color: var(--accent); }
   /* SCALE-24: no scroll anchoring — a windowed list keeps its spacers at
      the height of what they stand for, so content above the viewport never
@@ -614,6 +692,261 @@
     font: inherit; font-size: .8rem; border-radius: 4px; padding: 0 .5rem; cursor: pointer;
   }
   #toast button:hover { color: var(--accent); border-color: var(--accent); }
+  /* WAVE-5: the wave board — a column per wave (or per stage), cards in
+     the house chip idiom. The board takes the content column's whole
+     width; its columns scroll sideways when they outgrow it. Owner,
+     2026-10-06: every column is the page's height and scrolls inside —
+     the row's height is measured in waves.rs (what the viewport leaves
+     below it); the fallback here only covers the first frame. */
+  header .hlink { color: var(--muted); font-size: .8rem; text-decoration: none; }
+  header .hlink:hover, header .hlink[aria-current] { color: var(--accent); }
+  main:has(#waves) { max-width: none; }
+  #waves .wbar {
+    position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem;
+    margin: 0 0 .9rem; font-size: .85rem;
+  }
+  #waves .code, #waves-index .code, #waves .card .off {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: var(--chip-fg);
+    background: var(--chip-bg); border: 1px solid var(--chip-line); border-radius: 5px;
+    padding: 0 5px; white-space: nowrap; text-decoration: none;
+  }
+  #waves a.code:hover, #waves-index a.code:hover, #waves .card .off:hover { color: var(--accent); border-color: var(--accent); }
+  #waves .layout { color: var(--muted); white-space: nowrap; }
+  #waves button.seg {
+    background: none; border: 0; padding: 0 .2rem; font: inherit; color: var(--muted); cursor: pointer;
+  }
+  #waves button.seg:hover { color: var(--accent); }
+  #waves button.seg.on { color: var(--ink); font-weight: 600; text-decoration: underline; }
+  #waves .tally { margin-left: auto; color: var(--muted); font-size: .75rem; }
+  #waves .lanes {
+    display: flex; align-items: stretch; gap: .75rem; overflow-x: auto; overflow-y: hidden;
+    padding-bottom: .5rem; height: calc(100dvh - 8rem); box-sizing: border-box;
+  }
+  #waves .lane {
+    flex: 0 0 16.5rem; min-width: 0; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px; padding: .5rem;
+    display: flex; flex-direction: column; min-height: 0; box-sizing: border-box;
+  }
+  #waves .lane > .lane-h { flex: none; }
+  #waves .lane.collapsed { flex: 0 0 auto; }
+  #waves .lane-h {
+    display: flex; align-items: baseline; gap: .4rem; margin: 0 0 .45rem; padding: 0 .15rem;
+    font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  #waves .lane-h .n { margin-left: auto; font-family: var(--mono); font-weight: 400; letter-spacing: 0; }
+  #waves button.lane-h { background: none; border: 0; cursor: pointer; width: 100%; margin: 0; white-space: nowrap; }
+  #waves button.lane-h:hover { color: var(--accent); }
+  #waves .lane:not(.collapsed) button.lane-h { margin-bottom: .45rem; }
+  #waves ul.cards {
+    list-style: none; margin: 0; padding: 0 2px 0 0; display: flex; flex-direction: column; gap: .4rem;
+    flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  }
+  #waves ul.cards > li { flex: none; }
+  #waves .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+    padding: .35rem .5rem .4rem; font-size: 12px; line-height: 1.45;
+  }
+  #waves .card { cursor: pointer; }
+  #waves .card:hover { border-color: var(--accent); }
+  #waves .card .top { display: flex; align-items: baseline; gap: .4rem; }
+  #waves .card .kind { color: var(--muted); font-size: 10.5px; }
+  #waves .card[data-kind="scope"] .kind { color: var(--kind-scope); }
+  #waves .card[data-kind="build"] .kind { color: var(--kind-build); }
+  #waves .card[data-kind="execution"] .kind { color: var(--kind-execution); }
+  #waves .card[data-kind="gap"] .kind { color: var(--kind-gap); }
+  #waves .card[data-kind="spike"] .kind { color: var(--kind-spike); }
+  #waves .card .sev { color: var(--muted); font-weight: 700; }
+  #waves .card .sev[data-sev="Critical"], #waves .card .sev[data-sev="High"] { color: var(--err-fg); }
+  #waves .card .blocked-mark { color: var(--err-fg); font-weight: 700; }
+  #waves .card .badge {
+    margin-left: auto; font-size: 10px; color: var(--chip-fg); background: var(--chip-bg);
+    border: 1px solid var(--chip-line); border-radius: 6px; padding: 0 5px;
+  }
+  #waves .card a.title {
+    display: block; margin: .15rem 0 .3rem; color: var(--ink); text-decoration: none;
+    font-family: var(--sans); font-size: 13px; overflow-wrap: anywhere;
+  }
+  #waves .card a.title:hover { color: var(--accent); }
+  #waves .card .foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem; }
+  #waves .card .foot .tag { font-size: 10px; padding: 0 5px; border-radius: 6px; border: 1px solid transparent; }
+  #waves .card .off { font-weight: 400; }
+  #waves-index h2 { font-size: 1rem; margin: 0 0 .4rem; }
+  #waves-index ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem; }
+  /* COMP-6: #/components — a row per component (its tag, its owner or
+     "orphan", what references it), its source folded on the line below. */
+  #components { max-width: 64rem; }
+  #components h2 { font-size: 1rem; margin: 0 0 .4rem; font-family: var(--mono); }
+  #components .crumbs a { color: var(--muted); text-decoration: none; font-size: .85rem; }
+  #components .crumbs a:hover { color: var(--accent); }
+  #components table.comps { margin-top: .75rem; }
+  #components th.c-name { width: 16rem; }
+  #components th.c-owner { width: 8rem; }
+  #components tr.comp td { border-bottom: 0; padding-bottom: .1rem; vertical-align: baseline; }
+  #components tr.src td { padding-top: 0; }
+  #components a.tag { font-family: var(--mono); font-size: 13px; color: var(--accent); text-decoration: none; }
+  #components a.tag:hover { text-decoration: underline; }
+  #components .code {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: var(--chip-fg);
+    background: var(--chip-bg); border: 1px solid var(--chip-line); border-radius: 5px;
+    padding: 0 5px; white-space: nowrap; text-decoration: none; margin-right: .25rem;
+  }
+  #components a.code:hover { color: var(--accent); border-color: var(--accent); }
+  #components .orphan {
+    font-size: .75rem; color: var(--muted); border: 1px dashed var(--line); border-radius: 5px; padding: 0 5px;
+  }
+  #components .count { color: var(--muted); font-size: .8rem; margin-right: .35rem; }
+  /* COMP-9: each row's summary; the help page's docs card (a frame). */
+  #components .c-summary { font-size: .8rem; color: var(--ink); margin-top: .1rem; }
+  #components .c-summary.none { color: var(--muted); font-style: italic; }
+  #components .help-card { margin: .5rem 0 1rem; }
+  #components details summary { cursor: pointer; color: var(--muted); font-size: .75rem; }
+  #components details pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px; margin: .35rem 0 .2rem;
+    padding: .6rem .8rem; overflow-x: auto; font-family: var(--mono); font-size: 12px; line-height: 1.5;
+  }
+  /* WAVE-11: the board's annotation below it — read, or edited beside a
+     live preview — and a wave reference in any body. */
+  #waves .notes { margin-top: 1rem; border-top: 1px solid var(--line); padding-top: .6rem; }
+  #waves .notes .nh { display: flex; align-items: baseline; gap: .75rem; }
+  #waves .notes button.fold { background: none; border: 0; padding: 0; font: inherit; cursor: pointer; color: var(--ink); }
+  #waves .notes button.fold:hover .code { color: var(--accent); border-color: var(--accent); }
+  #waves .notes button.edit, #waves .notes button.link, .editor button.reload {
+    background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer;
+  }
+  #waves .notes .none, #waves .notes .loading { color: var(--muted); }
+  .editor .panes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .75rem; margin-top: .5rem; }
+  .editor textarea.src {
+    width: 100%; min-height: 18rem; resize: vertical; box-sizing: border-box; padding: .5rem;
+    font-family: var(--mono); font-size: 12px; line-height: 1.5;
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 4px;
+  }
+  .editor .preview { border: 1px dashed var(--line); border-radius: 4px; padding: 0 .75rem; overflow: auto; max-height: 40rem; }
+  .editor .actions { display: flex; gap: .5rem; margin-top: .4rem; }
+  .editor button.save, .editor button.cancel {
+    font: inherit; font-size: .8rem; padding: 0 .6rem; cursor: pointer;
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 4px;
+  }
+  .editor button.save:hover, .editor button.cancel:hover { color: var(--accent); border-color: var(--accent); }
+  .editor .notice { background: var(--sel); border: 1px solid var(--line); border-radius: 4px; padding: .25rem .5rem; }
+  .editor .problem { color: var(--err-fg); background: var(--err-bg); border: 1px solid var(--err-line); border-radius: 4px; padding: .25rem .5rem; }
+  /* COMP-4: a framed body — its HTML in a sandboxed frame (src/frame.rs),
+     sized to its content by the frame's SDK, so it never scrolls inside. A
+     re-render loads beside the frame on screen, invisible, and replaces it
+     once drawn: an amended body never flashes. The frame's own background
+     is transparent (its color-scheme follows the app's), so it sits on
+     whatever surface hosts it. */
+  .mframe { position: relative; max-width: 56rem; }
+  .mframe > iframe { display: block; width: 100%; border: 0; }
+  .mframe > iframe[data-state="pending"] { position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none; }
+  .md .wave-ref {
+    font-family: var(--mono); font-size: .85em; white-space: nowrap; text-decoration: none;
+    border: 1px solid var(--chip-line); background: var(--chip-bg); color: var(--chip-fg); border-radius: 6px; padding: 0 5px;
+  }
+  .md a.wave-ref { color: var(--accent); }
+  .md .wave-ref.missing { color: var(--err-fg); }
+  #waves .card.flash, #waves .lane.flash { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #waves > p.none { color: var(--muted); font-size: .8rem; margin: 0 0 .5rem; }
+  /* WAVE-12: the board's filter, in Linear's idiom on the house tokens — a
+     Filter button, the applied clauses as segmented pills, and a popover
+     (the ticket menu's card: bordered, shadowed) hanging from the bar: a
+     search field over the categories, the open category's values beside
+     them — a box, the label, the count. With too little room for both (the
+     `narrow` class) the values take the categories' place, with a back row. */
+  #waves .filters { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+  #waves button.fbtn {
+    display: inline-flex; align-items: center; gap: .35rem; font: inherit; font-size: 12px; line-height: 1.6;
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 6px;
+    padding: .05rem .55rem; cursor: pointer;
+  }
+  #waves button.fbtn svg { width: 12px; height: 12px; color: var(--muted); }
+  #waves button.fbtn:hover, #waves button.fbtn[aria-expanded="true"] { border-color: var(--accent); }
+  #waves button.fbtn:hover svg, #waves button.fbtn[aria-expanded="true"] svg { color: var(--accent); }
+  #waves .pill {
+    display: inline-flex; align-items: stretch; font-size: 12px; line-height: 1.6;
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  }
+  #waves .pill > * {
+    padding: .05rem .45rem; border: 0; border-left: 1px solid var(--line); border-radius: 0;
+    background: none; font: inherit; color: var(--ink); white-space: nowrap;
+  }
+  #waves .pill > :first-child { border-left: 0; }
+  #waves .pill .p-cat, #waves .pill .p-op, #waves .pill .more, #waves .pill .p-x { color: var(--muted); }
+  #waves .pill button { cursor: pointer; }
+  #waves .pill button:hover { background: var(--hover); color: var(--accent); }
+  #waves .pill .p-vals { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+  #waves .pill .p-x { padding: .05rem .4rem; }
+  #waves button.reset {
+    background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer;
+  }
+  #waves button.reset:hover { text-decoration: underline; }
+  #fmenu {
+    position: absolute; z-index: 30; display: flex; flex-direction: column; max-width: calc(100vw - 16px);
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 10px 30px var(--shadow); font: 12.5px/1.5 var(--mono); overflow: hidden;
+  }
+  #fmenu input.fsearch {
+    flex: none; font: inherit; padding: .45rem .75rem; border: 0; border-bottom: 1px solid var(--line);
+    background: var(--bg); color: var(--ink); outline: none;
+  }
+  #fmenu input.fsearch::placeholder { color: var(--muted); }
+  #fmenu .panes { display: flex; min-height: 0; flex: 1 1 auto; }
+  #fmenu .fpane { overflow-y: auto; padding: 4px; min-height: 0; overscroll-behavior: contain; }
+  #fmenu .fmain { width: 17rem; flex: none; }
+  #fmenu .fsub { width: 18rem; flex: none; border-left: 1px solid var(--line); }
+  #fmenu.direct .fmain { display: none; }
+  #fmenu.direct .fsub { border-left: 0; }
+  #fmenu .frow {
+    display: flex; align-items: center; gap: .45rem; padding: 3px 8px; border-radius: 5px;
+    cursor: pointer; white-space: nowrap; user-select: none;
+  }
+  #fmenu .frow.hi { background: var(--hover); }
+  #fmenu .frow.cat.open { background: var(--sel); }
+  #fmenu .frow.cat.open .flabel { color: var(--accent); }
+  #fmenu .frow .flabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #fmenu .frow .glyph { width: 1.2em; flex: none; text-align: center; color: var(--muted); }
+  #fmenu .frow .arrow, #fmenu .fscope { color: var(--muted); }
+  #fmenu .fscope { margin-right: .3rem; font-size: 11px; }
+  #fmenu .frow .fcount { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2ch; text-align: right; font-size: 11px; }
+  #fmenu .frow .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  #fmenu .fhead {
+    padding: 6px 8px 2px; font-family: var(--sans); font-size: 10.5px; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  }
+  #fmenu .fhead.fdiv { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 6px; }
+  #fmenu .box {
+    flex: none; width: 13px; height: 13px; border: 1px solid var(--muted); border-radius: 3px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; line-height: 1; color: var(--bg);
+  }
+  #fmenu .box[data-state="on"], #fmenu .box[data-state="mixed"] { background: var(--accent); border-color: var(--accent); }
+  #fmenu .frow .only {
+    display: none; background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: 10.5px;
+    color: var(--accent); cursor: pointer;
+  }
+  #fmenu .frow:hover .only, #fmenu .frow.hi .only { display: inline; }
+  #fmenu .frow .only:hover { text-decoration: underline; }
+  #fmenu .frow .tag { font-size: 10.5px; padding: 0 5px; border-radius: 6px; }
+  #fmenu .kind .kglyph { color: var(--muted); }
+  #fmenu .kind[data-kind="scope"] .kglyph { color: var(--kind-scope); }
+  #fmenu .kind[data-kind="build"] .kglyph { color: var(--kind-build); }
+  #fmenu .kind[data-kind="execution"] .kglyph { color: var(--kind-execution); }
+  #fmenu .kind[data-kind="gap"] .kglyph { color: var(--kind-gap); }
+  #fmenu .kind[data-kind="spike"] .kglyph { color: var(--kind-spike); }
+  #fmenu .frow.back { display: none; color: var(--muted); border-bottom: 1px solid var(--line); border-radius: 0; margin-bottom: 4px; }
+  #fmenu .ftitle { padding: .5rem .6rem; display: flex; flex-direction: column; gap: .35rem; }
+  #fmenu .ftitle input {
+    font: inherit; padding: .25rem .45rem; background: var(--card); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px; outline: none;
+  }
+  #fmenu .ftitle input:focus { border-color: var(--accent); }
+  #fmenu .fhint, #fmenu .fempty { color: var(--muted); font-size: 11px; }
+  #fmenu .fempty { padding: 4px 8px; }
+  /* Too little room for two panes (src/filter.rs measures the column). */
+  #fmenu.narrow .fpane { width: 18rem; max-width: 100%; flex: 0 1 auto; }
+  #fmenu.narrow.has-sub .fmain { display: none; }
+  #fmenu.narrow .fsub { border-left: 0; }
+  #fmenu.narrow:not(.direct) .frow.back { display: flex; }
 </style>
 </head>
 <body></body>

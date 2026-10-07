@@ -59,6 +59,10 @@
 //! SCALE-26: and it holds its ticket there while it is open — fetching it
 //! when no view holds it (a ticket page's unlock not asked for yet): nothing
 //! walks the store into the cache any more.
+//!
+//! WAVE-5: opened on a shortcode's row in the nav — the root's row, which
+//! carries `data-shortcode` — it offers that shortcode's **Wave board**
+//! (`#/waves/<SHORTCODE>`) after Open in new tab.
 
 use js_sys::Reflect;
 use leptos::prelude::*;
@@ -83,6 +87,9 @@ const TOAST_MANUAL_MS: i32 = 12_000;
 #[derive(Clone, PartialEq)]
 struct Target {
     id: String,
+    /// WAVE-5: the shortcode the element stands for, when it is a
+    /// shortcode's row in the nav (`data-shortcode`).
+    shortcode: Option<String>,
     x: f64,
     y: f64,
 }
@@ -187,7 +194,7 @@ fn close_menu(target: RwSignal<Option<Target>>) {
 /// ever loses the former still answers. Nothing inside an overlay dialog
 /// counts (those own their keys), and the menu opens at the element's
 /// rect rather than a cursor that does not exist.
-fn focused_ticket() -> Option<(String, f64, f64)> {
+fn focused_ticket() -> Option<(String, Option<String>, f64, f64)> {
     let active = document().active_element()?;
     if active.closest("[role=dialog]").ok().flatten().is_some() {
         return None;
@@ -200,7 +207,7 @@ fn focused_ticket() -> Option<(String, f64, f64)> {
         .get_attribute("data-ticket-id")
         .or_else(|| host.get_attribute("data-nav-id"))?;
     let rect = host.get_bounding_client_rect();
-    Some((id, rect.left(), rect.bottom()))
+    Some((id, host.get_attribute("data-shortcode"), rect.left(), rect.bottom()))
 }
 
 /// The document-level listeners, installed once for the app's lifetime
@@ -212,15 +219,14 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
     let win = dom::window();
 
     let on_context = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
-        let hit = ev
+        let host = ev
             .target()
             .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-            .and_then(|el| el.closest("[data-ticket-id]").ok().flatten())
-            .and_then(|el| el.get_attribute("data-ticket-id"));
-        if let Some(id) = hit {
+            .and_then(|el| el.closest("[data-ticket-id]").ok().flatten());
+        if let Some((id, shortcode)) = host.and_then(|el| Some((el.get_attribute("data-ticket-id")?, el.get_attribute("data-shortcode")))) {
             // Only here: a right-click anywhere else keeps the native menu.
             ev.prevent_default();
-            target.set(Some(Target { id, x: ev.client_x() as f64, y: ev.client_y() as f64 }));
+            target.set(Some(Target { id, shortcode, x: ev.client_x() as f64, y: ev.client_y() as f64 }));
         }
     });
     let _ = doc.add_event_listener_with_callback("contextmenu", on_context.as_ref().unchecked_ref());
@@ -259,11 +265,11 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
         // is what stops the engine from also firing its own `contextmenu`
         // for the same keystroke and re-opening us at its coordinates.
         if key == "ContextMenu" || (key == "F10" && ev.shift_key()) {
-            if let Some((id, x, y)) = focused_ticket() {
+            if let Some((id, shortcode, x, y)) = focused_ticket() {
                 ev.prevent_default();
                 ev.stop_propagation();
                 keys::remember_focus();
-                target.set(Some(Target { id, x, y }));
+                target.set(Some(Target { id, shortcode, x, y }));
             }
         }
     });
@@ -395,7 +401,7 @@ fn menu_view(
     toast: RwSignal<Option<Toast>>,
     toast_gen: StoredValue<u32>,
 ) -> impl IntoView {
-    let Target { id, x, y } = t;
+    let Target { id, shortcode, x, y } = t;
     // SCALE-26: the menu holds the ticket it is open on, and asks for it when
     // no view does (no walk puts every ticket in the cache any more).
     let holder = cache::Holder::new();
@@ -549,6 +555,12 @@ fn menu_view(
             <a class="item" role="menuitem" href=href target="_blank" rel="noopener" on:click=move |_| close()>
                 "Open in new tab"
             </a>
+            // WAVE-5: a shortcode's row offers the shortcode's wave board.
+            {shortcode.map(|sc| view! {
+                <a class="item" role="menuitem" href=format!("#/waves/{sc}") data-wave-board=sc.clone() on:click=move |_| close()>
+                    "Wave board"
+                </a>
+            })}
             <button class="item" role="menuitem" on:click=copy>"Copy code"</button>
             {move || {
                 let status_items = status_items.clone();

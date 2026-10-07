@@ -13,6 +13,7 @@ use super::*;
 
 fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: format!("a {} in {epic}", kind.as_str()),
         kind,

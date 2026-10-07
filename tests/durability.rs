@@ -676,6 +676,14 @@ async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkil
         .into_iter()
         .map(|ev| ev["ticket"].clone())
         .collect();
+    // WAVE-6: and each carries its kept placement, which that binary had not
+    // — on every one (the fixture holds no doc); its values are held to the
+    // rule by the store's own tests.
+    assert_eq!(tickets.len(), expected.len());
+    for (want, got) in expected.iter_mut().zip(&tickets) {
+        assert!(got["placement"]["type"].is_string(), "{} is placed: {got}", got["id"]);
+        want["placement"] = got["placement"].clone();
+    }
     assert_eq!(tickets, expected, "every ticket exactly as the seven-status binary answered it");
     let log = s1.startup_output();
     // Nothing of SDLC-7's to migrate. The one migration a database of that

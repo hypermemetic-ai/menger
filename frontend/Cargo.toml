@@ -27,10 +27,16 @@ leptos = { version = "0.8", features = ["csr"] }
 menger-tickets-api = { path = "../tickets-api", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std"] }
 
-# AGS-14 only: the config object handed to the vendored mermaid renderer
-# across the JS boundary (src/mermaid.rs). No wire data is a `Value` any
-# more — the client's typed events replaced all of it.
+# AGS-14: the config object handed to the vendored mermaid renderer
+# across the JS boundary (src/mermaid.rs); COMP-4/5: a frame's init block,
+# and typed events and params written to / read from a frame as JSON
+# (src/frame.rs, src/bridge.rs). No wire data is a `Value` any more — the
+# client's typed events replaced all of it.
 serde_json = "1"
+# COMP-5: the bridge reads a frame's `menger.call` params into typed structs
+# with the activation's parameter names (src/bridge.rs) — already in the
+# tree (tickets-api derives with it); no weight.
+serde = { version = "1", features = ["derive"] }
 
 # MFE-7: ticket bodies as markdown. Sanitization is done in the event
 # stream (src/md.rs) — raw HTML downgraded to text, unsafe link/image
@@ -99,6 +105,13 @@ web-sys = { version = "0.3", features = [
   "MutationRecord",
   "FocusOptions",
   "FocusEvent",
+  # WAVE-12: the wave board's filter rewrites the route's query in place
+  # (history.replaceState — no history entry, no hashchange).
+  "History",
+  # COMP-4: a framed body is a sandboxed <iframe srcdoc> (src/frame.rs), and
+  # its SDK shell talks to the app over postMessage.
+  "HtmlIFrameElement",
+  "MessageEvent",
 ] }
 
 console_error_panic_hook = "0.1"

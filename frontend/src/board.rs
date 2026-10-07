@@ -121,6 +121,11 @@ impl Extents {
         self.pos(epic, seq)
     }
 
+    /// COMP-9: whether a shortcode holds a ticket.
+    pub(crate) fn has_shortcode(&self, epic: &str) -> bool {
+        self.runs.binary_search_by(|(e, _)| e.as_str().cmp(epic)).is_ok()
+    }
+
     /// The key of row `p`.
     pub(crate) fn key_at(&self, p: usize) -> Option<(&str, u32)> {
         if p >= self.n {
@@ -371,6 +376,19 @@ impl Board {
 
     pub(crate) fn pos_of_untracked(self, id: &str) -> Option<usize> {
         self.ext.with_untracked(|e| e.as_ref()?.pos_of(id))
+    }
+
+    /// COMP-9: whether a shortcode holds a ticket — `None` before the
+    /// extents are in.
+    pub(crate) fn has_shortcode_untracked(self, epic: &str) -> Option<bool> {
+        self.ext.with_untracked(|e| e.as_ref().map(|e| e.has_shortcode(epic)))
+    }
+
+    /// COMP-9: whether a ticket has the id `id` (ids are allocated
+    /// highest-plus-one and nothing deletes — SCALE-16) — `None` before the
+    /// extents are in.
+    pub(crate) fn has_ticket_untracked(self, id: &str) -> Option<bool> {
+        self.ext.with_untracked(|e| e.as_ref().map(|e| e.pos_of(id).is_some()))
     }
 
     /// The row pitch the board's view last measured (px).
@@ -663,6 +681,8 @@ mod tests {
             blocked_by: Vec::new(),
             unlocks: Vec::new(),
             commits: Vec::new(),
+            path: None,
+            placement: None,
             created_unix: 0,
             updated_unix: 0,
         }

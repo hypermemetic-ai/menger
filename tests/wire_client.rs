@@ -227,7 +227,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 None,
                 None,
-                None,
+                None, None,
             )
             .await
             .expect("create"),
@@ -241,7 +241,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // The rule itself, typed: a build first is the activation's own Error.
     match one(
         client
-            .create_all("FRESH".into(), "a build first".into(), None, None, None, None, None)
+            .create_all("FRESH".into(), "a build first".into(), None, None, None, None, None, None)
             .await
             .expect("the call succeeds; the activation says no"),
     ) {
@@ -300,7 +300,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 Some(vec!["DG-99".into()]),
                 None,
-                None,
+                None, None,
             )
             .await
             .expect("create DG-1"),
@@ -324,7 +324,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- parent / children (AGS-19, MNG-14, MNG-12's set_parent) ------------
     let parent = created(
         client
-            .create_all("PA".into(), "P".into(), Some("scope".into()), None, None, None, None)
+            .create_all("PA".into(), "P".into(), Some("scope".into()), None, None, None, None, None)
             .await
             .expect("create PA-1"),
     );
@@ -338,7 +338,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 None,
                 None,
-                Some("PA-1".into()),
+                Some("PA-1".into()), None,
             )
             .await
             .expect("create PA-2"),
@@ -348,7 +348,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // No parent named: the shortcode root (MNG-14).
     let third = created(
         client
-            .create_all("PA".into(), "loose".into(), None, None, None, None, None)
+            .create_all("PA".into(), "loose".into(), None, None, None, None, None, None)
             .await
             .expect("create PA-3"),
     );
@@ -387,7 +387,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- an unlocks edge ----------------------------------------------------
     created(
         client
-            .create_all("RS".into(), "A".into(), Some("scope".into()), None, None, None, None)
+            .create_all("RS".into(), "A".into(), Some("scope".into()), None, None, None, None, None)
             .await
             .expect("create RS-1"),
     );
@@ -400,7 +400,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 Some(vec!["RS-1".into()]),
                 None,
-                None,
+                None, None,
             )
             .await
             .expect("create RS-2"),
@@ -538,4 +538,108 @@ async fn the_wire_assertions_through_the_generated_client() {
         TicketsEvent::Health { ticket_count, .. } => assert_eq!(ticket_count, 7),
         other => panic!("expected `health`, got {other:?}"),
     }
+}
+
+/// WAVE-4: the `waves` events through the generated client — the call the
+/// board makes — decode to the activation's own types: `Placed` with its
+/// internally tagged `Placement` nested inside the tagged event, then one
+/// `WaveCounts`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn waves_decode_typed_through_the_generated_client() {
+    use menger_tickets_api::Placement;
+    let port = start_server().await;
+    let transport = connect(port).await;
+    let client = TicketsClient::new(&transport);
+    for (epic, kind, blocked_by) in [
+        ("TY", "scope", None),
+        ("TY", "build", None),
+        ("TY", "build", Some(vec!["TY-2".to_string()])),
+        ("TY", "gap", Some(vec!["TY-77".to_string()])),
+    ] {
+        created(
+            client
+                .create_all(epic.into(), "t".into(), Some(kind.into()), None, blocked_by, None, None, None)
+                .await
+                .expect("create"),
+        );
+    }
+    let events = client.waves_all(vec!["ty".into()], None).await.expect("waves");
+    let placed: Vec<(String, Placement, Vec<String>)> = events
+        .iter()
+        .filter_map(|e| match e {
+            TicketsEvent::Placed { summary, placement, waiting_on } => {
+                Some((summary.id.clone(), *placement, waiting_on.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        placed,
+        vec![
+            ("TY-2".to_string(), Placement::Wave { n: 1 }, vec![]),
+            ("TY-3".to_string(), Placement::Wave { n: 2 }, vec!["TY-2".to_string()]),
+            ("TY-4".to_string(), Placement::MissingBlocker, vec!["TY-77".to_string()]),
+        ]
+    );
+    match events.last() {
+        Some(TicketsEvent::WaveCounts { waves, missing, done }) => {
+            assert_eq!((waves.as_slice(), *missing, *done), (&[1u64, 1][..], 1, 0));
+        }
+        other => panic!("expected wave_counts last, got {other:?}"),
+    }
+}
+
+/// WAVE-6 and WAVE-10: what the board and the annotation read, through the
+/// generated client — `placement` on a created ticket and on a summary row,
+/// a `placements_changed` from `watch` decoding to its typed changes, and
+/// `get` by a path address — the activation's own types, no JSON in hand.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn placements_and_paths_decode_typed_through_the_generated_client() {
+    use futures::StreamExt;
+    use menger_tickets_api::{Placement, PlacementChange};
+    let port = start_server().await;
+    let transport = connect(port).await;
+    let client = TicketsClient::new(&transport);
+    let mut watch = client.watch(None);
+    let mut make = |kind: &str, blocked_by: Option<Vec<String>>, path: Option<&str>| {
+        client.create_all("PT".into(), "t".into(), Some(kind.into()), None, blocked_by, None, None, path.map(Into::into))
+    };
+    created(make("scope", None, None).await.expect("create")); // PT-1
+    let y = created(make("build", None, None).await.expect("create")); // PT-2
+    let x = created(make("build", Some(vec!["PT-2".into()]), None).await.expect("create")); // PT-3
+    let doc = created(make("doc", None, Some("_MENGER/board")).await.expect("create")); // PT-4
+    assert_eq!((y.placement, x.placement, doc.placement), (Some(Placement::Wave { n: 1 }), Some(Placement::Wave { n: 2 }), None));
+    assert_eq!(doc.path.as_deref(), Some("_MENGER/board"));
+
+    match one(client.get_all("pt/_MENGER/board".into()).await.expect("get")) {
+        TicketsEvent::Ticket { ticket } => assert_eq!(ticket.id, "PT-4"),
+        other => panic!("expected the ticket, got {other:?}"),
+    }
+    client.set_status_all("PT-2".into(), "Complete".into()).await.expect("set_status");
+    let mut changes = None;
+    while changes.is_none() {
+        let ev = tokio::time::timeout(Duration::from_secs(5), watch.next()).await.expect("watch").expect("open");
+        if let Ok(plexus_client::ClientEvent::Data(TicketsEvent::PlacementsChanged { changes: c })) = ev {
+            changes = Some(c);
+        }
+    }
+    assert_eq!(
+        changes.unwrap(),
+        vec![
+            PlacementChange { id: "PT-2".into(), placement: Placement::Done },
+            PlacementChange { id: "PT-3".into(), placement: Placement::Wave { n: 1 } },
+        ]
+    );
+    let rows: Vec<_> = client
+        .list_all(Some("PT".into()), None, None, None, None, Some(true))
+        .await
+        .expect("list")
+        .into_iter()
+        .filter_map(|e| match e {
+            TicketsEvent::Summary { summary } => Some((summary.id, summary.placement)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rows[2], ("PT-3".to_string(), Some(Placement::Wave { n: 1 })), "on the row");
+    assert_eq!(rows[3], ("PT-4".to_string(), None), "a doc is placed nowhere");
 }

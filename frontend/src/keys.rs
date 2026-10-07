@@ -122,6 +122,7 @@ pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
     ("Enter", "open the focused ticket"),
     ("/ or Ctrl+K", "jump to a ticket (⌘K on a Mac)"),
     ("g h", "go to the board"),
+    ("f", "filter the wave board (on a wave board)"),
     ("?", "this list"),
     ("Esc", "close the palette or this list"),
 ];
@@ -414,6 +415,12 @@ pub(crate) fn remember_focus() {
     FOCUS_BEFORE_OVERLAY.with(|c| *c.borrow_mut() = el);
 }
 
+/// WAVE-12: let go of what [`remember_focus`] kept — the board's filter
+/// closed by a click, which put focus where it wanted it.
+pub(crate) fn forget_focus() {
+    FOCUS_BEFORE_OVERLAY.with(|c| *c.borrow_mut() = None);
+}
+
 /// Hand focus back, a tick later — the dialog (or menu) has to leave the
 /// DOM first, or the browser's own "focus fell out of a removed subtree"
 /// fixup lands on `<body>` after us. A no-op when nothing was remembered.
@@ -519,7 +526,7 @@ pub(crate) fn install(overlay: RwSignal<Overlay>, board: board::Board) {
 /// True where a keystroke belongs to whatever already has focus: a text
 /// field, a `<select>`, a dialog (the overlays run their own key maps),
 /// or a menu (AGS-16).
-fn defer_to_focus(el: &web_sys::Element) -> bool {
+pub(crate) fn defer_to_focus(el: &web_sys::Element) -> bool {
     matches!(
         el.tag_name().as_str(),
         "INPUT" | "TEXTAREA" | "SELECT" | "OPTION"
@@ -1160,6 +1167,8 @@ mod tests {
             parent: None,
             child_count: 0,
             commits: Vec::new(),
+            path: None,
+            placement: None,
             blocked_by: Vec::new(),
             unlocks: Vec::new(),
             created_unix: 0,
@@ -1225,6 +1234,7 @@ mod tests {
             "Enter",       // open
             "/ or Ctrl+K", // palette
             "g h",         // board
+            "f",           // the wave board's filter (WAVE-12)
             "?",           // this list
             "Esc",         // close
         ] {

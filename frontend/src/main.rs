@@ -179,18 +179,55 @@
 //! shows the `Doc` chip, no relations, and its children's docs counted
 //! apart. Every id and selector the earlier tickets read is kept.
 
+//! WAVE-5: the wave board (src/waves.rs) — `#/waves/<SHORTCODE>`, the
+//! order of work as columns derived from `blocked_by` by the server
+//! (`tickets.waves`, WAVE-4): a column per wave, or per stage, one toggle
+//! apart. `#/waves` lists the boards; the header links to it beside the
+//! board, and a shortcode's row in the nav offers its board in the ticket
+//! menu. `waves` is asked only while a wave board is open.
+
+//! WAVE-12: the board's filter (src/filter.rs) — a Linear-style menu that
+//! builds any board; a board opens on its shortcode tree, and the filter is
+//! the route's query (`#/waves/PLEXUS?status=not:Complete`), which the route
+//! itself ignores.
+
+//! COMP-6: `#/components` (src/components.rs) — every component in the
+//! registry, its owner or "orphan", what references it, its source; linked
+//! from the header beside `waves`. `#/components/<tag>` is one, its source
+//! open.
+
+//! MFE-21: `#/settings` (src/settings.rs) — the app's settings, linked from
+//! the header beside `components`; the first is the backend's WebSocket URL.
+//! The session connects to the override when one is saved, else to this
+//! page's server as before, and while it does the header's status names the
+//! URL (`live · ws://…`, highlighted) on every page.
+//!
+//! MFE-22: `test ↗` beside `settings` opens the test environment
+//! (`http://127.0.0.1:4451/` unless #/settings says otherwise) in a new tab;
+//! a page the test environment serves does not show it.
+
 mod board;
+mod bridge;
 mod cache;
+mod card;
+mod components;
 mod dom;
+mod filter;
+mod frame;
+mod inspect;
 mod keys;
 mod kids;
 mod md;
 mod menu;
 mod nav;
+mod notes;
 
 mod mermaid;
+mod registry;
 mod session;
+mod settings;
 mod theme;
+mod waves;
 
 use std::collections::HashSet;
 
@@ -261,17 +298,39 @@ pub(crate) enum Conn {
 // Routing (MFE-7). The deep-link contract this ticket owns, recorded in
 // MFE-1: a ticket's page is `/app/#/ticket/{id}`.
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Route {
     Board,
     Ticket(String),
+    /// WAVE-5: `#/waves/<SHORTCODE>` — the wave board for the shortcode (held
+    /// upper case: the route is case-insensitive) and every shortcode hosted
+    /// under it; `#/waves` alone (an empty shortcode) lists the boards.
+    /// WAVE-12: a query after it (`?sc=…&status=…`) is the board's filter —
+    /// the board's to read, not the route's.
+    Waves(String),
+    /// COMP-6: `#/components` (`None`) — every component; and
+    /// `#/components/<tag>` — that one (its name folded to lowercase, as
+    /// HTML folds a tag).
+    Components(Option<String>),
+    /// MFE-21: `#/settings`.
+    Settings,
 }
 
 fn parse_route(hash: &str) -> Route {
     let path = hash.strip_prefix('#').unwrap_or(hash);
     let path = path.strip_prefix('/').unwrap_or(path);
+    // WAVE-12: the query is the wave board's filter, not part of the route.
+    let path = path.split_once('?').map_or(path, |(p, _)| p);
     match path.split_once('/') {
         Some(("ticket", id)) if !id.is_empty() => Route::Ticket(id.to_string()),
+        Some(("waves", sc)) => Route::Waves(sc.trim_end_matches('/').to_ascii_uppercase()),
+        None if path == "waves" => Route::Waves(String::new()),
+        Some(("components", tag)) => {
+            let tag = tag.trim_end_matches('/').to_ascii_lowercase();
+            Route::Components((!tag.is_empty()).then_some(tag))
+        }
+        None if path == "components" => Route::Components(None),
+        _ if path.trim_end_matches('/') == "settings" => Route::Settings,
         _ => Route::Board,
     }
 }
@@ -963,6 +1022,7 @@ fn ticket_view(
     blockers_loaded: RwSignal<bool>,
     kids: RwSignal<kids::Kids>,
     more: impl Fn() + Copy + Send + Sync + 'static,
+    refs: notes::Refs,
 ) -> impl IntoView {
     let blocked_by = Memo::new(move |_| ticket.with(|t| t.blocked_by.clone()));
     let unlocks_ids = Memo::new(move |_| ticket.with(|t| t.unlocks.clone()));
@@ -1084,41 +1144,31 @@ fn ticket_view(
             view! { <span class="roll" title=tip>{nav::roll_label(done, total, docs)}</span> }
         })
     };
-    let body = move || {
-        // MFE-9: the body is not a row field — it arrives with this page's
-        // own `get` and lives here. `None` is "not fetched yet"; an empty
-        // string is a ticket that genuinely has no body.
-        let Some(raw) = body_raw.get() else {
-            return view! { <p class="loading">"loading body…"</p> }.into_any();
-        };
-        if raw.trim().is_empty() {
-            return view! { <p class="none">"(no body)"</p> }.into_any();
+    // MFE-9: the body is not a row field — it arrives with this page's own
+    // `get` and lives here. `None` is "not fetched yet"; an empty string is a
+    // ticket that genuinely has no body. A memo, so a change to the body
+    // re-renders the body and not this choice (COMP-4: a framed body's frame
+    // re-renders in place, without a flash).
+    let body_state = Memo::new(move |_| {
+        body_raw.with(|b| match b.as_deref() {
+            None => None,
+            Some(raw) => Some(!raw.trim().is_empty()),
+        })
+    });
+    let body = move || match body_state.get() {
+        None => view! { <p class="loading">"loading body…"</p> }.into_any(),
+        Some(false) => view! { <p class="none">"(no body)"</p> }.into_any(),
+        // AGS-14: the frontmatter folded, the markdown through `md.rs`, its
+        // mermaid placeholders handed to the renderer once the div is in the
+        // DOM — a body re-render makes a new div (and a new hook), so
+        // navigation never re-renders a stale one. WAVE-11: and each
+        // `{wave: ID}` placed from the named ticket's row (`refs`), live as
+        // its placement moves; a body with none renders as it always did.
+        // COMP-4: a body that holds HTML renders in a sandboxed frame.
+        Some(true) => view! {
+            <notes::BodyView body=Signal::derive(move || body_raw.get().unwrap_or_default()) refs=Some(refs) />
         }
-        let (fm, md_src) = md::split_frontmatter(&raw);
-        let fm_view = fm.map(|f| {
-            let f = f.to_string();
-            view! {
-                <details class="frontmatter">
-                    <summary>"frontmatter"</summary>
-                    <pre>{f}</pre>
-                </details>
-            }
-        });
-        let md::Rendered { html, diagrams } = md::render_body(md_src);
-        // AGS-14: once this div is in the DOM, hand its mermaid
-        // placeholders to the renderer. `on_load` fires once per mounted
-        // div, and a body re-render makes a new div (and a new hook), so
-        // navigation never re-renders a stale one; a diagram-free body
-        // never touches the renderer at all.
-        let md_node = NodeRef::<leptos::html::Div>::new();
-        if diagrams > 0 {
-            md_node.on_load(move |el: web_sys::HtmlDivElement| mermaid::mount(&el));
-        }
-        view! {
-            {fm_view}
-            <div class="md" node_ref=md_node inner_html=html></div>
-        }
-            .into_any()
+        .into_any(),
     };
 
     // The id never changes for a row's lifetime (see `Row`), so the
@@ -1284,6 +1334,23 @@ fn TicketPage(
         Memo::new(move |_| cache::find(&id))
     };
 
+    // WAVE-11: the rows a `{wave: ID}` in the body names, held while the
+    // page is open — asked again after a reconnect or a lag.
+    let refs = notes::Refs::new(None, holder);
+    {
+        let stale = session::stale();
+        Effect::new(move |seen: Option<(u32, u32)>| {
+            let epoch = (socket.get(), stale.get());
+            if seen.is_some_and(|s| s != epoch) {
+                refs.forget();
+            }
+            if epoch.0 > 0 {
+                body.with(|b| b.as_deref().map(|b| refs.want(&md::wave_ids(b))));
+            }
+            epoch
+        });
+    }
+
     // SCALE-26: what the page names by id that its own calls do not bring —
     // the chain above it (the crumb), its unlocks, and its blockers again.
     // The walk used to put every one of them in the store; nothing else will
@@ -1351,7 +1418,7 @@ fn TicketPage(
         <div id="ticket-page">
             <p class="crumbs"><a href="#/">"← board"</a>{crumbs}</p>
             {move || match ticket.get() {
-                Some(t) => ticket_view(RwSignal::from(t), body, blockers_loaded, kids, more).into_any(),
+                Some(t) => ticket_view(RwSignal::from(t), body, blockers_loaded, kids, more, refs).into_any(),
                 None if not_found.get() => {
                     let id = id_view.clone();
                     view! {
@@ -1379,6 +1446,9 @@ fn App() -> impl IntoView {
     // SCALE-26: the board's model of the store — the extents, the window's
     // rows it holds — asked for by the session and kept by its own effect.
     let board = board::Board::new();
+    // COMP-9: an instance's shortcode / ticket attributes are checked
+    // against the board's extents.
+    frame::know(board);
     board.drive();
     let dock = RwSignal::new(None::<Dock>);
     let conn = RwSignal::new(Conn::Connecting);
@@ -1397,10 +1467,25 @@ fn App() -> impl IntoView {
     // walk — `extents` and the board's one window, then live.
     session::drive(board, dock, conn, socket, last_error, tree);
 
-    let conn_view = move || match conn.get() {
-        Conn::Connecting => ("", "connecting…"),
-        Conn::Live => ("live", "live · WS"),
-        Conn::Reconnecting => ("reconnecting", "reconnecting…"),
+    // MFE-21: the backend this page's app talks to — when it is not this
+    // page's server (an override from #/settings), the status names it.
+    let over = settings::backend().over().map(str::to_string);
+    let overridden = over.is_some();
+    let conn_class = move || {
+        let class = match conn.get() {
+            Conn::Connecting => "",
+            Conn::Live => "live",
+            Conn::Reconnecting => "reconnecting",
+        };
+        if overridden { format!("{class} override") } else { class.to_string() }
+    };
+    let conn_words = move || {
+        let (state, live) = match conn.get() {
+            Conn::Connecting => ("connecting…", false),
+            Conn::Live => ("live", true),
+            Conn::Reconnecting => ("reconnecting…", false),
+        };
+        settings::conn_text(state, live, over.as_deref())
     };
     // SCALE-26: the count is the board's extent once the extents are in —
     // kept by every `created` and asked again after a `lagged`, so it is the
@@ -1432,6 +1517,10 @@ fn App() -> impl IntoView {
     let viewport = Trigger::new();
     window_event_listener(leptos::ev::resize, move |_| viewport.notify());
 
+    // MFE-22: where the header's `test ↗` goes — the settings page moves it.
+    let test_link = RwSignal::new(settings::load().test_link());
+    let page_origin = settings::page_origin();
+
     view! {
         <div id="app" class:nonav=move || nav_hidden.get() data-rows-held=move || held.get()>
             <nav::Nav tree route hidden=nav_hidden />
@@ -1449,13 +1538,61 @@ fn App() -> impl IntoView {
                         })
                     }}
                     <h1><a href="#/">"menger"</a></h1>
+                    // WAVE-5: the wave boards, beside the board.
+                    <a
+                        class="hlink"
+                        href="#/waves"
+                        aria-current=move || matches!(route.get(), Route::Waves(_)).then_some("page")
+                    >
+                        "waves"
+                    </a>
+                    // COMP-6: the component registry, beside them.
+                    <a
+                        class="hlink"
+                        href="#/components"
+                        aria-current=move || matches!(route.get(), Route::Components(_)).then_some("page")
+                    >
+                        "components"
+                    </a>
+                    // MFE-21: the settings, beside them.
+                    <a
+                        class="hlink"
+                        href="#/settings"
+                        aria-current=move || matches!(route.get(), Route::Settings).then_some("page")
+                    >
+                        "settings"
+                    </a>
+                    // MFE-22: the test environment, in a new tab — not on
+                    // the test environment itself.
+                    {move || {
+                        let link = test_link.get();
+                        settings::shows_test_link(&link, &page_origin).then(|| {
+                            let title = format!("the test environment — {link} (set in #/settings)");
+                            view! {
+                                <a class="hlink" id="test-link" href=link target="_blank" rel="noopener" title=title>
+                                    "test ↗"
+                                </a>
+                            }
+                        })
+                    }}
                     <span class="tag">
                         {move || match route.get() {
                             Route::Board => "the live board (MFE-3)",
                             Route::Ticket(_) => "ticket (MFE-7)",
+                            Route::Waves(_) => "the wave board (WAVE-5)",
+                            Route::Components(_) => "components (COMP-6)",
+                            Route::Settings => "settings (MFE-21)",
                         }}
                     </span>
-                    <span id="conn" class=move || conn_view().0>{move || conn_view().1}</span>
+                    // MFE-21: `override` marks a backend other than this
+                    // page's server (highlighted, its URL in the words).
+                    <span
+                        id="conn"
+                        class=conn_class
+                        title=overridden.then_some("not this page's server — set in #/settings")
+                    >
+                        {conn_words}
+                    </span>
                     // AGS-17: the theme toggle (system → light → dark).
                     <theme::Toggle />
                 </header>
@@ -1474,6 +1611,11 @@ fn App() -> impl IntoView {
                         Route::Ticket(id) => {
                             view! { <TicketPage id socket last_error /> }.into_any()
                         }
+                        Route::Waves(shortcode) => {
+                            view! { <waves::WaveBoard shortcode tree socket last_error /> }.into_any()
+                        }
+                        Route::Components(only) => view! { <components::ComponentsPage only /> }.into_any(),
+                        Route::Settings => view! { <settings::SettingsPage test_link /> }.into_any(),
                     }}
                 </main>
             </div>
@@ -1493,8 +1635,40 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        board_layout, board_window, fmt_relative, st_class, tally, Geom, BOARD_MARGIN, BOARD_MAX_PX, BOARD_STEP, STATUSES,
+        board_layout, board_window, fmt_relative, parse_route, st_class, tally, Geom, Route, BOARD_MARGIN, BOARD_MAX_PX,
+        BOARD_STEP, STATUSES,
     };
+
+    /// WAVE-5: `#/waves/<SHORTCODE>` is the wave board, case-insensitive;
+    /// `#/waves` lists the boards; the board's and the ticket page's routes
+    /// are as they were.
+    #[test]
+    fn the_wave_board_has_its_route_and_the_others_keep_theirs() {
+        assert_eq!(parse_route("#/waves/PLEXUS"), Route::Waves("PLEXUS".into()));
+        assert_eq!(parse_route("#/waves/plexus"), Route::Waves("PLEXUS".into()));
+        assert_eq!(parse_route("#/waves/Plexus/"), Route::Waves("PLEXUS".into()));
+        assert_eq!(parse_route("#/waves"), Route::Waves(String::new()));
+        assert_eq!(parse_route("#/waves/"), Route::Waves(String::new()));
+        assert_eq!(parse_route("#/ticket/MNG-4"), Route::Ticket("MNG-4".into()));
+        assert_eq!(parse_route("#/ticket/"), Route::Board);
+        assert_eq!(parse_route("#/"), Route::Board);
+        assert_eq!(parse_route(""), Route::Board);
+        assert_eq!(parse_route("#/wavesX"), Route::Board);
+        // WAVE-12: the board's filter rides in the query; the route ignores it.
+        assert_eq!(parse_route("#/waves/PLEXUS?sc=is:RETURNS&status=not:Complete"), Route::Waves("PLEXUS".into()));
+        assert_eq!(parse_route("#/waves/plexus/?all"), Route::Waves("PLEXUS".into()));
+        assert_eq!(parse_route("#/waves?all"), Route::Waves(String::new()));
+        // COMP-6: the component registry, and one component by its tag.
+        assert_eq!(parse_route("#/components"), Route::Components(None));
+        assert_eq!(parse_route("#/components/"), Route::Components(None));
+        assert_eq!(parse_route("#/components/m-wave-summary"), Route::Components(Some("m-wave-summary".into())));
+        assert_eq!(parse_route("#/components/M-Wave-Summary/"), Route::Components(Some("m-wave-summary".into())));
+        assert_eq!(parse_route("#/componentsX"), Route::Board);
+        // MFE-21: the settings page.
+        assert_eq!(parse_route("#/settings"), Route::Settings);
+        assert_eq!(parse_route("#/settings/"), Route::Settings);
+        assert_eq!(parse_route("#/settingsX"), Route::Board);
+    }
     use crate::nav::roll_label;
 
     /// AGS-22: the relative-time ladder. Truncating, floored at one, so no
@@ -1926,6 +2100,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// COMP-4 (COMP-1 pin 10): a framed body receives the app's theme
+    /// tokens by name (src/frame.rs) — exactly the custom properties the
+    /// light `:root` block defines, the type tokens included; a token added
+    /// to the palette and not sent would be missing inside every frame.
+    #[test]
+    fn frames_receive_every_token_the_light_block_defines() {
+        let scan = scan(&app_css());
+        let defined: std::collections::BTreeSet<String> =
+            declarations(&scan.light).into_iter().map(|(name, _)| name).filter(|n| n.starts_with("--")).collect();
+        let sent: std::collections::BTreeSet<String> = crate::frame::THEME_TOKENS.iter().map(|t| t.to_string()).collect();
+        assert_eq!(sent.len(), crate::frame::THEME_TOKENS.len(), "a token listed twice");
+        assert_eq!(sent, defined, "frame::THEME_TOKENS vs index.html's light :root block");
     }
 
     /// AGS-17: the two dark mechanisms — the media query (guarded) and the

@@ -26,7 +26,14 @@
 //! ```
 
 pub mod types;
-pub use types::{Group, Kind, RootRow, Severity, Status, Ticket, TicketSummary, TicketsEvent};
+/// COMP-8: a component's help — its source's `<docs>` and its block's
+/// preview line, parsed. Wasm-safe: the store reads definitions with it, and
+/// the app renders a definition's card (COMP-9) from the block it shows.
+pub mod component_docs;
+pub use types::{
+    is_menger_path, path_address, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, KnowNothing, Known, SlotDoc, Kind, Placement, PlacementChange, RootRow, Severity, Status, Ticket, TicketSummary,
+    TicketsEvent, MENGER_PATH_PREFIX,
+};
 
 /// The cache and its storage — the server's system of record (MNG-2).
 #[cfg(feature = "server")]

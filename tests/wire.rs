@@ -806,6 +806,9 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
         ev["group"],
         json!({"epic": "LONE", "total": 2, "done": 1, "docs": 0, "root": "LONE-1", "root_row": root_row("alone"), "host": null})
     );
+    // WAVE-6: and, last, the placement it moved.
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev, json!({"type": "placements_changed", "changes": [{"id": "LONE-2", "placement": {"type": "done"}}]}));
     // Nothing else came of it: the next item is the next write's.
     collect(call(&client, "tickets.set_status", json!({"id": "HUB-1", "status": "Ready"})).await).await;
     let ev = content(watch.next().await.unwrap().unwrap());
@@ -1300,4 +1303,330 @@ async fn docs_root_a_shortcode_refuse_set_status_in_band_and_are_never_ready() {
     }
     let mut sub = call(&client, "tickets.health", json!({})).await;
     assert_eq!(content(sub.next().await.unwrap().unwrap())["ticket_count"], 3, "nothing else was created");
+}
+
+/// WAVE-4 acceptance 3: `tickets.waves` over the real protocol — `epics` a
+/// JSON list, case-insensitive; one `placed { summary, placement,
+/// waiting_on }` per ticket (a summary row: no body), the placement tagged
+/// `{"type": "wave", "n": …}` / `{"type": "missing_blocker"}` /
+/// `{"type": "done"}`; a blocker followed into a shortcode not asked for;
+/// then exactly one `wave_counts`, then `done`. A completion moves a
+/// dependent left on the next ask. The errors are in-band data items.
+#[tokio::test]
+async fn waves_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let create = |epic: &str, kind: &str, blocked_by: Value| {
+        json!({"epic": epic, "title": format!("a {kind}"), "kind": kind, "blocked_by": blocked_by})
+    };
+    for params in [
+        create("UP", "scope", json!([])),           // UP-1
+        create("UP", "build", json!([])),           // UP-2: wave 1
+        create("WV", "scope", json!([])),           // WV-1
+        create("WV", "build", json!(["UP-2"])),     // WV-2: wave 2, its blocker off-board
+        create("WV", "spike", json!(["WV-2"])),     // WV-3: wave 3
+        create("WV", "gap", json!(["WV-404"])),     // WV-4: missing
+        create("WV", "build", json!([])),           // WV-5: done
+        create("WV", "doc", json!([])),             // WV-6: a doc, never placed
+    ] {
+        let evs = collect(call(&client, "tickets.create", params.clone()).await).await;
+        assert_eq!(evs[0]["type"], "created", "{params}: {evs:?}");
+    }
+    collect(call(&client, "tickets.set_status", json!({"id": "WV-5", "status": "Complete"})).await).await;
+
+    let mut evs = collect(call(&client, "tickets.waves", json!({"epics": ["wv"]})).await).await;
+    let counts = evs.pop().expect("a waves answer ends with the tally");
+    assert_eq!(counts, json!({"type": "wave_counts", "waves": [0, 1, 1], "missing": 1, "done": 1}));
+    assert!(evs.iter().all(|e| e["type"] == "placed"), "{evs:?}");
+    let got: Vec<(String, Value, Value)> = evs
+        .iter()
+        .map(|e| (e["summary"]["id"].as_str().unwrap().to_string(), e["placement"].clone(), e["waiting_on"].clone()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("WV-2".into(), json!({"type": "wave", "n": 2}), json!(["UP-2"])),
+            ("WV-3".into(), json!({"type": "wave", "n": 3}), json!(["WV-2"])),
+            ("WV-4".into(), json!({"type": "missing_blocker"}), json!(["WV-404"])),
+            ("WV-5".into(), json!({"type": "done"}), json!([])),
+        ]
+    );
+    assert!(evs[0]["summary"].get("body").is_none(), "a summary row: {}", evs[0]);
+    assert_eq!(evs[0]["summary"]["kind"], "build");
+
+    // UP-2 completes: everything behind it moves one wave left.
+    collect(call(&client, "tickets.set_status", json!({"id": "UP-2", "status": "Complete"})).await).await;
+    let evs = collect(call(&client, "tickets.waves", json!({"epics": ["WV", "UP"], "kinds": ["build", "spike"]})).await).await;
+    let placed: Vec<(&str, &Value)> = evs
+        .iter()
+        .filter(|e| e["type"] == "placed")
+        .map(|e| (e["summary"]["id"].as_str().unwrap(), &e["placement"]))
+        .collect();
+    assert_eq!(
+        placed,
+        vec![
+            ("WV-2", &json!({"type": "wave", "n": 1})),
+            ("WV-3", &json!({"type": "wave", "n": 2})),
+            ("UP-2", &json!({"type": "done"})),
+            ("WV-5", &json!({"type": "done"})),
+        ],
+        "kinds: the gap is not asked for; the done in store order"
+    );
+    assert_eq!(evs.last().unwrap(), &json!({"type": "wave_counts", "waves": [1, 1], "missing": 0, "done": 2}));
+
+    // In-band errors: one data item, then done.
+    for (params, needle) in [
+        (json!({"epics": []}), "epics"),
+        (json!({"epics": ["WV"], "kinds": ["bug"]}), "'bug'"),
+    ] {
+        let evs = collect(call(&client, "tickets.waves", params.clone()).await).await;
+        assert_eq!(evs.len(), 1, "{params}: {evs:?}");
+        assert_eq!(evs[0]["type"], "error");
+        assert!(evs[0]["message"].as_str().unwrap().contains(needle), "{params}: {}", evs[0]);
+    }
+}
+
+/// WAVE-10 acceptance 2: a path address over the real protocol — a
+/// `PLEXUS/_MENGER/board`-style doc created with `path`, the path on the
+/// `created` ticket (and absent from a ticket without one), `get` by the
+/// address (the shortcode in any case) answering the same ticket as `get`
+/// by its id, `not_found` naming an address that names nothing, and a
+/// second holder of the path refused in-band.
+#[tokio::test]
+async fn a_path_address_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let root = collect(call(&client, "tickets.create", json!({"epic": "PLX", "title": "the platform", "kind": "scope"})).await).await;
+    assert!(root[0]["ticket"].get("path").is_none(), "no path, no key: {}", root[0]);
+    let evs = collect(
+        call(
+            &client,
+            "tickets.create",
+            json!({"epic": "PLX", "title": "board: PLX", "kind": "doc", "path": "_MENGER/board", "body": "notes"}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(evs[0]["type"], "created", "{evs:?}");
+    let born = &evs[0]["ticket"];
+    assert_eq!((born["id"].as_str(), born["parent"].as_str()), (Some("PLX-2"), Some("PLX-1")));
+    assert_eq!(born["path"], "_MENGER/board");
+
+    let by_id = collect(call(&client, "tickets.get", json!({"id": "PLX-2"})).await).await;
+    for address in ["PLX/_MENGER/board", "plx/_MENGER/board"] {
+        let evs = collect(call(&client, "tickets.get", json!({"id": address})).await).await;
+        assert_eq!(evs, by_id, "{address}");
+        assert_eq!(evs[0]["ticket"]["body"], "notes");
+    }
+    let evs = collect(call(&client, "tickets.get", json!({"id": "PLX/_MENGER/nothing"})).await).await;
+    assert_eq!(evs, vec![json!({"type": "not_found", "id": "PLX/_MENGER/nothing"})]);
+
+    let evs = collect(
+        call(&client, "tickets.create", json!({"epic": "PLX", "title": "again", "kind": "doc", "path": "_MENGER/board"})).await,
+    )
+    .await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["type"], "error");
+    assert!(evs[0]["message"].as_str().unwrap().contains("PLX-2"), "names the holder: {}", evs[0]);
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "PLX", "title": "x", "path": "_MENGER/x"})).await).await;
+    assert_eq!(evs[0]["type"], "error", "a build carries no path: {evs:?}");
+
+    // The summary row carries it too.
+    let rows = rows(call(&client, "tickets.list", json!({"epic": "PLX", "summary": true})).await).await;
+    assert_eq!(rows[1]["summary"]["path"], "_MENGER/board");
+    assert!(rows[0]["summary"].get("path").is_none(), "{}", rows[0]);
+}
+
+/// WAVE-6 over the real protocol: every row carries its kept placement —
+/// tagged as `waves` tags it, omitted on a doc — and a completion two
+/// blockers back from a ticket moves it in one `placements_changed { changes
+/// }`, after the write's other events; `watch { epic }` carries only the
+/// changes in its shortcode.
+#[tokio::test]
+async fn kept_placements_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let mut created = Vec::new();
+    for params in [
+        json!({"epic": "UP", "title": "up", "kind": "scope"}),
+        json!({"epic": "UP", "title": "y"}),                                   // UP-2: wave 1
+        json!({"epic": "DN", "title": "down", "kind": "scope"}),
+        json!({"epic": "DN", "title": "x", "blocked_by": ["UP-2"]}),          // DN-2: wave 2
+        json!({"epic": "DN", "title": "c", "blocked_by": ["DN-2"]}),          // DN-3: wave 3
+        json!({"epic": "DN", "title": "notes", "kind": "doc"}),               // DN-4: a doc
+    ] {
+        let evs = collect(call(&client, "tickets.create", params.clone()).await).await;
+        assert_eq!(evs[0]["type"], "created", "{params}: {evs:?}");
+        created.push(evs[0]["ticket"].clone());
+    }
+    assert_eq!(created[1]["placement"], json!({"type": "wave", "n": 1}));
+    assert_eq!(created[4]["placement"], json!({"type": "wave", "n": 3}));
+    assert!(created[5].get("placement").is_none(), "a doc carries none: {}", created[5]);
+    let rows = rows(call(&client, "tickets.list", json!({"epic": "DN", "summary": true})).await).await;
+    assert_eq!(rows[2]["summary"]["placement"], json!({"type": "wave", "n": 3}), "on the summary row");
+
+    let mut all = call(&client, "tickets.watch", json!({})).await;
+    let mut down = call(&client, "tickets.watch", json!({"epic": "dn"})).await;
+    collect(call(&client, "tickets.set_status", json!({"id": "UP-2", "status": "Complete"})).await).await;
+    let ev = content(all.next().await.unwrap().unwrap());
+    assert_eq!((ev["type"].as_str(), ev["ticket"]["placement"].clone()), (Some("status_changed"), json!({"type": "done"})));
+    let ev = content(all.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "group_changed");
+    let ev = content(all.next().await.unwrap().unwrap());
+    assert_eq!(
+        ev,
+        json!({"type": "placements_changed", "changes": [
+            {"id": "UP-2", "placement": {"type": "done"}},
+            {"id": "DN-2", "placement": {"type": "wave", "n": 1}},
+            {"id": "DN-3", "placement": {"type": "wave", "n": 2}},
+        ]})
+    );
+    // DN's watch: nothing of UP's — its ticket, its group, its change.
+    let ev = content(down.next().await.unwrap().unwrap());
+    assert_eq!(
+        ev,
+        json!({"type": "placements_changed", "changes": [
+            {"id": "DN-2", "placement": {"type": "wave", "n": 1}},
+            {"id": "DN-3", "placement": {"type": "wave", "n": 2}},
+        ]})
+    );
+    let ev = collect(call(&client, "tickets.get", json!({"id": "DN-3"})).await).await;
+    assert_eq!(ev[0]["ticket"]["placement"], json!({"type": "wave", "n": 2}), "get reads the kept one");
+}
+
+/// COMP-3: a `watch`'s events up to and including the first of type `kind`.
+async fn watch_until(watch: &mut Subscription<Value>, kind: &str) -> Vec<Value> {
+    let mut seen = Vec::new();
+    loop {
+        let item = tokio::time::timeout(Duration::from_secs(10), watch.next())
+            .await
+            .unwrap_or_else(|_| panic!("no {kind} after {seen:?}"))
+            .expect("the watch is open")
+            .unwrap();
+        let ev = content(item);
+        let last = ev["type"] == kind;
+        seen.push(ev);
+        if last {
+            return seen;
+        }
+    }
+}
+
+/// COMP-3 acceptance 2: the component registry over the real protocol —
+/// define, reference, orphan, remove — each step seen by `components` and by
+/// `watch`: the component events end their write's events, carry the whole
+/// component, and reach a `watch { epic }` of another shortcode too. A second
+/// ticket defining the owned name is one in-band `error` naming the owner.
+#[tokio::test]
+async fn components_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let created = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "root", "kind": "scope"})).await).await;
+    assert_eq!(created[0]["type"], "created");
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    let mut elsewhere = call(&client, "tickets.watch", json!({"epic": "OTHER"})).await;
+    let components = || async { collect(call(&client, "tickets.components", json!({})).await).await };
+    assert_eq!(components().await, Vec::<Value>::new(), "an empty registry is an empty answer");
+
+    // Define.
+    let body = "Defines it.\n\n```component m-x\n<template><b>x</b></template>\n```\n";
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "owner", "body": body})).await).await;
+    assert_eq!((evs[0]["type"].as_str(), evs[0]["ticket"]["id"].as_str()), (Some("created"), Some("CMP-2")));
+    assert_eq!(evs[0]["ticket"]["body"], body, "stored as written");
+    let defined = json!({
+        "type": "component_changed",
+        "component": {"name": "m-x", "source": "<template><b>x</b></template>\n", "owner": "CMP-2", "references": [], "docs": null, "preview": []}
+    });
+    let heard = watch_until(&mut watch, "component_changed").await;
+    assert_eq!(heard[0]["type"], "created", "{heard:?}");
+    assert_eq!(heard.last(), Some(&defined), "after the write's other events");
+    assert_eq!(content(elsewhere.next().await.unwrap().unwrap()), defined, "past the epic filter");
+    assert_eq!(components().await, vec![json!({"type": "component", "component": defined["component"]})]);
+
+    // Reference.
+    collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "user", "body": "uses <m-x></m-x> twice <m-x/>"})).await).await;
+    let heard = watch_until(&mut watch, "component_changed").await;
+    assert_eq!(heard[0]["ticket"]["id"], "CMP-3");
+    assert_eq!(heard.last().unwrap()["component"]["references"], json!(["CMP-3"]), "a ticket counts once");
+    assert_eq!(content(elsewhere.next().await.unwrap().unwrap())["component"]["references"], json!(["CMP-3"]));
+
+    // A second owner is refused, naming the first; nothing allocated.
+    let evs = collect(
+        call(&client, "tickets.create", json!({"epic": "CMP", "title": "thief", "body": "```component m-x\n<template>mine</template>\n```\n"})).await,
+    )
+    .await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["type"], "error");
+    assert!(evs[0]["message"].as_str().unwrap().contains("CMP-2"), "names the owner: {}", evs[0]);
+
+    // Orphan: the owner's body loses the block; CMP-3 still uses it.
+    let evs = collect(call(&client, "tickets.amend", json!({"id": "CMP-2", "body": "no block now"})).await).await;
+    assert_eq!(evs[0]["type"], "amended");
+    let heard = watch_until(&mut watch, "component_changed").await;
+    assert_eq!(heard[0]["type"], "amended");
+    let orphan = json!({"name": "m-x", "source": "<template><b>x</b></template>\n", "owner": null, "references": ["CMP-3"], "docs": null, "preview": []});
+    assert_eq!(heard.last().unwrap()["component"], orphan);
+    assert_eq!(content(elsewhere.next().await.unwrap().unwrap())["component"], orphan);
+    assert_eq!(components().await, vec![json!({"type": "component", "component": orphan})]);
+
+    // Remove: the last reference goes, and the orphan with it.
+    collect(call(&client, "tickets.amend", json!({"id": "CMP-3", "body": "plain"})).await).await;
+    let heard = watch_until(&mut watch, "component_removed").await;
+    assert_eq!(heard[0]["type"], "amended");
+    assert_eq!(heard.last(), Some(&json!({"type": "component_removed", "name": "m-x"})));
+    assert_eq!(content(elsewhere.next().await.unwrap().unwrap()), json!({"type": "component_removed", "name": "m-x"}));
+    assert_eq!(components().await, Vec::<Value>::new());
+}
+
+/// COMP-8 acceptance 2: a component's docs and preview line on the wire —
+/// `components` and `component_changed` carry them, typed attributes
+/// internally tagged; a malformed `<docs>` is one in-band `error` naming the
+/// problem, and nothing is allocated.
+#[tokio::test]
+async fn component_docs_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "root", "kind": "scope"})).await).await;
+    let body = "```component m-wave-summary board=RETURNS label=\"Platform team\"\n\
+                <template><b id=\"n\"></b></template>\n\
+                <docs>\n\
+                  <summary>How many of a board's tickets are workable now.</summary>\n\
+                  <attr name=\"board\" type=\"shortcode\" required>The shortcode to count.</attr>\n\
+                  <attr name=\"size\" type=\"enum(s|m)\">How big.</attr>\n\
+                  <slot name=\"title\">Optional title markup.</slot>\n\
+                  <example><m-wave-summary board=\"RETURNS\"></m-wave-summary></example>\n\
+                  Longer help, as markdown prose.\n\
+                </docs>\n\
+                ```\n";
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "owner", "body": body})).await).await;
+    assert_eq!(evs[0]["type"], "created", "{evs:?}");
+    let docs = json!({
+        "summary": "How many of a board's tickets are workable now.",
+        "attrs": [
+            {"name": "board", "kind": {"type": "shortcode"}, "required": true, "description": "The shortcode to count."},
+            {"name": "size", "kind": {"type": "enum", "values": ["s", "m"]}, "required": false, "description": "How big."}
+        ],
+        "slots": [{"name": "title", "description": "Optional title markup."}],
+        "examples": ["<m-wave-summary board=\"RETURNS\"></m-wave-summary>"],
+        "help": "Longer help, as markdown prose."
+    });
+    let preview = json!([["board", "RETURNS"], ["label", "Platform team"]]);
+    let heard = watch_until(&mut watch, "component_changed").await;
+    let changed = &heard.last().unwrap()["component"];
+    assert_eq!((&changed["docs"], &changed["preview"]), (&docs, &preview));
+    let listed = collect(call(&client, "tickets.components", json!({})).await).await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["component"]["docs"], docs);
+    assert_eq!(listed[0]["component"]["preview"], preview);
+
+    // Malformed: one in-band error naming the problem; nothing allocated.
+    let bad = "```component m-bad\n<docs><attr type=\"number\">no name</attr></docs>\n```\n";
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "bad", "body": bad})).await).await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["type"], "error");
+    let message = evs[0]["message"].as_str().unwrap();
+    assert!(message.contains("'m-bad' has a malformed <docs>") && message.contains("an <attr> without a name"), "{message}");
+    let next = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "next"})).await).await;
+    assert_eq!(next[0]["ticket"]["id"], "CMP-3", "no id spent");
 }

@@ -335,6 +335,25 @@ pub struct Ticket {
     /// verified: the server has no repository. At most 256 (SCALE-4's
     /// lesson — a list on a row is bounded).
     pub commits: Vec<String>,
+    /// WAVE-10: the ticket's **path address** inside its shortcode, if it
+    /// has one — `<SHORTCODE>/<path>` names it (`get { id:
+    /// "PLEXUS/_MENGER/board" }`), and no other ticket of the shortcode
+    /// holds the same path. An address, not an id: the ticket keeps its
+    /// `EPIC-N`, and the store's order, extents, paging and readiness never
+    /// read it. Only the reserved prefix `_MENGER/` is accepted, on a doc
+    /// filed under its shortcode's scope root — menger's own documents
+    /// (WAVE-1 decision 11). Omitted on the wire when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// WAVE-6: where the ticket sits in the order of work ([`Placement`]),
+    /// kept by the store — equal at every moment to WAVE-4's rule over the
+    /// whole `blocked_by` graph, moved by the write that moves it (a birth
+    /// that resolves a forward reference, a status crossing `Complete` /
+    /// `Superseded`), and announced by `placements_changed`. `None` —
+    /// omitted on the wire — for a doc, which has no place in the order of
+    /// work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Placement>,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
     pub body: String,
     pub created_unix: i64,
@@ -368,6 +387,17 @@ pub struct TicketSummary {
     /// SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
     /// the ticket page all have it without a `get`.
     pub commits: Vec<String>,
+    /// WAVE-10: as on [`Ticket`] — on the row, so the nav can hide
+    /// `_MENGER/` documents without a `get`. Unlike `severity` and
+    /// `parent`, omitted when there is none (the ticket's contract): every
+    /// ticket but menger's own documents would carry a `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// WAVE-6: as on [`Ticket`] — the kept placement, on the row, so the
+    /// board, the nav and a body's `{wave: ID}` have it without a `get`;
+    /// omitted for a doc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Placement>,
     pub created_unix: i64,
     pub updated_unix: i64,
 }
@@ -387,10 +417,38 @@ impl From<Ticket> for TicketSummary {
             blocked_by: t.blocked_by,
             unlocks: t.unlocks,
             commits: t.commits,
+            path: t.path,
+            placement: t.placement,
             created_unix: t.created_unix,
             updated_unix: t.updated_unix,
         }
     }
+}
+
+/// WAVE-10: the reserved prefix of every path menger accepts — the
+/// documents menger itself keeps inside a shortcode (WAVE-1 decision 11),
+/// hidden from the nav unless asked for.
+pub const MENGER_PATH_PREFIX: &str = "_MENGER/";
+
+/// WAVE-10: whether `path` is one menger keeps for itself — `_MENGER/` and
+/// at least one character after it. The one rule `create { path }` accepts
+/// and the nav hides by.
+pub fn is_menger_path(path: &str) -> bool {
+    path.len() > MENGER_PATH_PREFIX.len() && path.starts_with(MENGER_PATH_PREFIX)
+}
+
+/// WAVE-10: a **path address** — `<SHORTCODE>/<path>` — split into the
+/// shortcode (upper-cased: shortcodes are case-insensitive) and the path
+/// (exactly as written). `None` for anything else — an `EPIC-N` id has no
+/// `/`, and an address needs a shortcode and a path on either side of the
+/// first one.
+pub fn path_address(id: &str) -> Option<(String, &str)> {
+    let (shortcode, path) = id.split_once('/')?;
+    let shortcode = shortcode.trim();
+    if shortcode.is_empty() || path.is_empty() || !shortcode.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some((shortcode.to_ascii_uppercase(), path))
 }
 
 /// MFE-9: the same narrowing from a borrowed ticket, for a consumer that
@@ -466,6 +524,302 @@ impl Group {
     /// Whether the nav draws this row: it holds a ticket, work or doc.
     pub fn drawn(&self) -> bool {
         self.total > 0 || self.docs > 0
+    }
+}
+
+/// WAVE-4: where a ticket sits in the order of work — what `waves` says of
+/// each ticket it places, derived from `blocked_by` over the whole graph by
+/// MNG-4's rule (a blocker is satisfied iff it is a `Complete` or
+/// `Superseded` ticket; an id naming no ticket never is).
+///
+/// - `Wave { n }` — unfinished, and `n` is 1 when every blocker is
+///   satisfied, else 1 + the highest wave among its unsatisfied blockers.
+/// - `Done` — the ticket itself is `Complete` or `Superseded`.
+/// - `MissingBlocker` — it, or something it waits on, names a blocker that
+///   is no ticket: no wave can be given until that id exists.
+///
+/// Internally tagged like the events (`{"type": "wave", "n": 2}`,
+/// `{"type": "done"}`, `{"type": "missing_blocker"}`). WAVE-6: the store
+/// keeps it — on every row ([`Ticket::placement`]), current after every
+/// write — and says when one moves ([`PlacementChange`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Placement {
+    Wave { n: u32 },
+    Done,
+    MissingBlocker,
+}
+
+/// WAVE-6: one ticket whose kept placement a write moved — its id and the
+/// placement it has now (a `placements_changed` carries one per ticket).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PlacementChange {
+    pub id: String,
+    pub placement: Placement,
+}
+
+/// COMP-3: one entry of the **component registry** — a custom element some
+/// ticket defined in a ` ```component <name> ` block (COMP-1 decisions 2, 3,
+/// pins 6–8), as the server keeps it.
+///
+/// - `name` — the tag: a custom element's name, lowercase, with a hyphen
+///   (`m-wave-summary`).
+/// - `source` — the block's content, exactly as written between its fences
+///   (a `<template>`, an optional `<style>`, an optional `<script>`).
+/// - `owner` — the ticket whose body defines it; `null` for an **orphan**: a
+///   component whose definition left its ticket while something still
+///   references it. An orphan is read-only; a ticket that defines its name
+///   again **adopts** it.
+/// - `references` — what uses it: each ticket whose body holds `<name` as an
+///   HTML tag (outside code spans and fences, once per ticket), in the
+///   store's `(epic, seq)` order, then each component whose source holds it,
+///   by name.
+///
+/// - `docs` (COMP-8) — the source's `<docs>` element, parsed
+///   ([`ComponentDocs`]); `null` when the source holds none.
+/// - `preview` (COMP-8) — the attributes written after the tag on the
+///   block's opening line (` ```component m-x board=RETURNS label="Platform" `),
+///   `[name, value]` in the order written; a value may be double-quoted, and
+///   a bare name's value is `""`. What a live preview of the definition is
+///   rendered with.
+///
+/// Unlike [`Ticket`], `owner` and `docs` are written out as `null` rather
+/// than skipped: every component has the same keys, and `null` is what
+/// "orphan" (or "no docs yet") looks like.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Component {
+    pub name: String,
+    pub source: String,
+    pub owner: Option<String>,
+    pub references: Vec<String>,
+    pub docs: Option<ComponentDocs>,
+    pub preview: Vec<(String, String)>,
+}
+
+/// COMP-8: a component's help — its source's one `<docs>` element, parsed.
+///
+/// ```html
+/// <docs>
+///   <summary>How many of a board's tickets are workable now.</summary>
+///   <attr name="board" type="shortcode" required>The shortcode to count.</attr>
+///   <slot name="title">Optional title markup.</slot>
+///   <example><m-wave-summary board="RETURNS"></m-wave-summary></example>
+///   Longer help, as markdown prose.
+/// </docs>
+/// ```
+///
+/// - `summary` — the `<summary>`'s text, tags dropped, whitespace collapsed,
+///   trimmed (`""` when there is none).
+/// - `attrs` — one [`AttrDoc`] per `<attr>`, in the order written.
+/// - `slots` — one [`SlotDoc`] per `<slot>`, in the order written.
+/// - `examples` — each `<example>`'s inner HTML as written, its common
+///   indentation and the blank lines around it removed.
+/// - `help` — everything else inside `<docs>`, as markdown: the lines the
+///   elements above stood on removed, the rest de-indented and trimmed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ComponentDocs {
+    pub summary: String,
+    pub attrs: Vec<AttrDoc>,
+    pub slots: Vec<SlotDoc>,
+    pub examples: Vec<String>,
+    pub help: String,
+}
+
+/// COMP-8: one declared attribute — `<attr name="board" type="shortcode"
+/// required>The shortcode to count.</attr>`. `name` is lowercased (HTML
+/// folds attribute names); `kind` is the `type` (`string` when omitted);
+/// `required` is whether the `required` attribute is present;
+/// `description` the element's text, as [`ComponentDocs::summary`] is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AttrDoc {
+    pub name: String,
+    pub kind: AttrKind,
+    pub required: bool,
+    pub description: String,
+}
+
+/// COMP-8: one declared slot — `<slot name="title">Optional title
+/// markup.</slot>`; `name` is `null` for the default slot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SlotDoc {
+    pub name: Option<String>,
+    pub description: String,
+}
+
+/// COMP-8: what an attribute's value must be — an `<attr type=…>`, written
+/// `string` (the default), `number`, `boolean`, `shortcode` (an existing
+/// shortcode, e.g. `RETURNS`), `ticket` (an existing ticket id) or
+/// `enum(a|b|c)` (one of those words). Internally tagged on the wire, as
+/// [`Placement`] is: `{"type": "shortcode"}`, `{"type": "enum", "values":
+/// ["a", "b"]}`. [`FromStr`] reads the written form and [`fmt::Display`]
+/// writes it back.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AttrKind {
+    #[default]
+    String,
+    Number,
+    Boolean,
+    Shortcode,
+    Ticket,
+    Enum { values: Vec<String> },
+}
+
+impl FromStr for AttrKind {
+    type Err = String;
+
+    /// The written form, exactly (`enum(` … `)` with its values split on
+    /// `|` and trimmed). An unknown word, or an `enum` naming no value, is
+    /// refused with the reason.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        Ok(match s {
+            "string" => Self::String,
+            "number" => Self::Number,
+            "boolean" => Self::Boolean,
+            "shortcode" => Self::Shortcode,
+            "ticket" => Self::Ticket,
+            _ => {
+                let Some(inner) = s.strip_prefix("enum(").and_then(|r| r.strip_suffix(')')) else {
+                    return Err(format!(
+                        "unknown type '{s}' — one of string, number, boolean, shortcode, ticket, enum(a|b|c)"
+                    ));
+                };
+                let values: Vec<String> = inner
+                    .split('|')
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                if values.is_empty() {
+                    return Err(format!("the type '{s}' names no value — enum(a|b|c)"));
+                }
+                Self::Enum { values }
+            }
+        })
+    }
+}
+
+/// COMP-9: what a caller knows exists, for checking a `shortcode` or
+/// `ticket` value — `None` when it cannot say (nothing loaded yet), and the
+/// check then passes the value as far as the form goes.
+pub trait Known {
+    /// Whether a shortcode holds a ticket (`epic` upper case).
+    fn shortcode(&self, epic: &str) -> Option<bool>;
+    /// Whether a ticket has this id (upper case).
+    fn ticket(&self, id: &str) -> Option<bool>;
+}
+
+/// COMP-9: knowing nothing — only the form of a value is checked.
+pub struct KnowNothing;
+
+impl Known for KnowNothing {
+    fn shortcode(&self, _: &str) -> Option<bool> {
+        None
+    }
+    fn ticket(&self, _: &str) -> Option<bool> {
+        None
+    }
+}
+
+/// A shortcode's form: ASCII letters and digits (the server folds case).
+fn is_shortcode(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+impl AttrKind {
+    /// COMP-9: whether an instance's attribute `value` fits — `Err` says
+    /// why not. `string`: anything. `number`: a finite decimal number.
+    /// `boolean`: present is true, so `""`, `true` or `false` (any case).
+    /// `shortcode`: letters and digits naming a shortcode that holds a
+    /// ticket; `ticket`: `SHORTCODE-N` naming a ticket that exists (both
+    /// case-insensitive, as the server reads them; existence as `known`
+    /// says). `enum(a|b)`: exactly one of the values.
+    pub fn check(&self, value: &str, known: &dyn Known) -> Result<(), String> {
+        let v = value.trim();
+        match self {
+            Self::String => Ok(()),
+            Self::Number => match v.parse::<f64>() {
+                Ok(n) if n.is_finite() => Ok(()),
+                _ => Err(format!("'{value}' is not a number")),
+            },
+            Self::Boolean => match v.to_ascii_lowercase().as_str() {
+                "" | "true" | "false" => Ok(()),
+                _ => Err(format!("'{value}' is not a boolean — write the attribute alone, or true / false")),
+            },
+            Self::Shortcode => {
+                if !is_shortcode(v) {
+                    return Err(format!("'{value}' is not a shortcode (letters and digits, e.g. RETURNS)"));
+                }
+                match known.shortcode(&v.to_ascii_uppercase()) {
+                    Some(false) => Err(format!("no shortcode '{}'", v.to_ascii_uppercase())),
+                    _ => Ok(()),
+                }
+            }
+            Self::Ticket => {
+                let id = v.to_ascii_uppercase();
+                let formed = id
+                    .rsplit_once('-')
+                    .is_some_and(|(epic, seq)| is_shortcode(epic) && !seq.is_empty() && seq.chars().all(|c| c.is_ascii_digit()));
+                if !formed {
+                    return Err(format!("'{value}' is not a ticket id (e.g. MNG-2)"));
+                }
+                match known.ticket(&id) {
+                    Some(false) => Err(format!("no ticket '{id}'")),
+                    _ => Ok(()),
+                }
+            }
+            Self::Enum { values } => {
+                if values.iter().any(|x| x == v) {
+                    Ok(())
+                } else {
+                    Err(format!("'{value}' is not one of {}", values.join(" | ")))
+                }
+            }
+        }
+    }
+}
+
+/// COMP-9: one declared attribute on one instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttrState {
+    /// Set, and its value fits.
+    Fits,
+    /// Not set, and not required.
+    Unset,
+    /// Required, and not set.
+    Missing,
+    /// Set to a value that does not fit — why.
+    Unfit(String),
+}
+
+impl AttrDoc {
+    /// COMP-9: this attribute on an instance that sets it to `value`
+    /// (`None`: not set). A boolean set to its own name
+    /// (`compact="compact"`) is true, as HTML has it.
+    pub fn state(&self, value: Option<&str>, known: &dyn Known) -> AttrState {
+        match value {
+            None if self.required => AttrState::Missing,
+            None => AttrState::Unset,
+            Some(v) if self.kind == AttrKind::Boolean && v.trim().eq_ignore_ascii_case(&self.name) => AttrState::Fits,
+            Some(v) => match self.kind.check(v, known) {
+                Ok(()) => AttrState::Fits,
+                Err(why) => AttrState::Unfit(why),
+            },
+        }
+    }
+}
+
+impl fmt::Display for AttrKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::String => f.write_str("string"),
+            Self::Number => f.write_str("number"),
+            Self::Boolean => f.write_str("boolean"),
+            Self::Shortcode => f.write_str("shortcode"),
+            Self::Ticket => f.write_str("ticket"),
+            Self::Enum { values } => write!(f, "enum({})", values.join("|")),
+        }
     }
 }
 
@@ -583,6 +937,52 @@ pub enum TicketsEvent {
     /// it: `created` carries the newborn's `epic` and `seq`, which is its
     /// shortcode's new `last_seq`.
     Extent { epic: String, last_seq: u32 },
+    /// WAVE-4: one ticket's place in the order of work (yielded per ticket
+    /// by `waves`): its row, its [`Placement`] — computed over the whole
+    /// `blocked_by` graph, whatever shortcodes were asked for — and
+    /// `waiting_on`, its unsatisfied direct blockers (ids that name no
+    /// ticket included) in `blocked_by` order, distinct; empty for `Done`.
+    Placed {
+        summary: TicketSummary,
+        placement: Placement,
+        waiting_on: Vec<String>,
+    },
+    /// WAVE-4: the tally that closes a `waves` answer, exactly once, after
+    /// every `placed`: `waves[i]` is how many of the placed tickets sit in
+    /// wave `i + 1` (as long as the highest wave placed; `[]` when none is),
+    /// `missing` how many are `missing_blocker`, `done` how many are done.
+    WaveCounts {
+        waves: Vec<u64>,
+        missing: u64,
+        done: u64,
+    },
+    /// WAVE-6: the kept placements one write moved (yielded by `watch`) —
+    /// one event per write that moved any, after that write's other events,
+    /// each change the ticket's id and its placement now: the ticket a
+    /// status change crossed `Complete` / `Superseded` with, and every
+    /// ticket downstream of it along `unlocks` whose placement changed; or,
+    /// for a birth that resolved forward references, the tickets that were
+    /// waiting on its id and theirs (the newborn's own is on its `created`).
+    /// `watch { epic }` keeps only the changes in that shortcode, and the
+    /// event only when one is left.
+    PlacementsChanged { changes: Vec<PlacementChange> },
+    /// COMP-3: one entry of the component registry (yielded per component by
+    /// `components`, in name order) — orphans included (`owner: null`).
+    Component { component: Component },
+    /// COMP-3: a component was registered, or its source, owner or
+    /// references moved (yielded by `watch`) — a `create` or `amend` whose
+    /// body gained, changed or lost a ` ```component ` block or a `<name`
+    /// tag. Carries the whole component as it is now, so applying it is one
+    /// upsert; one per component the write moved, in name order, after that
+    /// write's other events. A component belongs to no shortcode — any
+    /// ticket may use it — so `watch { epic }` passes it on whatever the
+    /// filter.
+    ComponentChanged { component: Component },
+    /// COMP-3: a component left the registry (yielded by `watch`) — an
+    /// orphan whose last reference went, in the write that took it. After
+    /// the write's `component_changed` events; past any `epic` filter, as
+    /// they are.
+    ComponentRemoved { name: String },
     /// One resolved blocker of the queried ticket, at its current status
     /// (yielded per-entry by `blockers`).
     Blocker { ticket: Ticket },
@@ -600,6 +1000,68 @@ pub enum TicketsEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// COMP-9 acceptance 1: an instance's attribute checked against each
+    /// `AttrKind` — the form, and existence as the caller knows it.
+    #[test]
+    fn attribute_values_are_checked_per_kind() {
+        struct Board;
+        impl Known for Board {
+            fn shortcode(&self, epic: &str) -> Option<bool> {
+                Some(matches!(epic, "RETURNS" | "MNG"))
+            }
+            fn ticket(&self, id: &str) -> Option<bool> {
+                Some(matches!(id, "MNG-2" | "RETURNS-6"))
+            }
+        }
+        let fits = |k: &AttrKind, v: &str| k.check(v, &Board).is_ok();
+        let why = |k: &AttrKind, v: &str| k.check(v, &Board).unwrap_err();
+        assert!(fits(&AttrKind::String, "") && fits(&AttrKind::String, "anything <at> all"));
+        for n in ["0", "-3", "2.5", " 7 ", "1e3"] {
+            assert!(fits(&AttrKind::Number, n), "{n}");
+        }
+        for n in ["", "seven", "NaN", "inf", "1,5"] {
+            assert!(why(&AttrKind::Number, n).contains("is not a number"), "{n}");
+        }
+        for b in ["", "true", "FALSE", "False"] {
+            assert!(fits(&AttrKind::Boolean, b), "{b}");
+        }
+        assert!(why(&AttrKind::Boolean, "yes").contains("not a boolean"));
+        assert!(fits(&AttrKind::Shortcode, "RETURNS") && fits(&AttrKind::Shortcode, "mng"));
+        assert_eq!(why(&AttrKind::Shortcode, "NOPE"), "no shortcode 'NOPE'");
+        assert!(why(&AttrKind::Shortcode, "RE TURNS").contains("is not a shortcode"));
+        assert!(why(&AttrKind::Shortcode, "").contains("is not a shortcode"));
+        assert!(fits(&AttrKind::Ticket, "MNG-2") && fits(&AttrKind::Ticket, "returns-6"));
+        assert_eq!(why(&AttrKind::Ticket, "MNG-99"), "no ticket 'MNG-99'");
+        for bad in ["MNG", "MNG-", "-2", "MNG-x", "M N-2"] {
+            assert!(why(&AttrKind::Ticket, bad).contains("is not a ticket id"), "{bad}");
+        }
+        let size = AttrKind::Enum { values: vec!["s".into(), "m".into(), "l".into()] };
+        assert!(fits(&size, "m") && fits(&size, " l "));
+        assert_eq!(why(&size, "xl"), "'xl' is not one of s | m | l");
+        assert!(why(&size, "M").contains("not one of"), "enum values are exact");
+        // Knowing nothing, existence is not checked — only the form.
+        assert!(AttrKind::Shortcode.check("NOPE", &KnowNothing).is_ok());
+        assert!(AttrKind::Ticket.check("NOPE-1", &KnowNothing).is_ok());
+        assert!(AttrKind::Ticket.check("NOPE", &KnowNothing).is_err());
+    }
+
+    /// COMP-9: an attribute on an instance — set and fitting, unset,
+    /// required and missing, unfit; a boolean set to its own name is true.
+    #[test]
+    fn an_instances_attribute_state() {
+        let attr = |name: &str, kind: AttrKind, required: bool| AttrDoc { name: name.into(), kind, required, description: String::new() };
+        let board = attr("board", AttrKind::Shortcode, true);
+        let label = attr("label", AttrKind::String, false);
+        let compact = attr("compact", AttrKind::Boolean, false);
+        assert_eq!(board.state(None, &KnowNothing), AttrState::Missing);
+        assert_eq!(label.state(None, &KnowNothing), AttrState::Unset);
+        assert_eq!(board.state(Some("RETURNS"), &KnowNothing), AttrState::Fits);
+        assert_eq!(board.state(Some("no way"), &KnowNothing), AttrState::Unfit("'no way' is not a shortcode (letters and digits, e.g. RETURNS)".into()));
+        assert_eq!(compact.state(Some("compact"), &KnowNothing), AttrState::Fits);
+        assert_eq!(compact.state(Some(""), &KnowNothing), AttrState::Fits);
+        assert!(matches!(compact.state(Some("very"), &KnowNothing), AttrState::Unfit(_)));
+    }
 
     /// MFE-9: the browser app renders a status by its wire spelling and
     /// sends that spelling straight back to `set_status`. If `as_str` and
@@ -705,6 +1167,60 @@ mod tests {
         assert!(!g(0, 0).drawn());
     }
 
+    /// WAVE-4: `Placement` and the two `waves` events on the wire — tagged
+    /// like every event, snake_case, and back again.
+    #[test]
+    fn placements_and_the_waves_events_render_tagged_and_snake_cased() {
+        use serde_json::json;
+        for (p, want) in [
+            (Placement::Wave { n: 3 }, json!({"type": "wave", "n": 3})),
+            (Placement::Done, json!({"type": "done"})),
+            (Placement::MissingBlocker, json!({"type": "missing_blocker"})),
+        ] {
+            assert_eq!(serde_json::to_value(p).unwrap(), want, "{p:?}");
+            assert_eq!(serde_json::from_value::<Placement>(want).unwrap(), p);
+        }
+        let counts = TicketsEvent::WaveCounts { waves: vec![2, 0, 1], missing: 1, done: 4 };
+        assert_eq!(
+            serde_json::to_value(&counts).unwrap(),
+            json!({"type": "wave_counts", "waves": [2, 0, 1], "missing": 1, "done": 4})
+        );
+        let summary = TicketSummary {
+            id: "W-2".into(),
+            epic: "W".into(),
+            seq: 2,
+            title: "t".into(),
+            status: Status::Pending,
+            kind: Kind::Build,
+            severity: None,
+            parent: Some("W-1".into()),
+            child_count: 0,
+            blocked_by: vec!["W-3".into()],
+            unlocks: vec![],
+            commits: vec![],
+            path: None,
+            placement: Some(Placement::Wave { n: 2 }),
+            created_unix: 1,
+            updated_unix: 1,
+        };
+        let placed = TicketsEvent::Placed {
+            summary,
+            placement: Placement::Wave { n: 2 },
+            waiting_on: vec!["W-3".into()],
+        };
+        let wire = serde_json::to_value(&placed).unwrap();
+        assert_eq!(wire["type"], "placed");
+        assert_eq!(wire["summary"]["id"], "W-2");
+        assert_eq!(wire["placement"], json!({"type": "wave", "n": 2}));
+        assert_eq!(wire["waiting_on"], json!(["W-3"]));
+        match serde_json::from_value::<TicketsEvent>(wire).unwrap() {
+            TicketsEvent::Placed { placement, waiting_on, .. } => {
+                assert_eq!((placement, waiting_on), (Placement::Wave { n: 2 }, vec!["W-3".to_string()]));
+            }
+            other => panic!("expected Placed, got {other:?}"),
+        }
+    }
+
     #[test]
     fn kind_and_severity_render_as_their_wire_spellings() {
         for k in Kind::ALL {
@@ -751,6 +1267,8 @@ mod tests {
             parent: Some("SUM-4".into()),
             child_count: 1,
             commits: vec!["77df9a0".into()],
+            path: Some("_MENGER/board".into()),
+            placement: Some(Placement::MissingBlocker),
             body: "## Problem\n\nthe weight of a list".into(),
             created_unix: 1,
             updated_unix: 2,

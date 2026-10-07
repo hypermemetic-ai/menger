@@ -26,6 +26,7 @@ impl Rng {
 
 fn new_ticket(epic: &str, kind: Kind, parent: Option<&str>) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
@@ -283,6 +284,8 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
                     parent: parent.map(Into::into),
                     child_count: 0,
                     commits: Vec::new(),
+                    path: None,
+                    placement: None,
                     body: String::new(),
                     created_unix: 0,
                     updated_unix: 0,
@@ -301,6 +304,7 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
     // Both edges on one ticket: the parent is also the blocker.
     store
         .create(NewTicket {
+            path: None,
             blocked_by: vec!["PAR-6".into()],
             ..new_ticket("PAR", Kind::Build, Some("PAR-6"))
         })
@@ -396,6 +400,7 @@ async fn a_birth_and_a_move_broadcast_the_parents_id_and_count() {
     let mut rx = store.subscribe();
     store
         .create(NewTicket {
+            path: None,
             blocked_by: vec!["EV-1".into()],
             ..new_ticket("EV", Kind::Build, None)
         })

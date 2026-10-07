@@ -34,6 +34,7 @@ impl Rng {
 
 fn new_ticket(epic: &str, kind: Kind, parent: Option<String>, blocked_by: Vec<String>) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
@@ -140,7 +141,10 @@ fn assert_kept_is_a_scan(store: &Store, path: Option<&Path>, after: &str) {
     if let Some(path) = path {
         let (stored_rows, state, stored) = filed(path);
         assert_eq!(state, State::Current, "after {after}");
-        assert_eq!(stored_rows, rows, "the file's rows are the cache's, after {after}");
+        // WAVE-6: placements are the cache's alone — held to the rule instead.
+        let unplaced: Vec<Row> = rows.iter().map(|t| Row { placement: None, ..t.clone() }).collect();
+        assert_eq!(stored_rows, unplaced, "the file's rows are the cache's, after {after}");
+        super::tests_placements::assert_kept_placements_are_the_rule(store, after);
         assert_eq!(stored, want, "the file, after {after}");
     }
 }

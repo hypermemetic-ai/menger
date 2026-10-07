@@ -202,7 +202,9 @@ async fn serve_dist_file(dist: &std::path::Path, rel: &str, ws_port: u16) -> Res
                 Some("json") | Some("map") => "application/json",
                 Some("svg") => "image/svg+xml",
                 Some("ico") => "image/x-icon",
-                Some("txt") => "text/plain; charset=utf-8",
+                // COMP-10: the SDK's TypeScript declarations (sdk/*.d.ts),
+                // shown as text.
+                Some("txt") | Some("ts") => "text/plain; charset=utf-8",
                 _ => "application/octet-stream",
             };
             ([(header::CONTENT_TYPE, mime)], bytes).into_response()

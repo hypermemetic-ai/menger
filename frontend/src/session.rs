@@ -123,8 +123,21 @@
 //! body signal to the session while it is mounted ([`hold_body`]), so the
 //! body still lives in exactly one place and the event needs no `get`.
 
+//!
+//! # The wave board listens (WAVE-5)
+//!
+//! An open wave board (src/waves.rs) asks `waves` for its shortcodes and
+//! asks again when what it shows may have moved. It lends the session an ear
+//! for as long as it is mounted ([`listen`]): every `watch` event is offered
+//! to it before the loop applies it, and the board decides what it does to
+//! its cards. Nothing else about the session changes — `waves` is asked only
+//! while a wave board is open, never at startup. WAVE-6: the server keeps
+//! every placement and says when one moves (`placements_changed`); the board
+//! moves its cards from that, and the session sets each moved placement on
+//! the rows views hold.
+
 use crate::kids::Kids;
-use crate::{board, cache, dom, nav, Conn, Dock};
+use crate::{board, cache, dom, frame, nav, registry, settings, Conn, Dock};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::{TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
@@ -137,7 +150,7 @@ use wasm_bindgen_futures::spawn_local;
 /// menger's hub namespace — `DynamicHub::new("menger")` server-side. A
 /// property of the server, not of the activation, which is why it is a
 /// constructor argument and not part of a `MethodRef`.
-const HUB: &str = "menger";
+pub(crate) const HUB: &str = "menger";
 
 /// The retry gap after a session ends. A server restart costs a few
 /// seconds of `reconnecting…`, never a reload.
@@ -183,6 +196,33 @@ thread_local! {
     /// the walk used to put every newborn in the store, which is how a
     /// dangling blocker resolved live (MFE-7).
     static WANTED: RefCell<Vec<(StoredValue<HashSet<String>>, cache::Holder)>> = const { RefCell::new(Vec::new()) };
+
+    /// WAVE-5: the open wave boards' ears on `watch`, each with the number
+    /// it was lent under — offered every event before the loop applies it.
+    static EARS: RefCell<Vec<(u64, Rc<dyn Fn(&TicketsEvent)>)>> = const { RefCell::new(Vec::new()) };
+    static NEXT_EAR: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// WAVE-5: lend the session an ear on `watch` until the current owner (a
+/// wave board) is cleaned up — `ear` is offered every event the stream
+/// carries, before it is applied.
+pub(crate) fn listen(ear: impl Fn(&TicketsEvent) + 'static) {
+    let n = NEXT_EAR.with(|c| {
+        let n = c.get();
+        c.set(n.wrapping_add(1));
+        n
+    });
+    EARS.with(|e| e.borrow_mut().push((n, Rc::new(ear))));
+    on_cleanup(move || EARS.with(|e| e.borrow_mut().retain(|(m, _)| *m != n)));
+}
+
+/// Every ear, offered `ev` — taken out of the list first, so an ear that
+/// lends or returns one (a view mounting or leaving) never meets a borrow.
+fn hear(ev: &TicketsEvent) {
+    let ears: Vec<Rc<dyn Fn(&TicketsEvent)>> = EARS.with(|e| e.borrow().iter().map(|(_, f)| f.clone()).collect());
+    for ear in ears {
+        ear(ev);
+    }
 }
 
 /// SCALE-26: the `lagged` count, as a signal — see `STALE`.
@@ -348,10 +388,13 @@ async fn session(
     last_error: RwSignal<Option<String>>,
     tree: nav::Tree,
 ) -> Result<(), String> {
+    // MFE-21: the override from #/settings when one is set, else this
+    // page's server (`dom::ws_url()`) as before — fixed for the page's life.
+    let url = settings::effective_ws_url();
     let transport = Rc::new(
-        WsTransport::connect(&dom::ws_url(), HUB)
+        WsTransport::connect(&url, HUB)
             .await
-            .map_err(|e| format!("connect {}: {e}", dom::ws_url()))?,
+            .map_err(|e| format!("connect {url}: {e}"))?,
     );
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport.clone()));
     LINK.with(|l| l.set(true));
@@ -364,6 +407,9 @@ async fn session(
     // 1. `watch` first — subscribed eagerly, so a ticket born while the
     //    calls below are out arrives behind them (MNG-9 acceptance 5).
     let mut live = client.watch(None);
+    // COMP-5: the component registry, if a view wants it — after `watch`,
+    // so nothing it misses is lost (src/registry.rs).
+    registry::refresh();
 
     // 2. The dock.
     for ev in client.health_all().await.map_err(|e| describe(&e))? {
@@ -397,6 +443,15 @@ async fn session(
     conn.set(Conn::Live);
     while let Some(ev) = live.next().await {
         let ev = ev.map_err(|e| describe(&e))?;
+        // WAVE-5: an open wave board hears it first (it only decides
+        // whether to ask `waves` again).
+        if let ClientEvent::Data(data) = &ev {
+            hear(data);
+            // COMP-5: the app's registry takes a component event, then
+            // every open frame hears the event as a change notice.
+            registry::heard(data);
+            frame::broadcast_change(data);
+        }
         match ev {
             // Every mutation event carries the full updated ticket —
             // AGS-19's `children_changed` carries the full *parent*, which
@@ -447,6 +502,13 @@ async fn session(
             }
             // SCALE-24 (MNG-10): a shortcode row's roll-up moved.
             ClientEvent::Data(TicketsEvent::GroupChanged { group }) => tree.group_changed(group),
+            // WAVE-6: kept placements a write moved — on each row a view
+            // holds (an open wave board heard it first, and moved its cards).
+            ClientEvent::Data(TicketsEvent::PlacementsChanged { changes }) => {
+                for c in changes {
+                    cache::set_placement(&c.id, c.placement);
+                }
+            }
             // MNG-16: the row's title in place; the open page's body too.
             ClientEvent::Data(TicketsEvent::Amended { ticket, .. }) => {
                 show_body(&ticket);
@@ -479,6 +541,7 @@ async fn session(
                 board.refresh(&client).await?;
                 refetch_open_body(&client, last_error).await;
                 refetch_open_children(last_error);
+                registry::refresh();
                 STALE.with(|s| s.update(|n| *n = n.wrapping_add(1)));
             }
             // Future event kinds: ignore, stay live.

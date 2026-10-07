@@ -22,9 +22,16 @@ pub(super) const SCHEMA: &str = "
             commits      TEXT NOT NULL DEFAULT '[]',
             child_count  INTEGER NOT NULL DEFAULT 0,
             unsatisfied  INTEGER NOT NULL DEFAULT 0,
+            path         TEXT,
             UNIQUE (epic, seq)
         );
     ";
+
+/// WAVE-10: a path is unique within its shortcode — the file's own guard
+/// under the cache's ([`super::Cache::paths`]). Partial: only the few
+/// tickets that carry a path are in it.
+const PATH_INDEX: &str =
+    "CREATE UNIQUE INDEX IF NOT EXISTS tickets_path ON tickets (epic, path) WHERE path IS NOT NULL";
 
 /// The pre-AGS-13 column, and its vocabulary mapped onto kinds (the
 /// pinned migration). This is the only place the legacy vocabulary
@@ -136,7 +143,7 @@ pub(super) fn frontmatter_parent(body: &str) -> Option<String> {
 /// them in, so of two frontmatter parents that would close a loop the
 /// earlier ticket's is the one kept. An id that is not `EPIC-N` sorts
 /// last, by name.
-fn by_epic_seq(id: &str) -> (String, u32, String) {
+pub(super) fn by_epic_seq(id: &str) -> (String, u32, String) {
     match id.rsplit_once('-').and_then(|(e, n)| {
         n.parse::<u32>().ok().map(|n| (e.to_string(), n))
     }) {
@@ -382,6 +389,40 @@ pub(super) fn migrate_add_commits(conn: &mut Connection) -> anyhow::Result<bool>
     Ok(true)
 }
 
+/// The column WAVE-10 adds: a ticket's path address inside its shortcode.
+const PATH_COLUMN: &str = "path";
+
+/// One-shot, durable migration of a database written before WAVE-10.
+///
+/// If the `tickets` table has no `path` column, this adds it — `TEXT`,
+/// nullable, no default, as [`SCHEMA`] creates it — in one transaction,
+/// committed before the cache loads; every existing ticket then reads
+/// `None`: no ticket had an address. SQLite rewrites no row to add a
+/// column whose default is `NULL`, so this costs the same at 10⁶ tickets as
+/// at ten, and no row is rewritten (WAVE-10: prod's data untouched). The
+/// unique index on `(epic, path)` is made in the same transaction — and,
+/// `IF NOT EXISTS`, on every open, which is a no-op once it is there. A
+/// restart (or a SIGKILL right after) finds the column, and the check makes
+/// every later open add nothing. Additive: a binary from before WAVE-10
+/// names its columns, so it still opens a migrated file and inserts take
+/// `NULL`. Returns whether the column was added.
+pub(super) fn migrate_add_path(conn: &mut Connection) -> anyhow::Result<bool> {
+    let tx = conn.transaction()?;
+    let added = !has_column(&tx, "tickets", PATH_COLUMN)?;
+    if added {
+        tx.execute(&format!("ALTER TABLE tickets ADD COLUMN {PATH_COLUMN} TEXT"), [])?;
+    }
+    tx.execute(PATH_INDEX, [])?;
+    tx.commit()?;
+    if added {
+        let tickets: u64 = conn.query_row("SELECT count(*) FROM tickets", [], |r| r.get(0))?;
+        tracing::info!(
+            "WAVE-10: added the {PATH_COLUMN} column to {tickets} ticket(s), none with a path, durably"
+        );
+    }
+    Ok(added)
+}
+
 /// Serializes a unit enum to its serde string form (`Pending`,
 /// `build`, `Critical`) — the same casing the wire uses, and what the
 /// `FromStr` impls parse back.
@@ -415,8 +456,8 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix, commits, child_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                  created_unix, updated_unix, commits, child_count, path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT (id) DO UPDATE SET
                  epic = excluded.epic,
                  seq = excluded.seq,
@@ -431,7 +472,8 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
                  created_unix = excluded.created_unix,
                  updated_unix = excluded.updated_unix,
                  commits = excluded.commits,
-                 child_count = excluded.child_count",
+                 child_count = excluded.child_count,
+                 path = excluded.path",
         params![
             t.id,
             t.epic,
@@ -448,6 +490,7 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
             t.updated_unix,
             serde_json::to_string(&t.commits).expect("serialize commits"),
             t.child_count,
+            t.path,
         ],
     )?;
     Ok(())
@@ -466,8 +509,8 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix, commits, child_count, unsatisfied)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                  created_unix, updated_unix, commits, child_count, unsatisfied, path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
     )?;
     debug_assert_eq!(tickets.len(), open.len());
     for (t, open) in tickets.iter().zip(open) {
@@ -488,6 +531,7 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
             serde_json::to_string(&t.commits).expect("serialize commits"),
             t.child_count,
             open,
+            t.path,
         ])?;
     }
     Ok(())
@@ -496,9 +540,20 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
 /// SCALE-14: every stored column of a row but the body, in the order
 /// [`read_row`] reads them — what the cache loads, and the head of what a
 /// whole ticket is read back as. SDLC-9: `commits` at 12. SCALE-28:
-/// `child_count` last, at 13.
+/// `child_count` at 13. WAVE-10: `path` last, at 14.
 const ROW_COLUMNS: &str = "id, epic, seq, title, status, kind, severity,
-                    blocked_by, unlocks, created_unix, updated_unix, parent, commits, child_count";
+                    blocked_by, unlocks, created_unix, updated_unix, parent, commits, child_count, path";
+
+/// [`ROW_COLUMNS`] for a file that may be from before WAVE-10 — what
+/// `--verify-derived` reads, which runs no migration: `NULL` stands in for
+/// a `path` column the file does not have yet.
+fn row_columns(conn: &Connection) -> rusqlite::Result<String> {
+    Ok(if has_column(conn, "tickets", PATH_COLUMN)? {
+        ROW_COLUMNS.to_string()
+    } else {
+        ROW_COLUMNS.replace(", path", ", NULL AS path")
+    })
+}
 
 /// One row from a `SELECT` that starts with [`ROW_COLUMNS`].
 fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
@@ -523,6 +578,10 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         // under this ticket (SCALE-4 counted it from the parents at load).
         child_count: row.get(13)?,
         commits: parse_ids(12, &row.get::<_, String>(12)?)?,
+        // WAVE-10: set at birth, never moved.
+        path: row.get(14)?,
+        // WAVE-6: not stored — the cache places every row at open.
+        placement: None,
     })
 }
 
@@ -530,7 +589,7 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
 /// body is never read here, not read and dropped: what a load allocates
 /// and frees still costs resident memory the allocator keeps.
 pub(super) fn load_rows(conn: &Connection) -> anyhow::Result<HashMap<String, Row>> {
-    let mut stmt = conn.prepare(&format!("SELECT {ROW_COLUMNS} FROM tickets"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {} FROM tickets", row_columns(conn)?))?;
     let rows = stmt.query_map([], read_row)?;
     let mut out = HashMap::new();
     for row in rows {
@@ -549,7 +608,7 @@ pub(super) fn load_rows_counted(
     conn: &Connection,
 ) -> anyhow::Result<(HashMap<String, Row>, HashMap<String, u32>)> {
     let mut stmt = conn.prepare(&format!("SELECT {ROW_COLUMNS}, unsatisfied FROM tickets"))?;
-    let rows = stmt.query_map([], |r| Ok((read_row(r)?, r.get::<_, u32>(14)?)))?;
+    let rows = stmt.query_map([], |r| Ok((read_row(r)?, r.get::<_, u32>(15)?)))?;
     let (mut out, mut open) = (HashMap::new(), HashMap::new());
     for row in rows {
         let (row, n) = row?;
@@ -572,7 +631,7 @@ pub(super) fn body(conn: &Connection, id: &str) -> rusqlite::Result<Option<Strin
 /// statement, so from one snapshot (SCALE-28: its `child_count` too).
 pub(super) fn ticket(conn: &Connection, id: &str) -> rusqlite::Result<Option<Ticket>> {
     conn.prepare_cached(&format!("SELECT {ROW_COLUMNS}, body FROM tickets WHERE id = ?1"))?
-        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(14)?)))
+        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(15)?)))
         .optional()
 }
 
@@ -582,7 +641,8 @@ pub(super) fn ticket(conn: &Connection, id: &str) -> rusqlite::Result<Option<Tic
 /// the ticket is in the cache, so it is in the database. SDLC-9: the
 /// commits are a column of the row, so `link_commits` writes through here.
 /// SCALE-28: and not `child_count` — the derived state's, written only by
-/// the birth or move that changes it ([`super::stored::Changes`]).
+/// the birth or move that changes it ([`super::stored::Changes`]). WAVE-10:
+/// nor `path`, which is set at birth and that no write moves.
 pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
     let changed = conn.prepare_cached(
         "UPDATE tickets SET

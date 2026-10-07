@@ -8,6 +8,7 @@ use super::*;
 
 fn ticket(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: "the title it was born with".into(),
         kind,

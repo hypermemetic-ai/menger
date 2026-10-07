@@ -9,6 +9,7 @@ use super::*;
 
 fn ticket(epic: &str, kind: Kind, blocked_by: &[&str]) -> NewTicket {
     NewTicket {
+        path: None,
         epic: epic.into(),
         title: "t".into(),
         kind,

@@ -210,6 +210,56 @@ asks the server: `find` once the typing pauses (80 ms), only the newest
 question's answer shown, its count the answer's rows plus `remaining` —
 `map-12` shows MAP-12 first ~0.26 s after the last keystroke at 10^6.
 
+The wave board (WAVE-5) is `#/waves/<SHORTCODE>` — e.g.
+`http://127.0.0.1:4456/app/#/waves/PLEXUS`, the platform's work in order:
+the shortcode and every shortcode hosted under it (the nav's `host` chain
+from `groups`), placed by one `tickets.waves` (WAVE-4) and grouped here into
+columns — a column per non-empty wave, then `missing blocker`, then `Done`
+collapsed to its count; or, one toggle away, the stages (`Blocked`, holding
+wave 2 and later with a `w<n>` badge, then the wave-1 tickets by status and
+`Done`). The layout is remembered per shortcode in localStorage. A card
+names each ticket it waits on that the board does not show (an off-board
+blocker, a chip linking to it). WAVE-12: that tree and the kinds build,
+spike, gap are the board's default; its **filter** builds any other — a
+`Filter` button (or `f`) opens a Linear-style menu: a search over the
+categories and their values, then Shortcode (the hosting tree, the route's
+first, tri-state), Status, Wave, Kind, Severity, Readiness, Off-board
+blockers, Title contains — each value with its count on the board's answer.
+Applied clauses are pills, `[Category] [is any of | is not] [values +n]
+[×]`; `reset` returns to the default. Shortcode and Kind are what `waves` is
+asked for; the rest narrow the answer in the browser. The filter is the
+route's query, rewritten in place — `#/waves/PLEXUS?sc=is:RETURNS&
+status=not:Pending` — so a reload or a pasted link restores the board.
+WAVE-6: it moves its cards as `watch` says
+they move — each `placements_changed` takes a card to its new column
+(however far upstream the write was: a completion two blockers back moves
+it), each `status_changed` its stage and what the cards wait on — and asks
+`waves` again (coalesced, one in flight and one queued) only for a ticket
+born into its shortcodes, on a `lagged`, on a reconnect, and once more
+behind an answer in flight when a change lands while it is out; `waves` is
+asked only while a wave board is open. `#/waves`
+lists the boards; the header links to it, and a shortcode's row in the nav
+offers its board in the ticket menu.
+
+Below the board, in either layout, is its **annotation** (WAVE-11): a
+markdown document that discusses the board's waves, kept in the board's
+root shortcode at the reserved path `_MENGER/board` (WAVE-10) — `get { id:
+"PLEXUS/_MENGER/board" }` — a doc under the shortcode's scope root, hidden
+from the nav. The panel is titled with that address and folds; with none
+written yet it says "write notes for this board". `[ edit ]` opens a
+markdown textarea beside a live preview through the ticket page's renderer;
+save amends the document (`amend { id, body }`) — the first save creates it
+(`create { epic, kind: doc, path: _MENGER/board, title: "board: ROOT",
+body }`) — and cancel discards. An `amended` from elsewhere updates the
+panel, or, mid-edit, says "changed elsewhere — reload?" and leaves the
+draft alone. In any body — the annotation's or a ticket page's — a **wave
+reference** `{wave: RETURNS-6}` renders as that ticket's current ordinal:
+`wave 2` (on the board a link to the card's column), `done` or `missing
+blocker`, from the board's cards when the ticket is one, else from the
+ticket's row (its kept `placement`, fetched and held while shown); it moves
+live, and an id that is no ticket is left as written. A body without one
+renders byte for byte as before.
+
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service
@@ -315,22 +365,312 @@ synapse -P 4455 menger tickets link_commits --id MNG-10 --commits 77df9a0
 synapse -P 4455 menger tickets link_commits --id SCALE-4 --commits 0bb28b2 --commits 090cdec
 ```
 
+A ticket may also carry a **path address** (WAVE-10): an optional
+**`path`**, unique within its shortcode, so that `<SHORTCODE>/<path>`
+names it — `get { id: "PLEXUS/_MENGER/board" }` answers the one ticket of
+`PLEXUS` holding the path `_MENGER/board` (the shortcode in any case, the
+path exactly as written; an address that names nothing is `not_found`
+carrying the address). A path is an address, not an id: the ticket keeps
+its `EPIC-N`, and the store's order, extents, paging and readiness never
+read it. **`_MENGER/` is reserved** for the documents menger itself keeps
+inside a shortcode (WAVE-1 decision 11 — the board's annotation,
+`_MENGER/board`, is the first), and is the only prefix accepted for now:
+`create { …, path }` takes a path only when it starts with `_MENGER/` and
+names something after it, the ticket is a `doc`, and its `parent` is the
+shortcode's scope root (or is omitted, which defaults to it); a path
+another ticket of the shortcode already holds is an in-band `error` naming
+that ticket. A path is set at birth and never moves; it is on the row and
+the ticket, omitted when there is none. The nav hides tickets whose path is
+under `_MENGER/` unless its "menger docs" toggle is on (remembered in the
+browser). A database written before WAVE-10 gains the column, and the
+unique index on `(epic, path)`, on first open, durably — `ADD COLUMN` with
+no default rewrites no row, so it is instant at any size, and a binary from
+before it still opens the file.
+
+```sh
+# synapse expands any parameter named `path` as a filesystem path (`--path
+# _MENGER/board` arrives as `$PWD/_MENGER/board`, which `create` refuses):
+# pass a path address's `path` in the params object instead.
+synapse -P 4455 -p '{"epic": "PLEXUS", "kind": "doc", "path": "_MENGER/board", "title": "board: PLEXUS"}' menger tickets create
+synapse -P 4455 menger tickets get --id PLEXUS/_MENGER/board
+```
+
+Every ticket's place in the order of work is **kept** (WAVE-6): each row
+and ticket carries **`placement`** — `{"type": "wave", "n": n}`,
+`{"type": "done"}` or `{"type": "missing_blocker"}`, the rule `waves`
+answers by (below) — omitted on a doc, which has no place in it. The store
+holds it equal to that rule at every moment: it places every ticket from
+the rows when it opens the file (nothing stores a placement, so none is
+stale after a restart), and the two writes that can move one move it before
+they commit — a birth (the newborn, and every ticket a forward reference to
+its id held in the missing lane, and theirs) and a status change across
+`Complete` / `Superseded` in either direction (the ticket, and everything
+downstream of it along `unlocks` whose placement changes; the walk stops
+where nothing changes). Nothing else moves one: `blocked_by` is fixed at
+birth. A write that moved any says so last, once, in `placements_changed`
+(the newborn's own is on its `created`; a status change's own ticket is on
+its `status_changed` and in the changes). WAVE-3 measured what keeping them
+costs (`spike/WAVE-2/`).
+
+A ticket can define **components** (COMP-3, COMP-1): custom elements
+written in its body, usable as a tag in any ticket. The server keeps the
+**registry** — every component, its source, its owner and what uses it.
+
+````markdown
+```component m-wave-summary
+<template><div class="summary"><slot></slot></div></template>
+<style>.summary { font-weight: 600 }</style>
+<script>/* the element class's `this` */</script>
+```
+````
+
+- **A definition** is a fenced block whose info string is `component`
+  and then the tag (` ```component m-name `, or a `~~~` fence; what follows
+  the tag is the preview line — below); its **source** is the block's content exactly
+  as written between the fences. The tag is a custom element's name:
+  lowercase ASCII, starting with a letter, holding a hyphen (`m-x`,
+  `m-wave-summary`; not one of HTML's eight reserved names). A
+  ` ```component ` block that names no such tag, or a body defining one
+  name twice, is an in-band `error` on the `create` or `amend` that carries
+  it, and nothing is written. A block inside an indented code block or
+  inside a fence of another language (` ````markdown `) is that example's
+  text, not a definition.
+- **One owner**: the ticket whose body defines it. Another ticket's body
+  defining an owned name is refused in-band, naming the owner. The owner
+  amending the block replaces the source.
+- **A reference** is the tag, `<m-name`, as HTML in a body — an HTML block
+  or inline HTML as the markdown renderer finds them, the name folded to
+  lowercase as HTML does — outside code spans, fences, indented code,
+  HTML comments, the frontmatter, and the definition's own block. A ticket
+  references a name once however often it writes it. A component's
+  **source** is HTML through and through: each `<m-other` in it (its
+  `<script>` included, outside comments) is a reference by that component —
+  never by itself. A reference made before the name is defined counts from
+  the definition's birth.
+- **Orphans**: when the owner's body loses the block and something still
+  uses the component, it stays, ownerless (`owner: null`), read-only,
+  source kept. It is kept while a ticket references it or a live component
+  — owned, or a kept orphan — does; the write that takes its last such
+  reference removes it (and anything only it kept, and orphans that only
+  reference each other). With no reference at all, losing the block
+  removes it at once. A ticket that defines an orphan's name **adopts** it:
+  owner that ticket, source its block, references as they were.
+- Kept by the store on `create` and on an `amend` of the body, in the
+  write's transaction, from the new body and the registry's own record of
+  what the ticket defined and referenced (the old body is not read); bodies
+  are stored exactly as written. Stored in a `components` table (`name`,
+  `source`, `owner`, `references`), which a database written before COMP-3
+  gains on first open, durably, once, with the registry built from every
+  body in the store's order — a name two bodies define is the earlier
+  one's (the later is logged, and refused when it next changes its body
+  while still defining it); a malformed block is logged and skipped. The
+  table also holds the names referenced before anyone defined them (`source`
+  null), which never reach the wire.
+
+**Docs** (COMP-8, COMP-1 decision 6). A source may hold one `<docs>`
+element, at its top level (outside `<template>`, `<script>`, `<style>` and
+comments; anywhere among them) — the component's help, served on the wire
+as `docs` (`null` without one):
+
+````markdown
+```component m-wave-summary board=RETURNS label="Platform team"
+<template>…</template>
+<docs>
+  <summary>How many of a board's tickets are workable now (wave 1).</summary>
+  <attr name="board" type="shortcode" required>The shortcode to count, e.g. RETURNS.</attr>
+  <attr name="label" type="string">Shown before the count.</attr>
+  <slot name="title">Optional title markup.</slot>
+  <example><m-wave-summary board="RETURNS"></m-wave-summary></example>
+  Longer help, as markdown prose.
+</docs>
+<script>…</script>
+```
+````
+
+| in `<docs>` | on the wire, `docs.…` |
+| -- | -- |
+| `<summary>` (at most one) | `summary` — its text: tags dropped, whitespace collapsed, trimmed (`""` without one) |
+| `<attr name type? required?>` | `attrs[]` — `{ name, kind, required, description }`, in order; `name` lowercased; `kind` the `type`: `string` (the default), `number`, `boolean`, `shortcode` (an existing shortcode), `ticket` (an existing id) or `enum(a\|b\|c)`, internally tagged — `{"type": "shortcode"}`, `{"type": "enum", "values": ["a", "b", "c"]}`; `required` whether the attribute is present |
+| `<slot name?>` | `slots[]` — `{ name, description }`; `name` `null` for the default slot |
+| `<example>` | `examples[]` — each one's inner HTML as written (its common indentation and surrounding blank lines removed) |
+| everything else | `help` — markdown: the four elements' lines removed, the rest de-indented, runs of blank lines one |
+
+The four are the `<docs>` element's own children: one inside another
+element of the help (`<details><summary>`) or a backtick code span or fence
+is help. A malformed `<docs>` — two of them, one never closed, two
+`<summary>`s, an `<attr>` without a `name`, an unknown `type`, an `enum()`
+naming nothing, an attribute or slot declared twice — is an in-band `error`
+on the `create` or `amend` that carries it, naming the component and the
+problem, and nothing is written.
+
+**The preview line**: what follows the tag on the opening line is
+attributes as on a tag — `board=RETURNS label="Platform team" compact` —
+served as `preview`, `[name, value]` pairs in order (names lowercased; a
+value bare, double- or single-quoted; a bare name's value `""`); what a
+live preview of the definition renders with. Changing only it moves the
+component (`component_changed`). Stored with the component (a `components`
+table from before COMP-8 gains the column on first open, each owned
+component's read from its owner's body); the docs are parsed from the
+stored source.
+
+```sh
+synapse -P 4455 menger tickets components
+```
+
+**In the app** (COMP-4, COMP-5) a body holding HTML or a component tag
+renders in a sandboxed frame (no `allow-same-origin`) under menger's SDK
+(`frontend/sdk/menger-sdk.js`, whose header is the protocol's reference),
+and every component in the registry is a custom element there. A custom
+element cannot be redefined, so each name's class delegates to its current
+source: amending a definition re-renders every live instance in every open
+frame, without a reload; an orphan keeps rendering; a component that left
+the registry renders `unknown component m-x`. An instance is an open shadow
+root holding the source's `<style>`s and its `<template>`'s content
+(`<slot>`s take the element's children); the source's `<script>`s then run
+as one function with the element as `this`:
+
+| in a component script | |
+| -- | -- |
+| `this.root` | its shadow root |
+| `this.attr(name)` | the attribute, or `null` — an attribute read this way re-renders the instance when it changes |
+| `this.menger` | `window.menger` itself |
+| `return () => …` | runs before the next render and when the element leaves the document; so does the end of every `menger.on` made while the script ran |
+
+`window.menger` (1.2, frozen): `version`; **`tickets`** (COMP-10) — the
+`tickets` activation's typed client (below); **`call(method, params)`** → a
+Promise of the call's items (the stream's data events as the wire spells
+them, an in-band `error` included), answered by the app over its own
+connection — **read-only**: `get`, `list`, `find`, `waves`, `groups`,
+`extents`, `blockers`, `health`, `components`, with the activation's
+parameter names (`menger.call('waves', { epics: ['PLEXUS'] })`); any other
+method rejects with `read-only: …`, a parameter the method does not take
+rejects naming it; **`on('change', cb)`** → `cb(event)` for every `watch`
+event the app hears, and returns the function that stops it;
+**`navigate(route)`** (COMP-9, below). Its types are
+`frontend/sdk/menger.d.ts`, published at `/app/sdk/menger.d.ts`.
+
+**The typed SDK** (COMP-10, COMP-1 decision 7). `menger.tickets` is the
+client the house generator writes from the activation's schema —
+`synapse-cc` → `hub-codegen`'s TypeScript target, never a hand-written
+mirror — over the same read-only bridge:
+
+```js
+for await (const ev of this.menger.tickets.waves(['RETURNS'])) {
+  if (ev.type === 'wave_counts') count = ev.waves[0] ?? 0;
+}
+const all = await Array.fromAsync(menger.tickets.components());
+```
+
+It is hub-codegen's surface as generated: every method of the activation,
+camelCased (`setStatus`, `linkCommits`, `readySet`), with the activation's
+parameters positionally (required first, in the generated order —
+`waves(epics, kinds?)`; the `.d.ts` says each), each an
+`AsyncGenerator<TicketsEvent>` (`schema()` a Promise) whose events' keys the
+generated runtime camelCases (`waitingOn`, `blockedBy`; `type` values stay
+as the wire spells them). A read is answered as `menger.call` is; every
+other method is present and throws a `PlexusError` "read-only: …" when
+iterated — the host's allow-list is the only gate. `menger.call` stays, the
+untyped escape hatch.
+
+The generated client's only seam is its `RpcClient` (Layer 1): the bridge
+transport (`frontend/sdk/bridge.ts`) implements it over the frame's
+postMessage channel — the call's items become `data` items and a `done`, a
+rejection an `error` item — so nothing generated is edited.
+**`scripts/sdk-codegen.sh`** produces it all: it builds menger, starts a
+throwaway server on its own ports (`SDK_CODEGEN_PORT`, default 4466–4468;
+never 4450–4462) over a temporary database, and in the `plexus-codegen`
+image runs `synapse-cc build` (generate, install, compile, smoke-test),
+emits the client's declarations with `tsc`, typechecks `bridge.ts` and
+`menger.d.ts` against them, and bundles the bridge transport with the
+client (`bun build`, IIFE). It writes the snapshot into
+`frontend/sdk/generated/` — the generated sources and `.d.ts`,
+`manifest.json` (each method's parameter names, from the IR) and
+`sdk-bundle.js` — and splices the bundle into `menger-sdk.js` between its
+`@generated-begin` / `@generated-end` lines, where it assigns the shell's
+own `mengerTyped` and defines no global. All of it is committed: `cargo
+build`, `trunk build` and the tests need neither Docker nor Node. A run
+takes ~4 s in the container (plus menger's build); a second run with
+nothing changed changes nothing. **Run it whenever the activation's surface
+changes** — the drift guard, `tickets-api/tests/sdk_manifest.rs`, holds the
+activation's methods and parameter names to `manifest.json` and fails
+`cargo test --workspace` with "run scripts/sdk-codegen.sh" until it is; a
+native test in `frontend/src/frame.rs` holds the spliced region to
+`sdk-bundle.js` (never edit it in place) and the bundle to the manifest.
+
+```sh
+scripts/sdk-codegen.sh        # needs Docker and the plexus-codegen image
+```
+
+**`#/components`** (COMP-6; linked from the header beside `waves`) lists
+the registry live: a row per component — its tag and (COMP-9) its summary
+or "no docs yet", its owner (a ticket link) or **orphan**, its reference
+count with each referrer as a link, its source folded. `#/components/<tag>`
+is one component — COMP-9: its **help page**: its docs card (below,
+framed, examples and preview live), then what references it, then its
+source, open.
+
+**Definitions render, instances link to them** (COMP-9, COMP-1 decisions
+5–6):
+
+- **The docs card.** A body holding a definition frames, and the
+  ` ```component m-x ` block renders inside the frame as its card
+  (`frontend/src/card.rs`, built from the block itself — a draft's docs
+  show as they are typed, a malformed one as the problem): `<m-x>` and its
+  summary · "N references ↗" (to the help page, kept live by the SDK) · a
+  **live preview** with the opening line's preview attributes · the
+  attributes (name, type, required, description) · the slots · each
+  example rendered live beside its markup · the help prose (markdown) · the
+  source, folded. The card is addressable: **`#/ticket/<OWNER>?component=m-x`**
+  scrolls the app to it and flashes it.
+- **Badges and tooltips.** Every component instance in a frame wears a
+  small corner badge, `m-x ↗`, shown on hover or keyboard focus and laid
+  over the page (absolutely placed at the instance's top-left corner — it
+  moves nothing). Hovering or focusing the badge opens a tooltip: the name,
+  its owner (or orphan), the summary, and each declared attribute with this
+  instance's value — a missing required one, or a value that does not fit
+  its `AttrKind` (a number; a boolean; a shortcode that exists; a ticket id
+  that exists; one of an enum's values), flagged with the reason (`no
+  shortcode 'NOPE'`) and the badge turned to the error colour — with
+  "definition ↗" (the owner's card; for an orphan, the help page) and
+  "docs ↗" (the help page). A component without docs: its name and "no docs
+  yet". The badge is focusable: Enter (or a click) follows "definition",
+  Esc closes the tooltip. The host fills the tooltip (`menger:inspect` →
+  `menger:inspected`, `frontend/src/inspect.rs`): the registry and the
+  board's extents say what exists, and the checks are
+  `AttrKind::check` / `AttrDoc::state` in `tickets-api` (wasm-safe).
+- **`menger.navigate(route)`** (SDK 1.2) moves the app to an app route —
+  `#/ticket/<id>` (with `?component=<tag>`), `#/components`,
+  `#/components/<tag>`, `#/waves`, `#/waves/<SHORTCODE>` (with a board's
+  query); anything else is ignored. The badge and the tooltip's links use
+  it, and so does a click on any `#/…` link in a framed body; a `{wave: ID}`
+  clicked in a framed board note reveals the card on the board, as in an
+  unframed note.
+
+The order of work for a shortcode tree — the platform's, here — is one call
+(WAVE-4); the app's wave board (`#/waves/<SHORTCODE>`) makes the same one:
+
+```sh
+synapse -P 4455 menger tickets waves --epics PLEXUS,MACRO,SYNAPSE,TRANSPORT,STARTER,HYPERFORGE,RETURNS,CONTEXT
+```
+
 | method | yields |
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
-| `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the six is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12) **or a doc** (SDLC-11): the first ticket of a prefix must be `kind: scope` or `kind: doc`, anything else is an in-band `error` naming the rule and nothing is allocated; a `doc` starts — and stays — in `Doc`, and a doc with a `blocked_by`, a `blocked_by` naming a doc, or a doc born as an id a `blocked_by` already names is an in-band `error` (SDLC-11); **`parent` defaults to the shortcode's scope root and must stay inside the shortcode** (MNG-14): omitted, a non-root hangs under its prefix's root; named, it must be in the same prefix, else an in-band `error` — the scope root itself is the exception, its parent (if any) is the shortcode it hangs under, a sub-shortcode |
-| `tickets.get { id }` | `ticket` or `not_found` |
+| `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent?, path? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the six is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12) **or a doc** (SDLC-11): the first ticket of a prefix must be `kind: scope` or `kind: doc`, anything else is an in-band `error` naming the rule and nothing is allocated; a `doc` starts — and stays — in `Doc`, and a doc with a `blocked_by`, a `blocked_by` naming a doc, or a doc born as an id a `blocked_by` already names is an in-band `error` (SDLC-11); **`parent` defaults to the shortcode's scope root and must stay inside the shortcode** (MNG-14): omitted, a non-root hangs under its prefix's root; named, it must be in the same prefix, else an in-band `error` — the scope root itself is the exception, its parent (if any) is the shortcode it hangs under, a sub-shortcode; **`path`** (WAVE-10) gives the ticket a path address in its shortcode — only `_MENGER/…` with something after it, only on a `doc`, only with the shortcode's scope root as `parent` (the default); one another ticket of the shortcode holds is an in-band `error` naming it, as is each other refusal, and nothing is allocated; COMP-3: the body's ` ```component ` blocks register components — a block whose tag is not a component name, a name defined twice, or a name another ticket defines is an in-band `error` (the last naming that ticket) and nothing is allocated; COMP-8: so is a malformed `<docs>`, naming the problem |
+| `tickets.get { id }` | `ticket` or `not_found` — `id` is an `EPIC-N`, or (WAVE-10) a path address `SHORTCODE/path` (`PLEXUS/_MENGER/board`; the shortcode case-insensitive, the path exact), and `not_found` carries the id or address as given |
 | `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children — the one way to read them (SCALE-4), from an index the store keeps, so a page of a root's 163,530 children costs the page (1.3 ms at 10⁶ over REST, first page or deep) and its `remaining` is arithmetic; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page — `after` naming no ticket is one in-band `error` |
 | `tickets.ready_set { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete or Superseded — never a doc), ordered (epic, seq), then one `page { next, remaining }` |
 | `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
 | `tickets.set_status { id, status }` | `status_changed { ticket, previous }` — any of the nine, from any status (SDLC-7: the worker states `Coding` and `In Review` included); one outside them is an in-band `error` naming the nine; SDLC-11: on a doc, an in-band `error` (a doc has no lifecycle), and `Doc` on any other kind an in-band `error` too |
-| `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id |
+| `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id. COMP-3: a new body moves the component registry (definitions, references, orphans); a malformed ` ```component ` block (COMP-8: or `<docs>`), or a name another ticket defines, is an in-band `error` and nothing is written, title included |
 | `tickets.link_commits { id, commits }` | `commits_linked { ticket, added }` (SDLC-9) — appends every commit reference in `commits` the ticket does not already carry, in the order given; `added` is what was newly linked, in order. Every entry already linked, or `commits` empty, is no write and no broadcast and answers `added: []`. An entry that is not a commit reference is one in-band `error` naming every such entry, and nothing is written — a call is all or nothing; so is a link that would put more than 256 commits on the ticket. An id naming no ticket is `not_found`. Durable before it is acknowledged; `updated_unix` moves, nothing else does |
 | `tickets.unlink_commits { id, commits }` | `commits_unlinked { ticket, removed }` (SDLC-9) — every entry the ticket carries is removed; `removed` names them in the order given; none of them linked is no write, `removed: []`. The same grammar, the same all-or-nothing `error`, `not_found` |
 | `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's row is written, and it leaves the old parent's children and joins the new one's (SCALE-4: neither parent's row is rewritten — SCALE-28 stores each one's new `child_count` on it, in the move's transaction; `watch` carries `children_changed` and `child_removed` with each parent's new `child_count`); the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, docs, root, root_row, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only; SDLC-11: the work only — `docs` counts the docs, and a row of docs alone is drawn), `root` is the lowest-seq `scope` (or `doc`), `root_row` the root's `{ title, status, kind }` (AGS-23: the nav draws the shortcode as the root's row; `null` with no root), `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
+| `tickets.components {}` | one `component { component: { name, source, owner, references, docs, preview } }` per component, in name order, then the stream's own `done` (COMP-3) — `source` the ` ```component name ` block's content, `owner` the defining ticket (`null`: an orphan), `references` the tickets whose bodies use `<name`, in the store's order, then the components whose sources do, by name; COMP-8: `docs` the source's `<docs>` parsed (`{ summary, attrs, slots, examples, help }`, `null` without one), `preview` the opening line's attributes (`[[name, value], …]`). From the cache; `watch` keeps it current with `component_changed` / `component_removed` |
 | `tickets.extents {}` | one `extent { epic, last_seq }` per shortcode that holds a ticket, in shortcode order (the store's), then the stream's own `done` (SCALE-16) — where each shortcode ends: ids are allocated highest-plus-one and never deleted, so a shortcode holds `last_seq` tickets, row k of it is `EPIC-k`, and a position in the store's order becomes a `list { after }` cursor without a walk; every `last_seq` together sums to `health.ticket_count` (a hand-edited database with a hole still reports the highest sequence; `after` naming the missing id is `list`'s cursor error). Not a roll-up: the shortcode's own tickets only, and every shortcode has one whether or not the nav draws it a row. Read from the sequence `create` allocates from (SCALE-3), so the cost is the number of shortcodes; no `watch` event — `created` carries the shortcode's new `last_seq` as its `seq` |
-| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `commits_linked` / `commits_unlinked` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`) — AGS-23: so is a shortcode root's status change (any, not only across `Complete`) or new title, which moves its group's `root_row`; `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
+| `tickets.waves { epics, kinds? }` | the order of work (WAVE-4): one `placed { summary, placement, waiting_on }` per ticket of the shortcodes `epics` (case-insensitive; one with no tickets contributes nothing) whose kind is in `kinds` (default `build`, `spike`, `gap`; a doc is never placed), then exactly one `wave_counts { waves, missing, done }` — `waves[i]` counts the placed tickets in wave `i + 1`. `placement` is computed over the **whole** `blocked_by` graph by `ready_set`'s rule (MNG-4), blockers followed into any shortcode, asked for or not: `{"type": "done"}` when the ticket is `Complete` or `Superseded`; `{"type": "missing_blocker"}` when it, or anything it waits on, names a blocker that is no ticket (or, only by a hand edit, sits on or behind a `blocked_by` cycle); otherwise `{"type": "wave", "n": n}` — 1 with every blocker satisfied, else 1 + the highest wave among its unsatisfied blockers. `parent` orders nothing, and a `Blocked` status is a marker, not an edge. `waiting_on` is the ticket's unsatisfied direct blockers (missing ids included), in `blocked_by` order, distinct; `[]` when done. Order: waves ascending, inside a wave `Coding`, `In Review`, `Ready`, `Pending`, `Blocked`, `Idea`, `Epic`, then (epic, seq); then the missing lane; then the done — each in (epic, seq). `epics` empty, or a kind outside the six, is one in-band `error` and nothing else. WAVE-6: read from the placements the store keeps (below) — the cost is the placed tickets — and `waiting_on` worked out per row |
+| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `commits_linked` / `commits_unlinked` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` / `placements_changed` / `component_changed` / `component_removed` — COMP-3: a `create` or `amend` that moved the component registry ends — after every other event of the write, `placements_changed` included — with one **`component_changed { component }`** per component it registered or moved (source, owner, references: the whole component, so applying it is one upsert), in name order, then one **`component_removed { name }`** per component it took out; a component is in no shortcode, so both pass any `epic` filter — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`) — WAVE-6: and a write that moved any kept placement ends with one **`placements_changed { changes: [{ id, placement }] }`**, after its other events (`epic` keeps the changes in its shortcode, and the event only when one is left) — AGS-23: so is a shortcode root's status change (any, not only across `Complete`) or new title, which moves its group's `root_row`; `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
 
 Paging (MNG-9). `(epic, seq)` is a total order the schema keeps unique, so
 a ticket id is a cursor: a client that renders opens `watch` first, then
@@ -448,7 +788,7 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        typed Plexus client it emits — ONE declaration, shared by
                        the server (default features: `server`) and the app
                        (default-features = false, wasm32)
-  types.rs             Ticket · Status · Kind · Severity · TicketSummary · Group · TicketsEvent
+  types.rs             Ticket · Status · Kind · Severity · TicketSummary · Group · Placement · TicketsEvent
   store/               the service-wide cache (SQLite system of record behind it)
     mod.rs             the Store: the cache of rows, reads (a body from the
                        database on read-only connections — SCALE-14), the
@@ -467,12 +807,22 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        set it decides (store order), each shortcode's count of
                        each status — what ready_set and list { status } page
                        and count from (SCALE-32)
+    waves.rs           each ticket's wave in the order of work — MNG-4's rule
+                       over blocked_by, the whole graph (WAVE-4); `waves`
+                       reads the kept placements (WAVE-6)
+    placements.rs      the placements kept on the rows: the re-placement pass
+                       a birth or a status change across the satisfied line
+                       runs before it commits, and the pass at open (WAVE-6)
     stored.rs          the derived state as stored beside the tickets — its
                        tables, what a write's transaction writes to them, the
                        read at start, the build on first open, and
                        --verify-derived (SCALE-28)
     commits.rs         what a commit reference is, as stored and compared, and
                        how many a ticket holds (SDLC-9)
+    components.rs      the component registry: what a body defines and
+                       references, the plan a create or amend makes of it
+                       (orphans, adoption, the sweep), its table, and the
+                       build from every body on first open (COMP-3)
     synthetic.rs       the --seed-synthetic generator (PERF-2)
     tests.rs           the store's unit tests
     tests_paging.rs    page.remaining against a count, on every shape (SCALE-19)
@@ -499,10 +849,44 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        a scan after every write, in the cache and the file;
                        every ready_set and list { status } page against the
                        code before it (SCALE-32)
+    tests_waves.rs     waves: chains, diamonds, the missing lane, blockers in
+                       other shortcodes, docs, kinds, the yield order and the
+                       tally, a hand-edited cycle, a chain past any call stack
+                       (WAVE-4)
+    tests_placements.rs  the kept placements against the rule after random
+                       births and status changes, watch's mirror, the
+                       two-blockers-back case (WAVE-6)
+    tests_paths.rs     path addresses: create, refusals, get by address, the
+                       column added to an old file (WAVE-10)
+    tests_components.rs  the component registry: each row of its table, code
+                       examples and code spans, events, durability, the
+                       table built from the bodies of an old file (COMP-3)
+  component_docs.rs    a component's help: its source's <docs> parsed
+                       (summary, typed attributes, slots, examples, help)
+                       and the preview line (COMP-8) — wasm-safe, shared
+                       with the app's docs card (COMP-9)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
+  tests/sdk_manifest.rs  COMP-10's drift guard: the activation's methods and
+                       parameters against frontend/sdk/generated/manifest.json
+scripts/sdk-codegen.sh the frames' typed SDK, generated (COMP-10; Docker)
 web/index.html         the day-one reactive shell
-frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/)
+frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
+                       src/waves.rs the wave board (WAVE-5, WAVE-6),
+                       src/filter.rs its filter and menu (WAVE-12),
+                       src/notes.rs its annotation and the body editor (WAVE-11),
+                       src/frame.rs framed bodies and their messages (COMP-4,
+                       COMP-5), sdk/menger-sdk.js the SDK every frame runs,
+                       sdk/menger.d.ts its types, sdk/bridge.ts the bridge
+                       transport and sdk/generated/ the typed client
+                       (COMP-10, scripts/sdk-codegen.sh),
+                       src/registry.rs the app's copy of the component
+                       registry, src/bridge.rs menger.call's read-only host
+                       side (COMP-5), src/components.rs #/components (COMP-6)
+                       and the help pages, src/card.rs a definition's docs
+                       card, src/inspect.rs the tooltip's checks and
+                       menger.navigate's routes (COMP-9)
+spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)
 diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub
                        (WS :4458); the `mermaid` activation and the client it
                        emits, the Node child it owns (src/node.rs), the app's

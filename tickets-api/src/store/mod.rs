@@ -86,8 +86,42 @@
 //! roll-ups count a doc in `docs`, never in `done/total` ([`rollup`]) — the
 //! derived state's form 3, built once on a file's first open. Everything
 //! else is a doc's as any ticket's: amend, parenthood, commits, the pages.
+//! WAVE-4 reads the order of work off the rows ([`waves`]): each ticket's
+//! wave, derived from `blocked_by` over the whole graph by MNG-4's rule, on
+//! demand — computed under the read lock for the one call, memoized for it,
+//! and kept nowhere: no write moves it, nothing stores it.
+//! WAVE-6 keeps them ([`placements`]): every non-doc row carries its
+//! placement, equal at every moment to that rule — placed from the rows at
+//! open (nothing stores one, so none is stale after a restart), and moved by
+//! the two writes that can move one, in the write, before it commits: a
+//! birth (the newborn, and the tickets a forward reference to its id held
+//! missing) and a status change across `Complete` / `Superseded` (the ticket,
+//! and what moves downstream of it along `unlocks` — the walk stops where
+//! nothing moves). The moves are broadcast last, one `PlacementsChanged`
+//! per write that made any; `waves` reads the kept placements.
+//! WAVE-10 gives a ticket an optional **path address**: a `path` on its row,
+//! unique within its shortcode, which `get` resolves from `<SHORTCODE>/<path>`
+//! through an index the cache keeps beside the hash half ([`Paths`]) and the
+//! file keeps as a unique index on `(epic, path)`. An address, not an id —
+//! the order, extents, paging and readiness never read it — set at birth and
+//! never moved; only `_MENGER/…`, on a doc directly under its shortcode's
+//! scope root, for the documents menger keeps inside a shortcode. A database
+//! written before WAVE-10 gains the column, durably, once, on first open.
+//! COMP-3 keeps the **component registry** ([`components`]): every custom
+//! element a ticket defines in a ` ```component <tag> ` block — its source,
+//! its owner (or none: an orphan, kept while something live still uses it)
+//! and what references it. The two writes that change a body move it —
+//! `create` and an `amend` of the body — worked out under the write-serial
+//! lock from the new body in hand and the registry's own record of what the
+//! ticket defined and referenced (the old body is never read), stored in the
+//! write's transaction, taken by the cache with its rows, and announced
+//! last (`ComponentChanged`, `ComponentRemoved`). A definition of a name
+//! another ticket owns refuses the write. Held in the cache, sources and
+//! all (a component is a few KB, and there are few); stored in its own
+//! table, which a database written before COMP-3 gains — the registry built
+//! from every body — durably, once, on first open.
 
-use crate::types::TicketSummary;
+use crate::types::{is_menger_path, path_address, Component, Placement, PlacementChange, TicketSummary, MENGER_PATH_PREFIX};
 use rusqlite::{Connection, OpenFlags};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -132,6 +166,8 @@ fn whole(row: Row, body: String) -> Ticket {
         blocked_by,
         unlocks,
         commits,
+        path,
+        placement,
         created_unix,
         updated_unix,
     } = row;
@@ -148,6 +184,8 @@ fn whole(row: Row, body: String) -> Ticket {
         parent,
         child_count,
         commits,
+        path,
+        placement,
         body,
         created_unix,
         updated_unix,
@@ -574,6 +612,18 @@ pub enum Change {
     /// a client applying events in order meets the cause before the
     /// effect — one per group whose row changed, innermost first.
     GroupChanged { group: Group },
+    /// WAVE-6: the kept placements one write moved, each with its ticket's
+    /// shortcode (what `watch { epic }` filters by; it does not cross the
+    /// wire) — broadcast last, after the write's other events, once per
+    /// write that moved any.
+    PlacementsChanged { changes: Vec<(String, PlacementChange)> },
+    /// COMP-3: a component a write registered or moved — its source, owner
+    /// or references — as the write leaves it; one per component, in name
+    /// order, after every other event of the write (placements included).
+    ComponentChanged { component: Component },
+    /// COMP-3: a component the write took out of the registry (an orphan
+    /// nothing live uses any more) — after the write's `ComponentChanged`.
+    ComponentRemoved { name: String },
 }
 
 impl Change {
@@ -593,7 +643,46 @@ impl Change {
             | Self::ParentChanged { ticket, .. } => &ticket.epic,
             Self::ChildrenChanged { epic, .. } | Self::ChildRemoved { epic, .. } => epic,
             Self::GroupChanged { group } => &group.epic,
+            // WAVE-6: one per change, not per event — see `in_epic`.
+            Self::PlacementsChanged { .. } => "",
+            // COMP-3: in no shortcode — see `in_epic`.
+            Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => "",
         }
+    }
+
+    /// What `watch { epic }` passes on of this change: the change itself
+    /// when it is in `epic` (or no epic is asked for) — WAVE-6: and of a
+    /// `PlacementsChanged`, the changes in `epic`, when any is. COMP-3: a
+    /// component's change whatever the epic — a component belongs to no
+    /// shortcode, and a ticket of any shortcode may use it.
+    pub fn in_epic(self, epic: Option<&str>) -> Option<Change> {
+        let Some(epic) = epic else { return Some(self) };
+        match self {
+            Self::PlacementsChanged { changes } => {
+                let changes: Vec<_> = changes.into_iter().filter(|(e, _)| e == epic).collect();
+                (!changes.is_empty()).then_some(Self::PlacementsChanged { changes })
+            }
+            Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => Some(self),
+            other => (other.epic() == epic).then_some(other),
+        }
+    }
+
+    /// COMP-3: a write's component events, in the order they are sent —
+    /// the components it moved, then the ones it removed, each in name order.
+    fn components(plan: components::Plan) -> Vec<Change> {
+        plan.changed
+            .into_iter()
+            .map(|component| Self::ComponentChanged { component })
+            .chain(plan.removed.into_iter().map(|name| Self::ComponentRemoved { name }))
+            .collect()
+    }
+
+    /// WAVE-6: the `PlacementsChanged` a write's pass makes — `None` when it
+    /// moved no placement.
+    fn placed(replaced: &placements::Replaced) -> Option<Change> {
+        (!replaced.shifts.is_empty()).then(|| Self::PlacementsChanged {
+            changes: replaced.shifts.iter().map(placements::Shift::change).collect(),
+        })
     }
 }
 
@@ -615,6 +704,10 @@ pub struct NewTicket {
     /// AGS-19: the ticket this one is an output of. Must already exist
     /// (any epic) and must not make the newborn its own ancestor.
     pub parent: Option<String>,
+    /// WAVE-10: the newborn's path address in its shortcode — only a
+    /// `_MENGER/…` path, only on a doc, only directly under the shortcode's
+    /// scope root, and only one no ticket of the shortcode already holds.
+    pub path: Option<String>,
     pub body: String,
 }
 
@@ -705,6 +798,58 @@ pub enum StoreError {
     /// to resume from. Distinct from `NotFound`: the miss is the cursor,
     /// not the thing asked for, and the message says so.
     CursorNotFound(String),
+    /// WAVE-10: `create { path }` with a path outside `_MENGER/` (or
+    /// `_MENGER/` and nothing after it) — the one prefix menger accepts.
+    /// Nothing was stored.
+    PathNotReserved { path: String },
+    /// WAVE-10: `create { path }` for a ticket that is not a doc — a path
+    /// names one of menger's own documents. Nothing was stored.
+    PathOnWork { path: String, kind: Kind },
+    /// WAVE-10: `create { path }` with a `parent` other than the shortcode's
+    /// scope root, `root`, which is where a `_MENGER/` document lives.
+    /// Nothing was stored.
+    PathParent { path: String, parent: String, root: String },
+    /// WAVE-10: `create { path }` in a shortcode with no scope root yet (its
+    /// first ticket, or a legacy prefix that never had one) — nowhere for
+    /// the document to live. Nothing was stored.
+    PathNoRoot { epic: String, path: String },
+    /// WAVE-10: `create { path }` with a path `holder` already holds in
+    /// `epic`. Nothing was stored and no id was allocated.
+    PathTaken { epic: String, path: String, holder: String },
+    /// COMP-3: the body holds a ` ```component ` block whose tag, `name`, is
+    /// not a component name ([`crate::component_docs::is_component_name`]; `""`: it
+    /// names none). `id` is the amended ticket — `None` for a `create`, which
+    /// stored nothing and allocated no id. Nothing changed.
+    ComponentName { id: Option<String>, name: String },
+    /// COMP-3: the body defines `name` in two blocks. Nothing changed.
+    ComponentTwice { id: Option<String>, name: String },
+    /// COMP-3: the body defines `name`, which `owner` already defines — a
+    /// component has one owner. Nothing changed.
+    ComponentOwned { id: Option<String>, name: String, owner: String },
+    /// COMP-8: the body's definition of `name` holds a malformed `<docs>` —
+    /// `problem` says what. Nothing changed.
+    ComponentDocs { id: Option<String>, name: String, problem: String },
+}
+
+impl StoreError {
+    /// COMP-3: a body's refused ` ```component ` block, as the write that
+    /// carried it says so — `id` the amended ticket, `None` for a create.
+    fn component(id: Option<&str>, problem: components::Problem) -> Self {
+        let id = id.map(str::to_string);
+        match problem {
+            components::Problem::Name(name) => Self::ComponentName { id, name },
+            components::Problem::Twice(name) => Self::ComponentTwice { id, name },
+            components::Problem::Docs { name, problem } => Self::ComponentDocs { id, name, problem },
+        }
+    }
+}
+
+/// COMP-3: the end of a component refusal — what did not happen.
+fn nothing(id: &Option<String>) -> String {
+    match id {
+        Some(id) => format!("nothing changed for '{id}'"),
+        None => "nothing was created".to_string(),
+    }
 }
 
 impl std::fmt::Display for StoreError {
@@ -806,6 +951,60 @@ impl std::fmt::Display for StoreError {
                  and seeding into an existing database was not explicitly allowed"
             ),
             Self::CursorNotFound(id) => write!(f, "after: no ticket {id}"),
+            Self::PathNotReserved { path } => write!(
+                f,
+                "a path must start with {MENGER_PATH_PREFIX} — the prefix menger reserves for its own \
+                 documents — and name something after it (got '{path}'); nothing was created"
+            ),
+            Self::PathOnWork { path, kind } => write!(
+                f,
+                "only a doc carries a path: '{path}' names one of menger's own documents, and a {} is \
+                 work — create it with kind doc (nothing was created)",
+                kind.as_str()
+            ),
+            Self::PathParent { path, parent, root } => write!(
+                f,
+                "a {MENGER_PATH_PREFIX} document lives directly under its shortcode's scope root, {root}: \
+                 '{path}' cannot be filed under {parent} — omit parent, or name {root} (nothing was \
+                 created)"
+            ),
+            Self::PathNoRoot { epic, path } => write!(
+                f,
+                "'{epic}' has no scope root for '{path}' to live under — create the shortcode's root \
+                 first (nothing was created)"
+            ),
+            Self::PathTaken { epic, path, holder } => write!(
+                f,
+                "'{epic}/{path}' is taken: {holder} already holds the path '{path}' in {epic} (nothing \
+                 was created)"
+            ),
+            Self::ComponentName { id, name } if name.is_empty() => write!(
+                f,
+                "a ```component block names its tag — ```component m-name — and this one names none ({})",
+                nothing(id)
+            ),
+            Self::ComponentName { id, name } => write!(
+                f,
+                "'{name}' is not a component name: a component is a custom element, named in lowercase \
+                 ASCII, starting with a letter and holding a hyphen — e.g. m-chart ({})",
+                nothing(id)
+            ),
+            Self::ComponentTwice { id, name } => write!(
+                f,
+                "the body defines the component '{name}' twice: one ```component block per name ({})",
+                nothing(id)
+            ),
+            Self::ComponentOwned { id, name, owner } => write!(
+                f,
+                "the component '{name}' is defined by {owner}: a component has one owner — change it in \
+                 {owner}, or give this one another name ({})",
+                nothing(id)
+            ),
+            Self::ComponentDocs { id, name, problem } => write!(
+                f,
+                "the component '{name}' has a malformed <docs>: {problem} ({})",
+                nothing(id)
+            ),
         }
     }
 }
@@ -1012,10 +1211,16 @@ impl Needle {
 struct Cache {
     order: BTreeMap<OrderKey, Row>,
     at: HashMap<String, OrderKey>,
+    /// WAVE-10: the path addresses ([`Paths`]).
+    paths: Paths,
     rollups: rollup::Rollups,
     ids: ids::Ids,
     children: children::Children,
     ready: ready::Ready,
+    /// COMP-3: the component registry ([`components::Registry`]) — read from
+    /// its table at open, moved by a body's write in the same critical
+    /// section as the ticket's row.
+    components: components::Registry,
     written: u64,
 }
 
@@ -1133,6 +1338,17 @@ struct Moved {
     /// SCALE-32: the counts, the ready set and the status counts as a birth
     /// or a status change moves them.
     ready: Option<ready::Move>,
+    /// WAVE-6: the placements a birth or a status change across the
+    /// satisfied line moves, and the written ticket's own.
+    placed: Option<placements::Replaced>,
+}
+
+impl Moved {
+    /// WAVE-6: the written ticket's placement as the write leaves it, when
+    /// the write re-placed it.
+    fn placement(&self) -> Option<Option<Placement>> {
+        self.placed.as_ref().map(|r| r.placement)
+    }
 }
 
 impl Derived {
@@ -1157,6 +1373,7 @@ impl Derived {
                 rollups: Some(rollups),
                 groups,
                 ready: None,
+                placed: None,
             },
         }
     }
@@ -1175,11 +1392,29 @@ impl Derived {
 /// rather than inserted one at a time — `BTreeMap`'s `FromIterator` sorts
 /// and bulk-builds the tree instead of rebalancing n times — and the hash
 /// half that says where each id sits.
-fn ordered(loaded: HashMap<String, Row>) -> (BTreeMap<OrderKey, Row>, HashMap<String, OrderKey>) {
+///
+/// WAVE-10: and the path addresses, from the same pass as the hash half —
+/// the few tickets that carry a path ([`Paths`]).
+fn ordered(loaded: HashMap<String, Row>) -> (BTreeMap<OrderKey, Row>, HashMap<String, OrderKey>, Paths) {
     let order: BTreeMap<OrderKey, Row> = loaded.into_values().map(|t| (OrderKey::of(&t), t)).collect();
-    let at = order.values().map(|t| (t.id.clone(), OrderKey::of(t))).collect();
-    (order, at)
+    let mut paths = Paths::new();
+    let at = order
+        .values()
+        .map(|t| {
+            if let Some(p) = &t.path {
+                paths.insert((t.epic.clone(), p.clone()), t.id.clone());
+            }
+            (t.id.clone(), OrderKey::of(t))
+        })
+        .collect();
+    (order, at, paths)
 }
+
+/// WAVE-10: every path address the store holds — `(shortcode, path)` to
+/// the id that holds it. Only menger's own documents carry a path, so this
+/// is a few entries a shortcode at most; a path is set at birth and never
+/// moves, so only a birth adds one and nothing takes one away.
+type Paths = HashMap<(String, String), String>;
 
 impl Cache {
     /// Builds the cache from the tickets alone: their rows put in order
@@ -1196,7 +1431,7 @@ impl Cache {
     /// and nothing else, every count included — a row's stored
     /// `child_count` is set aside, and the count is the parents'.
     fn new(loaded: HashMap<String, Row>) -> Self {
-        let (mut order, at) = ordered(loaded);
+        let (mut order, at, paths) = ordered(loaded);
         for t in order.values_mut() {
             t.child_count = 0;
         }
@@ -1245,10 +1480,14 @@ impl Cache {
         Self {
             order,
             at,
+            paths,
             rollups,
             ids,
             children,
             ready,
+            // COMP-3: read beside the cache, never built from rows
+            // ([`Store::with_connection`]).
+            components: components::Registry::default(),
             written: 0,
         }
     }
@@ -1263,14 +1502,18 @@ impl Cache {
         children: children::Children,
         ready: ready::Ready,
     ) -> Self {
-        let (order, at) = ordered(loaded);
+        let (order, at, paths) = ordered(loaded);
         Self {
             order,
             at,
+            paths,
             rollups,
             ids,
             children,
             ready,
+            // COMP-3: read beside the cache, never built from rows
+            // ([`Store::with_connection`]).
+            components: components::Registry::default(),
             written: 0,
         }
     }
@@ -1309,6 +1552,35 @@ impl Cache {
         }
     }
 
+    /// WAVE-6: every row's placement from the rows alone
+    /// ([`placements::place_all`]) — at open and after a seed. Logged with
+    /// what it cost: the startup recompute WAVE-3 measures.
+    fn place_all(&mut self) {
+        if cfg!(feature = "wave3-no-replace") {
+            return;
+        }
+        let started = std::time::Instant::now();
+        let placed = placements::place_all(self.rows());
+        let (mut waves, mut missing, mut done) = (0usize, 0usize, 0usize);
+        for (t, p) in self.order.values_mut().zip(placed) {
+            match p {
+                Some(Placement::Wave { .. }) => waves += 1,
+                Some(Placement::MissingBlocker) => missing += 1,
+                Some(Placement::Done) => done += 1,
+                None => {}
+            }
+            t.placement = p;
+        }
+        tracing::info!(
+            target: "wave6",
+            micros = started.elapsed().as_micros() as u64,
+            "WAVE-6: placed {} tickets — {waves} in a wave, {missing} missing a blocker, {done} done — \
+             from the rows in {:.1} ms",
+            waves + missing + done,
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+
     /// SCALE-4: `id`'s kept `child_count` — set from the children index,
     /// on the one row it describes, every time the index moves for it. A
     /// parent that names no ticket (only a hand edit makes one) has no row
@@ -1336,7 +1608,9 @@ impl Cache {
     /// already one of its parent's children), and the roll-ups, worked out
     /// on a copy over the rows with the newborn among them (MNG-10).
     /// SCALE-32: and its own count of unsatisfied blockers and its status
-    /// counted ([`ready::Ready::born`]).
+    /// counted ([`ready::Ready::born`]). WAVE-6: and its placement, with the
+    /// placements of the tickets a forward reference to it held missing,
+    /// and theirs ([`placements::replace`]).
     fn birth(&self, newborn: &Row) -> Derived {
         let rows = self.rows().with(newborn);
         let birth = self.ids.birth(rows, newborn);
@@ -1348,7 +1622,23 @@ impl Cache {
             derived.stored.counts.push((p.clone(), self.children.count(p) + 1));
         }
         derived.moved.birth = Some(birth);
+        derived.moved.placed = Some(Self::replace(rows, newborn, true));
         derived
+    }
+
+    /// WAVE-6: the re-placement pass of a write ([`placements::replace`]),
+    /// unless WAVE-3's measurement build leaves it out.
+    fn replace(rows: Rows<'_>, written: &Row, born: bool) -> placements::Replaced {
+        #[cfg(feature = "wave3-no-replace")]
+        {
+            let _ = (rows, born);
+            return placements::Replaced {
+                placement: written.placement,
+                ..Default::default()
+            };
+        }
+        #[cfg(not(feature = "wave3-no-replace"))]
+        placements::replace(rows, written, born)
     }
 
     /// MNG-10: a create's rows — the newborn and every ticket it touched —
@@ -1369,6 +1659,11 @@ impl Cache {
         }
         let key = OrderKey::of(&ticket);
         let parent = ticket.parent.clone();
+        // WAVE-10: its address, if it has one — checked free under the
+        // write-serial lock before the commit.
+        if let Some(p) = &ticket.path {
+            self.paths.insert((ticket.epic.clone(), p.clone()), ticket.id.clone());
+        }
         self.insert(ticket);
         let count = parent.map(|p| {
             let count = self.children.add(&p, &key);
@@ -1383,6 +1678,9 @@ impl Cache {
     /// crosses `Complete`. SCALE-32: and to the status counts, the ready set
     /// and — across the satisfied line — the counts of the tickets it
     /// unlocks ([`ready::Ready::status_changed`]), whatever the roll-ups do.
+    /// WAVE-6: and, across the satisfied line, its placement and every one
+    /// downstream that moves with it ([`placements::replace`]) — on one side
+    /// of the line, no placement moves.
     fn status_change(&self, row: &Row, previous: Status) -> Derived {
         let rows = self.rows().with(row);
         let derived = if rollup::Rollups::crosses(previous, row.status) {
@@ -1392,7 +1690,11 @@ impl Cache {
         } else {
             Derived::none()
         };
-        derived.readied(self.ready.status_changed(rows, row, previous))
+        let mut derived = derived.readied(self.ready.status_changed(rows, row, previous));
+        if satisfied(previous) != satisfied(row.status) {
+            derived.moved.placed = Some(Self::replace(rows, row, false));
+        }
+        derived
     }
 
     /// MNG-10: a status change; only a crossing of `Complete` moves a count.
@@ -1494,6 +1796,15 @@ impl Cache {
     fn take(&mut self, moved: Moved) -> Vec<Group> {
         if let Some(birth) = moved.birth {
             self.ids.born(birth);
+        }
+        // WAVE-6: after the write's own rows went in, so a placement it
+        // moved is never undone by a row it carried.
+        if let Some(placed) = moved.placed {
+            for shift in placed.shifts {
+                if let Some(t) = self.order.get_mut(&shift.key) {
+                    t.placement = Some(shift.placement);
+                }
+            }
         }
         if let Some(rollups) = moved.rollups {
             self.rollups = rollups;
@@ -1713,6 +2024,14 @@ impl Store {
         // durably — every ticket with none linked. Adding a column with a
         // constant default rewrites no row, so this is instant at any size.
         db::migrate_add_commits(&mut conn)?;
+        // WAVE-10: a database written before WAVE-10 gains `path` here, once,
+        // durably — every ticket without one; and the index that keeps a
+        // path unique in its shortcode. No row is rewritten.
+        db::migrate_add_path(&mut conn)?;
+        // COMP-3: a database written before COMP-3 — or a new one — gains the
+        // `components` table here, once, durably, with the registry built
+        // from every body; after it, every open reads the table.
+        components::migrate(&mut conn)?;
         // SCALE-28: the derived state is read from the file — each
         // shortcode's run, the dangling forward references, the roll-ups,
         // the children index — beside the rows, each carrying its stored
@@ -1728,6 +2047,12 @@ impl Store {
             }
             found => stored::build(&mut conn, found)?,
         };
+        // WAVE-6: every placement, from the rows — nothing stores them, so
+        // none can be stale after a restart.
+        let mut cache = cache;
+        cache.place_all();
+        // COMP-3: the registry, as stored.
+        cache.components = components::load(&conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
             Some(path) => Readers::open(path)?,
@@ -1895,8 +2220,14 @@ impl Store {
                     } else {
                         #[cfg(test)]
                         tests_bodies::STORED_VERSION_READS.fetch_add(1, Ordering::Relaxed);
+                        // WAVE-6: a placement is the cache's alone — nothing
+                        // stores it — so the row's goes with the stored version.
                         rows.into_iter()
-                            .map(|row| db::ticket(&tx, &row.id)?.ok_or_else(|| missing(&row.id)))
+                            .map(|row| {
+                                let mut t = db::ticket(&tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
+                                t.placement = row.placement;
+                                Ok(t)
+                            })
                             .collect::<Result<Vec<Ticket>, StoreError>>()?
                     };
                     tx.commit()?;
@@ -1985,10 +2316,32 @@ impl Store {
                 blocked_by: new.blocked_by,
             });
         }
+        // WAVE-10: a path is an address menger keeps for its own documents —
+        // `_MENGER/…`, on a doc; where it lives and whether it is free are
+        // checked under the lock, with the rest.
+        if let Some(path) = &new.path {
+            if !is_menger_path(path) {
+                return Err(StoreError::PathNotReserved { path: path.clone() });
+            }
+            if new.kind != Kind::Doc {
+                return Err(StoreError::PathOnWork {
+                    path: path.clone(),
+                    kind: new.kind,
+                });
+            }
+        }
         let requested_parent = new
             .parent
             .map(|p| p.trim().to_ascii_uppercase())
             .filter(|p| !p.is_empty());
+        // COMP-3: what the body defines and references — read here, from the
+        // body in hand, before the lock; a malformed ```component block is
+        // refused now. Whether a name it defines is another ticket's is the
+        // registry's to say, under the lock.
+        let (uses, problems) = components::read(&new.body);
+        if let Some(problem) = problems.into_iter().next() {
+            return Err(StoreError::component(None, problem));
+        }
 
         let serial = self.serial().await;
         // Under the write-serial lock the cache mirrors the database
@@ -2000,7 +2353,7 @@ impl Store {
         // every ticket in the store. This read phase computes everything
         // and mutates nothing: a rejection leaves no trace, in the
         // tickets or in what is kept about them.
-        let (ticket, touched, unlocks_added, parent_epic, derived) = {
+        let (ticket, touched, unlocks_added, parent_epic, derived, registered) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let tickets = &cache;
             let seq = tickets.ids.next_seq(&epic);
@@ -2072,6 +2425,45 @@ impl Store {
                 (None, _) => shortcode_root(tickets, &epic).map(|r| r.id.clone()),
             };
 
+            // WAVE-10: a `_MENGER/` document lives directly under its
+            // shortcode's scope root — which it cannot be itself (`seq == 1`)
+            // — and its path is one no ticket of the shortcode holds yet.
+            if let Some(path) = &new.path {
+                let Some(root) = (seq > 1).then(|| shortcode_root(tickets, &epic)).flatten() else {
+                    return Err(StoreError::PathNoRoot {
+                        epic,
+                        path: path.clone(),
+                    });
+                };
+                if parent.as_deref() != Some(root.id.as_str()) {
+                    return Err(StoreError::PathParent {
+                        path: path.clone(),
+                        parent: parent.unwrap_or_default(),
+                        root: root.id.clone(),
+                    });
+                }
+                if let Some(holder) = tickets.paths.get(&(epic.clone(), path.clone())) {
+                    return Err(StoreError::PathTaken {
+                        epic,
+                        path: path.clone(),
+                        holder: holder.clone(),
+                    });
+                }
+            }
+
+            // COMP-3: what the body does to the registry — refused, nothing
+            // stored and no id spent, when it defines a name another ticket
+            // owns. Last of the checks: a body without components is refused
+            // for nothing it was not refused for before.
+            let registered = tickets
+                .components
+                .plan(&id, &uses)
+                .map_err(|o| StoreError::ComponentOwned {
+                    id: None,
+                    name: o.name,
+                    owner: o.owner,
+                })?;
+
             // Dangling forward references to this id resolve now: their
             // owners are the newborn's `unlocks` from birth. SCALE-3: the
             // cache keeps them by the id they name, already in (epic, seq)
@@ -2080,7 +2472,7 @@ impl Store {
             let unlocks = tickets.ids.waiting_on(&id);
 
             let now = chrono::Utc::now().timestamp();
-            let ticket = Ticket {
+            let mut ticket = Ticket {
                 id: id.clone(),
                 epic,
                 seq,
@@ -2098,6 +2490,10 @@ impl Store {
                 child_count: tickets.children.count(&id),
                 // SDLC-9: linked after birth, by `link_commits`.
                 commits: Vec::new(),
+                // WAVE-10: checked above.
+                path: new.path,
+                // WAVE-6: placed below, with the derived state.
+                placement: None,
                 body: new.body,
                 created_unix: now,
                 updated_unix: now,
@@ -2146,7 +2542,9 @@ impl Store {
             // shortcode's run, the forward references, its parent's count,
             // the roll-ups — worked out now, while nothing has changed.
             let derived = tickets.birth(&Row::from(&ticket));
-            (ticket, touched, unlocks_added, parent_epic, derived)
+            // WAVE-6: born placed — `created` carries it.
+            ticket.placement = derived.moved.placement().flatten();
+            (ticket, touched, unlocks_added, parent_epic, derived, registered)
         };
 
         // SCALE-14: the newborn is written whole — the one ticket a write
@@ -2159,6 +2557,13 @@ impl Store {
         let newborn = Row::from(&ticket);
         let rows: Vec<Row> = touched.values().cloned().collect();
         let Derived { stored, moved } = derived;
+        // WAVE-6: the placements it moved, said last.
+        let placed = moved.placed.as_ref().and_then(Change::placed);
+        // COMP-3: and the registry it moved — stored in the transaction,
+        // taken by the cache with the rows, said after everything else.
+        let mut registered = registered;
+        let registry_moves = std::mem::take(&mut registered.moves);
+        let registry_rows = registry_moves.clone();
         self.write(
             serial,
             move |tx| {
@@ -2172,9 +2577,14 @@ impl Store {
                     })
                     .collect::<Result<HashMap<String, Ticket>, StoreError>>()?;
                 stored.write(tx)?;
+                components::store(tx, &registry_rows)?;
                 Ok(blockers)
             },
-            move |cache, _| cache.created(newborn, touched.into_values(), moved),
+            move |cache, _| {
+                let out = cache.created(newborn, touched.into_values(), moved);
+                cache.components.take(registry_moves);
+                out
+            },
             move |blockers, (groups, child_count), tx| {
                 let _ = tx.send(Change::Created {
                     ticket: ticket.clone(),
@@ -2196,6 +2606,12 @@ impl Store {
                     });
                 }
                 broadcast_groups(tx, groups);
+                if let Some(placed) = placed {
+                    let _ = tx.send(placed);
+                }
+                for change in Change::components(registered) {
+                    let _ = tx.send(change);
+                }
                 ticket
             },
         )
@@ -2236,12 +2652,46 @@ impl Store {
             .collect()
     }
 
+    /// WAVE-4: every ticket of the shortcodes `epics` (case-insensitive;
+    /// one with no tickets contributes nothing) whose kind is in `kinds` —
+    /// never a doc — placed in the order of work, with what it waits on,
+    /// and the tally ([`waves::Waves`]). Blockers are followed into every
+    /// shortcode, asked for or not, so a ticket's wave is the same whatever
+    /// board shows it. Rows only, under the read lock and nothing else —
+    /// no await, no body, no write — memoized for the call, so the cost is
+    /// the yielded tickets and their blocker closure.
+    pub fn waves(&self, epics: &[String], kinds: &[Kind]) -> waves::Waves {
+        let epics: std::collections::BTreeSet<String> = epics.iter().map(|e| e.to_ascii_uppercase()).collect();
+        let cache = self.tickets.read().expect("store lock poisoned");
+        waves::waves(cache.rows(), &epics, kinds)
+    }
+
     /// One ticket, whole. SCALE-14: its row from the cache and its body from
     /// the database ([`Store::full`]); [`StoreError::NotFound`] when `id`
     /// names no ticket — answered by the cache, with no read.
+    ///
+    /// WAVE-10: `id` may be a path address, `<SHORTCODE>/<path>` (the
+    /// shortcode case-insensitive, the path exact) — the one ticket of that
+    /// shortcode that holds the path; `NotFound` names the address as given.
     pub async fn get(&self, id: &str) -> Result<Ticket, StoreError> {
-        let (row, written) = self.row(id)?;
+        let (row, written) = match path_address(id) {
+            Some((epic, path)) => self.addressed(&epic, path, id)?,
+            None => self.row(id)?,
+        };
         self.full_one(row, written).await
+    }
+
+    /// WAVE-10: the row a path address names, and the cache's count of
+    /// writes — [`Store::row`] by address.
+    fn addressed(&self, epic: &str, path: &str, address: &str) -> Result<(Row, u64), StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let row = cache
+            .paths
+            .get(&(epic.to_string(), path.to_string()))
+            .and_then(|id| cache.get(id))
+            .cloned()
+            .ok_or_else(|| StoreError::NotFound(address.to_string()))?;
+        Ok((row, cache.written))
     }
 
     /// Tickets ordered by (epic, seq), optionally filtered. The `parent`
@@ -2596,6 +3046,13 @@ impl Store {
             .read()
             .expect("store lock poisoned")
             .status_change(&row, previous);
+        // WAVE-6: across the satisfied line, its own placement moves with it
+        // (its `status_changed` carries the new one), and the ones downstream
+        // that move are said last.
+        if let Some(placement) = moved.placement() {
+            row.placement = placement;
+        }
+        let placed = moved.placed.as_ref().and_then(Change::placed);
         let commit = Self::row_commit(row);
 
         self.write(
@@ -2613,6 +3070,9 @@ impl Store {
                 };
                 let _ = tx.send(change.clone());
                 broadcast_groups(tx, groups);
+                if let Some(placed) = placed {
+                    let _ = tx.send(placed);
+                }
                 change
             },
         )
@@ -2762,6 +3222,10 @@ impl Store {
         if title.as_deref().is_some_and(|t| t.trim().is_empty()) {
             return Err(StoreError::EmptyTitle { id });
         }
+        // COMP-3: what a new body defines and references, read from the body
+        // in hand before the lock — and refused, if malformed, only once it
+        // is known to change the body (the same body again is still a no-op).
+        let uses = body.as_deref().map(components::read);
         let serial = self.serial().await;
         let mut ticket = self.get(&id).await?;
         let mut changed: Vec<String> = Vec::new();
@@ -2776,11 +3240,33 @@ impl Store {
         if changed.is_empty() {
             return Ok(Change::Amended { ticket, changed });
         }
+        // COMP-3: a new body moves the registry — the whole amend refused,
+        // title too, when a block is malformed or defines a name another
+        // ticket owns.
+        let mut registered = match uses.filter(|_| changed.iter().any(|c| c == "body")) {
+            None => components::Plan::default(),
+            Some((uses, problems)) => {
+                if let Some(problem) = problems.into_iter().next() {
+                    return Err(StoreError::component(Some(&id), problem));
+                }
+                let cache = self.tickets.read().expect("store lock poisoned");
+                cache
+                    .components
+                    .plan(&ticket.id, &uses)
+                    .map_err(|o| StoreError::ComponentOwned {
+                        id: Some(id.clone()),
+                        name: o.name,
+                        owner: o.owner,
+                    })?
+            }
+        };
         ticket.updated_unix = chrono::Utc::now().timestamp();
 
         let row = Row::from(&ticket);
         let body = changed.iter().any(|c| c == "body").then(|| ticket.body.clone());
         let title_changed = changed.iter().any(|c| c == "title");
+        let registry_moves = std::mem::take(&mut registered.moves);
+        let registry_rows = registry_moves.clone();
         self.write(
             serial,
             move |tx| {
@@ -2788,20 +3274,35 @@ impl Store {
                 if let Some(body) = body {
                     db::set_body(tx, &row.id, &body)?;
                 }
+                components::store(tx, &registry_rows)?;
                 Ok(row)
             },
             // Rows only: what an amend changes is counted by no roll-up and
             // indexed by no id index (see above). AGS-23: a root's new title
-            // is its group's, though — one `GroupChanged` after it.
-            move |cache, row| cache.amended(row.clone(), title_changed),
+            // is its group's, though — one `GroupChanged` after it. COMP-3:
+            // and a new body's registry, beside the row.
+            move |cache, row| {
+                let groups = cache.amended(row.clone(), title_changed);
+                cache.components.take(registry_moves);
+                groups
+            },
             move |_, groups, tx| {
                 let change = Change::Amended { ticket, changed };
                 let _ = tx.send(change.clone());
                 broadcast_groups(tx, groups);
+                for change in Change::components(registered) {
+                    let _ = tx.send(change);
+                }
                 change
             },
         )
         .await
+    }
+
+    /// COMP-3: every component in the registry, in name order — orphans
+    /// included (`owner: None`), waiting names not. From the cache alone.
+    pub fn components(&self) -> Vec<Component> {
+        self.tickets.read().expect("store lock poisoned").components.components()
     }
 
     /// SDLC-9: links `entries` to the ticket `id` — the record of which
@@ -3129,6 +3630,8 @@ impl Store {
             // a seed's tickets arrive with their statuses and blockers set.
             let ready = ready::Ready::build(tickets.rows());
             tickets.ready = ready;
+            // WAVE-6: and every placement, over the seeded store.
+            tickets.place_all();
             tickets.form()
         });
         // SCALE-28: and all of it stored, in one transaction, which also
@@ -3302,6 +3805,18 @@ mod children;
 /// `Doc` bucket of its shortcode, as every status is counted in its own.
 mod ready;
 
+/// WAVE-4: the order of work, read off the rows on demand — each ticket's
+/// wave (MNG-4's rule over `blocked_by`, the whole graph), `Done`, or the
+/// missing-blocker lane, and what it waits on. Nothing kept: a call places
+/// what it yields and the blockers behind it, once each, and forgets them.
+pub mod waves;
+
+/// WAVE-6: the placements kept — the pass a birth or a status change across
+/// the satisfied line runs before it commits, re-placing the written ticket
+/// and what moves downstream of it, and the pass that places every ticket at
+/// open.
+mod placements;
+
 /// SDLC-9: what a commit reference is — the grammar `link_commits` and
 /// `unlink_commits` hold every entry to, and the text a reference is stored
 /// and compared as — and how many one ticket may carry.
@@ -3311,6 +3826,11 @@ mod commits;
 /// only ever sees the cache above.
 mod db;
 
+/// COMP-3: the component registry — what a body defines and references, the
+/// registry the cache keeps, the plan a write makes of it, its table and the
+/// first open that builds it.
+mod components;
+
 /// SCALE-28: the derived state, stored — the tables beside the tickets,
 /// what a write's transaction writes to them ([`stored::Changes`]), a start
 /// reads from them, a first open builds into them, and `--verify-derived`
@@ -3318,6 +3838,7 @@ mod db;
 mod stored;
 
 pub use stored::Verdict;
+pub use waves::{Placed, Waves};
 
 #[cfg(test)]
 mod tests;
@@ -3391,3 +3912,28 @@ mod tests_docs;
 /// from before it; and `--verify-derived` naming what differs.
 #[cfg(test)]
 mod tests_ready;
+
+/// WAVE-4: `waves` — chains, diamonds, completion and supersession moving
+/// waves left, the missing-blocker lane, blockers in shortcodes not asked
+/// for, docs never placed, `kinds` filtering the yield and not the walk,
+/// the yield order and the tally, and a hand-edited cycle that terminates.
+#[cfg(test)]
+mod tests_waves;
+
+/// WAVE-10: path addresses — `create { path }` on each row of the ticket's
+/// table, `get` by `SHORTCODE/path`, uniqueness in the cache and the file,
+/// and a file from before the column.
+#[cfg(test)]
+mod tests_paths;
+
+/// WAVE-6: the placements kept — the property test against WAVE-4's rule
+/// and `watch`, the two-blockers-back case, the pass stopping where nothing
+/// moves, forward references, a hand-edited cycle, a reopen, `watch { epic }`.
+#[cfg(test)]
+mod tests_placements;
+
+/// COMP-3: the component registry — a test per row of the ticket's table,
+/// the code examples that are not definitions, the code span that is not a
+/// reference, durability, events, and a database from before the table.
+#[cfg(test)]
+mod tests_components;

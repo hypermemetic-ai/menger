@@ -1,0 +1,19 @@
+{
+  "name": "@plexus/client",
+  "version": "0.0.0-d622eb6ddb0131ae",
+  "type": "module",
+  "main": "index.ts",
+  "_generatedBy": "hub-codegen",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bun x tsc --noEmit"
+  },
+  "dependencies": {
+
+  },
+  "devDependencies": {
+    "bun-types": "^1.0.0",
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  }
+}
