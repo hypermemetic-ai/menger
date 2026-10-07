@@ -629,11 +629,14 @@ impl Tickets {
     /// orphan: no ticket defines it any more, and something still uses it)
     /// and its `references` (the tickets whose bodies hold `<name` as an
     /// HTML tag, in the store's order, then the components whose sources
-    /// do). Nothing trails them — the stream's own `done` is the whole
+    /// do). COMP-8: and its help — `docs`, the source's `<docs>` parsed
+    /// (summary, typed attributes, slots, examples, markdown help; `null`
+    /// without one) — and `preview`, the attributes on the block's opening
+    /// line. Nothing trails them — the stream's own `done` is the whole
     /// answer, as for `groups`. From the cache alone; `watch` keeps a
     /// client's copy current with `ComponentChanged` and `ComponentRemoved`.
     #[plexus_macros::method(
-        description = "Every component in the registry, in name order: its source, its owner (null: an orphan) and what references it"
+        description = "Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes"
     )]
     pub async fn components(&self) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();

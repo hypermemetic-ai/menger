@@ -575,14 +575,142 @@ pub struct PlacementChange {
 ///   store's `(epic, seq)` order, then each component whose source holds it,
 ///   by name.
 ///
-/// Unlike [`Ticket`], `owner` is written out as `null` rather than skipped:
-/// every component has the same keys, and `null` is what "orphan" looks like.
+/// - `docs` (COMP-8) — the source's `<docs>` element, parsed
+///   ([`ComponentDocs`]); `null` when the source holds none.
+/// - `preview` (COMP-8) — the attributes written after the tag on the
+///   block's opening line (` ```component m-x board=RETURNS label="Platform" `),
+///   `[name, value]` in the order written; a value may be double-quoted, and
+///   a bare name's value is `""`. What a live preview of the definition is
+///   rendered with.
+///
+/// Unlike [`Ticket`], `owner` and `docs` are written out as `null` rather
+/// than skipped: every component has the same keys, and `null` is what
+/// "orphan" (or "no docs yet") looks like.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Component {
     pub name: String,
     pub source: String,
     pub owner: Option<String>,
     pub references: Vec<String>,
+    pub docs: Option<ComponentDocs>,
+    pub preview: Vec<(String, String)>,
+}
+
+/// COMP-8: a component's help — its source's one `<docs>` element, parsed.
+///
+/// ```html
+/// <docs>
+///   <summary>How many of a board's tickets are workable now.</summary>
+///   <attr name="board" type="shortcode" required>The shortcode to count.</attr>
+///   <slot name="title">Optional title markup.</slot>
+///   <example><m-wave-summary board="RETURNS"></m-wave-summary></example>
+///   Longer help, as markdown prose.
+/// </docs>
+/// ```
+///
+/// - `summary` — the `<summary>`'s text, tags dropped, whitespace collapsed,
+///   trimmed (`""` when there is none).
+/// - `attrs` — one [`AttrDoc`] per `<attr>`, in the order written.
+/// - `slots` — one [`SlotDoc`] per `<slot>`, in the order written.
+/// - `examples` — each `<example>`'s inner HTML as written, its common
+///   indentation and the blank lines around it removed.
+/// - `help` — everything else inside `<docs>`, as markdown: the lines the
+///   elements above stood on removed, the rest de-indented and trimmed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ComponentDocs {
+    pub summary: String,
+    pub attrs: Vec<AttrDoc>,
+    pub slots: Vec<SlotDoc>,
+    pub examples: Vec<String>,
+    pub help: String,
+}
+
+/// COMP-8: one declared attribute — `<attr name="board" type="shortcode"
+/// required>The shortcode to count.</attr>`. `name` is lowercased (HTML
+/// folds attribute names); `kind` is the `type` (`string` when omitted);
+/// `required` is whether the `required` attribute is present;
+/// `description` the element's text, as [`ComponentDocs::summary`] is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AttrDoc {
+    pub name: String,
+    pub kind: AttrKind,
+    pub required: bool,
+    pub description: String,
+}
+
+/// COMP-8: one declared slot — `<slot name="title">Optional title
+/// markup.</slot>`; `name` is `null` for the default slot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SlotDoc {
+    pub name: Option<String>,
+    pub description: String,
+}
+
+/// COMP-8: what an attribute's value must be — an `<attr type=…>`, written
+/// `string` (the default), `number`, `boolean`, `shortcode` (an existing
+/// shortcode, e.g. `RETURNS`), `ticket` (an existing ticket id) or
+/// `enum(a|b|c)` (one of those words). Internally tagged on the wire, as
+/// [`Placement`] is: `{"type": "shortcode"}`, `{"type": "enum", "values":
+/// ["a", "b"]}`. [`FromStr`] reads the written form and [`fmt::Display`]
+/// writes it back.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AttrKind {
+    #[default]
+    String,
+    Number,
+    Boolean,
+    Shortcode,
+    Ticket,
+    Enum { values: Vec<String> },
+}
+
+impl FromStr for AttrKind {
+    type Err = String;
+
+    /// The written form, exactly (`enum(` … `)` with its values split on
+    /// `|` and trimmed). An unknown word, or an `enum` naming no value, is
+    /// refused with the reason.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        Ok(match s {
+            "string" => Self::String,
+            "number" => Self::Number,
+            "boolean" => Self::Boolean,
+            "shortcode" => Self::Shortcode,
+            "ticket" => Self::Ticket,
+            _ => {
+                let Some(inner) = s.strip_prefix("enum(").and_then(|r| r.strip_suffix(')')) else {
+                    return Err(format!(
+                        "unknown type '{s}' — one of string, number, boolean, shortcode, ticket, enum(a|b|c)"
+                    ));
+                };
+                let values: Vec<String> = inner
+                    .split('|')
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                if values.is_empty() {
+                    return Err(format!("the type '{s}' names no value — enum(a|b|c)"));
+                }
+                Self::Enum { values }
+            }
+        })
+    }
+}
+
+impl fmt::Display for AttrKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::String => f.write_str("string"),
+            Self::Number => f.write_str("number"),
+            Self::Boolean => f.write_str("boolean"),
+            Self::Shortcode => f.write_str("shortcode"),
+            Self::Ticket => f.write_str("ticket"),
+            Self::Enum { values } => write!(f, "enum({})", values.join("|")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]

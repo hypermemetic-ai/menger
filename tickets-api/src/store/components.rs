@@ -15,7 +15,10 @@
 //!   HTML reserves. A ` ```component ` block that names no such tag, and a
 //!   body that defines one name twice, are [`Problem`]s — a write refuses
 //!   them in-band. A block inside an indented code block or inside a fence
-//!   of another language is that block's text, not a definition.
+//!   of another language is that block's text, not a definition. COMP-8:
+//!   the words after the tag are its **preview** attributes, and the
+//!   source's one `<docs>` element its **docs** ([`super::component_docs`]);
+//!   a malformed `<docs>` is a [`Problem`] too.
 //! - a **reference** is a tag `<name` in the body's raw HTML — an HTML block
 //!   or inline HTML, as the parser finds them — whose name, ASCII
 //!   lowercased (HTML's own folding), is a component name; outside HTML
@@ -57,15 +60,20 @@
 //!
 //! **Stored** in one table, `components` — `name`, `source` (`NULL`:
 //! waiting), `owner`, `references` (the referrers, a JSON list in the wire's
-//! order) — read whole at open ([`load`]). A database without the table
+//! order), COMP-8's `preview` (a JSON list of `[name, value]`) — read whole
+//! at open ([`load`]); the docs are the source's, parsed as it is read. A database without the table
 //! gains it on first open, durably, once ([`migrate`]), with the registry
 //! built from every body in the store's order: a name two bodies define is
 //! the first's (the second is logged, and refused when it next changes its
 //! body); a malformed block is logged and skipped. Orphans exist only here —
 //! no body says they were ever defined — so the table is the record, not a
-//! cache of the bodies, and `--verify-derived` does not rebuild it.
+//! cache of the bodies, and `--verify-derived` does not rebuild it. A table
+//! from before COMP-8 gains `preview` on first open, durably, once — each
+//! owned component's read from its owner's body, an orphan's empty
+//! ([`migrate_preview`]).
 
-use crate::types::Component;
+use super::component_docs;
+use crate::types::{Component, ComponentDocs};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use rusqlite::{params, Connection};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -76,7 +84,8 @@ const TABLE: &str = "
             name         TEXT PRIMARY KEY,
             source       TEXT,
             owner        TEXT,
-            \"references\" TEXT NOT NULL
+            \"references\" TEXT NOT NULL,
+            preview      TEXT NOT NULL DEFAULT '[]'
         ) WITHOUT ROWID;
     ";
 
@@ -104,11 +113,23 @@ pub(crate) fn is_component_name(name: &str) -> bool {
         && !RESERVED.contains(&name)
 }
 
+/// One definition a body holds: the block's content, and what COMP-8 reads
+/// from it and from its opening line.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Def {
+    pub(crate) source: String,
+    /// The attributes after the tag on the opening line.
+    pub(crate) preview: Vec<(String, String)>,
+    /// The source's `<docs>` — `None` when it holds none (or, in a
+    /// [`read`] that also reports a [`Problem::Docs`], a malformed one).
+    pub(crate) docs: Option<ComponentDocs>,
+}
+
 /// What one body says about components ([`read`]).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Uses {
     /// Each name the body defines, with its source.
-    pub(crate) defines: BTreeMap<String, String>,
+    pub(crate) defines: BTreeMap<String, Def>,
     /// Each name the body references as a tag.
     pub(crate) references: BTreeSet<String>,
 }
@@ -126,6 +147,10 @@ pub(crate) enum Problem {
     Name(String),
     /// A second block defines the name (the first is the one a build keeps).
     Twice(String),
+    /// COMP-8: the name's source holds a malformed `<docs>` — `problem`
+    /// says what ([`component_docs::parse`]). The definition is still read,
+    /// without docs, for a build that skips rather than refuses.
+    Docs { name: String, problem: String },
 }
 
 /// The frontmatter split off as the app splits it (`frontend/src/md.rs`,
@@ -162,29 +187,35 @@ pub(crate) fn read(body: &str) -> (Uses, Vec<Problem>) {
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TASKLISTS);
     opts.insert(Options::ENABLE_FOOTNOTES);
-    // The block being read: its tag as written, and its source so far.
-    let mut block: Option<(String, String)> = None;
+    // The block being read: its tag as written, its preview, and its source
+    // so far.
+    let mut block: Option<(String, Vec<(String, String)>, String)> = None;
     // An HTML block's lines, gathered so a comment across them is one.
     let mut html: Option<String> = None;
     for event in Parser::new_ext(rendered(body), opts) {
         match event {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
-                let mut words = info.split_whitespace();
-                if words.next() == Some("component") {
-                    block = Some((words.next().unwrap_or("").to_string(), String::new()));
+                let (first, rest) = word(&info);
+                if first == "component" {
+                    let (name, rest) = word(rest);
+                    block = Some((name.to_string(), component_docs::preview(rest), String::new()));
                 }
             }
             Event::Text(text) => {
-                if let Some((_, source)) = &mut block {
+                if let Some((_, _, source)) = &mut block {
                     source.push_str(&text);
                 }
             }
             Event::End(TagEnd::CodeBlock) => {
-                if let Some((name, source)) = block.take() {
+                if let Some((name, preview, source)) = block.take() {
                     if !is_component_name(&name) {
                         problems.push(Problem::Name(name));
                     } else if let std::collections::btree_map::Entry::Vacant(free) = uses.defines.entry(name.clone()) {
-                        free.insert(source);
+                        let docs = component_docs::parse(&source).unwrap_or_else(|problem| {
+                            problems.push(Problem::Docs { name, problem });
+                            None
+                        });
+                        free.insert(Def { source, preview, docs });
                     } else {
                         problems.push(Problem::Twice(name));
                     }
@@ -205,6 +236,13 @@ pub(crate) fn read(body: &str) -> (Uses, Vec<Problem>) {
         }
     }
     (uses, problems)
+}
+
+/// The first whitespace-separated word of `s`, and what follows it.
+fn word(s: &str) -> (&str, &str) {
+    let s = s.trim_start();
+    let end = s.find(char::is_whitespace).unwrap_or(s.len());
+    (&s[..end], &s[end..])
 }
 
 /// Every component name `html` opens a tag with — `<` then a name, which
@@ -268,6 +306,10 @@ pub(crate) struct Entry {
     pub(crate) owner: Option<String>,
     /// Each ticket and component that references it.
     pub(crate) referrers: BTreeSet<String>,
+    /// COMP-8: the definition's preview attributes (empty while waiting).
+    pub(crate) preview: Vec<(String, String)>,
+    /// COMP-8: the source's docs, parsed — derived, never stored.
+    pub(crate) docs: Option<ComponentDocs>,
 }
 
 impl Entry {
@@ -276,6 +318,8 @@ impl Entry {
             source: None,
             owner: None,
             referrers: BTreeSet::new(),
+            preview: Vec::new(),
+            docs: None,
         }
     }
 
@@ -289,6 +333,8 @@ impl Entry {
             source: self.source.clone().expect("a component has a source"),
             owner: self.owner.clone(),
             references: ordered(&self.referrers),
+            docs: self.docs.clone(),
+            preview: self.preview.clone(),
         }
     }
 }
@@ -366,9 +412,12 @@ impl Registry {
         for name in defined.iter().filter(|n| !uses.defines.contains_key(*n)) {
             work.get_mut(name).expect("a component the ticket owns").owner = None;
         }
-        for (name, source) in &uses.defines {
+        for (name, def) in &uses.defines {
+            let source = &def.source;
             let entry = work.entry(name);
             entry.owner = Some(ticket.to_string());
+            entry.preview.clone_from(&def.preview);
+            entry.docs.clone_from(&def.docs);
             let before = entry.source.replace(source.clone());
             if before.as_deref() == Some(source.as_str()) {
                 continue;
@@ -546,16 +595,17 @@ pub(crate) fn store(conn: &Connection, moves: &[(String, Option<Entry>)]) -> rus
         match entry {
             Some(e) => {
                 conn.prepare_cached(
-                    "INSERT INTO components (name, source, owner, \"references\") VALUES (?1, ?2, ?3, ?4)
+                    "INSERT INTO components (name, source, owner, \"references\", preview) VALUES (?1, ?2, ?3, ?4, ?5)
                          ON CONFLICT (name) DO UPDATE SET
                              source = excluded.source, owner = excluded.owner,
-                             \"references\" = excluded.\"references\"",
+                             \"references\" = excluded.\"references\", preview = excluded.preview",
                 )?
                 .execute(params![
                     name,
                     e.source,
                     e.owner,
                     serde_json::to_string(&ordered(&e.referrers)).expect("serialize referrers"),
+                    serde_json::to_string(&e.preview).expect("serialize preview"),
                 ])?;
             }
             None => {
@@ -566,21 +616,40 @@ pub(crate) fn store(conn: &Connection, moves: &[(String, Option<Entry>)]) -> rus
     Ok(())
 }
 
+/// A JSON column, read.
+fn json<T: serde::de::DeserializeOwned>(r: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<T> {
+    serde_json::from_str(r.get_ref(column)?.as_str()?)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, e.into()))
+}
+
+/// The docs of a stored source — COMP-8 parses them as a start reads it. A
+/// source stored before COMP-8 that holds a malformed `<docs>` (no write
+/// since would have taken it) is logged, and has none.
+fn stored_docs(name: &str, source: Option<&str>) -> Option<ComponentDocs> {
+    component_docs::parse(source?).unwrap_or_else(|problem| {
+        tracing::warn!("COMP-8: the component '{name}' has a malformed <docs> ({problem}) — served without docs");
+        None
+    })
+}
+
 /// The registry as stored — what a start reads.
 pub(crate) fn load(conn: &Connection) -> rusqlite::Result<Registry> {
-    let mut stmt = conn.prepare("SELECT name, source, owner, \"references\" FROM components")?;
+    let mut stmt = conn.prepare("SELECT name, source, owner, \"references\", preview FROM components")?;
     let mut rows = stmt.query([])?;
     let mut names = BTreeMap::new();
     while let Some(r) = rows.next()? {
-        let referrers: Vec<String> = serde_json::from_str(r.get_ref(3)?.as_str()?).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, e.into())
-        })?;
+        let name: String = r.get(0)?;
+        let source: Option<String> = r.get(1)?;
+        let referrers: Vec<String> = json(r, 3)?;
+        let docs = stored_docs(&name, source.as_deref());
         names.insert(
-            r.get(0)?,
+            name,
             Entry {
-                source: r.get(1)?,
+                source,
                 owner: r.get(2)?,
                 referrers: referrers.into_iter().collect(),
+                preview: json(r, 4)?,
+                docs,
             },
         );
     }
@@ -608,6 +677,7 @@ fn has_table(conn: &Connection) -> rusqlite::Result<bool> {
 /// written. Returns whether the table was made.
 pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
     if has_table(conn)? {
+        migrate_preview(conn)?;
         return Ok(false);
     }
     let started = std::time::Instant::now();
@@ -634,6 +704,10 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
                     ),
                     Problem::Twice(name) => tracing::warn!(
                         "COMP-3 migration: {id} defines '{name}' twice — the first block is its source"
+                    ),
+                    Problem::Docs { name, problem } => tracing::warn!(
+                        "COMP-3 migration: {id}'s '{name}' has a malformed <docs> ({problem}) — registered \
+                         without docs"
                     ),
                 }
             }
@@ -665,6 +739,40 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// COMP-8: one-shot, durable migration of a `components` table written
+/// before COMP-8. If it has no `preview` column, this adds it — `TEXT NOT
+/// NULL DEFAULT '[]'`, as [`TABLE`] makes it — and fills each owned
+/// component's from its owner's body (the opening line it is defined on
+/// now); an orphan's stays empty, no body saying it any more. One
+/// transaction, committed before the cache loads; every later open finds the
+/// column. Returns whether it was added.
+pub(crate) fn migrate_preview(conn: &mut Connection) -> anyhow::Result<bool> {
+    if super::db::has_column(conn, "components", "preview")? {
+        return Ok(false);
+    }
+    let tx = conn.transaction()?;
+    tx.execute("ALTER TABLE components ADD COLUMN preview TEXT NOT NULL DEFAULT '[]'", [])?;
+    let mut filled = 0usize;
+    {
+        let mut owned = tx.prepare(
+            "SELECT c.name, t.body FROM components c JOIN tickets t ON t.id = c.owner WHERE c.source IS NOT NULL",
+        )?;
+        let mut rows = owned.query([])?;
+        let mut update = tx.prepare("UPDATE components SET preview = ?1 WHERE name = ?2")?;
+        while let Some(r) = rows.next()? {
+            let name: String = r.get(0)?;
+            let (uses, _) = read(r.get_ref(1)?.as_str()?);
+            if let Some(def) = uses.defines.get(&name).filter(|d| !d.preview.is_empty()) {
+                update.execute(params![serde_json::to_string(&def.preview)?, name])?;
+                filled += 1;
+            }
+        }
+    }
+    tx.commit()?;
+    tracing::info!("COMP-8: added the components table's preview column — {filled} component(s) with a preview line, durably");
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,10 +795,16 @@ mod tests {
     fn a_fence_tagged_component_defines_and_its_content_is_the_source() {
         let (uses, problems) = read("intro\n\n```component m-x\n<template><b>x</b></template>\n```\n\nafter\n");
         assert!(problems.is_empty());
-        assert_eq!(uses.defines["m-x"], "<template><b>x</b></template>\n");
+        assert_eq!(uses.defines["m-x"].source, "<template><b>x</b></template>\n");
+        assert_eq!((uses.defines["m-x"].preview.len(), uses.defines["m-x"].docs.as_ref()), (0, None));
         assert!(uses.references.is_empty(), "a definition's own content is not a reference by the body");
         let (uses, _) = read("~~~component m-y extra words\nsrc\n~~~\n");
-        assert_eq!(uses.defines["m-y"], "src\n", "a tilde fence; words after the tag are ignored");
+        assert_eq!(uses.defines["m-y"].source, "src\n", "a tilde fence");
+        assert_eq!(
+            uses.defines["m-y"].preview,
+            vec![("extra".to_string(), String::new()), ("words".to_string(), String::new())],
+            "COMP-8: words after the tag are its preview attributes"
+        );
     }
 
     #[test]
@@ -700,7 +814,7 @@ mod tests {
         assert_eq!(read("```component nohyphen\nx\n```\n").1, vec![Problem::Name("nohyphen".into())]);
         let (uses, problems) = read("```component m-x\none\n```\n\n```component m-x\ntwo\n```\n");
         assert_eq!(problems, vec![Problem::Twice("m-x".into())]);
-        assert_eq!(uses.defines["m-x"], "one\n", "the first block");
+        assert_eq!(uses.defines["m-x"].source, "one\n", "the first block");
     }
 
     #[test]
@@ -738,3 +852,4 @@ mod tests {
         assert_eq!(ordered(&set), vec!["ABC-2", "MNG-9", "MNG-10", "m-a", "z-z"]);
     }
 }
+

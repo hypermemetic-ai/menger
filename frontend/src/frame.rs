@@ -633,8 +633,8 @@ mod tests {
         let tokens = shell_tokens();
         let source = "<template><b>x</b></template>\n<script>this.root.append('</script><script>alert(1)</script>')</script>\n<!-- c -->";
         let components = [
-            Component { name: "m-a".into(), source: source.into(), owner: Some("A-2".into()), references: vec!["A-3".into()] },
-            Component { name: "m-b".into(), source: "<i>b</i>".into(), owner: None, references: vec!["m-a".into()] },
+            Component { name: "m-a".into(), source: source.into(), owner: Some("A-2".into()), references: vec!["A-3".into()], docs: None, preview: vec![] },
+            Component { name: "m-b".into(), source: "<i>b</i>".into(), owner: None, references: vec!["m-a".into()], docs: None, preview: vec![] },
         ];
         let shell = Shell { channel: "f2", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: Some(&components) };
         let json = init_json(&shell);

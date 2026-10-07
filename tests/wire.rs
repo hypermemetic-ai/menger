@@ -1535,7 +1535,7 @@ async fn components_over_the_wire() {
     assert_eq!(evs[0]["ticket"]["body"], body, "stored as written");
     let defined = json!({
         "type": "component_changed",
-        "component": {"name": "m-x", "source": "<template><b>x</b></template>\n", "owner": "CMP-2", "references": []}
+        "component": {"name": "m-x", "source": "<template><b>x</b></template>\n", "owner": "CMP-2", "references": [], "docs": null, "preview": []}
     });
     let heard = watch_until(&mut watch, "component_changed").await;
     assert_eq!(heard[0]["type"], "created", "{heard:?}");
@@ -1564,7 +1564,7 @@ async fn components_over_the_wire() {
     assert_eq!(evs[0]["type"], "amended");
     let heard = watch_until(&mut watch, "component_changed").await;
     assert_eq!(heard[0]["type"], "amended");
-    let orphan = json!({"name": "m-x", "source": "<template><b>x</b></template>\n", "owner": null, "references": ["CMP-3"]});
+    let orphan = json!({"name": "m-x", "source": "<template><b>x</b></template>\n", "owner": null, "references": ["CMP-3"], "docs": null, "preview": []});
     assert_eq!(heard.last().unwrap()["component"], orphan);
     assert_eq!(content(elsewhere.next().await.unwrap().unwrap())["component"], orphan);
     assert_eq!(components().await, vec![json!({"type": "component", "component": orphan})]);
@@ -1576,4 +1576,57 @@ async fn components_over_the_wire() {
     assert_eq!(heard.last(), Some(&json!({"type": "component_removed", "name": "m-x"})));
     assert_eq!(content(elsewhere.next().await.unwrap().unwrap()), json!({"type": "component_removed", "name": "m-x"}));
     assert_eq!(components().await, Vec::<Value>::new());
+}
+
+/// COMP-8 acceptance 2: a component's docs and preview line on the wire —
+/// `components` and `component_changed` carry them, typed attributes
+/// internally tagged; a malformed `<docs>` is one in-band `error` naming the
+/// problem, and nothing is allocated.
+#[tokio::test]
+async fn component_docs_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "root", "kind": "scope"})).await).await;
+    let body = "```component m-wave-summary board=RETURNS label=\"Platform team\"\n\
+                <template><b id=\"n\"></b></template>\n\
+                <docs>\n\
+                  <summary>How many of a board's tickets are workable now.</summary>\n\
+                  <attr name=\"board\" type=\"shortcode\" required>The shortcode to count.</attr>\n\
+                  <attr name=\"size\" type=\"enum(s|m)\">How big.</attr>\n\
+                  <slot name=\"title\">Optional title markup.</slot>\n\
+                  <example><m-wave-summary board=\"RETURNS\"></m-wave-summary></example>\n\
+                  Longer help, as markdown prose.\n\
+                </docs>\n\
+                ```\n";
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "owner", "body": body})).await).await;
+    assert_eq!(evs[0]["type"], "created", "{evs:?}");
+    let docs = json!({
+        "summary": "How many of a board's tickets are workable now.",
+        "attrs": [
+            {"name": "board", "kind": {"type": "shortcode"}, "required": true, "description": "The shortcode to count."},
+            {"name": "size", "kind": {"type": "enum", "values": ["s", "m"]}, "required": false, "description": "How big."}
+        ],
+        "slots": [{"name": "title", "description": "Optional title markup."}],
+        "examples": ["<m-wave-summary board=\"RETURNS\"></m-wave-summary>"],
+        "help": "Longer help, as markdown prose."
+    });
+    let preview = json!([["board", "RETURNS"], ["label", "Platform team"]]);
+    let heard = watch_until(&mut watch, "component_changed").await;
+    let changed = &heard.last().unwrap()["component"];
+    assert_eq!((&changed["docs"], &changed["preview"]), (&docs, &preview));
+    let listed = collect(call(&client, "tickets.components", json!({})).await).await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["component"]["docs"], docs);
+    assert_eq!(listed[0]["component"]["preview"], preview);
+
+    // Malformed: one in-band error naming the problem; nothing allocated.
+    let bad = "```component m-bad\n<docs><attr type=\"number\">no name</attr></docs>\n```\n";
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "bad", "body": bad})).await).await;
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0]["type"], "error");
+    let message = evs[0]["message"].as_str().unwrap();
+    assert!(message.contains("'m-bad' has a malformed <docs>") && message.contains("an <attr> without a name"), "{message}");
+    let next = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "next"})).await).await;
+    assert_eq!(next[0]["ticket"]["id"], "CMP-3", "no id spent");
 }

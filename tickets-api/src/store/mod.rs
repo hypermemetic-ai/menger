@@ -826,6 +826,9 @@ pub enum StoreError {
     /// COMP-3: the body defines `name`, which `owner` already defines — a
     /// component has one owner. Nothing changed.
     ComponentOwned { id: Option<String>, name: String, owner: String },
+    /// COMP-8: the body's definition of `name` holds a malformed `<docs>` —
+    /// `problem` says what. Nothing changed.
+    ComponentDocs { id: Option<String>, name: String, problem: String },
 }
 
 impl StoreError {
@@ -836,6 +839,7 @@ impl StoreError {
         match problem {
             components::Problem::Name(name) => Self::ComponentName { id, name },
             components::Problem::Twice(name) => Self::ComponentTwice { id, name },
+            components::Problem::Docs { name, problem } => Self::ComponentDocs { id, name, problem },
         }
     }
 }
@@ -994,6 +998,11 @@ impl std::fmt::Display for StoreError {
                 f,
                 "the component '{name}' is defined by {owner}: a component has one owner — change it in \
                  {owner}, or give this one another name ({})",
+                nothing(id)
+            ),
+            Self::ComponentDocs { id, name, problem } => write!(
+                f,
+                "the component '{name}' has a malformed <docs>: {problem} ({})",
                 nothing(id)
             ),
         }
@@ -3821,6 +3830,10 @@ mod db;
 /// registry the cache keeps, the plan a write makes of it, its table and the
 /// first open that builds it.
 mod components;
+
+/// COMP-8: a component's help — its source's `<docs>`, and the preview
+/// attributes on its block's opening line.
+mod component_docs;
 
 /// SCALE-28: the derived state, stored — the tables beside the tickets,
 /// what a write's transaction writes to them ([`stored::Changes`]), a start

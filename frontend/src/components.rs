@@ -196,6 +196,8 @@ mod tests {
             source: source.into(),
             owner: owner.map(str::to_string),
             references: references.iter().map(|r| r.to_string()).collect(),
+            docs: None,
+            preview: Vec::new(),
         }
     }
 

@@ -56,6 +56,8 @@ fn component(name: &str, source: &str, owner: Option<&str>, references: &[&str])
         source: source.into(),
         owner: owner.map(Into::into),
         references: references.iter().map(|r| r.to_string()).collect(),
+        docs: None,
+        preview: Vec::new(),
     }
 }
 
@@ -435,4 +437,205 @@ fn synthetic_bodies_say_nothing_about_components() {
     for t in &generated {
         assert_eq!(components::read(&t.body), (components::Uses::default(), vec![]), "{}", t.id);
     }
+}
+
+// ---------------------------------------------------------------------------
+// COMP-8: a component's docs and its preview line.
+
+/// The ticket's own example, defined with a preview line.
+const DOCUMENTED: &str = r#"```component m-wave-summary board=RETURNS label="Platform team"
+<template><slot name="title"></slot> <b id="n"></b></template>
+<docs>
+  <summary>How many of a board's tickets are workable now (wave 1).</summary>
+  <attr name="board" type="shortcode" required>The shortcode to count, e.g. RETURNS.</attr>
+  <attr name="label" type="string">Shown before the count.</attr>
+  <attr name="size" type="enum(s|m|l)">How big.</attr>
+  <attr name="limit" type="number">At most this many.</attr>
+  <attr name="compact" type="boolean">Tighter.</attr>
+  <attr name="focus" type="ticket">A ticket to highlight.</attr>
+  <slot name="title">Optional title markup.</slot>
+  <slot>The rest.</slot>
+  <example><m-wave-summary board="RETURNS"></m-wave-summary></example>
+  <example>
+    <m-wave-summary board="PLEXUS" label="Platform">
+      <b slot="title">Platform</b>
+    </m-wave-summary>
+  </example>
+  Longer help, as **markdown** prose.
+
+  - counts wave 1
+</docs>
+<script>this.root.querySelector('#n').textContent = this.attr('board')</script>
+```
+"#;
+
+/// COMP-8 acceptance 1, every row of the table: `<summary>`, each `<attr>`
+/// kind, `required`, `<slot>` named and default, `<example>` inner HTML, the
+/// remaining text as markdown help — and the preview line, quoted and bare.
+#[tokio::test]
+async fn docs_are_parsed_into_the_registry_row_by_row() {
+    let store = store().await;
+    let id = born(&store, DOCUMENTED).await;
+    let c = registry(&store).remove("m-wave-summary").expect("registered");
+    assert_eq!(c.owner.as_deref(), Some(id.as_str()));
+    assert_eq!(c.preview, vec![("board".to_string(), "RETURNS".to_string()), ("label".to_string(), "Platform team".to_string())]);
+    let docs = c.docs.expect("docs");
+    assert_eq!(docs.summary, "How many of a board's tickets are workable now (wave 1).");
+    let attrs: Vec<(&str, String, bool, &str)> = docs
+        .attrs
+        .iter()
+        .map(|a| (a.name.as_str(), a.kind.to_string(), a.required, a.description.as_str()))
+        .collect();
+    assert_eq!(
+        attrs,
+        vec![
+            ("board", "shortcode".into(), true, "The shortcode to count, e.g. RETURNS."),
+            ("label", "string".into(), false, "Shown before the count."),
+            ("size", "enum(s|m|l)".into(), false, "How big."),
+            ("limit", "number".into(), false, "At most this many."),
+            ("compact", "boolean".into(), false, "Tighter."),
+            ("focus", "ticket".into(), false, "A ticket to highlight."),
+        ]
+    );
+    assert_eq!(
+        docs.attrs[2].kind,
+        crate::types::AttrKind::Enum { values: vec!["s".into(), "m".into(), "l".into()] }
+    );
+    let slots: Vec<(Option<&str>, &str)> = docs.slots.iter().map(|s| (s.name.as_deref(), s.description.as_str())).collect();
+    assert_eq!(slots, vec![(Some("title"), "Optional title markup."), (None, "The rest.")]);
+    assert_eq!(
+        docs.examples,
+        vec![
+            r#"<m-wave-summary board="RETURNS"></m-wave-summary>"#.to_string(),
+            "<m-wave-summary board=\"PLEXUS\" label=\"Platform\">\n  <b slot=\"title\">Platform</b>\n</m-wave-summary>".to_string(),
+        ]
+    );
+    assert_eq!(docs.help, "Longer help, as **markdown** prose.\n\n- counts wave 1");
+    // The source is still the block's content, exactly — <docs> included.
+    assert!(c.source.contains("<docs>") && c.source.ends_with("</script>\n"));
+    // The example's own tags are inside the definition's block: no reference.
+    assert_eq!(c.references, Vec::<String>::new());
+}
+
+/// A component without `<docs>` has `docs: None`, and no preview line an
+/// empty preview.
+#[tokio::test]
+async fn a_component_without_docs_has_none() {
+    let store = store().await;
+    born(&store, &def("m-x", "<template>x</template>")).await;
+    let c = &registry(&store)["m-x"];
+    assert_eq!((c.docs.as_ref(), c.preview.len()), (None, 0));
+    assert_eq!(c, &component("m-x", &src("<template>x</template>"), Some("C-2"), &[]));
+}
+
+/// COMP-8 acceptance 1: each malformed `<docs>` refuses the write in-band,
+/// naming the component and the problem — a create (no id spent) and an
+/// amend (title included) alike; nothing changes, nothing is heard.
+#[tokio::test]
+async fn a_malformed_docs_refuses_the_write_naming_the_problem() {
+    let store = store().await;
+    let id = born(&store, &def("m-x", "<template>x</template>")).await; // C-2
+    let before = store.components();
+    let mut rx = store.subscribe();
+    for (docs, needle) in [
+        ("<docs><attr type=\"number\">no name</attr></docs>", "an <attr> without a name"),
+        ("<docs><attr name=\"n\" type=\"date\">x</attr></docs>", "unknown type 'date'"),
+        ("<docs><summary>one</summary><summary>two</summary></docs>", "two <summary> elements"),
+        ("<docs><attr name=\"n\" type=\"enum()\">x</attr></docs>", "names no value"),
+        ("<docs></docs>\n<docs></docs>", "two <docs> elements"),
+        ("<docs><summary>never closed</summary>", "<docs> is never closed"),
+    ] {
+        let body = def("m-y", &format!("<template>y</template>\n{docs}"));
+        let e = store.create(ticket("C", Kind::Build, &body)).await.unwrap_err();
+        assert!(matches!(&e, StoreError::ComponentDocs { id: None, name, .. } if name == "m-y"), "{e:?}");
+        let message = e.to_string();
+        assert!(
+            message.contains("'m-y' has a malformed <docs>") && message.contains(needle) && message.contains("nothing was created"),
+            "{docs}: {message}"
+        );
+        let e = store.amend(&id, Some("new title".into()), Some(body.clone())).await.unwrap_err();
+        assert!(e.to_string().contains(needle) && e.to_string().contains(&format!("nothing changed for '{id}'")), "{e}");
+    }
+    assert_eq!(store.components(), before);
+    assert!(drain(&mut rx).is_empty(), "nothing heard");
+    assert_eq!(store.get(&id).await.unwrap().title, "a build in C", "the title as it was");
+    assert_eq!(born(&store, "next").await, "C-3", "no id was spent");
+}
+
+/// The preview line is part of the definition: changing only it moves the
+/// component (one `component_changed`), quoted and bare values alike.
+#[tokio::test]
+async fn the_preview_line_parses_and_moves_the_component() {
+    let store = store().await;
+    let id = born(&store, "```component m-x board=RETURNS label=\"Platform team\" compact\n<template>x</template>\n```\n").await;
+    assert_eq!(
+        registry(&store)["m-x"].preview,
+        vec![
+            ("board".to_string(), "RETURNS".to_string()),
+            ("label".to_string(), "Platform team".to_string()),
+            ("compact".to_string(), String::new()),
+        ]
+    );
+    let mut rx = store.subscribe();
+    amend(&store, &id, "```component m-x board='PLEXUS'\n<template>x</template>\n```\n").await;
+    assert_eq!(registry(&store)["m-x"].preview, vec![("board".to_string(), "PLEXUS".to_string())]);
+    let changes = drain(&mut rx);
+    assert_eq!(heard(&changes), [("changed", "m-x".to_string())]);
+    match changes.last() {
+        Some(Change::ComponentChanged { component }) => assert_eq!(component.preview[0].1, "PLEXUS"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Docs and preview survive a reopen (the preview stored, the docs parsed
+/// from the stored source) — an orphan's included.
+#[tokio::test]
+async fn docs_and_preview_survive_a_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("docs.db");
+    let before = {
+        let store = Store::open(&path).unwrap();
+        store.create(ticket("C", Kind::Scope, "root")).await.unwrap();
+        let owner = born(&store, DOCUMENTED).await;
+        born(&store, "<m-wave-summary board=RETURNS></m-wave-summary>").await;
+        born(&store, &format!("{}{}", def("m-y", "<docs><summary>y</summary></docs>"), "")).await;
+        amend(&store, &owner, "let it go").await; // m-wave-summary orphaned, docs kept
+        store.components()
+    };
+    assert!(before.iter().all(|c| c.docs.is_some()), "{before:?}");
+    assert_eq!(before[0].owner, None);
+    assert_eq!(before[0].preview.len(), 2);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.components(), before);
+}
+
+/// A `components` table from before COMP-8 gains `preview` on open,
+/// durably, once — each owned component's read from its owner's body, an
+/// orphan's empty; the docs come from the stored sources.
+#[tokio::test]
+async fn a_table_without_preview_gains_it_from_the_owners_bodies() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("before-comp8.db");
+    {
+        let store = Store::open(&path).unwrap();
+        store.create(ticket("C", Kind::Scope, "root")).await.unwrap();
+        born(&store, DOCUMENTED).await; // C-2
+        let gone = born(&store, "```component m-o board=X\n<docs><summary>o</summary></docs>\n```\n").await; // C-3
+        born(&store, "<m-o></m-o>").await; // C-4
+        amend(&store, &gone, "let it go").await; // m-o orphaned
+    }
+    {
+        // As a binary from before COMP-8 left it: no preview column.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("ALTER TABLE components DROP COLUMN preview").unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    let r = registry(&store);
+    assert_eq!(r["m-wave-summary"].preview.len(), 2, "read from C-2's body");
+    assert_eq!(r["m-wave-summary"].docs.as_ref().unwrap().attrs.len(), 6);
+    assert_eq!((r["m-o"].owner.as_deref(), r["m-o"].preview.len()), (None, 0), "an orphan's preview is empty");
+    assert_eq!(r["m-o"].docs.as_ref().unwrap().summary, "o");
+    drop(store);
+    let mut conn = Connection::open(&path).unwrap();
+    assert!(!components::migrate_preview(&mut conn).unwrap(), "once");
 }
