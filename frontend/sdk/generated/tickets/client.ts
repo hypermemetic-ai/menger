@@ -13,8 +13,8 @@ export interface TicketsClient {
   answer(input: string, ticket: string, value: InputValue, rationale?: string | null, source?: string | null): AsyncGenerator<TicketsEvent>;
   /** One ticket's blockers resolved to current statuses; dangling ids marked */
   blockers(id: string): AsyncGenerator<TicketsEvent>;
-  /** Clear an input's answer (open again; kept in its history); yields input_changed */
-  clearAnswer(input: string, ticket: string): AsyncGenerator<TicketsEvent>;
+  /** Clear an input's answer (open again; kept in its history, with a source); yields input_changed */
+  clearAnswer(input: string, ticket: string, source?: string | null): AsyncGenerator<TicketsEvent>;
   /** Close an input: freeze its answer (or its lack of one); yields input_changed */
   closeInput(input: string, ticket: string): AsyncGenerator<TicketsEvent>;
   /** Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes */
@@ -75,8 +75,8 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
-  async *clearAnswer(input: string, ticket: string): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.clear_answer', { input, ticket });
+  async *clearAnswer(input: string, ticket: string, source?: string | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.clear_answer', { input, source, ticket });
     yield* extractData<TicketsEvent>(stream);
   }
 

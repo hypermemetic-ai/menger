@@ -64,7 +64,7 @@
 //! route names a card (`#/ticket/<OWNER>?component=m-x`): the frame holding
 //! that card flashes it and says where it is, and the host scrolls there.
 //!
-//! INPUT-4: **the one write.** A frame that renders a ticket's stored body
+//! INPUT-4: **the first write.** A frame that renders a ticket's stored body
 //! knows which (`ticket` in its init block — `menger.input.ticket`), and
 //! the host stamps it on the `<iframe data-ticket>`, where nothing in the
 //! frame can change it. `menger.input.submit` sends `menger:submit { id,
@@ -75,6 +75,13 @@
 //! checks and `tickets.answer` with source `app` (src/bridge.rs). Every
 //! `watch` event, `input_changed` among them, reaches the frames as
 //! `menger:change` as ever.
+//!
+//! INPUT-9: **the second write.** `menger.input.clear` sends `menger:clear
+//! { id, params: { input } }` under the same rule — the SDK's gesture
+//! check, the host's own activation read at once, the frame's stamped
+//! ticket — and the host answers `menger:cleared { id, input }` (the input
+//! as the clear left it, the wire's spelling) or `{ id, error }` after the
+//! bridge's checks and `tickets.clear_answer` with source `app`.
 //!
 //! What decides — the srcdoc, the theme block, the init block, which
 //! messages count — is pure and pinned by native tests; the rest is DOM.
@@ -97,8 +104,8 @@ use crate::{board, bridge, dom, inspect, mermaid, notes, registry, session};
 /// `tickets`, the generated typed client over the same bridge; COMP-9's 1.2
 /// adds `navigate`, and the badges, tooltips and docs cards; INPUT-4's 1.3
 /// adds `input` — `submit`, the one write, and `ticket` — and `inputs`
-/// among the reads.
-pub(crate) const SDK_VERSION: &str = "1.3.0";
+/// among the reads; INPUT-9's 1.4 adds `input.clear`, the second write.
+pub(crate) const SDK_VERSION: &str = "1.4.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -276,6 +283,8 @@ pub(crate) enum Msg {
     /// INPUT-4: `menger.input.submit` — its id and params are read by the
     /// caller, with the app's activation read at once.
     Submit,
+    /// INPUT-9: `menger.input.clear` — read as a submit is.
+    Clear,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -287,6 +296,7 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:inspect" => Some(Msg::Inspect),
         "menger:revealed" => Some(Msg::Revealed),
         "menger:submit" => Some(Msg::Submit),
+        "menger:clear" => Some(Msg::Clear),
         "menger:size" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Size { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32, settled: settled.unwrap_or(false) })
@@ -476,8 +486,12 @@ fn host_activated() -> Option<bool> {
 /// }`: refused unless a gesture is under way (`activated`) and the frame
 /// renders a ticket (`ticket`, from its `data-ticket`), then the bridge's
 /// checks against that ticket's inputs, then `tickets.answer` with source
-/// `app`. A frame replaced meanwhile is not answered.
-fn answer_submit(
+/// `app`. INPUT-9: and (`write` [`Msg::Clear`]) its `menger.input.clear` —
+/// `menger:cleared { id, input }` or `{ id, error }`, the same way, then
+/// `tickets.clear_answer` with source `app`. A frame replaced meanwhile is
+/// not answered.
+fn answer_write(
+    write: Msg,
     frame: web_sys::HtmlIFrameElement,
     channel: String,
     id: JsValue,
@@ -485,18 +499,29 @@ fn answer_submit(
     activated: Option<bool>,
     params: Result<String, String>,
 ) {
+    let (sdk, reply_kind, field) = if write == Msg::Clear {
+        (bridge::CLEAR, "menger:cleared", "input")
+    } else {
+        (bridge::SUBMIT, "menger:submitted", "answer")
+    };
     spawn_local(async move {
         let reply = async {
-            let ticket = bridge::admit(ticket.as_deref(), activated)?;
-            let submit = bridge::parse_submit(&params?)?;
-            let client = session::client().ok_or_else(|| format!("{}: not connected (nothing sent)", bridge::SUBMIT))?;
-            bridge::submit(&client, ticket, submit).await
+            let ticket = bridge::admit(sdk, ticket.as_deref(), activated)?;
+            let params = params?;
+            let client = || session::client().ok_or_else(|| format!("{sdk}: not connected (nothing sent)"));
+            if write == Msg::Clear {
+                let clear = bridge::parse_clear(&params)?;
+                bridge::clear(&client()?, ticket, clear).await.map(|input| to_js(&input))
+            } else {
+                let submit = bridge::parse_submit(&params)?;
+                bridge::submit(&client()?, ticket, submit).await.map(|answer| to_js(&answer))
+            }
         }
         .await;
-        let msg = message("menger:submitted", &channel);
+        let msg = message(reply_kind, &channel);
         set(&msg, "id", &id);
         match reply {
-            Ok(answer) => set(&msg, "answer", &to_js(&answer)),
+            Ok(done) => set(&msg, field, &done),
             Err(error) => set(&msg, "error", &error.into()),
         }
         post(&frame, &msg.into());
@@ -591,18 +616,19 @@ fn on_message(ev: web_sys::MessageEvent) {
             };
             answer_call(frame, channel, id, method, params);
         }
-        Some(Msg::Submit) => {
+        Some(write @ (Msg::Submit | Msg::Clear)) => {
             // Now, while the gesture that sent it is still the app's too.
             let activated = host_activated();
+            let sdk = if write == Msg::Clear { bridge::CLEAR } else { bridge::SUBMIT };
             let id = field("id").filter(|v| v.as_f64().is_some()).unwrap_or(JsValue::NULL);
             let params = field("params")
                 .filter(|v| !v.is_undefined() && !v.is_null())
                 .and_then(|v| js_sys::JSON::stringify(&v).ok())
                 .and_then(|s| s.as_string())
-                .ok_or_else(|| format!("{}: its params are missing or not plain data (nothing sent)", bridge::SUBMIT));
+                .ok_or_else(|| format!("{sdk}: its params are missing or not plain data (nothing sent)"));
             // The host's own stamp — nothing in the frame can move it.
             let ticket = frame.get_attribute("data-ticket");
-            answer_submit(frame, channel, id, ticket, activated, params);
+            answer_write(write, frame, channel, id, ticket, activated, params);
         }
         Some(Msg::Size { height, settled }) => {
             let _ = web_sys::HtmlElement::style(&frame).set_property("height", &format!("{height}px"));
@@ -946,9 +972,10 @@ mod tests {
         assert_eq!(parse_msg("menger:inspect", None, None), Some(Msg::Inspect));
         assert_eq!(parse_msg("menger:revealed", None, None), Some(Msg::Revealed));
         assert_eq!(parse_msg("menger:submit", None, None), Some(Msg::Submit));
+        assert_eq!(parse_msg("menger:clear", None, None), Some(Msg::Clear));
         for outbound in [
             "menger:theme", "menger:result", "menger:components", "menger:change", "menger:inspected", "menger:reveal",
-            "menger:submitted",
+            "menger:submitted", "menger:cleared",
         ] {
             assert_eq!(parse_msg(outbound, None, None), None, "{outbound}: outbound only");
         }
@@ -968,8 +995,8 @@ mod tests {
             ),
             "window.menger = {{ version, tickets, call, on, navigate, input }}"
         );
-        // INPUT-4: `menger.input` is frozen too, and its one write.
-        assert!(SDK_JS.contains("var input = Object.freeze({ ticket: ticket, submit: submit });"), "menger.input");
+        // INPUT-4: `menger.input` is frozen too, with its writes (INPUT-9: clear).
+        assert!(SDK_JS.contains("var input = Object.freeze({ ticket: ticket, submit: submit, clear: clear });"), "menger.input");
         let lower = SDK_JS.to_ascii_lowercase();
         assert!(!lower.contains("</script") && !lower.contains("<!--"), "inlinable");
         let name = SDK_URL.rsplit('/').next().unwrap();
@@ -985,7 +1012,7 @@ mod tests {
         for kind in [
             "menger:ready", "menger:size", "menger:theme", "menger:call", "menger:result", "menger:components", "menger:change",
             "menger:navigate", "menger:inspect", "menger:inspected", "menger:reveal", "menger:revealed", "menger:submit",
-            "menger:submitted",
+            "menger:submitted", "menger:clear", "menger:cleared",
         ] {
             assert!(SDK_JS.contains(&format!("\"{kind}\"")), "{kind}");
         }

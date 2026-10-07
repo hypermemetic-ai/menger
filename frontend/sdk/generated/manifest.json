@@ -19,6 +19,7 @@
     ],
     "clear_answer": [
       "input",
+      "source",
       "ticket"
     ],
     "close_input": [

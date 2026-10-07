@@ -111,7 +111,11 @@ pub(crate) enum Op {
         rationale: Option<String>,
         source: AnswerSource,
     },
-    Clear,
+    /// INPUT-9: with who cleared it — `app` when the host clears it for a
+    /// frame (`menger.input.clear`), else `api`.
+    Clear {
+        source: AnswerSource,
+    },
     Close,
     Reopen,
 }
@@ -142,14 +146,14 @@ pub(crate) fn apply(input: &Input, op: Op, now: i64) -> Result<Option<(Input, In
         at_unix: now,
     };
     let entry = match op {
-        Op::Answer { .. } | Op::Clear if closed => return Err(Refused::Closed),
+        Op::Answer { .. } | Op::Clear { .. } if closed => return Err(Refused::Closed),
         Op::Answer { value, rationale, source } => {
             let value = markup::check(input.kind, &input.options, value).map_err(Refused::Invalid)?;
             let rationale = rationale.filter(|r| !r.trim().is_empty());
             entry(InputAction::Answered, Some(value), rationale, source)
         }
-        Op::Clear if input.answer.is_none() => return Ok(None),
-        Op::Clear => entry(InputAction::Cleared, None, None, AnswerSource::Api),
+        Op::Clear { .. } if input.answer.is_none() => return Ok(None),
+        Op::Clear { source } => entry(InputAction::Cleared, None, None, source),
         Op::Close if closed => return Ok(None),
         Op::Close => entry(InputAction::Closed, None, None, AnswerSource::Api),
         Op::Reopen if !closed => return Ok(None),
@@ -530,8 +534,9 @@ mod tests {
             rationale: Some("because".into()),
             source: AnswerSource::App,
         };
+        let clear = || Op::Clear { source: AnswerSource::Api };
         assert!(matches!(apply(&a, answer("z"), 1), Err(Refused::Invalid(_))));
-        assert_eq!(apply(&a, Op::Clear, 1).unwrap(), None, "nothing to clear");
+        assert_eq!(apply(&a, clear(), 1).unwrap(), None, "nothing to clear");
         assert_eq!(apply(&a, Op::Reopen, 1).unwrap(), None, "not closed");
         let (a, e) = apply(&a, answer("x"), 10).unwrap().unwrap();
         assert_eq!((a.state, e.action, e.source), (InputState::Answered, InputAction::Answered, AnswerSource::App));
@@ -541,18 +546,22 @@ mod tests {
         assert_eq!(a.state, InputState::Closed);
         assert_eq!(a.answer.as_ref().map(|x| x.value.clone()), Some(InputValue::Choice { option: "y".into() }), "frozen with its answer");
         assert_eq!(apply(&a, answer("x"), 13), Err(Refused::Closed));
-        assert_eq!(apply(&a, Op::Clear, 13), Err(Refused::Closed));
+        assert_eq!(apply(&a, clear(), 13), Err(Refused::Closed));
         assert_eq!(apply(&a, Op::Close, 13).unwrap(), None);
         let (a, _) = apply(&a, Op::Reopen, 14).unwrap().unwrap();
         assert_eq!(a.state, InputState::Answered, "reopened to what its history says");
-        let (a, e) = apply(&a, Op::Clear, 15).unwrap().unwrap();
+        let (a, e) = apply(&a, clear(), 15).unwrap().unwrap();
         assert_eq!((a.state, a.answer.as_ref(), e.source), (InputState::Open, None, AnswerSource::Api));
+        // INPUT-9: a clear made for a frame is the app's.
+        let (b, _) = apply(&a, answer("x"), 16).unwrap().unwrap();
+        let (b, e) = apply(&b, Op::Clear { source: AnswerSource::App }, 17).unwrap().unwrap();
+        assert_eq!((b.state, b.answer.as_ref(), e.action, e.source), (InputState::Open, None, InputAction::Cleared, AnswerSource::App));
         let actions: Vec<InputAction> = a.history.iter().map(|e| e.action).collect();
         use InputAction::*;
         assert_eq!(actions, [Answered, Answered, Closed, Reopened, Cleared]);
         let mut gone = a.clone();
         gone.state = InputState::Removed;
-        for op in [answer("x"), Op::Clear, Op::Close, Op::Reopen] {
+        for op in [answer("x"), clear(), Op::Close, Op::Reopen] {
             assert_eq!(apply(&gone, op, 16), Err(Refused::Removed));
         }
     }

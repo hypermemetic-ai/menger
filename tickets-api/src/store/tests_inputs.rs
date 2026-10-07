@@ -234,13 +234,13 @@ async fn an_answer_is_refused_unknown_invalid_closed_or_removed() {
     changed(store.close_input(&id, "d").await.unwrap());
     let e = store.answer(&id, "d", choice("a"), None, AnswerSource::Api).await.unwrap_err();
     assert_eq!(e.to_string(), "Q-2's 'd' is closed: its answer is frozen — reopen_input it first (nothing changed)");
-    let e = store.clear_answer(&id, "d").await.unwrap_err();
+    let e = store.clear_answer(&id, "d", AnswerSource::Api).await.unwrap_err();
     assert!(matches!(e, StoreError::InputClosed { .. }), "{e:?}");
 
     amend(&store, &id, &text("t")).await; // `d` leaves the body
     for e in [
         store.answer(&id, "d", choice("a"), None, AnswerSource::Api).await.unwrap_err(),
-        store.clear_answer(&id, "d").await.unwrap_err(),
+        store.clear_answer(&id, "d", AnswerSource::Api).await.unwrap_err(),
         store.close_input(&id, "d").await.unwrap_err(),
         store.reopen_input(&id, "d").await.unwrap_err(),
     ] {
@@ -256,12 +256,12 @@ async fn clear_close_and_reopen_move_the_state_and_are_history() {
     let store = store().await;
     let id = born(&store, &decision("d", &["A", "B"])).await;
     let mut rx = store.subscribe();
-    assert_eq!(unchanged(store.clear_answer(&id, "d").await.unwrap()).state, InputState::Open, "nothing to clear");
+    assert_eq!(unchanged(store.clear_answer(&id, "d", AnswerSource::Api).await.unwrap()).state, InputState::Open, "nothing to clear");
     assert_eq!(unchanged(store.reopen_input(&id, "d").await.unwrap()).state, InputState::Open, "not closed");
     assert!(drain(&mut rx).is_empty(), "a no-op is not heard");
 
     changed(store.answer(&id, "d", choice("a"), None, AnswerSource::App).await.unwrap());
-    let d = changed(store.clear_answer(&id, "d").await.unwrap());
+    let d = changed(store.clear_answer(&id, "d", AnswerSource::App).await.unwrap());
     assert_eq!((d.state, d.answer.as_ref()), (InputState::Open, None));
     changed(store.answer(&id, "d", choice("b"), Some("settled".into()), AnswerSource::Api).await.unwrap());
     let d = changed(store.close_input(&id, "d").await.unwrap());
@@ -272,7 +272,8 @@ async fn clear_close_and_reopen_move_the_state_and_are_history() {
     assert_eq!(d.state, InputState::Answered, "reopened to its answer");
     use InputAction::*;
     assert_eq!(actions(&d), [Answered, Cleared, Answered, Closed, Reopened]);
-    assert_eq!(d.history[1].source, AnswerSource::Api, "clear, close and reopen are the api's");
+    assert_eq!(d.history[1].source, AnswerSource::App, "INPUT-9: a clear is the source it is given");
+    assert!(d.history[3..].iter().all(|e| e.source == AnswerSource::Api), "close and reopen are the api's");
     assert_eq!(heard(&drain(&mut rx)).len(), 5, "one input_changed per change");
 
     // Closed without an answer, reopened to open.

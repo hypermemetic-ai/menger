@@ -1695,6 +1695,13 @@ async fn inputs_over_the_wire() {
     assert_eq!(watch_until(&mut mine, "input_changed").await.last().unwrap()["input"]["state"], "open", "the declaration");
     assert_eq!(watch_until(&mut mine, "input_changed").await, vec![json!({"type": "input_changed", "input": answered})]);
 
+    // INPUT-9: a clear takes a source too (the host's `app` for a frame's
+    // `menger.input.clear`), recorded in the history.
+    let evs = collect(call(&client, "tickets.clear_answer", json!({"ticket": "ASK-2", "input": "landing", "source": "app"})).await).await;
+    assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("input_changed")), "{evs:?}");
+    assert_eq!((&evs[0]["input"]["state"], &evs[0]["input"]["answer"]), (&json!("open"), &Value::Null));
+    assert_eq!((&evs[0]["input"]["history"][1]["action"], &evs[0]["input"]["history"][1]["source"]), (&json!("cleared"), &json!("app")));
+
     // Default source: api. Close, then a no-op close answers `input`.
     let evs = collect(call(&client, "tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "Delete"}})).await).await;
     assert_eq!(evs[0]["input"]["answer"]["source"], "api");
@@ -1708,6 +1715,7 @@ async fn inputs_over_the_wire() {
         ("tickets.clear_answer", json!({"ticket": "ASK-2", "input": "landing"}), "is closed"),
         ("tickets.reopen_input", json!({"ticket": "ASK-2", "input": "nope"}), "declares no input 'nope'"),
         ("tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "x"}, "source": "robot"}), "unknown answer source 'robot'"),
+        ("tickets.clear_answer", json!({"ticket": "ASK-2", "input": "landing", "source": "robot"}), "unknown answer source 'robot'"),
         ("tickets.inputs", json!({"state": "pending"}), "unknown input state 'pending'"),
     ] {
         let evs = collect(call(&client, method, params).await).await;
@@ -1732,7 +1740,7 @@ async fn inputs_over_the_wire() {
         .iter()
         .map(|e| e["action"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(history, ["answered", "answered", "closed", "reopened"]);
+    assert_eq!(history, ["answered", "cleared", "answered", "closed", "reopened"]);
 
     // The other shortcode's watch heard none of it: its first event is the
     // next one in OTHER.
