@@ -500,6 +500,11 @@ method rejects with `read-only: …`, a parameter the method does not take
 rejects naming it; **`on('change', cb)`** → `cb(event)` for every `watch`
 event the app hears, and returns the function that stops it.
 
+**`#/components`** (COMP-6; linked from the header beside `waves`) lists
+the registry live: a row per component — its tag, its owner (a ticket
+link) or **orphan**, its reference count with each referrer as a link, its
+source folded. `#/components/<tag>` is one component, its source open.
+
 The order of work for a shortcode tree — the platform's, here — is one call
 (WAVE-4); the app's wave board (`#/waves/<SHORTCODE>`) makes the same one:
 
@@ -726,7 +731,7 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        COMP-5), sdk/menger-sdk.js the SDK every frame runs,
                        src/registry.rs the app's copy of the component
                        registry, src/bridge.rs menger.call's read-only host
-                       side (COMP-5)
+                       side (COMP-5), src/components.rs #/components (COMP-6)
 spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)
 diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub
                        (WS :4458); the `mermaid` activation and the client it

@@ -706,6 +706,34 @@
   #waves .card .off { font-weight: 400; }
   #waves-index h2 { font-size: 1rem; margin: 0 0 .4rem; }
   #waves-index ul { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem; }
+  /* COMP-6: #/components — a row per component (its tag, its owner or
+     "orphan", what references it), its source folded on the line below. */
+  #components { max-width: 64rem; }
+  #components h2 { font-size: 1rem; margin: 0 0 .4rem; font-family: var(--mono); }
+  #components .crumbs a { color: var(--muted); text-decoration: none; font-size: .85rem; }
+  #components .crumbs a:hover { color: var(--accent); }
+  #components table.comps { margin-top: .75rem; }
+  #components th.c-name { width: 16rem; }
+  #components th.c-owner { width: 8rem; }
+  #components tr.comp td { border-bottom: 0; padding-bottom: .1rem; vertical-align: baseline; }
+  #components tr.src td { padding-top: 0; }
+  #components a.tag { font-family: var(--mono); font-size: 13px; color: var(--accent); text-decoration: none; }
+  #components a.tag:hover { text-decoration: underline; }
+  #components .code {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: var(--chip-fg);
+    background: var(--chip-bg); border: 1px solid var(--chip-line); border-radius: 5px;
+    padding: 0 5px; white-space: nowrap; text-decoration: none; margin-right: .25rem;
+  }
+  #components a.code:hover { color: var(--accent); border-color: var(--accent); }
+  #components .orphan {
+    font-size: .75rem; color: var(--muted); border: 1px dashed var(--line); border-radius: 5px; padding: 0 5px;
+  }
+  #components .count { color: var(--muted); font-size: .8rem; margin-right: .35rem; }
+  #components details summary { cursor: pointer; color: var(--muted); font-size: .75rem; }
+  #components details pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px; margin: .35rem 0 .2rem;
+    padding: .6rem .8rem; overflow-x: auto; font-family: var(--mono); font-size: 12px; line-height: 1.5;
+  }
   /* WAVE-11: the board's annotation below it — read, or edited beside a
      live preview — and a wave reference in any body. */
   #waves .notes { margin-top: 1rem; border-top: 1px solid var(--line); padding-top: .6rem; }

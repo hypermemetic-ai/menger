@@ -191,9 +191,15 @@
 //! the route's query (`#/waves/PLEXUS?status=not:Complete`), which the route
 //! itself ignores.
 
+//! COMP-6: `#/components` (src/components.rs) — every component in the
+//! registry, its owner or "orphan", what references it, its source; linked
+//! from the header beside `waves`. `#/components/<tag>` is one, its source
+//! open.
+
 mod board;
 mod bridge;
 mod cache;
+mod components;
 mod dom;
 mod filter;
 mod frame;
@@ -289,6 +295,10 @@ pub(crate) enum Route {
     /// WAVE-12: a query after it (`?sc=…&status=…`) is the board's filter —
     /// the board's to read, not the route's.
     Waves(String),
+    /// COMP-6: `#/components` (`None`) — every component; and
+    /// `#/components/<tag>` — that one (its name folded to lowercase, as
+    /// HTML folds a tag).
+    Components(Option<String>),
 }
 
 fn parse_route(hash: &str) -> Route {
@@ -300,6 +310,11 @@ fn parse_route(hash: &str) -> Route {
         Some(("ticket", id)) if !id.is_empty() => Route::Ticket(id.to_string()),
         Some(("waves", sc)) => Route::Waves(sc.trim_end_matches('/').to_ascii_uppercase()),
         None if path == "waves" => Route::Waves(String::new()),
+        Some(("components", tag)) => {
+            let tag = tag.trim_end_matches('/').to_ascii_lowercase();
+            Route::Components((!tag.is_empty()).then_some(tag))
+        }
+        None if path == "components" => Route::Components(None),
         _ => Route::Board,
     }
 }
@@ -1493,11 +1508,20 @@ fn App() -> impl IntoView {
                     >
                         "waves"
                     </a>
+                    // COMP-6: the component registry, beside them.
+                    <a
+                        class="hlink"
+                        href="#/components"
+                        aria-current=move || matches!(route.get(), Route::Components(_)).then_some("page")
+                    >
+                        "components"
+                    </a>
                     <span class="tag">
                         {move || match route.get() {
                             Route::Board => "the live board (MFE-3)",
                             Route::Ticket(_) => "ticket (MFE-7)",
                             Route::Waves(_) => "the wave board (WAVE-5)",
+                            Route::Components(_) => "components (COMP-6)",
                         }}
                     </span>
                     <span id="conn" class=move || conn_view().0>{move || conn_view().1}</span>
@@ -1522,6 +1546,7 @@ fn App() -> impl IntoView {
                         Route::Waves(shortcode) => {
                             view! { <waves::WaveBoard shortcode tree socket last_error /> }.into_any()
                         }
+                        Route::Components(only) => view! { <components::ComponentsPage only /> }.into_any(),
                     }}
                 </main>
             </div>
@@ -1564,6 +1589,12 @@ mod tests {
         assert_eq!(parse_route("#/waves/PLEXUS?sc=is:RETURNS&status=not:Complete"), Route::Waves("PLEXUS".into()));
         assert_eq!(parse_route("#/waves/plexus/?all"), Route::Waves("PLEXUS".into()));
         assert_eq!(parse_route("#/waves?all"), Route::Waves(String::new()));
+        // COMP-6: the component registry, and one component by its tag.
+        assert_eq!(parse_route("#/components"), Route::Components(None));
+        assert_eq!(parse_route("#/components/"), Route::Components(None));
+        assert_eq!(parse_route("#/components/m-wave-summary"), Route::Components(Some("m-wave-summary".into())));
+        assert_eq!(parse_route("#/components/M-Wave-Summary/"), Route::Components(Some("m-wave-summary".into())));
+        assert_eq!(parse_route("#/componentsX"), Route::Board);
     }
     use crate::nav::roll_label;
 

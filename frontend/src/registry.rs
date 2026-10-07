@@ -92,6 +92,11 @@ thread_local! {
     static HEARD: RefCell<Option<Vec<TicketsEvent>>> = const { RefCell::new(None) };
 }
 
+/// The registry, as a signal — what `#/components` (COMP-6) draws from.
+pub(crate) fn signal() -> ArcRwSignal<Option<Registry>> {
+    REGISTRY.with(Clone::clone)
+}
+
 /// The registry now, untracked — what a frame's srcdoc is built with.
 pub(crate) fn snapshot() -> Option<Vec<Component>> {
     REGISTRY.with(|r| r.with_untracked(|r| r.as_ref().map(Registry::list)))
