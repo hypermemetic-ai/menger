@@ -27,6 +27,7 @@ releases — never from a checkout. `deploy/README.md` defines the pipeline
 ```sh
 deploy/pipeline build          # master's tip → gate (cargo test --workspace + frontend tests) → release
 deploy/pipeline deploy test    # the release → test, on a fresh copy of prod's data; smoke checks
+deploy/pipeline sync test      # test's data refreshed from prod, same release (DEPLOY-4)
 deploy/pipeline promote        # the release test passed → prod; smoke; automatic rollback on failure
 deploy/pipeline status         # what each env runs and whether it is healthy
 ```

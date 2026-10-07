@@ -27,6 +27,7 @@ commit on master → build → gate → release → deploy test → smoke → pr
 deploy/pipeline install              # once, and after a change to deploy/: units + env files, enable both envs
 deploy/pipeline build                # master's tip → gate → release (prints its name)
 deploy/pipeline deploy test          # the newest release → test, with a fresh copy of prod's data
+deploy/pipeline sync test            # test's data refreshed from prod; test keeps its release
 deploy/pipeline promote              # the release test runs → prod
 deploy/pipeline status               # what each env runs, whether it is up, its health
 ```
@@ -53,6 +54,13 @@ deploy/pipeline status               # what each env runs, whether it is up, its
    `~/.local/share/menger/backups/`, prod switches (the release it ran becomes
    `previous`), restarts and must pass the smoke checks. A failure stops prod,
    restores that backup, switches back and restarts — by itself.
+**Sync** (`sync test`, DEPLOY-4). Test's data refreshed from prod on demand,
+between deploys: test stops, its current database is backed up to test's
+`backups/` (`…-before-sync`, the newest five kept), and it becomes a live
+snapshot of prod's — the same `.backup` step 4 takes — then test restarts on
+the release it already runs and must pass the smoke checks. One way only:
+`sync prod` is refused, and a sync never stops or writes prod.
+
 6. **Rollback** (`rollback ENV [--restore BACKUP]`). Back to `previous`. A
    data upgrade can be one-way — an older build cannot always read what a
    newer one wrote (SDLC-11's docs did that) — so a rollback across one needs
