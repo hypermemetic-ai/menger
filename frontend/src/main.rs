@@ -206,6 +206,12 @@
 //! (`http://127.0.0.1:4451/` unless #/settings says otherwise) in a new tab;
 //! a page the test environment serves does not show it.
 
+//! INPUT-6: `#/inputs` (src/inputs_page.rs) — every input across tickets,
+//! grouped by state (open first), filtered by the route's query; linked
+//! from the header beside `components`, with the open count as a badge. The
+//! inputs are the app's copy (src/inputs.rs), asked for only once the page
+//! is opened — the badge shows from then on, live.
+
 mod board;
 mod bridge;
 mod cache;
@@ -214,6 +220,8 @@ mod components;
 mod dom;
 mod filter;
 mod frame;
+mod inputs;
+mod inputs_page;
 mod inspect;
 mod keys;
 mod kids;
@@ -312,6 +320,9 @@ pub(crate) enum Route {
     /// `#/components/<tag>` — that one (its name folded to lowercase, as
     /// HTML folds a tag).
     Components(Option<String>),
+    /// INPUT-6: `#/inputs` — every input across tickets. A query after it
+    /// (`?sc=…&state=…&removed`) is the page's filter, not the route's.
+    Inputs,
     /// MFE-21: `#/settings`.
     Settings,
 }
@@ -330,6 +341,7 @@ fn parse_route(hash: &str) -> Route {
             Route::Components((!tag.is_empty()).then_some(tag))
         }
         None if path == "components" => Route::Components(None),
+        _ if path.trim_end_matches('/') == "inputs" => Route::Inputs,
         _ if path.trim_end_matches('/') == "settings" => Route::Settings,
         _ => Route::Board,
     }
@@ -1521,6 +1533,13 @@ fn App() -> impl IntoView {
     let test_link = RwSignal::new(settings::load().test_link());
     let page_origin = settings::page_origin();
 
+    // INPUT-6: the header's open-input count — `None` until the app holds
+    // the inputs (the first time #/inputs opens), then kept live by `watch`.
+    let open_inputs = {
+        let held = inputs::signal();
+        Memo::new(move |_| held.with(|h| h.as_ref().map(inputs::Inputs::open_count)))
+    };
+
     view! {
         <div id="app" class:nonav=move || nav_hidden.get() data-rows-held=move || held.get()>
             <nav::Nav tree route hidden=nav_hidden />
@@ -1554,6 +1573,22 @@ fn App() -> impl IntoView {
                     >
                         "components"
                     </a>
+                    // INPUT-6: every input across tickets, beside them —
+                    // the open count once the app holds the inputs (the
+                    // page asks for them; nothing at startup does).
+                    <a
+                        class="hlink"
+                        id="inputs-link"
+                        href="#/inputs"
+                        aria-current=move || matches!(route.get(), Route::Inputs).then_some("page")
+                    >
+                        "inputs"
+                        {move || {
+                            open_inputs.get().map(|n| view! {
+                                <span class="hbadge" class:zero=n == 0 title=inputs_page::badge_title(n)>{n}</span>
+                            })
+                        }}
+                    </a>
                     // MFE-21: the settings, beside them.
                     <a
                         class="hlink"
@@ -1581,6 +1616,7 @@ fn App() -> impl IntoView {
                             Route::Ticket(_) => "ticket (MFE-7)",
                             Route::Waves(_) => "the wave board (WAVE-5)",
                             Route::Components(_) => "components (COMP-6)",
+                            Route::Inputs => "inputs (INPUT-6)",
                             Route::Settings => "settings (MFE-21)",
                         }}
                     </span>
@@ -1615,6 +1651,7 @@ fn App() -> impl IntoView {
                             view! { <waves::WaveBoard shortcode tree socket last_error /> }.into_any()
                         }
                         Route::Components(only) => view! { <components::ComponentsPage only /> }.into_any(),
+                        Route::Inputs => view! { <inputs_page::InputsPage /> }.into_any(),
                         Route::Settings => view! { <settings::SettingsPage test_link /> }.into_any(),
                     }}
                 </main>
@@ -1664,6 +1701,13 @@ mod tests {
         assert_eq!(parse_route("#/components/m-wave-summary"), Route::Components(Some("m-wave-summary".into())));
         assert_eq!(parse_route("#/components/M-Wave-Summary/"), Route::Components(Some("m-wave-summary".into())));
         assert_eq!(parse_route("#/componentsX"), Route::Board);
+        // INPUT-6: every input; the filter rides in the query.
+        assert_eq!(parse_route("#/inputs"), Route::Inputs);
+        assert_eq!(parse_route("#/inputs/"), Route::Inputs);
+        assert_eq!(parse_route("#/inputs?sc=INPUT,MNG&state=open&removed"), Route::Inputs);
+        assert_eq!(parse_route("#/inputs/?state=closed"), Route::Inputs);
+        assert_eq!(parse_route("#/inputsX"), Route::Board);
+        assert_eq!(parse_route("#/inputs/INPUT-9"), Route::Board);
         // MFE-21: the settings page.
         assert_eq!(parse_route("#/settings"), Route::Settings);
         assert_eq!(parse_route("#/settings/"), Route::Settings);
