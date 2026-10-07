@@ -7,8 +7,23 @@
       "id",
       "title"
     ],
+    "answer": [
+      "input",
+      "rationale",
+      "source",
+      "ticket",
+      "value"
+    ],
     "blockers": [
       "id"
+    ],
+    "clear_answer": [
+      "input",
+      "ticket"
+    ],
+    "close_input": [
+      "input",
+      "ticket"
     ],
     "components": [],
     "create": [
@@ -32,6 +47,11 @@
     ],
     "groups": [],
     "health": [],
+    "inputs": [
+      "epic",
+      "state",
+      "ticket"
+    ],
     "link_commits": [
       "commits",
       "id"
@@ -49,6 +69,10 @@
       "epic",
       "limit",
       "summary"
+    ],
+    "reopen_input": [
+      "input",
+      "ticket"
     ],
     "schema": [],
     "set_parent": [

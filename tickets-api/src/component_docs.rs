@@ -448,8 +448,9 @@ fn entities(s: &str) -> String {
 }
 
 /// An element's text, as a summary or a description is: its tags dropped,
-/// entities decoded, whitespace collapsed, trimmed.
-fn text(inner: &str) -> String {
+/// entities decoded, whitespace collapsed, trimmed. (INPUT-3: an input's
+/// question, recommendation and choice labels are read with it too.)
+pub(crate) fn text(inner: &str) -> String {
     let mut plain = String::with_capacity(inner.len());
     let mut i = 0;
     while let Some(off) = inner[i..].find('<') {

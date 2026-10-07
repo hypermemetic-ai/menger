@@ -19,12 +19,14 @@
 //! a struct.
 #![allow(clippy::too_many_arguments)]
 
-use crate::types::TicketsEvent;
+use crate::types::{InputValue, TicketsEvent};
 #[cfg(feature = "server")]
 use crate::store::{
-    BlockerRef, Change, Kind, NewTicket, Page, PageQuery, Select, Severity, Status, Step, Store,
-    StoreError, Walk,
+    BlockerRef, Change, InputWrite, Kind, NewTicket, Page, PageQuery, Select, Severity, Status, Step,
+    Store, StoreError, Walk,
 };
+#[cfg(feature = "server")]
+use crate::types::{AnswerSource, InputState};
 #[cfg(feature = "server")]
 use async_stream::stream;
 #[cfg(feature = "server")]
@@ -156,6 +158,22 @@ fn change_event(change: Change) -> TicketsEvent {
         // COMP-3: past any `epic` filter — a component is in no shortcode.
         Change::ComponentChanged { component } => TicketsEvent::ComponentChanged { component },
         Change::ComponentRemoved { name } => TicketsEvent::ComponentRemoved { name },
+        // INPUT-3: its ticket's shortcode filtered `watch { epic }` on the
+        // way here; the wire carries the input.
+        Change::InputChanged { input, .. } => TicketsEvent::InputChanged { input },
+    }
+}
+
+/// INPUT-3: a write to one input, as its one event — `input_changed` for a
+/// change, `input` for one that changed nothing, `not_found` for a ticket
+/// that is none, an in-band `error` for every refusal.
+#[cfg(feature = "server")]
+fn input_event(written: Result<InputWrite, StoreError>, ticket: String) -> TicketsEvent {
+    match written {
+        Ok(InputWrite::Changed(input)) => TicketsEvent::InputChanged { input },
+        Ok(InputWrite::Unchanged(input)) => TicketsEvent::Input { input },
+        Err(StoreError::NotFound(_)) => TicketsEvent::NotFound { id: ticket },
+        Err(e) => TicketsEvent::Error { message: e.to_string() },
     }
 }
 
@@ -647,6 +665,146 @@ impl Tickets {
         }
     }
 
+    /// INPUT-3: the inputs store. Yields one `Input` per input of `ticket`
+    /// (every ticket's, without one) whose ticket is in the shortcode `epic`
+    /// and which is in `state` — its ticket, id, kind (`choice`, `multi`,
+    /// `text`), question, options (`{ value, label, recommended }`, the
+    /// body's order), recommendation, state (`open`, `answered`, `closed`,
+    /// `removed`), current answer (`{ value, rationale, source, at_unix }`,
+    /// `null` with none) and whole history, oldest first — in the store's
+    /// order of tickets, each ticket's inputs in its body's order and the
+    /// removed after. Nothing trails them; the stream's own `done` is the
+    /// whole answer. `NotFound` when `ticket` names no ticket; an unknown
+    /// `state` is an in-band `Error`. From the cache; `watch` keeps a
+    /// client's copy current with `InputChanged`.
+    #[plexus_macros::method(
+        description = "Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode and state",
+        params(
+            ticket = "Only this ticket's inputs, e.g. INPUT-9 (optional)",
+            epic = "Only inputs of tickets in this shortcode (optional)",
+            state = "Only inputs in this state: open | answered | closed | removed (optional)"
+        )
+    )]
+    pub async fn inputs(
+        &self,
+        ticket: Option<String>,
+        epic: Option<String>,
+        state: Option<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            let state = match state.as_deref().map(str::parse::<InputState>) {
+                None => None,
+                Some(Ok(s)) => Some(s),
+                Some(Err(e)) => {
+                    yield TicketsEvent::Error { message: e };
+                    return;
+                }
+            };
+            match store.inputs(ticket.as_deref(), epic.as_deref(), state) {
+                Ok(inputs) => {
+                    for input in inputs {
+                        yield TicketsEvent::Input { input };
+                    }
+                }
+                Err(StoreError::NotFound(id)) => yield TicketsEvent::NotFound { id },
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            }
+        }
+    }
+
+    /// INPUT-3: answers an input — records `value` against `ticket`'s input
+    /// `input`, with its `rationale`, its `source` (`app`: a viewer's click,
+    /// which the host says; `api`, the default: anything else) and the
+    /// time. The value is typed by the input's kind and checked against the
+    /// options its body declares: `{"type": "choice", "option": …}` names
+    /// one, `{"type": "multi", "options": […]}` a set (kept in the body's
+    /// order, each once; empty: none ticked), `{"type": "text", "text": …}`
+    /// a reply, not blank. Every answer is a history entry — a changed one,
+    /// and the same one again. Yields exactly one event: `InputChanged` (the
+    /// input as it is now, its answer and history included), `NotFound` for
+    /// a ticket that is none, or an in-band `Error` — the ticket declares no
+    /// such input, the value does not answer it, it is closed, or it was
+    /// removed from its body — and nothing is written. Never touches the
+    /// body. `watch` carries the `InputChanged`.
+    #[plexus_macros::method(
+        description = "Answer an input: record a value (checked against its kind and options) with a rationale, a source and the time; yields input_changed",
+        params(
+            ticket = "Ticket id, e.g. INPUT-9",
+            input = "The input's id in that ticket's body, e.g. landing",
+            value = "Typed by the input's kind: {\"type\": \"choice\", \"option\": \"archive\"} | {\"type\": \"multi\", \"options\": [\"a\", \"b\"]} | {\"type\": \"text\", \"text\": \"a reply\"}; through synapse, --value.type choice --value.option archive",
+            rationale = "Why (optional)",
+            source = "app (a viewer's click, said by the host) | api (default)"
+        )
+    )]
+    pub async fn answer(
+        &self,
+        ticket: String,
+        input: String,
+        value: InputValue,
+        rationale: Option<String>,
+        source: Option<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            let source = match source.as_deref().map(str::parse::<AnswerSource>) {
+                None => AnswerSource::Api,
+                Some(Ok(s)) => s,
+                Some(Err(e)) => {
+                    yield TicketsEvent::Error { message: e };
+                    return;
+                }
+            };
+            yield input_event(store.answer(&ticket, &input, value, rationale, source).await, ticket);
+        }
+    }
+
+    /// INPUT-3: clears an input's answer — `open` again, the clear in its
+    /// history (source `api`). Yields exactly one event: `InputChanged`;
+    /// `Input` when it held no answer (nothing written); `NotFound`; or an
+    /// in-band `Error` — no such input, closed, removed.
+    #[plexus_macros::method(
+        description = "Clear an input's answer (open again; kept in its history); yields input_changed",
+        params(ticket = "Ticket id, e.g. INPUT-9", input = "The input's id in that ticket's body")
+    )]
+    pub async fn clear_answer(&self, ticket: String, input: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            yield input_event(store.clear_answer(&ticket, &input).await, ticket);
+        }
+    }
+
+    /// INPUT-3: closes an input — frozen (a decision's DECIDED), with its
+    /// answer or without one; an answer or a clear is refused until it is
+    /// reopened. Yields exactly one event: `InputChanged`; `Input` when it
+    /// was closed already; `NotFound`; or an in-band `Error` — no such
+    /// input, removed.
+    #[plexus_macros::method(
+        description = "Close an input: freeze its answer (or its lack of one); yields input_changed",
+        params(ticket = "Ticket id, e.g. INPUT-9", input = "The input's id in that ticket's body")
+    )]
+    pub async fn close_input(&self, ticket: String, input: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            yield input_event(store.close_input(&ticket, &input).await, ticket);
+        }
+    }
+
+    /// INPUT-3: reopens a closed input — `answered` again when it holds an
+    /// answer, else `open`. Yields exactly one event: `InputChanged`;
+    /// `Input` when it was not closed; `NotFound`; or an in-band `Error` —
+    /// no such input, removed.
+    #[plexus_macros::method(
+        description = "Reopen a closed input; yields input_changed",
+        params(ticket = "Ticket id, e.g. INPUT-9", input = "The input's id in that ticket's body")
+    )]
+    pub async fn reopen_input(&self, ticket: String, input: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            yield input_event(store.reopen_input(&ticket, &input).await, ticket);
+        }
+    }
+
     /// SCALE-16: where each shortcode ends in the store's order. Yields
     /// one `Extent` per shortcode that holds a ticket, in shortcode order
     /// — its highest sequence, read from the per-shortcode sequence
@@ -808,10 +966,17 @@ impl Tickets {
     /// then one `ComponentRemoved` per component it took out — after every
     /// other event of the write. A component is in no shortcode, so both
     /// pass any `epic` filter.
+    ///
+    /// INPUT-3: an input a write moved is one `InputChanged` — the whole
+    /// input — after every other event of the write, the component events
+    /// included: an `answer`, `clear_answer`, `close_input` or
+    /// `reopen_input`; or a `create` or `amend` whose body declared,
+    /// re-declared or removed inputs (in the body's order, the removed
+    /// after). The `epic` filter applies to it by its ticket's shortcode.
     #[plexus_macros::method(
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved), until disconnect; Lagged { missed } where a slow subscriber lost changes",
-        params(epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; component changes always)")
+        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes",
+        params(epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)")
     )]
     pub async fn watch(
         &self,

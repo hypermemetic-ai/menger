@@ -86,11 +86,57 @@ pub fn fields(body: &str) -> Vec<Field> {
     // offset into the body.
     let at = body.len() - rest.len();
     let lines = LineStarts::of(body);
-    let scan = Scan::read(rest, at);
+    let scan = Scan::read(rest, at, Mark::Field);
     if scan.top.is_empty() {
         return legacy(body, rest, at, &lines);
     }
     scan.top.iter().map(|&id| scan.field(id, body, &lines)).collect()
+}
+
+/// INPUT-3: an element of a body named in a [`marked`] reading — what the
+/// inputs store reads a body's input markup from (`crate::inputs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Element {
+    /// Its tag, ASCII-lowercased.
+    pub(crate) tag: String,
+    /// Its open tag's attributes, as written — names lowercased, values
+    /// with their entities decoded; `None` for a bare name.
+    pub(crate) attrs: Vec<(String, Option<String>)>,
+    /// What it holds, as written — its content between its open and close
+    /// tags, as a [`Field`]'s is.
+    pub(crate) content: String,
+    /// The named elements inside it, outermost first, in order.
+    pub(crate) parts: Vec<Element>,
+}
+
+impl Element {
+    /// The attribute `name`'s value — `Some("")` for a bare name.
+    pub(crate) fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_deref().unwrap_or(""))
+    }
+}
+
+/// INPUT-3: every element whose tag is one of `tags` (lowercase), read as
+/// [`fields`] reads a body — the frontmatter split off, the rest through the
+/// app's markdown parser, raw HTML only (never a code span, a fence or
+/// indented code), comments and raw text skipped, each element's extent the
+/// one a browser builds — outermost first, each with the named elements
+/// inside it as its parts. The artifact form's scan with another mark: a
+/// tag named, not a `data-field`.
+pub(crate) fn marked(body: &str, tags: &'static [&'static str]) -> Vec<Element> {
+    let (_, rest) = split_frontmatter(body);
+    let at = body.len() - rest.len();
+    let scan = Scan::read(rest, at, Mark::Tags(tags));
+    scan.top.iter().map(|&id| scan.element(id, body)).collect()
+}
+
+/// What a scan marks: ART-5's fields — elements with a `data-field` — or
+/// INPUT-3's elements of the named tags.
+#[derive(Clone, Copy, Default)]
+enum Mark {
+    #[default]
+    Field,
+    Tags(&'static [&'static str]),
 }
 
 /// The legacy headings ought's field set names — its "was" column, one row
@@ -183,6 +229,8 @@ fn reads_as(h: &str, was: &str) -> bool {
 /// open — raw HTML's, and the ones the markdown blocks around it render as.
 #[derive(Default)]
 struct Scan {
+    /// What it marks ([`Mark`]).
+    mark: Mark,
     nodes: Vec<Node>,
     /// The outermost marked elements, in order.
     top: Vec<usize>,
@@ -200,6 +248,8 @@ struct Scan {
 struct Node {
     name: String,
     tag: String,
+    /// Its open tag's attributes — kept for a [`Mark::Tags`] scan.
+    attrs: Vec<(String, Option<String>)>,
     /// Its open tag's `<`.
     start: usize,
     /// Just past its open tag's `>`.
@@ -245,8 +295,11 @@ fn is_heading(name: &str) -> bool {
 impl Scan {
     /// Every marked element in `rest` (the body after its frontmatter,
     /// which starts `at` bytes into it).
-    fn read(rest: &str, at: usize) -> Scan {
-        let mut scan = Scan::default();
+    fn read(rest: &str, at: usize, mark: Mark) -> Scan {
+        let mut scan = Scan {
+            mark,
+            ..Scan::default()
+        };
         // An HTML block's lines, gathered so a tag or a comment across them
         // is one — with where each line starts in the gathered text and in
         // the body (a line in a list item or a block quote has its prefix
@@ -333,17 +386,29 @@ impl Scan {
                 i = lt + 1;
                 continue;
             };
-            let field = attributes(html[name_end..gt - 1].trim_end_matches('/'))
-                .into_iter()
-                .find(|(k, _)| k == "data-field")
-                .map(|(_, v)| v.unwrap_or_default());
-            self.start(name, field, body_at(lt), body_at(gt), self_closing);
+            let attrs = attributes(html[name_end..gt - 1].trim_end_matches('/'));
+            let (field, attrs) = match self.mark {
+                Mark::Field => {
+                    let field = attrs.into_iter().find(|(k, _)| k == "data-field").map(|(_, v)| v.unwrap_or_default());
+                    (field, Vec::new())
+                }
+                Mark::Tags(tags) => (tags.contains(&name.as_str()).then(|| name.clone()), attrs),
+            };
+            self.start(name, field, attrs, body_at(lt), body_at(gt), self_closing);
             i = gt;
         }
     }
 
     /// An open tag `<name …>` at `start`, its content from `content`.
-    fn start(&mut self, name: String, field: Option<String>, start: usize, content: usize, self_closing: bool) {
+    fn start(
+        &mut self,
+        name: String,
+        field: Option<String>,
+        attrs: Vec<(String, Option<String>)>,
+        start: usize,
+        content: usize,
+        self_closing: bool,
+    ) {
         if CLOSES_P.contains(&name.as_str()) {
             self.close_p(start);
         }
@@ -361,6 +426,7 @@ impl Scan {
             self.nodes.push(Node {
                 name: f,
                 tag: name.clone(),
+                attrs,
                 start,
                 content,
                 end: None,
@@ -463,6 +529,18 @@ impl Scan {
             if self.raw.as_deref() == Some(open.name.as_str()) {
                 self.raw = None;
             }
+        }
+    }
+
+    /// A [`Mark::Tags`] scan's element `id`, with its parts.
+    fn element(&self, id: usize, body: &str) -> Element {
+        let n = &self.nodes[id];
+        let end = n.end.unwrap_or(body.len()).max(n.content);
+        Element {
+            tag: n.tag.clone(),
+            attrs: n.attrs.clone(),
+            content: body.get(n.content..end).unwrap_or_default().to_string(),
+            parts: n.parts.iter().map(|&p| self.element(p, body)).collect(),
         }
     }
 

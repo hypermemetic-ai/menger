@@ -127,8 +127,20 @@
       const stream = this.rpc.call("tickets.amend", { body, id, title });
       yield* extractData(stream);
     }
+    async* answer(input, ticket, value, rationale, source) {
+      const stream = this.rpc.call("tickets.answer", { input, rationale, source, ticket, value });
+      yield* extractData(stream);
+    }
     async* blockers(id) {
       const stream = this.rpc.call("tickets.blockers", { id });
+      yield* extractData(stream);
+    }
+    async* clearAnswer(input, ticket) {
+      const stream = this.rpc.call("tickets.clear_answer", { input, ticket });
+      yield* extractData(stream);
+    }
+    async* closeInput(input, ticket) {
+      const stream = this.rpc.call("tickets.close_input", { input, ticket });
       yield* extractData(stream);
     }
     async* components() {
@@ -159,6 +171,10 @@
       const stream = this.rpc.call("tickets.health", {});
       yield* extractData(stream);
     }
+    async* inputs(epic, state, ticket) {
+      const stream = this.rpc.call("tickets.inputs", { epic, state, ticket });
+      yield* extractData(stream);
+    }
     async* linkCommits(commits, id) {
       const stream = this.rpc.call("tickets.link_commits", { commits, id });
       yield* extractData(stream);
@@ -169,6 +185,10 @@
     }
     async* readySet(after, epic, limit, summary) {
       const stream = this.rpc.call("tickets.ready_set", { after, epic, limit, summary });
+      yield* extractData(stream);
+    }
+    async* reopenInput(input, ticket) {
+      const stream = this.rpc.call("tickets.reopen_input", { input, ticket });
       yield* extractData(stream);
     }
     async schema() {

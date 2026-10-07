@@ -1630,3 +1630,112 @@ async fn component_docs_over_the_wire() {
     let next = collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "next"})).await).await;
     assert_eq!(next[0]["ticket"]["id"], "CMP-3", "no id spent");
 }
+
+/// INPUT-3 acceptance 2: the inputs store over the real protocol — a body
+/// declares an input (heard as `input_changed`, after the `created`), an
+/// `answer` with a typed value is recorded, `inputs` shows it with its
+/// history, and `watch` hears it — a `watch { epic }` of the ticket's
+/// shortcode too, and not one of another. Then the refusals are one in-band
+/// `error` each, a no-op `close_input` answers `input`, and `inputs`' filters
+/// hold.
+#[tokio::test]
+async fn inputs_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    collect(call(&client, "tickets.create", json!({"epic": "ASK", "title": "root", "kind": "scope"})).await).await;
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    let mut mine = call(&client, "tickets.watch", json!({"epic": "ask"})).await;
+    let mut elsewhere = call(&client, "tickets.watch", json!({"epic": "OTHER"})).await;
+    let inputs = |params: Value| {
+        let client = &client;
+        async move { collect(call(client, "tickets.inputs", params).await).await }
+    };
+
+    let body = "<m-decision data-field=\"decision\" id=\"landing\">\n\n\
+                <m-question data-field=\"question\">Archive or delete?</m-question>\n\n\
+                <m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n\
+                <m-option data-field=\"option\" name=\"Delete\"></m-option>\n\n\
+                </m-decision>\n";
+    let evs = collect(call(&client, "tickets.create", json!({"epic": "ASK", "title": "asks", "body": body})).await).await;
+    assert_eq!((evs[0]["type"].as_str(), evs[0]["ticket"]["id"].as_str()), (Some("created"), Some("ASK-2")));
+    let declared = json!({
+        "ticket": "ASK-2", "id": "landing", "kind": "choice", "question": "Archive or delete?",
+        "options": [
+            {"value": "archive", "label": "Archive", "recommended": true},
+            {"value": "Delete", "label": "Delete", "recommended": false}
+        ],
+        "recommendation": "Archive", "state": "open", "answer": null, "history": []
+    });
+    let heard = watch_until(&mut watch, "input_changed").await;
+    assert_eq!(heard[0]["type"], "created", "{heard:?}");
+    assert_eq!(heard.last(), Some(&json!({"type": "input_changed", "input": declared})), "after the write's other events");
+    assert_eq!(inputs(json!({})).await, vec![json!({"type": "input", "input": declared})]);
+
+    // Answer: a typed value, recorded with its source and rationale.
+    let value = json!({"type": "choice", "option": "archive"});
+    let evs = collect(
+        call(&client, "tickets.answer", json!({"ticket": "ask-2", "input": "landing", "value": value, "rationale": "holds are real", "source": "app"}))
+            .await,
+    )
+    .await;
+    assert_eq!(evs.len(), 1, "{evs:?}");
+    assert_eq!(evs[0]["type"], "input_changed");
+    let answered = evs[0]["input"].clone();
+    assert_eq!(answered["state"], "answered");
+    assert_eq!(answered["answer"]["value"], value);
+    assert_eq!((&answered["answer"]["rationale"], &answered["answer"]["source"]), (&json!("holds are real"), &json!("app")));
+    assert!(answered["answer"]["at_unix"].as_i64().unwrap() > 0);
+    assert_eq!(answered["history"].as_array().unwrap().len(), 1);
+    assert_eq!(answered["history"][0]["action"], "answered");
+
+    // `inputs` shows it; `watch` hears it — the ticket's shortcode too.
+    assert_eq!(inputs(json!({"ticket": "ASK-2"})).await, vec![json!({"type": "input", "input": answered})]);
+    let heard = watch_until(&mut watch, "input_changed").await;
+    assert_eq!(heard, vec![json!({"type": "input_changed", "input": answered})], "an answer is its one event");
+    assert_eq!(watch_until(&mut mine, "input_changed").await.last().unwrap()["input"]["state"], "open", "the declaration");
+    assert_eq!(watch_until(&mut mine, "input_changed").await, vec![json!({"type": "input_changed", "input": answered})]);
+
+    // Default source: api. Close, then a no-op close answers `input`.
+    let evs = collect(call(&client, "tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "Delete"}})).await).await;
+    assert_eq!(evs[0]["input"]["answer"]["source"], "api");
+    assert_eq!(collect(call(&client, "tickets.close_input", json!({"ticket": "ASK-2", "input": "landing"})).await).await[0]["type"], "input_changed");
+    let evs = collect(call(&client, "tickets.close_input", json!({"ticket": "ASK-2", "input": "landing"})).await).await;
+    assert_eq!((evs.len(), evs[0]["type"].as_str(), evs[0]["input"]["state"].as_str()), (1, Some("input"), Some("closed")));
+
+    // Refusals: one in-band error each, naming why; a ticket that is none is not_found.
+    for (method, params, says) in [
+        ("tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "archive"}}), "is closed"),
+        ("tickets.clear_answer", json!({"ticket": "ASK-2", "input": "landing"}), "is closed"),
+        ("tickets.reopen_input", json!({"ticket": "ASK-2", "input": "nope"}), "declares no input 'nope'"),
+        ("tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "choice", "option": "x"}, "source": "robot"}), "unknown answer source 'robot'"),
+        ("tickets.inputs", json!({"state": "pending"}), "unknown input state 'pending'"),
+    ] {
+        let evs = collect(call(&client, method, params).await).await;
+        assert_eq!(evs.len(), 1, "{method}: {evs:?}");
+        assert_eq!(evs[0]["type"], "error", "{method}: {evs:?}");
+        assert!(evs[0]["message"].as_str().unwrap().contains(says), "{method}: {}", evs[0]);
+    }
+    collect(call(&client, "tickets.reopen_input", json!({"ticket": "ASK-2", "input": "landing"})).await).await;
+    let evs = collect(call(&client, "tickets.answer", json!({"ticket": "ASK-2", "input": "landing", "value": {"type": "text", "text": "x"}})).await).await;
+    assert!(evs[0]["message"].as_str().unwrap().contains("the input is a choice and the value a text"), "{evs:?}");
+    let evs = collect(call(&client, "tickets.answer", json!({"ticket": "ASK-99", "input": "landing", "value": value})).await).await;
+    assert_eq!(evs, vec![json!({"type": "not_found", "id": "ASK-99"})]);
+    assert_eq!(collect(call(&client, "tickets.inputs", json!({"ticket": "ASK-99"})).await).await, vec![json!({"type": "not_found", "id": "ASK-99"})]);
+
+    // Filters.
+    assert_eq!(inputs(json!({"state": "open"})).await, Vec::<Value>::new());
+    assert_eq!(inputs(json!({"state": "answered", "epic": "ask"})).await.len(), 1);
+    assert_eq!(inputs(json!({"epic": "OTHER"})).await, Vec::<Value>::new());
+    let history: Vec<String> = inputs(json!({})).await[0]["input"]["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["action"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(history, ["answered", "answered", "closed", "reopened"]);
+
+    // The other shortcode's watch heard none of it: its first event is the
+    // next one in OTHER.
+    collect(call(&client, "tickets.create", json!({"epic": "OTHER", "title": "root", "kind": "scope"})).await).await;
+    assert_eq!(content(elsewhere.next().await.unwrap().unwrap())["type"], "created");
+}

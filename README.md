@@ -653,6 +653,92 @@ The order of work for a shortcode tree — the platform's, here — is one call
 synapse -P 4455 menger tickets waves --epics PLEXUS,MACRO,SYNAPSE,TRANSPORT,STARTER,HYPERFORGE,RETURNS,CONTEXT
 ```
 
+A reader can **answer a ticket in place** (INPUT-1): a body declares
+**inputs**, and the server keeps every answer, with its history, in an
+**inputs store** beside the tickets — a click never rewrites a body
+(INPUT-3).
+
+```html
+<m-decision data-field="decision" id="landing">          <!-- kind="choice" is the default -->
+  <m-question data-field="question">Expired events: archive or delete?</m-question>
+  <m-option data-field="option" name="Archive" value="archive" recommended></m-option>
+  <m-option data-field="option" name="Delete"></m-option>  <!-- its value: its name, "Delete" -->
+  <m-recommendation data-field="recommendation">Archive: holds are real.</m-recommendation>
+</m-decision>
+
+<m-input id="checks" kind="multi">
+  <m-question>Which checks ran?</m-question>
+  <m-choice value="unit">Unit tests</m-choice>
+  <m-choice value="wire">The wire test</m-choice>
+</m-input>
+
+<m-input id="notes" kind="text"><m-question>Anything else?</m-question></m-input>
+```
+
+- **An input** is an `<m-decision>` or an `<m-input>` with an `id` (not
+  blank), unique in its ticket; without one it is not an input — every
+  decision written before INPUT-3 is not. Its **kind**: an `<m-decision>` is
+  a `choice` (`kind` omitted or `"choice"`); an `<m-input>` says
+  `kind="multi"` (any of its options, a set) or `kind="text"` (a free reply).
+- **Options**, in the body's order: an `<m-decision>`'s `<m-option>`s — the
+  `value`, else the `name`, labelled by the name — and an `<m-input>`'s
+  `<m-choice>`s — the `value`, labelled by its text; `recommended` marks
+  one. A text input has none. Its **question** is its `<m-question>`'s text;
+  its **recommendation** the `<m-recommendation>`'s, else the label of the
+  option marked `recommended`. An input's parts are inside it, not inside a
+  nested `<m-decision>` / `<m-input>`.
+- **Read as the app renders the body** (`tickets-api/src/inputs.rs`, with
+  ART-5's scan): raw HTML only, so markup in a code span, a fence or
+  indented code — an example — is never an input; outside comments and the
+  frontmatter.
+- **Refused in-band**, naming the input, by the `create` or `amend` that
+  carries it — nothing written, title included: two inputs with one id; a
+  kind its element does not take (an `<m-decision kind="multi">`, an
+  `<m-input>` with no kind or `kind="choice"`); an option with no value; an
+  option value declared twice; a text input with options.
+- **Every body write re-reads them**: a new input is born `open`; one
+  declared again takes the new declaration and keeps its history; one the
+  body no longer declares is **`removed`**, history kept — declared again, it
+  is back in the state its history says. An answer stays what was recorded
+  when a later body changes the options it named; a new answer is checked
+  against the new ones.
+- **States**: `open` → `answered` (changeable) → `closed` (frozen: no
+  answer, no clear, until `reopen_input`) — and `removed`. The state is
+  the history's: the last `answered` / `cleared`, the last `closed` /
+  `reopened`.
+- **History**: every `answer`, `clear_answer`, `close_input` and
+  `reopen_input` is one entry — `{ action, value, rationale, source,
+  at_unix }`, oldest first; `source` is `app` (a viewer's click, which the
+  host says) or `api` (the default; `clear_answer`, `close_input` and
+  `reopen_input` are always `api`). Each `answer` is recorded, the same value
+  again included; a clear, close or reopen that changes nothing (no answer,
+  closed already, not closed) writes nothing and answers `input`.
+- **Stored** in two tables, `inputs` (a row per input: `ticket`, `id`,
+  `position`, `kind`, `question`, `options`, `recommendation`, `state`) and
+  `answers` (a row per history entry), which a database written before
+  INPUT-3 gains on first open, durably, once, with every body's inputs read
+  in (each `open`; a malformed one logged and skipped). Held whole in the
+  cache.
+
+An answer's **value** is typed by its input's kind — internally tagged:
+`{"type": "choice", "option": "archive"}`, `{"type": "multi", "options":
+["unit", "wire"]}` (kept in the body's order, each once; `[]` is "none
+ticked"), `{"type": "text", "text": "…"}` (not blank). Through synapse its
+fields are dotted flags; a `multi`'s list goes in `-p` (synapse 3.14.3 sends
+a list field inside a tagged param as one string):
+
+```sh
+synapse -P 4455 menger tickets inputs --state open             # what is still waiting
+synapse -P 4455 menger tickets inputs --ticket INPUT-9
+synapse -P 4455 menger tickets answer --ticket INPUT-9 --input landing \
+  --value.type choice --value.option archive --rationale "holds are real"
+synapse -P 4455 menger tickets answer --ticket INPUT-9 --input notes \
+  --value.type text --value.text "Yes, ship it, today"
+synapse -P 4455 -p '{"ticket": "INPUT-9", "input": "checks", "value": {"type": "multi", "options": ["unit", "wire"]}}' \
+  menger tickets answer
+synapse -P 4455 menger tickets close_input --ticket INPUT-9 --input landing
+```
+
 | method | yields |
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
@@ -668,9 +754,14 @@ synapse -P 4455 menger tickets waves --epics PLEXUS,MACRO,SYNAPSE,TRANSPORT,STAR
 | `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's row is written, and it leaves the old parent's children and joins the new one's (SCALE-4: neither parent's row is rewritten — SCALE-28 stores each one's new `child_count` on it, in the move's transaction; `watch` carries `children_changed` and `child_removed` with each parent's new `child_count`); the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, docs, root, root_row, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only; SDLC-11: the work only — `docs` counts the docs, and a row of docs alone is drawn), `root` is the lowest-seq `scope` (or `doc`), `root_row` the root's `{ title, status, kind }` (AGS-23: the nav draws the shortcode as the root's row; `null` with no root), `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
 | `tickets.components {}` | one `component { component: { name, source, owner, references, docs, preview } }` per component, in name order, then the stream's own `done` (COMP-3) — `source` the ` ```component name ` block's content, `owner` the defining ticket (`null`: an orphan), `references` the tickets whose bodies use `<name`, in the store's order, then the components whose sources do, by name; COMP-8: `docs` the source's `<docs>` parsed (`{ summary, attrs, slots, examples, help }`, `null` without one), `preview` the opening line's attributes (`[[name, value], …]`). From the cache; `watch` keeps it current with `component_changed` / `component_removed` |
+| `tickets.inputs { ticket?, epic?, state? }` | one `input { input: { ticket, id, kind, question, options, recommendation, state, answer, history } }` per input of `ticket` (every ticket's without one) whose ticket is in the shortcode `epic` and which is in `state` (`open` / `answered` / `closed` / `removed`), then the stream's own `done` (INPUT-3) — in the store's order of tickets, each ticket's inputs in its body's order and the removed after; `kind` `choice` / `multi` / `text`; `options` `[{ value, label, recommended }]`; `question` and `recommendation` `null` without one; `answer` `{ value, rationale, source, at_unix }` or `null`; `history` every change, oldest first. A ticket that is none is `not_found`; a state outside the four an in-band `error`. From the cache; `watch` keeps it current with `input_changed` |
+| `tickets.answer { ticket, input, value, rationale?, source? }` | `input_changed { input }` (INPUT-3) — records `value` (typed, above) against the input, checked against its kind and the options its body declares, with `rationale` (blank: none), `source` (`app` / `api`, default `api`) and the time; every call is one history entry. One in-band `error`, nothing written: the ticket declares no such input (naming those it does), the value does not answer it (naming why), it is closed, or it was removed; `not_found` for a ticket that is none. The body and the ticket's row are untouched |
+| `tickets.clear_answer { ticket, input }` | `input_changed { input }` — the answer cleared, `open` again, the clear in its history; `input { input }` when it held none (nothing written); in-band `error` when closed, removed or not declared (INPUT-3) |
+| `tickets.close_input { ticket, input }` | `input_changed { input }` — frozen, with or without an answer (a decision's DECIDED); `input { input }` when closed already; in-band `error` when removed or not declared (INPUT-3) |
+| `tickets.reopen_input { ticket, input }` | `input_changed { input }` — `answered` again when it holds an answer, else `open`; `input { input }` when it was not closed; in-band `error` when removed or not declared (INPUT-3) |
 | `tickets.extents {}` | one `extent { epic, last_seq }` per shortcode that holds a ticket, in shortcode order (the store's), then the stream's own `done` (SCALE-16) — where each shortcode ends: ids are allocated highest-plus-one and never deleted, so a shortcode holds `last_seq` tickets, row k of it is `EPIC-k`, and a position in the store's order becomes a `list { after }` cursor without a walk; every `last_seq` together sums to `health.ticket_count` (a hand-edited database with a hole still reports the highest sequence; `after` naming the missing id is `list`'s cursor error). Not a roll-up: the shortcode's own tickets only, and every shortcode has one whether or not the nav draws it a row. Read from the sequence `create` allocates from (SCALE-3), so the cost is the number of shortcodes; no `watch` event — `created` carries the shortcode's new `last_seq` as its `seq` |
 | `tickets.waves { epics, kinds? }` | the order of work (WAVE-4): one `placed { summary, placement, waiting_on }` per ticket of the shortcodes `epics` (case-insensitive; one with no tickets contributes nothing) whose kind is in `kinds` (default `build`, `spike`, `gap`; a doc is never placed), then exactly one `wave_counts { waves, missing, done }` — `waves[i]` counts the placed tickets in wave `i + 1`. `placement` is computed over the **whole** `blocked_by` graph by `ready_set`'s rule (MNG-4), blockers followed into any shortcode, asked for or not: `{"type": "done"}` when the ticket is `Complete` or `Superseded`; `{"type": "missing_blocker"}` when it, or anything it waits on, names a blocker that is no ticket (or, only by a hand edit, sits on or behind a `blocked_by` cycle); otherwise `{"type": "wave", "n": n}` — 1 with every blocker satisfied, else 1 + the highest wave among its unsatisfied blockers. `parent` orders nothing, and a `Blocked` status is a marker, not an edge. `waiting_on` is the ticket's unsatisfied direct blockers (missing ids included), in `blocked_by` order, distinct; `[]` when done. Order: waves ascending, inside a wave `Coding`, `In Review`, `Ready`, `Pending`, `Blocked`, `Idea`, `Epic`, then (epic, seq); then the missing lane; then the done — each in (epic, seq). `epics` empty, or a kind outside the six, is one in-band `error` and nothing else. WAVE-6: read from the placements the store keeps (below) — the cost is the placed tickets — and `waiting_on` worked out per row |
-| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `commits_linked` / `commits_unlinked` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` / `placements_changed` / `component_changed` / `component_removed` — COMP-3: a `create` or `amend` that moved the component registry ends — after every other event of the write, `placements_changed` included — with one **`component_changed { component }`** per component it registered or moved (source, owner, references: the whole component, so applying it is one upsert), in name order, then one **`component_removed { name }`** per component it took out; a component is in no shortcode, so both pass any `epic` filter — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`) — WAVE-6: and a write that moved any kept placement ends with one **`placements_changed { changes: [{ id, placement }] }`**, after its other events (`epic` keeps the changes in its shortcode, and the event only when one is left) — AGS-23: so is a shortcode root's status change (any, not only across `Complete`) or new title, which moves its group's `root_row`; `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
+| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `amended` / `commits_linked` / `commits_unlinked` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` / `placements_changed` / `component_changed` / `component_removed` / `input_changed` — INPUT-3: an input a write moved is one **`input_changed { input }`** — the whole input, its state, answer and history, so applying it is one upsert — after every other event of the write, the component events included: an `answer`, `clear_answer`, `close_input` or `reopen_input` (its one event), or a `create` / `amend` whose body declared, re-declared or removed inputs (in the body's order, the removed after); `epic` filters it by its ticket's shortcode — COMP-3: a `create` or `amend` that moved the component registry ends — after every other event of the write, `placements_changed` included — with one **`component_changed { component }`** per component it registered or moved (source, owner, references: the whole component, so applying it is one upsert), in name order, then one **`component_removed { name }`** per component it took out; a component is in no shortcode, so both pass any `epic` filter — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`) — WAVE-6: and a write that moved any kept placement ends with one **`placements_changed { changes: [{ id, placement }] }`**, after its other events (`epic` keeps the changes in its shortcode, and the event only when one is left) — AGS-23: so is a shortcode root's status change (any, not only across `Complete`) or new title, which moves its group's `root_row`; `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
 
 Paging (MNG-9). `(epic, seq)` is a total order the schema keeps unique, so
 a ticket id is a cursor: a client that renders opens `watch` first, then
@@ -803,6 +894,7 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        the server (default features: `server`) and the app
                        (default-features = false, wasm32)
   types.rs             Ticket · Status · Kind · Severity · TicketSummary · Group · Placement · TicketsEvent
+                       · Input · InputKind · InputState · InputValue · Answer · InputHistoryEntry (INPUT-3)
   store/               the service-wide cache (SQLite system of record behind it)
     mod.rs             the Store: the cache of rows, reads (a body from the
                        database on read-only connections — SCALE-14), the
@@ -833,6 +925,11 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        --verify-derived (SCALE-28)
     commits.rs         what a commit reference is, as stored and compared, and
                        how many a ticket holds (SDLC-9)
+    inputs.rs          the inputs store: each ticket's inputs as its body
+                       declares them (removed ones kept), the plan a create or
+                       amend makes of them, answer / clear / close / reopen as
+                       history, its two tables, and the read of every body on
+                       first open (INPUT-3)
     components.rs      the component registry: what a body defines and
                        references, the plan a create or amend makes of it
                        (orphans, adoption, the sweep), its table, and the
@@ -872,6 +969,9 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        two-blockers-back case (WAVE-6)
     tests_paths.rs     path addresses: create, refusals, get by address, the
                        column added to an old file (WAVE-10)
+    tests_inputs.rs    the inputs store: each row of its table, refusals,
+                       history, removed, the query, events, durability, the
+                       tables added to an old file (INPUT-3)
     tests_components.rs  the component registry: each row of its table, code
                        examples and code spans, events, durability, the
                        table built from the bodies of an old file (COMP-3)
@@ -879,6 +979,10 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        (summary, typed attributes, slots, examples, help)
                        and the preview line (COMP-8) — wasm-safe, shared
                        with the app's docs card (COMP-9)
+  inputs.rs            a body's inputs (INPUT-3): <m-decision id> / <m-input
+                       id kind>, their options, question and recommendation,
+                       read with fields.rs's scan; an answer's value checked —
+                       wasm-safe
   fields.rs            a body's fields (ART-5): its elements marked
                        data-field, parts nested, or a legacy body's ## headings
                        read through ought's field set — wasm-safe; the piece
