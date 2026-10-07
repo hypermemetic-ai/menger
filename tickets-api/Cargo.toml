@@ -40,7 +40,6 @@ server = [
     "dep:chrono",
     "dep:anyhow",
     "dep:tracing",
-    "dep:pulldown-cmark",
 ]
 # WAVE-3, measurement only: a build of the store without WAVE-6's
 # re-placement pass and its startup placement — the "without" half of the
@@ -64,6 +63,14 @@ futures = "0.3"
 # `ws-native`.
 plexus-macros = { path = "../../plexus-macros" }
 plexus-client = { path = "../../plexus-macros/plexus-client", default-features = false }
+# COMP-3: the component registry reads a body as the app renders it — the
+# app's own markdown parser (frontend/src/md.rs, MFE-7), so a fence, a code
+# span and raw HTML are what the renderer will say they are. Already in the
+# lock (`diagrams` takes it the same way); no renderer, no default features.
+# ART-5: not server-only — `fields` (a body's fields, read the same way) is
+# wasm-safe, like `component_docs`, and pulldown-cmark builds for wasm32 (the
+# app renders with it).
+pulldown-cmark = { version = "0.13", default-features = false }
 
 # Server-only. None of these builds for wasm32-unknown-unknown.
 plexus-core = { path = "../../plexus-core", optional = true }
@@ -77,11 +84,6 @@ rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 chrono = { version = "0.4", optional = true }
 anyhow = { version = "1", optional = true }
 tracing = { version = "0.1", optional = true }
-# COMP-3: the component registry reads a body as the app renders it — the
-# app's own markdown parser (frontend/src/md.rs, MFE-7), so a fence, a code
-# span and raw HTML are what the renderer will say they are. Already in the
-# lock (`diagrams` takes it the same way); no renderer, no default features.
-pulldown-cmark = { version = "0.13", default-features = false, optional = true }
 
 [dev-dependencies]
 # The wire-casing tests assert what serde writes; the store's tests open

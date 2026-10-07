@@ -72,7 +72,9 @@ impl Mermaid {
 
     /// Every mermaid block in a markdown body — by the app's own rule
     /// (`frontend/src/md.rs`: a fenced block whose info string's first word
-    /// is `mermaid`, frontmatter excluded) — parsed in order. Yields one
+    /// is `mermaid`, frontmatter excluded; and, ART-5, in a body holding
+    /// HTML, a `<pre class="mermaid">` in an HTML block, alone or inside a
+    /// field element or a component — see `blocks.rs`) — parsed in order. Yields one
     /// `diagram { index, line, result }` per block, `index` from 1 and
     /// `line` the block's first source line within the markdown, `result`
     /// as `parse` would answer; then the stream ends. No blocks, no items.
@@ -81,8 +83,8 @@ impl Mermaid {
     /// piece is one `error` in place of the rest, since none of it can be
     /// (a body with no blocks needs no Node, and still yields nothing).
     #[plexus_macros::method(
-        description = "Parse every mermaid block in a markdown body: one diagram { index, line, result } per block, in order",
-        params(markdown = "A markdown body — a ticket's, say")
+        description = "Parse every mermaid diagram in a ticket body — a ```mermaid fence, or a <pre class=\"mermaid\"> in its HTML: one diagram { index, line, result } per diagram, in order",
+        params(markdown = "A ticket body — markdown, HTML, or markdown with HTML")
     )]
     pub async fn check(
         &self,

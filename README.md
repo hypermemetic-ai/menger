@@ -734,17 +734,31 @@ synapse -P 4458 diagrams mermaid check --markdown "$(cat ticket-body.md)"
 | method | yields |
 |---|---|
 | `mermaid.parse { source }` | exactly one of `parsed { diagram_type }` (`flowchart-v2`, `sequence`, `pie`, …); `parse_error { message, line }` — `message` is mermaid's, verbatim, `line` the 1-based line within `source` (null when mermaid names none); `error { message }` — the service could not ask (a missing piece, the program died, the 5 s limit) |
-| `mermaid.check { markdown }` | one `diagram { index, line, result }` per mermaid block, in order, then the end — `index` from 1, `line` the block's first source line in the markdown, `result` what `parse` would answer — so an error at `result.line` L is markdown line `line + L - 1`. No blocks, no items. A missing piece is one `error` in place of everything |
+| `mermaid.check { markdown }` | one `diagram { index, line, result }` per mermaid block (a fence, or ART-5's `<pre class="mermaid">` in a body's HTML), in order, then the end — `index` from 1, `line` the block's first source line in the markdown, `result` what `parse` would answer — so an error at `result.line` L is markdown line `line + L - 1`. No blocks, no items. A missing piece is one `error` in place of everything |
 
 A mermaid block is the app's: a fenced block whose info string's first word
 is exactly `mermaid`, frontmatter excluded — `diagrams/src/blocks.rs` copies
 `frontend/src/md.rs`'s rule and its tests hold the copy to the original
 (same functions word for word, same pulldown-cmark version and options,
-every case md.rs's tests name). `line` within `source` can differ from the
-number in mermaid's message: mermaid numbers the text it parsed, after
-dropping frontmatter, directives, `%%` comments and leading blank lines;
-the Node program maps it back with mermaid 11.17.2's own regular
-expressions.
+every case md.rs's tests name). ART-5: a body holding HTML is drawn in a
+frame (COMP-4), and there a diagram may also be written as HTML — ought's
+form, `<pre class="mermaid">…</pre>` in an HTML block, alone or inside a
+field element or a component (`<m-dag>`). The frame's renderer
+(`render_body_framed`) puts a fence's placeholder in its place, so the
+frame draws it, and `check` finds it by the same rule (`html_diagrams`,
+copied verbatim): its source is the element's content, the newline after
+the open tag dropped, character references decoded (`--&gt;` is `-->`), a
+`<br/>` in a label kept; its `line` is the line that source starts on. A
+fence inside a field element or a component is a fence when blank lines
+stand around it. Not a diagram, drawn by neither: a `<pre class="mermaid">`
+in code, a comment or a script, inline in a paragraph, or one its HTML
+block does not close (a blank line inside one nested in a `<section>` ends
+that block — write the `<pre>` without blank lines, or as a fence).
+
+`line` within `source` can differ from the number in mermaid's message:
+mermaid numbers the text it parsed, after dropping frontmatter, directives,
+`%%` comments and leading blank lines; the Node program maps it back with
+mermaid 11.17.2's own regular expressions.
 
 **What it needs.** Node.js ^22.22.2, ^24.15.0 or >=26 (jsdom 30's range)
 on `PATH`, jsdom (`npm ci --prefix diagrams/node`; `node_modules` is not
@@ -865,6 +879,10 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        (summary, typed attributes, slots, examples, help)
                        and the preview line (COMP-8) — wasm-safe, shared
                        with the app's docs card (COMP-9)
+  fields.rs            a body's fields (ART-5): its elements marked
+                       data-field, parts nested, or a legacy body's ## headings
+                       read through ought's field set — wasm-safe; the piece
+                       COMPILE checks (fields_tests.rs: its tests)
   nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
   activation.rs        #[plexus_macros::activation(client, server_cfg)]
   tests/sdk_manifest.rs  COMP-10's drift guard: the activation's methods and
@@ -890,8 +908,9 @@ spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)
 diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub
                        (WS :4458); the `mermaid` activation and the client it
                        emits, the Node child it owns (src/node.rs), the app's
-                       mermaid-block rule (src/blocks.rs); node/ is the Node
-                       program and its lockfile
+                       mermaid-block rule (src/blocks.rs: fences, and ART-5's
+                       <pre class="mermaid"> in a body's HTML); node/ is the
+                       Node program and its lockfile
 plans/MNG/             the backend epic; plans/MFE/ the frontend epic
 ```
 

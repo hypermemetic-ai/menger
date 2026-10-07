@@ -24,6 +24,14 @@
 //! finds the placeholders after mount and replaces each with SVG; until
 //! then, and whenever rendering fails, the reader sees the source.
 //!
+//! ART-5: in a framed body, a diagram may also be written as HTML — ought's
+//! form, mermaid source in a `<pre class="mermaid">` (its design rule,
+//! "Diagrams") — in an HTML block, alone or inside a field element or a
+//! component. [`render_body_framed`] puts the same placeholder in its place
+//! ([`html_diagrams`]), so the frame draws it as it draws a fence's, and
+//! counts it. (`diagrams/src/blocks.rs` copies that rule, so `check` finds
+//! exactly these.)
+//!
 //! WAVE-11: a **wave reference** — `{wave: RETURNS-6}` in prose — renders as
 //! that ticket's current ordinal ([`render_body_with`]): `wave 2` (a link),
 //! `done`, or `missing blocker`, as the caller's resolver places it; one it
@@ -248,7 +256,8 @@ pub fn render_body_with(src: &str, resolve: &dyn Fn(&str) -> Option<WaveRef>) ->
 
 /// COMP-4: a framed body's markup — [`render_body_with`]'s, raw HTML passed
 /// through (block and inline) instead of downgraded to text. Mermaid fences
-/// still become placeholders (the frame's SDK draws them), `{wave: ID}`s in
+/// still become placeholders (the frame's SDK draws them) — and so, ART-5,
+/// does a `<pre class="mermaid">` in an HTML block ([`html_diagrams`]); `{wave: ID}`s in
 /// prose are placed by `resolve` here, on the host, and markdown links and
 /// images keep their scheme allow-list. Only for the sandboxed frame: this
 /// HTML is never safe for `inner_html`.
@@ -277,6 +286,179 @@ fn definition_card(info: &str, source: &str) -> String {
         Err(problem) => Err(problem.as_str()),
     };
     card::card_html(&card::Card { name, preview: &preview, docs, source, in_body: true }, &render_help)
+}
+
+/// ART-5: the diagrams an HTML block writes as HTML — ought's form, mermaid
+/// source in a `<pre class="mermaid">`: each `<pre>` whose class list holds
+/// `mermaid`, to the first `</pre>` after it in the same block (one the
+/// block does not close is no diagram). For each, where the element starts
+/// and ends in `html`, where its source starts, and the source: the
+/// element's content, the newline right after its open tag dropped (as
+/// HTML's parser drops it), character references decoded (`&lt;` `&gt;`
+/// `&amp;` `&quot;` `&apos;` `&nbsp;`, numeric ones) and the rest as
+/// written — a `<br/>` in a label stays a `<br/>`, as mermaid's own `run`
+/// reads a `.mermaid` element. Never in a comment, nor in the text of a
+/// `script`, `style`, `textarea` or `title`.
+fn html_diagrams(html: &str) -> Vec<(usize, usize, usize, String)> {
+    /// Whether the tag name at `at` in `low` is `name`, whole.
+    fn named(low: &str, at: usize, name: &str) -> bool {
+        low[at..].starts_with(name)
+            && low[at + name.len()..].chars().next().is_none_or(|c| c.is_ascii_whitespace() || c == '/' || c == '>')
+    }
+    /// The first `</name` at or after `from`: where it starts, and just past
+    /// its `>`.
+    fn close(low: &str, name: &str, from: usize) -> Option<(usize, usize)> {
+        let mut i = from;
+        while let Some(off) = low[i..].find("</") {
+            let lt = i + off;
+            if named(low, lt + 2, name) {
+                return Some((lt, low[lt..].find('>').map_or(low.len(), |j| lt + j + 1)));
+            }
+            i = lt + 2;
+        }
+        None
+    }
+    /// The first `class` among a tag's attributes (what follows its name).
+    fn class(attrs: &str) -> Option<&str> {
+        let mut rest = attrs;
+        loop {
+            rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '/');
+            if rest.is_empty() {
+                return None;
+            }
+            let end = rest.find(|c: char| c.is_ascii_whitespace() || c == '=' || c == '/').unwrap_or(rest.len()).max(1);
+            let name = &rest[..end];
+            rest = rest[end..].trim_start();
+            let mut value = "";
+            if let Some(v) = rest.strip_prefix('=') {
+                let v = v.trim_start();
+                (value, rest) = match v.chars().next() {
+                    Some(q @ ('"' | '\'')) => match v[1..].find(q) {
+                        Some(j) => (&v[1..1 + j], &v[2 + j..]),
+                        None => (&v[1..], ""),
+                    },
+                    _ => v.split_at(v.find(|c: char| c.is_ascii_whitespace()).unwrap_or(v.len())),
+                };
+            }
+            if name.eq_ignore_ascii_case("class") {
+                return Some(value);
+            }
+        }
+    }
+    /// Character references decoded: the named few, and numeric ones.
+    fn decode(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut rest = s;
+        while let Some(amp) = rest.find('&') {
+            out.push_str(&rest[..amp]);
+            rest = &rest[amp..];
+            let decoded = rest.find(';').filter(|&j| j <= 10).and_then(|j| {
+                let c = match &rest[1..j] {
+                    "lt" => Some('<'),
+                    "gt" => Some('>'),
+                    "amp" => Some('&'),
+                    "quot" => Some('"'),
+                    "apos" => Some('\''),
+                    "nbsp" => Some('\u{a0}'),
+                    n => n
+                        .strip_prefix('#')
+                        .and_then(|n| match n.strip_prefix(['x', 'X']) {
+                            Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                            None => n.parse::<u32>().ok(),
+                        })
+                        .and_then(char::from_u32),
+                };
+                c.map(|c| (c, j + 1))
+            });
+            match decoded {
+                Some((c, len)) => {
+                    out.push(c);
+                    rest = &rest[len..];
+                }
+                None => {
+                    out.push('&');
+                    rest = &rest[1..];
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+    // ASCII lowercasing keeps every offset.
+    let low = html.to_ascii_lowercase();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(off) = low[i..].find('<') {
+        let lt = i + off;
+        if low[lt..].starts_with("<!--") {
+            i = low[lt + 4..].find("-->").map_or(low.len(), |j| lt + 4 + j + 3);
+            continue;
+        }
+        if !low[lt + 1..].starts_with(|c: char| c.is_ascii_alphabetic()) {
+            i = lt + 1;
+            continue;
+        }
+        let name_end = low[lt + 1..]
+            .find(|c: char| c.is_ascii_whitespace() || c == '/' || c == '>')
+            .map_or(low.len(), |j| lt + 1 + j);
+        // The open tag's `>`, outside quoted values.
+        let mut quote = None;
+        let Some(gt) = low[name_end..]
+            .char_indices()
+            .find(|&(_, c)| match quote {
+                Some(q) => {
+                    if c == q {
+                        quote = None;
+                    }
+                    false
+                }
+                None if c == '"' || c == '\'' => {
+                    quote = Some(c);
+                    false
+                }
+                None => c == '>',
+            })
+            .map(|(j, _)| name_end + j + 1)
+        else {
+            break;
+        };
+        i = match &low[lt + 1..name_end] {
+            name @ ("script" | "style" | "textarea" | "title") => close(&low, name, gt).map_or(low.len(), |(_, after)| after),
+            "pre" if class(&html[name_end..gt - 1]).is_some_and(|c| c.split_ascii_whitespace().any(|w| w == "mermaid")) => {
+                match close(&low, "pre", gt) {
+                    Some((end, after)) => {
+                        let nl = if low[gt..].starts_with("\r\n") { 2 } else { usize::from(low[gt..].starts_with('\n')) };
+                        let from = gt + nl;
+                        out.push((lt, after, from, decode(&html[from..end.max(from)])));
+                        after
+                    }
+                    None => gt,
+                }
+            }
+            _ => gt,
+        };
+    }
+    out
+}
+
+/// ART-5: an HTML block with each diagram it writes as HTML
+/// ([`html_diagrams`]) in place as the placeholder a mermaid fence becomes,
+/// each counted — so the frame draws them as it draws a fence's.
+fn with_diagrams(block: &str, diagrams: &mut usize) -> String {
+    let found = html_diagrams(block);
+    if found.is_empty() {
+        return block.to_string();
+    }
+    let mut out = String::with_capacity(block.len() + 96 * found.len());
+    let mut at = 0;
+    for (start, end, _, source) in found {
+        out.push_str(&block[at..start]);
+        out.push_str(&mermaid_placeholder(&source));
+        *diagrams += 1;
+        at = end;
+    }
+    out.push_str(&block[at..]);
+    out
 }
 
 /// COMP-4: does this body (its frontmatter already split off) render in a
@@ -364,6 +546,10 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
     // string and the source collected so far; the End emits the card.
     let mut definition: Option<(String, String)> = None;
     let cards = framed && cards;
+    // ART-5 (framed only): an HTML block's lines, gathered — a diagram
+    // written as HTML spans them — and emitted whole at its end, each
+    // diagram in it a placeholder (`with_diagrams`).
+    let mut html_block: Option<String> = None;
     let events = Parser::new_ext(src, opts).filter_map(|ev| {
         if definition.is_some() {
             return match ev {
@@ -393,6 +579,23 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
                 // would be a parser surprise — drop it rather than paint it.
                 _ => None,
             };
+        }
+        if framed {
+            match &ev {
+                Event::Start(Tag::HtmlBlock) => {
+                    html_block = Some(String::new());
+                    return None;
+                }
+                Event::Html(s) if html_block.is_some() => {
+                    html_block.as_mut().expect("checked").push_str(s);
+                    return None;
+                }
+                Event::End(TagEnd::HtmlBlock) => {
+                    let block = html_block.take().unwrap_or_default();
+                    return Some(Event::Html(with_diagrams(&block, &mut diagrams).into()));
+                }
+                _ => {}
+            }
         }
         match ev {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref info)))
@@ -938,6 +1141,72 @@ mod tests {
         assert!(bad.contains("malformed &lt;docs&gt;: two &lt;summary&gt; elements"), "{bad}");
         let unnamed = render_body_framed("```component Chart\nx\n```\n", &|_| None).html;
         assert!(unnamed.contains("is not a component name") && !unnamed.contains("<Chart"), "{unnamed}");
+    }
+
+    // -- diagrams written as HTML (ART-5) ---------------------------------
+
+    /// ought's form — mermaid source in a `<pre class="mermaid">` — is drawn
+    /// in a frame as a fence is: it becomes the same placeholder, holding its
+    /// source with its references decoded and a `<br/>` in a label kept.
+    #[test]
+    fn a_framed_pre_mermaid_becomes_the_fences_placeholder() {
+        let src = "<pre class=\"mermaid\">\ngraph LR\n  A[\"a<br/>b\"] --&gt; B &amp; C\n</pre>\n";
+        assert!(is_framed(src));
+        let r = render_body_framed(src, &|_| None);
+        assert_eq!(r.diagrams, 1);
+        assert_eq!(
+            r.html,
+            format!("{}\n", mermaid_placeholder("graph LR\n  A[\"a<br/>b\"] --> B & C\n"))
+        );
+        // Inside a field element, among its other markup: only the `<pre>`
+        // is replaced.
+        let src = "<figure data-field=\"dag\">\n  <pre class=\"mermaid\">\ngraph TD\n  A --> B\n  </pre>\n  <figcaption>The DAG.</figcaption>\n</figure>\n";
+        let r = render_body_framed(src, &|_| None);
+        assert_eq!(r.diagrams, 1);
+        assert!(r.html.starts_with("<figure data-field=\"dag\">\n  <div class=\"mermaid\" data-state=\"pending\"><pre class=\"mermaid-src\"><code>graph TD\n  A --&gt; B\n  </code></pre></div>\n\n  <figcaption>The DAG.</figcaption>\n</figure>\n"), "{}", r.html);
+        // Unframed (the page never paints such a body unframed), it is text.
+        let r = render_body(src);
+        assert_eq!(r.diagrams, 0);
+        assert!(r.html.contains("&lt;pre class=\"mermaid\"&gt;") && !r.html.contains("<pre"), "{}", r.html);
+    }
+
+    /// Where a diagram written as HTML is one — and where it is not. Each
+    /// case is also `diagrams/src/blocks.rs`'s: its tests read these and
+    /// hold `check` to the same counts.
+    #[test]
+    fn diagrams_written_as_html_are_counted_where_the_frame_draws_them() {
+        // Alone, on one line, beside other classes.
+        assert_eq!(render_body_framed("<pre class=\"mermaid\">\ngraph LR\n  A --> B\n</pre>\n", &|_| None).diagrams, 1);
+        assert_eq!(render_body_framed("<PRE Class='diagram mermaid' id=d1>graph TD; A-->B</PRE>\n", &|_| None).diagrams, 1);
+        // Inside a field element, or a component, with a fence beside it.
+        assert_eq!(render_body_framed("<figure data-field=\"dag\">\n  <pre class=\"mermaid\">\ngraph TD\n  A --> B\n  </pre>\n  <figcaption>The DAG.</figcaption>\n</figure>\n", &|_| None).diagrams, 1);
+        assert_eq!(render_body_framed("<m-dag data-field=\"dag\">\n<pre class=\"mermaid\">graph TD; A-->B</pre>\n</m-dag>\n\n<section data-field=\"shape\">\n\n```mermaid\ngraph LR\n  A --> B\n```\n\n</section>\n", &|_| None).diagrams, 2);
+        // A fence inside a component, blank lines around it: markdown, a
+        // fence's placeholder.
+        assert_eq!(render_body_framed("<m-dag data-field=\"dag\">\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n</m-dag>\n", &|_| None).diagrams, 1);
+        // In a block quote and a list item.
+        assert_eq!(render_body_framed("> <pre class=\"mermaid\">\n> pie\n> </pre>\n\n- item\n\n  <pre class=\"mermaid\">\n  pie\n  </pre>\n", &|_| None).diagrams, 2);
+        // Not a diagram: a plain `<pre>`, another class, a comment, a
+        // script's text, code, inline HTML in a paragraph, and a `<pre>` its
+        // HTML block does not close (a blank line ends the section's block).
+        assert_eq!(render_body_framed("<pre>graph LR</pre>\n", &|_| None).diagrams, 0);
+        assert_eq!(render_body_framed("<pre class=\"mermaid-src\">graph LR</pre>\n<pre data-class=\"mermaid\">graph LR</pre>\n", &|_| None).diagrams, 0);
+        assert_eq!(render_body_framed("<!-- <pre class=\"mermaid\">graph LR</pre> -->\n", &|_| None).diagrams, 0);
+        assert_eq!(render_body_framed("<script>x = '<pre class=\"mermaid\">graph LR</pre>'</script>\n", &|_| None).diagrams, 0);
+        assert_eq!(render_body_framed("```html\n<pre class=\"mermaid\">graph LR</pre>\n```\n\nWrite `<pre class=\"mermaid\">` and <b>bold</b>.\n", &|_| None).diagrams, 0);
+        assert_eq!(render_body_framed("text <pre class=\"mermaid\">graph LR</pre> inline\n", &|_| None).diagrams, 0);
+        assert_eq!(render_body_framed("<section data-field=\"dag\">\n<pre class=\"mermaid\">\ngraph TD\n\n  A --> B\n</pre>\n</section>\n", &|_| None).diagrams, 0);
+    }
+
+    /// A framed body with no diagram written as HTML renders byte for byte
+    /// as before: gathering an HTML block's lines changes nothing else.
+    #[test]
+    fn gathering_html_blocks_changes_nothing_else() {
+        let src = "<table>\n<tr><td>1</td></tr>\n</table>\n\n> <div>\n> quoted\n> </div>\n\n<pre>\nplain\n\nkept\n</pre>\n";
+        assert_eq!(
+            render_body_framed(src, &|_| None).html,
+            "<table>\n<tr><td>1</td></tr>\n</table>\n<blockquote>\n<div>\nquoted\n</div>\n</blockquote>\n<pre>\nplain\n\nkept\n</pre>\n"
+        );
     }
 
     #[test]
