@@ -144,11 +144,15 @@ impl Rng {
 
 const EPICS: [&str; 3] = ["KA", "KB", "KC"];
 
+/// SDLC-13: how many acknowledged `set_kind`s changed a kind, across the
+/// bursts.
+static KINDS_CHANGED: AtomicUsize = AtomicUsize::new(0);
+
 /// One client's share of a burst: writes of every kind, back to back, until
 /// the server goes away — creates (under a parent in the shortcode, a new
 /// sub-shortcode's root hosted in another, blocked by a ticket or by an id
 /// not born yet), status changes into and out of `Complete`, moves, amends,
-/// links and unlinks. Each acknowledged write counts in `acked`. The client
+/// links and unlinks, and (SDLC-13) kind changes. Each acknowledged write counts in `acked`. The client
 /// names tickets it knows exist — each shortcode's highest it has seen,
 /// starting from `known`.
 async fn burst(port: u16, seed: u64, known: Vec<usize>, acked: Arc<AtomicUsize>) {
@@ -163,7 +167,7 @@ async fn burst(port: u16, seed: u64, known: Vec<usize>, acked: Arc<AtomicUsize>)
             format!("{}-{}", EPICS[k], 1 + rng.below(known[k]))
         };
         let target = format!("{epic}-{}", 1 + rng.below(known[e]));
-        let (method, params) = match rng.below(12) {
+        let (method, params) = match rng.below(14) {
             0..=3 => {
                 let parent = match rng.below(3) {
                     0 => Value::Null,
@@ -195,12 +199,24 @@ async fn burst(port: u16, seed: u64, known: Vec<usize>, acked: Arc<AtomicUsize>)
                 "tickets.link_commits",
                 json!({"id": target, "commits": [format!("{:07x}", 0xabc0000 + rng.below(4))]}),
             ),
-            _ => (
+            11 => (
                 "tickets.unlink_commits",
                 json!({"id": target, "commits": [format!("{:07x}", 0xabc0000 + rng.below(4))]}),
             ),
+            // SDLC-13: a kind changed — any of the six, with no status or one
+            // (`Doc` among them); a root made work, a doc that blocks, a
+            // status a kind does not take are refused in-band, and a lower
+            // ticket made a scope or a doc would re-root its shortcode.
+            _ => {
+                let kind = ["scope", "execution", "build", "gap", "spike", "doc"][rng.below(6)];
+                let status = [Value::Null, json!("Ready"), json!("Complete"), json!("Doc")][rng.below(4)].clone();
+                ("tickets.set_kind", json!({"id": target, "kind": kind, "status": status}))
+            }
         };
         let Some(ev) = one(&client, method, params).await else { return };
+        if ev["type"] == "kind_changed" && ev["previous"] != ev["ticket"]["kind"] {
+            KINDS_CHANGED.fetch_add(1, Ordering::SeqCst);
+        }
         if ev["type"] == "created" {
             if let Some(k) = EPICS.iter().position(|x| ev["ticket"]["epic"] == *x) {
                 known[k] = known[k].max(ev["ticket"]["seq"].as_u64().unwrap() as usize);
@@ -270,6 +286,7 @@ async fn a_server_killed_mid_burst_leaves_a_file_whose_derived_state_verifies() 
         assert!(out.starts_with("consistent: "), "round {round}: {out}");
     }
     assert!(total > 24 * 3, "{total} writes acknowledged across the rounds");
+    assert!(KINDS_CHANGED.load(Ordering::SeqCst) > 0, "a set_kind changed a kind among the writes");
 }
 
 /// Acceptance 3, through the binary: a consistent file verifies (exit 0,

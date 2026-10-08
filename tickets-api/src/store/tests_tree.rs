@@ -150,7 +150,7 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, epics: &[&str
         let what = random_write(&store, &mut rng, epics, &mut tally).await;
         assert_tree_is_a_scan(&store, Some(path), &format!("step {step}: {what}"));
     }
-    assert!(tally.moves > 0 && tally.created > 0 && tally.crossings > 0, "{tally:?}");
+    assert!(tally.moves > 0 && tally.created > 0 && tally.crossings > 0 && tally.kinds > 0, "{tally:?}");
     let before = kept(&store);
     drop(store);
     let store = Store::open(path).unwrap();

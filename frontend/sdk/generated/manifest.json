@@ -92,6 +92,11 @@
       "ticket"
     ],
     "schema": [],
+    "set_kind": [
+      "id",
+      "kind",
+      "status"
+    ],
     "set_parent": [
       "id",
       "parent"

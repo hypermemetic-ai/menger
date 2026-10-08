@@ -264,6 +264,24 @@ nested parameter as one string (SYNAPSE-9).
   produced them, or under a doc collection's root (a doc may root a
   shortcode, as a scope may) — not as work that will never close.
   Don't invent a second vocabulary for either.
+- A kind changes only through **`tickets.set_kind`** (SDLC-13; owner,
+  2026-10-08: "identity is a scope") — never by editing a row — and
+  everything kept by kind moves in that one write (roll-ups, status
+  counts, the ready set, placements, the filter cells, the kept tree;
+  `--verify-derived` checks it). Its rules: to a `doc`, the status becomes
+  `Doc`, and a ticket that waits on a blocker or that a ticket waits on is
+  refused (both named); from a doc, the status becomes `--status` when
+  given (never `Doc`), else `Epic` for a scope and `Pending` otherwise;
+  between two kinds of work the status stays unless given. A shortcode's
+  root never becomes a kind that roots nothing (doc ↔ scope it may), a
+  path holder stays a doc, and a lower-seq ticket made a scope or a doc
+  becomes its shortcode's root. A kind and status it already has is a
+  no-op:
+
+  ```sh
+  synapse -P 4455 menger tickets set_kind --id IDENTITY-1 --kind scope
+  synapse -P 4455 menger tickets set_kind --id MNG-40 --kind gap --status Ready
+  ```
 - Architecture (owner-pinned): a service-wide in-memory cache
   (`src/store.rs`) is the ONLY interface the application has to tickets.
   Reads hit the cache, never storage; reads are async-safe (no lock

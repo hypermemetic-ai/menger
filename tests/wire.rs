@@ -1853,6 +1853,89 @@ async fn watch_filter_says_entered_and_left_last() {
     assert!(ev["message"].as_str().unwrap().contains("palette"), "{ev}");
 }
 
+/// SDLC-13 acceptance 3: `set_kind` over the real protocol. A doc collection's
+/// root made a scope: its answer is `kind_changed { ticket, previous }`; on
+/// `watch {}` the `kind_changed` comes first, then the `group_changed` (the
+/// root's row, its new kind) and the `placements_changed` (a scope is placed;
+/// a doc was not); `watch { filter: "kind scope" }` hears the same, then
+/// `entered` for it, last. A build made a complete gap frees what waited on
+/// it, in the same order. The refusals are in-band errors naming what they
+/// refuse, and the ticket stands as the last change left it.
+#[tokio::test]
+async fn set_kind_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    answer(&client, "tickets.create", json!({"epic": "IDW", "title": "identity", "kind": "doc"})).await; // IDW-1
+    answer(&client, "tickets.create", json!({"epic": "IDW", "title": "a build"})).await; // IDW-2
+    answer(&client, "tickets.create", json!({"epic": "IDW", "title": "waits", "blocked_by": ["IDW-2"]})).await; // IDW-3
+    let mut plain = call(&client, "tickets.watch", json!({})).await;
+    let mut scopes = call(&client, "tickets.watch", json!({"filter": "kind scope"})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let marker = |n: u32| json!({"id": "IDW-2", "body": format!("marker {n}")});
+
+    // The doc root made a scope: Epic, and placed.
+    let ev = answer(&client, "tickets.set_kind", json!({"id": "IDW-1", "kind": "scope"})).await;
+    assert_eq!(
+        (ev["type"].as_str(), ev["previous"].as_str(), ev["ticket"]["kind"].as_str(), ev["ticket"]["status"].as_str()),
+        (Some("kind_changed"), Some("doc"), Some("scope"), Some("Epic")),
+        "{ev}"
+    );
+    assert_eq!(ev["ticket"]["placement"], json!({"type": "wave", "n": 1}));
+    answer(&client, "tickets.amend", marker(1)).await;
+    let evs = until_marker(&mut plain).await;
+    assert_eq!(kinds(&evs), ["kind_changed", "group_changed", "placements_changed", "amended"], "{evs:#?}");
+    assert_eq!(evs[0], ev, "the watch carries the answer");
+    assert_eq!(
+        evs[1]["group"],
+        json!({
+            "epic": "IDW", "total": 3, "done": 0, "docs": 0, "root": "IDW-1",
+            "root_row": {"title": "identity", "status": "Epic", "kind": "scope"}, "host": null
+        })
+    );
+    assert_eq!(evs[2]["changes"], json!([{"id": "IDW-1", "placement": {"type": "wave", "n": 1}}]));
+    let evs = until_marker(&mut scopes).await;
+    assert_eq!(kinds(&evs), ["kind_changed", "group_changed", "placements_changed", "entered", "amended"], "{evs:#?}");
+    assert_eq!(evs[3], json!({"type": "entered", "id": "IDW-1", "epic": "IDW", "seq": 1}));
+
+    // A build made a complete gap: `done` moves, and what waited on it is
+    // placed again.
+    let ev = answer(&client, "tickets.set_kind", json!({"id": "IDW-2", "kind": "gap", "status": "Complete"})).await;
+    assert_eq!((ev["ticket"]["kind"].as_str(), ev["ticket"]["status"].as_str()), (Some("gap"), Some("Complete")), "{ev}");
+    answer(&client, "tickets.amend", marker(2)).await;
+    let evs = until_marker(&mut plain).await;
+    assert_eq!(kinds(&evs), ["kind_changed", "group_changed", "placements_changed", "amended"], "{evs:#?}");
+    assert_eq!((evs[1]["group"]["total"].as_u64(), evs[1]["group"]["done"].as_u64()), (Some(3), Some(1)));
+    assert_eq!(
+        evs[2]["changes"],
+        json!([{"id": "IDW-2", "placement": {"type": "done"}}, {"id": "IDW-3", "placement": {"type": "wave", "n": 1}}])
+    );
+    assert_eq!(kinds(&until_marker(&mut scopes).await), ["kind_changed", "group_changed", "placements_changed", "amended"]);
+
+    // The refusals, each one in-band error naming what it refuses.
+    for (params, says) in [
+        (json!({"id": "IDW-2", "kind": "doc"}), "'IDW-3' waits on it"),
+        (json!({"id": "IDW-1", "kind": "build"}), "'IDW-1' is the root of IDW"),
+        (json!({"id": "IDW-3", "kind": "spike", "status": "Doc"}), "Doc is a doc's own status"),
+        (json!({"id": "IDW-3", "kind": "bug"}), "unknown kind 'bug'"),
+        (json!({"id": "IDW-3", "kind": "gap", "status": "Shipped"}), "unknown status 'shipped'"),
+    ] {
+        let evs = collect(call(&client, "tickets.set_kind", params.clone()).await).await;
+        assert_eq!(evs.len(), 1, "{params}: {evs:?}");
+        assert_eq!(evs[0]["type"], "error", "{params}");
+        assert!(evs[0]["message"].as_str().unwrap().contains(says), "{params}: {evs:?}");
+    }
+    let ev = answer(&client, "tickets.set_kind", json!({"id": "IDW-9", "kind": "gap"})).await;
+    assert_eq!(ev, json!({"type": "not_found", "id": "IDW-9"}));
+    // The kind it has: its answer, and nothing on the watch.
+    let ev = answer(&client, "tickets.set_kind", json!({"id": "IDW-3", "kind": "build"})).await;
+    assert_eq!((ev["type"].as_str(), ev["previous"].as_str()), (Some("kind_changed"), Some("build")));
+    answer(&client, "tickets.amend", marker(3)).await;
+    assert_eq!(kinds(&until_marker(&mut plain).await), ["amended"], "a no-op sends nothing");
+
+    let ev = answer(&client, "tickets.get", json!({"id": "IDW-1"})).await;
+    assert_eq!((ev["ticket"]["kind"].as_str(), ev["ticket"]["status"].as_str()), (Some("scope"), Some("Epic")));
+}
+
 /// FILTER-13 over the real protocol: `tree` — a parent's children and a
 /// shortcode's top row that match or hold a match, each a `node { summary,
 /// matched, below }`, then one `page` with no `first`; one address, or one

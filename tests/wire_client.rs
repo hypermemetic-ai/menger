@@ -20,7 +20,7 @@
 
 use futures::StreamExt;
 use menger::build_rpc;
-use menger_tickets_api::{Group, Status, Ticket, TicketsClient, TicketsEvent};
+use menger_tickets_api::{Group, Kind, Status, Ticket, TicketsClient, TicketsEvent};
 use plexus_client::{ClientEvent, MethodRef, StreamItem, Transport, WsTransport};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::TransportServer;
@@ -102,6 +102,8 @@ fn apply(
     let (ticket, kind) = match event {
         TicketsEvent::Created { ticket } => (ticket, "created"),
         TicketsEvent::StatusChanged { ticket, .. } => (ticket, "status_changed"),
+        // SDLC-13: a kind changed — the whole ticket, one upsert.
+        TicketsEvent::KindChanged { ticket, .. } => (ticket, "kind_changed"),
         TicketsEvent::UnlocksChanged { ticket, .. } => (ticket, "unlocks_changed"),
         TicketsEvent::ParentChanged { ticket, .. } => (ticket, "parent_changed"),
         // SCALE-4: a parent's side is its id and new count — set on the
@@ -117,6 +119,14 @@ fn apply(
         TicketsEvent::GroupChanged { group } => {
             groups.insert(group.epic.clone(), group.clone());
             return "group_changed";
+        }
+        // WAVE-6: each kept placement a write moved, on the row the mirror
+        // holds — SDLC-13: a doc made a scope is placed.
+        TicketsEvent::PlacementsChanged { changes } => {
+            for c in changes {
+                mirror.entry(c.id.clone()).and_modify(|row| row.placement = Some(c.placement));
+            }
+            return "placements_changed";
         }
         other => panic!("unexpected watch event {other:?}"),
     };
@@ -424,6 +434,25 @@ async fn the_wire_assertions_through_the_generated_client() {
             .expect("create RS-2"),
     );
 
+    // -- set_kind (SDLC-13) -------------------------------------------------
+    // A doc collection's root made a scope, through the emitted client.
+    created(
+        client
+            .create_all("KD".into(), "identity".into(), Some("doc".into()), None, None, None, None, None)
+            .await
+            .expect("create KD-1"),
+    );
+    match one(client.set_kind_all("KD-1".into(), "scope".into(), None).await.expect("set_kind")) {
+        TicketsEvent::KindChanged { ticket, previous } => {
+            assert_eq!((ticket.kind, ticket.status, previous), (Kind::Scope, Status::Epic, Kind::Doc));
+        }
+        other => panic!("expected `kind_changed`, got {other:?}"),
+    }
+    match one(client.set_kind_all("KD-1".into(), "build".into(), Some("Ready".into())).await.expect("set_kind")) {
+        TicketsEvent::Error { message } => assert!(message.contains("'KD-1' is the root of KD"), "{message}"),
+        other => panic!("expected the in-band `error`, got {other:?}"),
+    }
+
     // -- the watch-only mirror ---------------------------------------------
     // Every mutation event kind, decoded into the activation's own types.
     let mut mirror: HashMap<String, Ticket> = HashMap::new();
@@ -448,6 +477,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     for expected in [
         "created",
         "status_changed",
+        "kind_changed",
         "unlocks_changed",
         "children_changed",
         "parent_changed",
@@ -511,6 +541,8 @@ async fn the_wire_assertions_through_the_generated_client() {
             .collect::<Vec<_>>(),
         [
             ("DG", 1, 0, Some("DG-1"), None),
+            // SDLC-13: the doc root made a scope — one piece of work.
+            ("KD", 1, 0, Some("KD-1"), None),
             ("PA", 3, 0, Some("PA-1"), None),
             ("RS", 2, 0, Some("RS-1"), None),
             ("WIRE", 1, 0, Some("WIRE-1"), None),
@@ -542,7 +574,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     }
     assert_eq!(
         extents,
-        [("DG".to_string(), 1), ("PA".to_string(), 3), ("RS".to_string(), 2), ("WIRE".to_string(), 1)]
+        [("DG".to_string(), 1), ("KD".to_string(), 1), ("PA".to_string(), 3), ("RS".to_string(), 2), ("WIRE".to_string(), 1)]
     );
     assert_eq!(extents, from_mirror.into_iter().collect::<Vec<_>>(), "watch-derivable from `created`");
 
@@ -553,7 +585,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(!transport.is_closed(), "the unsubscribe did not disturb the socket");
     match one(client.health_all().await.expect("health after unsubscribe")) {
-        TicketsEvent::Health { ticket_count, .. } => assert_eq!(ticket_count, 7),
+        TicketsEvent::Health { ticket_count, .. } => assert_eq!(ticket_count, 8),
         other => panic!("expected `health`, got {other:?}"),
     }
 }

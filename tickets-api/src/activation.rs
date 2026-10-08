@@ -137,6 +137,7 @@ fn wire_event(change: Change) -> Option<TicketsEvent> {
         Change::StatusChanged { ticket, previous } => {
             TicketsEvent::StatusChanged { ticket, previous }
         }
+        Change::KindChanged { ticket, previous } => TicketsEvent::KindChanged { ticket, previous },
         Change::Amended { ticket, changed } => TicketsEvent::Amended { ticket, changed },
         Change::CommitsLinked { ticket, added } => TicketsEvent::CommitsLinked { ticket, added },
         Change::CommitsUnlinked { ticket, removed } => {
@@ -510,6 +511,63 @@ impl Tickets {
                 }
             };
             match store.set_status(&id, status).await {
+                Ok(change) => yield change_event(change),
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            }
+        }
+    }
+
+    /// SDLC-13: changes a ticket's kind — the one write that does — and
+    /// everything kept by kind with it, in the one write. Yields exactly one
+    /// event: `KindChanged { ticket, previous }`, `NotFound` if `id` names no
+    /// ticket, or an in-band `Error` naming what it refuses. The status goes
+    /// with the kind across the doc line: to a doc it becomes `Doc` (a
+    /// `status` other than `Doc` is an `Error`); from a doc it becomes
+    /// `status` when given (never `Doc`), else `Epic` for a scope and
+    /// `Pending` for any other kind; between two other kinds it stays unless
+    /// `status` is given (`Doc` an `Error`). Refused: a ticket that waits on
+    /// a blocker, or that a ticket waits on, becoming a doc (both named); a
+    /// shortcode's root becoming a kind that roots nothing (the shortcode
+    /// named — doc ↔ scope on a root is allowed); a ticket holding a path
+    /// address becoming work; an unknown kind or status. A lower-seq ticket
+    /// that becomes a scope or a doc becomes its shortcode's root. The kind
+    /// (and status) it already has writes and sends nothing: `KindChanged`
+    /// with `previous` equal to its kind. `watch` carries `KindChanged`
+    /// first, then the `GroupChanged`, `PlacementsChanged` and (filtered)
+    /// `Entered` / `Left` it caused, as for a status change.
+    #[plexus_macros::method(
+        description = "Set a ticket's kind; everything kept by kind moves with it (to a doc: status Doc; from a doc: the status given, else Epic for a scope and Pending otherwise)",
+        params(
+            id = "Ticket id, e.g. IDENTITY-1",
+            kind = "New kind: scope | execution | build | gap | spike | doc (case-insensitive)",
+            status = "Its status with the new kind (optional): Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded — or Doc, the only one a doc takes; omitted, a doc becomes Doc, a doc becoming work becomes Epic (a scope) or Pending, and work keeps its own"
+        )
+    )]
+    pub async fn set_kind(
+        &self,
+        id: String,
+        kind: String,
+        status: Option<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            let kind = match kind.parse::<Kind>() {
+                Ok(k) => k,
+                Err(e) => {
+                    yield TicketsEvent::Error { message: e };
+                    return;
+                }
+            };
+            let status = match status.as_deref().map(str::parse::<Status>) {
+                None => None,
+                Some(Ok(s)) => Some(s),
+                Some(Err(e)) => {
+                    yield TicketsEvent::Error { message: e };
+                    return;
+                }
+            };
+            match store.set_kind(&id, kind, status).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
                 Err(e) => yield TicketsEvent::Error { message: e.to_string() },
@@ -1297,6 +1355,12 @@ impl Tickets {
     /// something — one `CommitsLinked` or `CommitsUnlinked`, the whole
     /// ticket, no group.
     ///
+    /// SDLC-13: a `set_kind` that changed something is one `KindChanged`
+    /// — the whole ticket — then what it moved, as a status change's: a
+    /// `GroupChanged` per row (a root's whenever its kind or status
+    /// changed; every row a re-rooted shortcode moved), the
+    /// `PlacementsChanged`, and with a filter the `Entered` / `Left`.
+    ///
     /// SCALE-4: a parent's side of a birth or a move is the exception to
     /// "the full ticket": `ChildrenChanged` / `ChildRemoved` carry the
     /// parent's id, the child, and the parent's new `child_count` — the
@@ -1331,7 +1395,7 @@ impl Tickets {
     /// `text`, is one in-band `error` and the stream ends.
     #[plexus_macros::method(
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
+        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
         params(
             epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)",
             filter = "A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256",
@@ -1574,6 +1638,46 @@ mod tests {
                 assert_eq!(previous, Status::Pending);
             }
             other => panic!("expected StatusChanged, got {other:?}"),
+        }
+    }
+
+    /// SDLC-13, over the activation: `set_kind` answers `kind_changed` with
+    /// the kind it had, its kind and status as the call and the rules leave
+    /// them (case-insensitive, `active` for `Coding`); an unknown id is
+    /// `not_found`; an unknown kind or status, and each rule's refusal, one
+    /// in-band `error` naming what it refuses.
+    #[tokio::test]
+    async fn set_kind_reports_previous_and_refuses_in_band() {
+        let hub = hub();
+        one(hub.create("IDN".into(), "identity".into(), Some("doc".into()), None, None, None, None, None).await).await;
+        one(hub.create("IDN".into(), "a".into(), None, None, None, None, None, None).await).await;
+        match one(hub.set_kind("IDN-1".into(), "Scope".into(), None).await).await {
+            TicketsEvent::KindChanged { ticket, previous } => {
+                assert_eq!((ticket.kind, ticket.status, previous), (Kind::Scope, Status::Epic, Kind::Doc));
+            }
+            other => panic!("expected KindChanged, got {other:?}"),
+        }
+        match one(hub.set_kind("IDN-2".into(), "gap".into(), Some("active".into())).await).await {
+            TicketsEvent::KindChanged { ticket, previous } => {
+                assert_eq!((ticket.kind, ticket.status, previous), (Kind::Gap, Status::Coding, Kind::Build));
+            }
+            other => panic!("expected KindChanged, got {other:?}"),
+        }
+        assert!(matches!(
+            one(hub.set_kind("IDN-9".into(), "gap".into(), None).await).await,
+            TicketsEvent::NotFound { id } if id == "IDN-9"
+        ));
+        for (id, kind, status, says) in [
+            ("IDN-2", "bug", None, "unknown kind 'bug'"),
+            ("IDN-2", "gap", Some("Shipped"), "unknown status 'shipped'"),
+            ("IDN-1", "build", None, "'IDN-1' is the root of IDN"),
+            ("IDN-2", "doc", Some("Ready"), "a doc's status is Doc"),
+            ("IDN-2", "spike", Some("Doc"), "Doc is a doc's own status"),
+        ] {
+            match one(hub.set_kind(id.into(), kind.into(), status.map(Into::into)).await).await {
+                TicketsEvent::Error { message } => assert!(message.contains(says), "{kind} {status:?}: {message}"),
+                other => panic!("{kind} {status:?}: expected Error, got {other:?}"),
+            }
         }
     }
 

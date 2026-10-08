@@ -150,9 +150,9 @@ AGS-23: the nav draws a shortcode that has a root *as* its root ticket's
 row, so the group carries what that row shows — `root_row`, the root's
 title, status and kind, read from the server's cache — and the top level
 still paints from `groups {}` alone, with no `get` per shortcode. It is
-kept current the way the counts are: a change to the root's title or
-status is a change to its group, and `group_changed` carries it (a kind
-never changes). `None` exactly when `root` is. */
+kept current the way the counts are: a change to the root's title,
+status or kind (SDLC-13: `set_kind`) is a change to its group, and
+`group_changed` carries it. `None` exactly when `root` is. */
 export interface Group {
     /** SDLC-11: the docs in the row's subtree, which `total` leaves out. */
     docs: number;
@@ -250,7 +250,17 @@ export declare function isInputValueText(e: InputValue): e is InputValueText;
 /** What shape of work a ticket is (AGS-13): the owner's closed five-value
 set, one vocabulary owning the slot — and, since SDLC-11 (owner,
 2026-10-02), a sixth that is not work at all: `doc`. Serialized
-lowercase (`kind: build`) on the wire and in the store. */
+lowercase (`kind: build`) on the wire and in the store.
+
+SDLC-13: set at birth, and changed only by `set_kind`, which moves
+everything kept by kind in the same write. Its rules: to a doc, the
+status becomes [`Status::Doc`] — refused while the ticket waits on a
+blocker or a ticket waits on it; from a doc, the status becomes the one
+given (never `Doc`), else `Epic` for a scope and `Pending` for any other
+kind; between two kinds with a lifecycle the status stays unless one is
+given. A shortcode's root never becomes a kind that roots nothing
+(doc ↔ scope it may), and a lower-seq ticket that becomes a scope or a
+doc becomes its shortcode's root. */
 export type Kind = "scope" | "execution" | "build" | "gap" | "spike" | "doc";
 export interface PlacementWave {
     type: 'wave';
@@ -432,6 +442,20 @@ export interface TicketsEventPage {
 export interface TicketsEventStatusChanged {
     type: 'status_changed';
     previous: Status;
+    ticket: Ticket;
+}
+/** SDLC-13: a ticket's kind changed (yielded by `set_kind`, and by
+`watch`) — and its status with it, when the change crossed the doc
+line or the call gave one; `previous` is the kind it had. The whole
+ticket rides along, its new placement included, so applying it is
+one upsert, as `status_changed` is. First of its write's events: the
+`group_changed`, `placements_changed` and (on a filtered watch)
+`entered` / `left` it caused follow, as they follow a status change.
+`set_kind`'s own answer to a call that changed nothing has `previous`
+equal to the ticket's kind; `watch` never carries that one. */
+export interface TicketsEventKindChanged {
+    type: 'kind_changed';
+    previous: Kind;
     ticket: Ticket;
 }
 /** MNG-16: a ticket's title and/or body was replaced (yielded by
@@ -728,13 +752,14 @@ export interface TicketsEventNode {
     matched: boolean;
     summary: TicketSummary;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventNode;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventNode;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
 export declare function isTicketsEventSummary(e: TicketsEvent): e is TicketsEventSummary;
 export declare function isTicketsEventPage(e: TicketsEvent): e is TicketsEventPage;
 export declare function isTicketsEventStatusChanged(e: TicketsEvent): e is TicketsEventStatusChanged;
+export declare function isTicketsEventKindChanged(e: TicketsEvent): e is TicketsEventKindChanged;
 export declare function isTicketsEventAmended(e: TicketsEvent): e is TicketsEventAmended;
 export declare function isTicketsEventCommitsLinked(e: TicketsEvent): e is TicketsEventCommitsLinked;
 export declare function isTicketsEventCommitsUnlinked(e: TicketsEvent): e is TicketsEventCommitsUnlinked;

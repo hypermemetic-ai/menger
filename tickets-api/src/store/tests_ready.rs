@@ -360,6 +360,11 @@ pub(super) struct Tally {
     /// SDLC-11: docs born, and creates tried (what picks a doc).
     docs: usize,
     attempts: usize,
+    /// SDLC-13: writes made (what picks a `set_kind`), kinds changed, and of
+    /// those, the ones that re-rooted a shortcode.
+    writes: usize,
+    pub(super) kinds: usize,
+    pub(super) reroots: usize,
 }
 
 /// One random write against the store as it stands, weighted to what moves
@@ -370,6 +375,26 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
     let extents: BTreeMap<String, u32> = store.extents().into_iter().collect();
     let pick = |rng: &mut Rng| all[rng.below(all.len())].id.clone();
     let members_before = store.tickets.read().unwrap().ready.size();
+    // SDLC-13: every seventh write a kind changed — every pair of kinds, with
+    // and without a status, legal or refused, held to the rules
+    // (`tests_kinds`). By a count, and on draws of its own: the walk's draws
+    // stay the ones it had.
+    tally.writes += 1;
+    if !all.is_empty() && tally.writes % 7 == 0 {
+        let mut own = Rng(rng.0 ^ (tally.writes as u64).wrapping_mul(0x5D1C_0013_0000_0001));
+        let (what, did) = super::tests_kinds::random_set_kind(store, &mut |n| own.below(n)).await;
+        match did {
+            super::tests_kinds::KindWrite::Changed { reroot } => {
+                tally.kinds += 1;
+                tally.reroots += usize::from(reroot);
+            }
+            _ => tally.others += 1,
+        }
+        let members_after = store.tickets.read().unwrap().ready.size();
+        tally.joined += usize::from(members_after > members_before);
+        tally.left += usize::from(members_after < members_before);
+        return what;
+    }
     let what = match if all.is_empty() { 0 } else { rng.below(20) } {
         0..=6 => {
             let epic = epics[rng.below(epics.len())];
@@ -510,7 +535,8 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, pages: usize,
             && tally.left > 0
             && tally.moves > 0
             && tally.others > 0
-            && tally.docs > 0,
+            && tally.docs > 0
+            && tally.kinds > writes / 50,
         "every kind of write, and enough of those that move the ready set: {tally:?}"
     );
     let before = kept(&store);
