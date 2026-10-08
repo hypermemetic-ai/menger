@@ -3,7 +3,7 @@
 //! WAVE-4 placed tickets on demand ([`super::waves`]); the owner wants them
 //! precomputed — "every additional ticket should trigger an update" (WAVE-1
 //! decision 9). So each non-doc row carries its [`Placement`], equal at all
-//! times to WAVE-4's rule over the whole graph, and the two writes that can
+//! times to WAVE-4's rule over the whole graph, and the writes that can
 //! move one keep it:
 //!
 //! - **a birth** — the newborn is placed from its blockers, and a forward
@@ -12,6 +12,11 @@
 //! - **a status change across `Complete` / `Superseded`** — the ticket goes
 //!   to `done` or back to a wave, and its dependents (found from `unlocks`,
 //!   the mirror the store keeps of who names it — never a scan) may move.
+//!
+//! - SDLC-13: **a kind change across the doc line** — a doc made work is
+//!   placed (it has no edges, so nothing downstream moves), work made a doc
+//!   is placed nowhere (it is refused while in the graph) — or with a status
+//!   across `Complete` / `Superseded`, as a status change.
 //!
 //! Nothing else moves one: `blocked_by` is fixed at birth, a status change
 //! that stays on one side of the line changes no placement, and a move, an

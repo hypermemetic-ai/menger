@@ -908,8 +908,9 @@ fn flat_row(
         let id = id.clone();
         Memo::new(move |_| route.with(|rt| matches!(rt, Route::Ticket(x) if *x == id)))
     };
-    // A ticket's kind is fixed at birth, and so is its place in the order.
-    let kind = ticket.with_untracked(|t| t.kind.as_str());
+    // A ticket's place in the order is fixed at birth; SDLC-13: its kind is
+    // not (`set_kind`), so the row follows it.
+    let kind = Memo::new(move |_| ticket.with(|t| t.kind.as_str()));
     let key: Key = ticket.with_untracked(|t| (t.epic.clone(), t.seq));
     let posinset = Memo::new(move |_| f.matches.with(|m| f.ranked.with(|r| r.pos_of(m.as_ref()?, &key))).map(|p| p + 1));
     // WAVE-10: one of menger's own documents only when the nav shows them.
@@ -928,10 +929,10 @@ fn flat_row(
             data-node-key=id.clone()
             data-nav-id=id.clone()
             data-ticket-id=id.clone()
-            data-kind=kind
+            data-kind=move || kind.get()
             href=href
         >
-            <span class="toggle kind" title=kind>{nav::kind_glyph(kind)}</span>
+            <span class="toggle kind" title=move || kind.get()>{move || nav::kind_glyph(kind.get())}</span>
             <span class="code">{id.clone()}</span>
             <span class="label">{move || ticket.with(|t| t.title.clone())}</span>
             // The status tag, its paint and its word one effect: they move

@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn anything_else_is_read_only() {
         for m in [
-            "set_status", "amend", "create", "set_parent", "link_commits", "unlink_commits", "watch", "ready_set", "answer",
+            "set_status", "set_kind", "amend", "create", "set_parent", "link_commits", "unlink_commits", "watch", "ready_set", "answer",
             "clear_answer", "close_input", "reopen_input", "", "GET", "menger.tickets.get", "submit", "menger.input.submit",
             "clear", "menger.input.clear",
         ] {

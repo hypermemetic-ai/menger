@@ -3076,10 +3076,10 @@ fn leaf_row(
         Memo::new(move |_| route.with(|rt| matches!(rt, Route::Ticket(x) if *x == id)))
     };
     let href = format!("#/ticket/{id}");
-    // A ticket's kind is fixed at birth — no write changes it — so the row
-    // reads it once (AGS-23: three attribute effects fewer a row, which the
-    // top level, all ticket rows now, paints with).
-    let kind = ticket.with_untracked(|t| t.kind.as_str());
+    // SDLC-13: a kind changes (`set_kind`), so the row reads it as it reads
+    // the status — one memo, which the glyph, its title and the row's
+    // `data-kind` (its tint) follow.
+    let kind = Memo::new(move |_| ticket.with(|t| t.kind.as_str()));
     // A row's place among its siblings, said only in a list that is a window
     // — and asked only of a row in a list (AGS-23: a top-level root's row is
     // in none).
@@ -3110,7 +3110,7 @@ fn leaf_row(
             // WAVE-5: a shortcode's row says which shortcode it stands for —
             // what the ticket menu offers its wave board by.
             data-shortcode=shortcode
-            data-kind=kind
+            data-kind=move || kind.get()
             href=href
             // AGS-25: a double-click on a row with children opens or closes
             // it. Its first click still follows the link; it selects no text.
@@ -3142,7 +3142,7 @@ fn leaf_row(
             >
                 {toggle_glyph}
             </span>
-            <span class="toggle kind" title=kind>{kind_glyph(kind)}</span>
+            <span class="toggle kind" title=move || kind.get()>{move || kind_glyph(kind.get())}</span>
             <span class="code">{id.clone()}</span>
             <span class="label">{move || ticket.with(|t| t.title.clone())}</span>
             // FILTER-14: the matches under the row, as its badge (a

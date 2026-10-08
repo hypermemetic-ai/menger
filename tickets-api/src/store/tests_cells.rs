@@ -122,7 +122,7 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, epics: &[&str
         moved += said.len();
         assert_cells_are_a_scan(&store, Some(path), &format!("step {step}: {what}"));
     }
-    assert!(moved > writes / 2, "{moved} cell moves over {writes} writes: {tally:?}");
+    assert!(moved > writes / 2 && tally.kinds > 0, "{moved} cell moves over {writes} writes: {tally:?}");
     let before = store.tickets.read().unwrap().cells.stored();
     drop(rx);
     drop(store);

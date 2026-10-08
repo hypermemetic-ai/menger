@@ -271,7 +271,7 @@ pub(crate) fn off_board(card: &Card, on_board: &HashSet<String>) -> Vec<String> 
 pub(crate) enum Heard {
     /// Ask `waves` again: a ticket born into one of the board's shortcodes
     /// (`epics`) — a card it has not got — or a `lagged`, after which
-    /// anything may have moved.
+    /// anything may have moved; SDLC-13: or a kind changed there.
     Ask,
     /// Apply it to the cards ([`apply`]): a `placements_changed`, a
     /// `status_changed`.
@@ -286,8 +286,15 @@ pub(crate) enum Heard {
 pub(crate) fn heard(ev: &TicketsEvent, epics: &BTreeSet<String>) -> Heard {
     match ev {
         TicketsEvent::Created { ticket } if epics.contains(&ticket.epic) => Heard::Ask,
+        // SDLC-13: a kind changed in one of its shortcodes — a doc made work
+        // is a card it has not got, work made a doc a card it must not show,
+        // and a kind the board filters on may let it in or out. Elsewhere, it
+        // is a status change to the cards that wait on it.
+        TicketsEvent::KindChanged { ticket, .. } if epics.contains(&ticket.epic) => Heard::Ask,
         TicketsEvent::Lagged { .. } => Heard::Ask,
-        TicketsEvent::PlacementsChanged { .. } | TicketsEvent::StatusChanged { .. } => Heard::Apply,
+        TicketsEvent::PlacementsChanged { .. } | TicketsEvent::StatusChanged { .. } | TicketsEvent::KindChanged { .. } => {
+            Heard::Apply
+        }
         _ => Heard::Nothing,
     }
 }
@@ -365,7 +372,7 @@ pub(crate) fn apply(a: &mut Answer, ev: &TicketsEvent) -> bool {
                 }
             }
         }
-        TicketsEvent::StatusChanged { ticket, .. } => {
+        TicketsEvent::StatusChanged { ticket, .. } | TicketsEvent::KindChanged { ticket, .. } => {
             let done = satisfied(ticket.status);
             for card in &mut a.cards {
                 if card.summary.id == ticket.id {
@@ -1258,6 +1265,11 @@ mod tests {
         assert_eq!(heard(&amended, &epics), Heard::Nothing, "a new title moves no card (its row repaints in place)");
         let unlocks = TicketsEvent::UnlocksChanged { ticket: ticket("PLEXUS-3"), added: "PLEXUS-9".into() };
         assert_eq!(heard(&unlocks, &epics), Heard::Nothing);
+        // SDLC-13: a kind changed on the board may add or take a card; one
+        // elsewhere is a status change to the cards that wait on it.
+        let rekinded = |id: &str| TicketsEvent::KindChanged { ticket: ticket(id), previous: Kind::Doc };
+        assert_eq!(heard(&rekinded("PLEXUS-3"), &epics), Heard::Ask, "a card it may not have, or must not show");
+        assert_eq!(heard(&rekinded("MNG-4"), &epics), Heard::Apply, "a card may wait on it");
     }
 
     fn change(id: &str, placement: Placement) -> menger_tickets_api::PlacementChange {

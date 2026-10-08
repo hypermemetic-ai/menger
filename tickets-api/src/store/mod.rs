@@ -97,7 +97,8 @@
 //! birth (the newborn, and the tickets a forward reference to its id held
 //! missing) and a status change across `Complete` / `Superseded` (the ticket,
 //! and what moves downstream of it along `unlocks` — the walk stops where
-//! nothing moves). The moves are broadcast last, one `PlacementsChanged`
+//! nothing moves) — SDLC-13: and a kind change across the doc line, or with
+//! such a status. The moves are broadcast last, one `PlacementsChanged`
 //! per write that made any; `waves` reads the kept placements.
 //! WAVE-10 gives a ticket an optional **path address**: a `path` on its row,
 //! unique within its shortcode, which `get` resolves from `<SHORTCODE>/<path>`
@@ -120,6 +121,15 @@
 //! all (a component is a few KB, and there are few); stored in its own
 //! table, which a database written before COMP-3 gains — the registry built
 //! from every body — durably, once, on first open.
+//! SDLC-13 makes a kind changeable — by one write, `set_kind`
+//! ([`Store::set_kind`]), and only by it. Everything the cache keeps by kind
+//! moves in that write's own [`Derived`] and transaction, worked out before it
+//! commits as a status change's is ([`Cache::kind_change`]): the roll-ups (a
+//! ticket's count moving between work and docs, a lower-seq ticket made a
+//! scope or a doc re-rooting its shortcode, the shape settled again), the
+//! status counts and the ready set (the status crosses the doc line with the
+//! kind), the placements (none for a doc), the cells (kind is in the cell) and
+//! the kept tree's tallies and holders. `--verify-derived` holds it to a scan.
 //! INPUT-3 keeps the **inputs store** ([`inputs`]): every input a body
 //! declares (`<m-decision id>`, `<m-input id kind>` — [`crate::inputs`]) and
 //! every answer and state change it has been through, with who and when. The
@@ -658,6 +668,12 @@ impl Walk {
 pub enum Change {
     Created { ticket: Ticket },
     StatusChanged { ticket: Ticket, previous: Status },
+    /// SDLC-13: a ticket's kind changed (`set_kind`) — and its status with
+    /// it, when the change crossed the doc line or a status was given;
+    /// `previous` is the kind it had. Carries the full ticket, as every write
+    /// after birth does; first of its write's events, before the groups, the
+    /// placements and the cell moves it caused.
+    KindChanged { ticket: Ticket, previous: Kind },
     /// MNG-16: a ticket's title and/or body was replaced (`amend`);
     /// `changed` names which, in that order. Carries the full ticket — body
     /// included, so an open page can show the new one without a `get`.
@@ -726,8 +742,9 @@ pub enum Change {
     InputChanged { epic: String, input: Input },
     /// FILTER-4: every ticket whose cell the write moved — a birth, a status
     /// change and the blocker crossings it fans out to, a first commit or a
-    /// last — worked out once per write before it committed, and sent last,
-    /// after every other event of the write. Never on the wire as itself:
+    /// last, SDLC-13: a kind changed — worked out once per write before it
+    /// committed, and sent last, after every other event of the write.
+    /// Never on the wire as itself:
     /// `watch { filter }` turns it into `entered`, `left` or `recount` for
     /// its own filter; a `watch` without one passes it over.
     #[serde(skip)]
@@ -752,6 +769,7 @@ impl Change {
         match self {
             Self::Created { ticket }
             | Self::StatusChanged { ticket, .. }
+            | Self::KindChanged { ticket, .. }
             | Self::Amended { ticket, .. }
             | Self::CommitsLinked { ticket, .. }
             | Self::CommitsUnlinked { ticket, .. }
@@ -942,6 +960,22 @@ pub enum StoreError {
     /// SDLC-11: `set_status … Doc` on a ticket of another kind. `Doc` is a
     /// doc's own status and no other kind's. Nothing changed.
     DocStatusOnWork { id: String, kind: Kind },
+    /// SDLC-13: `set_kind … doc` with a status other than `Doc` — a doc's
+    /// status is `Doc`, whatever it was before. Nothing changed.
+    DocStatusForDoc { id: String, status: Status },
+    /// SDLC-13: `set_kind` to a kind with a lifecycle, with the status `Doc`
+    /// — `Doc` is a doc's own. Nothing changed.
+    DocStatusForWork { id: String, kind: Kind },
+    /// SDLC-13: `set_kind … doc` on a ticket in the `blocked_by` graph — it
+    /// waits on `blocked_by`, or `unlocks` wait on it — where a doc is never
+    /// blocked and never a blocker. Both named. Nothing changed.
+    DocInGraph { id: String, blocked_by: Vec<String>, unlocks: Vec<String> },
+    /// SDLC-13: `id` is the root of `epic` — its lowest-seq scope or doc —
+    /// and `kind` roots nothing. Nothing changed.
+    RootKind { id: String, epic: String, kind: Kind },
+    /// SDLC-13 (WAVE-10): `id` holds the path address `path`, which only a
+    /// doc carries, and `kind` is work. Nothing changed.
+    PathKind { id: String, path: String, kind: Kind },
     /// MNG-14: a ticket's parent must be inside its own shortcode; only a
     /// shortcode's scope root may hang under another shortcode (its host).
     /// Nothing changed.
@@ -1109,6 +1143,46 @@ impl std::fmt::Display for StoreError {
                 f,
                 "Doc is a doc's own status: '{id}' is a {}, so it cannot be set to Doc (nothing \
                  changed)",
+                kind.as_str()
+            ),
+            Self::DocStatusForDoc { id, status } => write!(
+                f,
+                "a doc's status is Doc: '{id}' would be a doc, which has no lifecycle, so it cannot be {status} — \
+                 give no status, or Doc (nothing changed)"
+            ),
+            Self::DocStatusForWork { id, kind } => write!(
+                f,
+                "Doc is a doc's own status: '{id}' would be a {}, so it cannot be Doc — give a status of the \
+                 lifecycle, or none (nothing changed)",
+                kind.as_str()
+            ),
+            Self::DocInGraph { id, blocked_by, unlocks } => {
+                let named = |ids: &[String]| ids.iter().map(|i| format!("'{i}'")).collect::<Vec<_>>().join(", ");
+                let mut why: Vec<String> = Vec::new();
+                if !blocked_by.is_empty() {
+                    why.push(format!("it is blocked by {}", named(blocked_by)));
+                }
+                if !unlocks.is_empty() {
+                    let verb = if unlocks.len() == 1 { "waits" } else { "wait" };
+                    why.push(format!("{} {verb} on it", named(unlocks)));
+                }
+                write!(
+                    f,
+                    "'{id}' cannot become a doc: a doc is never blocked and never a blocker, and {} (nothing \
+                     changed)",
+                    why.join(", and ")
+                )
+            }
+            Self::RootKind { id, epic, kind } => write!(
+                f,
+                "'{id}' is the root of {epic}: a shortcode's root is its lowest-seq scope or doc, so it cannot \
+                 become a {} — make it a scope or a doc (nothing changed)",
+                kind.as_str()
+            ),
+            Self::PathKind { id, path, kind } => write!(
+                f,
+                "'{id}' holds the path '{path}': only a doc carries a path (menger's own documents), so it \
+                 cannot become a {} (nothing changed)",
                 kind.as_str()
             ),
             Self::ParentOutsideShortcode { id, parent } => write!(
@@ -1309,9 +1383,10 @@ fn find_parent_cycle(
 /// for a legacy prefix that never had a scope.
 ///
 /// SCALE-3: read from the roll-ups, which keep exactly that per shortcode
-/// (MNG-10 — fixed once set: kinds never change and every later ticket has
-/// a higher seq), rather than found by walking the prefix to its first
-/// scope. That walk was one step for every prefix made since MNG-12, but
+/// (MNG-10 — a birth never moves it once set, every later ticket having a
+/// higher seq; SDLC-13: a `set_kind` that makes a lower-seq ticket a scope
+/// or a doc does, in its write), rather than found by walking the prefix to
+/// its first scope. That walk was one step for every prefix made since MNG-12, but
 /// the whole prefix for a legacy one that never had a scope — and `create`
 /// took it, under the write lock, for every ticket filed there.
 fn shortcode_root<'a>(tickets: &'a Cache, epic: &str) -> Option<&'a Row> {
@@ -2099,6 +2174,58 @@ impl Cache {
         self.insert(ticket);
         let mut groups = self.take(moved);
         if changed && !groups.iter().any(|g| g.epic == epic) {
+            if let Some(g) = self.root_group(&epic, &id) {
+                groups.insert(0, g);
+            }
+        }
+        groups
+    }
+
+    /// SDLC-13: what `row`'s change of kind (from `old`, its row before —
+    /// and of status with it, when the write moves one) does to the derived
+    /// state, before it commits. Everything kept by kind or by status moves
+    /// here, from one worked-out change:
+    ///
+    /// - the roll-ups ([`rollup::Rollups::kind_changed`]) — the ticket's
+    ///   tally moves between work and docs, a crossing of `Complete` moves
+    ///   `done`, and a ticket that now roots its shortcode below its root
+    ///   (or roots a rootless one) re-roots it, its shape settled again;
+    /// - the status counts, the ready set and — across the satisfied line —
+    ///   the counts of the tickets it unlocks, as a status change moves them
+    ///   ([`ready::Ready::status_changed_touching`]; nothing, when the status
+    ///   stays);
+    /// - the cells and the kept tree ([`Cache::recell`]: the ticket's cell
+    ///   moves, kind being in the cell, and so does every cell the fan-out
+    ///   moved);
+    /// - its placement — none for a doc, placed by the rule for anything
+    ///   else ([`placements::replace`]) — and every one downstream that moves,
+    ///   across the doc line or the satisfied line.
+    fn kind_change(&self, row: &Row, old: &Row) -> Derived {
+        let rows = self.rows().with(row);
+        let mut rollups = self.rollups.clone();
+        let derived = match rollups.kind_changed(rows, old, row) {
+            Some(groups) => Derived::rolled(self, rollups, groups),
+            None => Derived::none(),
+        };
+        let (ready, touched) = self.ready.status_changed_touching(rows, row, old.status);
+        let (cells, tree) = self.recell(rows, row, false, &touched);
+        let mut derived = derived.readied(ready).celled(cells).treed(tree);
+        if satisfied(old.status) != satisfied(row.status) || old.kind.has_lifecycle() != row.kind.has_lifecycle() {
+            derived.moved.placed = Some(Self::replace(rows, row, false));
+        }
+        derived
+    }
+
+    /// SDLC-13: a `set_kind`, once it has committed — the row, then what
+    /// [`Cache::kind_change`] worked out. AGS-23: a shortcode root's kind and
+    /// status are on its group's row ([`Group::root_row`]), so a change of
+    /// either moves that group — first, as the innermost, when the roll-ups
+    /// did not already report it.
+    fn kind_changed(&mut self, ticket: Row, moved: Moved) -> Vec<Group> {
+        let (epic, id) = (ticket.epic.clone(), ticket.id.clone());
+        self.insert(ticket);
+        let mut groups = self.take(moved);
+        if !groups.iter().any(|g| g.epic == epic) {
             if let Some(g) = self.root_group(&epic, &id) {
                 groups.insert(0, g);
             }
@@ -3597,6 +3724,139 @@ impl Store {
         .await
     }
 
+    /// SDLC-13: changes a ticket's kind — the one write that does; a kind
+    /// was fixed at birth until it — write-through, as `set_status` is, and
+    /// everything kept by kind moves with it in the write's own [`Derived`]
+    /// and transaction ([`Cache::kind_change`]).
+    ///
+    /// The status goes with the kind across the doc line: to a doc, `Doc`
+    /// (a `status` other than `Doc` is refused); from a doc, `status` when
+    /// given (anything but `Doc`), else `Epic` for a scope and `Pending` for
+    /// any other kind; between two kinds with a lifecycle it stays, unless
+    /// `status` is given. Refused, before anything is written, and each
+    /// naming what it refuses: a doc in the `blocked_by` graph — a ticket
+    /// that waits on a blocker, or that a ticket waits on, cannot become a
+    /// doc ([`StoreError::DocInGraph`]); a shortcode's root becoming a kind
+    /// that roots nothing ([`StoreError::RootKind`] — doc ↔ scope on a root
+    /// is a kind change like any other); a ticket holding a path address
+    /// (WAVE-10, only a doc's) becoming work ([`StoreError::PathKind`]).
+    /// A lower-seq ticket that becomes a scope or a doc becomes its
+    /// shortcode's root.
+    ///
+    /// The kind and status it already has — the same kind, and no `status`
+    /// or the one it holds — is no write and no broadcast: the returned
+    /// `KindChanged` then has `previous` equal to the ticket's kind, as
+    /// `set_parent` answers a no-op. Otherwise the row commits, then the
+    /// cache, then `KindChanged`, then what it moved as `set_status` sends
+    /// it: one `GroupChanged` per row that moved, innermost first (AGS-23:
+    /// a root's group whenever its kind or status changed), the
+    /// `PlacementsChanged`, the cell moves and what an `under` watch saw.
+    pub async fn set_kind(&self, id: &str, kind: Kind, status: Option<Status>) -> Result<Change, StoreError> {
+        let serial = self.serial().await;
+        let (mut row, written) = self.row(id)?;
+        let old = row.clone();
+        let previous = row.kind;
+        let status = if kind.has_lifecycle() {
+            match status {
+                Some(Status::Doc) => return Err(StoreError::DocStatusForWork { id: row.id, kind }),
+                Some(s) => s,
+                None if previous.has_lifecycle() => row.status,
+                None if kind == Kind::Scope => Status::Epic,
+                None => Status::Pending,
+            }
+        } else {
+            match status {
+                None | Some(Status::Doc) => Status::Doc,
+                Some(s) => return Err(StoreError::DocStatusForDoc { id: row.id, status: s }),
+            }
+        };
+        if kind == previous && status == row.status {
+            return Ok(Change::KindChanged {
+                ticket: self.full_one(row, written).await?,
+                previous,
+            });
+        }
+        let (derived, under) = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            if !kind.has_lifecycle() && (!row.blocked_by.is_empty() || !row.unlocks.is_empty()) {
+                let distinct = |ids: &[String]| {
+                    ids.iter().fold(Vec::<String>::new(), |mut seen, i| {
+                        if !seen.contains(i) {
+                            seen.push(i.clone());
+                        }
+                        seen
+                    })
+                };
+                return Err(StoreError::DocInGraph {
+                    blocked_by: distinct(&row.blocked_by),
+                    unlocks: distinct(&row.unlocks),
+                    id: row.id,
+                });
+            }
+            if !kind.roots_a_shortcode() && cache.rollups.root(&row.epic) == Some(row.id.as_str()) {
+                return Err(StoreError::RootKind { id: row.id, epic: row.epic, kind });
+            }
+            if let (Some(path), true) = (&row.path, kind.has_lifecycle()) {
+                return Err(StoreError::PathKind { path: path.clone(), id: row.id, kind });
+            }
+            row.kind = kind;
+            row.status = status;
+            row.updated_unix = chrono::Utc::now().timestamp();
+            // Everything kept by kind, and by status — worked out now, while
+            // nothing has changed. FILTER-13: and what an open `watch { filter
+            // }` asking `under` sees of it: the cells it moves, and — when it
+            // re-roots a shortcode — every shortcode whose hosts that moves.
+            let derived = cache.kind_change(&row, &old);
+            let under = self.under_before(&cache, || {
+                let mut t = lineage::Touched::of_moves(derived.announced().as_deref());
+                if let Some(after) = &derived.moved.rollups {
+                    t.hosts(&cache, after, cache.rows().with(&row), None);
+                }
+                t
+            });
+            (derived, under)
+        };
+        let announced = derived.announced();
+        let Derived { stored, moved } = derived;
+        // WAVE-6: a doc is placed nowhere; work is placed by the rule — its
+        // `kind_changed` carries the placement, and the ones downstream that
+        // move are said after the groups.
+        if let Some(placement) = moved.placement() {
+            row.placement = placement;
+        }
+        let placed = moved.placed.as_ref().and_then(Change::placed);
+        let commit = Self::row_commit(row);
+        let cache = Arc::clone(&self.tickets);
+        self.write(
+            serial,
+            move |tx| {
+                let out = commit(tx)?;
+                stored.write(tx)?;
+                Ok(out)
+            },
+            move |cache, (row, _)| cache.kind_changed(row.clone(), moved),
+            move |(row, body), groups, tx| {
+                let change = Change::KindChanged {
+                    ticket: whole(row, body),
+                    previous,
+                };
+                let _ = tx.send(change.clone());
+                broadcast_groups(tx, groups);
+                if let Some(placed) = placed {
+                    let _ = tx.send(placed);
+                }
+                if let Some(moves) = announced {
+                    let _ = tx.send(Change::CellsMoved { moves });
+                }
+                if let Some(change) = under.and_then(|u| u.after(&cache)) {
+                    let _ = tx.send(change);
+                }
+                change
+            },
+        )
+        .await
+    }
+
     /// MNG-12: files an existing ticket as an output of `parent` — the
     /// verb AGS-19 left out, for adopting a ticket born parentless or
     /// moving one. Same guards as `create`: the parent must exist, a
@@ -4738,3 +4998,11 @@ mod tests_language;
 /// random writes; each without a filter exactly today's answer.
 #[cfg(test)]
 mod tests_lensed;
+
+/// SDLC-13: `set_kind` — each row of the ticket's table (the status across
+/// the doc line, each refusal naming what it refuses, a root between the
+/// kinds that root, a lower-seq ticket made the root, the no-op, the events
+/// in order), `--verify-derived` after each kind of change; and the random
+/// `set_kind` every random walk takes into its mix, held to the rules.
+#[cfg(test)]
+mod tests_kinds;

@@ -70,8 +70,10 @@ impl Tally {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct Shortcode {
     /// Its lowest-seq `scope` ticket — SDLC-11: or `doc`, which may root a
-    /// shortcode as a scope may. Fixed once set: kinds never change and
-    /// every later ticket has a higher seq.
+    /// shortcode as a scope may. A birth never moves it once set (every
+    /// later ticket has a higher seq); SDLC-13: a `set_kind` that makes a
+    /// lower-seq ticket a scope or a doc does, and one that would leave the
+    /// shortcode without it is refused.
     root: Option<String>,
     /// The trees whose top has no parent — drawn in this row whatever
     /// moves elsewhere.
@@ -488,6 +490,64 @@ impl Rollups {
         }
         let home = self.count(rows, t, Tally::DONE, gain);
         self.carry(&home, Tally::DONE, gain)
+    }
+
+    /// SDLC-13: a ticket's kind changed — and its status with it, when the
+    /// write moved one — from `old`'s to `t`'s (`t` already in `rows`). Its
+    /// tally moves from what `old` counted to what `t` counts — between work
+    /// and docs, into or out of `done` — in the bucket its tree is kept in
+    /// and up every row it is drawn in, as a completion does. And a ticket
+    /// that now roots its shortcode — a scope or a doc below the root, or in
+    /// a shortcode that has none — becomes its root: the root is what
+    /// decides whether the shortcode is hosted, so the shape is settled
+    /// again (as a `set_parent` settles it) and every row that moved is
+    /// reported. `None` when nothing moves: a kind and status that count
+    /// alike and root nothing new.
+    ///
+    /// The root itself never becomes a kind that roots nothing — `set_kind`
+    /// refuses it, since its shortcode would lose the root a scan gives it
+    /// only by finding the next one. Were one to arrive here, everything is
+    /// rebuilt from the rows, which is right by definition.
+    pub(super) fn kind_changed(&mut self, rows: Rows<'_>, old: &Row, t: &Row) -> Option<Vec<Group>> {
+        let (was, now) = (Tally::of(old), Tally::of(t));
+        let root = self.shortcodes.get(&t.epic).and_then(|s| s.root.clone());
+        let roots_it = root.as_deref() == Some(t.id.as_str());
+        if roots_it && !t.kind.roots_a_shortcode() {
+            let before = self.snapshot();
+            let why = format!("{} rooted {} and became a {}", t.id, t.epic, t.kind.as_str());
+            return Some(self.rebuild(rows, before, &why));
+        }
+        let reroot = !roots_it
+            && t.kind.roots_a_shortcode()
+            && root.as_deref().and_then(|r| rows.get(r)).is_none_or(|r| t.seq < r.seq);
+        if !reroot {
+            return (was != now).then(|| self.retally(rows, t, was, now));
+        }
+        let before = self.snapshot();
+        self.count(rows, t, was, false);
+        self.count(rows, t, now, true);
+        self.shortcodes.get_mut(&t.epic).expect("every epic has a shortcode").root = Some(t.id.clone());
+        self.settle(rows);
+        Some(self.diff(before))
+    }
+
+    /// SDLC-13: `t`'s own count moves from `was` to `now` where its tree is
+    /// kept, and in the row it is drawn in and every row around it; returns
+    /// each as it now stands, innermost first.
+    fn retally(&mut self, rows: Rows<'_>, t: &Row, was: Tally, now: Tally) -> Vec<Group> {
+        let home = self.count(rows, t, was, false);
+        self.count(rows, t, now, true);
+        let chain = self.chain(&home);
+        for (i, epic) in chain.iter().enumerate() {
+            let s = self.shortcodes.get_mut(epic).expect("in the chain");
+            if i == 0 {
+                s.own.shift(was, false);
+                s.own.shift(now, true);
+            }
+            s.roll.shift(was, false);
+            s.roll.shift(now, true);
+        }
+        chain.iter().filter_map(|epic| self.view(epic)).collect()
     }
 
     /// A `set_parent`, before the rows change: the child's tree — the

@@ -309,6 +309,22 @@ fn remember(t: &TicketSummary) {
     });
 }
 
+/// A `watch` event that carries a ticket whose row it replaces whole —
+/// `status_changed`, `kind_changed` (SDLC-13), `unlocks_changed` — applied:
+/// remembered as the newest row for its id, and put on the row the cache
+/// holds (dropped where no view holds it). True when a view holds it.
+pub(crate) fn upsert(ev: &TicketsEvent) -> bool {
+    let ticket = match ev {
+        TicketsEvent::StatusChanged { ticket, .. }
+        | TicketsEvent::KindChanged { ticket, .. }
+        | TicketsEvent::UnlocksChanged { ticket, .. } => ticket,
+        _ => return false,
+    };
+    let summary = TicketSummary::from(ticket);
+    remember(&summary);
+    cache::put(summary)
+}
+
 /// FILTER-12: the row `watch` last carried for `id`, if it was recent.
 pub(crate) fn recent(id: &str) -> Option<TicketSummary> {
     RECENT.with(|r| r.borrow().iter().rev().find(|t| t.id == id).cloned())
@@ -792,14 +808,16 @@ async fn session(
                 board.created(&summary);
             }
             // SCALE-26: applied to the row where a view holds it, dropped
-            // where none does.
+            // where none does. SDLC-13: a `kind_changed` as a
+            // `status_changed` — the row upserts, so every view that draws
+            // it (the nav's glyph, the board's kind and status, the ticket
+            // page's kind) moves with it.
             ClientEvent::Data(
-                TicketsEvent::StatusChanged { ticket, .. }
-                | TicketsEvent::UnlocksChanged { ticket, .. },
+                ev @ (TicketsEvent::StatusChanged { .. }
+                | TicketsEvent::KindChanged { .. }
+                | TicketsEvent::UnlocksChanged { .. }),
             ) => {
-                let summary = TicketSummary::from(&ticket);
-                remember(&summary);
-                cache::put(summary);
+                upsert(&ev);
             }
             // SCALE-4: the parent's id, the child and the new count — the
             // child's own row arrived with its `created`.
@@ -1226,4 +1244,61 @@ pub(crate) async fn children_matching(parent: String, filter: String) -> Result<
         }
     }
     remaining.ok_or_else(|| "no page".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{recent, upsert};
+    use crate::cache;
+    use leptos::prelude::*;
+    use menger_tickets_api::{Kind, Placement, Status, Ticket, TicketSummary, TicketsEvent};
+
+    fn ticket(id: &str, kind: Kind, status: Status) -> Ticket {
+        let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
+        Ticket {
+            id: id.to_string(),
+            epic: epic.to_string(),
+            seq: seq.parse().expect("seq"),
+            title: format!("the title of {id}"),
+            status,
+            kind,
+            severity: None,
+            blocked_by: vec![],
+            unlocks: vec![],
+            parent: None,
+            child_count: 0,
+            commits: vec![],
+            path: None,
+            placement: kind.has_lifecycle().then_some(Placement::Wave { n: 1 }),
+            body: String::new(),
+            created_unix: 0,
+            updated_unix: 0,
+        }
+    }
+
+    /// SDLC-13: a `kind_changed` is applied as a `status_changed` is — the
+    /// row a view holds takes the ticket's new kind, status and placement in
+    /// place (the one signal the nav's glyph, the board's row and the ticket
+    /// page all draw it through), and it is the newest row `watch` carried
+    /// for its id; a row no view holds is remembered, not inserted.
+    #[test]
+    fn a_kind_changed_upserts_the_row() {
+        let held = cache::hold(TicketSummary::from(&ticket("KC-1", Kind::Doc, Status::Doc)));
+        let scope = ticket("KC-1", Kind::Scope, Status::Epic);
+        assert!(upsert(&TicketsEvent::KindChanged { ticket: scope, previous: Kind::Doc }));
+        assert_eq!(
+            held.with_untracked(|t| (t.kind, t.status, t.placement)),
+            (Kind::Scope, Status::Epic, Some(Placement::Wave { n: 1 }))
+        );
+        assert_eq!(recent("KC-1").map(|t| t.kind), Some(Kind::Scope));
+
+        // Back to a doc: placed nowhere again.
+        assert!(upsert(&TicketsEvent::KindChanged { ticket: ticket("KC-1", Kind::Doc, Status::Doc), previous: Kind::Scope }));
+        assert_eq!(held.with_untracked(|t| (t.kind, t.status, t.placement)), (Kind::Doc, Status::Doc, None));
+
+        assert!(!upsert(&TicketsEvent::KindChanged { ticket: ticket("KC-2", Kind::Gap, Status::Pending), previous: Kind::Build }));
+        assert!(cache::get("KC-2").is_none(), "no view holds it");
+        assert_eq!(recent("KC-2").map(|t| t.kind), Some(Kind::Gap));
+        cache::release("KC-1");
+    }
 }

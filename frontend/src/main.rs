@@ -826,8 +826,9 @@ fn Board(
                         let href_id = row_id.clone();
                         let index_id = row_id.clone();
                         // SDLC-11: a doc has no lifecycle — its status is a
-                        // chip, not a control. A kind is fixed at birth.
-                        let is_doc = ticket.with_untracked(|t| !t.kind.has_lifecycle());
+                        // chip, not a control. SDLC-13: a kind changes
+                        // (`set_kind`), so which one the cell draws follows it.
+                        let is_doc = Memo::new(move |_| ticket.with(|t| !t.kind.has_lifecycle()));
                         view! {
                             <tr
                                 data-ticket-id=row_id.clone()
@@ -874,7 +875,7 @@ fn Board(
                                 <td title=move || ticket.with(|t| t.title.clone())>{move || ticket.with(|t| t.title.clone())}</td>
                                 <td class="kind">{move || ticket.with(|t| t.kind.to_string())}</td>
                                 <td class="status">
-                                    {if is_doc {
+                                    {move || if is_doc.get() {
                                         view! {
                                             <span class=move || format!("status chip {}", ticket.with(|t| st_class(t.status.as_str())))>
                                                 {move || ticket.with(|t| t.status.to_string())}
@@ -882,6 +883,7 @@ fn Board(
                                         }
                                             .into_any()
                                     } else {
+                                        let id = id.clone();
                                         view! {
                                             <select
                                                 // The control is the chip: it wears the
@@ -1009,7 +1011,8 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>, lensed: Option<U
     let dangling = move || found.get().is_none() && dangling_when.is_some_and(|loaded| loaded.get());
     let attr_id = id.clone();
     let menu_id = id.clone();
-    // The glyph's tint, once the row is known (a kind is fixed at birth).
+    // The glyph's tint, once the row is known — SDLC-13: and as its kind
+    // changes.
     let kind_attr = move || found.get().map(|t| t.with(|x| x.kind.as_str()));
     let outside = {
         let id = id.clone();
@@ -1028,9 +1031,9 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>, lensed: Option<U
                 Some(t) => {
                     let t = RwSignal::from(t);
                     let href = format!("#/ticket/{id}");
-                    let kind = t.with_untracked(|x| x.kind.as_str());
+                    let kind = move || t.with(|x| x.kind.as_str());
                     view! {
-                        <span class="glyph" title=kind aria-hidden="true">{nav::kind_glyph(kind)}</span>
+                        <span class="glyph" title=kind aria-hidden="true">{move || nav::kind_glyph(kind())}</span>
                         <a class="code" href=href>{id.clone()}</a>
                         <span class="btitle" title=move || t.with(|x| x.title.clone())>
                             {move || t.with(|x| x.title.clone())}
@@ -1357,14 +1360,14 @@ fn ticket_view(
     };
 
     // The id never changes for a row's lifetime (see `Row`), so the
-    // header's menu attachment is static. SDLC-11: nor does a kind, so
-    // whether this is a doc is read once.
+    // header's menu attachment is static. SDLC-13: a kind does change
+    // (`set_kind`), so whether this is a doc is followed.
     let header_id = ticket.with_untracked(|t| t.id.clone());
     let me = header_id.clone();
-    let is_doc = ticket.with_untracked(|t| !t.kind.has_lifecycle());
+    let is_doc = Memo::new(move |_| ticket.with(|t| !t.kind.has_lifecycle()));
     // A doc is never blocked and never a blocker (SDLC-11): its relations
     // are not drawn while they are empty, which they always are.
-    let no_relations = move || is_doc && blocked_by.with(Vec::is_empty) && unlocks_ids.with(Vec::is_empty);
+    let no_relations = move || is_doc.get() && blocked_by.with(Vec::is_empty) && unlocks_ids.with(Vec::is_empty);
     view! {
         <article class="ticket">
             <h2 data-ticket-id=header_id>
@@ -1392,7 +1395,7 @@ fn ticket_view(
                     <dd
                         id="t-status"
                         class=move || format!("status {}", ticket.with(|t| st_class(t.status.as_str())))
-                        title=is_doc.then_some("A doc has no lifecycle: it is born Doc and nothing moves it")
+                        title=move || is_doc.get().then_some("A doc has no lifecycle: it holds Doc, and no status moves it")
                     >
                         {move || ticket.with(|t| t.status.to_string())}
                     </dd>

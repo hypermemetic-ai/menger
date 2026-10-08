@@ -163,9 +163,12 @@ struct Tally {
     /// SDLC-11: docs born, and creates tried (what picks a doc).
     docs: usize,
     attempts: usize,
+    /// SDLC-13: writes made (what picks a `set_kind`), and kinds changed.
+    writes: usize,
+    kinds: usize,
 }
 
-/// One random write — any of the six, legal or refused — against the store
+/// One random write — any of the seven, legal or refused — against the store
 /// as it stands.
 async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut Tally) -> String {
     // Ids the API can name: a lowercase one (only a hand edit writes one)
@@ -179,6 +182,22 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
         .collect();
     let extents: BTreeMap<String, u32> = store.extents().into_iter().collect();
     let pick = |rng: &mut Rng| all[rng.below(all.len())].id.clone();
+    // SDLC-13: every seventh write a kind changed — every pair of kinds, with
+    // and without a status, legal or refused, held to the rules
+    // (`tests_kinds`); on the hand-edited shapes, re-rooting a shortcode that
+    // had another root, or none. By a count, and on draws of its own: the
+    // walk's draws stay the ones it had.
+    tally.writes += 1;
+    if !all.is_empty() && tally.writes % 7 == 0 {
+        let mut own = Rng(rng.0 ^ (tally.writes as u64).wrapping_mul(0x5D1C_0013_0000_0001));
+        let (what, did) = super::tests_kinds::random_set_kind(store, &mut |n| own.below(n)).await;
+        match did {
+            super::tests_kinds::KindWrite::Changed { .. } => tally.kinds += 1,
+            super::tests_kinds::KindWrite::Refused => tally.refused += 1,
+            super::tests_kinds::KindWrite::Unchanged => {}
+        }
+        return what;
+    }
     let kind = if all.is_empty() { 0 } else { rng.below(20) };
     match kind {
         0..=7 => {
@@ -321,7 +340,8 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, epics: &[&str
             && tally.links > 0
             && tally.unlinks > 0
             && tally.forward > 0
-            && tally.docs > 0,
+            && tally.docs > 0
+            && tally.kinds > writes / 50,
         "every kind of write, and enough of them: {tally:?}"
     );
     let form = store.tickets.read().unwrap().form();
@@ -406,6 +426,7 @@ async fn the_stored_state_is_a_scan_on_hand_edited_shapes_and_through_their_repa
     let file = read_back(&path);
     assert!(!file.form.marks.iter().any(|(m, id)| *m == stored::Mark::Dangling && id == "GHOST-1"), "repaired");
 
+    let reroots = super::tests_kinds::reroots();
     let store = walk(
         store,
         &path,
@@ -414,6 +435,9 @@ async fn the_stored_state_is_a_scan_on_hand_edited_shapes_and_through_their_repa
         &["AAA", "AGS", "BBB", "CYC", "DEMO", "NOSC", "PLEX", "TRAN", "XPC", "DUA", "NEW"],
     )
     .await;
+    // SDLC-13: a `set_kind` re-rooted a legacy shortcode, and what it stored
+    // is what a scan gives.
+    assert!(super::tests_kinds::reroots() > reroots, "no set_kind re-rooted a shortcode");
     drop(store);
 
     // SCALE-19's shapes: holes, a sequence 0, a lowercase shortcode.

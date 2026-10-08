@@ -57,7 +57,9 @@ pub enum Status {
     Idea,
     Epic,
     Superseded,
-    /// SDLC-11: a doc's, and only a doc's — set at its birth, never changed.
+    /// SDLC-11: a doc's, and only a doc's — set at its birth, never moved by
+    /// `set_status`. SDLC-13: `set_kind` gives it to a ticket that becomes a
+    /// doc and takes it from one that stops being one.
     Doc,
 }
 
@@ -166,6 +168,16 @@ impl FromStr for Status {
 /// set, one vocabulary owning the slot — and, since SDLC-11 (owner,
 /// 2026-10-02), a sixth that is not work at all: `doc`. Serialized
 /// lowercase (`kind: build`) on the wire and in the store.
+///
+/// SDLC-13: set at birth, and changed only by `set_kind`, which moves
+/// everything kept by kind in the same write. Its rules: to a doc, the
+/// status becomes [`Status::Doc`] — refused while the ticket waits on a
+/// blocker or a ticket waits on it; from a doc, the status becomes the one
+/// given (never `Doc`), else `Epic` for a scope and `Pending` for any other
+/// kind; between two kinds with a lifecycle the status stays unless one is
+/// given. A shortcode's root never becomes a kind that roots nothing
+/// (doc ↔ scope it may), and a lower-seq ticket that becomes a scope or a
+/// doc becomes its shortcode's root.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
 )]
@@ -493,9 +505,9 @@ impl From<&Ticket> for TicketSummary {
 /// row, so the group carries what that row shows — `root_row`, the root's
 /// title, status and kind, read from the server's cache — and the top level
 /// still paints from `groups {}` alone, with no `get` per shortcode. It is
-/// kept current the way the counts are: a change to the root's title or
-/// status is a change to its group, and `group_changed` carries it (a kind
-/// never changes). `None` exactly when `root` is.
+/// kept current the way the counts are: a change to the root's title,
+/// status or kind (SDLC-13: `set_kind`) is a change to its group, and
+/// `group_changed` carries it. `None` exactly when `root` is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Group {
     /// The shortcode (epic prefix), uppercase.
@@ -1112,6 +1124,16 @@ pub enum TicketsEvent {
     },
     /// A ticket's status changed (yielded by `set_status`, and by `watch`).
     StatusChanged { ticket: Ticket, previous: Status },
+    /// SDLC-13: a ticket's kind changed (yielded by `set_kind`, and by
+    /// `watch`) — and its status with it, when the change crossed the doc
+    /// line or the call gave one; `previous` is the kind it had. The whole
+    /// ticket rides along, its new placement included, so applying it is
+    /// one upsert, as `status_changed` is. First of its write's events: the
+    /// `group_changed`, `placements_changed` and (on a filtered watch)
+    /// `entered` / `left` it caused follow, as they follow a status change.
+    /// `set_kind`'s own answer to a call that changed nothing has `previous`
+    /// equal to the ticket's kind; `watch` never carries that one.
+    KindChanged { ticket: Ticket, previous: Kind },
     /// MNG-16: a ticket's title and/or body was replaced (yielded by
     /// `amend`, and by `watch` for every amend that changed something).
     /// `changed` names what moved — `"title"`, `"body"`, both in that

@@ -44,6 +44,8 @@ export interface TicketsClient {
     reopenInput(input: string, ticket: string): AsyncGenerator<TicketsEvent>;
     /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
     schema(): Promise<unknown>;
+    /** Set a ticket's kind; everything kept by kind moves with it (to a doc: status Doc; from a doc: the status given, else Epic for a scope and Pending otherwise) */
+    setKind(id: string, kind: string, status?: string | null): AsyncGenerator<TicketsEvent>;
     /** Set a ticket's parent — the ticket it is an output of; adopts a parentless ticket or moves one */
     setParent(id: string, parent: string): AsyncGenerator<TicketsEvent>;
     /** Set a ticket's status (not a doc's: a doc has no lifecycle) */
@@ -52,7 +54,7 @@ export interface TicketsClient {
     tree(filter: string, after?: string | null, epic?: string | null, limit?: number | null, parent?: string | null): AsyncGenerator<TicketsEvent>;
     /** Unlink commits from a ticket; yields commits_unlinked { ticket, removed } */
     unlinkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
-    /** Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
+    /** Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
     watch(epic?: string | null, filter?: string | null, membership?: boolean | null): AsyncGenerator<TicketsEvent>;
     /** The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts */
     waves(epics: string[], kinds?: string[] | null): AsyncGenerator<TicketsEvent>;
