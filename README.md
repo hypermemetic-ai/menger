@@ -280,6 +280,14 @@ and a ticket page says when its ticket is outside and filters its children
 `f=` the surface's own — and the viewer's local storage, so global and nav
 filters survive navigation and reload.
 
+The menu builds a NOT (FILTER-19): a category's values open with an `is` /
+`is not` switch (Title's `contains` / `does not contain`) showing the
+clause's operator. Set to `is not`, it makes the clause a pill's toggle
+makes, and values checked under it are excluded — Filter ▸ Kind, `is not`,
+doc and spike is `not kind in (spike, doc)`. A flag (Ready, Blocked,
+Commits) has no switch; its `yes` / `no` is the negation. Tab from the
+search reaches the switch; Space or Enter flips it.
+
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service

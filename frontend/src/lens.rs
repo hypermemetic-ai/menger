@@ -795,19 +795,23 @@ impl Lens {
         self.commit(level, Some(next));
     }
 
-    /// A click on a value of `c`: a shortcode takes its subtree with it.
-    pub(crate) fn toggle(self, level: Level, c: Cat, token: &str) {
+    /// A click on a value of `c`: a shortcode takes its subtree with it. A
+    /// clause it starts takes `op` (FILTER-19: the menu's switch).
+    pub(crate) fn toggle(self, level: Level, c: Cat, token: &str, op: Op) {
         let tree = self.sctree.get_untracked();
-        self.edit(level, |k| match (c, &tree) {
-            (Cat::Shortcode, Some(t)) => k.toggle_code(t, token),
-            _ => k.toggle(c, token),
+        self.edit(level, |k| {
+            k.edit_as(c, op, |k| match (c, &tree) {
+                (Cat::Shortcode, Some(t)) => k.toggle_code(t, token),
+                _ => k.toggle(c, token),
+            })
         });
     }
 
-    /// Shortcode is (any of) `code`'s tree only.
-    pub(crate) fn only(self, level: Level, code: &str) {
+    /// Shortcode is (any of, or — `op`, a new clause's — none of) `code`'s
+    /// tree only.
+    pub(crate) fn only(self, level: Level, code: &str, op: Op) {
         let Some(t) = self.sctree.get_untracked() else { return };
-        self.edit(level, |k| k.set_values(Cat::Shortcode, t.subtree(code)));
+        self.edit(level, |k| k.edit_as(Cat::Shortcode, op, |k| k.set_values(Cat::Shortcode, t.subtree(code))));
     }
 
     /// A custom pill's group taken out.
@@ -1233,6 +1237,42 @@ mod tests {
         assert_eq!(clause_of(&parsed("status in (Ready, Coding)").groups[0]), Some((Cat::Status, clause(Is, &["Coding", "Ready"]))));
         assert_eq!(field_of(Cat::Status, "Bogus"), None);
         assert_eq!(field_of(Cat::Wave, "1"), None, "a local category is no field");
+    }
+
+    /// FILTER-19: the menu's switch on a level's filter — `is not` turns a
+    /// pill's group exactly as the pill's toggle does, and the pill and the
+    /// canonical text follow; values checked under it are a new excluding
+    /// group; a flag's is untouched.
+    #[test]
+    fn the_menus_switch_writes_the_not() {
+        let mut k = Kept { filter: parsed("status in (Ready, Coding) and in MNG"), ..Kept::default() };
+        let mut by_pill = k.clone();
+        by_pill.flip(Cat::Status);
+        k.set_op(Cat::Status, Op::Not);
+        assert_eq!(k, by_pill, "the same clause a pill's toggle makes");
+        assert_eq!(k.filter.format(), "not status in (Coding, Ready) and in MNG");
+        assert_eq!(k.pills()[0], Pill::Clause { cat: Cat::Status, clause: clause(Op::Not, &["Coding", "Ready"]) });
+        k.set_op(Cat::Status, Op::Is);
+        assert_eq!(k.filter.format(), "status in (Coding, Ready) and in MNG");
+
+        // Filter ▸ Kind, `is not`, doc and spike checked.
+        k.edit_as(Cat::Kind, Op::Not, |k| k.toggle(Cat::Kind, "doc"));
+        assert_eq!(k.filter.format(), "status in (Coding, Ready) and in MNG and not kind doc");
+        k.edit_as(Cat::Kind, Op::Not, |k| k.toggle(Cat::Kind, "spike"));
+        assert_eq!(k.filter.format(), "status in (Coding, Ready) and in MNG and not kind in (spike, doc)");
+        assert_eq!(k.pills()[2], Pill::Clause { cat: Cat::Kind, clause: clause(Op::Not, &["spike", "doc"]) });
+        assert_eq!(parsed(&k.filter.format()), k.filter, "the text parses back to the filter");
+
+        // A shortcode's tree, excluded.
+        let t = platform();
+        let mut n = Kept::default();
+        n.edit_as(Cat::Shortcode, Op::Not, |k| k.toggle_code(&t, "MACRO"));
+        assert_eq!(n.filter.format(), "not in (CODEGEN, GEN, MACRO)");
+
+        // A flag has no switch: its value says it.
+        let mut r = Kept { filter: parsed("ready"), ..Kept::default() };
+        r.set_op(Cat::Ready, Op::Not);
+        assert_eq!(r.filter.format(), "ready");
     }
 
     /// Acceptance 1: a group no category draws is a custom pill showing its
