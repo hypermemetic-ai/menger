@@ -1252,7 +1252,10 @@ fn ticket_view(
             return view! { <p class="none">"The server did not take the global filter: "<code>{why}</code></p> }.into_any();
         }
         if ids.is_empty() {
-            let word = match kids.with(|k| (k.loaded, k.list_filter().is_some())) {
+            // FILTER-16: every child hidden by the filter says so; none at
+            // all is "None", as always.
+            let count = ticket.with(|t| t.child_count);
+            let word = match kids.with(|k| (k.loaded, k.list_filter().is_some() && k.hidden(count) > 0)) {
                 (false, _) => "loading…",
                 (true, false) => "None",
                 (true, true) => "None in the filter",

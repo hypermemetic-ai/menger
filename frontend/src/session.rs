@@ -1161,9 +1161,18 @@ const MEMBER_MAX: usize = 1000;
 /// in the order asked, asked in parts of [`MEMBER_MAX`]. `Err`: no
 /// connection, or the server's words (a filter it did not take).
 pub(crate) async fn member(ids: Vec<String>, filter: String) -> Result<Vec<(String, bool)>, String> {
-    // WIRE-PENDING(FILTER-15): `member` is not on this branch yet.
-    let _ = (client(), MEMBER_MAX, ids, filter);
-    Err("member: FILTER-15 is not merged yet".to_string())
+    let client = client().ok_or_else(|| "not connected".to_string())?;
+    let mut out = Vec::with_capacity(ids.len());
+    for part in ids.chunks(MEMBER_MAX) {
+        for ev in client.member_all(part.to_vec(), filter.clone()).await.map_err(|e| describe(&e))? {
+            match ev {
+                TicketsEvent::Member { id, matched } => out.push((id, matched)),
+                TicketsEvent::Error { message } => return Err(message),
+                _ => {}
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// FILTER-16: the palette's `find { query, limit, filter }` — its rows and
@@ -1171,11 +1180,7 @@ pub(crate) async fn member(ids: Vec<String>, filter: String) -> Result<Vec<(Stri
 /// take. `Err`: the call failed (the socket).
 pub(crate) async fn find_under(query: String, limit: u32, filter: Option<String>) -> Result<Result<(Vec<TicketSummary>, u64), String>, String> {
     let client = client().ok_or_else(|| "not connected".to_string())?;
-    // WIRE-PENDING(FILTER-15): `find { filter }` is not on this branch yet.
-    if filter.is_some() {
-        return Ok(Err("find { filter }: FILTER-15 is not merged yet".to_string()));
-    }
-    let events = client.find_all(query, None, Some(limit), None).await.map_err(|e| describe(&e))?;
+    let events = client.find_all(query, None, Some(limit), filter).await.map_err(|e| describe(&e))?;
     let mut rows = Vec::new();
     let mut remaining = 0;
     for ev in events {
@@ -1193,9 +1198,15 @@ pub(crate) async fn find_under(query: String, limit: u32, filter: Option<String>
 /// tickets `filter` admits, in the store's order (FILTER-15). `Err`: no
 /// connection, or the server's words.
 pub(crate) async fn inputs_under(filter: String) -> Result<Vec<TicketsEvent>, String> {
-    // WIRE-PENDING(FILTER-15): `inputs { filter }` is not on this branch yet.
-    let _ = (client(), filter);
-    Err("inputs { filter }: FILTER-15 is not merged yet".to_string())
+    let client = client().ok_or_else(|| "not connected".to_string())?;
+    let events = client.inputs_all(None, None, None, Some(filter)).await.map_err(|e| describe(&e))?;
+    if let Some(message) = events.iter().find_map(|ev| match ev {
+        TicketsEvent::Error { message } => Some(message.clone()),
+        _ => None,
+    }) {
+        return Err(message);
+    }
+    Ok(events)
 }
 
 /// FILTER-16: how many of `parent`'s children `filter` admits — `list {
