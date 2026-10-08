@@ -1291,6 +1291,12 @@ pub enum TicketsEvent {
     /// A blocker id that names no existing ticket — a dangling forward
     /// reference (yielded per-entry by `blockers`).
     DanglingBlocker { id: String },
+    /// FILTER-15: whether a filter admits one ticket (yielded by `member`,
+    /// one per id asked, in the order asked): `id` as it was asked,
+    /// `matched` whether the filter admits the ticket it names — `false`
+    /// for an id that names no ticket. One lookup in the filter's admitted
+    /// cells, never a test of the ticket.
+    Member { id: String, matched: bool },
     /// Lookup miss.
     NotFound { id: String },
     /// In-band error (bad enum value, invalid epic, blocked_by cycle, …).

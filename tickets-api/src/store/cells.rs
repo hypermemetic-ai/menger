@@ -889,3 +889,27 @@ fn merge(bms: &[std::borrow::Cow<'_, RoaringBitmap>], lo: u32, take: usize, mut 
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// FILTER-15: the reads that take the lens ask a view two more things — is
+// this ticket a match (one lookup in its shortcode's admitted bitmaps), and
+// which bitmaps hold the candidates from a shortcode on.
+
+impl<'a> View<'a> {
+    /// Whether the ticket at `seq` of `epic` is a match: its shortcode found
+    /// by a binary search, then a lookup in each bitmap admitted there — the
+    /// cells are disjoint, so the first that holds it answers.
+    pub(super) fn contains(&self, epic: &str, seq: u32) -> bool {
+        match self.by_epic.binary_search_by(|(e, _)| (*e).cmp(epic)) {
+            Ok(i) => self.by_epic[i].1.iter().any(|b| b.contains(seq)),
+            Err(_) => false,
+        }
+    }
+
+    /// Each shortcode with a match from `epic` on (every one without it), in
+    /// the store's order, with the bitmaps admitted there.
+    pub(super) fn shortcodes_from(&self, epic: Option<&str>) -> &[(&'a str, Vec<std::borrow::Cow<'a, RoaringBitmap>>)] {
+        let start = epic.map_or(0, |e| self.by_epic.partition_point(|(x, _)| *x < e));
+        &self.by_epic[start..]
+    }
+}

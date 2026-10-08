@@ -187,14 +187,14 @@ pub(crate) async fn run(client: &Client, call: Call) -> Result<Vec<TicketsEvent>
         Call::List { epic, status, parent, after, limit, summary } => {
             client.list_all(epic, status, parent, after, limit, summary, None, None).await
         }
-        Call::Find { query, after, limit } => client.find_all(query, after, limit).await,
+        Call::Find { query, after, limit } => client.find_all(query, after, limit, None).await,
         Call::Waves { epics, kinds } => client.waves_all(epics, kinds).await,
         Call::Groups => client.groups_all().await,
         Call::Extents => client.extents_all().await,
         Call::Blockers { id } => client.blockers_all(id).await,
         Call::Health => client.health_all().await,
         Call::Components => client.components_all().await,
-        Call::Inputs { ticket, epic, state } => client.inputs_all(ticket, epic, state).await,
+        Call::Inputs { ticket, epic, state } => client.inputs_all(ticket, epic, state, None).await,
     };
     answer.map_err(|e| crate::session::describe(&e))
 }
@@ -315,7 +315,7 @@ pub(crate) fn recorded(events: Vec<TicketsEvent>) -> Result<Answer, String> {
 /// `tickets.answer` with source `app` — the recorded answer, or why not.
 pub(crate) async fn submit(client: &Client, ticket: String, submit: Submit) -> Result<Answer, String> {
     let described = |e: plexus_client::ClientError| format!("{SUBMIT}: {}", crate::session::describe(&e));
-    let held = inputs_of(SUBMIT, client.inputs_all(Some(ticket.clone()), None, None).await.map_err(described)?)?;
+    let held = inputs_of(SUBMIT, client.inputs_all(Some(ticket.clone()), None, None, None).await.map_err(described)?)?;
     let value = check_submit(&ticket, &submit, &held)?;
     let source = Some(AnswerSource::App.as_str().to_string());
     recorded(client.answer_all(ticket, submit.input, value, submit.rationale, source).await.map_err(described)?)
@@ -364,7 +364,7 @@ pub(crate) fn cleared(events: Vec<TicketsEvent>) -> Result<Input, String> {
 /// `tickets.clear_answer` with source `app` — the input, or why not.
 pub(crate) async fn clear(client: &Client, ticket: String, clear: Clear) -> Result<Input, String> {
     let described = |e: plexus_client::ClientError| format!("{CLEAR}: {}", crate::session::describe(&e));
-    let held = inputs_of(CLEAR, client.inputs_all(Some(ticket.clone()), None, None).await.map_err(described)?)?;
+    let held = inputs_of(CLEAR, client.inputs_all(Some(ticket.clone()), None, None, None).await.map_err(described)?)?;
     check_clear(&ticket, &clear, &held)?;
     let source = Some(AnswerSource::App.as_str().to_string());
     cleared(client.clear_answer_all(ticket, clear.input, source).await.map_err(described)?)

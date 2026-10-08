@@ -217,7 +217,7 @@ pub struct Watcher {
 
 /// The matches of `q` under the read lock: the admitted bitmaps, and — for
 /// a parent's page — inside its children.
-fn view<'c>(cache: &'c Cache, q: &Filtered) -> View<'c> {
+pub(super) fn view<'c>(cache: &'c Cache, q: &Filtered) -> View<'c> {
     let admit = q.lens.admit(cache.cells.keys(), q.status);
     let view = View::of(&cache.cells, &admit, q.epic.as_deref());
     match q.parent.as_deref() {

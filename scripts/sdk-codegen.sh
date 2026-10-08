@@ -119,7 +119,8 @@ export async function script(this: MengerElement): Promise<number> {
   const v: string = window.menger.version;
   // INPUT-4: this ticket's inputs, read typed, and the first write.
   const ticket: string | null = this.menger.input.ticket;
-  for await (const ev of menger.tickets.inputs(undefined, 'open', ticket)) {
+  // (epic, filter, state, ticket): the generated client takes them in name order.
+  for await (const ev of menger.tickets.inputs(undefined, undefined, 'open', ticket)) {
     if (ev.type === 'input') n += ev.input.history.length + (ev.input.answer?.atUnix ?? 0);
   }
   const answer: Answer = await menger.input.submit('landing', { type: 'choice', option: 'archive' }, 'holds are real');

@@ -47,6 +47,7 @@
     ],
     "find": [
       "after",
+      "filter",
       "limit",
       "query"
     ],
@@ -57,6 +58,7 @@
     "health": [],
     "inputs": [
       "epic",
+      "filter",
       "state",
       "ticket"
     ],
@@ -74,9 +76,14 @@
       "status",
       "summary"
     ],
+    "member": [
+      "filter",
+      "ids"
+    ],
     "ready_set": [
       "after",
       "epic",
+      "filter",
       "limit",
       "summary"
     ],

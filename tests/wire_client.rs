@@ -275,7 +275,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- find (SCALE-6) -----------------------------------------------------
     // The generated client's `find`: typed `summary` rows, then the page.
     let found = client
-        .find_all(" OVER the ".into(), None, None)
+        .find_all(" OVER the ".into(), None, None, None)
         .await
         .expect("find");
     match found.as_slice() {
@@ -286,9 +286,27 @@ async fn the_wire_assertions_through_the_generated_client() {
         other => panic!("expected one `summary` and the page, got {other:?}"),
     }
     assert!(
-        rows(client.find_all("zzz".into(), None, Some(2)).await.expect("find")).is_empty(),
+        rows(client.find_all("zzz".into(), None, Some(2), None).await.expect("find")).is_empty(),
         "nothing matches"
     );
+
+    // -- FILTER-15: find under a filter, and member -------------------------
+    // WIRE-1 is Ready: a filter that does not admit it hides it from find.
+    assert!(
+        rows(client.find_all(" OVER the ".into(), None, None, Some("status Pending".into())).await.expect("find")).is_empty(),
+        "the filter does not admit it"
+    );
+    assert_eq!(rows(client.find_all(" OVER the ".into(), None, None, Some("ready".into())).await.expect("find")).len(), 1);
+    let members = client
+        .member_all(vec!["WIRE-1".into(), "NOPE-1".into(), "wire-1".into()], "status Ready".into())
+        .await
+        .expect("member");
+    match members.as_slice() {
+        [TicketsEvent::Member { id: a, matched: true }, TicketsEvent::Member { id: b, matched: false }, TicketsEvent::Member { id: c, matched: true }] => {
+            assert_eq!((a.as_str(), b.as_str(), c.as_str()), ("WIRE-1", "NOPE-1", "wire-1"), "in the order asked, as asked");
+        }
+        other => panic!("expected three `member` events, got {other:?}"),
+    }
 
     // -- a dangling blocker -------------------------------------------------
     created(
@@ -311,7 +329,7 @@ async fn the_wire_assertions_through_the_generated_client() {
         .expect("promote DG-1");
     let ready = rows(
         client
-            .ready_set_all(Some("DG".into()), None, None, None)
+            .ready_set_all(Some("DG".into()), None, None, None, None)
             .await
             .expect("ready_set"),
     );
@@ -450,7 +468,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // Server and watch-only mirror agree on the ready set, computed two ways.
     let server_ready = ids(rows(
         client
-            .ready_set_all(Some("WIRE".into()), None, None, None)
+            .ready_set_all(Some("WIRE".into()), None, None, None, None)
             .await
             .expect("ready_set"),
     ));

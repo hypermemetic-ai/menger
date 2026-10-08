@@ -861,7 +861,7 @@ fn ask_find(found: RwSignal<Found>, n: u32, query: String, then: impl FnOnce() +
             found.try_update(|f| f.lost(n));
             return;
         };
-        match client.find_all(query.clone(), None, Some(PALETTE_MAX as u32)).await {
+        match client.find_all(query.clone(), None, Some(PALETTE_MAX as u32), None).await {
             Ok(events) => {
                 let mut rows = Vec::new();
                 let mut remaining = 0;

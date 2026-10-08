@@ -79,6 +79,17 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets watch --filter 'category in (active, review)'   # + entered/left
   ```
 
+  The other reads take the same flag (FILTER-15) — `find`, `ready_set`
+  and `inputs` answer what they answered, of the tickets the filter
+  admits; `member` says which of up to 1,000 ids it admits:
+
+  ```sh
+  synapse -P 4455 menger tickets find --query watch --filter 'not category done'
+  synapse -P 4455 menger tickets ready_set --filter 'kind build and in SCALE' --summary
+  synapse -P 4455 menger tickets inputs --state open --filter 'kind build'
+  synapse -P 4455 menger tickets member --ids FILTER-4,FILTER-5 --filter 'status Ready'
+  ```
+
   **Params are individual flags, not a JSON blob** — treat synapse as a
   normal CLI: `--kebab-case-flag value` after the method path, and
   `<method> --help` prints each parameter's name and type. **A list

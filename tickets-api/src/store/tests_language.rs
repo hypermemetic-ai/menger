@@ -17,7 +17,7 @@ use super::*;
 use crate::filter::{category_of, Category, Display, Facts, Field, Filter, Group, Predicate, Shape};
 
 /// The facts the reference evaluator reads of a row — `blocked` the scan's.
-fn facts(t: &Row, k: Key) -> Facts {
+pub(super) fn facts(t: &Row, k: Key) -> Facts {
     Facts {
         id: t.id.clone(),
         epic: t.epic.clone(),
@@ -70,7 +70,7 @@ fn random_group(rng: &mut Rng, epics: &[String]) -> Group {
 }
 
 /// A random filter, as the wire carries it: its text, read back.
-fn random_filter(rng: &mut Rng, epics: &[String]) -> Filter {
+pub(super) fn random_filter(rng: &mut Rng, epics: &[String]) -> Filter {
     let f = Filter {
         groups: (0..rng.below(4)).map(|_| random_group(rng, epics)).collect(),
         display: match rng.below(4) {
