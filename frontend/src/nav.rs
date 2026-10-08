@@ -176,6 +176,37 @@
 //! - **Persisted expansion moves with it** ([`migrate_expanded`]): an open
 //!   shortcode's code in localStorage opened the row whose one child was
 //!   the root; it now opens the root, so a tree that was open stays open.
+//!
+//! FILTER-14: **the nav under the lens.** The nav shows its effective filter
+//! — `global ∧ nav` (FILTER-11's [`Level::Nav`]); with no group in it the
+//! nav is exactly what it was, and asks exactly what it asked. With one, it
+//! shows where the matches are (FILTER-3 §4, FILTER-9 decision 5) and never
+//! decides membership itself — it draws what the server answers:
+//!
+//! - **The bar** sits at the nav's top under the brand: FILTER-11's generic
+//!   bar at level `nav` — its `Filter` button, the inherited global pills,
+//!   its own; the menu's counts are `facets` (FILTER-12's provider). `f`
+//!   opens it while the nav has focus.
+//! - **The shortcode rows** show their matches in place of their tally:
+//!   `counts { filter }` (FILTER-12's [`LiveCounts`]) summed along the
+//!   hosts ([`summed`]) — a shortcode's and every shortcode hosted under it.
+//!   A shortcode with none is hidden; the last line says how many are
+//!   ([`hidden_line`]) and toggles drawing them, dimmed.
+//! - **Inside**, a node's children are the pruned tree: `tree { parent |
+//!   epic, filter, after, limit }` (FILTER-13) — the rows that match or hold
+//!   a match, in the nav's order, paged and windowed as before. A row that
+//!   matches is drawn as today; one that only holds matches is dimmed; each
+//!   with matches under it carries their number as a badge ([`face_of`]).
+//! - **Live**: a membership watch (`watch { filter, membership: true }`)
+//!   moves the counts (`entered` / `left` / `recount`), and makes every open
+//!   list on the moved ticket's chain ask its page again ([`on_chain`]);
+//!   `recount` and `lagged` make every open list ask again. A re-parent moves
+//!   no membership, so the two parents' chains ask again on its
+//!   `child_removed` / `children_changed`. A list asking again keeps the DOM
+//!   of every row that is still there (the keyed `<For>`).
+//! - **A deep link** to a ticket outside the filter does not draw it: the
+//!   chain opens down to the deepest row the tree shows ([`reveal_from`]),
+//!   which is brought into view.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -185,8 +216,13 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::counts::{wire_text, LiveCounts};
+use crate::filter::{Cat, FilterBar, ScTree};
 use crate::kids::key;
+use crate::lens::{use_lens, Lens, Level};
+use crate::session::Member;
 use crate::{cache, dom, keys, session, st_class, Route};
+use menger_tickets_api::filter::Filter;
 use menger_tickets_api::{Group, Kind, Status, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX};
 
 /// Every treeitem in the nav, in document order (group rows and leaves).
@@ -470,6 +506,118 @@ pub(crate) fn migrate_expanded(expanded: &BTreeSet<String>, groups: &BTreeMap<St
         next.insert(root.clone());
     }
     Some(next)
+}
+
+// ---------------------------------------------------------------------
+// FILTER-14: the nav under the lens — what decides, pure.
+
+/// What `tree` says of a row it answers (FILTER-13's `node`): whether the
+/// row itself matches, and how many matches are strictly under it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Mark {
+    pub(crate) matched: bool,
+    pub(crate) below: u64,
+}
+
+/// How a row is drawn under the lens.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Face {
+    /// It only holds matches: drawn dimmed (still a link, still focusable,
+    /// still opening like any row).
+    pub(crate) dim: bool,
+    /// The matches under it, as its badge — none when there are none.
+    pub(crate) badge: Option<String>,
+    /// It opens onto something the lens shows: matches under it.
+    pub(crate) opens: bool,
+}
+
+/// A row `tree` answered, as it is drawn: a match as today; a row that only
+/// holds matches dimmed; every row with matches under it badged with their
+/// number, and opening onto them.
+pub(crate) fn face_of(m: Mark) -> Face {
+    Face { dim: !m.matched, badge: (m.below > 0).then(|| m.below.to_string()), opens: m.below > 0 }
+}
+
+/// A shortcode's row under the lens — `n` its matches summed along the
+/// hosts, `root` what `tree` said of its root when the nav has been told
+/// (a hosted root, in its host's page). The row's tally is `n`, so it
+/// carries no badge besides. Without the root's word: dimmed when nothing
+/// in it matches (drawn only on the hidden line's say-so), opening when
+/// anything does.
+pub(crate) fn shortcode_face(n: usize, root: Option<Mark>) -> Face {
+    match root {
+        Some(m) if n > 0 => Face { badge: None, ..face_of(m) },
+        _ => Face { dim: n == 0, badge: None, opens: n > 0 },
+    }
+}
+
+/// Each shortcode's matches summed along the hosts (MNG-14's hosting, as the
+/// groups' `host` says it): its own (`held`) and those of every shortcode
+/// hosted under it, at any depth — the shortcode row's number, as its roll-up
+/// counts its subtree.
+pub(crate) fn summed(tree: &ScTree, held: impl Fn(&str) -> usize) -> BTreeMap<String, usize> {
+    tree.known().iter().map(|e| (e.clone(), tree.subtree(e).iter().map(|s| held(s)).sum())).collect()
+}
+
+/// How many shortcodes the filter hides: those with no match.
+pub(crate) fn hidden_count(sums: &BTreeMap<String, usize>) -> usize {
+    sums.values().filter(|n| **n == 0).count()
+}
+
+/// The nav's last line under the lens.
+pub(crate) fn hidden_line(n: usize) -> String {
+    match n {
+        1 => "1 shortcode hidden by the filter".to_string(),
+        n => format!("{n} shortcodes hidden by the filter"),
+    }
+}
+
+/// The shortcode a node stands for, if it does.
+fn node_code(n: &Node) -> Option<&str> {
+    match n {
+        Node::Root(_, epic) | Node::Group(epic) => Some(epic),
+        Node::Ticket(_) => None,
+    }
+}
+
+/// Which shortcode rows the lens draws: those with a match — every one when
+/// `all` (the hidden line toggled on: the rest dimmed). A ticket row is not
+/// the counts' to hide.
+pub(crate) fn shown(nodes: Vec<Node>, sums: &BTreeMap<String, usize>, all: bool) -> Vec<Node> {
+    if all {
+        return nodes;
+    }
+    nodes.into_iter().filter(|n| node_code(n).is_none_or(|e| sums.get(e).is_some_and(|c| *c > 0))).collect()
+}
+
+/// Whether an open list is on a ticket's chain — `chain` the ticket and its
+/// ancestors: a parent's list when the parent is on it (its children's
+/// faces, its count, are what moved), a flat shortcode's list when one of
+/// the chain is in that shortcode.
+pub(crate) fn on_chain(source: &Source, chain: &[String]) -> bool {
+    match source {
+        Source::Parent(p) => chain.contains(p),
+        Source::Epic(e) => chain.iter().any(|id| key(id).is_some_and(|(x, _)| x == e)),
+    }
+}
+
+/// A deep link under the lens: `shown[i]` whether the chain's `i`-th ticket
+/// (0 the open ticket, then each ancestor up to its top row) is a row the
+/// tree draws. A row is drawn when it matches or holds a match, so every
+/// ancestor of a drawn row is drawn: the chain opens from the first drawn
+/// one up — `Some(i)`: skip the first `i` steps — and nothing opens when
+/// none is drawn.
+pub(crate) fn reveal_from(shown: &[bool]) -> Option<usize> {
+    shown.iter().position(|s| *s)
+}
+
+/// A filter's text with `under id` added — what asks whether `id`'s row is
+/// drawn (it or anything under it matches). `None` if `id` is not one the
+/// language reads.
+pub(crate) fn under_text(filter: &str, id: &str) -> Option<String> {
+    let f = Filter::parse(filter).ok()?;
+    let u = Filter::parse(&format!("under {id}")).ok()?;
+    Some(wire_text(&f.and(&u)))
 }
 
 // ---------------------------------------------------------------------
@@ -1051,14 +1199,25 @@ impl Tree {
     }
 }
 
+/// One open list: what it lists, its children, the rows it holds — and
+/// (FILTER-14) whether it is the pruned tree under the lens, and what moves
+/// when it must ask its page again.
+struct Open {
+    source: Source,
+    list: RwSignal<List>,
+    holder: cache::Holder,
+    lensed: bool,
+    again: RwSignal<u32>,
+}
+
 thread_local! {
     /// Every open list, by what it lists — where `watch`'s deltas are applied.
-    static OPEN: RefCell<Vec<(Source, RwSignal<List>, cache::Holder)>> = const { RefCell::new(Vec::new()) };
+    static OPEN: RefCell<Vec<Open>> = const { RefCell::new(Vec::new()) };
 
-    /// The ticket the last `created` / `parent_changed` carried: the
-    /// `children_changed` behind it names it, and an open list takes its
-    /// row from here rather than ask the server for it.
-    static ARRIVED: RefCell<Option<TicketSummary>> = const { RefCell::new(None) };
+    /// The ticket the last `created` / `parent_changed` carried, and whether
+    /// it was born: the `children_changed` behind it names it, and an open
+    /// list takes its row from here rather than ask the server for it.
+    static ARRIVED: RefCell<Option<(TicketSummary, bool)>> = const { RefCell::new(None) };
 
     /// The deep link being revealed; a newer navigation supersedes it.
     static REVEAL_GEN: Cell<u32> = const { Cell::new(0) };
@@ -1134,16 +1293,71 @@ fn keep_focus(tree: &web_sys::Element) {
     on_mutate.forget(); // lives as long as the app
 }
 
-/// The open lists `pick` matches, outside the registry's borrow.
+/// The open lists `pick` matches, outside the registry's borrow — the
+/// unfiltered ones: `watch`'s deltas are what the store did, and a list
+/// under the lens shows what `tree` answers (FILTER-14).
 fn lists(pick: impl Fn(&Source) -> bool) -> Vec<(RwSignal<List>, cache::Holder)> {
-    OPEN.with(|o| o.borrow().iter().filter(|(s, _, _)| pick(s)).map(|(_, l, h)| (*l, h.clone())).collect())
+    OPEN.with(|o| o.borrow().iter().filter(|e| !e.lensed && pick(&e.source)).map(|e| (e.list, e.holder.clone())).collect())
+}
+
+/// FILTER-14: every open list under the lens that `pick` matches asks its
+/// page again.
+fn ask_again(pick: impl Fn(&Source) -> bool) {
+    let hit: Vec<RwSignal<u32>> = OPEN.with(|o| o.borrow().iter().filter(|e| e.lensed && pick(&e.source)).map(|e| e.again).collect());
+    for again in hit {
+        again.try_update(|n| *n = n.wrapping_add(1));
+    }
+}
+
+/// FILTER-14: whether any open list is under the lens.
+fn any_lensed() -> bool {
+    OPEN.with(|o| o.borrow().iter().any(|e| e.lensed))
+}
+
+/// A row as the app last heard of it — the row cache's, else the last
+/// `watch` carried — or, failing both, the server's.
+async fn row_of(id: &str) -> Option<TicketSummary> {
+    match cache::get(id).map(|s| s.get_untracked()).or_else(|| session::recent(id)) {
+        Some(t) => Some(t),
+        None => get_summary(id).await,
+    }
+}
+
+/// FILTER-14: `id` and its ancestors, nearest first — one lookup per
+/// ancestor, from what the app holds where it can.
+async fn chain_ids(id: &str) -> Vec<String> {
+    let mut out = vec![id.to_string()];
+    let mut cur = id.to_string();
+    for _ in 0..64 {
+        match row_of(&cur).await.and_then(|t| t.parent) {
+            Some(p) if !out.contains(&p) => {
+                out.push(p.clone());
+                cur = p;
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+/// FILTER-14: something under `id` moved in or out of the lens (or `id`
+/// itself did): every open list under the lens on its chain asks again —
+/// the faces and counts on the chain are what moved.
+pub(crate) fn chain_moved(id: String) {
+    if !any_lensed() {
+        return;
+    }
+    spawn_local(async move {
+        let chain = chain_ids(&id).await;
+        ask_again(|s| on_chain(s, &chain));
+    });
 }
 
 /// A `created` or `parent_changed` came in. A flat shortcode's list (no
 /// root) takes a birth of its shortcode the way a parent's list takes
 /// `children_changed`.
 pub(crate) fn arrived(t: &TicketSummary, born: bool) {
-    ARRIVED.with(|a| *a.borrow_mut() = Some(t.clone()));
+    ARRIVED.with(|a| *a.borrow_mut() = Some((t.clone(), born)));
     if !born {
         return;
     }
@@ -1157,8 +1371,15 @@ pub(crate) fn arrived(t: &TicketSummary, born: bool) {
 }
 
 /// `children_changed`: an open list of `parent`'s children takes `added`.
+/// FILTER-14: a move (not a birth: the membership watch says whether a
+/// newborn matches) changes no membership, but the pruned tree on the new
+/// parent's chain: those lists ask again.
 pub(crate) fn children_changed(parent: &str, added: &str, count: u64) {
-    let row = ARRIVED.with(|a| a.borrow().as_ref().filter(|t| t.id == added).cloned());
+    let arrived = ARRIVED.with(|a| a.borrow().as_ref().filter(|(t, _)| t.id == added).cloned());
+    if arrived.as_ref().is_some_and(|(_, born)| !born) {
+        chain_moved(parent.to_string());
+    }
+    let row = arrived.map(|(t, _)| t);
     for (list, holder) in lists(|s| matches!(s, Source::Parent(p) if p == parent)) {
         match &row {
             Some(t) => {
@@ -1173,17 +1394,19 @@ pub(crate) fn children_changed(parent: &str, added: &str, count: u64) {
 }
 
 /// MFE-17's `child_removed`: an open list of `parent`'s children lets
-/// `removed` go.
+/// `removed` go. FILTER-14: under the lens, the old parent's chain asks again.
 pub(crate) fn child_removed(parent: &str, removed: &str, count: u64) {
+    chain_moved(parent.to_string());
     for (list, holder) in lists(|s| matches!(s, Source::Parent(p) if p == parent)) {
         list.try_update(|l| l.removed(removed, count as usize));
         holder.release(removed);
     }
 }
 
-/// One page of a list, asked of the server.
+/// One page of a list, asked of the server — FILTER-14: under the lens, with
+/// what `tree` said of each row.
 enum Asked {
-    Page(Vec<TicketSummary>, usize),
+    Page(Vec<TicketSummary>, usize, Vec<(String, Mark)>),
     /// An in-band refusal — a guessed cursor that names no ticket (a hole
     /// in a hand-edited store), or worse.
     Refused,
@@ -1210,11 +1433,68 @@ async fn ask_page(source: &Source, after: Option<String>, limit: usize) -> Asked
                 }
             }
             match remaining {
-                Some(r) => Asked::Page(rows, r),
+                Some(r) => Asked::Page(rows, r, Vec::new()),
                 None => Asked::Refused,
             }
         }
         Err(_) => Asked::Offline,
+    }
+}
+
+/// FILTER-14: one page of a list under the lens — `tree { parent | epic,
+/// filter, after, limit }` (FILTER-13): the rows that match or hold a
+/// match, in the list's order, each with what the tree says of it.
+async fn ask_tree(source: &Source, filter: &str, after: Option<String>, limit: usize) -> Asked {
+    let Some(client) = session::client() else { return Asked::Offline };
+    let (epic, parent) = match source {
+        Source::Parent(p) => (None, Some(p.clone())),
+        Source::Epic(e) => (Some(e.clone()), None),
+    };
+    match client.tree_all(parent, epic, filter.to_string(), after, Some(limit as u32)).await {
+        Ok(events) => {
+            let mut rows = Vec::new();
+            let mut marks = Vec::new();
+            let mut remaining = None;
+            for ev in events {
+                match ev {
+                    TicketsEvent::Node { summary, matched, below } => {
+                        marks.push((summary.id.clone(), Mark { matched, below }));
+                        rows.push(summary);
+                    }
+                    TicketsEvent::Page { remaining: r, .. } => remaining = Some(r as usize),
+                    TicketsEvent::Error { message } => {
+                        leptos::logging::log!("nav: tree: {message}");
+                        return Asked::Refused;
+                    }
+                    _ => {}
+                }
+            }
+            match remaining {
+                Some(r) => Asked::Page(rows, r, marks),
+                None => Asked::Refused,
+            }
+        }
+        Err(_) => Asked::Offline,
+    }
+}
+
+/// FILTER-14: what `tree` says of shortcode `epic`'s top row — its root —
+/// under `filter`: `tree { epic, filter, limit: 1 }`. `None` when the root
+/// is not drawn (nothing in the shortcode matches), or no answer came.
+async fn ask_root(epic: &str, root: &str, filter: &str) -> Option<Mark> {
+    let client = session::client()?;
+    let events = client.tree_all(None, Some(epic.to_string()), filter.to_string(), None, Some(1)).await.ok()?;
+    events.into_iter().find_map(|ev| match ev {
+        TicketsEvent::Node { summary, matched, below } if summary.id == root => Some(Mark { matched, below }),
+        _ => None,
+    })
+}
+
+/// A list's page: `list` — or under the lens, `tree`.
+async fn ask_list(source: &Source, lensed: Option<&str>, after: Option<String>, limit: usize) -> Asked {
+    match lensed {
+        Some(filter) => ask_tree(source, filter, after, limit).await,
+        None => ask_page(source, after, limit).await,
     }
 }
 
@@ -1512,6 +1792,85 @@ struct Ctx {
     expanded: RwSignal<BTreeSet<String>>,
     /// WAVE-10: the "menger docs" toggle — `_MENGER/` documents drawn.
     menger_docs: RwSignal<bool>,
+    /// FILTER-14: the nav's lens.
+    under: Under,
+}
+
+/// FILTER-14: the nav under its effective filter (`global ∧ nav`) — every
+/// handle `Copy`. Off (no group in the filter), nothing here is asked and
+/// every node draws as it did.
+#[derive(Clone, Copy)]
+struct Under {
+    /// The effective filter has a group: the nav is under the lens.
+    on: Memo<bool>,
+    /// What the server is asked: the filter's groups as text — `None` while
+    /// off, and while the filter admits nothing (nothing is asked then).
+    text: Memo<Option<String>>,
+    /// Each shortcode's matches, summed along the hosts — `None` while off,
+    /// and until counted.
+    sums: Memo<Option<BTreeMap<String, usize>>>,
+    /// The hidden line toggled on: the shortcodes with no match drawn,
+    /// dimmed.
+    show_hidden: RwSignal<bool>,
+    /// What `tree` said of each row it answered, by id — for this filter.
+    marks: RwSignal<HashMap<String, Mark>>,
+    /// The server did not take the filter: its words (the stream ended).
+    refused: RwSignal<Option<String>>,
+}
+
+impl Under {
+    fn new(lens: Lens) -> Self {
+        let eff = lens.effective(Level::Nav);
+        let on = Memo::new(move |_| eff.with(|f| !f.groups.is_empty()));
+        let text = Memo::new(move |_| eff.with(|f| (!f.groups.is_empty() && f.admits_nothing().is_none()).then(|| wire_text(f))));
+        // `counts { filter }`, kept live by its membership watch (FILTER-12).
+        let live = LiveCounts::new(text.into());
+        let sctree = lens.sctree();
+        let sums = Memo::new(move |_| {
+            if !on.get() {
+                return None;
+            }
+            let nothing = text.with(Option::is_none);
+            let held = if nothing { None } else { Some(live.get()?) };
+            sctree.with(|t| t.as_ref().map(|t| summed(t, |e| held.as_ref().map_or(0, |m| m.held(e)))))
+        });
+        let marks = RwSignal::new(HashMap::new());
+        let refused = RwSignal::new(None);
+        // A new filter: what the old one's tree said is nothing to this one.
+        Effect::new(move |prev: Option<Option<String>>| {
+            let now = text.get();
+            if prev.is_some_and(|p| p != now) {
+                marks.set(HashMap::new());
+                refused.set(None);
+            }
+            now
+        });
+        Under { on, text, sums, show_hidden: RwSignal::new(false), marks, refused }
+    }
+
+    /// Shortcode `epic`'s matches (tracked) — `None` while off or uncounted.
+    fn count(self, epic: &str) -> Option<usize> {
+        self.sums.with(|s| s.as_ref().map(|s| s.get(epic).copied().unwrap_or(0)))
+    }
+
+    /// What `tree` said of `id` (tracked).
+    fn mark(self, id: &str) -> Option<Mark> {
+        self.marks.with(|m| m.get(id).copied())
+    }
+
+    /// The membership watch's word, for the nav's open lists (the counts
+    /// hear it on their own): a ticket moved in or out — its chain asks
+    /// again; a recount or a gap — every open list does.
+    fn heard(self, ev: &Member) {
+        match ev {
+            Member::Entered { id, .. } | Member::Left { id, .. } => chain_moved(id.clone()),
+            Member::Recount { .. } | Member::Lagged => ask_again(|_| true),
+            Member::Refused(message) => {
+                self.refused.try_set(Some(message.clone()));
+            }
+            Member::Opened => {}
+        }
+    }
 }
 
 /// SCALE-24: the chain from a deep link's ticket up to the top level, one
@@ -1555,6 +1914,19 @@ async fn reveal(ctx: Ctx, leaf: String, gen: u32) {
     if REVEAL_GEN.with(Cell::get) != gen {
         return;
     }
+    // FILTER-14: under the lens the chain opens down to the deepest row the
+    // tree draws, which is what is brought into view.
+    let (steps, leaf) = match ctx.under.text.get_untracked() {
+        Some(filter) => {
+            let Some((steps, at)) = drawn_chain(&filter, &leaf, steps).await else { return };
+            if REVEAL_GEN.with(Cell::get) != gen {
+                return;
+            }
+            (steps, at)
+        }
+        None if ctx.under.on.get_untracked() => return, // a filter that admits nothing draws nothing
+        None => (steps, leaf),
+    };
     let keys: Vec<String> = steps.iter().map(|(n, _)| n.key().to_string()).collect();
     let missing: Vec<String> = ctx.expanded.with_untracked(|e| keys.into_iter().filter(|k| !e.contains(k)).collect());
     if !missing.is_empty() {
@@ -1573,7 +1945,64 @@ async fn reveal(ctx: Ctx, leaf: String, gen: u32) {
             scroll_selected_into_view();
             return;
         }
+        // FILTER-14: the open ticket outside the lens — its deepest drawn
+        // ancestor, into view.
+        let row = dom::window()
+            .document()
+            .and_then(|d| d.query_selector(&format!("#nav .row[data-nav-id=\"{leaf}\"]")).ok().flatten());
+        if let Some(row) = row {
+            let opts = web_sys::ScrollIntoViewOptions::new();
+            opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
+            row.scroll_into_view_with_scroll_into_view_options(&opts);
+            return;
+        }
     }
+}
+
+/// FILTER-14: a deep link's chain under the lens — `steps` as [`chain_to`]
+/// found them (each a node to open and the child it must show), cut to the
+/// steps whose child the tree draws, and the ticket the chain now ends at:
+/// the open ticket when it is drawn, else its deepest drawn ancestor. Whether
+/// a ticket is drawn — it or anything under it matches — is the server's
+/// word: `counts { filter: <filter> and under <id> }`, asked from the open
+/// ticket up until one is (FILTER-13's `under`). `None` when nothing on the
+/// chain is drawn, or the server cannot say.
+async fn drawn_chain(filter: &str, leaf: &str, steps: Vec<(Node, Option<TicketSummary>)>) -> Option<(Vec<(Node, Option<TicketSummary>)>, String)> {
+    // The chain's tickets: the open one, then each step's node that is a
+    // ticket (a flat shortcode's row is not; its list is the chain's end).
+    let mut chain = vec![leaf.to_string()];
+    chain.extend(steps.iter().filter_map(|(n, _)| match n {
+        Node::Ticket(id) => Some(id.clone()),
+        _ => None,
+    }));
+    let mut shown = Vec::new();
+    for id in &chain {
+        let drawn = holds_a_match(&under_text(filter, id)?).await?;
+        shown.push(drawn);
+        if drawn {
+            break;
+        }
+    }
+    let from = reveal_from(&shown)?;
+    Some((steps.into_iter().skip(from).collect(), chain[from].clone()))
+}
+
+/// Whether `filter` admits any ticket: the sum of `counts { filter }`.
+async fn holds_a_match(filter: &str) -> Option<bool> {
+    let client = session::client()?;
+    let events = client.counts_all(Some(filter.to_string())).await.ok()?;
+    let mut any = false;
+    for ev in events {
+        match ev {
+            TicketsEvent::Count { held, .. } => any |= held > 0,
+            TicketsEvent::Error { message } => {
+                leptos::logging::log!("nav: counts: {message}");
+                return None;
+            }
+            _ => {}
+        }
+    }
+    Some(any)
 }
 
 /// The left panel: brand header + the tree. Always mounted; the App hides
@@ -1601,12 +2030,57 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
         }
         now
     });
-    let ctx = Ctx { tree, route, expanded, menger_docs };
+    // FILTER-14: the nav's lens — its effective filter, the shortcodes'
+    // matches, what `tree` says of each row; and the membership watch that
+    // keeps the open lists live (shared with the counts' own: one stream).
+    let lens = use_lens();
+    let under = Under::new(lens);
+    session::follow_membership(move || under.text.get(), move |ev| under.heard(ev));
+    let ctx = Ctx { tree, route, expanded, menger_docs, under };
     let top = tree.top;
     // AGS-23: the top-level rows, each shortcode as the node it is drawn as;
-    // the last of them by its key.
-    let top_nodes = Memo::new(move |_| top.with(|t| tree.nodes(t)));
+    // the last of them by its key. FILTER-14: under the lens, those with a
+    // match — or all, the rest dimmed, when the hidden line says so — and
+    // none until they are counted.
+    let top_nodes = Memo::new(move |_| {
+        let all = top.with(|t| tree.nodes(t));
+        if !under.on.get() {
+            return all;
+        }
+        let every = under.show_hidden.get();
+        under.sums.with(|s| s.as_ref().map(|s| shown(all, s, every)).unwrap_or_default())
+    });
     let top_last = Memo::new(move |_| top_nodes.with(|n| n.last().map(|n| n.key().to_string())));
+    // FILTER-14: the last line under the lens — how many shortcodes the
+    // filter hides, toggling them in (dimmed).
+    let hidden_n = Memo::new(move |_| under.sums.with(|s| s.as_ref().map(hidden_count)));
+    let show_hidden = under.show_hidden;
+    let lens_line = move || {
+        if !under.on.get() {
+            return None;
+        }
+        if let Some(why) = under.refused.get() {
+            return Some(view! { <div class="nlens-note" data-nlens="refused">"The server did not take the filter: "{why}</div> }.into_any());
+        }
+        let line = match hidden_n.get() {
+            None => view! { <div class="nlens-note" data-nlens="counting">"counting…"</div> }.into_any(),
+            Some(0) => return None,
+            Some(n) => view! {
+                <button
+                    class="nhidden"
+                    data-nhidden=n
+                    aria-pressed=move || show_hidden.get().to_string()
+                    title=move || if show_hidden.get() { "hide the shortcodes with no match" } else { "show the shortcodes with no match, dimmed" }
+                    on:click=move |_| show_hidden.update(|s| *s = !*s)
+                >
+                    {hidden_line(n)}
+                    {move || if show_hidden.get() { " · shown dimmed" } else { "" }}
+                </button>
+            }
+            .into_any(),
+        };
+        Some(line)
+    };
 
     // Selection follows the route. The chain holding the open ticket
     // auto-expands so the selected row is visible — once per navigation
@@ -1637,7 +2111,7 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
     // the render that changed things. SCALE-24: and every windowed list
     // measures again — opening a node moves everything below it.
     Effect::new(move |_| {
-        top.track();
+        top_nodes.track();
         expanded.with(|e| e.len());
         let _ = route.get();
         spawn_local(async move {
@@ -1651,7 +2125,13 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
     tree_ref.on_load(|el: web_sys::HtmlDivElement| keep_focus(&el));
 
     view! {
-        <aside id="nav" class="nav">
+        <aside
+            id="nav"
+            class="nav"
+            class:lensed=move || under.on.get()
+            // FILTER-14: `f` opens the nav's filter while the nav has focus.
+            on:keydown=move |ev| nav_f(ev, lens)
+        >
             <div class="brand">
                 "menger"
                 <span class="muted">"· tickets"</span>
@@ -1673,6 +2153,12 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                     "‹"
                 </button>
             </div>
+            // FILTER-14: the nav's bar — FILTER-11's generic bar at level
+            // nav: the server-backed categories, the inherited global pills,
+            // the menu's counts from `facets`.
+            <div class="nbar">
+                <FilterBar level=Level::Nav cats=Cat::SERVER.to_vec() counts=crate::counts::provider(Level::Nav) hint="Filter the nav (f)" />
+            </div>
             <div class="tree-scroll" on:scroll=move |_| tree.viewport.notify()>
                 <div
                     class="tree"
@@ -1687,8 +2173,25 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                         children=move |n: Node| node_view(n, ctx, Arc::new(Vec::new()), top_last, None)
                     />
                 </div>
+                {lens_line}
             </div>
         </aside>
+    }
+}
+
+/// FILTER-14: `f` in the nav opens the nav's filter menu — unless typing,
+/// or in a dialog or menu (the filter's own menu among them).
+fn nav_f(ev: web_sys::KeyboardEvent, lens: Lens) {
+    if ev.key() != "f" || ev.default_prevented() || ev.is_composing() || ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+        return;
+    }
+    let target = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+    if target.as_ref().is_some_and(keys::defer_to_focus) {
+        return;
+    }
+    ev.prevent_default();
+    if !lens.pop(Level::Nav).is_open() {
+        lens.open_menu(Level::Nav, None, None);
     }
 }
 
@@ -1764,9 +2267,58 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
         let expanded = ctx.expanded;
         Memo::new(move |_| expanded.with(|e| e.contains(&k)))
     };
+    // FILTER-14: how the row is drawn under the lens — `None` off it (as
+    // today). A ticket row as `tree` answered it; a shortcode's row by its
+    // matches (and its root's word, when its host's page said it).
+    let under = ctx.under;
+    let face: Memo<Option<Face>> = {
+        let node = node.clone();
+        Memo::new(move |_| {
+            if !under.on.get() {
+                return None;
+            }
+            Some(match &node {
+                Node::Ticket(id) => under.mark(id).map(face_of).unwrap_or_default(),
+                Node::Root(id, epic) => shortcode_face(under.count(epic).unwrap_or(0), under.mark(id)),
+                Node::Group(epic) => shortcode_face(under.count(epic).unwrap_or(0), None),
+            })
+        })
+    };
+    // FILTER-14: a shortcode's row is its root's (AGS-23), and whether the
+    // root itself matches is `tree { epic }`'s word — asked while the
+    // shortcode has matches, and again whenever their number moves (the root
+    // entering or leaving moves it) or the connection does.
+    if let Node::Root(id, epic) = &node {
+        let (id, epic) = (id.clone(), epic.clone());
+        let asked = StoredValue::new(0u64);
+        Effect::new(move |_| {
+            let Some(filter) = under.text.get() else { return };
+            let n = under.count(&epic).unwrap_or(0);
+            tree.epoch.track();
+            if n == 0 {
+                return;
+            }
+            let ask = asked.get_value().wrapping_add(1);
+            asked.set_value(ask);
+            let (id, epic) = (id.clone(), epic.clone());
+            spawn_local(async move {
+                let mark = ask_root(&epic, &id, &filter).await;
+                if asked.try_get_value() != Some(ask) {
+                    return; // a newer ask, or the row is gone
+                }
+                if let Some(m) = mark {
+                    if under.marks.try_with_untracked(|ms| ms.get(&id) != Some(&m)) == Some(true) {
+                        under.marks.try_update(|ms| ms.insert(id, m));
+                    }
+                }
+            });
+        });
+    }
     let has_kids = {
         let (k, node) = (key.clone(), node.clone());
         Memo::new(move |_| match &node {
+            // FILTER-14: under the lens a row opens onto the matches under it.
+            _ if face.with(Option::is_some) => face.with(|f| f.as_ref().is_some_and(|f| f.opens)),
             Node::Ticket(_) => {
                 ticket.is_some_and(|t| t.with(|t| t.child_count > 0)) || tree.hosted.with(|h| h.contains_key(&k))
             }
@@ -1821,17 +2373,24 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
         Memo::new(move |_| p.list.with(|l| l.index_of(&k)))
     });
     // A shortcode's roll-up, on whichever row stands for it (AGS-23: a
-    // root's row carries it beside the root's own status).
-    let rollup = shortcode.clone().map(|epic| Memo::new(move |_| tree.with_group(&epic, rollup_label).unwrap_or_default()));
+    // root's row carries it beside the root's own status). FILTER-14: under
+    // the lens, its matches in place of it.
+    let rollup = shortcode.clone().map(|epic| {
+        Memo::new(move |_| match under.count(&epic) {
+            Some(n) => n.to_string(),
+            None => tree.with_group(&epic, rollup_label).unwrap_or_default(),
+        })
+    });
 
     // Only one of these runs, so each may take the row's closures by
     // value; the two row shapes are otherwise unrelated.
     let row = match ticket {
-        None => group_row(key.clone(), rollup.expect("a shortcode row"), prefix, toggle_glyph, toggle, expanded_attr, owns_attr),
+        None => group_row(key.clone(), rollup.expect("a shortcode row"), face, prefix, toggle_glyph, toggle, expanded_attr, owns_attr),
         Some(t) => leaf_row(
             key.clone(),
             t,
             rollup,
+            face,
             shortcode.clone(),
             ctx,
             pos,
@@ -1873,7 +2432,15 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
                         view! {
                             <div class="kids" role="group" id=kids_id.clone() node_ref=kids_ref>
                                 {move || {
-                                    open.get().then(|| children_of(node.clone(), ctx, child_ancestry.clone(), kids_ref, ticket))
+                                    // FILTER-14: a new filter is a new list
+                                    // (a position in one pruned tree is
+                                    // nothing in another); one that admits
+                                    // nothing lists nothing.
+                                    let lensed = match (under.on.get(), under.text.get()) {
+                                        (true, None) => return None,
+                                        (on, text) => text.filter(|_| on),
+                                    };
+                                    open.get().then(|| children_of(node.clone(), ctx, child_ancestry.clone(), kids_ref, ticket, lensed))
                                 }}
                             </div>
                         }
@@ -1893,6 +2460,7 @@ fn children_of(
     ancestry: Ancestry,
     kids_ref: NodeRef<leptos::html::Div>,
     ticket: Option<Signal<TicketSummary>>,
+    lensed: Option<String>,
 ) -> AnyView {
     let tree = ctx.tree;
     let hosted = |id: &str| {
@@ -1900,18 +2468,20 @@ fn children_of(
         Memo::new(move |_| tree.hosted.with(|h| h.get(&id).cloned().unwrap_or_default()))
     };
     match node {
-        Node::Group(epic) => list_view(Source::Epic(epic), None, ctx, ancestry, kids_ref, None),
+        Node::Group(epic) => list_view(Source::Epic(epic), None, ctx, ancestry, kids_ref, None, lensed),
         Node::Ticket(id) => {
-            let count = ticket.map(|t| Memo::new(move |_| t.with(|t| t.child_count as usize)));
+            // FILTER-14: under the lens a row's `child_count` is not its
+            // list's: the pruned tree is sized by its first page.
+            let count = ticket.filter(|_| lensed.is_none()).map(|t| Memo::new(move |_| t.with(|t| t.child_count as usize)));
             let hosted = hosted(&id);
-            list_view(Source::Parent(id), count, ctx, ancestry, kids_ref, Some(hosted))
+            list_view(Source::Parent(id), count, ctx, ancestry, kids_ref, Some(hosted), lensed)
         }
         // AGS-23: the root's row is the group's, which carries no count of
         // its children: its list is sized by its first page, and moved by
         // `children_changed` / `child_removed`, which carry the count.
         Node::Root(id, _) => {
             let hosted = hosted(&id);
-            list_view(Source::Parent(id), None, ctx, ancestry, kids_ref, Some(hosted))
+            list_view(Source::Parent(id), None, ctx, ancestry, kids_ref, Some(hosted), lensed)
         }
     }
 }
@@ -1926,6 +2496,9 @@ enum Slot {
 /// A node's children, by page — and, past one page, a window over them
 /// ([`span`]). `count` is the node's `child_count` (a ticket's list),
 /// followed live; `hosted` the sub-shortcodes drawn after the children.
+/// FILTER-14: `lensed`, the nav's filter: the children are the pruned tree
+/// `tree` answers for it, and `watch`'s deltas are not applied — the list
+/// asks again when the membership watch says its chain moved.
 fn list_view(
     source: Source,
     count: Option<Memo<usize>>,
@@ -1933,12 +2506,18 @@ fn list_view(
     ancestry: Ancestry,
     kids_ref: NodeRef<leptos::html::Div>,
     hosted: Option<Memo<Vec<String>>>,
+    lensed: Option<String>,
 ) -> AnyView {
     let tree = ctx.tree;
+    let under = ctx.under;
     let list = RwSignal::new(List::of(count.map_or(0, |c| c.get_untracked())));
     let holder = cache::Holder::new();
-    OPEN.with(|o| o.borrow_mut().push((source.clone(), list, holder.clone())));
-    on_cleanup(move || OPEN.with(|o| o.borrow_mut().retain(|(_, l, _)| *l != list)));
+    let again = RwSignal::new(0u32);
+    OPEN.with(|o| {
+        o.borrow_mut().push(Open { source: source.clone(), list, holder: holder.clone(), lensed: lensed.is_some(), again })
+    });
+    on_cleanup(move || OPEN.with(|o| o.borrow_mut().retain(|e| e.list != list)));
+    let lensed: Option<Arc<str>> = lensed.map(Arc::from);
 
     // The node's own count, as `watch` moves it on its row.
     if let Some(count) = count {
@@ -2012,34 +2591,42 @@ fn list_view(
     // rows it no longer holds — asked for a page at a time, one page in
     // flight; and what is far from it, given back.
     let busy = StoredValue::new(false);
-    let seen = StoredValue::new(0u32);
+    // The epoch (and, FILTER-14, the times this list was told to ask
+    // again) when it last asked.
+    let seen = StoredValue::new((0u32, 0u32));
     // An answer that changed nothing re-runs nothing — except when the
-    // connection moved on while it was in flight (a reconnect, a `lagged`):
-    // then the list asks again, on the new one.
+    // connection moved on while it was in flight (a reconnect, a `lagged`),
+    // or (FILTER-14) the list was told to ask again: then it asks again.
     let retry = Trigger::new();
     // Asks in a row that told the list nothing, for this window: a list
     // whose known ids disagree with the server cannot spin on one gap.
     let strikes = StoredValue::new(((0usize, 0usize), 0u8));
     {
-        let (source, holder) = (source.clone(), holder.clone());
+        let (source, holder, lensed) = (source.clone(), holder.clone(), lensed.clone());
         Effect::new(move |_| {
             let epoch = tree.epoch.get();
+            let told = again.get();
             let (lo, hi) = range.get();
             list.track();
             retry.track();
             if epoch == 0 || busy.get_value() {
                 return;
             }
-            if strikes.with_value(|(r, n)| *r == (lo, hi) && *n >= 3) {
-                return; // until the window, or the connection, moves
-            }
+            let (seen_epoch, seen_told) = seen.get_value();
             // A reconnect or a `lagged` since this list last asked: what it
             // shows is asked for again, from its first row, in one page.
-            let stale = seen.get_value() != 0 && seen.get_value() != epoch;
+            // FILTER-14: under the lens — or told to ask again — from the
+            // top: the pruned tree's count is the first page's, and what
+            // moved may be anywhere before the window.
+            let stale = seen_epoch != 0 && (seen_epoch != epoch || seen_told != told);
+            if !stale && strikes.with_value(|(r, n)| *r == (lo, hi) && *n >= 3) {
+                return; // until the window, or the connection, moves
+            }
             let ask = list.with_untracked(|l| {
                 if stale {
-                    let a = if lo == 0 { Ask::top() } else { l.ask_for(lo) };
-                    return Some((a, (hi - lo).max(PAGE), true));
+                    let a = if lo == 0 || lensed.is_some() { Ask::top() } else { l.ask_for(lo) };
+                    let limit = if lensed.is_some() { PAGE } else { (hi - lo).max(PAGE) };
+                    return Some((a, limit, true));
                 }
                 if !l.loaded {
                     return Some((Ask::top(), PAGE, false));
@@ -2047,7 +2634,7 @@ fn list_view(
                 let missing = (lo..hi).find(|&i| l.id_at(i).is_none_or(|id| !holder.holds(id)))?;
                 Some((l.ask_for(missing), PAGE, false))
             });
-            seen.set_value(epoch);
+            seen.set_value((epoch, told));
             let Some((ask, limit, reset)) = ask else {
                 // Everything shown is in hand: let go of what is far away.
                 let keep = (lo.saturating_sub(KEEP_CHUNKS * CHUNK), hi + KEEP_CHUNKS * CHUNK);
@@ -2057,19 +2644,27 @@ fn list_view(
                 return;
             };
             busy.set_value(true);
-            let (source, holder) = (source.clone(), holder.clone());
+            let (source, holder, lensed) = (source.clone(), holder.clone(), lensed.clone());
             spawn_local(async move {
-                let answer = ask_page(&source, ask.after.clone(), limit).await;
+                let answer = ask_list(&source, lensed.as_deref(), ask.after.clone(), limit).await;
                 busy.try_set_value(false);
-                if tree.epoch.try_get_untracked().is_some_and(|e| e != epoch) {
+                if tree.epoch.try_get_untracked().is_some_and(|e| e != epoch) || again.try_get_untracked().is_some_and(|t| t != told) {
                     retry.notify(); // a no-op once the list is gone
                 }
                 match answer {
-                    Asked::Page(rows, remaining) => {
+                    Asked::Page(rows, remaining, marks) => {
                         let ids: Vec<String> = rows.iter().map(|t| t.id.clone()).collect();
                         // Rows it did not hold are news too: a scroll back
                         // over children it had let go of.
                         let newly = ids.iter().any(|id| !holder.holds(id));
+                        // FILTER-14: what the tree says of each row, before
+                        // the row is drawn.
+                        if !marks.is_empty() {
+                            let changed = under.marks.try_with_untracked(|m| marks.iter().any(|(id, k)| m.get(id) != Some(k)));
+                            if changed == Some(true) {
+                                under.marks.try_update(|m| m.extend(marks));
+                            }
+                        }
                         if holder.hold_page(rows) {
                             let moved = list
                                 .try_update(|l| l.answered(&ask, ids, remaining, reset))
@@ -2104,7 +2699,7 @@ fn list_view(
     // A deep link through this list: ask for the page after the child it
     // must show — its `remaining` says where the child is — and scroll there.
     {
-        let (source, holder) = (source.clone(), holder.clone());
+        let (source, holder, lensed) = (source.clone(), holder.clone(), lensed.clone());
         let me = match &source {
             Source::Parent(p) => Node::Ticket(p.clone()),
             Source::Epic(e) => Node::Group(e.clone()),
@@ -2118,7 +2713,7 @@ fn list_view(
             }
             done.set_value(r.gen);
             holder.hold(child.clone());
-            let (source, holder) = (source.clone(), holder.clone());
+            let (source, holder, lensed) = (source.clone(), holder.clone(), lensed.clone());
             // `try_` throughout: the list can be gone (its node closed or
             // rebuilt) by the time the page comes back.
             spawn_local(async move {
@@ -2126,7 +2721,15 @@ fn list_view(
                 let i = match known {
                     Some(i) => i,
                     None => {
-                        let Asked::Page(rows, remaining) = ask_page(&source, Some(child.id.clone()), PAGE).await else { return };
+                        // FILTER-14: under the lens the child is one the
+                        // tree draws (the reveal opened no further), and
+                        // the page after it is the tree's.
+                        let Asked::Page(rows, remaining, marks) = ask_list(&source, lensed.as_deref(), Some(child.id.clone()), PAGE).await else {
+                            return;
+                        };
+                        if !marks.is_empty() {
+                            under.marks.try_update(|m| m.extend(marks));
+                        }
                         let ids: Vec<String> = rows.iter().map(|t| t.id.clone()).collect();
                         let Some(n) = list.try_with_untracked(|l| l.n) else { return };
                         let i = n.saturating_sub(remaining + ids.len() + 1);
@@ -2165,8 +2768,17 @@ fn list_view(
     // The hosted sub-shortcodes, each as the node it is drawn as (AGS-23:
     // its root's row); the last row under the node by its key — the last
     // of them, else the last child.
+    // FILTER-14: under the lens, those with a match — or every one, the
+    // rest dimmed, when the hidden line says so.
     let hosted = match hosted {
-        Some(h) => Memo::new(move |_| h.with(|h| tree.nodes(h))),
+        Some(h) => Memo::new(move |_| {
+            let nodes = h.with(|h| tree.nodes(h));
+            if !under.on.get() {
+                return nodes;
+            }
+            let every = under.show_hidden.get();
+            under.sums.with(|s| s.as_ref().map(|s| shown(nodes, s, every)).unwrap_or_default())
+        }),
         None => Memo::new(|_| Vec::new()),
     };
     let last_kid = Memo::new(move |_| {
@@ -2285,6 +2897,7 @@ fn chunk_heights(kids: &web_sys::Element, s: Span) -> Vec<(usize, f64)> {
 fn group_row(
     key: String,
     rollup: Memo<String>,
+    face: Memo<Option<Face>>,
     prefix: impl Fn() -> String + Send + Sync + 'static,
     toggle_glyph: impl Fn() -> &'static str + Send + Sync + 'static,
     toggle: impl Fn() + Send + Sync + 'static,
@@ -2295,6 +2908,7 @@ fn group_row(
     view! {
         <div
             class="row grouprow"
+            class:dim=move || face.with(|f| f.as_ref().is_some_and(|f| f.dim))
             role="treeitem"
             tabindex="-1"
             data-node-key=key
@@ -2313,10 +2927,18 @@ fn group_row(
             <span class="toggle clickable">{toggle_glyph}</span>
             <span class="toggle mark" aria-hidden="true">" "</span>
             <span class="code">{code}</span>
-            <span class="tag roll">{move || rollup.get()}</span>
+            {roll_tag(rollup, face)}
         </div>
     }
     .into_any()
+}
+
+/// A shortcode's tally — its roll-up; FILTER-14: under the lens, its
+/// matches (summed along the hosts), marked so.
+fn roll_tag(rollup: Memo<String>, face: Memo<Option<Face>>) -> AnyView {
+    let lensed = Memo::new(move |_| face.with(Option::is_some));
+    let title = move || lensed.get().then(|| format!("{} matching the nav's filter, with the shortcodes it hosts", rollup.get()));
+    view! { <span class="tag roll" class:lensed=move || lensed.get() title=title>{move || rollup.get()}</span> }.into_any()
 }
 
 /// AGS-25: a double-click toggles a nav row; its second press must not also
@@ -2343,6 +2965,7 @@ fn leaf_row(
     id: String,
     ticket: Signal<TicketSummary>,
     rollup: Option<Memo<String>>,
+    face: Memo<Option<Face>>,
     shortcode: Option<String>,
     ctx: Ctx,
     pos: Option<Pos>,
@@ -2377,6 +3000,9 @@ fn leaf_row(
         <a
             class="row leaf"
             class:sel=move || sel.get()
+            // FILTER-14: a row that only holds matches, dimmed.
+            class:dim=move || face.with(|f| f.as_ref().is_some_and(|f| f.dim))
+            data-lens=move || face.with(|f| f.as_ref().map(|f| if f.dim { "holder" } else { "match" }))
             role="treeitem"
             tabindex="-1"
             aria-selected=move || sel.get().to_string()
@@ -2425,7 +3051,15 @@ fn leaf_row(
             <span class="toggle kind" title=kind>{kind_glyph(kind)}</span>
             <span class="code">{id.clone()}</span>
             <span class="label">{move || ticket.with(|t| t.title.clone())}</span>
-            {rollup.map(|r| view! { <span class="tag roll">{move || r.get()}</span> })}
+            // FILTER-14: the matches under the row, as its badge (a
+            // shortcode's row has its tally instead).
+            {move || {
+                face.with(|f| f.as_ref().and_then(|f| f.badge.clone())).map(|b| {
+                    let (title, at) = (format!("{b} matching below"), b.clone());
+                    view! { <span class="below" data-below=at title=title>{b}</span> }
+                })
+            }}
+            {rollup.map(|r| roll_tag(r, face))}
             // The status tag, its paint and its word one effect: they move
             // together.
             {move || {
@@ -2440,9 +3074,12 @@ fn leaf_row(
 #[cfg(test)]
 mod tests {
     use super::{
-        art, chunks, climb, face, is_menger_doc, kind_glyph, migrate_expanded, nav_shows, offset_of, rollup_label, root_has_kids,
-        shortcode_node, span, Ask, Climb, Geom, List, Node, CHUNK, MENGER_DOCS_KEY, PAGE, WHOLE,
+        art, chunks, climb, face, face_of, hidden_count, hidden_line, is_menger_doc, kind_glyph, migrate_expanded, nav_shows, offset_of,
+        on_chain, reveal_from, rollup_label, root_has_kids, shortcode_face, shortcode_node, shown, span, summed, under_text, Ask, Climb, Face,
+        Geom, List, Mark, Node, Source, CHUNK, MENGER_DOCS_KEY, PAGE, WHOLE,
     };
+    use crate::board::Matches;
+    use crate::filter::ScTree;
     use menger_tickets_api::{Group, Kind, RootRow, Status, TicketSummary};
     use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -2874,5 +3511,147 @@ mod tests {
         let s = span(n, g(1_000_000.0), &m);
         assert_eq!(s.top_px, (1..s.start).map(|k| super::rows_in(k, n) as f64 * 20.0).sum::<f64>() + CHUNK as f64 * 20.0 + 400.0);
         assert_eq!(offset_of(CHUNK + 3, n, 20.0, &m), CHUNK as f64 * 20.0 + 400.0 + 60.0);
+    }
+
+    // -----------------------------------------------------------------
+    // FILTER-14: the nav under the lens
+
+    /// The demo store's tree of shortcodes, and counts over it: SUB is hosted
+    /// under SUP's SUP-4.
+    fn sums_of(counts: &[(&str, u64)]) -> (ScTree, Matches) {
+        let t = ScTree::of(&demo());
+        (t, Matches::new(counts.iter().map(|(e, n)| (e.to_string(), *n))))
+    }
+
+    /// FILTER-14 acceptance 1, counts summed along the hosts: a shortcode
+    /// row's number is its own matches and those of every shortcode hosted
+    /// under it, at any depth — SUP's is SUP's and SUB's; SUB's (drawn under
+    /// its host) its own; a shortcode the counts do not name has none.
+    #[test]
+    fn a_shortcode_counts_its_matches_and_those_of_the_shortcodes_it_hosts() {
+        let (t, m) = sums_of(&[("SUP", 2), ("SUB", 3), ("ALPHA", 1)]);
+        let s = summed(&t, |e| m.held(e));
+        assert_eq!(s["SUP"], 5, "SUP's two and SUB's three");
+        assert_eq!(s["SUB"], 3);
+        assert_eq!(s["ALPHA"], 1);
+        assert_eq!((s["DOCS"], s["PRE"]), (0, 0));
+        assert_eq!(s.len(), 5, "every shortcode the groups know");
+        // A hosted shortcode's matches alone hold its host's row open.
+        let (t, m) = sums_of(&[("SUB", 1)]);
+        let s = summed(&t, |e| m.held(e));
+        assert_eq!((s["SUP"], s["SUB"]), (1, 1));
+        // Deeper: a shortcode hosted under a hosted one counts at every level.
+        let mut g = demo();
+        g.insert("LEAF".into(), group("LEAF", 2, 0, 0, Some(("LEAF-1", "leaf", Status::Pending, Kind::Scope)), Some("SUB-2")));
+        let t = ScTree::of(&g);
+        let m = Matches::new([("LEAF".to_string(), 4u64), ("SUP".to_string(), 1)]);
+        let s = summed(&t, |e| m.held(e));
+        assert_eq!((s["SUP"], s["SUB"], s["LEAF"]), (5, 4, 4));
+    }
+
+    /// FILTER-14 acceptance 1, a hidden shortcode: one with no match is not
+    /// drawn, the last line counts it, and toggled on every shortcode is
+    /// drawn — the rest dimmed (its face). A ticket row is never the counts'
+    /// to hide.
+    #[test]
+    fn a_shortcode_with_no_match_is_hidden_and_counted_on_the_last_line() {
+        let (t, m) = sums_of(&[("SUB", 1), ("ALPHA", 2)]);
+        let s = summed(&t, |e| m.held(e));
+        let g = demo();
+        let nodes: Vec<Node> = ["ALPHA", "DOCS", "PRE", "SUP"].iter().map(|e| shortcode_node(&g[*e])).collect();
+        let keys = |v: Vec<Node>| v.iter().map(|n| n.key().to_string()).collect::<Vec<_>>();
+        assert_eq!(keys(shown(nodes.clone(), &s, false)), ["ALPHA-1", "SUP-1"], "DOCS and PRE hidden; SUP holds SUB's match");
+        assert_eq!(keys(shown(nodes.clone(), &s, true)), ["ALPHA-1", "DOCS-1", "PRE", "SUP-1"], "toggled: every one");
+        assert_eq!(hidden_count(&s), 2, "DOCS, PRE");
+        assert_eq!(hidden_line(2), "2 shortcodes hidden by the filter");
+        assert_eq!(hidden_line(1), "1 shortcode hidden by the filter");
+        assert_eq!(hidden_line(0), "0 shortcodes hidden by the filter");
+        // A hidden one drawn on the line's say-so is dimmed and opens onto nothing.
+        assert_eq!(shortcode_face(s["DOCS"], None), Face { dim: true, badge: None, opens: false });
+        assert_eq!(shortcode_face(s["PRE"], None), Face { dim: true, badge: None, opens: false });
+        // One with matches is drawn as itself and opens.
+        assert_eq!(shortcode_face(s["SUP"], None), Face { dim: false, badge: None, opens: true });
+        // A ticket node is not a shortcode's: never hidden by the counts.
+        assert_eq!(keys(shown(vec![Node::Ticket("X-2".into())], &s, false)), ["X-2"]);
+    }
+
+    /// FILTER-14 acceptance 1, a holder row's face: a row that matches is
+    /// drawn as today; one that only holds matches is dimmed; either, with
+    /// matches below it, carries their number as a badge and opens onto
+    /// them; a match with nothing below is a leaf. A shortcode's row carries
+    /// its tally instead of a badge, and its root's word when the nav has it.
+    #[test]
+    fn a_holder_row_is_dimmed_and_badged_with_the_matches_below_it() {
+        let holder = face_of(Mark { matched: false, below: 3 });
+        assert_eq!(holder, Face { dim: true, badge: Some("3".into()), opens: true });
+        let both = face_of(Mark { matched: true, below: 12 });
+        assert_eq!(both, Face { dim: false, badge: Some("12".into()), opens: true });
+        let leaf = face_of(Mark { matched: true, below: 0 });
+        assert_eq!(leaf, Face { dim: false, badge: None, opens: false });
+        // A root that is the shortcode's only match: drawn, not dimmed, a leaf.
+        assert_eq!(shortcode_face(1, Some(Mark { matched: true, below: 0 })), Face { dim: false, badge: None, opens: false });
+        // A root that only holds them: dimmed, opening — no badge (its tally says it).
+        assert_eq!(shortcode_face(4, Some(Mark { matched: false, below: 4 })), Face { dim: true, badge: None, opens: true });
+        // Without its word, a shortcode with matches opens onto them.
+        assert_eq!(shortcode_face(4, None), Face { dim: false, badge: None, opens: true });
+    }
+
+    /// FILTER-14 acceptance 1, applying `entered` / `left`: the counts move
+    /// (a shortcode whose last match leaves is hidden; one a match enters is
+    /// drawn, and so is its host), and the open lists that ask again are
+    /// those on the moved ticket's chain — a parent's when the parent is on
+    /// it, a flat shortcode's when the ticket is in it — and no other.
+    #[test]
+    fn entered_and_left_move_the_counts_and_the_open_pages_on_the_chain() {
+        let t = ScTree::of(&demo());
+        let mut m = Matches::new([("SUP".to_string(), 1u64), ("ALPHA".to_string(), 1)]);
+        let g = demo();
+        let nodes: Vec<Node> = ["ALPHA", "PRE", "SUP"].iter().map(|e| shortcode_node(&g[*e])).collect();
+        let keys = |m: &Matches| {
+            let s = summed(&t, |e| m.held(e));
+            shown(nodes.clone(), &s, false).iter().map(|n| n.key().to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(keys(&m), ["ALPHA-1", "SUP-1"]);
+        m.left("ALPHA");
+        assert_eq!(keys(&m), ["SUP-1"], "ALPHA's last match left: hidden");
+        m.entered("SUB");
+        let s = summed(&t, |e| m.held(e));
+        assert_eq!((s["SUP"], s["SUB"]), (2, 1), "a match entered SUB: SUB's and its host's counts move");
+        m.entered("PRE");
+        assert_eq!(keys(&m), ["PRE", "SUP-1"], "PRE drawn");
+        m.left("SUP");
+        m.left("SUB");
+        assert_eq!(keys(&m), ["PRE"]);
+
+        // The open lists on SUB-4's chain (SUB-4 < SUB-2 < SUB-1 < SUP-4 < SUP-1).
+        let chain: Vec<String> = ["SUB-4", "SUB-2", "SUB-1", "SUP-4", "SUP-1"].map(String::from).to_vec();
+        let open = [
+            Source::Parent("SUP-1".into()),
+            Source::Parent("SUP-4".into()),
+            Source::Parent("SUB-2".into()),
+            Source::Parent("SUB-4".into()),
+            Source::Parent("SUP-7".into()),
+            Source::Parent("ALPHA-1".into()),
+            Source::Epic("PRE".into()),
+            Source::Epic("SUB".into()),
+        ];
+        let asked: Vec<bool> = open.iter().map(|s| on_chain(s, &chain)).collect();
+        assert_eq!(asked, [true, true, true, true, false, false, false, true]);
+    }
+
+    /// FILTER-14: a deep link under the lens opens from the deepest ticket
+    /// of its chain the tree draws — the open ticket itself when it is
+    /// drawn, nothing when nothing on the chain is; and whether one is drawn
+    /// is asked with `under` added to the nav's filter.
+    #[test]
+    fn a_deep_link_outside_the_lens_opens_down_to_the_deepest_drawn_row() {
+        assert_eq!(reveal_from(&[true]), Some(0), "drawn: the whole chain, as today");
+        assert_eq!(reveal_from(&[false, true]), Some(1), "its parent is the last row the tree shows");
+        assert_eq!(reveal_from(&[false, false, false, true]), Some(3));
+        assert_eq!(reveal_from(&[false, false]), None, "nothing drawn: nothing opens");
+        assert_eq!(reveal_from(&[]), None);
+        assert_eq!(under_text("status Ready", "mng-4").as_deref(), Some("status Ready and under MNG-4"));
+        assert_eq!(under_text("status in (Ready, Coding) and kind build", "FILTER-9").as_deref(), Some("status in (Ready, Coding) and kind build and under FILTER-9"));
+        assert_eq!(under_text("not a filter (", "MNG-4"), None);
     }
 }
