@@ -434,6 +434,30 @@
   ul#children li:hover { background: var(--hover); }
   #blockers .glyph, #unlocks .glyph, #children .glyph { flex: none; width: 1ch; color: var(--muted); }
   #blockers a, #unlocks a, #children a { flex: none; }
+  /* FILTER-16: under the global filter — the notice under the title when
+     the ticket is outside it (its pills in words, clear), the relations and
+     children outside it dimmed, and the line that says what the filter
+     hides of the children. */
+  .tout {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem; margin: 0 0 .9rem;
+    padding: .4rem .6rem; font-family: var(--sans); font-size: 12.5px; color: var(--muted);
+    background: var(--panel); border: 1px dashed var(--line); border-radius: 8px;
+  }
+  .tout strong { color: var(--ink); font-weight: 600; }
+  .tout-pills { display: inline-flex; flex-wrap: wrap; gap: .3rem; }
+  .tout .pill {
+    display: inline-flex; align-items: stretch; font-size: 12px; line-height: 1.6;
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  }
+  .tout .pill > * { padding: .05rem .45rem; border-left: 1px solid var(--line); white-space: nowrap; }
+  .tout .pill > :first-child { border-left: 0; }
+  .tout .pill .p-vals { color: var(--ink); }
+  .tout button.tout-clear {
+    background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer;
+  }
+  .tout button.tout-clear:hover { text-decoration: underline; }
+  #blockers li.outside, #unlocks li.outside, #children li.outside { opacity: .45; }
+  #blockers li.outside:hover, #unlocks li.outside:hover, #children li.outside:hover { opacity: .8; }
   /* SCALE-4: a large parent's children come a page at a time. */
   button.more {
     margin: .35rem 0 0; padding: .1rem .5rem; font: inherit; font-size: .8rem;
@@ -612,6 +636,16 @@
     font-size: 10px; padding: 0 5px; border-radius: 6px;
   }
   #palette-list li .label { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  /* FILTER-16: under the global filter — the rows outside it ("Search
+     everything") dimmed and marked; the last row, the other pass. */
+  #palette-list li.outside .code, #palette-list li.outside .label { opacity: .55; }
+  #palette-list li .pal-out {
+    flex: none; font-family: var(--sans); font-size: 10px; letter-spacing: .03em; color: var(--muted);
+    border: 1px dashed var(--line); border-radius: 5px; padding: 0 4px;
+  }
+  #palette-list li.pal-wide { border-top: 1px solid var(--line); margin-top: .2rem; padding-top: .25rem; color: var(--accent); }
+  #palette-list li.pal-wide .label { flex: none; }
+  #palette-list li.pal-wide .pal-hint { color: var(--muted); font-size: 11px; }
   #palette-list li.empty, #palette .hint { color: var(--muted); font-size: .75rem; }
   #palette-list li.empty { padding: .3rem .8rem; cursor: default; }
   #palette .hint { padding: .35rem .8rem; border-top: 1px solid var(--line); }
@@ -826,22 +860,14 @@
     font-family: var(--sans); font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
     text-transform: uppercase; color: var(--muted);
   }
+  /* FILTER-16: the page's filter is the generic bar (the inputs level). */
   #inputs .ibar {
-    display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1.25rem;
-    margin: 0 0 1rem; padding: .45rem .6rem; font-size: .8rem;
+    margin: 0 0 1rem; padding: .45rem .6rem; font-size: .85rem;
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   }
-  #inputs .fgroup { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
-  #inputs .flabel { color: var(--muted); margin-right: .15rem; }
-  #inputs button.fchip, #inputs button.fclear {
-    font: inherit; font-size: .78rem; cursor: pointer; padding: 0 .45rem; border-radius: 5px;
-    background: var(--card); color: var(--ink); border: 1px solid var(--line);
-  }
-  #inputs button.fchip:hover, #inputs button.fclear:hover { color: var(--accent); border-color: var(--accent); }
-  #inputs button.fchip.on { background: var(--sel); color: var(--accent); border-color: var(--accent); font-weight: 600; }
-  #inputs .n { margin-left: .3rem; color: var(--muted); font-weight: 400; }
-  #inputs .fremoved { display: inline-flex; align-items: center; gap: .25rem; margin-left: .4rem; color: var(--muted); cursor: pointer; }
-  #inputs button.fclear { margin-left: auto; color: var(--muted); }
+  #inputs .ibar > .fclash { margin-top: .4rem; }
+  #inputs .irefused { margin: 0 0 1rem; font-size: .8rem; color: var(--err-fg); overflow-wrap: anywhere; }
+  #inputs .igroup .n { margin-left: .3rem; color: var(--muted); font-weight: 400; }
   #inputs .igroup { margin: 0 0 1.1rem; }
   #inputs .igroup h3 { display: flex; align-items: baseline; gap: .1rem; margin: 0 0 .45rem; font-size: .85rem; }
   #inputs .ist {
@@ -882,7 +908,7 @@
   #inputs .opt.chosen { background: var(--sel); border-color: var(--accent); color: var(--accent); font-weight: 600; }
   #inputs .irec, #inputs .ians { margin: .15rem 0; font-size: 12.5px; overflow-wrap: anywhere; }
   #inputs .ians.none { font-size: .8rem; font-style: italic; }
-  #inputs .val { font-weight: 600; }
+  #inputs .irow .val { font-weight: 600; }
   #inputs .why { color: var(--ink); margin-left: .3rem; }
   #inputs .src {
     margin-left: .45rem; font-size: 10.5px; color: var(--chip-fg); background: var(--chip-bg);
@@ -1054,6 +1080,10 @@
     font-family: var(--sans); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
   }
   #lens-top > .fclash { margin: .4rem 1.25rem; }
+  /* FILTER-16: on a page the filter does not reach (components, settings)
+     the bar says so, its pills quieter. */
+  .lensbar .lens-na { font-size: 12px; font-style: italic; color: var(--muted); }
+  .lensbar.na .pill { opacity: .55; }
   .fbar .pill.inherited { opacity: .72; border-style: dashed; }
   .fbar .pill.inherited .p-cat, .fbar .pill.inherited .p-op { color: var(--muted); }
   .fbar .pill .p-lvl, .fclash .p-lvl {

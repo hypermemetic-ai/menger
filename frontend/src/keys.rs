@@ -73,6 +73,16 @@
 //! left it behind), go to the board's first and last rows the same way —
 //! before, they were the page's own scroll, which carried the focused row out
 //! of the window and dropped the focus.
+//!
+//! FILTER-16: **the palette searches inside the global filter.** While it is
+//! non-empty every question is `find { query, filter: global }`, and the
+//! list ends in one more row, "Search everything": chosen (Enter, a click),
+//! the palette asks again without the filter and marks each answer's rows
+//! the filter does not admit `outside the filter` (`member { ids, filter }`
+//! over the rows shown); the row then reads "Search inside the filter" and
+//! turns it back. The rows, the 50-row budget, the keys and the numbering
+//! of questions are SCALE-25's; with the global filter empty the palette is
+//! exactly what it was ([`pass`]).
 
 use std::cell::{Cell, RefCell};
 
@@ -81,8 +91,9 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{board, dom, navigate_to_ticket, session, st_class};
-use menger_tickets_api::{TicketSummary, TicketsEvent};
+use crate::{board, counts, dom, lens, navigate_to_ticket, session, st_class};
+use menger_tickets_api::TicketSummary;
+use std::collections::HashSet;
 
 /// How long a `g` stays armed as the first key of a `g …` sequence.
 const GO_WINDOW_MS: f64 = 1500.0;
@@ -161,6 +172,50 @@ pub(crate) fn narrows(before: &str, query: &str) -> bool {
     before.is_empty() || contains_ignore_ascii_case(query.trim(), before)
 }
 
+/// FILTER-16: what one palette question asks `find` with, and what its
+/// rows are marked against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Pass {
+    /// `find`'s `filter` — the global filter's text; none with the global
+    /// filter empty, or for "Search everything".
+    pub(crate) filter: Option<String>,
+    /// "Search everything" under a global filter: the filter its rows are
+    /// asked of (`member`), to mark those outside it.
+    pub(crate) mark: Option<String>,
+}
+
+/// FILTER-16: the palette's two passes — inside the global filter (`global`,
+/// its wire text), or everything with the rows outside it marked; with no
+/// global filter, SCALE-25's one pass.
+pub(crate) fn pass(global: Option<&str>, everything: bool) -> Pass {
+    match (global, everything) {
+        (Some(g), false) => Pass { filter: Some(g.to_string()), mark: None },
+        (Some(g), true) => Pass { filter: None, mark: Some(g.to_string()) },
+        (None, _) => Pass { filter: None, mark: None },
+    }
+}
+
+/// FILTER-16: the palette's count line — SCALE-25's words, and under a
+/// global filter which pass they count.
+pub(crate) fn count_words(f: &Found, under: bool) -> String {
+    if f.offline {
+        return "offline".to_string();
+    }
+    if f.pending() {
+        return "… matches".to_string();
+    }
+    if f.refused.is_some() {
+        return "the global filter was not taken".to_string();
+    }
+    let (shown, all) = (f.rows.len() as u64, f.total);
+    let words = if all > shown { format!("{shown} of {all} matches") } else { format!("{all} matches") };
+    match (under, f.everything) {
+        (false, _) => words,
+        (true, false) => format!("{words} inside the global filter"),
+        (true, true) => format!("{words} in everything · {} outside the filter", f.outside.len()),
+    }
+}
+
 /// SCALE-25: what the palette shows — the newest answer it took, and
 /// whether a newer question is out. Questions are numbered as they are
 /// asked; an answer is taken only if it is to the newest, so one that comes
@@ -178,6 +233,14 @@ pub(crate) struct Found {
     pub(crate) took: u32,
     /// The newest question found no connection: nothing is shown as current.
     pub(crate) offline: bool,
+    /// FILTER-16: the shown answer searched everything ("Search
+    /// everything"), and so does the newest question.
+    pub(crate) everything: bool,
+    pub(crate) wants_everything: bool,
+    /// FILTER-16: the shown answer's rows the global filter does not admit.
+    pub(crate) outside: HashSet<String>,
+    /// FILTER-16: the server did not take the newest question's filter.
+    pub(crate) refused: Option<String>,
 }
 
 impl Found {
@@ -187,6 +250,13 @@ impl Found {
         self.asked
     }
 
+    /// FILTER-16: a new question of the other pass (`everything`); its
+    /// number.
+    pub(crate) fn ask_pass(&mut self, everything: bool) -> u32 {
+        self.wants_everything = everything;
+        self.ask()
+    }
+
     /// Whether an answer to the newest question is still to come.
     pub(crate) fn pending(&self) -> bool {
         self.took != self.asked && !self.offline
@@ -194,6 +264,11 @@ impl Found {
 
     /// The answer to question `n`: taken if `n` is still the newest.
     pub(crate) fn take(&mut self, n: u32, query: String, rows: Vec<TicketSummary>, remaining: u64) -> bool {
+        self.take_marked(n, query, rows, remaining, HashSet::new())
+    }
+
+    /// FILTER-16: [`Found::take`], with the rows outside the global filter.
+    pub(crate) fn take_marked(&mut self, n: u32, query: String, rows: Vec<TicketSummary>, remaining: u64, outside: HashSet<String>) -> bool {
         if n != self.asked {
             return false;
         }
@@ -202,6 +277,18 @@ impl Found {
         self.rows = rows;
         self.took = n;
         self.offline = false;
+        self.everything = self.wants_everything;
+        self.outside = outside;
+        self.refused = None;
+        true
+    }
+
+    /// FILTER-16: question `n`'s filter was refused — its words, no rows.
+    pub(crate) fn refuse(&mut self, n: u32, query: String, why: String) -> bool {
+        if !self.take(n, query, Vec::new(), 0) {
+            return false;
+        }
+        self.refused = Some(why);
         true
     }
 
@@ -224,7 +311,9 @@ impl Found {
             return self.rows.clone();
         }
         match &self.query {
-            Some(q) if narrows(q, typed) => self
+            // FILTER-16: of the same pass only — the other's rows are not
+            // the head of what is coming.
+            Some(q) if narrows(q, typed) && self.everything == self.wants_everything => self
                 .rows
                 .iter()
                 .filter(|t| palette_match(&t.id, &t.title, typed))
@@ -855,26 +944,32 @@ pub(crate) fn Overlays(overlay: RwSignal<Overlay>) -> impl IntoView {
 /// SCALE-25: ask `find` question `n` (`query`), and take the answer if it is
 /// still the newest; with no connection, say so. `then` runs when an answer
 /// is taken (Enter, pressed while it was on its way).
-fn ask_find(found: RwSignal<Found>, n: u32, query: String, then: impl FnOnce() + 'static) {
+///
+/// FILTER-16: under the global filter, `find { query, filter }` — or, for
+/// "Search everything", `find { query }` and then `member` over its rows, to
+/// mark those outside the filter ([`pass`]).
+fn ask_find(found: RwSignal<Found>, n: u32, query: String, pass: Pass, then: impl FnOnce() + 'static) {
     spawn_local(async move {
-        let Some(client) = session::client() else {
+        if session::client().is_none() {
             found.try_update(|f| f.lost(n));
             return;
-        };
-        match client.find_all(query.clone(), None, Some(PALETTE_MAX as u32), None).await {
-            Ok(events) => {
-                let mut rows = Vec::new();
-                let mut remaining = 0;
-                for ev in events {
-                    match ev {
-                        TicketsEvent::Summary { summary } => rows.push(summary),
-                        TicketsEvent::Page { remaining: r, .. } => remaining = r,
-                        _ => {}
+        }
+        match session::find_under(query.clone(), PALETTE_MAX as u32, pass.filter).await {
+            Ok(Ok((rows, remaining))) => {
+                let mut outside = HashSet::new();
+                if let (Some(mark), false) = (pass.mark, rows.is_empty()) {
+                    match session::member(rows.iter().map(|t| t.id.clone()).collect(), mark).await {
+                        Ok(answer) => outside.extend(answer.into_iter().filter(|(_, m)| !m).map(|(id, _)| id)),
+                        Err(why) => leptos::logging::log!("palette: member: {why}"),
                     }
                 }
-                if found.try_update(|f| f.take(n, query, rows, remaining)) == Some(true) {
+                if found.try_update(|f| f.take_marked(n, query, rows, remaining, outside)) == Some(true) {
                     then();
                 }
+            }
+            // The server did not take the filter: its words.
+            Ok(Err(why)) => {
+                found.try_update(|f| f.refuse(n, query, why));
             }
             Err(_) => {
                 found.try_update(|f| f.lost(n));
@@ -891,6 +986,13 @@ fn ask_find(found: RwSignal<Found>, n: u32, query: String, then: impl FnOnce() +
 fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     let query = RwSignal::new(String::new());
     let hi = RwSignal::new(0usize);
+    // FILTER-16: the global filter (read as the palette opens: it is modal),
+    // and which pass is asked — inside it, or everything.
+    let global = lens::use_lens().filter(lens::Level::Global).with_untracked(|g| (!g.groups.is_empty()).then(|| counts::wire_text(g)));
+    let under = global.is_some();
+    let global = StoredValue::new(global);
+    let everything = RwSignal::new(false);
+    let pass_now = move || pass(global.try_with_value(|g| g.clone()).flatten().as_deref(), everything.try_get_untracked().unwrap_or(false));
     // SCALE-25: the server's answers, numbered; what is shown is derived
     // from the newest one and what is typed now.
     let found = RwSignal::new(Found::default());
@@ -900,11 +1002,22 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     });
     // Enter pressed while the answer was on its way, with nothing to open.
     let enter_waits = StoredValue::new(false);
+    // FILTER-16: the last row under a global filter — the other pass, asked
+    // now with what is typed.
+    let widen = move || {
+        let e = !everything.get_untracked();
+        everything.set(e);
+        hi.set(0);
+        let n = found.try_update(|f| f.ask_pass(e)).unwrap_or(0);
+        ask_find(found, n, query.get_untracked(), pass_now(), || {});
+    };
     let open_at = move |i: usize| {
         let hit = results.with_untracked(|r| r.get(i).map(|t| t.id.clone()));
         if let Some(id) = hit {
             close_overlay(overlay);
             navigate_to_ticket(&id);
+        } else if under && i == results.with_untracked(Vec::len) {
+            widen();
         }
     };
     let answered = move || {
@@ -919,7 +1032,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     };
     // Opening is the head of the store, asked at once.
     let first = found.try_update(Found::ask).unwrap_or(0);
-    ask_find(found, first, String::new(), answered);
+    ask_find(found, first, String::new(), pass_now(), answered);
     // The connection: lost, the palette says so and shows nothing as
     // current; back, it asks the newest question again.
     let link = session::link();
@@ -932,7 +1045,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
             });
         } else if was == Some(false) {
             let n = found.try_update(Found::ask).unwrap_or(0);
-            ask_find(found, n, query.get_untracked(), answered);
+            ask_find(found, n, query.get_untracked(), pass_now(), answered);
         }
         up
     });
@@ -945,7 +1058,10 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     let on_key = move |ev: web_sys::KeyboardEvent| {
         let key = ev.key();
         let len = results.with_untracked(Vec::len);
-        let cur = hi.get_untracked().min(len.saturating_sub(1));
+        // FILTER-16: under a global filter the last row ("Search everything")
+        // is a row like the others.
+        let items = len + usize::from(under);
+        let cur = hi.get_untracked().min(items.saturating_sub(1));
         match key.as_str() {
             "Escape" => {
                 ev.prevent_default();
@@ -953,23 +1069,23 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
             }
             "Enter" => {
                 ev.prevent_default();
-                if len > 0 {
-                    open_at(cur);
-                } else if found.with_untracked(Found::pending) {
+                if len == 0 && found.with_untracked(Found::pending) {
                     // SCALE-25: the answer is on its way — open its first.
                     enter_waits.set_value(true);
+                } else if items > 0 {
+                    open_at(cur);
                 }
             }
             "ArrowDown" => {
                 ev.prevent_default();
-                if len > 0 {
-                    hi.set((cur + 1) % len);
+                if items > 0 {
+                    hi.set((cur + 1) % items);
                 }
             }
             "ArrowUp" => {
                 ev.prevent_default();
-                if len > 0 {
-                    hi.set((cur + len - 1) % len);
+                if items > 0 {
+                    hi.set((cur + items - 1) % items);
                 }
             }
             "Home" => {
@@ -978,7 +1094,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
             }
             "End" => {
                 ev.prevent_default();
-                hi.set(len.saturating_sub(1));
+                hi.set(items.saturating_sub(1));
             }
             "Tab" => {
                 ev.prevent_default();
@@ -1024,7 +1140,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                             dom::sleep_ms(DEBOUNCE_MS).await;
                             if found.try_with_untracked(|f| f.asked) == Some(n) {
                                 if let Some(q) = query.try_get_untracked() {
-                                    ask_find(found, n, q, answered);
+                                    ask_find(found, n, q, pass_now(), answered);
                                 }
                             }
                         });
@@ -1038,42 +1154,70 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                 >
                     {move || {
                         let shown = results.get();
+                        let len = shown.len();
+                        let cur = hi.get().min((len + usize::from(under)).saturating_sub(1));
+                        // FILTER-16: the last row under a global filter — the
+                        // other pass.
+                        let wide = under.then(|| {
+                            let e = everything.get();
+                            view! {
+                                <li
+                                    id=format!("pal-{len}")
+                                    role="option"
+                                    class="pal-wide"
+                                    data-pal-wide=if e { "inside" } else { "everything" }
+                                    aria-selected=if cur == len { "true" } else { "false" }
+                                    class:hi=cur == len
+                                    on:click=move |_| open_at(len)
+                                >
+                                    <span class="label">{if e { "Search inside the filter" } else { "Search everything" }}</span>
+                                    <span class="pal-hint">{if e { "only what the global filter admits" } else { "without the global filter" }}</span>
+                                </li>
+                            }
+                        });
                         if shown.is_empty() {
                             let word = found.with(|f| {
                                 if f.offline {
-                                    "offline — reconnecting…"
+                                    "offline — reconnecting…".to_string()
                                 } else if f.pending() {
-                                    "searching…"
+                                    "searching…".to_string()
+                                } else if let Some(why) = &f.refused {
+                                    format!("the server did not take the global filter: {why}")
+                                } else if under && !f.everything {
+                                    "no ticket inside the global filter matches".to_string()
                                 } else {
-                                    "no ticket matches"
+                                    "no ticket matches".to_string()
                                 }
                             });
-                            return view! { <li class="empty">{word}</li> }.into_any();
+                            return view! { <li class="empty">{word}</li> {wide} }.into_any();
                         }
-                        let cur = hi.get().min(shown.len() - 1);
-                        shown
+                        let outside = found.with(|f| f.outside.clone());
+                        let rows = shown
                             .into_iter()
                             .enumerate()
                             .map(|(i, t)| {
                                 let id = t.id.clone();
                                 let (title, status) = (t.title.clone(), t.status);
+                                let out = outside.contains(&id);
                                 view! {
                                     <li
                                         id=format!("pal-{i}")
                                         role="option"
                                         aria-selected=if i == cur { "true" } else { "false" }
                                         class:hi=i == cur
+                                        class:outside=out
                                         data-pal-id=id.clone()
                                         on:click=move |_| open_at(i)
                                     >
                                         <span class="code">{id.clone()}</span>
                                         <span class="label">{title}</span>
+                                        {out.then(|| view! { <span class="pal-out">"outside the filter"</span> })}
                                         <span class=format!("tag {}", st_class(status.as_str()))>{status.to_string()}</span>
                                     </li>
                                 }
                             })
-                            .collect_view()
-                            .into_any()
+                            .collect_view();
+                        view! { {rows} {wide} }.into_any()
                     }}
                 </ul>
                 <div class="hint">
@@ -1081,21 +1225,8 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                         {move || {
                             // SCALE-25: the server's count — the answer's rows
                             // plus its `remaining` — once it is the answer to
-                            // what is typed.
-                            found.with(|f| {
-                                if f.offline {
-                                    "offline".to_string()
-                                } else if f.pending() {
-                                    "… matches".to_string()
-                                } else {
-                                    let (shown, all) = (f.rows.len() as u64, f.total);
-                                    if all > shown {
-                                        format!("{shown} of {all} matches")
-                                    } else {
-                                        format!("{all} matches")
-                                    }
-                                }
-                            })
+                            // what is typed. FILTER-16: and which pass.
+                            found.with(|f| count_words(f, under))
                         }}
                     </span>
                     " · ↑↓ move · Enter opens · Esc closes"
@@ -1162,7 +1293,7 @@ fn Cheats(overlay: RwSignal<Overlay>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{narrows, palette_match, Found, SHORTCUTS};
+    use super::{count_words, narrows, palette_match, pass, Found, Pass, SHORTCUTS};
     use menger_tickets_api::{Kind, Status, TicketSummary};
 
     /// The palette's v1 filter: a case-insensitive substring of either
@@ -1269,6 +1400,50 @@ mod tests {
         let again = f.ask();
         assert!(f.take(again, "map-1".into(), vec![hit("MAP-1", "a map")], 0));
         assert!(!f.offline);
+    }
+
+    /// FILTER-16: the palette's two passes — with a global filter, `find
+    /// { filter }`, and "Search everything" asks with none and marks against
+    /// it; with none, SCALE-25's one pass.
+    #[test]
+    fn the_palette_asks_inside_the_filter_then_everything() {
+        assert_eq!(pass(None, false), Pass { filter: None, mark: None }, "no global filter: as it was");
+        assert_eq!(pass(None, true), Pass { filter: None, mark: None });
+        assert_eq!(pass(Some("kind build"), false), Pass { filter: Some("kind build".into()), mark: None });
+        assert_eq!(pass(Some("kind build"), true), Pass { filter: None, mark: Some("kind build".into()) });
+
+        // Inside the filter.
+        let mut f = Found::default();
+        let open = f.ask();
+        assert!(f.take(open, String::new(), vec![hit("AGS-3", "a build"), hit("AGS-5", "another")], 16));
+        assert_eq!(count_words(&f, true), "2 of 18 matches inside the global filter");
+        assert_eq!(count_words(&f, false), "2 of 18 matches", "SCALE-25's words with no global filter");
+        assert!(!f.everything && f.outside.is_empty());
+
+        // "Search everything": nothing of the other pass shows while it is
+        // out; its answer is marked.
+        let wide = f.ask_pass(true);
+        assert!(f.pending());
+        assert!(f.shown("").is_empty(), "the filtered rows are not the head of everything");
+        let out: std::collections::HashSet<String> = ["AGS-1".to_string()].into();
+        assert!(f.take_marked(wide, String::new(), vec![hit("AGS-1", "a scope"), hit("AGS-3", "a build")], 280, out));
+        assert!(f.everything);
+        assert_eq!(ids(f.shown("")), ["AGS-1", "AGS-3"]);
+        assert!(f.outside.contains("AGS-1") && !f.outside.contains("AGS-3"));
+        assert_eq!(count_words(&f, true), "2 of 282 matches in everything · 1 outside the filter");
+
+        // Typing keeps the pass; a query that grew shows the head meanwhile.
+        let typed = f.ask();
+        assert!(f.wants_everything);
+        assert_eq!(ids(f.shown("ags-3")), ["AGS-3"]);
+        assert!(f.take(typed, "ags-3".into(), vec![hit("AGS-3", "a build")], 0));
+        assert!(f.everything && f.outside.is_empty(), "a new answer's own marks");
+
+        // Back inside; a refused filter says so.
+        let back = f.ask_pass(false);
+        assert!(f.refuse(back, String::new(), "under comes with FILTER-13".into()));
+        assert!(!f.everything && f.rows.is_empty());
+        assert_eq!(count_words(&f, true), "the global filter was not taken");
     }
 
     /// What `?` shows is the key map: every key the handlers implement
