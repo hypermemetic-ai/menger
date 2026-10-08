@@ -194,6 +194,15 @@ async fn a_walk_holds_a_page_of_bodies_and_answers_what_one_page_would() {
         Select::List { epic: None, status: Some(Status::Ready), parent: None },
         Select::List { epic: None, status: None, parent: Some(root.clone()) },
         Select::Ready { epic: None },
+        // FILTER-4: a filtered walk — every ticket, then a status by a lens
+        // with the old parameters beside it.
+        Select::Filtered(Filtered { lens: Lens::all(), epic: None, status: None, parent: None }),
+        Select::Filtered(Filtered {
+            lens: Lens::new("ready-or-blocked".into(), vec![], |_, k| matches!(k.status(), Status::Ready | Status::Blocked)),
+            epic: Some(epic.to_ascii_lowercase()),
+            status: None,
+            parent: Some(root.clone()),
+        }),
     ];
     for select in &selects {
         for after in [None, Some(first.as_str()), Some(mid.as_str())] {
@@ -208,6 +217,7 @@ async fn a_walk_holds_a_page_of_bodies_and_answers_what_one_page_would() {
                         limit,
                     }),
                     Select::Ready { epic } => store.ready_page(epic.as_deref(), after, limit),
+                    Select::Filtered(q) => store.filtered_page(q, after, None, limit),
                 }
                 .unwrap();
                 let mut walk = store.walk(select.clone(), after, limit);
@@ -218,12 +228,12 @@ async fn a_walk_holds_a_page_of_bodies_and_answers_what_one_page_would() {
                             assert!(!tickets.is_empty() && tickets.len() <= BODIES_PER_STEP as usize, "{what}: {}", tickets.len());
                             got.extend(tickets);
                         }
-                        Step::End { next, remaining } => break (next, remaining),
+                        Step::End { next, remaining, first } => break (next, remaining, first),
                     }
                 };
                 assert!(matches!(walk.next(&store).await.unwrap(), Step::End { .. }), "{what}: over is over");
                 assert_eq!(got.iter().map(TicketSummary::from).collect::<Vec<_>>(), page.tickets, "{what}");
-                assert_eq!(end, (page.next, page.remaining), "{what}");
+                assert_eq!(end, (page.next, page.remaining, page.first), "{what}");
                 assert!(got.iter().all(|t| t.body.contains(&format!("_{}: synthetic", t.id))), "{what}: each its own body");
             }
         }

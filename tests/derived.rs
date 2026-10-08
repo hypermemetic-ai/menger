@@ -350,3 +350,55 @@ async fn every_fixture_from_before_it_is_built_on_first_open_verifies_and_is_rea
         s.kill9();
     }
 }
+
+/// FILTER-4, acceptance 3, through the binary: a file whose cells are
+/// stored (form 4) verifies; one `cell_bits` container altered by hand, and
+/// then one `cell_counts` row, are each named — the shortcode, the cell (id
+/// and what it is) and the block, what is stored and what a scan gives —
+/// with exit 1.
+#[tokio::test]
+async fn verify_derived_names_an_altered_cell_container_and_count() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    let s = spawn_server(&db, dir.path(), "cells").await;
+    let c = connect(s.port).await;
+    one(&c, "tickets.create", json!({"epic": "CEL", "title": "root", "kind": "scope"})).await.unwrap();
+    for _ in 0..3 {
+        one(&c, "tickets.create", json!({"epic": "CEL", "title": "t"})).await.unwrap();
+    }
+    one(&c, "tickets.link_commits", json!({"id": "CEL-3", "commits": ["abc1234"]})).await.unwrap();
+    drop(c);
+    s.kill9();
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("cells' ") && out.contains("bitmaps"), "{out}");
+
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let cell: u32 = conn
+        .query_row("SELECT id FROM cells WHERE state = 'Pending' AND kind = 'build' AND commits = 0", [], |r| r.get(0))
+        .unwrap();
+    // CEL-2 and CEL-4 are that cell's; the container is made to say CEL-2.
+    conn.execute("UPDATE cell_bits SET card = 1, bits = x'0200' WHERE epic = 'CEL' AND cell = ?1", [cell]).unwrap();
+    drop(conn);
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(1), "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[0],
+        format!("cell_bits CEL cell {cell} (Pending, build, none, not blocked, no commits) container 0: stored 1 members [2]; a scan gives 2 members [2, 4]"),
+        "{out}"
+    );
+    assert!(lines[1].ends_with("1 difference(s) between the stored derived state and a scan"), "{out}");
+
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute("UPDATE cell_bits SET card = 2, bits = x'02000400' WHERE epic = 'CEL' AND cell = ?1", [cell]).unwrap();
+    conn.execute("UPDATE cell_counts SET held = 9 WHERE epic = 'CEL' AND cell = ?1", [cell]).unwrap();
+    drop(conn);
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(1), "{out}");
+    assert_eq!(
+        out.lines().next().unwrap(),
+        format!("cell_counts CEL cell {cell} (Pending, build, none, not blocked, no commits): stored 9; a scan gives 2"),
+        "{out}"
+    );
+}

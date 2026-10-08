@@ -1197,7 +1197,7 @@ async fn ask_page(source: &Source, after: Option<String>, limit: usize) -> Asked
         Source::Parent(p) => (None, Some(p.clone())),
         Source::Epic(e) => (Some(e.clone()), None),
     };
-    match client.list_all(epic, None, parent, after, Some(limit as u32), Some(true)).await {
+    match client.list_all(epic, None, parent, after, Some(limit as u32), Some(true), None, None).await {
         Ok(events) => {
             let mut rows = Vec::new();
             let mut remaining = None;

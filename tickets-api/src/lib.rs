@@ -19,7 +19,7 @@
 //!
 //! let transport = WsTransport::connect("ws://127.0.0.1:4455", "menger").await?;
 //! let client = TicketsClient::new(&transport);
-//! let mut page = client.list(None, None, None, None, Some(500), Some(true));
+//! let mut page = client.list(None, None, None, None, Some(500), Some(true), None, None);
 //! # let _ = &mut page;
 //! # Ok(())
 //! # }

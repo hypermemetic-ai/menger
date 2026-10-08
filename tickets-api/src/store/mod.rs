@@ -230,9 +230,50 @@ fn apply<T>(tickets: &RwLock<Cache>, f: impl FnOnce(&mut Cache) -> T) -> T {
 /// every ticket change of the same mutation, so the established order
 /// (`Created` first, …) is untouched and a client meets the cause before
 /// the count it moved.
-fn broadcast_groups(tx: &broadcast::Sender<Change>, groups: Vec<Group>) {
+fn broadcast_groups(tx: &Broadcast, groups: Vec<Group>) {
     for group in groups {
         let _ = tx.send(Change::GroupChanged { group });
+    }
+}
+
+/// The store's broadcast, on two channels (FILTER-4). `plain` is `watch`'s
+/// — every change, exactly as before FILTER-4, so a `watch` without a
+/// filter is today's stream, lags where it lagged and loses what it lost.
+/// `filtered` is `watch { filter }`'s: the same changes in the same order
+/// and, last in each write that moves any cell, [`Change::CellsMoved`] —
+/// fed only while a filtered subscriber is open, so a store with none pays
+/// nothing for it. Each has the capacity [`BROADCAST_CAPACITY`].
+#[derive(Clone)]
+pub(crate) struct Broadcast {
+    plain: broadcast::Sender<Change>,
+    filtered: broadcast::Sender<Change>,
+}
+
+/// How many changes a subscriber may fall behind before it lags (SCALE-5).
+pub const BROADCAST_CAPACITY: usize = 256;
+
+impl Broadcast {
+    fn new() -> Self {
+        Self {
+            plain: broadcast::channel(BROADCAST_CAPACITY).0,
+            filtered: broadcast::channel(BROADCAST_CAPACITY).0,
+        }
+    }
+
+    /// Sends `change` to every subscriber it is for: a cell move to the
+    /// filtered channel alone; anything else to both.
+    fn send(&self, change: Change) {
+        let watched = self.filtered.receiver_count() > 0;
+        if let Change::CellsMoved { .. } = change {
+            if watched {
+                let _ = self.filtered.send(change);
+            }
+            return;
+        }
+        if watched {
+            let _ = self.filtered.send(change.clone());
+        }
+        let _ = self.plain.send(change);
     }
 }
 
@@ -449,6 +490,10 @@ pub struct Page {
     pub next: Option<String>,
     /// How many further tickets match the same filters beyond this page.
     pub remaining: u64,
+    /// FILTER-4: the position of the page's first row among the matches —
+    /// for an empty page, where it would start — on a filtered page
+    /// ([`Store::filtered_page`]); `None` on every other.
+    pub first: Option<u64>,
 }
 
 /// SCALE-14: what a walk of whole tickets selects — the two selections the
@@ -463,6 +508,8 @@ pub enum Select {
     },
     /// The ready set's rule ([`Store::ready_set`]), optionally in one epic.
     Ready { epic: Option<String> },
+    /// FILTER-4: a filter, with `list`'s old parameters beside it.
+    Filtered(Filtered),
 }
 
 /// SCALE-14: whether a cut counts what it leaves behind. A page's
@@ -489,6 +536,11 @@ enum Rest {
 pub struct Walk {
     select: Select,
     after: Option<String>,
+    /// FILTER-4: where a filtered walk starts, as a position among the
+    /// matches — spent by its first cut, after which it goes on by `after`.
+    at: Option<u64>,
+    /// FILTER-4: a filtered walk's first position, from its first cut.
+    first: Option<u64>,
     left: Option<u32>,
     /// Set once the selection is spent: its `next` and `remaining`.
     over: Option<(Option<String>, u64)>,
@@ -507,7 +559,12 @@ pub enum Step {
     Tickets(Vec<Ticket>),
     /// The walk is over, and this is where it stands: what MNG-9's page
     /// event says — exactly what one page of the walk's `limit` says.
-    End { next: Option<String>, remaining: u64 },
+    /// FILTER-4: `first`, a filtered walk's first position.
+    End {
+        next: Option<String>,
+        remaining: u64,
+        first: Option<u64>,
+    },
 }
 
 impl Walk {
@@ -538,7 +595,7 @@ impl Walk {
         }
         let (rows, written) = {
             let cache = store.tickets.read().expect("store lock poisoned");
-            let page = Store::cut(&cache, &self.select, self.after.as_deref(), Some(take), Rest::Skip)?;
+            let page = self.cut(&cache, Some(take), Rest::Skip)?;
             (page.tickets, cache.written)
         };
         if rows.len() < take as usize {
@@ -562,13 +619,35 @@ impl Walk {
             None => {
                 let page = {
                     let cache = store.tickets.read().expect("store lock poisoned");
-                    Store::cut(&cache, &self.select, self.after.as_deref(), Some(0), Rest::Count)?
+                    self.cut(&cache, Some(0), Rest::Count)?
                 };
                 self.over = Some((page.next.clone(), page.remaining));
                 (page.next, page.remaining)
             }
         };
-        Ok(Step::End { next, remaining })
+        Ok(Step::End {
+            next,
+            remaining,
+            first: self.first,
+        })
+    }
+
+    /// One cut from where the walk stands: a filtered walk's first by its
+    /// `at` when it has one (and its first position kept), every other by
+    /// `after`.
+    fn cut(&mut self, cache: &Cache, limit: Option<u32>, rest: Rest) -> Result<Page, StoreError> {
+        let Select::Filtered(q) = &self.select else {
+            return Store::cut(cache, &self.select, self.after.as_deref(), limit, rest);
+        };
+        let page = Store::cut_filtered(cache, q, self.after.as_deref(), self.at.take(), limit, rest)?;
+        self.first = self.first.or(page.first);
+        Ok(page)
+    }
+
+    /// FILTER-4: a filtered walk that starts at the `at`-th match.
+    pub fn at(mut self, at: Option<u64>) -> Self {
+        self.at = at;
+        self
     }
 }
 
@@ -645,6 +724,15 @@ pub enum Change {
     /// it, after every other event of the write. `epic` is its ticket's
     /// shortcode, what `watch { epic }` filters by; it does not cross the wire.
     InputChanged { epic: String, input: Input },
+    /// FILTER-4: every ticket whose cell the write moved — a birth, a status
+    /// change and the blocker crossings it fans out to, a first commit or a
+    /// last — worked out once per write before it committed, and sent last,
+    /// after every other event of the write. Never on the wire as itself:
+    /// `watch { filter }` turns it into `entered`, `left` or `recount` for
+    /// its own filter; a `watch` without one passes it over.
+    #[serde(skip)]
+    #[schemars(skip)]
+    CellsMoved { moves: std::sync::Arc<cells::Moves> },
 }
 
 impl Change {
@@ -670,6 +758,8 @@ impl Change {
             Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => "",
             // INPUT-3: its ticket's.
             Self::InputChanged { epic, .. } => epic,
+            // FILTER-4: one per write, its moves in any shortcode.
+            Self::CellsMoved { .. } => "",
         }
     }
 
@@ -686,6 +776,8 @@ impl Change {
                 (!changes.is_empty()).then_some(Self::PlacementsChanged { changes })
             }
             Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => Some(self),
+            // FILTER-4: each move filtered where it is turned into events.
+            Self::CellsMoved { .. } => Some(self),
             other => (other.epic() == epic).then_some(other),
         }
     }
@@ -893,6 +985,12 @@ pub enum StoreError {
     /// INPUT-3: the input's body no longer declares it — it takes no change
     /// until the body declares it again. Nothing changed.
     InputRemoved { ticket: String, input: String },
+    /// FILTER-4: a `list` given both `at` and `after` — two answers to where
+    /// its page starts.
+    AtAndAfter,
+    /// FILTER-4: a filter the store cannot answer — not understood, or a
+    /// predicate that lives elsewhere; the message names every such chunk.
+    Filter(String),
 }
 
 impl StoreError {
@@ -1093,6 +1191,12 @@ impl std::fmt::Display for StoreError {
                 "{ticket}'s '{input}' was removed from its body: its history is kept, and it takes no change until \
                  the body declares it again (nothing changed)"
             ),
+            Self::AtAndAfter => write!(
+                f,
+                "list: give `at` (a position among the matches) or `after` (a ticket id), not both — each says \
+                 where the page starts"
+            ),
+            Self::Filter(message) => f.write_str(message),
         }
     }
 }
@@ -1313,6 +1417,10 @@ struct Cache {
     /// — read from their tables at open, moved by a body's write with its
     /// row and by an answer's write alone.
     inputs: inputs::Inputs,
+    /// FILTER-4: the cell table and every shortcode's bitmap of each cell it
+    /// holds ([`cells::Cells`]) — what a filter is compiled against and
+    /// answered from. Moved and stored as SCALE-32's state is.
+    cells: cells::Cells,
     written: u64,
 }
 
@@ -1433,6 +1541,9 @@ struct Moved {
     /// WAVE-6: the placements a birth or a status change across the
     /// satisfied line moves, and the written ticket's own.
     placed: Option<placements::Replaced>,
+    /// FILTER-4: the cells a birth, a status change (and its fan-out) or a
+    /// first or last commit moves.
+    cells: Option<cells::Move>,
 }
 
 impl Moved {
@@ -1466,6 +1577,7 @@ impl Derived {
                 groups,
                 ready: None,
                 placed: None,
+                cells: None,
             },
         }
     }
@@ -1477,6 +1589,20 @@ impl Derived {
         ready.store(&mut self.stored);
         self.moved.ready = Some(ready);
         self
+    }
+
+    /// FILTER-4: and what it does to the cells — the containers and counts
+    /// stored in the same transaction, the moves taken by the cache with
+    /// the rest and broadcast last.
+    fn celled(mut self, cells: cells::Move) -> Self {
+        cells.store(&mut self.stored);
+        self.moved.cells = Some(cells);
+        self
+    }
+
+    /// FILTER-4: what the write's broadcast says of its cell moves.
+    fn announced(&self) -> Option<std::sync::Arc<cells::Moves>> {
+        self.moved.cells.as_ref().and_then(cells::Move::announced)
     }
 }
 
@@ -1569,6 +1695,17 @@ impl Cache {
             order.len(),
             started.elapsed().as_secs_f64() * 1000.0
         );
+        let started = std::time::Instant::now();
+        let cells = cells::Cells::build(rows, |id| ready.count(id));
+        tracing::info!(
+            "interned {} cells and filled {} (shortcode, cell) bitmaps ({} bytes serialized) over {} \
+             tickets in {:.1} ms",
+            cells.keys().len(),
+            cells.bitmaps(),
+            cells.serialized_size(),
+            order.len(),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
         Self {
             order,
             at,
@@ -1577,6 +1714,7 @@ impl Cache {
             ids,
             children,
             ready,
+            cells,
             // COMP-3: read beside the cache, never built from rows
             // ([`Store::with_connection`]).
             components: components::Registry::default(),
@@ -1595,6 +1733,7 @@ impl Cache {
         rollups: rollup::Rollups,
         children: children::Children,
         ready: ready::Ready,
+        cells: cells::Cells,
     ) -> Self {
         let (order, at, paths) = ordered(loaded);
         Self {
@@ -1605,6 +1744,7 @@ impl Cache {
             ids,
             children,
             ready,
+            cells,
             // COMP-3: read beside the cache, never built from rows
             // ([`Store::with_connection`]).
             components: components::Registry::default(),
@@ -1636,6 +1776,7 @@ impl Cache {
             unsatisfied,
             statuses,
             ready,
+            cells: self.cells.stored(),
         }
     }
 
@@ -1712,7 +1853,9 @@ impl Cache {
         let birth = self.ids.birth(rows, newborn);
         let mut rollups = self.rollups.clone();
         let groups = rollups.created(rows, newborn);
-        let mut derived = Derived::rolled(self, rollups, groups).readied(self.ready.born(rows, newborn));
+        let (ready, touched) = self.ready.born_touching(rows, newborn);
+        let cells = self.recell(newborn, true, &touched);
+        let mut derived = Derived::rolled(self, rollups, groups).readied(ready).celled(cells);
         birth.store(&mut derived.stored);
         if let Some(p) = &newborn.parent {
             derived.stored.counts.push((p.clone(), self.children.count(p) + 1));
@@ -1786,11 +1929,50 @@ impl Cache {
         } else {
             Derived::none()
         };
-        let mut derived = derived.readied(self.ready.status_changed(rows, row, previous));
+        let (ready, touched) = self.ready.status_changed_touching(rows, row, previous);
+        let cells = self.recell(row, false, &touched);
+        let mut derived = derived.readied(ready).celled(cells);
         if satisfied(previous) != satisfied(row.status) {
             derived.moved.placed = Some(Self::replace(rows, row, false));
         }
         derived
+    }
+
+    /// FILTER-4: what a write does to the cells, before it commits: each
+    /// ticket the write's ready move touched (`touched`, SCALE-32's
+    /// fan-out, the written ticket among them: its row as the write leaves
+    /// it, its count before and after), each from the cell it is in to the
+    /// one its row and its count put it in now ([`cells::Cells::moved`]).
+    /// The written ticket's cell before is its row before (`born`: none).
+    fn recell(&self, written: &Row, born: bool, touched: &[ready::Touched<'_>]) -> cells::Move {
+        let mut moves: Vec<(&Row, Option<cells::Key>, cells::Key)> = Vec::with_capacity(touched.len());
+        for (t, was, now) in touched {
+            let before = if t.id != written.id {
+                Some(cells::Key::of(t, *was))
+            } else if born {
+                None
+            } else {
+                self.get(&t.id).map(|old| cells::Key::of(old, *was))
+            };
+            moves.push((t, before, cells::Key::of(t, *now)));
+        }
+        self.cells.moved(moves)
+    }
+
+    /// FILTER-4: what a `link_commits` or `unlink_commits` does to the derived
+    /// state, before it commits: nothing, unless it gives `row` its first
+    /// commit or takes its last — then the ticket moves cell.
+    fn commits_change(&self, row: &Row) -> Derived {
+        let count = self.ready.count(&row.id);
+        Derived::none().celled(self.recell(row, false, &[(row, count, count)]))
+    }
+
+    /// FILTER-4: a `link_commits` or `unlink_commits`, once it has committed:
+    /// the row, and the cell move [`Cache::commits_change`] worked out.
+    fn commits_changed(&mut self, row: Row, moved: Moved) {
+        self.insert(row);
+        let groups = self.take(moved);
+        debug_assert!(groups.is_empty(), "a link moves no roll-up");
     }
 
     /// MNG-10: a status change; only a crossing of `Complete` moves a count.
@@ -1907,6 +2089,9 @@ impl Cache {
         }
         if let Some(ready) = moved.ready {
             self.ready.moved(ready);
+        }
+        if let Some(cells) = moved.cells {
+            self.cells.take(cells);
         }
         moved.groups.into_iter().map(|g| self.dress(g)).collect()
     }
@@ -2041,7 +2226,7 @@ pub struct Store {
     /// flight ([`Store::write`]), which applies itself whether or not its
     /// caller is still there to do it.
     tickets: Arc<RwLock<Cache>>,
-    tx: broadcast::Sender<Change>,
+    tx: Broadcast,
     /// The system of record. Private to this module — nothing else in the
     /// application holds a database handle. Only touched off-runtime, via
     /// `spawn_blocking`. SCALE-14: the writer; reads have their own.
@@ -2160,7 +2345,7 @@ impl Store {
             Some(path) => Readers::open(path)?,
             None => Readers::Writer(Arc::clone(&db)),
         };
-        let (tx, _) = broadcast::channel(256);
+        let tx = Broadcast::new();
         Ok(Self {
             tickets: Arc::new(RwLock::new(cache)),
             tx,
@@ -2225,7 +2410,7 @@ impl Store {
         serial: OwnedMutexGuard<()>,
         commit: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StoreError> + Send + 'static,
         apply: impl FnOnce(&mut Cache, &T) -> U + Send + 'static,
-        publish: impl FnOnce(T, U, &broadcast::Sender<Change>) -> R + Send + 'static,
+        publish: impl FnOnce(T, U, &Broadcast) -> R + Send + 'static,
     ) -> Result<R, StoreError>
     where
         T: Send + 'static,
@@ -2666,6 +2851,8 @@ impl Store {
         let born = ticket.clone();
         let newborn = Row::from(&ticket);
         let rows: Vec<Row> = touched.values().cloned().collect();
+        // FILTER-4: the newborn's cell, said last of all.
+        let announced = derived.announced();
         let Derived { stored, moved } = derived;
         // WAVE-6: the placements it moved, said last.
         let placed = moved.placed.as_ref().and_then(Change::placed);
@@ -2735,6 +2922,9 @@ impl Store {
                 }
                 for change in Change::inputs(&ticket.epic, asked) {
                     let _ = tx.send(change);
+                }
+                if let Some(moves) = announced {
+                    let _ = tx.send(Change::CellsMoved { moves });
                 }
                 ticket
             },
@@ -2858,10 +3048,17 @@ impl Store {
                 parent: up(parent),
             },
             Select::Ready { epic } => Select::Ready { epic: up(epic) },
+            Select::Filtered(q) => Select::Filtered(Filtered {
+                epic: up(q.epic),
+                parent: up(q.parent),
+                ..q
+            }),
         };
         Walk {
             select,
             after: after.map(str::to_ascii_uppercase),
+            at: None,
+            first: None,
             left: limit,
             over: None,
             ahead: None,
@@ -2970,6 +3167,8 @@ impl Store {
                 let span = Span::of(cache, after, epic.as_deref())?;
                 Ok(Self::walk_ready(cache, span, limit, rest))
             }
+            // FILTER-4: from the bitmaps the filter admits.
+            Select::Filtered(q) => Self::cut_filtered(cache, q, after, None, limit, rest),
         }
     }
 
@@ -3135,6 +3334,7 @@ impl Store {
             tickets,
             next,
             remaining,
+            first: None,
         }
     }
 
@@ -3165,11 +3365,15 @@ impl Store {
         row.status = status;
         row.updated_unix = chrono::Utc::now().timestamp();
         // SCALE-28: the roll-ups it moves, stored with the row.
-        let Derived { stored, moved } = self
+        let derived = self
             .tickets
             .read()
             .expect("store lock poisoned")
             .status_change(&row, previous);
+        // FILTER-4: the cells it moves — its own and its fan-out's — said
+        // last.
+        let announced = derived.announced();
+        let Derived { stored, moved } = derived;
         // WAVE-6: across the satisfied line, its own placement moves with it
         // (its `status_changed` carries the new one), and the ones downstream
         // that move are said last.
@@ -3196,6 +3400,9 @@ impl Store {
                 broadcast_groups(tx, groups);
                 if let Some(placed) = placed {
                     let _ = tx.send(placed);
+                }
+                if let Some(moves) = announced {
+                    let _ = tx.send(Change::CellsMoved { moves });
                 }
                 change
             },
@@ -3601,17 +3808,29 @@ impl Store {
         }
         row.commits.extend(added.iter().cloned());
         row.updated_unix = chrono::Utc::now().timestamp();
+        // FILTER-4: a first commit moves the ticket's cell.
+        let derived = self.tickets.read().expect("store lock poisoned").commits_change(&row);
+        let announced = derived.announced();
+        let Derived { stored, moved } = derived;
+        let commit = Self::row_commit(row);
 
         self.write(
             serial,
-            Self::row_commit(row),
-            |cache, (row, _)| cache.insert(row.clone()),
+            move |tx| {
+                let out = commit(tx)?;
+                stored.write(tx)?;
+                Ok(out)
+            },
+            move |cache, (row, _)| cache.commits_changed(row.clone(), moved),
             move |(row, body), (), tx| {
                 let change = Change::CommitsLinked {
                     ticket: whole(row, body),
                     added,
                 };
                 let _ = tx.send(change.clone());
+                if let Some(moves) = announced {
+                    let _ = tx.send(Change::CellsMoved { moves });
+                }
                 change
             },
         )
@@ -3646,17 +3865,29 @@ impl Store {
             });
         }
         row.updated_unix = chrono::Utc::now().timestamp();
+        // FILTER-4: taking the last commit moves the ticket's cell.
+        let derived = self.tickets.read().expect("store lock poisoned").commits_change(&row);
+        let announced = derived.announced();
+        let Derived { stored, moved } = derived;
+        let commit = Self::row_commit(row);
 
         self.write(
             serial,
-            Self::row_commit(row),
-            |cache, (row, _)| cache.insert(row.clone()),
+            move |tx| {
+                let out = commit(tx)?;
+                stored.write(tx)?;
+                Ok(out)
+            },
+            move |cache, (row, _)| cache.commits_changed(row.clone(), moved),
             move |(row, body), (), tx| {
                 let change = Change::CommitsUnlinked {
                     ticket: whole(row, body),
                     removed,
                 };
                 let _ = tx.send(change.clone());
+                if let Some(moves) = announced {
+                    let _ = tx.send(Change::CellsMoved { moves });
+                }
                 change
             },
         )
@@ -3740,7 +3971,14 @@ impl Store {
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Change> {
-        self.tx.subscribe()
+        self.tx.plain.subscribe()
+    }
+
+    /// FILTER-4: `watch { filter }`'s channel — every change [`Store::subscribe`]
+    /// gives, in the same order, and after each write's last one the cells it
+    /// moved ([`Change::CellsMoved`]).
+    pub fn subscribe_filtered(&self) -> broadcast::Receiver<Change> {
+        self.tx.filtered.subscribe()
     }
 
     /// PERF-2: bulk-seeds `spec.count` synthetic tickets, through this
@@ -3888,6 +4126,9 @@ impl Store {
             // a seed's tickets arrive with their statuses and blockers set.
             let ready = ready::Ready::build(tickets.rows());
             tickets.ready = ready;
+            // FILTER-4: and the cells, from the rows and those counts.
+            let cells = cells::Cells::build(tickets.rows(), |id| tickets.ready.count(id));
+            tickets.cells = cells;
             // WAVE-6: and every placement, over the seeded store.
             tickets.place_all();
             tickets.form()
@@ -4092,6 +4333,23 @@ mod components;
 /// them, their answers and state changes, the tables and the migration.
 mod inputs;
 
+/// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
+/// has commits)` interned as one cell; per shortcode and cell, a Roaring
+/// bitmap of the sequences in it. What a filter is compiled against, and
+/// what `counts`, `facets`, a filtered page and `watch { filter }` answer
+/// from: sums and merges over the bitmaps a filter admits, never a test of
+/// a ticket. Moved by every write that moves a cell — a birth, a status
+/// change and its fan-out, a first commit and a last — in the write,
+/// before it commits; stored as form 4; read at start; verified.
+mod cells;
+pub use cells::{CellMove, Moves, RECOUNT_OVER};
+
+/// FILTER-4: what a filter answers — `counts`, a filtered page by cursor or
+/// position, and `watch { filter }`'s membership — compiled against the
+/// cells and answered from their bitmaps.
+mod filtered;
+pub use filtered::{Filtered, Lens, Membership, Watcher};
+
 /// SCALE-28: the derived state, stored — the tables beside the tickets,
 /// what a write's transaction writes to them ([`stored::Changes`]), a start
 /// reads from them, a first open builds into them, and `--verify-derived`
@@ -4204,3 +4462,23 @@ mod tests_components;
 /// the tables added to an old file.
 #[cfg(test)]
 mod tests_inputs;
+
+/// FILTER-4: the cells — every ticket's cell and every bitmap held to a scan
+/// after every write, in the cache and the file; each write's announced
+/// moves exactly the scan's; form 3's first open; `--verify-derived` naming
+/// an altered container and count; the container encoding.
+#[cfg(test)]
+mod tests_cells;
+
+/// FILTER-4: what a filter answers — `counts`, every filtered page by
+/// cursor and by position, and `watch { filter }`'s membership — held to
+/// the same filter tested on every row, after hundreds of random writes.
+#[cfg(test)]
+mod tests_filtered;
+
+/// FILTER-4: random filters from the language's own AST, sent as text,
+/// against its reference evaluator on every row — every read and `facets`;
+/// the refusals, the empty filter, `ready` as the ready set, FILTER-3's
+/// examples.
+#[cfg(test)]
+mod tests_language;

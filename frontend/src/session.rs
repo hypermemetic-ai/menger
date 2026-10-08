@@ -406,7 +406,7 @@ async fn session(
 
     // 1. `watch` first — subscribed eagerly, so a ticket born while the
     //    calls below are out arrives behind them (MNG-9 acceptance 5).
-    let mut live = client.watch(None);
+    let mut live = client.watch(None, None, None);
     // COMP-5: the component registry, if a view wants it — after `watch`,
     // so nothing it misses is lost (src/registry.rs).
     registry::refresh();
@@ -774,7 +774,7 @@ pub(crate) fn load_children(
         };
         let first = after.is_none();
         match client
-            .list_all(None, None, Some(id.clone()), after, Some(KIDS_LIMIT), Some(true))
+            .list_all(None, None, Some(id.clone()), after, Some(KIDS_LIMIT), Some(true), None, None)
             .await
         {
             Ok(events) => {

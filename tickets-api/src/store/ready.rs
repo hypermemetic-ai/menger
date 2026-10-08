@@ -41,6 +41,10 @@ pub(super) fn open_blockers(blocked_by: &[String], status_of: impl Fn(&str) -> O
     open
 }
 
+/// FILTER-4: a ticket a write's ready move touched — its row as the write
+/// leaves it, its count of unsatisfied blockers before and after.
+pub(super) type Touched<'a> = (&'a Row, u32, u32);
+
 pub(super) struct Ready {
     /// Each ticket with a blocker not done with, and how many it has
     /// ([`unsatisfied_of`]). A ticket with none is not here — most name no
@@ -186,7 +190,9 @@ impl Ready {
         self.statuses.len()
     }
 
-    fn count(&self, id: &str) -> u32 {
+    /// `id`'s kept count of unsatisfied blockers (0: none, or no ticket) —
+    /// FILTER-4: what decides whether its cell is `blocked`.
+    pub(super) fn count(&self, id: &str) -> u32 {
         self.unsatisfied.get(id).copied().unwrap_or(0)
     }
 
@@ -201,19 +207,23 @@ impl Ready {
     /// births every ticket `Pending`, which is not, so the tickets that were
     /// waiting on its id wait on it still — their counts do not move (the
     /// tests hold this to the scan rather than assume it).
-    pub(super) fn born(&self, rows: Rows<'_>, t: &Row) -> Move {
+    ///
+    /// FILTER-4: and each ticket whose status or count the birth moves — the
+    /// newborn first — with its count before and after, so the cells it
+    /// moves are worked out from rows already in hand.
+    pub(super) fn born_touching<'a>(&self, rows: Rows<'a>, t: &'a Row) -> (Move, Vec<Touched<'a>>) {
         let mut m = Move::default();
         let open = unsatisfied_of(rows, t);
         if open > 0 {
             m.counts.push((t.id.clone(), open));
         }
         self.restatus(t, None, &mut m);
-        let mut touched: Vec<(&Row, u32)> = vec![(t, open)];
+        let mut touched: Vec<Touched<'a>> = vec![(t, 0, open)];
         if satisfied(t.status) {
             self.fan_out(rows, t, true, &mut m, &mut touched);
         }
         self.settle(&touched, &mut m);
-        m
+        (m, touched)
     }
 
     /// `t`'s status changed from `previous` (`rows` hold it as changed): its
@@ -225,23 +235,37 @@ impl Ready {
     /// status: its blockers did not change. Then whoever's status or count
     /// moved joins or leaves the ready set. The fan-out is the cost: a
     /// crossing of a ticket that blocks k others writes k counts.
-    pub(super) fn status_changed(&self, rows: Rows<'_>, t: &Row, previous: Status) -> Move {
+    ///
+    /// FILTER-4: and each ticket whose status or count the change moves —
+    /// the written ticket last unless it names itself — with its count
+    /// before and after, so the cells it moves are worked out from rows
+    /// already in hand.
+    pub(super) fn status_changed_touching<'a>(&self, rows: Rows<'a>, t: &'a Row, previous: Status) -> (Move, Vec<Touched<'a>>) {
         let mut m = Move::default();
         if previous == t.status {
-            return m;
+            let count = self.count(&t.id);
+            return (m, vec![(t, count, count)]);
         }
         self.restatus(t, Some(previous), &mut m);
-        let mut touched: Vec<(&Row, u32)> = Vec::new();
+        let mut touched: Vec<Touched<'a>> = Vec::new();
         if satisfied(previous) != satisfied(t.status) {
             self.fan_out(rows, t, satisfied(t.status), &mut m, &mut touched);
         }
         // `t` named itself (a hand edit — `create` refuses it) and is
         // already here, with the count that moved.
-        if !touched.iter().any(|(r, _)| r.id == t.id) {
-            touched.push((t, self.count(&t.id)));
+        if !touched.iter().any(|(r, _, _)| r.id == t.id) {
+            let count = self.count(&t.id);
+            touched.push((t, count, count));
         }
         self.settle(&touched, &mut m);
-        m
+        (m, touched)
+    }
+
+    /// [`Ready::status_changed_touching`]'s move alone — what the tests
+    /// count a fan-out by.
+    #[cfg(test)]
+    pub(super) fn status_changed(&self, rows: Rows<'_>, t: &Row, previous: Status) -> Move {
+        self.status_changed_touching(rows, t, previous).0
     }
 
     /// `t`'s status counted in its shortcode — moved from `previous`, or
@@ -260,7 +284,7 @@ impl Ready {
     /// blocker, or loses one (`done`). An entry twice is one ticket; one
     /// that names no ticket, or a ticket that does not name `t` (only a hand
     /// edit leaves either), is not counted — its count does not hang on `t`.
-    fn fan_out<'a>(&self, rows: Rows<'a>, t: &Row, done: bool, m: &mut Move, touched: &mut Vec<(&'a Row, u32)>) {
+    fn fan_out<'a>(&self, rows: Rows<'a>, t: &Row, done: bool, m: &mut Move, touched: &mut Vec<Touched<'a>>) {
         let mut seen: HashSet<&str> = HashSet::with_capacity(t.unlocks.len());
         for id in &t.unlocks {
             if !seen.insert(id) {
@@ -273,16 +297,16 @@ impl Ready {
             let was = self.count(id);
             let now = if done { was.saturating_sub(1) } else { was + 1 };
             m.counts.push((id.clone(), now));
-            touched.push((r, now));
+            touched.push((r, was, now));
         }
     }
 
     /// Whoever's status or count moved, as the write leaves them: each joins
     /// the ready set or leaves it where that is not where it stands; then
     /// each shortcode whose share moved, with its new count.
-    fn settle(&self, touched: &[(&Row, u32)], m: &mut Move) {
+    fn settle(&self, touched: &[Touched<'_>], m: &mut Move) {
         let mut shares: BTreeMap<&str, u64> = BTreeMap::new();
-        for (r, open) in touched {
+        for (r, _, open) in touched {
             let key = OrderKey::of(r);
             let now = r.status == Status::Ready && *open == 0;
             if now == self.contains(&key) {
