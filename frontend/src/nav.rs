@@ -1779,6 +1779,8 @@ struct Under {
     show_hidden: RwSignal<bool>,
     /// What `tree` said of each row it answered, by id — for this filter.
     marks: RwSignal<HashMap<String, Mark>>,
+    /// The server did not take the filter: its words (the stream ended).
+    refused: RwSignal<Option<String>>,
 }
 
 impl Under {
@@ -1798,15 +1800,17 @@ impl Under {
             sctree.with(|t| t.as_ref().map(|t| summed(t, |e| held.as_ref().map_or(0, |m| m.held(e)))))
         });
         let marks = RwSignal::new(HashMap::new());
+        let refused = RwSignal::new(None);
         // A new filter: what the old one's tree said is nothing to this one.
         Effect::new(move |prev: Option<Option<String>>| {
             let now = text.get();
             if prev.is_some_and(|p| p != now) {
                 marks.set(HashMap::new());
+                refused.set(None);
             }
             now
         });
-        Under { on, text, sums, show_hidden: RwSignal::new(false), marks }
+        Under { on, text, sums, show_hidden: RwSignal::new(false), marks, refused }
     }
 
     /// Shortcode `epic`'s matches (tracked) — `None` while off or uncounted.
@@ -1822,11 +1826,14 @@ impl Under {
     /// The membership watch's word, for the nav's open lists (the counts
     /// hear it on their own): a ticket moved in or out — its chain asks
     /// again; a recount or a gap — every open list does.
-    fn heard(ev: &Member) {
+    fn heard(self, ev: &Member) {
         match ev {
             Member::Entered { id, .. } | Member::Left { id, .. } => chain_moved(id.clone()),
             Member::Recount { .. } | Member::Lagged => ask_again(|_| true),
-            Member::Opened | Member::Refused(_) => {}
+            Member::Refused(message) => {
+                self.refused.try_set(Some(message.clone()));
+            }
+            Member::Opened => {}
         }
     }
 }
@@ -1993,7 +2000,7 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
     // keeps the open lists live (shared with the counts' own: one stream).
     let lens = use_lens();
     let under = Under::new(lens);
-    session::follow_membership(move || under.text.get(), Under::heard);
+    session::follow_membership(move || under.text.get(), move |ev| under.heard(ev));
     let ctx = Ctx { tree, route, expanded, menger_docs, under };
     let top = tree.top;
     // AGS-23: the top-level rows, each shortcode as the node it is drawn as;
@@ -2016,6 +2023,9 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
     let lens_line = move || {
         if !under.on.get() {
             return None;
+        }
+        if let Some(why) = under.refused.get() {
+            return Some(view! { <div class="nlens-note" data-nlens="refused">"The server did not take the filter: "{why}</div> }.into_any());
         }
         let line = match hidden_n.get() {
             None => view! { <div class="nlens-note" data-nlens="counting">"counting…"</div> }.into_any(),
