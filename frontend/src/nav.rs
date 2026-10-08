@@ -1450,9 +1450,44 @@ async fn ask_tree(source: &Source, filter: &str, after: Option<String>, limit: u
         Source::Parent(p) => (None, Some(p.clone())),
         Source::Epic(e) => (Some(e.clone()), None),
     };
-    let _ = (client, epic, parent, filter, after, limit);
-    // FILTER-13's `tree` is not on this branch yet: nothing is asked.
-    Asked::Refused
+    match client.tree_all(parent, epic, filter.to_string(), after, Some(limit as u32)).await {
+        Ok(events) => {
+            let mut rows = Vec::new();
+            let mut marks = Vec::new();
+            let mut remaining = None;
+            for ev in events {
+                match ev {
+                    TicketsEvent::Node { summary, matched, below } => {
+                        marks.push((summary.id.clone(), Mark { matched, below }));
+                        rows.push(summary);
+                    }
+                    TicketsEvent::Page { remaining: r, .. } => remaining = Some(r as usize),
+                    TicketsEvent::Error { message } => {
+                        leptos::logging::log!("nav: tree: {message}");
+                        return Asked::Refused;
+                    }
+                    _ => {}
+                }
+            }
+            match remaining {
+                Some(r) => Asked::Page(rows, r, marks),
+                None => Asked::Refused,
+            }
+        }
+        Err(_) => Asked::Offline,
+    }
+}
+
+/// FILTER-14: what `tree` says of shortcode `epic`'s top row — its root —
+/// under `filter`: `tree { epic, filter, limit: 1 }`. `None` when the root
+/// is not drawn (nothing in the shortcode matches), or no answer came.
+async fn ask_root(epic: &str, root: &str, filter: &str) -> Option<Mark> {
+    let client = session::client()?;
+    let events = client.tree_all(None, Some(epic.to_string()), filter.to_string(), None, Some(1)).await.ok()?;
+    events.into_iter().find_map(|ev| match ev {
+        TicketsEvent::Node { summary, matched, below } if summary.id == root => Some(Mark { matched, below }),
+        _ => None,
+    })
 }
 
 /// A list's page: `list` — or under the lens, `tree`.
@@ -2249,6 +2284,36 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
             })
         })
     };
+    // FILTER-14: a shortcode's row is its root's (AGS-23), and whether the
+    // root itself matches is `tree { epic }`'s word — asked while the
+    // shortcode has matches, and again whenever their number moves (the root
+    // entering or leaving moves it) or the connection does.
+    if let Node::Root(id, epic) = &node {
+        let (id, epic) = (id.clone(), epic.clone());
+        let asked = StoredValue::new(0u64);
+        Effect::new(move |_| {
+            let Some(filter) = under.text.get() else { return };
+            let n = under.count(&epic).unwrap_or(0);
+            tree.epoch.track();
+            if n == 0 {
+                return;
+            }
+            let ask = asked.get_value().wrapping_add(1);
+            asked.set_value(ask);
+            let (id, epic) = (id.clone(), epic.clone());
+            spawn_local(async move {
+                let mark = ask_root(&epic, &id, &filter).await;
+                if asked.try_get_value() != Some(ask) {
+                    return; // a newer ask, or the row is gone
+                }
+                if let Some(m) = mark {
+                    if under.marks.try_with_untracked(|ms| ms.get(&id) != Some(&m)) == Some(true) {
+                        under.marks.try_update(|ms| ms.insert(id, m));
+                    }
+                }
+            });
+        });
+    }
     let has_kids = {
         let (k, node) = (key.clone(), node.clone());
         Memo::new(move |_| match &node {
