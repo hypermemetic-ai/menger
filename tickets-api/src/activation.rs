@@ -22,11 +22,16 @@
 use crate::types::{InputValue, TicketsEvent};
 #[cfg(feature = "server")]
 use crate::store::{
-    BlockerRef, Change, InputWrite, Kind, NewTicket, Page, PageQuery, Select, Severity, Status, Step,
-    Store, StoreError, Walk,
+    BlockerRef, Change, Filtered, InputWrite, Kind, Lens, Membership, NewTicket, Page, PageQuery, Select, Severity,
+    Status, Step, Store, StoreError, Walk,
 };
 #[cfg(feature = "server")]
+use crate::store::{TreePage, TreeQuery};
+#[cfg(feature = "server")]
 use crate::types::{AnswerSource, InputState};
+// FILTER-15: the reads that take the lens.
+#[cfg(feature = "server")]
+use crate::store::{narrowing, narrowing_lens, ready_and, MEMBER_MAX};
 #[cfg(feature = "server")]
 use async_stream::stream;
 #[cfg(feature = "server")]
@@ -71,6 +76,7 @@ fn page_events(page: Result<Page, StoreError>) -> Box<dyn Iterator<Item = Ticket
             .chain(std::iter::once(TicketsEvent::Page {
                 next: page.next,
                 remaining: page.remaining,
+                first: page.first,
             })),
     )
 }
@@ -92,8 +98,8 @@ fn walk_events(store: Arc<Store>, mut walk: Walk) -> impl Stream<Item = TicketsE
                         yield TicketsEvent::Ticket { ticket };
                     }
                 }
-                Ok(Step::End { next, remaining }) => {
-                    yield TicketsEvent::Page { next, remaining };
+                Ok(Step::End { next, remaining, first }) => {
+                    yield TicketsEvent::Page { next, remaining, first };
                     break;
                 }
                 Err(e) => {
@@ -111,9 +117,22 @@ fn walk_events(store: Arc<Store>, mut walk: Walk) -> impl Stream<Item = TicketsE
 #[cfg(feature = "server")]
 const FIND_LIMIT: u32 = 50;
 
+/// FILTER-15: a `ready_set { filter }` page event as every `ready_set` page
+/// is — without `first`, which only `list` gives (FILTER-4).
 #[cfg(feature = "server")]
-fn change_event(change: Change) -> TicketsEvent {
-    match change {
+fn without_first(ev: TicketsEvent) -> TicketsEvent {
+    match ev {
+        TicketsEvent::Page { next, remaining, .. } => TicketsEvent::Page { next, remaining, first: None },
+        ev => ev,
+    }
+}
+
+/// A change as its one wire event — `None` for FILTER-4's cell moves, which
+/// are never sent as themselves: `watch { filter }` turns them into
+/// `entered`, `left` and `recount` for its filter.
+#[cfg(feature = "server")]
+fn wire_event(change: Change) -> Option<TicketsEvent> {
+    Some(match change {
         Change::Created { ticket } => TicketsEvent::Created { ticket },
         Change::StatusChanged { ticket, previous } => {
             TicketsEvent::StatusChanged { ticket, previous }
@@ -161,7 +180,52 @@ fn change_event(change: Change) -> TicketsEvent {
         // INPUT-3: its ticket's shortcode filtered `watch { epic }` on the
         // way here; the wire carries the input.
         Change::InputChanged { input, .. } => TicketsEvent::InputChanged { input },
+        Change::CellsMoved { .. } => return None,
+        // FILTER-13: each `watch { filter }` asking `under` takes its own.
+        Change::UnderMoved { .. } => return None,
+    })
+}
+
+/// FILTER-13: one page of `tree` as its events — a `node` per row, then one
+/// `page` (no `first`); a refusal is the one in-band `error`, and nothing
+/// else.
+#[cfg(feature = "server")]
+fn tree_events(page: Result<TreePage, StoreError>) -> Vec<TicketsEvent> {
+    match page {
+        Err(e) => vec![TicketsEvent::Error { message: e.to_string() }],
+        Ok(page) => page
+            .nodes
+            .into_iter()
+            .map(|n| TicketsEvent::Node {
+                summary: n.summary,
+                matched: n.matched,
+                below: n.below,
+            })
+            .chain(std::iter::once(TicketsEvent::Page {
+                next: page.next,
+                remaining: page.remaining,
+                first: None,
+            }))
+            .collect(),
     }
+}
+
+/// FILTER-4 / FILTER-13: a `watch { filter }`'s membership events as the
+/// wire carries them.
+#[cfg(feature = "server")]
+fn membership_event(m: Membership) -> TicketsEvent {
+    match m {
+        Membership::Entered { id, epic, seq } => TicketsEvent::Entered { id, epic, seq },
+        Membership::Left { id, epic, seq } => TicketsEvent::Left { id, epic, seq },
+        Membership::Recount { epic, held } => TicketsEvent::Recount { epic, held },
+    }
+}
+
+/// A write's own answer: the change it made, which is always one that
+/// crosses the wire.
+#[cfg(feature = "server")]
+fn change_event(change: Change) -> TicketsEvent {
+    wire_event(change).expect("a write answers with a change the wire carries")
 }
 
 /// INPUT-3: a write to one input, as its one event — `input_changed` for a
@@ -323,15 +387,29 @@ impl Tickets {
     /// from the cache and the bodies from the database, read a page at a
     /// time as the rows go out — the same events, never every body at
     /// once.
+    ///
+    /// FILTER-4: `filter` (the language's text, FILTER-10) narrows the
+    /// matches further — ANDed with `epic`, `status` and `parent`, which are
+    /// sugar beside it — answered from the cells, never by testing a
+    /// ticket; and `at` starts the page at a position among the matches
+    /// (0-based) instead of after a cursor. Given either, the page event
+    /// carries `first`, the page's first row's position among the matches;
+    /// `at` past the end is an empty page with `first = at` and `next:
+    /// null`; `at` with `after` is an in-band `error`, and so is a filter
+    /// the language does not take (every bad chunk named) or one that
+    /// asks `under` or `text` (each named, with where it lives). Given
+    /// neither, every event is what it was.
     #[plexus_macros::method(
-        description = "List tickets, optionally filtered by epic, status and/or parent; paged with after + limit",
+        description = "List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at",
         params(
             epic = "Epic prefix filter (optional)",
             status = "Status filter: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Doc (optional)",
             parent = "Only this ticket's children, e.g. PERF-3 (optional)",
             after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
             limit = "At most this many tickets; the page event carries the next cursor (optional)",
-            summary = "Yield summary rows (every field but the body) instead of full tickets (optional)"
+            summary = "Yield summary rows (every field but the body) instead of full tickets (optional)",
+            filter = "A filter, e.g. 'ready and kind build and in SCALE' (FILTER-3's language; optional): ANDed with epic, status and parent; the page event then carries first",
+            at = "Start at this position among the matches, 0-based, instead of after a cursor (optional; not with after); the page event carries first"
         )
     )]
     pub async fn list(
@@ -342,6 +420,8 @@ impl Tickets {
         after: Option<String>,
         limit: Option<u32>,
         summary: Option<bool>,
+        filter: Option<String>,
+        at: Option<u64>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
@@ -353,6 +433,33 @@ impl Tickets {
                     return;
                 }
             };
+            if filter.is_some() || at.is_some() {
+                // FILTER-4: from the cells.
+                if after.is_some() && at.is_some() {
+                    yield TicketsEvent::Error { message: StoreError::AtAndAfter.to_string() };
+                    return;
+                }
+                let lens = match filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())) {
+                    Ok(lens) => lens,
+                    Err(e) => {
+                        yield TicketsEvent::Error { message: e.to_string() };
+                        return;
+                    }
+                };
+                let q = Filtered { lens, epic, status, parent };
+                if summary.unwrap_or(false) {
+                    for ev in page_events(store.filtered_page(&q, after.as_deref(), at, limit)) {
+                        yield ev;
+                    }
+                } else {
+                    let walk = store.walk(Select::Filtered(q), after.as_deref(), limit).at(at);
+                    let mut events = Box::pin(walk_events(store, walk));
+                    while let Some(ev) = events.next().await {
+                        yield ev;
+                    }
+                }
+                return;
+            }
             if summary.unwrap_or(false) {
                 let page = store.page(PageQuery {
                     epic: epic.as_deref(),
@@ -550,13 +657,21 @@ impl Tickets {
     /// ticket out (use `blockers` to see which ids dangle). The epic
     /// filter applies to membership; blockers resolve globally.
     /// `after` / `limit` / `summary` page it exactly as `list` (MNG-9).
+    ///
+    /// FILTER-15: `filter` (the language's text, FILTER-10) narrows it to
+    /// the ready set ∧ the filter — a filtered page of `ready and (filter)`
+    /// from the cells (`ready` is the ready set's rule), paged and counted
+    /// as without it, the page event without `first`. A filter not taken,
+    /// or one that asks `under` or `text`, is one in-band `error`; one that
+    /// narrows nothing (empty, a display part alone) is no filter.
     #[plexus_macros::method(
-        description = "Tickets that can start now: Ready, with every blocker Complete or Superseded",
+        description = "Tickets that can start now: Ready, with every blocker Complete or Superseded; optionally under a filter",
         params(
             epic = "Only tickets in this epic (optional; blockers still resolve globally)",
             after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
             limit = "At most this many tickets; the page event carries the next cursor (optional)",
-            summary = "Yield summary rows (every field but the body) instead of full tickets (optional)"
+            summary = "Yield summary rows (every field but the body) instead of full tickets (optional)",
+            filter = "A filter, e.g. 'kind build and in SCALE' (FILTER-3's language; optional): the ready set and the filter"
         )
     )]
     pub async fn ready_set(
@@ -565,9 +680,32 @@ impl Tickets {
         after: Option<String>,
         limit: Option<u32>,
         summary: Option<bool>,
+        filter: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
+            // FILTER-15: from the cells.
+            match narrowing(filter.as_deref()).and_then(|f| f.map(|f| ready_and(&f, epic.clone())).transpose()) {
+                Err(e) => {
+                    yield TicketsEvent::Error { message: e.to_string() };
+                    return;
+                }
+                Ok(Some(q)) => {
+                    if summary.unwrap_or(false) {
+                        for ev in page_events(store.ready_filtered_page(&q, after.as_deref(), limit)) {
+                            yield ev;
+                        }
+                    } else {
+                        let walk = store.walk(Select::Filtered(q), after.as_deref(), limit);
+                        let mut events = Box::pin(walk_events(store, walk));
+                        while let Some(ev) = events.next().await {
+                            yield without_first(ev);
+                        }
+                    }
+                    return;
+                }
+                Ok(None) => {}
+            }
             if summary.unwrap_or(false) {
                 for ev in page_events(store.ready_page(epic.as_deref(), after.as_deref(), limit)) {
                     yield ev;
@@ -594,12 +732,20 @@ impl Tickets {
     /// `list` (MNG-9) — a position, not a match — and one naming no
     /// ticket is one in-band `error`. Ids and titles only: a jump aid,
     /// not search over bodies.
+    ///
+    /// FILTER-15: `filter` (the language's text, FILTER-10) keeps the text
+    /// matches the filter admits, in the same order, paged and counted as
+    /// without it — the needle tested only on the candidates the filter's
+    /// cells admit, never on the rest of the store. A filter not taken, or
+    /// one that asks `under` or `text`, is one in-band `error`; one that
+    /// narrows nothing (empty, a display part alone) is no filter.
     #[plexus_macros::method(
-        description = "Find tickets whose id or title contains the query (case-insensitive); summary rows, paged with after + limit",
+        description = "Find tickets whose id or title contains the query (case-insensitive), optionally under a filter; summary rows, paged with after + limit",
         params(
             query = "Substring of the ticket id or title, case-insensitive (ASCII), trimmed; empty matches every ticket",
             after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
-            limit = "At most this many tickets (default 50); the page event carries the next cursor (optional)"
+            limit = "At most this many tickets (default 50); the page event carries the next cursor (optional)",
+            filter = "A filter, e.g. 'not category done' (FILTER-3's language; optional): only the matches it admits"
         )
     )]
     pub async fn find(
@@ -607,12 +753,59 @@ impl Tickets {
         query: String,
         after: Option<String>,
         limit: Option<u32>,
+        filter: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
-            let page = store.find_page(&query, after.as_deref(), Some(limit.unwrap_or(FIND_LIMIT)));
+            let limit = Some(limit.unwrap_or(FIND_LIMIT));
+            let page = match narrowing_lens(filter.as_deref()) {
+                Err(e) => Err(e),
+                // FILTER-15: the candidates the cells admit.
+                Ok(Some(lens)) => store.find_filtered(&query, &lens, after.as_deref(), limit),
+                Ok(None) => store.find_page(&query, after.as_deref(), limit),
+            };
             for ev in page_events(page) {
                 yield ev;
+            }
+        }
+    }
+
+    /// FILTER-15: which of some tickets a filter admits — what a page that
+    /// shows tickets it did not list (a ticket page, its blockers, its
+    /// unlocks) asks of the global filter. Yields one `Member { id, matched
+    /// }` per id, in the order given — `id` as given, `matched` whether the
+    /// filter admits the ticket it names; an id (or `SHORTCODE/path`
+    /// address) that names no ticket is `matched: false` — and nothing
+    /// after them: the stream's own `done` ends it. Each id is one lookup in
+    /// the filter's admitted cells, never a test of the ticket. At most
+    /// 1,000 ids: more, a filter not taken, or one that asks `under` or
+    /// `text`, is one in-band `error` and nothing else.
+    #[plexus_macros::method(
+        description = "Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids",
+        params(
+            ids = "Ticket ids (or SHORTCODE/path addresses), e.g. [\"FILTER-4\", \"FILTER-5\"]; at most 1000",
+            filter = "A filter, e.g. 'status Ready' (FILTER-3's language; empty: every ticket)"
+        )
+    )]
+    pub async fn member(&self, ids: Vec<String>, filter: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            if ids.len() > MEMBER_MAX {
+                yield TicketsEvent::Error {
+                    message: format!("member: at most {MEMBER_MAX} ids a call — {} were asked; ask in parts", ids.len()),
+                };
+                return;
+            }
+            let lens = match narrowing_lens(Some(&filter)) {
+                Ok(lens) => lens.unwrap_or_else(Lens::all),
+                Err(e) => {
+                    yield TicketsEvent::Error { message: e.to_string() };
+                    return;
+                }
+            };
+            let matched = store.member(&ids, &lens);
+            for (id, matched) in ids.into_iter().zip(matched) {
+                yield TicketsEvent::Member { id, matched };
             }
         }
     }
@@ -677,12 +870,20 @@ impl Tickets {
     /// whole answer. `NotFound` when `ticket` names no ticket; an unknown
     /// `state` is an in-band `Error`. From the cache; `watch` keeps a
     /// client's copy current with `InputChanged`.
+    ///
+    /// FILTER-15: `filter` (the language's text, FILTER-10) keeps the inputs
+    /// whose ticket the filter admits — each such ticket one lookup in the
+    /// filter's admitted cells; every other parameter as without it. A
+    /// filter not taken, or one that asks `under` or `text`, is one in-band
+    /// `error`; one that narrows nothing (empty, a display part alone) is no
+    /// filter.
     #[plexus_macros::method(
-        description = "Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode and state",
+        description = "Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket",
         params(
             ticket = "Only this ticket's inputs, e.g. INPUT-9 (optional)",
             epic = "Only inputs of tickets in this shortcode (optional)",
-            state = "Only inputs in this state: open | answered | closed | removed (optional)"
+            state = "Only inputs in this state: open | answered | closed | removed (optional)",
+            filter = "A filter on the input's ticket, e.g. 'kind build' (FILTER-3's language; optional): only inputs of tickets it admits"
         )
     )]
     pub async fn inputs(
@@ -690,6 +891,7 @@ impl Tickets {
         ticket: Option<String>,
         epic: Option<String>,
         state: Option<String>,
+        filter: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
@@ -701,7 +903,13 @@ impl Tickets {
                     return;
                 }
             };
-            match store.inputs(ticket.as_deref(), epic.as_deref(), state) {
+            // FILTER-15: of the tickets the filter admits, by the cells.
+            let answer = match narrowing_lens(filter.as_deref()) {
+                Err(e) => Err(e),
+                Ok(Some(lens)) => store.inputs_filtered(ticket.as_deref(), epic.as_deref(), state, &lens),
+                Ok(None) => store.inputs(ticket.as_deref(), epic.as_deref(), state),
+            };
+            match answer {
                 Ok(inputs) => {
                     for input in inputs {
                         yield TicketsEvent::Input { input };
@@ -843,6 +1051,122 @@ impl Tickets {
         stream! {
             for (epic, last_seq) in store.extents() {
                 yield TicketsEvent::Extent { epic, last_seq };
+            }
+        }
+    }
+
+    /// FILTER-4: the filtered `extents`. Yields one `Count { epic, held }`
+    /// per shortcode that holds a match of `filter`, in shortcode order,
+    /// and nothing after them — the stream's own `done` ends it, as for
+    /// `extents`. Without a filter, each shortcode's tickets. A sum over
+    /// the kept counts of the cells the filter admits: no ticket is tested,
+    /// and the cost is the shortcodes and the cells, never the tickets.
+    /// With the counts, a client turns a position among the matches into a
+    /// (shortcode, rank) by prefix sums, and asks `list { filter, at }`. A
+    /// filter not taken, or one that asks `under` or `text`, is one in-band
+    /// `error` and nothing else.
+    #[plexus_macros::method(
+        description = "Each shortcode's number of tickets matching a filter, in shortcode order — the filtered extents (every ticket without one)",
+        params(filter = "A filter, e.g. 'ready and kind build' (FILTER-3's language; optional: every ticket)")
+    )]
+    pub async fn counts(&self, filter: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            match filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())) {
+                Ok(lens) => {
+                    for (epic, held) in store.counts(&lens) {
+                        yield TicketsEvent::Count { epic, held };
+                    }
+                }
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            }
+        }
+    }
+
+    /// FILTER-4: the counts behind every menu (Linear's facets). For each
+    /// field — `status`, `category`, `kind`, `severity`, `blocked`, `ready`,
+    /// `has commits`, `in`, in that order — the tickets matching `base` and
+    /// `filter` with `filter`'s own groups for that field set aside (a group
+    /// is a field's own when every predicate in it names that field;
+    /// `base`'s are never set aside), counted by value: one `Facet { field,
+    /// value, held }` per value with `held` above 0 — `field` as the
+    /// language spells it, `value` canonical (`Coding`, `build`, `none`,
+    /// `yes`/`no` for the three flags, the shortcode for `in`), statuses in
+    /// the store's order of statuses, shortcodes in shortcode order — then
+    /// the stream's done. A sum over kept cell counts, never a ticket. A
+    /// filter not taken, or one that asks `under` or `text`, is one in-band
+    /// `error` and nothing else.
+    #[plexus_macros::method(
+        description = "Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, in), the matches of base and filter without filter's own groups for that field, by value",
+        params(
+            filter = "The filter whose menus are counted (optional): its own groups for a field are set aside for that field's counts",
+            base = "A filter that always applies, e.g. the global one (optional): never set aside"
+        )
+    )]
+    pub async fn facets(&self, filter: Option<String>, base: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            let read = |text: Option<String>| -> Result<crate::filter::Filter, String> {
+                text.as_deref().map_or_else(|| Ok(Default::default()), |t| crate::filter::Filter::parse(t).map_err(|e| e.to_string()))
+            };
+            let answer = read(filter)
+                .and_then(|f| Ok((f, read(base)?)))
+                .and_then(|(f, b)| store.facets(&f, &b).map_err(|e| e.to_string()));
+            match answer {
+                Ok(facets) => {
+                    for (field, value, held) in facets {
+                        yield TicketsEvent::Facet { field, value, held };
+                    }
+                }
+                Err(message) => yield TicketsEvent::Error { message },
+            }
+        }
+    }
+
+    /// FILTER-13: the nav under a filter — the rows the nav would show at an
+    /// address unfiltered (`parent`: that ticket's children, as `list {
+    /// parent }` gives them; `epic`: the shortcode's top level — its root,
+    /// or, for a shortcode with none, its tickets as `list { epic }` gives
+    /// them), only those that match `filter` or hold a match below them, in
+    /// the store's order. One `Node { summary, matched, below }` per row —
+    /// `matched` whether the row matches, `below` how many matches are
+    /// strictly under it — then one `Page { next, remaining }`, paged as
+    /// `list` pages (`after` a ticket id, at most `limit`). Answered from the
+    /// kept tree: a parent's children under a filter are (C(P) ∩ M) ∪ the
+    /// holders of every admitted cell, and `below` a sum over the row's
+    /// tally — no subtree is walked. Exactly one of `parent` and `epic`; a
+    /// filter not taken, or one that asks `text`, is one in-band `error` and
+    /// nothing else.
+    #[plexus_macros::method(
+        description = "The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page",
+        params(
+            parent = "Whose children, e.g. FILTER-9 (or give epic)",
+            epic = "A shortcode's top level: its root, or its tickets when it has none (or give parent)",
+            filter = "A filter, e.g. 'status Ready and under SCALE' (FILTER-3's language; empty: every ticket)",
+            after = "Cursor: start strictly after this ticket id (optional)",
+            limit = "At most this many rows; the page event carries the next cursor (optional)"
+        )
+    )]
+    pub async fn tree(
+        &self,
+        parent: Option<String>,
+        epic: Option<String>,
+        filter: String,
+        after: Option<String>,
+        limit: Option<u32>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            let lens = match Lens::parse(&filter) {
+                Ok(lens) => lens,
+                Err(e) => {
+                    yield TicketsEvent::Error { message: e.to_string() };
+                    return;
+                }
+            };
+            let q = TreeQuery { parent, epic, lens };
+            for ev in tree_events(store.tree_page(&q, after.as_deref(), limit)) {
+                yield ev;
             }
         }
     }
@@ -992,25 +1316,91 @@ impl Tickets {
     /// `reopen_input`; or a `create` or `amend` whose body declared,
     /// re-declared or removed inputs (in the body's order, the removed
     /// after). The `epic` filter applies to it by its ticket's shortcode.
+    ///
+    /// FILTER-4: with a `filter`, the same stream plus, as each write's
+    /// last events, one `Entered { id, epic, seq }` or `Left { id, epic,
+    /// seq }` per ticket the write moved into or out of the filter — a
+    /// birth, a status change, every ticket its blocker crossing moved, a
+    /// first commit or a last — in the store's order; a write that moves
+    /// more than 256 sends instead one `Recount { epic, held }` per
+    /// shortcode it moved, the filter's count there as the write left it.
+    /// `epic` filters them by their own shortcode. `membership` sends only
+    /// those three and `Lagged` — for a client whose rows already ride an
+    /// unfiltered `watch`. Without a filter or `membership`, the stream is
+    /// exactly what it was. A filter not taken, or one that asks `under` or
+    /// `text`, is one in-band `error` and the stream ends.
     #[plexus_macros::method(
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes",
-        params(epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)")
+        description = "Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
+        params(
+            epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)",
+            filter = "A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256",
+            membership = "Send only Entered, Left, Recount and Lagged (optional; default false)"
+        )
     )]
     pub async fn watch(
         &self,
         epic: Option<String>,
+        filter: Option<String>,
+        membership: Option<bool>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let mut rx = self.store.subscribe();
+        let membership = membership.unwrap_or(false);
         let epic = epic.map(|e| e.to_ascii_uppercase());
+        // FILTER-4: a filtered watch reads the filtered channel, which
+        // carries every change and each write's cell moves after them.
+        let filtered = (filter.is_some() || membership).then(|| {
+            let lens = filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all()));
+            (self.store.subscribe_filtered(), lens.map(|lens| self.store.watcher_in(lens, epic.as_deref())))
+        });
+        let store = Arc::clone(&self.store);
+        let plain = filtered.is_none().then(|| self.store.subscribe());
         stream! {
+            if let Some((mut rx, watcher)) = filtered {
+                let mut watcher = match watcher {
+                    Ok(w) => w,
+                    Err(e) => {
+                        yield TicketsEvent::Error { message: e.to_string() };
+                        return;
+                    }
+                };
+                loop {
+                    match rx.recv().await {
+                        Ok(Change::CellsMoved { moves }) => {
+                            for m in watcher.membership(&store, &moves, epic.as_deref()) {
+                                yield membership_event(m);
+                            }
+                        }
+                        // FILTER-13: a filter asking `under` — what the write
+                        // worked out for this watch.
+                        Ok(Change::UnderMoved { moves }) => {
+                            for m in watcher.under_membership(&moves) {
+                                yield membership_event(m);
+                            }
+                        }
+                        Ok(change) => {
+                            if membership {
+                                continue;
+                            }
+                            if let Some(ev) = change.in_epic(epic.as_deref()).and_then(wire_event) {
+                                yield ev;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                            yield TicketsEvent::Lagged { missed };
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                return;
+            }
+            let Some(mut rx) = plain else { return };
             loop {
                 match rx.recv().await {
                     Ok(change) => {
                         // WAVE-6: of a `placements_changed`, the changes in
                         // the epic.
-                        if let Some(change) = change.in_epic(epic.as_deref()) {
-                            yield change_event(change);
+                        if let Some(ev) = change.in_epic(epic.as_deref()).and_then(wire_event) {
+                            yield ev;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
@@ -1137,7 +1527,7 @@ mod tests {
             TicketsEvent::Error { message } => assert!(message.contains("'DOCS-1' is a doc"), "{message}"),
             other => panic!("expected Error, got {other:?}"),
         }
-        match one(hub.list(None, Some("Doc".into()), None, None, None, Some(true)).await).await {
+        match one(hub.list(None, Some("Doc".into()), None, None, None, Some(true), None, None).await).await {
             TicketsEvent::Summary { summary } => assert_eq!((summary.id.as_str(), summary.status), ("DOCS-1", Status::Doc)),
             other => panic!("expected Summary, got {other:?}"),
         }
@@ -1169,7 +1559,7 @@ mod tests {
         one(hub.set_status("MNG-1".into(), "Ready".into()).await).await;
 
         let (ids, page) =
-            ids_and_page(hub.list(None, Some("Ready".into()), None, None, None, None).await).await;
+            ids_and_page(hub.list(None, Some("Ready".into()), None, None, None, None, None, None).await).await;
         assert_eq!(ids, vec!["MNG-1"]);
         assert_eq!(page, Some((None, 0)), "one match, nothing beyond it");
     }
@@ -1213,9 +1603,9 @@ mod tests {
         let wire = serde_json::to_value(one(hub.get("WK-3".into()).await).await).unwrap();
         assert_eq!(wire["ticket"]["status"], "In Review");
 
-        let (ids, _) = ids_and_page(hub.list(None, Some("coding".into()), None, None, None, None).await).await;
+        let (ids, _) = ids_and_page(hub.list(None, Some("coding".into()), None, None, None, None, None, None).await).await;
         assert_eq!(ids, ["WK-2"]);
-        let (ids, _) = ids_and_page(hub.list(None, Some("In Review".into()), None, None, None, None).await).await;
+        let (ids, _) = ids_and_page(hub.list(None, Some("In Review".into()), None, None, None, None, None, None).await).await;
         assert_eq!(ids, ["WK-3"]);
     }
 
@@ -1229,7 +1619,7 @@ mod tests {
     async fn amend_yields_amended_and_watch_carries_only_what_changed() {
         let hub = hub();
         one(hub.create("AM".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None).await);
+        let mut watch = Box::pin(hub.watch(None, None, None).await);
 
         let ev = one(hub.amend("am-1".into(), None, Some("the body, now".into())).await).await;
         let wire = serde_json::to_value(&ev).unwrap();
@@ -1279,7 +1669,7 @@ mod tests {
     async fn link_commits_yields_commits_linked_and_watch_carries_only_what_changed() {
         let hub = hub();
         one(hub.create("LC".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None).await);
+        let mut watch = Box::pin(hub.watch(None, None, None).await);
         let commits = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
 
         let ev = one(hub.link_commits("lc-1".into(), commits(&["77df9a0", "plexus-macros@4F7114A"])).await).await;
@@ -1295,9 +1685,9 @@ mod tests {
         assert_eq!(wire["ticket"]["commits"], three);
         let got = serde_json::to_value(one(hub.get("LC-1".into()).await).await).unwrap();
         assert_eq!(got["ticket"]["commits"], three, "get shows them, in link order");
-        let (rows, _) = ids_and_page(hub.list(None, None, None, None, None, Some(true)).await).await;
+        let (rows, _) = ids_and_page(hub.list(None, None, None, None, None, Some(true), None, None).await).await;
         assert_eq!(rows, ["LC-1"]);
-        let evs: Vec<TicketsEvent> = Box::pin(hub.list(None, None, None, None, None, Some(true)).await).collect().await;
+        let evs: Vec<TicketsEvent> = Box::pin(hub.list(None, None, None, None, None, Some(true), None, None).await).collect().await;
         assert_eq!(serde_json::to_value(&evs[0]).unwrap()["summary"]["commits"], three, "and the summary row");
 
         for (i, added) in [&["77df9a0"], &["0bb28b2"]].into_iter().enumerate() {
@@ -1351,7 +1741,7 @@ mod tests {
     #[tokio::test]
     async fn watch_sees_creations_and_status_changes() {
         let hub = hub();
-        let mut watch = Box::pin(hub.watch(None).await);
+        let mut watch = Box::pin(hub.watch(None, None, None).await);
 
         one(hub.create("MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
         match watch.next().await.expect("change") {
@@ -1397,7 +1787,7 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(&groups[0]).unwrap()["host"], serde_json::Value::Null, "null, not missing");
 
-        let mut plx = Box::pin(hub.watch(Some("plx".into())).await);
+        let mut plx = Box::pin(hub.watch(Some("plx".into()), None, None).await);
         one(hub.set_status("SUB-2".into(), "Complete".into()).await).await;
         match plx.next().await.expect("change") {
             TicketsEvent::GroupChanged { group } => {
@@ -1465,7 +1855,7 @@ mod tests {
             match ev {
                 TicketsEvent::Ticket { ticket } => ids.push(ticket.id),
                 TicketsEvent::Summary { summary } => ids.push(summary.id),
-                TicketsEvent::Page { next, remaining } => page = Some((next, remaining)),
+                TicketsEvent::Page { next, remaining, .. } => page = Some((next, remaining)),
                 other => panic!("expected a row or the page, got {other:?}"),
             }
         }
@@ -1483,10 +1873,10 @@ mod tests {
         one(hub.set_status("DAG-1".into(), "Ready".into()).await).await;
         one(hub.set_status("DAG-2".into(), "Ready".into()).await).await;
 
-        assert_eq!(ticket_ids(hub.ready_set(None, None, None, None).await).await, vec!["DAG-1"]);
+        assert_eq!(ticket_ids(hub.ready_set(None, None, None, None, None).await).await, vec!["DAG-1"]);
 
         one(hub.set_status("DAG-1".into(), "Complete".into()).await).await;
-        assert_eq!(ticket_ids(hub.ready_set(None, None, None, None).await).await, vec!["DAG-2"]);
+        assert_eq!(ticket_ids(hub.ready_set(None, None, None, None, None).await).await, vec!["DAG-2"]);
     }
 
     #[tokio::test]
@@ -1503,11 +1893,11 @@ mod tests {
         one(hub.set_status("TWO-1".into(), "Ready".into()).await).await;
 
         assert_eq!(
-            ticket_ids(hub.ready_set(None, None, None, None).await).await,
+            ticket_ids(hub.ready_set(None, None, None, None, None).await).await,
             vec!["ONE-2", "TWO-1"]
         );
         assert_eq!(
-            ticket_ids(hub.ready_set(Some("one".into()), None, None, None).await).await,
+            ticket_ids(hub.ready_set(Some("one".into()), None, None, None, None).await).await,
             vec!["ONE-2"]
         );
     }
@@ -1521,7 +1911,7 @@ mod tests {
         .await;
         one(hub.set_status("DAG-1".into(), "Ready".into()).await).await;
 
-        assert!(ticket_ids(hub.ready_set(None, None, None, None).await).await.is_empty());
+        assert!(ticket_ids(hub.ready_set(None, None, None, None, None).await).await.is_empty());
 
         let evs: Vec<_> = Box::pin(hub.blockers("DAG-1".into()).await).collect().await;
         assert_eq!(evs.len(), 1);
@@ -1580,7 +1970,7 @@ mod tests {
     async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
         let hub = hub();
         one(hub.create("DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None).await);
+        let mut watch = Box::pin(hub.watch(None, None, None).await);
 
         one(hub
             .create("DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
@@ -1627,7 +2017,7 @@ mod tests {
     async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
         let hub = hub();
         one(hub.create("FAM".into(), "P".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None).await);
+        let mut watch = Box::pin(hub.watch(None, None, None).await);
 
         match one(
             hub.create(
@@ -1682,7 +2072,7 @@ mod tests {
             other => panic!("expected Ticket, got {other:?}"),
         }
         assert_eq!(
-            ticket_ids(hub.list(None, None, Some("FAM-1".into()), None, None, None).await).await,
+            ticket_ids(hub.list(None, None, Some("FAM-1".into()), None, None, None, None, None).await).await,
             vec!["FAM-2"]
         );
         match one(hub.get("FAM-2".into()).await).await {
@@ -1747,14 +2137,14 @@ mod tests {
 
         // MNG-14: "unrelated" (LP-2) named no parent and hangs under the root.
         assert_eq!(
-            ticket_ids(hub.list(None, None, Some("LP-1".into()), None, None, None).await).await,
+            ticket_ids(hub.list(None, None, Some("LP-1".into()), None, None, None, None, None).await).await,
             vec!["LP-2", "LP-3", "ZZ-1"]
         );
-        assert!(ticket_ids(hub.list(None, None, Some("LP-2".into()), None, None, None).await)
+        assert!(ticket_ids(hub.list(None, None, Some("LP-2".into()), None, None, None, None, None).await)
             .await
             .is_empty());
         assert_eq!(
-            ticket_ids(hub.list(None, None, None, None, None, None).await).await.len(),
+            ticket_ids(hub.list(None, None, None, None, None, None, None, None).await).await.len(),
             4,
             "unfiltered list is unchanged"
         );
@@ -1779,7 +2169,7 @@ mod tests {
             .await)
         .await;
 
-        let evs: Vec<_> = Box::pin(hub.list(None, None, None, None, None, Some(true)).await)
+        let evs: Vec<_> = Box::pin(hub.list(None, None, None, None, None, Some(true), None, None).await)
             .collect()
             .await;
         assert_eq!(evs.len(), 2, "one row, one page: {evs:?}");
@@ -1795,7 +2185,7 @@ mod tests {
         assert!(summary.get("children").is_none(), "SCALE-4: no list of children: {summary}");
 
         // The full ticket still carries it, unchanged.
-        let evs: Vec<_> = Box::pin(hub.list(None, None, None, None, None, None).await)
+        let evs: Vec<_> = Box::pin(hub.list(None, None, None, None, None, None, None, None).await)
             .collect()
             .await;
         let row = serde_json::to_value(&evs[0]).unwrap();
@@ -1811,10 +2201,10 @@ mod tests {
         one(hub.create("CUR".into(), "a".into(), None, None, None, None, None, None).await).await;
 
         for evs in [
-            Box::pin(hub.list(None, None, None, Some("ZZZ-9".into()), None, None).await)
+            Box::pin(hub.list(None, None, None, Some("ZZZ-9".into()), None, None, None, None).await)
                 .collect::<Vec<_>>()
                 .await,
-            Box::pin(hub.ready_set(None, Some("ZZZ-9".into()), None, None).await)
+            Box::pin(hub.ready_set(None, Some("ZZZ-9".into()), None, None, None).await)
                 .collect::<Vec<_>>()
                 .await,
         ] {
@@ -1842,7 +2232,7 @@ mod tests {
             one(hub.set_status(id.into(), "Ready".into()).await).await;
         }
 
-        let (ids, page) = ids_and_page(hub.ready_set(None, None, Some(2), Some(true)).await).await;
+        let (ids, page) = ids_and_page(hub.ready_set(None, None, Some(2), Some(true), None).await).await;
         assert_eq!(ids, vec!["RS-1", "RS-2"]);
         assert_eq!(
             page,
@@ -1851,7 +2241,7 @@ mod tests {
         );
 
         let (ids, page) =
-            ids_and_page(hub.ready_set(None, Some("RS-2".into()), Some(2), Some(true)).await).await;
+            ids_and_page(hub.ready_set(None, Some("RS-2".into()), Some(2), Some(true), None).await).await;
         assert_eq!(ids, vec!["RS-3"]);
         assert_eq!(page, Some((None, 0)));
     }
@@ -1871,26 +2261,26 @@ mod tests {
         }
         one(hub.create("OTH".into(), "The Ticket Page".into(), Some("scope".into()), None, None, None, None, None).await).await;
 
-        let evs: Vec<TicketsEvent> = Box::pin(hub.find("".into(), None, None).await).collect().await;
+        let evs: Vec<TicketsEvent> = Box::pin(hub.find("".into(), None, None, None).await).collect().await;
         assert_eq!(evs.len(), 51, "50 rows and the page");
         let row = serde_json::to_value(&evs[0]).unwrap();
         assert_eq!((row["type"].as_str(), row["summary"]["id"].as_str()), (Some("summary"), Some("FND-1")));
         assert!(row["summary"].get("body").is_none(), "a summary carries no body: {row}");
-        let (ids, page) = ids_and_page(hub.find("".into(), None, None).await).await;
+        let (ids, page) = ids_and_page(hub.find("".into(), None, None, None).await).await;
         assert_eq!(ids.len(), 50, "the palette's 50 when no limit is asked");
         assert_eq!(page, Some((Some("FND-50".into()), 11)));
 
-        let (ids, page) = ids_and_page(hub.find("  fnd-5 ".into(), None, None).await).await;
+        let (ids, page) = ids_and_page(hub.find("  fnd-5 ".into(), None, None, None).await).await;
         let expected: Vec<String> =
             std::iter::once(5).chain(50..=59).map(|n| format!("FND-{n}")).collect();
         assert_eq!(ids, expected, "trimmed, case-folded, in (epic, seq) order");
         assert_eq!(page, Some((None, 0)));
 
         let (ids, page) =
-            ids_and_page(hub.find("ticket page".into(), Some("fnd-3".into()), Some(1)).await).await;
+            ids_and_page(hub.find("ticket page".into(), Some("fnd-3".into()), Some(1), None).await).await;
         assert_eq!((ids, page), (vec!["OTH-1".to_string()], Some((None, 0))));
 
-        let evs: Vec<TicketsEvent> = Box::pin(hub.find("row".into(), Some("ZZZ-9".into()), None).await)
+        let evs: Vec<TicketsEvent> = Box::pin(hub.find("row".into(), Some("ZZZ-9".into()), None, None).await)
             .collect()
             .await;
         match evs.as_slice() {
@@ -1988,7 +2378,7 @@ mod tests {
     #[tokio::test]
     async fn watch_epic_filter_drops_other_epics() {
         let hub = hub();
-        let mut watch = Box::pin(hub.watch(Some("mng".into())).await);
+        let mut watch = Box::pin(hub.watch(Some("mng".into()), None, None).await);
 
         one(hub.create("OTHER".into(), "x".into(), Some("scope".into()), None, None, None, None, None).await).await;
         one(hub.create("MNG".into(), "y".into(), Some("scope".into()), None, None, None, None, None).await).await;
@@ -2025,8 +2415,8 @@ mod tests {
         const HELD: u64 = 256; // Store::with_connection's broadcast capacity
         let hub = hub();
         one(hub.create("LAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None).await);
-        let mut other = Box::pin(hub.watch(Some("other".into())).await);
+        let mut watch = Box::pin(hub.watch(None, None, None).await);
+        let mut other = Box::pin(hub.watch(Some("other".into()), None, None).await);
 
         let mut broadcast: Vec<String> = Vec::new();
         for k in 2..=CREATES + 1 {
@@ -2075,7 +2465,7 @@ mod tests {
         one(hub.create("SP".into(), "a".into(), None, None, None, None, None, None).await).await; // SP-2 → SP-1
         one(hub.create("SP".into(), "b".into(), None, None, None, None, None, None).await).await; // SP-3 → SP-1
         one(hub.create("OT".into(), "other".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None).await);
+        let mut watch = Box::pin(hub.watch(None, None, None).await);
 
         match one(hub.set_parent("sp-3".into(), "sp-2".into()).await).await {
             TicketsEvent::ParentChanged { ticket, previous } => {

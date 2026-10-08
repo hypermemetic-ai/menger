@@ -199,11 +199,23 @@ impl Inputs {
     /// `epic`, in `state` — in the store's order of tickets, each ticket's
     /// in its order.
     pub(crate) fn query(&self, ticket: Option<&str>, epic: Option<&str>, state: Option<InputState>) -> Vec<Input> {
+        self.query_where(ticket, epic, state, |_| true)
+    }
+
+    /// FILTER-15: [`Inputs::query`] of the tickets `keep` admits — asked once
+    /// a ticket that declares an input, before anything is cloned.
+    pub(crate) fn query_where(
+        &self,
+        ticket: Option<&str>,
+        epic: Option<&str>,
+        state: Option<InputState>,
+        keep: impl Fn(&str) -> bool,
+    ) -> Vec<Input> {
         let mut tickets: Vec<&String> = match ticket {
             Some(t) => self.by_ticket.get_key_value(t).map(|(k, _)| k).into_iter().collect(),
             None => self.by_ticket.keys().collect(),
         };
-        tickets.retain(|t| epic.is_none_or(|e| super::db::by_epic_seq(t).0 == e));
+        tickets.retain(|t| epic.is_none_or(|e| super::db::by_epic_seq(t).0 == e) && keep(t));
         tickets.sort_by_cached_key(|t| super::db::by_epic_seq(t));
         tickets
             .into_iter()

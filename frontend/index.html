@@ -434,6 +434,30 @@
   ul#children li:hover { background: var(--hover); }
   #blockers .glyph, #unlocks .glyph, #children .glyph { flex: none; width: 1ch; color: var(--muted); }
   #blockers a, #unlocks a, #children a { flex: none; }
+  /* FILTER-16: under the global filter — the notice under the title when
+     the ticket is outside it (its pills in words, clear), the relations and
+     children outside it dimmed, and the line that says what the filter
+     hides of the children. */
+  .tout {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem; margin: 0 0 .9rem;
+    padding: .4rem .6rem; font-family: var(--sans); font-size: 12.5px; color: var(--muted);
+    background: var(--panel); border: 1px dashed var(--line); border-radius: 8px;
+  }
+  .tout strong { color: var(--ink); font-weight: 600; }
+  .tout-pills { display: inline-flex; flex-wrap: wrap; gap: .3rem; }
+  .tout .pill {
+    display: inline-flex; align-items: stretch; font-size: 12px; line-height: 1.6;
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  }
+  .tout .pill > * { padding: .05rem .45rem; border-left: 1px solid var(--line); white-space: nowrap; }
+  .tout .pill > :first-child { border-left: 0; }
+  .tout .pill .p-vals { color: var(--ink); }
+  .tout button.tout-clear {
+    background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer;
+  }
+  .tout button.tout-clear:hover { text-decoration: underline; }
+  #blockers li.outside, #unlocks li.outside, #children li.outside { opacity: .45; }
+  #blockers li.outside:hover, #unlocks li.outside:hover, #children li.outside:hover { opacity: .8; }
   /* SCALE-4: a large parent's children come a page at a time. */
   button.more {
     margin: .35rem 0 0; padding: .1rem .5rem; font: inherit; font-size: .8rem;
@@ -612,6 +636,16 @@
     font-size: 10px; padding: 0 5px; border-radius: 6px;
   }
   #palette-list li .label { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  /* FILTER-16: under the global filter — the rows outside it ("Search
+     everything") dimmed and marked; the last row, the other pass. */
+  #palette-list li.outside .code, #palette-list li.outside .label { opacity: .55; }
+  #palette-list li .pal-out {
+    flex: none; font-family: var(--sans); font-size: 10px; letter-spacing: .03em; color: var(--muted);
+    border: 1px dashed var(--line); border-radius: 5px; padding: 0 4px;
+  }
+  #palette-list li.pal-wide { border-top: 1px solid var(--line); margin-top: .2rem; padding-top: .25rem; color: var(--accent); }
+  #palette-list li.pal-wide .label { flex: none; }
+  #palette-list li.pal-wide .pal-hint { color: var(--muted); font-size: 11px; }
   #palette-list li.empty, #palette .hint { color: var(--muted); font-size: .75rem; }
   #palette-list li.empty { padding: .3rem .8rem; cursor: default; }
   #palette .hint { padding: .35rem .8rem; border-top: 1px solid var(--line); }
@@ -826,22 +860,14 @@
     font-family: var(--sans); font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
     text-transform: uppercase; color: var(--muted);
   }
+  /* FILTER-16: the page's filter is the generic bar (the inputs level). */
   #inputs .ibar {
-    display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1.25rem;
-    margin: 0 0 1rem; padding: .45rem .6rem; font-size: .8rem;
+    margin: 0 0 1rem; padding: .45rem .6rem; font-size: .85rem;
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   }
-  #inputs .fgroup { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
-  #inputs .flabel { color: var(--muted); margin-right: .15rem; }
-  #inputs button.fchip, #inputs button.fclear {
-    font: inherit; font-size: .78rem; cursor: pointer; padding: 0 .45rem; border-radius: 5px;
-    background: var(--card); color: var(--ink); border: 1px solid var(--line);
-  }
-  #inputs button.fchip:hover, #inputs button.fclear:hover { color: var(--accent); border-color: var(--accent); }
-  #inputs button.fchip.on { background: var(--sel); color: var(--accent); border-color: var(--accent); font-weight: 600; }
-  #inputs .n { margin-left: .3rem; color: var(--muted); font-weight: 400; }
-  #inputs .fremoved { display: inline-flex; align-items: center; gap: .25rem; margin-left: .4rem; color: var(--muted); cursor: pointer; }
-  #inputs button.fclear { margin-left: auto; color: var(--muted); }
+  #inputs .ibar > .fclash { margin-top: .4rem; }
+  #inputs .irefused { margin: 0 0 1rem; font-size: .8rem; color: var(--err-fg); overflow-wrap: anywhere; }
+  #inputs .igroup .n { margin-left: .3rem; color: var(--muted); font-weight: 400; }
   #inputs .igroup { margin: 0 0 1.1rem; }
   #inputs .igroup h3 { display: flex; align-items: baseline; gap: .1rem; margin: 0 0 .45rem; font-size: .85rem; }
   #inputs .ist {
@@ -882,7 +908,7 @@
   #inputs .opt.chosen { background: var(--sel); border-color: var(--accent); color: var(--accent); font-weight: 600; }
   #inputs .irec, #inputs .ians { margin: .15rem 0; font-size: 12.5px; overflow-wrap: anywhere; }
   #inputs .ians.none { font-size: .8rem; font-style: italic; }
-  #inputs .val { font-weight: 600; }
+  #inputs .irow .val { font-weight: 600; }
   #inputs .why { color: var(--ink); margin-left: .3rem; }
   #inputs .src {
     margin-left: .45rem; font-size: 10.5px; color: var(--chip-fg); background: var(--chip-bg);
@@ -935,106 +961,225 @@
   .md .wave-ref.missing { color: var(--err-fg); }
   #waves .card.flash, #waves .lane.flash { outline: 2px solid var(--accent); outline-offset: 2px; }
   #waves > p.none { color: var(--muted); font-size: .8rem; margin: 0 0 .5rem; }
-  /* WAVE-12: the board's filter, in Linear's idiom on the house tokens — a
-     Filter button, the applied clauses as segmented pills, and a popover
-     (the ticket menu's card: bordered, shadowed) hanging from the bar: a
-     search field over the categories, the open category's values beside
-     them — a box, the label, the count. With too little room for both (the
-     `narrow` class) the values take the categories' place, with a back row. */
-  #waves .filters { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
-  #waves button.fbtn {
+  /* WAVE-12, FILTER-11: a filter bar (any level's), in Linear's idiom on
+     the house tokens — a Filter button, the applied clauses as segmented
+     pills (a surface's bar shows the global ones first, muted, marked
+     `global`), and a popover (the ticket menu's card: bordered, shadowed)
+     hanging from the bar: a search field over the categories, the open
+     category's values beside them — a box, the label, the count. With too
+     little room for both (the `narrow` class) the values take the
+     categories' place, with a back row. */
+  .fbar { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+  button.fbtn {
     display: inline-flex; align-items: center; gap: .35rem; font: inherit; font-size: 12px; line-height: 1.6;
     background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 6px;
     padding: .05rem .55rem; cursor: pointer;
   }
-  #waves button.fbtn svg { width: 12px; height: 12px; color: var(--muted); }
-  #waves button.fbtn:hover, #waves button.fbtn[aria-expanded="true"] { border-color: var(--accent); }
-  #waves button.fbtn:hover svg, #waves button.fbtn[aria-expanded="true"] svg { color: var(--accent); }
-  #waves .pill {
+  button.fbtn svg { width: 12px; height: 12px; color: var(--muted); }
+  button.fbtn:hover, button.fbtn[aria-expanded="true"] { border-color: var(--accent); }
+  button.fbtn:hover svg, button.fbtn[aria-expanded="true"] svg { color: var(--accent); }
+  .fbar .pill {
     display: inline-flex; align-items: stretch; font-size: 12px; line-height: 1.6;
     background: var(--card); border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
   }
-  #waves .pill > * {
+  .fbar .pill > * {
     padding: .05rem .45rem; border: 0; border-left: 1px solid var(--line); border-radius: 0;
     background: none; font: inherit; color: var(--ink); white-space: nowrap;
   }
-  #waves .pill > :first-child { border-left: 0; }
-  #waves .pill .p-cat, #waves .pill .p-op, #waves .pill .more, #waves .pill .p-x { color: var(--muted); }
-  #waves .pill button { cursor: pointer; }
-  #waves .pill button:hover { background: var(--hover); color: var(--accent); }
-  #waves .pill .p-vals { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
-  #waves .pill .p-x { padding: .05rem .4rem; }
-  #waves button.reset {
+  .fbar .pill > :first-child { border-left: 0; }
+  .fbar .pill .p-cat, .fbar .pill .p-op, .fbar .pill .more, .fbar .pill .p-x { color: var(--muted); }
+  .fbar .pill button { cursor: pointer; }
+  .fbar .pill button:hover { background: var(--hover); color: var(--accent); }
+  .fbar .pill .p-vals { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+  .fbar .pill .p-x { padding: .05rem .4rem; }
+  .fbar button.reset {
     background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer;
   }
-  #waves button.reset:hover { text-decoration: underline; }
-  #fmenu {
+  .fbar button.reset:hover { text-decoration: underline; }
+  .fmenu {
     position: absolute; z-index: 30; display: flex; flex-direction: column; max-width: calc(100vw - 16px);
     background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
     box-shadow: 0 10px 30px var(--shadow); font: 12.5px/1.5 var(--mono); overflow: hidden;
   }
-  #fmenu input.fsearch {
+  .fmenu input.fsearch {
     flex: none; font: inherit; padding: .45rem .75rem; border: 0; border-bottom: 1px solid var(--line);
     background: var(--bg); color: var(--ink); outline: none;
   }
-  #fmenu input.fsearch::placeholder { color: var(--muted); }
-  #fmenu .panes { display: flex; min-height: 0; flex: 1 1 auto; }
-  #fmenu .fpane { overflow-y: auto; padding: 4px; min-height: 0; overscroll-behavior: contain; }
-  #fmenu .fmain { width: 17rem; flex: none; }
-  #fmenu .fsub { width: 18rem; flex: none; border-left: 1px solid var(--line); }
-  #fmenu.direct .fmain { display: none; }
-  #fmenu.direct .fsub { border-left: 0; }
-  #fmenu .frow {
+  .fmenu input.fsearch::placeholder { color: var(--muted); }
+  .fmenu .panes { display: flex; min-height: 0; flex: 1 1 auto; }
+  .fmenu .fpane { overflow-y: auto; padding: 4px; min-height: 0; overscroll-behavior: contain; }
+  .fmenu .fmain { width: 17rem; flex: none; }
+  .fmenu .fsub { width: 18rem; flex: none; border-left: 1px solid var(--line); }
+  .fmenu.direct .fmain { display: none; }
+  .fmenu.direct .fsub { border-left: 0; }
+  .fmenu .frow {
     display: flex; align-items: center; gap: .45rem; padding: 3px 8px; border-radius: 5px;
     cursor: pointer; white-space: nowrap; user-select: none;
   }
-  #fmenu .frow.hi { background: var(--hover); }
-  #fmenu .frow.cat.open { background: var(--sel); }
-  #fmenu .frow.cat.open .flabel { color: var(--accent); }
-  #fmenu .frow .flabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  #fmenu .frow .glyph { width: 1.2em; flex: none; text-align: center; color: var(--muted); }
-  #fmenu .frow .arrow, #fmenu .fscope { color: var(--muted); }
-  #fmenu .fscope { margin-right: .3rem; font-size: 11px; }
-  #fmenu .frow .fcount { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2ch; text-align: right; font-size: 11px; }
-  #fmenu .frow .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-  #fmenu .fhead {
+  .fmenu .frow.hi { background: var(--hover); }
+  .fmenu .frow.cat.open { background: var(--sel); }
+  .fmenu .frow.cat.open .flabel { color: var(--accent); }
+  .fmenu .frow .flabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .fmenu .frow .glyph { width: 1.2em; flex: none; text-align: center; color: var(--muted); }
+  .fmenu .frow .arrow, .fmenu .fscope { color: var(--muted); }
+  .fmenu .fscope { margin-right: .3rem; font-size: 11px; }
+  .fmenu .frow .fcount { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2ch; text-align: right; font-size: 11px; }
+  .fmenu .frow .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .fmenu .fhead {
     padding: 6px 8px 2px; font-family: var(--sans); font-size: 10.5px; font-weight: 600;
     letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
   }
-  #fmenu .fhead.fdiv { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 6px; }
-  #fmenu .box {
+  .fmenu .fhead.fdiv { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 6px; }
+  .fmenu .box {
     flex: none; width: 13px; height: 13px; border: 1px solid var(--muted); border-radius: 3px;
     display: inline-flex; align-items: center; justify-content: center;
     font-size: 10px; font-weight: 700; line-height: 1; color: var(--bg);
   }
-  #fmenu .box[data-state="on"], #fmenu .box[data-state="mixed"] { background: var(--accent); border-color: var(--accent); }
-  #fmenu .frow .only {
+  .fmenu .box[data-state="on"], .fmenu .box[data-state="mixed"] { background: var(--accent); border-color: var(--accent); }
+  .fmenu .frow .only {
     display: none; background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: 10.5px;
     color: var(--accent); cursor: pointer;
   }
-  #fmenu .frow:hover .only, #fmenu .frow.hi .only { display: inline; }
-  #fmenu .frow .only:hover { text-decoration: underline; }
-  #fmenu .frow .tag { font-size: 10.5px; padding: 0 5px; border-radius: 6px; }
-  #fmenu .kind .kglyph { color: var(--muted); }
-  #fmenu .kind[data-kind="scope"] .kglyph { color: var(--kind-scope); }
-  #fmenu .kind[data-kind="build"] .kglyph { color: var(--kind-build); }
-  #fmenu .kind[data-kind="execution"] .kglyph { color: var(--kind-execution); }
-  #fmenu .kind[data-kind="gap"] .kglyph { color: var(--kind-gap); }
-  #fmenu .kind[data-kind="spike"] .kglyph { color: var(--kind-spike); }
-  #fmenu .frow.back { display: none; color: var(--muted); border-bottom: 1px solid var(--line); border-radius: 0; margin-bottom: 4px; }
-  #fmenu .ftitle { padding: .5rem .6rem; display: flex; flex-direction: column; gap: .35rem; }
-  #fmenu .ftitle input {
+  .fmenu .frow:hover .only, .fmenu .frow.hi .only { display: inline; }
+  .fmenu .frow .only:hover { text-decoration: underline; }
+  .fmenu .frow .tag { font-size: 10.5px; padding: 0 5px; border-radius: 6px; }
+  .fmenu .kind .kglyph { color: var(--muted); }
+  .fmenu .kind[data-kind="scope"] .kglyph { color: var(--kind-scope); }
+  .fmenu .kind[data-kind="build"] .kglyph { color: var(--kind-build); }
+  .fmenu .kind[data-kind="execution"] .kglyph { color: var(--kind-execution); }
+  .fmenu .kind[data-kind="gap"] .kglyph { color: var(--kind-gap); }
+  .fmenu .kind[data-kind="spike"] .kglyph { color: var(--kind-spike); }
+  .fmenu .frow.back { display: none; color: var(--muted); border-bottom: 1px solid var(--line); border-radius: 0; margin-bottom: 4px; }
+  .fmenu .ftitle { padding: .5rem .6rem; display: flex; flex-direction: column; gap: .35rem; }
+  .fmenu .ftitle input {
     font: inherit; padding: .25rem .45rem; background: var(--card); color: var(--ink);
     border: 1px solid var(--line); border-radius: 4px; outline: none;
   }
-  #fmenu .ftitle input:focus { border-color: var(--accent); }
-  #fmenu .fhint, #fmenu .fempty { color: var(--muted); font-size: 11px; }
-  #fmenu .fempty { padding: 4px 8px; }
+  .fmenu .ftitle input:focus { border-color: var(--accent); }
+  .fmenu .fhint, .fmenu .fempty { color: var(--muted); font-size: 11px; }
+  .fmenu .fempty { padding: 4px 8px; }
   /* Too little room for two panes (src/filter.rs measures the column). */
-  #fmenu.narrow .fpane { width: 18rem; max-width: 100%; flex: 0 1 auto; }
-  #fmenu.narrow.has-sub .fmain { display: none; }
-  #fmenu.narrow .fsub { border-left: 0; }
-  #fmenu.narrow:not(.direct) .frow.back { display: flex; }
+  .fmenu.narrow .fpane { width: 18rem; max-width: 100%; flex: 0 1 auto; }
+  .fmenu.narrow.has-sub .fmain { display: none; }
+  .fmenu.narrow .fsub { border-left: 0; }
+  .fmenu.narrow:not(.direct) .frow.back { display: flex; }
+  /* FILTER-11: the header's Filter button (its badge: the global groups),
+     the lens bar under the header while the global filter is non-empty, the
+     inherited pills, a custom group's pill, the text mode, and the notice
+     when a view's filters exclude each other. */
+  #lens-top { position: relative; }
+  header button.fbtn { align-self: center; font-size: 11px; line-height: 1.3; padding: 0 6px; border-radius: 4px; }
+  button.fbtn .fbadge {
+    display: inline-block; padding: 0 5px; border-radius: 8px; font-size: 10px; font-weight: 600; line-height: 1.5;
+    background: var(--accent); color: var(--bg);
+  }
+  .lensbar {
+    padding: .4rem 1.25rem; border-bottom: 1px solid var(--line); background: var(--panel); font-size: .85rem;
+  }
+  .lensbar .lens-l {
+    font-family: var(--sans); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  }
+  #lens-top > .fclash { margin: .4rem 1.25rem; }
+  /* FILTER-16: on a page the filter does not reach (components, settings)
+     the bar says so, its pills quieter. */
+  .lensbar .lens-na { font-size: 12px; font-style: italic; color: var(--muted); }
+  .lensbar.na .pill { opacity: .55; }
+  .fbar .pill.inherited { opacity: .72; border-style: dashed; }
+  .fbar .pill.inherited .p-cat, .fbar .pill.inherited .p-op { color: var(--muted); }
+  .fbar .pill .p-lvl, .fclash .p-lvl {
+    font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--accent); align-self: center;
+  }
+  .fclash .p-lvl { margin-right: .3rem; }
+  .fbar .pill.custom .p-cat { font-style: italic; }
+  .fbar .pill.custom .p-vals { max-width: 26rem; }
+  .fbar button.ftext-t {
+    background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer;
+  }
+  .fbar button.ftext-t:hover, .fbar button.ftext-t[aria-pressed="true"] { color: var(--accent); }
+  .fbar .ftext { flex: 1 1 24rem; min-width: 12rem; display: flex; }
+  .fbar .ftext input {
+    flex: 1; min-width: 0; font: inherit; font-size: 12px; padding: .1rem .45rem; background: var(--card); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px; outline: none;
+  }
+  .fbar .ftext input:focus { border-color: var(--accent); }
+  .fbar .ferrs {
+    order: 9; flex-basis: 100%; margin: 0; padding: .3rem .6rem; list-style: none; font-size: 12px;
+    background: var(--err-bg); color: var(--err-fg); border: 1px solid var(--err-line); border-radius: 6px;
+  }
+  .fbar .ferrs code { font-family: var(--mono); }
+  .fclash {
+    flex-basis: 100%; font-size: 12px; padding: .3rem .6rem; border-radius: 6px;
+    background: var(--err-bg); color: var(--err-fg); border: 1px solid var(--err-line);
+  }
+  .fclash code { font-family: var(--mono); }
+  .fclash-g { white-space: nowrap; }
+  #waves .wbar > .fclash { order: 9; margin-top: .2rem; }
+  .fmenu .flevel {
+    flex: none; padding: 4px 10px; border-bottom: 1px solid var(--line); font-family: var(--sans); font-size: 10.5px;
+    font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent);
+  }
+  .fmenu .frow.fgroup { margin-top: 2px; }
+  .fmenu .frow.fgroup .fhead-l {
+    font-family: var(--sans); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  }
+  /* FILTER-12: the board's bar over its table; the board when nothing
+     matches — the words, the effective filter's pills (the global ones
+     dashed and marked), a button to clear each level; the header's
+     `n of N` beside the global Filter button while the global filter is set. */
+  .bbar { margin: 0 0 .6rem; font-size: .85rem; }
+  .bbar > .fclash { margin-top: .4rem; }
+  .bempty {
+    margin: 1.25rem 0; padding: 1rem 1.25rem; border: 1px dashed var(--line); border-radius: 8px;
+    text-align: center; color: var(--muted);
+  }
+  .bempty-h { margin: 0 0 .6rem; font-size: 1rem; font-weight: 600; color: var(--ink); }
+  .bempty-why { margin: 0 0 .6rem; font-size: .8rem; color: var(--err-fg); overflow-wrap: anywhere; }
+  .bempty-pills { display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem; margin: 0 0 .8rem; }
+  .bempty .pill {
+    display: inline-flex; align-items: stretch; font-size: 12px; line-height: 1.6;
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  }
+  .bempty .pill > * { padding: .05rem .45rem; border-left: 1px solid var(--line); white-space: nowrap; }
+  .bempty .pill > :first-child { border-left: 0; }
+  .bempty .pill .p-cat { color: var(--muted); }
+  .bempty .pill .p-vals { color: var(--ink); }
+  .bempty .pill.inherited { opacity: .72; border-style: dashed; }
+  .bempty .pill .p-lvl {
+    font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--accent); align-self: center;
+  }
+  .bempty-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: .75rem; }
+  .bempty-clear {
+    font: inherit; font-size: .8rem; padding: .15rem .7rem; cursor: pointer;
+    background: var(--card); color: var(--accent); border: 1px solid var(--line); border-radius: 6px;
+  }
+  .bempty-clear:hover { border-color: var(--accent); }
+  header .gcount { align-self: center; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  header .gcount .gcount-n { color: var(--accent); font-weight: 600; }
+  /* FILTER-14: the nav under the lens — its bar under the brand (the menu
+     hangs over the content column: the nav no longer clips what leaves it;
+     its tree scrolls in its own box, so nothing else does), a shortcode's
+     tally as its matches, a row that only holds matches dimmed, the badge
+     of the matches below a row, and the last line: the shortcodes hidden. */
+  #nav { overflow: visible; }
+  #nav .nbar { padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: .85rem; }
+  #nav .nbar .fbar { gap: .3rem; }
+  #nav .nbar .ftext { flex-basis: 100%; min-width: 0; }
+  #nav .nbar .fclash { margin-top: .3rem; }
+  #nav .tag.roll.lensed { color: var(--accent); font-weight: 600; }
+  #nav .row.dim .code, #nav .row.dim .label, #nav .row.dim .toggle.kind, #nav .row.dim .tag:not(.roll) { opacity: .5; }
+  #nav .below {
+    flex: none; font-size: 10px; line-height: 1.4; padding: 0 5px; border-radius: 8px; font-variant-numeric: tabular-nums;
+    color: var(--accent); background: var(--chip-bg); border: 1px solid var(--chip-line);
+  }
+  #nav .nhidden, #nav .nlens-note {
+    display: block; margin: 2px 10px 10px; padding: 0; background: none; border: 0;
+    font: inherit; font-size: 11px; color: var(--muted); text-align: left;
+  }
+  #nav .nhidden { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+  #nav .nlens-note[data-nlens="refused"] { color: var(--err-fg); overflow-wrap: anywhere; }
+  #nav .nhidden:hover, #nav .nhidden[aria-pressed="true"] { color: var(--accent); }
 </style>
 </head>
 <body></body>

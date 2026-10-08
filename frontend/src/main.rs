@@ -212,11 +212,20 @@
 //! inputs are the app's copy (src/inputs.rs), asked for only once the page
 //! is opened — the badge shows from then on, live.
 
+//! FILTER-11: the lens (src/lens.rs) — a filter at every level, each the
+//! same generic filter (FILTER-10's language) and the same bar
+//! (src/filter.rs): a global one — the header's `Filter` button with its
+//! groups as a badge, a lens bar under the header while it is non-empty,
+//! `F` — and one per surface, combined with it (`global ∧ own`). Each is
+//! kept per viewer and in the route's query (`g=`, `n=`, `f=`); a
+//! navigation carries `g` and `n`. The wave board is its first surface.
+
 mod board;
 mod bridge;
 mod cache;
 mod card;
 mod components;
+mod counts;
 mod dom;
 mod filter;
 mod frame;
@@ -225,6 +234,7 @@ mod inputs_page;
 mod inspect;
 mod keys;
 mod kids;
+mod lens;
 mod md;
 mod menu;
 mod nav;
@@ -241,6 +251,8 @@ use std::collections::HashSet;
 
 use leptos::prelude::*;
 use menger_tickets_api::{Status, TicketSummary};
+
+use crate::filter::FilterBar;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
@@ -330,7 +342,8 @@ pub(crate) enum Route {
 fn parse_route(hash: &str) -> Route {
     let path = hash.strip_prefix('#').unwrap_or(hash);
     let path = path.strip_prefix('/').unwrap_or(path);
-    // WAVE-12: the query is the wave board's filter, not part of the route.
+    // WAVE-12, FILTER-11: the query is the filters' (`g=`, `n=`, `f=`) and a
+    // page's own, not part of the route.
     let path = path.split_once('?').map_or(path, |(p, _)| p);
     match path.split_once('/') {
         Some(("ticket", id)) if !id.is_empty() => Route::Ticket(id.to_string()),
@@ -353,10 +366,16 @@ fn current_route() -> Route {
 
 /// The route as a signal: seeded from the URL (deep links / cold loads),
 /// updated on every hashchange — link clicks, row clicks, and the
-/// browser's back/forward all funnel through the hash.
-fn use_route() -> RwSignal<Route> {
+/// browser's back/forward all funnel through the hash. FILTER-11: the lens
+/// follows each hash first (its levels from the URL, `g` and `n` carried
+/// into it), so a view mounted by the move reads its filter already set.
+fn use_route(lens: lens::Lens) -> RwSignal<Route> {
+    lens.follow(&dom::window().location().hash().unwrap_or_default());
     let route = RwSignal::new(current_route());
-    let cb = Closure::<dyn FnMut()>::new(move || route.set(current_route()));
+    let cb = Closure::<dyn FnMut()>::new(move || {
+        lens.follow(&dom::window().location().hash().unwrap_or_default());
+        route.set(current_route());
+    });
     dom::window()
         .add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref())
         .expect("hashchange listener");
@@ -681,6 +700,22 @@ fn Board(
         let (start, end) = range.get();
         board.slots(start, end)
     });
+    // FILTER-12: a filter that matches nothing is the empty state.
+    let empty = Memo::new(move |_| board.filtered() && board.ready() && n.get() == 0);
+    // FILTER-12: a new filter starts the board at its top — a position
+    // among one filter's matches is nothing among another's.
+    Effect::new(move |prev: Option<Option<board::Lensing>>| {
+        let now = board.lensing();
+        if prev.is_some_and(|p| p != now) {
+            if let Some(Some(tb)) = body.try_get_untracked() {
+                let tb: &web_sys::Element = tb.as_ref();
+                if let Ok(Some(scroller)) = tb.closest(".content") {
+                    scroller.set_scroll_top(0);
+                }
+            }
+        }
+        now
+    });
 
     // Read the geometry off the DOM. `try_` throughout: the deferred call
     // below can land after the board has unmounted.
@@ -730,6 +765,12 @@ fn Board(
     };
 
     view! {
+        // FILTER-12: the board's bar — FILTER-11's generic bar at level
+        // board: the server-backed categories, the inherited global pills,
+        // the menu's counts from `facets`.
+        <div class="bbar">
+            <FilterBar level=lens::Level::Board cats=filter::Cat::SERVER.to_vec() counts=counts::provider(lens::Level::Board) hint="Filter the board (f)" />
+        </div>
         // ARIA's virtualized-table contract: the table says how many rows
         // it has, each mounted row says which one it is (1 is the head).
         <table class="board" aria-rowcount=move || n.get() + 1>
@@ -899,6 +940,46 @@ fn Board(
                 {spacer(|l| l.bottom_px)}
             </tbody>
         </table>
+        {move || empty.get().then(|| view! { <BoardEmpty board /> })}
+    }
+}
+
+/// FILTER-12: the board when nothing matches — "No tickets match", the
+/// pills of its effective filter (the global ones marked), and a button to
+/// clear each level that has a filter: the board's, the global one.
+#[component]
+fn BoardEmpty(board: board::Board) -> impl IntoView {
+    let lens = lens::use_lens();
+    let pills = move || {
+        lens::bar_pills(lens::Level::Board, lens.pills(lens::Level::Global), lens.pills(lens::Level::Board))
+            .into_iter()
+            .map(|(level, p)| {
+                let (cat, words) = filter::pill_words(&p);
+                let global = level == lens::Level::Global;
+                view! {
+                    <span class="pill" class:inherited=global data-level=level.name()>
+                        <span class="p-cat">{cat}</span>
+                        <span class="p-vals">{words}</span>
+                        {global.then(|| view! { <span class="p-lvl">"global"</span> })}
+                    </span>
+                }
+            })
+            .collect_view()
+    };
+    view! {
+        <div class="bempty" role="status">
+            <p class="bempty-h">"No tickets match"</p>
+            {move || board.refused().map(|why| view! { <p class="bempty-why">"The server did not take this filter: "<code>{why}</code></p> })}
+            <div class="bempty-pills">{pills}</div>
+            <div class="bempty-acts">
+                {move || lens.differs(lens::Level::Board).then(|| view! {
+                    <button class="bempty-clear" data-clear="board" on:click=move |_| lens.reset(lens::Level::Board)>"Clear the board's filter"</button>
+                })}
+                {move || lens.differs(lens::Level::Global).then(|| view! {
+                    <button class="bempty-clear" data-clear="global" on:click=move |_| lens.reset(lens::Level::Global)>"Clear the global filter"</button>
+                })}
+            </div>
+        </div>
     }
 }
 
@@ -913,7 +994,10 @@ fn Board(
 /// the page is open. The entry carries `data-ticket-id` (the AGS-16 menu's
 /// attachment) exactly while it names a ticket — a dangling reference is
 /// not one — and `data-kind` (the glyph's tint) once its ticket is known.
-fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>) -> impl IntoView {
+///
+/// FILTER-16: an entry the global filter is known not to admit (`member`,
+/// kept by the membership watch) is dimmed, and says so on hover.
+fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>, lensed: Option<UnderLens>) -> impl IntoView {
     // SCALE-4: found by its key, as MFE-12's nav leaves are — a page of
     // children is up to 200 of these. SCALE-24: in the row cache, by id —
     // re-run when a row arrives, not on every change of the board's list.
@@ -926,11 +1010,18 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>) -> impl IntoView
     let menu_id = id.clone();
     // The glyph's tint, once the row is known (a kind is fixed at birth).
     let kind_attr = move || found.get().map(|t| t.with(|x| x.kind.as_str()));
+    let outside = {
+        let id = id.clone();
+        Memo::new(move |_| lensed.is_some_and(|l| l.outside(&id)))
+    };
     view! {
         <li
             data-dag-id=attr_id
             data-ticket-id=move || (!dangling()).then(|| menu_id.clone())
             data-kind=kind_attr
+            class:outside=move || outside.get()
+            data-outside=move || outside.get().then_some("global")
+            title=move || outside.get().then_some("outside the global filter")
         >
             {move || match found.get() {
                 Some(t) => {
@@ -1011,6 +1102,53 @@ fn short_commit(full: &str) -> String {
     }
 }
 
+/// FILTER-16: what a ticket page knows of the global filter — every handle
+/// `Copy`.
+#[derive(Clone, Copy)]
+struct UnderLens {
+    /// The global filter's wire text — `None` while it is empty: the page as
+    /// it always was, asking nothing new.
+    text: Memo<Option<String>>,
+    /// The filter's verdict on the tickets the page names (`member`, kept
+    /// by the membership watch).
+    members: RwSignal<kids::Members>,
+}
+
+impl UnderLens {
+    /// Whether the global filter is known not to admit `id`. Tracked.
+    fn outside(self, id: &str) -> bool {
+        self.text.with(Option::is_some) && self.members.with(|m| m.outside(id))
+    }
+}
+
+/// FILTER-16: under the title, while the global filter does not admit the
+/// page's ticket — "Outside the global filter", its pills (in words), and
+/// `clear`. The page itself always opens.
+fn outside_notice() -> impl IntoView {
+    let lens = lens::use_lens();
+    let pills = move || {
+        lens.pills(lens::Level::Global)
+            .into_iter()
+            .map(|p| {
+                let (cat, words) = filter::pill_words(&p);
+                view! {
+                    <span class="pill">
+                        <span class="p-cat">{cat}</span>
+                        <span class="p-vals">{words}</span>
+                    </span>
+                }
+            })
+            .collect_view()
+    };
+    view! {
+        <div id="t-outside" class="tout" role="status">
+            <strong>"Outside the global filter"</strong>
+            <span class="tout-pills">{pills}</span>
+            <button class="tout-clear" title="clear the global filter" on:click=move |_| lens.reset(lens::Level::Global)>"clear"</button>
+        </div>
+    }
+}
+
 /// The full ticket render: every wire-exposed field, in Linear's issue
 /// idiom (AGS-22). Two grid items of `#ticket-page`: the **article** —
 /// title, body, children — and the **properties aside** beside it, a quiet
@@ -1028,12 +1166,19 @@ fn short_commit(full: &str) -> String {
 /// SDLC-11: a doc's page shows its status as the `Doc` chip — there is
 /// nothing to move it to — and no relations, which a doc never has; its
 /// Children header counts docs apart, as the nav does.
+///
+/// FILTER-16: under the global filter, a notice under the title when the
+/// ticket is outside it; its children are the filter's, with the line that
+/// says how many it hides (`all` shows every one, or hides them again); its
+/// blockers and unlocks outside it dimmed.
 fn ticket_view(
     ticket: RwSignal<TicketSummary>,
     body_raw: RwSignal<Option<String>>,
     blockers_loaded: RwSignal<bool>,
     kids: RwSignal<kids::Kids>,
     more: impl Fn() + Copy + Send + Sync + 'static,
+    all: impl Fn() + Copy + Send + Sync + 'static,
+    lensed: UnderLens,
     refs: notes::Refs,
 ) -> impl IntoView {
     let blocked_by = Memo::new(move |_| ticket.with(|t| t.blocked_by.clone()));
@@ -1077,7 +1222,7 @@ fn ticket_view(
                 <ul id="blockers">
                     {ids
                         .into_iter()
-                        .map(|bid| dag_entry(bid, Some(blockers_loaded)))
+                        .map(|bid| dag_entry(bid, Some(blockers_loaded), Some(lensed)))
                         .collect_view()}
                 </ul>
             }
@@ -1093,7 +1238,7 @@ fn ticket_view(
                 <ul id="unlocks">
                     {ids
                         .into_iter()
-                        .map(|uid| dag_entry(uid, None))
+                        .map(|uid| dag_entry(uid, None, Some(lensed)))
                         .collect_view()}
                 </ul>
             }
@@ -1102,20 +1247,44 @@ fn ticket_view(
     };
     let children = move || {
         let ids = children_ids.get();
+        // FILTER-16: a filter the server did not take, in its words.
+        if let Some(why) = kids.with(|k| k.refused.clone()) {
+            return view! { <p class="none">"The server did not take the global filter: "<code>{why}</code></p> }.into_any();
+        }
         if ids.is_empty() {
-            let word = if kids.with(|k| k.loaded) { "None" } else { "loading…" };
+            // FILTER-16: every child hidden by the filter says so; none at
+            // all is "None", as always.
+            let count = ticket.with(|t| t.child_count);
+            let word = match kids.with(|k| (k.loaded, k.list_filter().is_some() && k.hidden(count) > 0)) {
+                (false, _) => "loading…",
+                (true, false) => "None",
+                (true, true) => "None in the filter",
+            };
             view! { <p class="none">{word}</p> }.into_any()
         } else {
             view! {
                 <ul id="children">
                     {ids
                         .into_iter()
-                        .map(|cid| dag_entry(cid, None))
+                        .map(|cid| dag_entry(cid, None, Some(lensed)))
                         .collect_view()}
                 </ul>
             }
                 .into_any()
         }
+    };
+    // FILTER-16: what the global filter hides of them — a click shows every
+    // child, and another hides them again.
+    let hidden_view = move || {
+        let count = ticket.with(|t| t.child_count);
+        let (n, every) = kids.with(|k| (k.hidden(count), k.all));
+        kids::hidden_line(n, every).map(|words| {
+            view! {
+                <button id="kids-hidden" class="more" class:every=every aria-pressed=every.to_string() on:click=move |_| all()>
+                    {words}
+                </button>
+            }
+        })
     };
     // The rest of a large parent's children, a page at a time.
     let more_view = move || {
@@ -1190,6 +1359,7 @@ fn ticket_view(
     // header's menu attachment is static. SDLC-11: nor does a kind, so
     // whether this is a doc is read once.
     let header_id = ticket.with_untracked(|t| t.id.clone());
+    let me = header_id.clone();
     let is_doc = ticket.with_untracked(|t| !t.kind.has_lifecycle());
     // A doc is never blocked and never a blocker (SDLC-11): its relations
     // are not drawn while they are empty, which they always are.
@@ -1200,6 +1370,7 @@ fn ticket_view(
                 <span class="id code">{move || ticket.with(|t| t.id.clone())}</span>
                 <span class="t">{move || ticket.with(|t| t.title.clone())}</span>
             </h2>
+            {move || lensed.outside(&me).then(outside_notice)}
             {body}
             // AGS-20/22: decomposition, under the body — the relations in
             // the aside are what this ticket waits on and frees; this is
@@ -1208,6 +1379,7 @@ fn ticket_view(
                 <h3>"Children"{roll_view}</h3>
                 {children}
                 {more_view}
+                {hidden_view}
             </section>
         </article>
         <aside class="props">
@@ -1278,6 +1450,183 @@ fn ticket_view(
     }
 }
 
+/// FILTER-16: hold `id`'s row for the page — the cache's, or the one
+/// `watch` last carried — so a child the filter lets in is drawn whole.
+fn hold_row(holder: &cache::Holder, id: &str) {
+    if !holder.hold_id(id) {
+        if let Some(t) = session::recent(id) {
+            holder.hold(t);
+        }
+    }
+}
+
+/// FILTER-16: `id`'s parent, as the page can know it without asking — the
+/// cache's row, or the one `watch` last carried.
+fn parent_known(id: &str) -> Option<String> {
+    cache::get(id)
+        .and_then(|r| r.try_with_untracked(|t| t.parent.clone()).flatten())
+        .or_else(|| session::recent(id).and_then(|t| t.parent))
+}
+
+/// FILTER-16: the ticket page under the global filter, for the page's
+/// lifetime — its membership watch (`entered` / `left` move a verdict the
+/// page holds, and a child of the page in or out of its list; a new
+/// connection, a `recount` or a `lagged` asks every verdict again, and the
+/// last two the children too); the children born or moved in under a
+/// filtered list asked of `member`; and the matches counted again whenever a
+/// delta may have moved them. With the global filter empty: nothing.
+fn under_lens(
+    me: String,
+    epoch: MembersEpoch,
+    gtext: Memo<Option<String>>,
+    members: RwSignal<kids::Members>,
+    kids: RwSignal<kids::Kids>,
+    holder: StoredValue<cache::Holder>,
+    last_error: RwSignal<Option<String>>,
+) {
+    {
+        let parent = me.clone();
+        let moved = move |id: &str, inside: bool| {
+            members.maybe_update(|m| m.moved(id, inside));
+            let child = kids.try_with_untracked(|k| k.ids.iter().chain(&k.unsure).any(|x| x == id)).unwrap_or(false)
+                || parent_known(id).as_deref() == Some(parent.as_str());
+            if child {
+                if let (true, Some(h)) = (inside, holder.try_get_value()) {
+                    hold_row(&h, id);
+                }
+                kids.maybe_update(|k| if inside { k.entered(id) } else { k.left(id) });
+            }
+        };
+        let me = me.clone();
+        session::follow_membership(
+            move || gtext.get(),
+            move |m: &session::Member| match m {
+                session::Member::Opened => epoch.open(gtext.try_get_untracked().flatten()),
+                session::Member::Recount { .. } | session::Member::Lagged => {
+                    epoch.open(gtext.try_get_untracked().flatten());
+                    if let Some(h) = holder.try_get_value() {
+                        session::load_children(me.clone(), None, h, kids, last_error);
+                    }
+                }
+                session::Member::Entered { id, .. } => moved(id, true),
+                session::Member::Left { id, .. } => moved(id, false),
+                session::Member::Refused(why) => leptos::logging::log!("ticket page: the global filter: {why}"),
+            },
+        );
+    }
+    // Born or moved in under a filtered list: `member` says.
+    let unsure_asked = StoredValue::new(HashSet::<String>::new());
+    Effect::new(move |_| {
+        let (filter, unsure) = kids.with(|k| (k.list_filter().map(str::to_string), k.unsure.clone()));
+        let Some(filter) = filter else { return };
+        let ask: Vec<String> = unsure.into_iter().filter(|u| unsure_asked.with_value(|a| !a.contains(u))).collect();
+        if ask.is_empty() {
+            return;
+        }
+        unsure_asked.update_value(|a| a.extend(ask.iter().cloned()));
+        spawn_local(async move {
+            let answer = session::member(ask.clone(), filter.clone()).await;
+            unsure_asked.try_update_value(|a| ask.iter().for_each(|u| {
+                a.remove(u);
+            }));
+            let Ok(answer) = answer else { return };
+            for (id, matched) in &answer {
+                if *matched {
+                    if let Some(h) = holder.try_get_value() {
+                        hold_row(&h, id);
+                    }
+                }
+            }
+            kids.try_update(|k| {
+                if k.list_filter() == Some(filter.as_str()) {
+                    for (id, matched) in answer {
+                        k.admit(&id, matched);
+                    }
+                }
+            });
+        });
+    });
+    // The matches, counted again when a delta may have moved them — and,
+    // every child shown, once the list is in.
+    Effect::new(move |seen: Option<u32>| {
+        let (filter, stale, ask_now) = kids.with(|k| (k.filter.clone(), k.stale, k.loaded && k.all && k.matched.is_none()));
+        let moved = stale != 0 && seen.is_some_and(|s| s != stale);
+        if let (Some(filter), true) = (filter, moved || ask_now) {
+            let parent = me.clone();
+            spawn_local(async move {
+                if let Ok(n) = session::children_matching(parent, filter.clone()).await {
+                    kids.try_update(|k| {
+                        if k.filter.as_deref() == Some(filter.as_str()) {
+                            k.counted(n);
+                        }
+                    });
+                }
+            });
+        }
+        stale
+    });
+}
+
+/// FILTER-16: when a ticket page asks its verdicts again — whenever its
+/// membership watch is open on a connection (the first time, a reconnect,
+/// a new filter), or says it may have missed a move. Every handle `Copy`.
+#[derive(Clone, Copy)]
+struct MembersEpoch {
+    /// Moves each time; what the asks follow.
+    n: RwSignal<u32>,
+    /// The filter whose watch is open — asks wait for it.
+    open_for: RwSignal<Option<String>>,
+}
+
+impl MembersEpoch {
+    fn new() -> Self {
+        MembersEpoch { n: RwSignal::new(0), open_for: RwSignal::new(None) }
+    }
+
+    fn open(self, filter: Option<String>) {
+        self.open_for.set(filter);
+        self.n.update(|n| *n = n.wrapping_add(1));
+    }
+}
+
+/// FILTER-16: the verdicts `want` names, asked of `member` once each for the
+/// open watch's filter — from scratch whenever the watch opens again or the
+/// filter moves; with the global filter empty, nothing is asked.
+fn ask_members(epoch: MembersEpoch, gtext: Memo<Option<String>>, members: RwSignal<kids::Members>, want: Memo<Vec<String>>) {
+    let inflight = StoredValue::new(HashSet::<String>::new());
+    Effect::new(move |seen: Option<(u32, Option<String>)>| {
+        let key = (epoch.n.get(), gtext.get());
+        if seen.as_ref().is_some_and(|s| *s != key) {
+            members.set(kids::Members::default());
+            inflight.set_value(HashSet::new());
+        }
+        let Some(filter) = key.1.clone() else { return key };
+        if epoch.open_for.get().as_deref() != Some(filter.as_str()) {
+            return key; // its watch is not open yet: asked when it is
+        }
+        let ask: Vec<String> =
+            members.with_untracked(|m| m.unknown(&want.get())).into_iter().filter(|i| inflight.with_value(|f| !f.contains(i))).collect();
+        if ask.is_empty() {
+            return key;
+        }
+        inflight.update_value(|f| f.extend(ask.iter().cloned()));
+        let asked = key.clone();
+        spawn_local(async move {
+            let answer = session::member(ask.clone(), filter).await;
+            inflight.try_update_value(|f| ask.iter().for_each(|i| {
+                f.remove(i);
+            }));
+            if (epoch.n.try_get_untracked(), gtext.try_get_untracked()) != (Some(asked.0), Some(asked.1)) {
+                return; // asked again since, or under another filter
+            }
+            if let Ok(answer) = answer {
+                members.try_update(|m| m.answered(answer));
+            }
+        });
+        key
+    });
+}
+
 /// SCALE-26: the most ids a ticket page asks for beyond its own calls — a
 /// ticket that names thousands (a blocker of everything) shows the rest as
 /// plain links.
@@ -1312,8 +1661,18 @@ fn TicketPage(
     // SCALE-24: what this page fetches — its ticket, its blockers, its
     // children — it holds in the row cache while it is open.
     let holder = StoredValue::new(cache::Holder::new());
+    // FILTER-16: the global filter the page is under — its wire text; none
+    // while it is empty, and then the page is what it always was.
+    let lens = lens::use_lens();
+    let global = lens.filter(lens::Level::Global);
+    let gtext = Memo::new(move |_| global.with(|g| (!g.groups.is_empty()).then(|| counts::wire_text(g))));
+    let members = RwSignal::new(kids::Members::default());
+    let lensed = UnderLens { text: gtext, members };
+    // FILTER-16: every child shown, the filter notwithstanding.
+    let show_all = RwSignal::new(false);
     // SCALE-4: this ticket's children, by page, kept live by `watch`.
-    let kids = RwSignal::new(kids::Kids::default());
+    // FILTER-16: the global filter's, while it is set.
+    let kids = RwSignal::new(kids::Kids::under(gtext.get_untracked(), false));
     session::watch_children(id.clone(), kids, holder.get_value());
 
     {
@@ -1330,9 +1689,26 @@ fn TicketPage(
                 blockers_loaded,
                 last_error,
             );
-            session::load_children(id.clone(), None, holder.get_value(), kids, last_error);
         });
     }
+    // SCALE-4: the children's first page, on entry and on every reconnect.
+    // FILTER-16: and — a list asked anew — whenever the global filter or the
+    // choice to show every child moves.
+    {
+        let id = id.clone();
+        Effect::new(move |seen: Option<(Option<String>, bool)>| {
+            let under = (gtext.get(), show_all.get());
+            if seen.as_ref().is_some_and(|s| *s != under) {
+                kids.set(kids::Kids::under(under.0.clone(), under.1));
+            }
+            if socket.get() > 0 {
+                session::load_children(id.clone(), None, holder.get_value(), kids, last_error);
+            }
+            under
+        });
+    }
+    let epoch = MembersEpoch::new();
+    under_lens(id.clone(), epoch, gtext, members, kids, holder, last_error);
     let more = {
         let id = StoredValue::new(id.clone());
         move || {
@@ -1341,6 +1717,7 @@ fn TicketPage(
             }
         }
     };
+    let all = move || show_all.update(|a| *a = !*a);
 
     // SCALE-24: the page's ticket is the row cache's — held by this page once
     // its `get` answers, and drawn as soon as anyone holds it.
@@ -1348,6 +1725,24 @@ fn TicketPage(
         let id = id.clone();
         Memo::new(move |_| cache::find(&id))
     };
+    // FILTER-16: what the page asks the filter's verdict on — its ticket, its
+    // blockers and unlocks, and its children while every one is shown.
+    let want = {
+        let id = id.clone();
+        Memo::new(move |_| {
+            let mut v = vec![id.clone()];
+            if let Some(row) = ticket.get() {
+                row.with(|t| v.extend(t.blocked_by.iter().chain(&t.unlocks).cloned()));
+            }
+            kids.with(|k| {
+                if k.all {
+                    v.extend(k.ids.iter().cloned());
+                }
+            });
+            v
+        })
+    };
+    ask_members(epoch, gtext, members, want);
 
     // WAVE-11: the rows a `{wave: ID}` in the body names, held while the
     // page is open — asked again after a reconnect or a lag.
@@ -1433,7 +1828,7 @@ fn TicketPage(
         <div id="ticket-page">
             <p class="crumbs"><a href="#/">"← board"</a>{crumbs}</p>
             {move || match ticket.get() {
-                Some(t) => ticket_view(RwSignal::from(t), body, blockers_loaded, kids, more, refs).into_any(),
+                Some(t) => ticket_view(RwSignal::from(t), body, blockers_loaded, kids, more, all, lensed, refs).into_any(),
                 None if not_found.get() => {
                     let id = id_view.clone();
                     view! {
@@ -1469,10 +1864,17 @@ fn App() -> impl IntoView {
     let conn = RwSignal::new(Conn::Connecting);
     let socket = RwSignal::new(0u32);
     let last_error = RwSignal::new(None::<String>);
-    let route = use_route();
     // SCALE-24: the nav's model of the store — the server's roll-ups, which
     // the session fetches and keeps.
     let tree = nav::Tree::new();
+    // FILTER-11: the lens — every level's filter, provided to every view;
+    // `F` and `f` open the menus.
+    let lens = lens::Lens::new(tree);
+    lens.install();
+    let route = use_route(lens);
+    // FILTER-12: the board shows its effective filter (global ∧ board) —
+    // set before the session asks for anything.
+    board.follow(lens.effective(lens::Level::Board));
 
     // MFE-9: the whole data plane is one task holding one WebSocket
     // (session.rs) — `watch` first, then MNG-9's summary pages walked with
@@ -1507,6 +1909,13 @@ fn App() -> impl IntoView {
     // store's; `health`'s until then.
     let health_view = move || {
         dock.get().map(|h| {
+            // FILTER-12: under a filter the board's extent is its matches —
+            // of the store's tickets.
+            if board.filtered() {
+                let n = if board.ready() { board.n().to_string() } else { "…".to_string() };
+                let all = board.store_n().map_or(h.ticket_count, |n| n as u64);
+                return format!("menger v{} · {} of {} tickets", h.version, n, all);
+            }
             let count = if board.ready() { board.n() as u64 } else { h.ticket_count };
             format!("menger v{} · {} tickets", h.version, count)
         })
@@ -1547,6 +1956,9 @@ fn App() -> impl IntoView {
         <div id="app" class:nonav=move || nav_hidden.get() data-rows-held=move || held.get()>
             <nav::Nav tree route hidden=nav_hidden />
             <div class="content" on:scroll=move |_| viewport.notify()>
+                // FILTER-11: the header, the lens bar under it, and the
+                // global menu hanging from both.
+                <div id="lens-top">
                 <header>
                     {move || {
                         nav_hidden.get().then(|| view! {
@@ -1613,6 +2025,11 @@ fn App() -> impl IntoView {
                             }
                         })
                     }}
+                    // FILTER-11: the global filter — its groups as a badge.
+                    <lens::GlobalButton />
+                    // FILTER-12: while the global filter is non-empty, what
+                    // it admits of every ticket — `n of N`, live.
+                    <counts::GlobalCount board />
                     <span class="tag">
                         {move || match route.get() {
                             Route::Board => "the live board (MFE-3)",
@@ -1635,6 +2052,9 @@ fn App() -> impl IntoView {
                     // AGS-17: the theme toggle (system → light → dark).
                     <theme::Toggle />
                 </header>
+                // FILTER-16: on a page the filter does not reach, it says so.
+                <lens::LensBar applies=Signal::derive(move || lens::applies(&route.get())) />
+                </div>
                 <main>
                     <div id="health">{health_view}</div>
                     {move || {

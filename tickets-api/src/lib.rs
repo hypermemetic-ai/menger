@@ -19,7 +19,7 @@
 //!
 //! let transport = WsTransport::connect("ws://127.0.0.1:4455", "menger").await?;
 //! let client = TicketsClient::new(&transport);
-//! let mut page = client.list(None, None, None, None, Some(500), Some(true));
+//! let mut page = client.list(None, None, None, None, Some(500), Some(true), None, None);
 //! # let _ = &mut page;
 //! # Ok(())
 //! # }
@@ -39,6 +39,11 @@ pub mod fields;
 /// body, and an answer's value checked against them. Wasm-safe, like
 /// `fields`, whose scan it reads with.
 pub mod inputs;
+/// FILTER-10: the filter language — manifest's view syntax with menger's
+/// fields: parse, format, the lens's `and`, contradiction, and the
+/// reference evaluator. Wasm-safe, with no feature gate: the server
+/// compiles it against its cells, the app parses what a reader types.
+pub mod filter;
 pub use types::{
     is_menger_path, path_address, Answer, AnswerSource, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, Input,
     InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, SlotDoc, Kind, Placement,

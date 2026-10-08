@@ -20,10 +20,10 @@ use std::collections::BTreeSet;
 
 /// SplitMix64, as the store's other randomized tests use: reproducible,
 /// dependency-free.
-struct Rng(u64);
+pub(super) struct Rng(pub(super) u64);
 
 impl Rng {
-    fn below(&mut self, n: usize) -> usize {
+    pub(super) fn below(&mut self, n: usize) -> usize {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -32,7 +32,7 @@ impl Rng {
     }
 }
 
-fn new_ticket(epic: &str, kind: Kind, parent: Option<String>, blocked_by: Vec<String>) -> NewTicket {
+pub(super) fn new_ticket(epic: &str, kind: Kind, parent: Option<String>, blocked_by: Vec<String>) -> NewTicket {
     NewTicket {
         path: None,
         epic: epic.into(),
@@ -47,12 +47,12 @@ fn new_ticket(epic: &str, kind: Kind, parent: Option<String>, blocked_by: Vec<St
 
 /// A blocker that is done with — written out, not [`satisfied`]: the oracle
 /// owes the code under test nothing.
-fn done(status: Status) -> bool {
+pub(super) fn done(status: Status) -> bool {
     matches!(status, Status::Complete | Status::Superseded)
 }
 
 /// Every row of the store, in its order.
-fn rows(store: &Store) -> Vec<Row> {
+pub(super) fn rows(store: &Store) -> Vec<Row> {
     store.tickets.read().unwrap().order.values().cloned().collect()
 }
 
@@ -346,16 +346,16 @@ fn assert_every_page_is_before(store: &Store, rng: &mut Rng, what: &str) {
 /// How many writes of each kind changed something, for the walk's own check
 /// that it exercised the ones that move membership.
 #[derive(Debug, Default)]
-struct Tally {
-    created: usize,
+pub(super) struct Tally {
+    pub(super) created: usize,
     with_blockers: usize,
     forward: usize,
     resolved: usize,
-    crossings: usize,
+    pub(super) crossings: usize,
     fanned: usize,
     joined: usize,
     left: usize,
-    moves: usize,
+    pub(super) moves: usize,
     others: usize,
     /// SDLC-11: docs born, and creates tried (what picks a doc).
     docs: usize,
@@ -364,7 +364,7 @@ struct Tally {
 
 /// One random write against the store as it stands, weighted to what moves
 /// the ready set.
-async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut Tally) -> String {
+pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut Tally) -> String {
     // Ids the API can name (a lowercase one is folded by `amend` and its kin).
     let all: Vec<Row> = rows(store).into_iter().filter(|t| t.id == t.id.to_ascii_uppercase()).collect();
     let extents: BTreeMap<String, u32> = store.extents().into_iter().collect();
@@ -774,6 +774,12 @@ async fn a_hand_edit_that_breaks_the_unlocks_mirror_is_named_by_verify() {
         [
             "unsatisfied blockers of MI-2: stored 1; a scan gives none",
             "ready count MI: stored 2; a scan gives 3",
+            // FILTER-4: MI-2's cell follows its kept count — blocked — so
+            // the cells part from the scan with it, and are named too.
+            "cell_bits MI cell 0 (Ready, build, none, not blocked, no commits) container 0: stored 2 members [3, 4]; a scan gives 3 members [2, 3, 4]",
+            "cell_bits MI cell 1 (Ready, build, none, blocked, no commits) container 0: stored 1 members [2]; a scan gives none",
+            "cell_counts MI cell 0 (Ready, build, none, not blocked, no commits): stored 2; a scan gives 3",
+            "cell_counts MI cell 1 (Ready, build, none, blocked, no commits): stored 1; a scan gives none",
             "ready set MI-2: a scan holds it; the index does not",
         ],
         "{found:#?}"
@@ -943,7 +949,7 @@ async fn a_walk_of_whole_tickets_answers_what_one_page_does() {
             let end = loop {
                 match walk.next(&store).await.unwrap() {
                     Step::Tickets(t) => ids.extend(t.into_iter().map(|t| t.id)),
-                    Step::End { next, remaining } => break (next, remaining),
+                    Step::End { next, remaining, .. } => break (next, remaining),
                 }
             };
             let page = match &select {

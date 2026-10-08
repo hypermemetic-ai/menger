@@ -111,6 +111,18 @@ impl Inputs {
     pub(crate) fn open_count(&self) -> usize {
         self.list.iter().filter(|i| i.state == InputState::Open).count()
     }
+
+    /// FILTER-16: `ticket`'s inputs, in the store's order.
+    pub(crate) fn of_ticket(&self, ticket: &str) -> Vec<Input> {
+        self.list.iter().filter(|i| i.ticket == ticket).cloned().collect()
+    }
+
+    /// FILTER-16: `ticket`'s inputs taken out; whether any were held.
+    pub(crate) fn drop_ticket(&mut self, ticket: &str) -> bool {
+        let before = self.list.len();
+        self.list.retain(|i| i.ticket != ticket);
+        self.list.len() != before
+    }
 }
 
 /// The fetch's rule: `answer`, then every event heard while it was out, in
@@ -184,7 +196,7 @@ fn fetch() {
     });
     HEARD.with(|h| *h.borrow_mut() = Some(Vec::new()));
     spawn_local(async move {
-        let answer = client.inputs_all(None, None, None).await;
+        let answer = client.inputs_all(None, None, None, None).await;
         if FETCH.with(Cell::get) != n {
             return; // a newer fetch went out; its answer is the one kept
         }

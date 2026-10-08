@@ -483,6 +483,7 @@ fn synthetic_bodies_declare_no_inputs() {
             into_existing: false,
         },
         &HashMap::new(),
+        SeedShape::Flat,
     );
     for t in &generated {
         assert_eq!(crate::inputs::read(&t.body), (vec![], vec![]), "{}", t.id);

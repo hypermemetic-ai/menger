@@ -49,9 +49,20 @@
 //! held in the row cache (src/cache.rs) while they are shown, so a title
 //! moves on the card the moment `watch` carries it.
 //!
+//! FILTER-11: the board's filter is the lens's (src/lens.rs) — its bar the
+//! generic one (src/filter.rs) with WAVE-12's categories (the server-backed
+//! ones, and its local Wave, Readiness, Off-board blockers and Title) and
+//! defaults, its counts from the held answer ([`counts`]). What it shows is
+//! its effective filter, global ∧ waves: the effective Shortcode and Kind
+//! groups decide the `epics` and `kinds` asked ([`epics`], [`kinds`]), and
+//! every group is evaluated on the held cards with FILTER-10's
+//! `Filter::matches` over each card's facts ([`facts_of`], [`narrow`]) —
+//! the local categories as WAVE-12 evaluates them. A filter that admits
+//! nothing is the empty board, the notice under the bar naming the clash.
+//!
 //! Everything that decides — the columns, the off-board test, what an event
-//! does, how a change moves the cards, the coalescing, the stored layout —
-//! is a pure function here (the filter's, in src/filter.rs), pinned by
+//! does, how a change moves the cards, the coalescing, the stored layout,
+//! what is asked and what is shown — is a pure function here, pinned by
 //! native tests.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -62,7 +73,11 @@ use std::cmp::Ordering;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::filter::{self, BoardFilter, FilterCtx, ScTree};
+use menger_tickets_api::filter::{Facts, Filter};
+
+use crate::filter::{Cat, Clauses, Counts, CountsProvider, FilterBar, Op, ScTree, WORK_KINDS};
+use crate::keys::palette_match;
+use crate::lens::{self, Level};
 use crate::nav::kind_glyph;
 use crate::notes::BoardNotes;
 use crate::{cache, dom, nav, session, st_class};
@@ -469,6 +484,170 @@ pub(crate) fn tally(a: &Answer) -> String {
 }
 
 // ---------------------------------------------------------------------
+// The board's filter (WAVE-12, on the lens since FILTER-11)
+
+/// What the board's filter is: its effective filter (global ∧ waves, the
+/// language's) and its local clauses (WAVE-12's Wave, Readiness, Off-board
+/// blockers, Title).
+pub(crate) type Effective = (Filter, Clauses);
+
+/// The shortcodes `waves` is asked for: every group Shortcode draws in the
+/// effective filter (`is`: its values; `is not`: the route's tree without
+/// them), all of them; with none, every shortcode. A group no category
+/// draws asks for nothing narrower — it is evaluated on the cards.
+pub(crate) fn epics(eff: &Filter, route: &str, tree: &ScTree) -> BTreeSet<String> {
+    let mut out: Option<BTreeSet<String>> = None;
+    for (_, cl) in eff.groups.iter().filter_map(lens::clause_of).filter(|(c, _)| *c == Cat::Shortcode) {
+        let these: BTreeSet<String> = match cl.op {
+            Op::Is => cl.values.iter().cloned().collect(),
+            Op::Not => tree.subtree(&route.to_ascii_uppercase()).into_iter().filter(|e| !cl.values.contains(e)).collect(),
+        };
+        out = Some(match out {
+            Some(o) => o.intersection(&these).cloned().collect(),
+            None => these,
+        });
+    }
+    out.unwrap_or_else(|| tree.known().clone())
+}
+
+/// The kinds `waves` is asked for: the kinds of work every group Kind draws
+/// admits (`is`: its values; `is not`: the rest); with none, every kind of
+/// work. Docs are never cards.
+pub(crate) fn kinds(eff: &Filter) -> Vec<String> {
+    let mut out: Vec<String> = WORK_KINDS.iter().map(|k| k.to_string()).collect();
+    for (_, cl) in eff.groups.iter().filter_map(lens::clause_of).filter(|(c, _)| *c == Cat::Kind) {
+        out.retain(|k| cl.values.contains(k) == (cl.op == Op::Is));
+    }
+    out
+}
+
+/// What the language reads of a card (FILTER-10's `Facts`): its summary;
+/// `blocked` — it waits on something (`waiting_on`, its unsatisfied
+/// blockers); `lineage` — its id, its ancestors as far as `parent_of`
+/// knows them, its shortcode, and what hosts that shortcode (`tree`).
+pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&str) -> Option<String>) -> Facts {
+    let s = &card.summary;
+    let mut lineage = vec![s.id.clone()];
+    let mut at = s.parent.clone();
+    while let Some(p) = at.take() {
+        if lineage.contains(&p) {
+            break;
+        }
+        at = parent_of(&p);
+        lineage.push(p);
+    }
+    lineage.push(s.epic.clone());
+    if let Some(t) = tree {
+        lineage.extend(t.hosting(&s.epic));
+    }
+    Facts {
+        id: s.id.clone(),
+        epic: s.epic.clone(),
+        title: s.title.clone(),
+        status: s.status,
+        kind: s.kind,
+        severity: s.severity,
+        blocked: !card.waiting_on.is_empty(),
+        has_commits: !s.commits.is_empty(),
+        lineage,
+    }
+}
+
+/// `card`'s value in category `c` (none for Title, which matches text; and
+/// none for a done card's readiness). `off`: whether it waits on a ticket
+/// the answer holds no card for.
+pub(crate) fn value_of(c: Cat, card: &Card, off: bool) -> Option<String> {
+    let s = &card.summary;
+    let flag = |b: bool| Some(if b { "yes" } else { "no" }.to_string());
+    match c {
+        Cat::Shortcode => Some(s.epic.clone()),
+        Cat::Status => Some(s.status.as_str().into()),
+        Cat::Kind => Some(s.kind.as_str().into()),
+        Cat::Severity => Some(s.severity.map_or("none".to_string(), |v| v.as_str().to_ascii_lowercase())),
+        Cat::Ready => flag(s.status == Status::Ready && card.waiting_on.is_empty()),
+        Cat::Blocked => flag(!card.waiting_on.is_empty()),
+        Cat::Commits => flag(!s.commits.is_empty()),
+        Cat::Wave => Some(match card.placement {
+            Placement::Wave { n } => n.to_string(),
+            Placement::MissingBlocker => "missing".into(),
+            Placement::Done => "done".into(),
+        }),
+        Cat::Readiness => match card.placement {
+            Placement::Wave { n: 1 } => Some("workable".into()),
+            Placement::Wave { .. } => Some("waiting".into()),
+            Placement::MissingBlocker => Some("missing".into()),
+            Placement::Done => None,
+        },
+        Cat::OffBoard => Some(if off { "some" } else { "none" }.into()),
+        Cat::Title | Cat::State | Cat::Removed => None,
+    }
+}
+
+/// Whether `card` passes the local clauses `k` — WAVE-12's evaluation.
+pub(crate) fn admits_local(k: &Clauses, card: &Card, off: bool) -> bool {
+    k.iter().all(|(c, cl)| match c {
+        Cat::Title => palette_match(&card.summary.id, &card.summary.title, &cl.values[0]) == (cl.op == Op::Is),
+        c => cl.admits(value_of(c, card, off).as_deref()),
+    })
+}
+
+fn ids(a: &Answer) -> HashSet<String> {
+    a.cards.iter().map(|c| c.summary.id.clone()).collect()
+}
+
+/// The answer narrowed to the cards the effective filter admits — every
+/// group evaluated with `Filter::matches` on the card's facts, the local
+/// clauses as WAVE-12 evaluates them — the tally recounted: what the
+/// columns, the tally and the Done count show.
+pub(crate) fn narrow(a: &Answer, eff: &Effective, tree: Option<&ScTree>) -> Answer {
+    let on = ids(a);
+    let parents: HashMap<&str, &str> = a.cards.iter().filter_map(|c| Some((c.summary.id.as_str(), c.summary.parent.as_deref()?))).collect();
+    let parent_of = |id: &str| -> Option<String> {
+        parents.get(id).map(|p| p.to_string()).or_else(|| cache::get(id).and_then(|r| r.try_with_untracked(|t| t.parent.clone()).flatten()))
+    };
+    let (filter, local) = eff;
+    let mut out = Answer {
+        cards: a
+            .cards
+            .iter()
+            .filter(|c| {
+                let off = !off_board(c, &on).is_empty();
+                admits_local(local, c, off) && filter.matches(&facts_of(c, tree, &parent_of))
+            })
+            .cloned()
+            .collect(),
+        ..Answer::default()
+    };
+    retally(&mut out);
+    out
+}
+
+/// Per category, per value: how many of the answer's cards have it — a
+/// value no card has counts 0 (Shortcode: among the shortcodes asked; one
+/// not asked shows no count).
+pub(crate) fn counts(a: &Answer, asked: &BTreeSet<String>) -> Counts {
+    let on = ids(a);
+    let mut out: Counts = HashMap::new();
+    for c in Cat::ALL {
+        let m = out.entry(c).or_default();
+        for v in c.fixed() {
+            m.insert(v.to_string(), 0);
+        }
+    }
+    out.entry(Cat::Shortcode).or_default().extend(asked.iter().map(|e| (e.clone(), 0)));
+    for card in &a.cards {
+        let off = !off_board(card, &on).is_empty();
+        for c in Cat::ALL {
+            if let Some(v) = value_of(c, card, off) {
+                *out.entry(c).or_default().entry(v).or_default() += 1;
+            }
+        }
+    }
+    out.remove(&Cat::Title);
+    out
+}
+
+// ---------------------------------------------------------------------
 // The view
 
 /// What the board's asks share — every handle `Copy`, so the ear, the
@@ -542,9 +721,9 @@ fn take(ctx: Ctx, a: Answer) {
 }
 
 /// `#/waves/<SHORTCODE>` — or, with no shortcode, `#/waves`: the top-level
-/// shortcodes, each a link to its board. WAVE-12: the board's filter is the
-/// route's query (`#/waves/PLEXUS?status=not:Complete`), read once here —
-/// a new hash mounts a new board — and rewritten in place on every change.
+/// shortcodes, each a link to its board. FILTER-11: the board's filter is
+/// the lens's waves level (`f=` in the route's query, kept per shortcode),
+/// under the global one.
 #[component]
 pub(crate) fn WaveBoard(
     shortcode: String,
@@ -558,38 +737,31 @@ pub(crate) fn WaveBoard(
         return view! { <WaveIndex tree /> }.into_any();
     }
     let sc = shortcode.to_ascii_uppercase();
-    // WAVE-12: the filter — what the URL says, or (no query, or a malformed
-    // one) the board's default, which follows the groups.
-    let chosen = RwSignal::new(BoardFilter::parse_query(filter::query_of(&dom::window().location().hash().unwrap_or_default())));
-    let sctree = Memo::new(move |_| tree.with_groups(|g| g.map(ScTree::of)));
-    let default = {
+    // FILTER-11: the board's filter is the lens's — global ∧ waves; the
+    // lens reads it from the URL (or storage, or the board's default) and
+    // writes it back. Its Shortcode and Kind say what `waves` is asked for.
+    let lens = lens::use_lens();
+    let sctree = lens.sctree();
+    let effective = lens.effective(Level::Waves);
+    // Only while the lens's waves level is this board's: a move to another
+    // board changes it before this one is gone, and this one asks nothing
+    // for it.
+    let eff = {
         let sc = sc.clone();
-        Memo::new(move |_| sctree.with(|t| t.as_ref().map(|t| BoardFilter::default_for(&sc, t))))
+        Memo::new(move |_| {
+            (lens.route_sc(Level::Waves).as_deref() == Some(sc.as_str())).then(|| lens.kept(Level::Waves).map(|w| (effective.get(), w.local))).flatten()
+        })
     };
-    let filter = Memo::new(move |_| chosen.get().or_else(|| default.get()));
     let set = {
         let sc = sc.clone();
         Memo::new(move |_| {
-            filter.with(|f| sctree.with(|t| match (f, t) {
-                (Some(f), Some(t)) => Some(f.epics(&sc, t)),
+            eff.with(|f| sctree.with(|t| match (f, t) {
+                (Some((f, _)), Some(t)) => Some(epics(f, &sc, t)),
                 _ => None,
             }))
         })
     };
-    let kinds = Memo::new(move |_| filter.with(|f| f.as_ref().map(BoardFilter::kinds)));
-    // The URL holds the board: rewritten in place (no history entry) on
-    // every change — no query while it is the default.
-    Effect::new(move |_| {
-        let Some(default) = default.get() else { return };
-        let query = chosen.with(|c| match c {
-            Some(f) if *f != default => f.to_query(),
-            _ => String::new(),
-        });
-        if chosen.with_untracked(|c| c.as_ref() == Some(&default)) {
-            chosen.set(None);
-        }
-        write_query(&query);
-    });
+    let kinds = Memo::new(move |_| eff.with(|f| f.as_ref().map(|(f, _)| kinds(f))));
     let layout = RwSignal::new(load_layout(&sc));
     {
         let sc = sc.clone();
@@ -660,7 +832,7 @@ pub(crate) fn WaveBoard(
     // count; live changes to the answer re-filter.
     let shown = Memo::new(move |_| {
         ctx.answer.with(|a| {
-            a.as_ref().map(|a| filter.with(|f| f.as_ref().map_or_else(|| a.clone(), |f| filter::narrow(a, f))))
+            a.as_ref().map(|a| eff.with(|f| sctree.with(|t| f.as_ref().map_or_else(|| a.clone(), |f| narrow(a, f, t.as_ref())))))
         })
     });
     let cols = Memo::new(move |_| {
@@ -668,16 +840,9 @@ pub(crate) fn WaveBoard(
         shown.with(|a| a.as_ref().map(|a| columns(&a.cards, l)).unwrap_or_default())
     });
     let lanes = Memo::new(move |_| cols.with(|cs| cs.iter().map(|c| c.lane.clone()).collect::<Vec<_>>()));
-    let fx = FilterCtx {
-        route: StoredValue::new(sc.clone()),
-        tree: sctree,
-        chosen,
-        default,
-        filter,
-        epics: set,
-        answer: ctx.answer,
-        counts: Memo::new(move |_| ctx.answer.with(|a| a.as_ref().map(filter::counts).unwrap_or_default())),
-    };
+    let counts = CountsProvider::new(move || {
+        ctx.answer.with(|a| set.with(|e| a.as_ref().map(|a| counts(a, e.as_ref().unwrap_or(&BTreeSet::new()))).unwrap_or_default()))
+    });
     // Owner, 2026-10-06: the columns are the page's height, all of them, and
     // scroll inside. The lanes row takes what the viewport has left below
     // the header and the bar (which wraps on a narrow window, so it is
@@ -700,7 +865,7 @@ pub(crate) fn WaveBoard(
         // can wrap the bar).
         ctx.answer.track();
         layout.track();
-        filter.track();
+        eff.track();
         request_animation_frame(measure);
     });
     let resize = window_event_listener(leptos::ev::resize, move |_| measure());
@@ -722,7 +887,7 @@ pub(crate) fn WaveBoard(
     view! {
         <section id="waves" data-shortcode=sc.clone() data-layout=move || layout.get().as_str()>
             <div class="wbar">
-                {filter::filter_bar(fx)}
+                <FilterBar level=Level::Waves cats=Cat::WAVES.to_vec() counts />
                 <span class="layout" role="group" aria-label="layout">"[ "{seg(Layout::Waves)}" | "{seg(Layout::Stages)}" ]"</span>
                 <span class="tally">{move || shown.with(|a| a.as_ref().map(tally))}</span>
             </div>
@@ -750,23 +915,6 @@ pub(crate) fn WaveBoard(
         </section>
     }
     .into_any()
-}
-
-/// The route's query rewritten to `q` in place — `replaceState`, so no
-/// history entry per click and no `hashchange` (the board stays mounted) —
-/// and only while the hash is still a wave board's.
-fn write_query(q: &str) {
-    let win = dom::window();
-    let hash = win.location().hash().unwrap_or_default();
-    if !hash.starts_with("#/waves/") {
-        return;
-    }
-    let next = filter::with_query(&hash, q);
-    if next != hash {
-        if let Ok(history) = win.history() {
-            let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&next));
-        }
-    }
 }
 
 /// Air left under the lanes row, and the shortest it may be — a viewport too
@@ -1257,5 +1405,195 @@ mod tests {
         assert_eq!(err, Err("waves: epics is empty".into()));
         let one = Answer { waves: vec![2], missing: 1, done: 0, cards: vec![] };
         assert_eq!(tally(&one), "2 in 1 wave · 1 missing · 0 done");
+    }
+
+    // -----------------------------------------------------------------
+    // The board's filter (WAVE-12's tests, on the lens since FILTER-11)
+
+    use crate::filter::tests::{platform, strs, PLEXUS_TREE};
+    use crate::filter::Clausal;
+    use crate::lens::{waves_default, Kept};
+
+    fn rich(id: &str, status: Status, kind: Kind, sev: Option<Severity>, placement: Placement, waiting_on: &[&str], title: &str) -> Card {
+        let mut c = card(id, status, placement, waiting_on);
+        c.summary.kind = kind;
+        c.summary.severity = sev;
+        c.summary.title = title.into();
+        c
+    }
+
+    /// A board's answer: RETURNS and CONTEXT, in four waves, a missing
+    /// blocker, two done; one card waits on a ticket off the board (MNG-4);
+    /// RETURNS-4 has a commit, and CONTEXT-2 is RETURNS-4's child.
+    fn fixture() -> Answer {
+        use Placement::{Done, MissingBlocker, Wave};
+        let mut cards = vec![
+            rich("RETURNS-4", Status::Ready, Kind::Build, Some(Severity::High), Wave { n: 1 }, &[], "envelope 0.7"),
+            rich("RETURNS-5", Status::Coding, Kind::Spike, None, Wave { n: 1 }, &[], "hub-codegen streams"),
+            rich("CONTEXT-2", Status::Pending, Kind::Gap, None, Wave { n: 1 }, &[], "context loss"),
+            rich("RETURNS-6", Status::Pending, Kind::Build, Some(Severity::Low), Wave { n: 2 }, &["RETURNS-4"], "Envelope conformance"),
+            rich("CONTEXT-4", Status::Blocked, Kind::Build, None, Wave { n: 3 }, &["RETURNS-6", "MNG-4"], "carry the context"),
+            rich("RETURNS-7", Status::Pending, Kind::Build, None, Wave { n: 4 }, &["CONTEXT-4"], "release"),
+            rich("RETURNS-9", Status::Pending, Kind::Build, None, MissingBlocker, &["RETURNS-99"], "orphan"),
+            rich("RETURNS-2", Status::Complete, Kind::Build, None, Done, &[], "old envelope"),
+            rich("CONTEXT-1", Status::Superseded, Kind::Spike, None, Done, &[], "first try"),
+        ];
+        cards[0].summary.commits = vec!["abc1234".into()];
+        cards[2].summary.parent = Some("RETURNS-4".into());
+        let mut a = Answer { cards, ..Answer::default() };
+        retally(&mut a);
+        a
+    }
+
+    fn shown_by(k: &Kept) -> Vec<String> {
+        narrow(&fixture(), &(k.filter.clone(), k.local.clone()), Some(&platform())).cards.into_iter().map(|c| c.summary.id).collect()
+    }
+
+    fn one(c: Cat, op: Op, v: &[&str]) -> Vec<String> {
+        let mut k = Kept::default();
+        k.set(c, op, strs(v));
+        shown_by(&k)
+    }
+
+    /// Acceptance 1 (WAVE-12): each category applied to the answer's cards
+    /// — the server-backed ones through the language's `matches`, the local
+    /// ones as WAVE-12 evaluates them — both operators; and the tally
+    /// follows what is shown.
+    #[test]
+    fn each_category_narrows_the_cards() {
+        assert_eq!(shown_by(&Kept::default()).len(), 9, "no clause: every card");
+        assert_eq!(one(Cat::Shortcode, Op::Is, &["CONTEXT"]), strs(&["CONTEXT-2", "CONTEXT-4", "CONTEXT-1"]));
+        assert_eq!(one(Cat::Shortcode, Op::Not, &["RETURNS"]), strs(&["CONTEXT-2", "CONTEXT-4", "CONTEXT-1"]));
+        assert_eq!(one(Cat::Status, Op::Not, &["Pending"]), strs(&["RETURNS-4", "RETURNS-5", "CONTEXT-4", "RETURNS-2", "CONTEXT-1"]));
+        assert_eq!(one(Cat::Status, Op::Is, &["Coding", "In Review"]), strs(&["RETURNS-5"]));
+        assert_eq!(one(Cat::Wave, Op::Is, &["2", "missing"]), strs(&["RETURNS-6", "RETURNS-9"]));
+        assert_eq!(one(Cat::Wave, Op::Not, &["1", "done"]), strs(&["RETURNS-6", "CONTEXT-4", "RETURNS-7", "RETURNS-9"]));
+        assert_eq!(one(Cat::Kind, Op::Is, &["spike"]), strs(&["RETURNS-5", "CONTEXT-1"]));
+        assert_eq!(one(Cat::Kind, Op::Not, &["build"]), strs(&["RETURNS-5", "CONTEXT-2", "CONTEXT-1"]));
+        assert_eq!(one(Cat::Severity, Op::Is, &["high", "low"]), strs(&["RETURNS-4", "RETURNS-6"]));
+        assert_eq!(one(Cat::Severity, Op::Not, &["none"]), strs(&["RETURNS-4", "RETURNS-6"]));
+        assert_eq!(one(Cat::Readiness, Op::Is, &["workable"]), strs(&["RETURNS-4", "RETURNS-5", "CONTEXT-2"]));
+        assert_eq!(one(Cat::Readiness, Op::Is, &["waiting"]), strs(&["RETURNS-6", "CONTEXT-4", "RETURNS-7"]));
+        assert_eq!(one(Cat::Readiness, Op::Is, &["missing"]), strs(&["RETURNS-9"]));
+        assert_eq!(
+            one(Cat::Readiness, Op::Not, &["workable", "waiting", "missing"]),
+            strs(&["RETURNS-2", "CONTEXT-1"]),
+            "a done card has no readiness"
+        );
+        // Off the board: MNG-4 and RETURNS-99; RETURNS-4 and -6 are cards.
+        assert_eq!(one(Cat::OffBoard, Op::Is, &["some"]), strs(&["CONTEXT-4", "RETURNS-9"]));
+        assert_eq!(one(Cat::OffBoard, Op::Not, &["none"]), strs(&["CONTEXT-4", "RETURNS-9"]));
+        assert_eq!(one(Cat::OffBoard, Op::Is, &["none"]).len(), 7);
+        // Title: a substring of the title or the id, any case.
+        assert_eq!(one(Cat::Title, Op::Is, &["ENVELOPE"]), strs(&["RETURNS-4", "RETURNS-6", "RETURNS-2"]));
+        assert_eq!(one(Cat::Title, Op::Is, &["context-"]), strs(&["CONTEXT-2", "CONTEXT-4", "CONTEXT-1"]));
+        assert_eq!(one(Cat::Title, Op::Not, &["envelope"]).len(), 6);
+        // FILTER-11's flags: ready is Ready and waiting on nothing; blocked
+        // waits on something; has commits.
+        assert_eq!(one(Cat::Ready, Op::Is, &["yes"]), strs(&["RETURNS-4"]));
+        assert_eq!(one(Cat::Blocked, Op::Is, &["yes"]), strs(&["RETURNS-6", "CONTEXT-4", "RETURNS-7", "RETURNS-9"]));
+        assert_eq!(one(Cat::Blocked, Op::Is, &["no"]).len(), 5);
+        assert_eq!(one(Cat::Commits, Op::Is, &["yes"]), strs(&["RETURNS-4"]));
+
+        // Clauses combine; the tally is the shown cards'.
+        let mut k = Kept::default();
+        k.set(Cat::Shortcode, Op::Is, strs(&["RETURNS"]));
+        k.set(Cat::Status, Op::Not, strs(&["Pending"]));
+        let a = narrow(&fixture(), &(k.filter.clone(), k.local.clone()), None);
+        assert_eq!(a.cards.iter().map(|c| c.summary.id.as_str()).collect::<Vec<_>>(), ["RETURNS-4", "RETURNS-5", "RETURNS-2"]);
+        assert_eq!(tally(&a), "2 in 1 wave · 1 done");
+        assert_eq!(tally(&fixture()), "6 in 4 waves · 1 missing · 2 done");
+    }
+
+    fn eff(text: &str) -> Filter {
+        Filter::parse(text).unwrap()
+    }
+
+    /// FILTER-11: every group of the effective filter is evaluated on the
+    /// held cards with `Filter::matches` — a custom group too (`under`
+    /// through the card's lineage: its parent, its shortcode, what hosts
+    /// it); global ∧ waves narrows to what both admit, and a clash admits
+    /// nothing.
+    #[test]
+    fn the_effective_filter_is_evaluated_on_the_cards() {
+        let show = |f: &str| -> Vec<String> {
+            narrow(&fixture(), &(eff(f), Clauses::default()), Some(&platform())).cards.into_iter().map(|c| c.summary.id).collect()
+        };
+        assert_eq!(show("status Ready"), strs(&["RETURNS-4"]));
+        assert_eq!(show("(blocked or status Ready)"), strs(&["RETURNS-4", "RETURNS-6", "CONTEXT-4", "RETURNS-7", "RETURNS-9"]));
+        assert_eq!(show("under RETURNS-4"), strs(&["RETURNS-4", "CONTEXT-2"]), "the ticket and its child");
+        assert_eq!(show("under PLEXUS-4").len(), 6, "RETURNS is hosted under PLEXUS-4");
+        assert_eq!(show("under PLEXUS"), show(""), "both are hosted under PLEXUS");
+        assert_eq!(show("category done"), strs(&["RETURNS-2"]));
+        assert_eq!(show("text \"envelope\""), strs(&["RETURNS-4", "RETURNS-6", "RETURNS-2"]));
+        // Global ∧ waves: the global Ready over the board's default.
+        let t = platform();
+        let mut d = waves_default("PLEXUS", &t);
+        d.filter.groups.retain(|g| crate::lens::clause_of(g).is_some_and(|(c, _)| c == Cat::Shortcode));
+        let both = eff("status Ready").and(&d.filter);
+        assert_eq!(narrow(&fixture(), &(both, Clauses::default()), Some(&t)).cards.len(), 1);
+        let clash = eff("status Ready").and(&eff("status Coding"));
+        assert!(clash.admits_nothing().is_some());
+        assert!(narrow(&fixture(), &(clash, Clauses::default()), Some(&t)).cards.is_empty(), "nothing can match: the empty board");
+    }
+
+    /// A card's facts: blocked is waiting on something; its lineage its id,
+    /// its ancestors as far as known, its shortcode, what hosts it.
+    #[test]
+    fn a_cards_facts_are_its_summary_and_lineage() {
+        let a = fixture();
+        let t = platform();
+        let c2 = a.cards.iter().find(|c| c.summary.id == "CONTEXT-2").unwrap();
+        let parent_of = |id: &str| (id == "RETURNS-4").then(|| "RETURNS-1".to_string());
+        let f = facts_of(c2, Some(&t), &parent_of);
+        assert_eq!(f.lineage, strs(&["CONTEXT-2", "RETURNS-4", "RETURNS-1", "CONTEXT", "PLEXUS-1", "PLEXUS"]));
+        assert!(!f.blocked);
+        let c4 = a.cards.iter().find(|c| c.summary.id == "CONTEXT-4").unwrap();
+        assert!(facts_of(c4, None, &|_| None).blocked);
+        assert!(facts_of(&a.cards[0], None, &|_| None).has_commits);
+    }
+
+    /// Acceptance 1 (WAVE-12): the default for a route — what it asks
+    /// `waves` for: Shortcode's set the `epics` (`is not`: the route's tree
+    /// without them; none: every shortcode), Kind's the `kinds`; every group
+    /// of Shortcode or Kind in the effective filter narrows them.
+    #[test]
+    fn a_board_opens_on_its_shortcode_tree() {
+        let t = platform();
+        let d = waves_default("plexus", &t);
+        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<BTreeSet<String>>();
+        assert_eq!(epics(&d.filter, "PLEXUS", &t), set(&PLEXUS_TREE));
+        assert_eq!(kinds(&d.filter), strs(&["build", "spike", "gap"]));
+        assert_eq!(epics(&waves_default("WAVE", &t).filter, "WAVE", &t), set(&["WAVE"]));
+        assert_eq!(epics(&waves_default("NOPE", &t).filter, "NOPE", &t), set(&["NOPE"]));
+
+        assert_eq!(epics(&eff("not in (MACRO, CODEGEN, GEN, MNG)"), "PLEXUS", &t), set(&["CONTEXT", "HYPERFORGE", "PLEXUS", "RETURNS", "STARTER", "SYNAPSE", "TRANSPORT"]));
+        assert_eq!(epics(&Filter::default(), "PLEXUS", &t).len(), 13);
+        assert_eq!(kinds(&Filter::default()), strs(&WORK_KINDS));
+        assert_eq!(kinds(&eff("not kind gap")), strs(&["build", "spike", "scope", "execution"]));
+        // The global filter's groups narrow what is asked too.
+        assert_eq!(epics(&eff("in (MNG, RETURNS)").and(&d.filter), "PLEXUS", &t), set(&["RETURNS"]));
+        assert_eq!(kinds(&eff("kind in (build, doc)").and(&d.filter)), strs(&["build"]), "docs are never cards");
+        assert_eq!(epics(&eff("(in MNG or ready)"), "PLEXUS", &t).len(), 13, "a custom group asks nothing narrower");
+    }
+
+    /// Acceptance 1 (WAVE-12): the count per value — how many of the
+    /// answer's cards have it, whatever else is applied; a value no card
+    /// has is 0, a shortcode not asked for shows none.
+    #[test]
+    fn counts_are_per_value_over_the_answer() {
+        let asked: BTreeSet<String> = ["RETURNS", "CONTEXT", "MNG"].into_iter().map(String::from).collect();
+        let k = counts(&fixture(), &asked);
+        let n = |c: Cat, v: &str| k.get(&c).and_then(|m| m.get(v)).copied();
+        assert_eq!((n(Cat::Shortcode, "RETURNS"), n(Cat::Shortcode, "CONTEXT"), n(Cat::Shortcode, "MNG")), (Some(6), Some(3), Some(0)));
+        assert_eq!(n(Cat::Shortcode, "WAVE"), None, "not asked for: no count");
+        assert_eq!((n(Cat::Status, "Pending"), n(Cat::Status, "Coding"), n(Cat::Status, "In Review")), (Some(4), Some(1), Some(0)));
+        assert_eq!((n(Cat::Wave, "1"), n(Cat::Wave, "2"), n(Cat::Wave, "missing"), n(Cat::Wave, "done")), (Some(3), Some(1), Some(1), Some(2)));
+        assert_eq!((n(Cat::Kind, "build"), n(Cat::Kind, "spike"), n(Cat::Kind, "gap"), n(Cat::Kind, "scope")), (Some(6), Some(2), Some(1), Some(0)));
+        assert_eq!((n(Cat::Severity, "high"), n(Cat::Severity, "low"), n(Cat::Severity, "none")), (Some(1), Some(1), Some(7)));
+        assert_eq!((n(Cat::Readiness, "workable"), n(Cat::Readiness, "waiting"), n(Cat::Readiness, "missing")), (Some(3), Some(3), Some(1)));
+        assert_eq!((n(Cat::OffBoard, "some"), n(Cat::OffBoard, "none")), (Some(2), Some(7)));
+        assert_eq!((n(Cat::Ready, "yes"), n(Cat::Blocked, "yes"), n(Cat::Commits, "yes")), (Some(1), Some(4), Some(1)));
+        assert!(!k.contains_key(&Cat::Title));
     }
 }

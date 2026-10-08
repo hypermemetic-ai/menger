@@ -459,9 +459,17 @@ export interface TicketsEventSummary {
 the last data event of the call. `next` is the cursor to pass as
 the next call's `after` — `null` when nothing more matches, which
 is how a client knows the walk is over — and `remaining` counts
-the matches beyond this page under the same filters. */
+the matches beyond this page under the same filters.
+
+FILTER-4: `first` is the position of the page's first row among the
+matches, 0-based — for an empty page, the position it would start
+at — given by `list` when it was asked a `filter` or an `at`, and
+omitted (not null) otherwise, so every other page is byte for byte
+what it was. A position plus the page is how a windowed client
+knows where the rows it holds sit. */
 export interface TicketsEventPage {
   type: 'page';
+  first: number | null;
   next: string | null;
   remaining: number;
 }
@@ -601,6 +609,62 @@ export interface TicketsEventExtent {
   lastSeq: number;
 }
 
+/** FILTER-4: how many tickets of one shortcode match a filter (yielded
+per shortcode by `counts`, in shortcode order, only for a shortcode
+that holds a match) — the filtered `extents`. A sum over the kept
+counts of the cells the filter admits, never a test of a ticket. */
+export interface TicketsEventCount {
+  type: 'count';
+  epic: string;
+  held: number;
+}
+
+/** FILTER-4: one menu count (yielded by `facets`): how many tickets
+match `base` and `filter` once `filter`'s own groups for `field` are
+set aside, among those whose `field` is `value`. `field` is spelled
+as the language spells it (`status`, `category`, `kind`, `severity`,
+`blocked`, `ready`, `has commits`, `in`); `value` is canonical — a
+status as `set_status` stores it, a kind, a severity or a category in
+lower case, `yes` / `no` for the three flags, a shortcode for `in`. */
+export interface TicketsEventFacet {
+  type: 'facet';
+  field: string;
+  held: number;
+  value: string;
+}
+
+/** FILTER-4: a write moved this ticket into a `watch { filter }`'s
+filter — born into it, or its status, its blockers' or its commits
+moved it there (yielded by `watch { filter }` only, after every other
+event of the write). */
+export interface TicketsEventEntered {
+  type: 'entered';
+  epic: string;
+  id: string;
+  seq: number;
+}
+
+/** FILTER-4: a write moved this ticket out of a `watch { filter }`'s
+filter (yielded by `watch { filter }` only, after every other event
+of the write). */
+export interface TicketsEventLeft {
+  type: 'left';
+  epic: string;
+  id: string;
+  seq: number;
+}
+
+/** FILTER-4: one write moved more than 256 tickets into or out of a
+`watch { filter }`'s filter: instead of those `entered` and `left`,
+one of these per shortcode it moved, with the filter's count of that
+shortcode as the write left it. A client sets its count and asks for
+its window again, as after `lagged`. */
+export interface TicketsEventRecount {
+  type: 'recount';
+  epic: string;
+  held: number;
+}
+
 /** WAVE-4: one ticket's place in the order of work (yielded per ticket
 by `waves`): its row, its [`Placement`] — computed over the whole
 `blocked_by` graph, whatever shortcodes were asked for — and
@@ -703,6 +767,17 @@ export interface TicketsEventDanglingBlocker {
   id: string;
 }
 
+/** FILTER-15: whether a filter admits one ticket (yielded by `member`,
+one per id asked, in the order asked): `id` as it was asked,
+`matched` whether the filter admits the ticket it names — `false`
+for an id that names no ticket. One lookup in the filter's admitted
+cells, never a test of the ticket. */
+export interface TicketsEventMember {
+  type: 'member';
+  id: string;
+  matched: boolean;
+}
+
 /** Lookup miss. */
 export interface TicketsEventNotFound {
   type: 'not_found';
@@ -717,7 +792,20 @@ export interface TicketsEventError {
   message: string;
 }
 
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventNotFound | TicketsEventError;
+/** FILTER-13: one row of `tree` — a parent's child, or a shortcode's top
+row, that matches the filter or holds a match below it: `matched`
+whether it matches itself, `below` how many matches are strictly
+under it (its whole subtree, whatever the nav shows). A row that only
+holds matches has `matched: false` and `below` above 0. Yielded in
+the store's order, then one `page`. */
+export interface TicketsEventNode {
+  type: 'node';
+  below: number;
+  matched: boolean;
+  summary: TicketSummary;
+}
+
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventNode;
 
 export function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth { return e.type === 'health'; }
 export function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated { return e.type === 'created'; }
@@ -736,6 +824,11 @@ export function isTicketsEventLagged(e: TicketsEvent): e is TicketsEventLagged {
 export function isTicketsEventGroup(e: TicketsEvent): e is TicketsEventGroup { return e.type === 'group'; }
 export function isTicketsEventGroupChanged(e: TicketsEvent): e is TicketsEventGroupChanged { return e.type === 'group_changed'; }
 export function isTicketsEventExtent(e: TicketsEvent): e is TicketsEventExtent { return e.type === 'extent'; }
+export function isTicketsEventCount(e: TicketsEvent): e is TicketsEventCount { return e.type === 'count'; }
+export function isTicketsEventFacet(e: TicketsEvent): e is TicketsEventFacet { return e.type === 'facet'; }
+export function isTicketsEventEntered(e: TicketsEvent): e is TicketsEventEntered { return e.type === 'entered'; }
+export function isTicketsEventLeft(e: TicketsEvent): e is TicketsEventLeft { return e.type === 'left'; }
+export function isTicketsEventRecount(e: TicketsEvent): e is TicketsEventRecount { return e.type === 'recount'; }
 export function isTicketsEventPlaced(e: TicketsEvent): e is TicketsEventPlaced { return e.type === 'placed'; }
 export function isTicketsEventWaveCounts(e: TicketsEvent): e is TicketsEventWaveCounts { return e.type === 'wave_counts'; }
 export function isTicketsEventPlacementsChanged(e: TicketsEvent): e is TicketsEventPlacementsChanged { return e.type === 'placements_changed'; }
@@ -746,5 +839,7 @@ export function isTicketsEventInput(e: TicketsEvent): e is TicketsEventInput { r
 export function isTicketsEventInputChanged(e: TicketsEvent): e is TicketsEventInputChanged { return e.type === 'input_changed'; }
 export function isTicketsEventBlocker(e: TicketsEvent): e is TicketsEventBlocker { return e.type === 'blocker'; }
 export function isTicketsEventDanglingBlocker(e: TicketsEvent): e is TicketsEventDanglingBlocker { return e.type === 'dangling_blocker'; }
+export function isTicketsEventMember(e: TicketsEvent): e is TicketsEventMember { return e.type === 'member'; }
 export function isTicketsEventNotFound(e: TicketsEvent): e is TicketsEventNotFound { return e.type === 'not_found'; }
 export function isTicketsEventError(e: TicketsEvent): e is TicketsEventError { return e.type === 'error'; }
+export function isTicketsEventNode(e: TicketsEvent): e is TicketsEventNode { return e.type === 'node'; }

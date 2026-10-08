@@ -20,4 +20,4 @@ pub mod shell;
 pub use menger_tickets_api::store;
 pub use menger_tickets_api::{Tickets, TicketsClient};
 
-pub use builder::{build_rpc, build_rpc_with, default_db_path};
+pub use builder::{build_rpc, build_rpc_seeded, build_rpc_with, default_db_path};

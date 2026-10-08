@@ -13,33 +13,50 @@
 //! that option's label, the current answer — value, rationale, source, time
 //! — and its history, folded.
 //!
-//! **The filter** is the route's query, as the wave board's is (WAVE-12):
-//! `#/inputs?sc=INPUT,MNG&state=open,answered&removed` — the shortcodes
-//! shown (none named: every one), the states shown (none named: all three),
-//! and whether the removed show. No query is the default; a malformed one is
-//! the default. Read once when the page mounts (a new hash mounts a new
-//! page) and rewritten in place (`replaceState`) on every change, so a
-//! reload or a pasted URL restores it.
+//! FILTER-16: **the filter is the lens's** — FILTER-11's generic bar at the
+//! `inputs` level: the page's own categories, **State** (open · answered ·
+//! closed: which groups show; none chosen, all three) and **Removed** (shown:
+//! the removed group, last), then the server-backed ticket categories, which
+//! filter the inputs by their ticket. The rows are the inputs of the tickets
+//! `global ∧ inputs` admits — `inputs { filter }` (FILTER-15) — then the
+//! page's own categories over them; with no ticket group at either level,
+//! the app's copy of every input, as before. The menu counts the page's own
+//! categories on the rows it holds and the ticket categories by `facets`
+//! (FILTER-12). The filter rides the URL as every level's does (`f=…&state=
+//! is:open&removed=is:yes`, src/lens.rs); an INPUT-6 link
+//! (`#/inputs?sc=INPUT,MNG&state=open,answered&removed`) still opens the
+//! filter it named — Shortcode is any of its codes — and is written as `f=`
+//! ([`read_input_6`]).
 //!
-//! **Live.** The rows are the app's copy of the inputs (src/inputs.rs),
-//! which the page asks for ([`inputs::want`]) and `watch` keeps — an
-//! `input_changed` replaces the input, so its row leaves one group and
-//! enters another as it happens. A row whose input did not change keeps its
-//! DOM (an opened history stays open).
+//! **Live.** With no ticket filter the rows are the app's copy of the inputs
+//! (src/inputs.rs), which the page asks for ([`inputs::want`]) and `watch`
+//! keeps — an `input_changed` replaces the input, so its row leaves one group
+//! and enters another as it happens. A row whose input did not change keeps
+//! its DOM (an opened history stays open). Under a ticket filter the
+//! answer is kept the same way ([`Lensed`]): an `input_changed` of a ticket
+//! it knows inside applies; one of a ticket it does not know is asked of
+//! `member`; the membership watch's `entered` brings a ticket's inputs (from
+//! the app's copy) and `left` takes them; a new connection, a `recount` or a
+//! `lagged` asks again.
 //!
-//! What decides — the filter and its query, the groups, the facets' counts,
-//! a row's words — is pure and pinned by native tests.
+//! What decides — the page's own categories and an INPUT-6 link, the groups,
+//! the counts, the answer kept live, a row's words — is pure and pinned by
+//! native tests.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
 
 use leptos::prelude::*;
-use menger_tickets_api::{AnswerSource, Input, InputAction, InputKind, InputOption, InputState, InputValue};
+use menger_tickets_api::{AnswerSource, Input, InputAction, InputKind, InputOption, InputState, InputValue, TicketsEvent};
+use wasm_bindgen_futures::spawn_local;
 
-use crate::inputs::{self, ticket_order};
-use crate::{dom, filter, fmt_relative, fmt_unix, now_unix};
+use crate::filter::{Cat, Clausal, Clauses, Counts, CountsProvider, FilterBar, Op, INPUT_STATES};
+use crate::inputs::{self, ticket_order, Inputs};
+use crate::lens::{self, Kept, Level};
+use crate::session::{self, Member};
+use crate::{counts, fmt_relative, fmt_unix, now_unix};
 
-/// The states the filter chooses among, in the page's order; `removed` is
-/// the toggle's.
+/// The states State chooses among, in the page's order; `removed` is
+/// Removed's.
 pub(crate) const SHOWN: [InputState; 3] = [InputState::Open, InputState::Answered, InputState::Closed];
 
 /// Every group the page can show, in its order.
@@ -51,119 +68,94 @@ pub(crate) fn shortcode_of(ticket: &str) -> &str {
 }
 
 // ---------------------------------------------------------------------
-// The filter
+// The page's own categories
 
-/// What the page shows — held in the route's query.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Filter {
-    /// Upper case; empty: every shortcode.
-    pub(crate) shortcodes: BTreeSet<String>,
-    /// A subset of [`SHOWN`], in its order; empty: all three.
+/// FILTER-16: what the page's own categories show — the groups of the
+/// states State admits (no State clause: all three), and the removed when
+/// Removed says `shown`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Shown {
+    /// A subset of [`SHOWN`], in its order.
     pub(crate) states: Vec<InputState>,
     /// Whether the removed show (their own group, last).
     pub(crate) removed: bool,
 }
 
-impl Filter {
+impl Default for Shown {
+    fn default() -> Self {
+        Shown { states: SHOWN.to_vec(), removed: false }
+    }
+}
+
+impl Shown {
+    /// The page's local clauses as what shows.
+    pub(crate) fn of(local: &Clauses) -> Self {
+        let states = match local.get(Cat::State) {
+            Some(cl) => SHOWN.into_iter().filter(|s| cl.admits(Some(s.as_str()))).collect(),
+            None => SHOWN.to_vec(),
+        };
+        let removed = local.get(Cat::Removed).is_some_and(|cl| cl.values.first().is_some_and(|v| v == "yes"));
+        Shown { states, removed }
+    }
+
     /// Whether the group `state` shows.
     pub(crate) fn shows(&self, state: InputState) -> bool {
         match state {
             InputState::Removed => self.removed,
-            s => self.states.is_empty() || self.states.contains(&s),
+            s => self.states.contains(&s),
         }
-    }
-
-    /// Whether an input of `ticket` passes the shortcode filter.
-    pub(crate) fn admits_ticket(&self, ticket: &str) -> bool {
-        self.shortcodes.is_empty() || self.shortcodes.contains(shortcode_of(ticket))
-    }
-
-    /// Whether `input` shows.
-    pub(crate) fn admits(&self, input: &Input) -> bool {
-        self.shows(input.state) && self.admits_ticket(&input.ticket)
-    }
-
-    /// `sc` in the shortcode filter, or out of it.
-    pub(crate) fn toggle_shortcode(&mut self, sc: &str) {
-        let sc = sc.to_ascii_uppercase();
-        if !self.shortcodes.remove(&sc) {
-            self.shortcodes.insert(sc);
-        }
-    }
-
-    /// `state` (one of [`SHOWN`]) in the state filter, or out of it — kept
-    /// in [`SHOWN`]'s order.
-    pub(crate) fn toggle_state(&mut self, state: InputState) {
-        if !SHOWN.contains(&state) {
-            return;
-        }
-        let mut set: Vec<InputState> = self.states.clone();
-        if let Some(at) = set.iter().position(|s| *s == state) {
-            set.remove(at);
-        } else {
-            set.push(state);
-        }
-        self.states = SHOWN.into_iter().filter(|s| set.contains(s)).collect();
-    }
-
-    /// The filter as the route's query (no `?`): `sc=A,B&state=open,closed&
-    /// removed`, each part only when it narrows — the default is no query.
-    pub(crate) fn to_query(&self) -> String {
-        let mut parts = Vec::new();
-        if !self.shortcodes.is_empty() {
-            parts.push(format!("sc={}", self.shortcodes.iter().cloned().collect::<Vec<_>>().join(",")));
-        }
-        if !self.states.is_empty() {
-            parts.push(format!("state={}", self.states.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(",")));
-        }
-        if self.removed {
-            parts.push("removed".into());
-        }
-        parts.join("&")
-    }
-
-    /// The route's query as a filter — the default for no query, and for a
-    /// malformed one (an unknown key, a key twice, no values, a shortcode
-    /// that is not one, a state outside [`SHOWN`]).
-    pub(crate) fn parse_query(q: &str) -> Self {
-        Self::try_parse(q).unwrap_or_default()
-    }
-
-    fn try_parse(q: &str) -> Option<Self> {
-        let q = q.trim().trim_start_matches('?');
-        let mut f = Filter::default();
-        let mut seen = BTreeSet::new();
-        for pair in q.split('&').filter(|p| !p.is_empty()) {
-            let (key, value) = pair.split_once('=').map_or((pair, None), |(k, v)| (k, Some(v)));
-            if !seen.insert(key) {
-                return None;
-            }
-            match (key, value) {
-                ("sc", Some(v)) => {
-                    for sc in v.split(',') {
-                        if sc.is_empty() || !sc.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-                            return None;
-                        }
-                        f.shortcodes.insert(sc.to_ascii_uppercase());
-                    }
-                }
-                ("state", Some(v)) => {
-                    let named: Vec<InputState> = v.split(',').map(|s| s.parse().ok()).collect::<Option<_>>()?;
-                    if named.iter().any(|s| !SHOWN.contains(s)) {
-                        return None;
-                    }
-                    f.states = SHOWN.into_iter().filter(|s| named.contains(s)).collect();
-                }
-                ("removed", None | Some("1")) => f.removed = true,
-                _ => return None,
-            }
-        }
-        Some(f)
     }
 }
 
+/// FILTER-16: an INPUT-6 link's filter — `sc=A,B` (the shortcodes shown),
+/// `state=open,closed` (the states shown), `removed` (the removed too),
+/// the lens's `g` and `n` aside — as the inputs level's: Shortcode is any of
+/// the codes (the language's `in`), State and Removed the page's own. `None`
+/// when it names none of INPUT-6's keys; `Some(None)` when it is malformed
+/// (an unknown key, a key twice, no values, a shortcode that is not one, a
+/// state outside [`SHOWN`]) — the default, as INPUT-6 read it.
+pub(crate) fn read_input_6(q: &str) -> Option<Option<Kept>> {
+    let ps: Vec<lens::Pair> = lens::pairs(q).into_iter().filter(|p| !matches!(p.key.as_str(), "g" | "n" | "f")).collect();
+    if !ps.iter().any(|p| lens::INPUT_6_KEYS.contains(&p.key.as_str())) {
+        return None;
+    }
+    Some(parse_input_6(&ps))
+}
+
+fn parse_input_6(ps: &[lens::Pair]) -> Option<Kept> {
+    let mut seen = BTreeSet::new();
+    let mut k = Kept::default();
+    for p in ps {
+        if !seen.insert(p.key.as_str()) {
+            return None;
+        }
+        match (p.key.as_str(), p.value.as_deref()) {
+            ("sc", Some(v)) => {
+                let mut codes = Vec::new();
+                for sc in v.split(',') {
+                    if sc.is_empty() || !sc.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                        return None;
+                    }
+                    codes.push(sc.to_ascii_uppercase());
+                }
+                k.set(Cat::Shortcode, Op::Is, codes);
+            }
+            ("state", Some(v)) => {
+                let named: Vec<InputState> = v.split(',').map(|s| s.parse().ok()).collect::<Option<_>>()?;
+                if named.iter().any(|s| !SHOWN.contains(s)) {
+                    return None;
+                }
+                k.set(Cat::State, Op::Is, named.iter().map(|s| s.as_str().to_string()));
+            }
+            ("removed", None | Some("1")) => k.set(Cat::Removed, Op::Is, ["yes".to_string()]),
+            _ => return None,
+        }
+    }
+    Some(k)
+}
+
 // ---------------------------------------------------------------------
-// The groups and the facets
+// The groups and the counts
 
 /// One group of the page: a state and its inputs, in the store's order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,46 +164,111 @@ pub(crate) struct Group {
     pub(crate) inputs: Vec<Input>,
 }
 
-/// The page's groups — each state `f` shows, in the page's order (open,
-/// answered, closed, then removed), with the inputs `f` admits; a group
-/// with none is still a group (its heading says 0).
-pub(crate) fn groups(list: &[Input], f: &Filter) -> Vec<Group> {
+/// The page's groups — each state `shown` shows, in the page's order (open,
+/// answered, closed, then removed), with its inputs of `list`; a group with
+/// none is still a group (its heading says 0).
+pub(crate) fn groups(list: &[Input], shown: &Shown) -> Vec<Group> {
     GROUPS
         .into_iter()
-        .filter(|s| f.shows(*s))
-        .map(|state| Group {
-            state,
-            inputs: list.iter().filter(|i| i.state == state && f.admits(i)).cloned().collect(),
-        })
+        .filter(|s| shown.shows(*s))
+        .map(|state| Group { state, inputs: list.iter().filter(|i| i.state == state).cloned().collect() })
         .collect()
 }
 
-/// What the filter bar offers, with counts.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Facets {
-    /// Every shortcode an input is in, and any the filter names, in order —
-    /// each with the inputs of it the state filter shows.
-    pub(crate) shortcodes: Vec<(String, usize)>,
-    /// Each of [`SHOWN`], with the inputs in it the shortcode filter admits.
-    pub(crate) states: Vec<(InputState, usize)>,
-    /// The removed inputs the shortcode filter admits.
-    pub(crate) removed: usize,
+/// FILTER-16: the page's own categories counted on the rows it holds (the
+/// ticket filter's) — what a click would give, each category's own clause
+/// set aside: State, the inputs in each state; Removed, `shown` the removed
+/// and `hidden` the rest.
+pub(crate) fn local_counts(list: &[Input]) -> Counts {
+    let n = |s: InputState| list.iter().filter(|i| i.state == s).count();
+    let mut out: Counts = HashMap::new();
+    out.insert(Cat::State, INPUT_STATES.iter().zip(SHOWN).map(|(t, s)| (t.to_string(), n(s))).collect());
+    let removed = n(InputState::Removed);
+    out.insert(Cat::Removed, HashMap::from([("yes".to_string(), removed), ("no".to_string(), list.len() - removed)]));
+    out
 }
 
-pub(crate) fn facets(list: &[Input], f: &Filter) -> Facets {
-    let mut sc: BTreeMap<String, usize> = f.shortcodes.iter().map(|s| (s.clone(), 0)).collect();
-    for i in list {
-        let n = sc.entry(shortcode_of(&i.ticket).to_string()).or_default();
-        if f.shows(i.state) {
-            *n += 1;
+// ---------------------------------------------------------------------
+// The answer under a ticket filter
+
+/// FILTER-16: the inputs of the tickets a filter admits — `inputs { filter
+/// }`'s answer, kept live: an `input_changed` of a ticket known inside
+/// applies; one of a ticket known outside is dropped; one of a ticket it
+/// does not know is to be asked of `member`; the membership watch's
+/// `entered` brings a ticket's inputs (the app's copy holds them) and `left`
+/// takes them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Lensed {
+    held: Inputs,
+    /// Tickets known inside the filter — the answer's, and any entered or
+    /// admitted since, with inputs or not.
+    inside: BTreeSet<String>,
+    /// Tickets known outside it.
+    outside: BTreeSet<String>,
+}
+
+/// What an `input_changed` does to a [`Lensed`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Heard {
+    /// Applied or dropped — whether the rows moved.
+    Moved(bool),
+    /// Its ticket is not known: ask `member`, then [`Lensed::entered`] or
+    /// [`Lensed::left`].
+    Ask(String),
+}
+
+impl Lensed {
+    /// `inputs { filter }`'s answer.
+    pub(crate) fn from_answer(events: impl IntoIterator<Item = TicketsEvent>) -> Self {
+        let held = Inputs::from_events(events);
+        let inside = held.list().iter().map(|i| i.ticket.clone()).collect();
+        Lensed { held, inside, outside: BTreeSet::new() }
+    }
+
+    /// The rows, in the store's order.
+    pub(crate) fn list(&self) -> &[Input] {
+        self.held.list()
+    }
+
+    /// An `input_changed`.
+    pub(crate) fn changed(&mut self, input: &Input) -> Heard {
+        if self.inside.contains(&input.ticket) {
+            Heard::Moved(self.held.upsert(input.clone()))
+        } else if self.outside.contains(&input.ticket) {
+            Heard::Moved(false)
+        } else {
+            Heard::Ask(input.ticket.clone())
         }
     }
-    let admitted = |state: InputState| list.iter().filter(|i| i.state == state && f.admits_ticket(&i.ticket)).count();
-    Facets {
-        shortcodes: sc.into_iter().collect(),
-        states: SHOWN.into_iter().map(|s| (s, admitted(s))).collect(),
-        removed: admitted(InputState::Removed),
+
+    /// `ticket` is inside the filter (`entered`, or `member` said so): its
+    /// inputs — the app's copy's — are held. Whether the rows moved.
+    pub(crate) fn entered(&mut self, ticket: &str, inputs: Vec<Input>) -> bool {
+        self.outside.remove(ticket);
+        self.inside.insert(ticket.to_string());
+        inputs.into_iter().filter(|i| i.ticket == ticket).fold(false, |moved, i| self.held.upsert(i) | moved)
     }
+
+    /// `ticket` is outside it (`left`, or `member` said so): its inputs go.
+    pub(crate) fn left(&mut self, ticket: &str) -> bool {
+        self.inside.remove(ticket);
+        self.outside.insert(ticket.to_string());
+        self.held.drop_ticket(ticket)
+    }
+}
+
+/// Something the page heard for its answer — kept while a fetch is out,
+/// to replay onto the answer in order.
+#[derive(Clone, Debug)]
+enum Note {
+    /// `input_changed`.
+    Changed(Input),
+    /// `entered`: the ticket's inputs from the app's copy.
+    Entered(String),
+    /// `member` admitted the ticket: these inputs of it.
+    Admitted(String, Vec<Input>),
+    /// `left`, or `member` did not admit it.
+    Left(String),
 }
 
 // ---------------------------------------------------------------------
@@ -468,84 +525,145 @@ fn group_view(state: InputState, all: Memo<Option<Vec<Group>>>) -> impl IntoView
     }
 }
 
-/// The filter bar: shortcodes, states, the removed toggle, and `clear`.
-fn bar_view(facets: Memo<Facets>, f: RwSignal<Filter>) -> impl IntoView {
-    move || {
-        let fx = facets.get();
-        let now = f.get();
-        let all_sc = now.shortcodes.is_empty();
-        let all_st = now.states.is_empty();
-        let scs = fx
-            .shortcodes
-            .into_iter()
-            .map(|(sc, n)| {
-                let on = now.shortcodes.contains(&sc);
-                let (pick, data_sc) = (sc.clone(), sc.clone());
-                view! {
-                    <button class="fchip" class:on=on aria-pressed=on.to_string() data-sc=data_sc
-                        on:click=move |_| f.update(|f| f.toggle_shortcode(&pick))>
-                        {sc}<span class="n">{n}</span>
-                    </button>
-                }
-            })
-            .collect_view();
-        let sts = fx
-            .states
-            .into_iter()
-            .map(|(s, n)| {
-                let on = now.states.contains(&s);
-                view! {
-                    <button class="fchip" class:on=on aria-pressed=on.to_string() data-state=s.as_str()
-                        on:click=move |_| f.update(|f| f.toggle_state(s))>
-                        {s.as_str()}<span class="n">{n}</span>
-                    </button>
-                }
-            })
-            .collect_view();
-        let removed = now.removed;
-        let clear = (now != Filter::default()).then(|| {
-            view! { <button class="fclear" on:click=move |_| f.set(Filter::default())>"clear filter"</button> }
-        });
-        view! {
-            <div class="ibar">
-                <div class="fgroup">
-                    <span class="flabel">"shortcode"</span>
-                    <button class="fchip" class:on=all_sc aria-pressed=all_sc.to_string()
-                        on:click=move |_| f.update(|f| f.shortcodes.clear())>"all"</button>
-                    {scs}
-                </div>
-                <div class="fgroup">
-                    <span class="flabel">"state"</span>
-                    <button class="fchip" class:on=all_st aria-pressed=all_st.to_string()
-                        on:click=move |_| f.update(|f| f.states.clear())>"all"</button>
-                    {sts}
-                    <label class="fremoved" title="inputs their body no longer declares — history kept">
-                        <input type="checkbox" prop:checked=removed
-                            on:change=move |ev| f.update(|f| f.removed = event_target_checked(&ev)) />
-                        "removed"<span class="n">{fx.removed}</span>
-                    </label>
-                </div>
-                {clear}
-            </div>
-        }
+/// What the page lists, by the ticket filter `global ∧ inputs`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Mode {
+    /// No ticket group at either level: the app's copy of every input.
+    Every,
+    /// Groups that exclude each other: nothing (FILTER-11's notice says
+    /// why), asked of no one.
+    Nothing,
+    /// The inputs of the tickets this filter (wire text) admits.
+    Under(String),
+}
+
+fn mode_of(f: &menger_tickets_api::filter::Filter) -> Mode {
+    if f.groups.is_empty() {
+        Mode::Every
+    } else if f.admits_nothing().is_some() {
+        Mode::Nothing
+    } else {
+        Mode::Under(counts::wire_text(f))
     }
 }
 
-/// The route's query rewritten to `q` in place — `replaceState`, so no
-/// history entry and no `hashchange` (the page stays mounted) — and only
-/// while the hash is still this page's (the wave board's `write_query`).
-fn write_query(q: &str) {
-    let win = dom::window();
-    let hash = win.location().hash().unwrap_or_default();
-    if filter::with_query(&hash, "").trim_end_matches('/') != "#/inputs" {
-        return;
-    }
-    let next = filter::with_query(&hash, q);
-    if next != hash {
-        if let Ok(history) = win.history() {
-            let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&next));
+/// The page's state under a ticket filter — every handle `Copy`.
+#[derive(Clone, Copy)]
+struct Lens16 {
+    mode: Memo<Mode>,
+    /// The answer, kept live — `None` until it is in (for this filter).
+    lensed: RwSignal<Option<Lensed>>,
+    /// While a fetch is out: what it heard, to replay onto its answer.
+    heard: StoredValue<Option<Vec<Note>>>,
+    /// The newest fetch; an older one's answer is dropped.
+    asked: StoredValue<u64>,
+    /// The server did not take the filter — its words.
+    refused: RwSignal<Option<String>>,
+}
+
+impl Lens16 {
+    /// The filter the page is under — none with no ticket filter, or once
+    /// the page is gone (an answer that lands late is dropped).
+    fn text(self) -> Option<String> {
+        match self.mode.try_get_untracked()? {
+            Mode::Under(t) => Some(t),
+            _ => None,
         }
     }
+
+    /// `inputs { filter }`, asked now; what is heard meanwhile is kept and
+    /// replayed onto its answer.
+    fn fetch(self) {
+        let Some(text) = self.text() else { return };
+        let Some(n) = self.asked.try_update_value(|n| {
+            *n = n.wrapping_add(1);
+            *n
+        }) else {
+            return;
+        };
+        self.heard.try_set_value(Some(Vec::new()));
+        spawn_local(async move {
+            let answer = session::inputs_under(text.clone()).await;
+            if self.asked.try_get_value() != Some(n) || self.text().as_deref() != Some(text.as_str()) {
+                return; // a newer fetch, or another filter
+            }
+            let heard = self.heard.try_update_value(Option::take).flatten().unwrap_or_default();
+            match answer {
+                Ok(events) => {
+                    let mut l = Lensed::from_answer(events);
+                    for h in heard {
+                        self.apply(&mut l, h);
+                    }
+                    self.refused.set(None);
+                    self.lensed.set(Some(l));
+                }
+                Err(why) => {
+                    self.refused.set(Some(why));
+                    self.lensed.set(Some(Lensed::default()));
+                }
+            }
+        });
+    }
+
+    /// One heard thing onto `l`; an input of a ticket it does not know is
+    /// asked of `member`.
+    fn apply(self, l: &mut Lensed, h: Note) -> bool {
+        match h {
+            Note::Changed(input) => match l.changed(&input) {
+                Heard::Moved(m) => m,
+                Heard::Ask(ticket) => {
+                    self.ask(ticket, input);
+                    false
+                }
+            },
+            Note::Entered(t) => l.entered(&t, of_ticket(&t)),
+            Note::Admitted(t, inputs) => l.entered(&t, inputs),
+            Note::Left(t) => l.left(&t),
+        }
+    }
+
+    /// Something heard: kept while a fetch is out, else applied.
+    fn hear(self, h: Note) {
+        if self.text().is_none() {
+            return;
+        }
+        let kept = self.heard.try_update_value(|b| b.as_mut().map(|b| b.push(h.clone())).is_some()).unwrap_or(true);
+        if !kept {
+            self.lensed.try_update(|l| {
+                if let Some(l) = l {
+                    self.apply(l, h);
+                }
+            });
+        }
+    }
+
+    /// `member { ids: [ticket], filter }`: inside, the ticket's inputs come
+    /// in (`input` among them); outside, it is known so.
+    fn ask(self, ticket: String, input: Input) {
+        let Some(text) = self.text() else { return };
+        spawn_local(async move {
+            let Ok(answer) = session::member(vec![ticket.clone()], text.clone()).await else { return };
+            if self.text().as_deref() != Some(text.as_str()) {
+                return;
+            }
+            if answer.iter().any(|(id, m)| *id == ticket && *m) {
+                // The app's copy has applied the event by now; the input
+                // that was asked about, in case it has not.
+                let mut held = of_ticket(&ticket);
+                if !held.iter().any(|i| i.id == input.id) {
+                    held.push(input);
+                }
+                self.hear(Note::Admitted(ticket, held));
+            } else {
+                self.hear(Note::Left(ticket));
+            }
+        });
+    }
+}
+
+/// The app's copy's inputs of `ticket` (none while it is not in).
+fn of_ticket(ticket: &str) -> Vec<Input> {
+    inputs::signal().with_untracked(|h| h.as_ref().map(|h| h.of_ticket(ticket)).unwrap_or_default())
 }
 
 /// `#/inputs`.
@@ -553,13 +671,64 @@ fn write_query(q: &str) {
 pub(crate) fn InputsPage() -> impl IntoView {
     inputs::want();
     let held = inputs::signal();
-    let f = RwSignal::new(Filter::parse_query(filter::query_of(&dom::window().location().hash().unwrap_or_default())));
-    Effect::new(move |_| write_query(&f.with(Filter::to_query)));
-    let held_groups = held.clone();
-    let all = Memo::new(move |_| held_groups.with(|h| h.as_ref().map(|h| f.with(|f| groups(h.list(), f)))));
-    let held_facets = held.clone();
-    let fx = Memo::new(move |_| held_facets.with(|h| h.as_ref().map(|h| f.with(|f| facets(h.list(), f))).unwrap_or_default()));
-    let loaded = Memo::new(move |_| held.with(Option::is_some));
+    let lens = lens::use_lens();
+    let eff = lens.effective(Level::Inputs);
+    let mode = Memo::new(move |_| eff.with(mode_of));
+    let l16 = Lens16 {
+        mode,
+        lensed: RwSignal::new(None),
+        heard: StoredValue::new(None),
+        asked: StoredValue::new(0),
+        refused: RwSignal::new(None),
+    };
+    // A new ticket filter: nothing held for it until its answer is in (its
+    // membership watch says when to ask).
+    Effect::new(move |_| {
+        mode.track();
+        l16.asked.update_value(|n| *n = n.wrapping_add(1));
+        l16.heard.set_value(None);
+        l16.lensed.set(None);
+        l16.refused.set(None);
+    });
+    session::follow_membership(
+        move || match mode.get() {
+            Mode::Under(t) => Some(t),
+            _ => None,
+        },
+        move |m: &Member| match m {
+            Member::Opened | Member::Recount { .. } | Member::Lagged => l16.fetch(),
+            Member::Entered { id, .. } => l16.hear(Note::Entered(id.clone())),
+            Member::Left { id, .. } => l16.hear(Note::Left(id.clone())),
+            Member::Refused(why) => {
+                l16.refused.set(Some(why.clone()));
+                l16.lensed.set(Some(Lensed::default()));
+            }
+        },
+    );
+    session::listen(move |ev: &TicketsEvent| {
+        if let TicketsEvent::InputChanged { input } = ev {
+            l16.hear(Note::Changed(input.clone()));
+        }
+    });
+
+    // The rows: the ticket filter's, then the page's own categories.
+    let held_list = held.clone();
+    let list = Memo::new(move |_| match mode.get() {
+        Mode::Every => held_list.with(|h| h.as_ref().map(|h| h.list().to_vec())),
+        Mode::Nothing => Some(Vec::new()),
+        Mode::Under(_) => l16.lensed.with(|l| l.as_ref().map(|l| l.list().to_vec())),
+    });
+    let shown = Memo::new(move |_| lens.kept(Level::Inputs).map(|k| Shown::of(&k.local)).unwrap_or_default());
+    let all = Memo::new(move |_| list.with(|l| l.as_ref().map(|l| shown.with(|s| groups(l, s)))));
+    // The menu's counts: the page's own on its rows, the tickets' by facets.
+    let server = counts::menu_counts(Level::Inputs);
+    let local = Memo::new(move |_| list.with(|l| l.as_deref().map(local_counts).unwrap_or_default()));
+    let provider = CountsProvider::of(Signal::derive(move || {
+        let mut c = server.get();
+        c.extend(local.get());
+        c
+    }));
+    let loaded = Memo::new(move |_| list.with(Option::is_some));
     view! {
         <section id="inputs">
             <h2>"Inputs"</h2>
@@ -570,13 +739,18 @@ pub(crate) fn InputsPage() -> impl IntoView {
                 <code>"<m-input id kind>"</code>
                 " — and its answer, live; what is waiting first."
             </p>
+            <div class="ibar">
+                <FilterBar level=Level::Inputs cats=Cat::INPUTS.to_vec() counts=provider hint="Filter the inputs (f)" />
+            </div>
+            {move || l16.refused.get().map(|why| view! {
+                <p class="irefused" role="status">"The server did not take this filter: "<code>{why}</code></p>
+            })}
             {move || if loaded.get() {
                 view! {
-                    {bar_view(fx, f)}
                     {move || {
                         GROUPS
                             .into_iter()
-                            .filter(|s| f.with(|f| f.shows(*s)))
+                            .filter(|s| shown.with(|f| f.shows(*s)))
                             .map(|s| group_view(s, all))
                             .collect_view()
                     }}
@@ -592,12 +766,9 @@ pub(crate) fn InputsPage() -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::filter::Clausal;
     use crate::inputs::tests::{answered, input};
     use menger_tickets_api::InputHistoryEntry;
-
-    fn states(f: &str) -> Filter {
-        Filter::parse_query(f)
-    }
 
     /// The fixture: three tickets in two shortcodes, every state.
     fn fixture() -> Vec<Input> {
@@ -619,91 +790,115 @@ mod tests {
         g.inputs.iter().map(|i| format!("{}#{}", i.ticket, i.id)).collect()
     }
 
+    fn clauses(state: Option<(Op, &[&str])>, removed: Option<&str>) -> Clauses {
+        let mut c = Clauses::default();
+        if let Some((op, v)) = state {
+            c.set(Cat::State, op, v.iter().map(|s| s.to_string()));
+        }
+        if let Some(r) = removed {
+            c.set(Cat::Removed, Op::Is, [r.to_string()]);
+        }
+        c
+    }
+
     /// Acceptance 1 — grouping: open, answered, closed, in that order, each
     /// in the store's order; the removed only with the toggle, last; a group
     /// with nothing in it still shows.
     #[test]
     fn inputs_group_by_state_open_first() {
-        let g = groups(&fixture(), &Filter::default());
+        let g = groups(&fixture(), &Shown::default());
         assert_eq!(g.iter().map(|g| g.state).collect::<Vec<_>>(), SHOWN);
         assert_eq!(keys(&g[0]), ["INPUT-6#a", "INPUT-9#notes", "MNG-2#c"]);
         assert_eq!(keys(&g[1]), ["INPUT-6#b"]);
         assert_eq!(keys(&g[2]), ["INPUT-9#landing"]);
 
-        let with_removed = Filter { removed: true, ..Filter::default() };
+        let with_removed = Shown { removed: true, ..Shown::default() };
         let g = groups(&fixture(), &with_removed);
         assert_eq!(g.len(), 4);
         assert_eq!(g[3].state, InputState::Removed);
         assert_eq!(keys(&g[3]), ["INPUT-9#old"]);
 
         let none_closed: Vec<Input> = fixture().into_iter().filter(|i| i.state != InputState::Closed).collect();
-        let g = groups(&none_closed, &Filter::default());
+        let g = groups(&none_closed, &Shown::default());
         assert_eq!(g[2].state, InputState::Closed);
         assert!(g[2].inputs.is_empty(), "an empty group is still a group");
     }
 
-    /// Acceptance 1 — filtering: by shortcode, by state, both; the facets
-    /// count what each choice would show.
+    /// FILTER-16 acceptance 1 — the page's own categories over the
+    /// fixture: State chooses the groups (is any of, is not), Removed shows
+    /// the removed; none, INPUT-6's default; the menu counts each on the rows.
     #[test]
-    fn the_filter_narrows_by_shortcode_and_state() {
-        let mut f = Filter::default();
-        f.toggle_shortcode("mng");
-        let g = groups(&fixture(), &f);
-        assert_eq!(keys(&g[0]), ["MNG-2#c"]);
-        assert!(g[1].inputs.is_empty() && g[2].inputs.is_empty());
-
-        f.toggle_shortcode("INPUT");
-        f.toggle_state(InputState::Answered);
-        f.toggle_state(InputState::Open);
-        assert_eq!(f.states, [InputState::Open, InputState::Answered], "kept in the page's order");
-        let g = groups(&fixture(), &f);
-        assert_eq!(g.iter().map(|g| g.state).collect::<Vec<_>>(), [InputState::Open, InputState::Answered]);
+    fn the_pages_own_categories_choose_the_groups() {
+        let states = |c: &Clauses| groups(&fixture(), &Shown::of(c)).iter().map(|g| g.state).collect::<Vec<_>>();
+        assert_eq!(Shown::of(&Clauses::default()), Shown::default());
+        assert_eq!(states(&Clauses::default()), SHOWN, "none chosen: all three, the removed hidden");
+        assert_eq!(states(&clauses(Some((Op::Is, &["answered", "open"])), None)), [InputState::Open, InputState::Answered], "in the page's order");
+        assert_eq!(states(&clauses(Some((Op::Not, &["closed"])), None)), [InputState::Open, InputState::Answered]);
+        assert_eq!(states(&clauses(Some((Op::Not, &["open", "answered", "closed"])), None)), Vec::<InputState>::new(), "none of them");
+        assert_eq!(states(&clauses(None, Some("yes"))), GROUPS, "the removed too, last");
+        assert_eq!(states(&clauses(Some((Op::Is, &["closed"])), Some("yes"))), [InputState::Closed, InputState::Removed]);
+        assert_eq!(states(&clauses(None, Some("no"))), SHOWN, "Removed is hidden: the default");
+        let g = groups(&fixture(), &Shown::of(&clauses(Some((Op::Is, &["open"])), None)));
         assert_eq!(keys(&g[0]), ["INPUT-6#a", "INPUT-9#notes", "MNG-2#c"]);
 
-        f.toggle_shortcode("MNG");
-        f.toggle_state(InputState::Removed); // not the state filter's: the toggle's
-        assert_eq!(f.states, [InputState::Open, InputState::Answered]);
-        assert!(f.admits(&fixture()[0]) && !f.admits(&fixture()[5]) && !f.admits(&fixture()[2]));
-
-        // The facets: every shortcode held, counted under the state filter;
-        // every state, counted under the shortcode filter.
-        let fx = facets(&fixture(), &f);
-        assert_eq!(fx.shortcodes, [("INPUT".to_string(), 3), ("MNG".to_string(), 1)]);
-        assert_eq!(fx.states, [(InputState::Open, 2), (InputState::Answered, 1), (InputState::Closed, 1)]);
-        assert_eq!(fx.removed, 1);
-
-        // A shortcode the filter names and no input is in is still offered.
-        let mut ghost = Filter::default();
-        ghost.toggle_shortcode("NOPE");
-        let fx = facets(&fixture(), &ghost);
-        assert!(fx.shortcodes.contains(&("NOPE".to_string(), 0)));
-        assert!(groups(&fixture(), &ghost).iter().all(|g| g.inputs.is_empty()));
+        // The counts: each state's inputs, the removed and the rest.
+        let c = local_counts(&fixture());
+        let get = |cat: Cat, v: &str| c.get(&cat).and_then(|m| m.get(v)).copied();
+        assert_eq!((get(Cat::State, "open"), get(Cat::State, "answered"), get(Cat::State, "closed")), (Some(3), Some(1), Some(1)));
+        assert_eq!((get(Cat::Removed, "yes"), get(Cat::Removed, "no")), (Some(1), Some(5)));
+        assert_eq!(get(Cat::Shortcode, "INPUT"), None, "the tickets' categories are facets'");
+        let empty = local_counts(&[]);
+        assert_eq!(empty.get(&Cat::State).and_then(|m| m.get("open")).copied(), Some(0));
     }
 
-    /// The filter is the route's query, both ways; no query, or a malformed
-    /// one, is the default.
+    /// FILTER-16 acceptance 1 — the query, old and new: an INPUT-6 link is
+    /// read as the inputs level (Shortcode the language's `in`, State and
+    /// Removed the page's own), the lens's `g` and `n` aside; malformed, the
+    /// default; and the level's own form (`f=` and its local pairs) round
+    /// trips.
     #[test]
-    fn the_filter_round_trips_through_the_query() {
-        let f = Filter {
-            shortcodes: ["INPUT".to_string(), "MNG".to_string()].into(),
-            states: vec![InputState::Open, InputState::Closed],
-            removed: true,
-        };
-        let q = f.to_query();
-        assert_eq!(q, "sc=INPUT,MNG&state=open,closed&removed");
-        assert_eq!(Filter::parse_query(&q), f);
-        assert_eq!(Filter::parse_query(&format!("?{q}")), f, "a leading ? is the query's");
-        assert_eq!(states("sc=input&state=closed,open"), Filter {
-            shortcodes: ["INPUT".to_string()].into(),
-            states: vec![InputState::Open, InputState::Closed],
-            removed: false,
-        });
-        assert_eq!(Filter::default().to_query(), "");
-        assert_eq!(states(""), Filter::default());
-        assert_eq!(states("removed=1"), Filter { removed: true, ..Filter::default() });
-        for bad in ["sc=", "sc=A-B", "state=removed", "state=open,shut", "kind=choice", "sc=A&sc=B", "removed=yes", "state"] {
-            assert_eq!(states(bad), Filter::default(), "{bad}");
+    fn the_query_old_and_new() {
+        let k = read_input_6("sc=INPUT,mng&state=closed,open&removed").expect("names INPUT-6's keys").expect("well formed");
+        assert_eq!(k.filter.format(), "in (INPUT, MNG)");
+        assert_eq!(Shown::of(&k.local), Shown { states: vec![InputState::Open, InputState::Closed], removed: true });
+        let new = lens::join(&lens::pairs_of(Level::Inputs, &k));
+        assert_eq!(new, "f=in%20%28INPUT%2C%20MNG%29&state=is:open,closed&removed=is:yes", "written as f=");
+        assert_eq!(lens::read(&new, Level::Inputs), Some(Some(k.clone())), "and read back");
+
+        assert_eq!(read_input_6("g=kind%20build&sc=INPUT").flatten().map(|k| k.filter.format()).as_deref(), Some("in INPUT"), "g is the lens's");
+        assert_eq!(read_input_6("removed=1").flatten().map(|k| Shown::of(&k.local)), Some(Shown { removed: true, ..Shown::default() }));
+        assert_eq!(read_input_6("state=answered").flatten().map(|k| (k.filter.groups.is_empty(), Shown::of(&k.local).states)), Some((true, vec![InputState::Answered])));
+        assert_eq!(read_input_6(""), None, "no INPUT-6 key: not one");
+        assert_eq!(read_input_6("g=ready&n=in%20MNG"), None);
+        for bad in ["sc=", "sc=A-B", "state=removed", "state=open,shut", "sc=A&kind=choice", "sc=A&sc=B", "removed=yes", "state"] {
+            assert_eq!(read_input_6(bad), Some(None), "{bad}");
         }
+    }
+
+    /// FILTER-16: the answer under a ticket filter, kept live — an input of
+    /// a ticket it holds applies; one of a ticket it does not know is asked;
+    /// `entered` brings a ticket's inputs, `left` takes them, and an input of
+    /// a ticket known outside is dropped.
+    #[test]
+    fn the_answer_under_a_ticket_filter_is_kept_live() {
+        let answer = [input("INPUT-6", "a"), answered(input("INPUT-6", "b"), "delete", 50)].map(|input| TicketsEvent::Input { input });
+        let mut l = Lensed::from_answer(answer);
+        let ids = |l: &Lensed| l.list().iter().map(|i| format!("{}#{}", i.ticket, i.id)).collect::<Vec<_>>();
+        assert_eq!(ids(&l), ["INPUT-6#a", "INPUT-6#b"]);
+
+        assert_eq!(l.changed(&answered(input("INPUT-6", "a"), "archive", 60)), Heard::Moved(true));
+        assert_eq!(l.list()[0].state, InputState::Answered);
+        assert_eq!(l.changed(&input("INPUT-6", "new")), Heard::Moved(true), "a new input of a ticket inside");
+        assert_eq!(l.changed(&input("MNG-2", "c")), Heard::Ask("MNG-2".into()), "a ticket it does not know");
+
+        assert!(l.entered("MNG-2", vec![input("MNG-2", "c"), input("MNG-3", "not-its")]));
+        assert_eq!(ids(&l), ["INPUT-6#a", "INPUT-6#b", "INPUT-6#new", "MNG-2#c"], "only the ticket's own");
+        assert!(l.left("INPUT-6"));
+        assert_eq!(ids(&l), ["MNG-2#c"]);
+        assert_eq!(l.changed(&input("INPUT-6", "a")), Heard::Moved(false), "known outside: dropped");
+        assert!(!l.entered("INPUT-9", Vec::new()), "inside, with no input");
+        assert_eq!(l.changed(&input("INPUT-9", "first")), Heard::Moved(true), "its first input applies");
+        assert!(!l.left("NOPE-1"));
     }
 
     /// A row's words: the options with the recommended marked and the
@@ -760,12 +955,12 @@ mod tests {
     fn an_answer_moves_its_row_between_groups() {
         let mut held = inputs::Inputs::from_events(fixture().into_iter().map(|input| menger_tickets_api::TicketsEvent::Input { input }));
         assert_eq!(held.open_count(), 3);
-        let before = groups(held.list(), &Filter::default());
+        let before = groups(held.list(), &Shown::default());
         assert_eq!(keys(&before[0]), ["INPUT-6#a", "INPUT-9#notes", "MNG-2#c"]);
 
         let notes = answered(input("INPUT-9", "notes"), "archive", 200);
         assert!(held.apply(&menger_tickets_api::TicketsEvent::InputChanged { input: notes }));
-        let after = groups(held.list(), &Filter::default());
+        let after = groups(held.list(), &Shown::default());
         assert_eq!(keys(&after[0]), ["INPUT-6#a", "MNG-2#c"]);
         assert_eq!(keys(&after[1]), ["INPUT-6#b", "INPUT-9#notes"], "in the store's order");
         assert_eq!(held.open_count(), 2);

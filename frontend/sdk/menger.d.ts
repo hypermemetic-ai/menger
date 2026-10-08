@@ -39,7 +39,9 @@ export interface MengerInput {
   /**
    * The ticket whose stored body this frame renders — what `submit`
    * answers against, and what to read this ticket's inputs with:
-   * `menger.tickets.inputs(undefined, undefined, menger.input.ticket)`.
+   * `menger.tickets.inputs(undefined, undefined, undefined, menger.input.ticket)`
+   * (the typed client's parameters are in name order: `epic`, `filter`,
+   * `state`, `ticket`).
    * `null` in a frame that renders no ticket's stored body (an editor's
    * preview, a component's help card), where `submit` always rejects.
    */

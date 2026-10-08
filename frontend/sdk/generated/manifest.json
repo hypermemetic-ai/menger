@@ -27,6 +27,9 @@
       "ticket"
     ],
     "components": [],
+    "counts": [
+      "filter"
+    ],
     "create": [
       "blocked_by",
       "body",
@@ -38,8 +41,13 @@
       "title"
     ],
     "extents": [],
+    "facets": [
+      "base",
+      "filter"
+    ],
     "find": [
       "after",
+      "filter",
       "limit",
       "query"
     ],
@@ -50,6 +58,7 @@
     "health": [],
     "inputs": [
       "epic",
+      "filter",
       "state",
       "ticket"
     ],
@@ -59,15 +68,22 @@
     ],
     "list": [
       "after",
+      "at",
       "epic",
+      "filter",
       "limit",
       "parent",
       "status",
       "summary"
     ],
+    "member": [
+      "filter",
+      "ids"
+    ],
     "ready_set": [
       "after",
       "epic",
+      "filter",
       "limit",
       "summary"
     ],
@@ -84,12 +100,21 @@
       "id",
       "status"
     ],
+    "tree": [
+      "after",
+      "epic",
+      "filter",
+      "limit",
+      "parent"
+    ],
     "unlink_commits": [
       "commits",
       "id"
     ],
     "watch": [
-      "epic"
+      "epic",
+      "filter",
+      "membership"
     ],
     "waves": [
       "epics",

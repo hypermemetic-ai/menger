@@ -260,6 +260,26 @@ ticket's row (its kept `placement`, fetched and held while shown); it moves
 live, and an id that is no ticket is left as written. A body without one
 renders byte for byte as before.
 
+**Filters** (FILTER-9) reach every view. There is one **global** filter
+(the header's `Filter` button, or <kbd>F</kbd>; a bar under the header while
+it holds anything, and `n of N` beside the button) and one per surface: the
+**board**, the **wave board**, the **nav** and the **inputs** page (each
+surface's own bar, or <kbd>f</kbd> on it). A surface shows what *both*
+admit — `global.and(own)`, which merges groups on the same field (lists
+intersect, exclusions unite) and names a contradiction under the bar. Every
+bar is the same component (WAVE-12's menu made generic, `src/lens.rs`):
+categories with counts (`facets`, Linear's: a category's counts ignore its
+own clause, never the global one), pills, a text mode in FILTER-3's
+language, and the global pills shown muted in each surface's bar. The
+board windows over `counts` (FILTER-12); the nav shows each shortcode with
+its matches and, inside, the matches plus the ancestors that hold them —
+dimmed — each row with the matches below it (`tree`, FILTER-13/14); the
+palette searches inside the global filter with a "Search everything" row,
+and a ticket page says when its ticket is outside and filters its children
+(FILTER-16). Each level rides the route's query — `g=` global, `n=` nav,
+`f=` the surface's own — and the viewer's local storage, so global and nav
+filters survive navigation and reload.
+
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service
@@ -754,11 +774,18 @@ and id, its kind, its question, its options with the recommended one marked
 (★) and the chosen ones ticked (✓), the recommendation where it says more
 than that option's label, the current answer — value, rationale, source
 (`app` / `api`) and time (relative; exact on hover) — and its history,
-folded. The filter bar narrows by shortcode and by state, each value with
-its count; the filter is the route's query, rewritten in place —
-`#/inputs?sc=INPUT,MNG&state=open,answered&removed` (no query: every
-shortcode, the three states, the removed hidden; a malformed one is the
-default) — so a reload or a pasted link restores it.
+folded. FILTER-16: the filter bar is the app's generic one at the `inputs`
+level — the page's own categories, **State** (open · answered · closed:
+which groups show) and **Removed** (shown: the removed group, last), then
+the ticket categories (Shortcode, Status, Kind, …), which filter the inputs
+by their ticket together with the global filter: the rows are then `inputs
+{ filter }`, kept live (`member` for a ticket it does not know, the
+membership watch's `entered` / `left`). The menu counts the page's own
+categories on its rows and the ticket categories by `facets`. The filter
+rides the route's query as every level's does —
+`#/inputs?f=in%20(INPUT%2C%20MNG)&state=is:open,answered&removed=is:yes` —
+and is kept per viewer; an INPUT-6 link (`#/inputs?sc=INPUT,MNG&state=open,
+answered&removed`) still opens the filter it named and is rewritten as `f=`.
 
 The page is the app's own copy of the inputs (`frontend/src/inputs.rs`),
 held to the component registry's rule (COMP-5): **nothing at startup asks
@@ -794,7 +821,7 @@ clear.onclick = () =>
 // input: the generated `Input`, `open`, its history ending { action: 'cleared', source: 'app', atUnix }
 
 // this ticket's inputs, typed (`ticket` is null in a frame that renders no ticket's body)
-for await (const ev of this.menger.tickets.inputs(undefined, undefined, this.menger.input.ticket)) { … }
+for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefined, this.menger.input.ticket)) { … }
 ```
 
 - **`menger.input.ticket`** — the ticket whose stored body the frame
@@ -1110,7 +1137,11 @@ scripts/sdk-codegen.sh the frames' typed SDK, generated (COMP-10; Docker)
 web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
                        src/waves.rs the wave board (WAVE-5, WAVE-6),
-                       src/filter.rs its filter and menu (WAVE-12),
+                       src/filter.rs the generic filter bar and menu (WAVE-12,
+                       FILTER-11), src/lens.rs the levels — global, nav,
+                       board, waves, inputs — their URL and storage, the
+                       header's bar (FILTER-11), src/counts.rs menu counts and
+                       the header's n of N (FILTER-12),
                        src/notes.rs its annotation and the body editor (WAVE-11),
                        src/frame.rs framed bodies and their messages (COMP-4,
                        COMP-5), sdk/menger-sdk.js the SDK every frame runs,
