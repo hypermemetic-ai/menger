@@ -402,3 +402,108 @@ async fn verify_derived_names_an_altered_cell_container_and_count() {
         "{out}"
     );
 }
+
+/// FILTER-13, acceptance 2, through the binary: a nested seed's file — its
+/// kept tree stored (form 5), lists past 256 children holding their
+/// holders — verifies; one `tree_tallies` row, and then one `tree_holders`
+/// container, altered by hand are each named — the parent, the shortcode,
+/// the cell (id and what it is), what is stored and what a scan gives —
+/// with exit 1; and a file in form 4 (the kept tree's tables gone) is built
+/// again once on its first open, saying so, and verifies.
+#[tokio::test]
+async fn verify_derived_names_an_altered_tally_and_holder_and_a_form_4_file_is_built_once() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    let port = free_port().await;
+    let stderr_path = dir.path().join("stderr-seed.log");
+    let child = Command::new(env!("CARGO_BIN_EXE_menger"))
+        .args(["--no-shell", "--no-rest", "--port", &port.to_string(), "--seed-synthetic", "6000", "--seed-shape", "nested", "--db-path"])
+        .arg(&db)
+        .env_remove("MENGER_DB_PATH")
+        .env_remove("RUST_LOG")
+        .env("PLEXUS_NO_REGISTRY", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(std::fs::File::create(&stderr_path).unwrap()))
+        .spawn()
+        .expect("spawn menger");
+    let s = Server { child, port, stderr_path };
+    let c = connect(s.port).await;
+    one(&c, "tickets.health", json!({})).await.unwrap();
+    drop(c);
+    s.kill9();
+    let (code, out, err) = verify(&db);
+    assert_eq!(code, Some(0), "{out}\n{err}");
+    assert!(out.contains("tally entries") && out.contains("holder containers"), "{out}");
+
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let holders: i64 = conn.query_row("SELECT count(*) FROM tree_holders", [], |r| r.get(0)).unwrap();
+    assert!(holders > 0, "a nested seed's roots keep holders");
+    let (p, e, cell, held): (String, String, u32, u32) = conn
+        .query_row("SELECT parent, epic, cell, held FROM tree_tallies ORDER BY parent, epic, cell LIMIT 1", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })
+        .unwrap();
+    conn.execute(
+        "UPDATE tree_tallies SET held = ?4 WHERE parent = ?1 AND epic = ?2 AND cell = ?3",
+        rusqlite::params![p, e, cell, held + 5],
+    )
+    .unwrap();
+    drop(conn);
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(1), "{out}");
+    let lines: Vec<&str> = out.lines().collect();
+    assert!(lines[0].starts_with(&format!("tree tally of {p}: {e} cell {cell} (")), "{out}");
+    assert!(lines[0].ends_with(&format!(": stored {}; a scan gives {held}", held + 5)), "{out}");
+    assert!(lines[1].ends_with("1 difference(s) between the stored derived state and a scan"), "{out}");
+
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute(
+        "UPDATE tree_tallies SET held = ?4 WHERE parent = ?1 AND epic = ?2 AND cell = ?3",
+        rusqlite::params![p, e, cell, held],
+    )
+    .unwrap();
+    let (hp, hk, he, hc, hi): (String, String, String, u32, u32) = conn
+        .query_row(
+            "SELECT parent, kids, epic, cell, hi FROM tree_holders WHERE card >= 2 AND card <= 4096 ORDER BY parent LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .unwrap();
+    conn.execute(
+        "UPDATE tree_holders SET card = 1, bits = substr(bits, 1, 2) WHERE parent = ?1 AND kids = ?2 AND epic = ?3 AND cell = ?4 AND hi = ?5",
+        rusqlite::params![hp, hk, he, hc, hi],
+    )
+    .unwrap();
+    drop(conn);
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(1), "{out}");
+    let first = out.lines().next().unwrap();
+    assert!(first.starts_with(&format!("tree holders of {hp}'s children in {hk}: {he} cell {hc} (")), "{out}");
+    assert!(first.contains(&format!("container {hi}: stored 1 members [")), "{out}");
+
+    // Form 4: the file as the commit before wrote it — no kept tree.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch("DROP TABLE tree_tallies; DROP TABLE tree_holders; UPDATE derived_state SET form = 4;").unwrap();
+    drop(conn);
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(1), "{out}");
+    assert!(out.contains("stored in form 4; this build reads 5"), "{out}");
+    let s = spawn_server(&db, dir.path(), "form4").await;
+    let c = connect(s.port).await;
+    one(&c, "tickets.health", json!({})).await.unwrap();
+    let log = s.log();
+    assert!(log.contains("it was stored in form 4, this build writes 5"), "{log}");
+    assert!(log.contains("kept the tree over 6000 tickets"), "{log}");
+    drop(c);
+    s.kill9();
+    let (code, out, err) = verify(&db);
+    assert_eq!(code, Some(0), "{out}\n{err}");
+    let s = spawn_server(&db, dir.path(), "form5").await;
+    let c = connect(s.port).await;
+    one(&c, "tickets.health", json!({})).await.unwrap();
+    assert!(s.log().contains("the kept tree's tallies of"), "read, not built: {}", s.log());
+    assert!(!s.log().contains("SCALE-28: stored"), "built once");
+    drop(c);
+    s.kill9();
+}

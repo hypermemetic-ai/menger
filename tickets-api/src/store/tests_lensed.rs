@@ -20,7 +20,7 @@
 
 use super::cells::Key;
 use super::tests_filtered::Plain;
-use super::tests_language::{facts, random_filter};
+use super::tests_language::{filter_names, random_filter};
 use super::tests_ready::{new_ticket, random_write, Rng, Tally};
 use super::*;
 use crate::filter::Filter;
@@ -142,7 +142,7 @@ struct Seen {
 #[track_caller]
 fn assert_find_is_a_scan(store: &Store, plain: &Plain, filter: &Filter, rng: &mut Rng, seen: &mut Seen, what: &str) {
     let lens = Lens::of(filter).unwrap();
-    let judge = |t: &Row, k: Key| filter.matches(&facts(t, k));
+    let judge = |t: &Row, k: Key| filter.matches(&plain.facts(t, k));
     for _ in 0..6 {
         let query = random_query(rng, plain);
         let m = matched(plain, |t, k| text_match(t, &query) && judge(t, k));
@@ -189,7 +189,7 @@ fn assert_ready_is_a_scan(store: &Store, plain: &Plain, filter: &Filter, epics: 
             _ => None,
         };
         let m = matched(plain, |t, k| {
-            ready(t, k) && filter.matches(&facts(t, k)) && epic.as_deref().is_none_or(|e| t.epic == e.to_ascii_uppercase())
+            ready(t, k) && filter.matches(&plain.facts(t, k)) && epic.as_deref().is_none_or(|e| t.epic == e.to_ascii_uppercase())
         });
         let (after, limit) = (random_after(rng, plain), random_limit(rng));
         let q = ready_and(filter, epic.clone()).unwrap();
@@ -222,7 +222,7 @@ fn assert_member_is_a_scan(store: &Store, plain: &Plain, filter: &Filter, rng: &
         .map(|id| {
             let id = id.trim();
             let at = plain.rows.iter().position(|t| t.id == id).or_else(|| plain.rows.iter().position(|t| t.id == id.to_ascii_uppercase()));
-            at.is_some_and(|i| filter.matches(&facts(&plain.rows[i], plain.cells[i])))
+            at.is_some_and(|i| filter.matches(&plain.facts(&plain.rows[i], plain.cells[i])))
         })
         .collect();
     seen.member_true += want.iter().filter(|m| **m).count();
@@ -238,9 +238,10 @@ fn assert_reads_are_a_scan(store: &Store, plain: &Plain, rng: &mut Rng, epics: &
     assert_member_is_a_scan(store, plain, &filter, rng, seen, what);
 }
 
-/// The shortcodes a store holds, and one it does not.
+/// The shortcodes a store holds, one it does not, and ticket ids —
+/// FILTER-13: what the random filters' `in` and `under` name.
 fn names(store: &Store) -> Vec<String> {
-    store.extents().into_iter().map(|(e, _)| e).chain(["NONE".into()]).collect()
+    filter_names(store)
 }
 
 async fn walk(store: Store, path: &Path, seed: u64, writes: usize, every: usize, epics: &[&str]) {
@@ -376,7 +377,7 @@ async fn inputs_under_random_filters_are_the_inputs_of_the_tickets_the_filter_ad
             };
             let admitted = |id: &str| {
                 let i = plain.rows.iter().position(|t| t.id == id).expect("an input's ticket is a ticket");
-                filter.matches(&facts(&plain.rows[i], plain.cells[i]))
+                filter.matches(&plain.facts(&plain.rows[i], plain.cells[i]))
             };
             let want: Vec<Input> = store
                 .inputs(ticket.as_deref(), epic.as_deref(), state)
@@ -397,15 +398,16 @@ async fn inputs_under_random_filters_are_the_inputs_of_the_tickets_the_filter_ad
 
 /// A filter that narrows nothing — none, empty, blank, a display part
 /// alone — is no filter: the read takes today's path. One the language
-/// does not take, or that asks `under` or `text`, is FILTER-4's refusal,
-/// word for word.
+/// does not take, or that asks `text`, is FILTER-4's refusal, word for
+/// word. FILTER-13: one that asks `under` is taken.
 #[test]
 fn a_filter_that_narrows_nothing_is_no_filter_and_a_refusal_is_filter_4s() {
     for text in [None, Some(""), Some("   "), Some("· flat"), Some("· columns id title · order code")] {
         assert!(narrowing(text).unwrap().is_none(), "{text:?}");
     }
     assert_eq!(narrowing(Some("kind build")).unwrap().unwrap().format(), "kind build");
-    for text in ["text \"watch\"", "under SCALE-13 and ready", "tag x and nonsense", "status Bogus", "board by status"] {
+    assert_eq!(narrowing(Some("under SCALE-13 and ready")).unwrap().unwrap().format(), "under SCALE-13 and ready");
+    for text in ["text \"watch\"", "under SCALE-13 and text \"x\"", "tag x and nonsense", "status Bogus", "board by status"] {
         let refused = narrowing(Some(text)).unwrap_err().to_string();
         assert_eq!(refused, Lens::parse(text).unwrap_err().to_string(), "{text}");
     }

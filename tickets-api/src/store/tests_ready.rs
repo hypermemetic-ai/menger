@@ -347,15 +347,15 @@ fn assert_every_page_is_before(store: &Store, rng: &mut Rng, what: &str) {
 /// that it exercised the ones that move membership.
 #[derive(Debug, Default)]
 pub(super) struct Tally {
-    created: usize,
+    pub(super) created: usize,
     with_blockers: usize,
     forward: usize,
     resolved: usize,
-    crossings: usize,
+    pub(super) crossings: usize,
     fanned: usize,
     joined: usize,
     left: usize,
-    moves: usize,
+    pub(super) moves: usize,
     others: usize,
     /// SDLC-11: docs born, and creates tried (what picks a doc).
     docs: usize,

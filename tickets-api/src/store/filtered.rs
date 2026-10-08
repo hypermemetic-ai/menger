@@ -10,22 +10,32 @@
 //! up by position, as a page of the ready set's are.
 
 use super::cells::{Admit, Key, View, SEVERITIES};
+use super::lineage::{Compiled, UNDERS_MAX};
 use super::*;
 use crate::filter::{Category, Facts, Field, Filter};
-use roaring::RoaringBitmap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 /// A filter as the store judges it: the shortcodes it names (each judged on
 /// its own) and, for a shortcode and a cell, whether the filter admits it.
 /// Judged once per (shortcode, cell) pair at a compile, never per ticket.
+///
+/// FILTER-13: and the names its `under` asks for. A judge reads a lineage
+/// beside the shortcode and the cell — the shortcodes hosting it, and which
+/// of those names a ticket is under — so a lens with `under` is compiled
+/// per (shortcode, cell, which `under`s hold) ([`super::lineage::Compiled`]).
 #[derive(Clone)]
 pub struct Lens {
     /// The filter as text, canonical — what two lenses are compared by.
     text: String,
     named: Vec<String>,
-    judge: Arc<dyn Fn(&str, Key) -> bool + Send + Sync>,
+    /// FILTER-13: what `under` names, upper case, each once.
+    unders: Vec<String>,
+    judge: Arc<Judge>,
 }
+
+/// A lens's judge: a shortcode, a cell, and the lineage's names that hold.
+type Judge = dyn Fn(&str, Key, &[&str]) -> bool + Send + Sync;
 
 impl Lens {
     /// A lens over `named` shortcodes that admits what `judge` admits. The
@@ -35,7 +45,8 @@ impl Lens {
         Self {
             text,
             named,
-            judge: Arc::new(judge),
+            unders: Vec::new(),
+            judge: Arc::new(move |e, k, _| judge(e, k)),
         }
     }
 
@@ -56,22 +67,53 @@ impl Lens {
     /// shortcodes named, each (shortcode, cell) judged by the language's own
     /// evaluator ([`Filter::matches`]) on the facts a cell holds — so a
     /// compiled filter admits exactly what the reference evaluator passes.
-    /// `under` and `text` are refused ([`refuse`]).
+    /// `text` is refused ([`refuse`]). FILTER-13: `under` is answered — its
+    /// names kept, and the evaluator handed the lineage they are tested on.
     pub fn of(filter: &Filter) -> Result<Self, StoreError> {
         refuse(filter)?;
-        let named: BTreeSet<String> = filter
-            .groups
-            .iter()
-            .flat_map(|g| &g.preds)
+        let preds = || filter.groups.iter().flat_map(|g| &g.preds);
+        let named: BTreeSet<String> = preds()
             .filter_map(|p| match &p.field {
                 Field::In(e) => Some(e.to_ascii_uppercase()),
                 _ => None,
             })
             .collect();
+        let unders: BTreeSet<String> = preds()
+            .filter_map(|p| match &p.field {
+                Field::Under(x) => Some(x.to_ascii_uppercase()),
+                _ => None,
+            })
+            .collect();
+        if unders.len() > UNDERS_MAX {
+            return Err(StoreError::Filter(format!(
+                "a filter asks `under` for at most {UNDERS_MAX} names; this one names {}",
+                unders.len()
+            )));
+        }
         let judged = filter.clone();
-        Ok(Self::new(filter.format(), named.into_iter().collect(), move |epic, key| {
-            judged.matches(&facts(epic, key))
-        }))
+        Ok(Self {
+            text: filter.format(),
+            named: named.into_iter().collect(),
+            unders: unders.into_iter().collect(),
+            judge: Arc::new(move |epic, key, lineage| judged.matches(&facts(epic, key, lineage))),
+        })
+    }
+
+    /// FILTER-13: what `under` names, upper case, each once.
+    pub(super) fn unders(&self) -> &[String] {
+        &self.unders
+    }
+
+    /// The shortcodes `in` names, upper case.
+    pub(super) fn named(&self) -> &[String] {
+        &self.named
+    }
+
+    /// FILTER-13: whether the lens admits a ticket of `epic` in cell `key`
+    /// whose lineage holds `lineage` (the shortcodes hosting `epic`, and the
+    /// `under` names it is under).
+    pub(super) fn judge(&self, epic: &str, key: Key, lineage: &[&str]) -> bool {
+        (self.judge)(epic, key, lineage)
     }
 
     /// The filter's text.
@@ -82,17 +124,23 @@ impl Lens {
     /// Compiled against `keys`, `list`'s `status` folded in as the sugar it
     /// is (its `epic` restricts the shortcodes a [`View`] holds: a shortcode
     /// exactly as named, as `list { epic }` always took it).
+    ///
+    /// FILTER-13: a lens with `under` is compiled with its lineage
+    /// ([`super::lineage::Compiled`]); this is the lens without it, where
+    /// the lineage holds nothing a judge reads.
     pub(super) fn admit(&self, keys: &[Key], status: Option<Status>) -> Admit {
+        debug_assert!(self.unders.is_empty(), "a lens with `under` is compiled with its lineage");
         Admit::compile(keys, self.named.iter().cloned(), |e, k| {
-            status.is_none_or(|s| k.status() == s) && (self.judge)(e, k)
+            status.is_none_or(|s| k.status() == s) && (self.judge)(e, k, &[])
         })
     }
 }
 
 /// What the evaluator reads of a cell in a shortcode: everything but a
-/// ticket's id, title and lineage — which only `text` and `under` read, and
-/// neither is compiled.
-fn facts(epic: &str, key: Key) -> Facts {
+/// ticket's id and title — which only `text` reads, and it is not compiled.
+/// FILTER-13: the lineage `under` reads is what the compile hands it: the
+/// shortcode, the shortcodes hosting it, and the `under` names that hold.
+fn facts(epic: &str, key: Key, lineage: &[&str]) -> Facts {
     Facts {
         id: String::new(),
         epic: epic.to_string(),
@@ -102,21 +150,18 @@ fn facts(epic: &str, key: Key) -> Facts {
         severity: key.severity(),
         blocked: key.blocked(),
         has_commits: key.commits(),
-        lineage: Vec::new(),
+        lineage: lineage.iter().map(|l| l.to_string()).collect(),
     }
 }
 
 /// FILTER-4: the predicates every filtered read refuses in-band, naming each
-/// chunk that holds one and where it is answered instead: `under` comes
-/// with FILTER-13 (the kept tree); `text` is the palette's (`find`) until
-/// SCALE-13's B5 indexes it.
+/// chunk that holds one and where it is answered instead: `text` is the
+/// palette's (`find`) until SCALE-13's B5 indexes it. FILTER-13: `under` is
+/// answered everywhere, from the kept tree.
 pub fn refuse(filter: &Filter) -> Result<(), StoreError> {
     let mut bad: Vec<String> = Vec::new();
     for g in &filter.groups {
         let mut why: Vec<&str> = Vec::new();
-        if g.preds.iter().any(|p| matches!(p.field, Field::Under(_))) {
-            why.push("`under` is not answered here yet: it comes with FILTER-13, the kept tree");
-        }
         if g.preds.iter().any(|p| matches!(p.field, Field::Text(_))) {
             why.push("text is the palette's — ask `find` (a filter's text waits for SCALE-13's B5)");
         }
@@ -213,19 +258,21 @@ pub enum Membership {
 pub struct Watcher {
     lens: Lens,
     admit: Admit,
+    /// FILTER-13: a filter that asks `under` — each write works out this
+    /// watch's membership itself ([`super::lineage::UnderMoves`]), and its
+    /// `admit` is not read.
+    under: Option<Arc<super::lineage::UnderWatch>>,
 }
 
 /// The matches of `q` under the read lock: the admitted bitmaps, and — for
-/// a parent's page — inside its children.
+/// a parent's page — inside its children. FILTER-13: compiled with the
+/// lineage `under` reads — so every read through here (FILTER-15's too)
+/// answers `under`.
 pub(super) fn view<'c>(cache: &'c Cache, q: &Filtered) -> View<'c> {
-    let admit = q.lens.admit(cache.cells.keys(), q.status);
-    let view = View::of(&cache.cells, &admit, q.epic.as_deref());
+    let view = Compiled::new(cache, &q.lens, q.status).view(q.epic.as_deref());
     match q.parent.as_deref() {
         None => view,
-        Some(parent) => view.within(|epic| {
-            let seqs = cache.children.in_shortcode(parent, epic);
-            (!seqs.is_empty()).then(|| RoaringBitmap::from_sorted_iter(seqs.iter().copied()).expect("children are sorted"))
-        }),
+        Some(parent) => view.within(|epic| cache.children.in_shortcode(parent, epic).map(|seqs| seqs.bitmap().into_owned())),
     }
 }
 
@@ -235,8 +282,7 @@ impl Store {
     /// the filter admits there. The empty lens is each shortcode's tickets.
     pub fn counts(&self, lens: &Lens) -> Vec<(String, u64)> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        let admit = lens.admit(cache.cells.keys(), None);
-        let out = View::of(&cache.cells, &admit, None).counts().map(|(e, n)| (e.to_string(), n)).collect();
+        let out = Compiled::new(&cache, lens, None).view(None).counts().map(|(e, n)| (e.to_string(), n)).collect();
         out
     }
 
@@ -271,13 +317,12 @@ impl Store {
         let mut shortcodes: Vec<(String, u64)> = Vec::new();
         for (rest, fields) in &distinct {
             let both = Lens::of(&base.and(rest))?;
-            let admit = both.admit(cache.cells.keys(), None);
+            let compiled = Compiled::new(&cache, &both, None);
             let mut by_epic: Vec<(&str, u64)> = Vec::new();
-            for (epic, held) in cache.cells.shortcodes() {
-                let table = admit.of(epic);
+            for (epic, _) in cache.cells.shortcodes() {
                 let mut in_epic = 0;
-                for (cell, bm) in held.iter().filter(|(c, _)| table.get(*c as usize).copied().unwrap_or(false)) {
-                    let (n, key) = (bm.len(), cache.cells.keys()[*cell as usize]);
+                for (cell, n) in compiled.cell_counts(epic) {
+                    let key = cache.cells.keys()[cell as usize];
                     in_epic += n;
                     for field in fields.iter().filter(|f| **f != "in") {
                         let i = FACET_FIELDS.iter().position(|f| f == field).expect("a facet field");
@@ -385,26 +430,50 @@ impl Store {
     /// FILTER-4: a `watch { filter }`'s filter, compiled against the cells
     /// as they stand.
     pub fn watcher(&self, lens: Lens) -> Watcher {
+        self.watcher_in(lens, None)
+    }
+
+    /// FILTER-13: [`Store::watcher`] for a watch in `epic` alone (when one
+    /// is asked) — which a filter asking `under` registers with the store, so
+    /// each write works out its membership.
+    pub fn watcher_in(&self, lens: Lens, epic: Option<&str>) -> Watcher {
+        if !lens.unders().is_empty() {
+            let under = self.unders.open(lens.clone(), epic.map(str::to_string));
+            return Watcher {
+                lens,
+                admit: Admit::compile(&[], std::iter::empty(), |_, _| false),
+                under: Some(under),
+            };
+        }
         let admit = {
             let cache = self.tickets.read().expect("store lock poisoned");
             lens.admit(cache.cells.keys(), None)
         };
-        Watcher { lens, admit }
+        Watcher { lens, admit, under: None }
     }
 }
 
 impl Watcher {
+    /// FILTER-13: this watch's events in a write's [`super::UnderMoves`] —
+    /// none for a filter without `under`, whose membership its cell moves say.
+    pub fn under_membership(&self, moves: &super::UnderMoves) -> Vec<Membership> {
+        self.under.as_ref().and_then(|w| moves.by.get(&w.id())).cloned().unwrap_or_default()
+    }
+
     /// What one write's cell moves are to this filter — in `epic` alone,
     /// when one is asked for: each ticket moved into it (`Entered`) or out
     /// of it (`Left`), in the store's order; or, when there are more than
     /// [`RECOUNT_OVER`] of those, one `Recount` per shortcode they are in,
     /// with the filter's count there as the write left it.
     pub fn membership(&mut self, store: &Store, moves: &Moves, epic: Option<&str>) -> Vec<Membership> {
+        if self.under.is_some() {
+            return Vec::new(); // the write's own `UnderMoved` says it
+        }
         let highest = moves.moves.iter().flat_map(|m| m.from.into_iter().chain([m.to])).max();
         if highest.is_some_and(|c| c as usize >= self.admit.len()) {
             // A cell interned after the compile: compile again — the table
             // only grows, and every id it held means what it meant.
-            *self = store.watcher(self.lens.clone());
+            self.admit = store.watcher(self.lens.clone()).admit;
         }
         let admits = |e: &str, c: u32| self.admit.admits(e, c).unwrap_or(false);
         let moved: Vec<(&CellMove, bool)> = moves

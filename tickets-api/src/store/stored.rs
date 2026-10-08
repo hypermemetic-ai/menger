@@ -1,4 +1,5 @@
 use super::cells::{self, Cells, Key};
+use super::tree;
 use super::{children::Children, db, ids::Ids, ready::Ready, rollup::Rollups, Cache, OrderKey, Row};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -22,7 +23,13 @@ use std::path::Path;
 /// 2¹⁶-sequence container (`cell_bits`), and each one's count
 /// (`cell_counts`). A file in form 3 or older is built again, once, on its
 /// first open, and holds them from then on.
-const FORM: i64 = 4;
+///
+/// FILTER-13 is form 5: the kept tree — each internal ticket's tally of its
+/// descendants by (shortcode, cell) (`tree_tallies`), and the holders of
+/// each list of more than 256 children (`tree_holders`, a row per
+/// container). A file in form 4 or older is built again, once, on its first
+/// open.
+const FORM: i64 = 5;
 
 /// SDLC-11: the columns form 3 adds to the roll-up tables, `(table,
 /// column)` — what a build gives a file from an older form, as it gives one
@@ -86,6 +93,16 @@ const DOCS_COLUMNS: [(&str, &str); 4] = [
 ///   size, and a cell move rewrites two.
 /// - `cell_counts` — FILTER-4: how many tickets each `(epic, cell)` holds,
 ///   a row for each that holds any: what `counts { filter }` sums.
+/// - `tree_tallies` — FILTER-13: per internal ticket (`parent`, a ticket's
+///   id or an id a hand edit names as a parent), how many of its
+///   descendants are in each (`epic`, `cell`), a row for each that is not 0:
+///   what `tree`'s `below` sums, and what a subtree's move takes off one
+///   chain of ancestors and puts on another.
+/// - `tree_holders` — FILTER-13: per parent and shortcode whose list of
+///   children is longer than 256 (`kids`), and per (`epic`, `cell`) some
+///   child's tally holds, the children whose tally holds it — a row per
+///   2¹⁶-sequence container, as `cell_bits` stores one: what a parent's
+///   children under a filter are a union of.
 /// - `derived_state` — one row: which form is stored, and whether it is
 ///   behind the tickets (a seed commits its tickets a chunk at a time and
 ///   their derived state after the last; until then the row says so).
@@ -162,6 +179,23 @@ const SCHEMA: &str = "
             cell INTEGER NOT NULL,
             held INTEGER NOT NULL,
             PRIMARY KEY (epic, cell)
+        ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS tree_tallies (
+            parent TEXT NOT NULL,
+            epic   TEXT NOT NULL,
+            cell   INTEGER NOT NULL,
+            held   INTEGER NOT NULL,
+            PRIMARY KEY (parent, epic, cell)
+        ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS tree_holders (
+            parent TEXT NOT NULL,
+            kids   TEXT NOT NULL,
+            epic   TEXT NOT NULL,
+            cell   INTEGER NOT NULL,
+            hi     INTEGER NOT NULL,
+            card   INTEGER NOT NULL,
+            bits   BLOB NOT NULL,
+            PRIMARY KEY (parent, kids, epic, cell, hi)
         ) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS derived_state (
             one   INTEGER PRIMARY KEY CHECK (one = 1),
@@ -288,6 +322,8 @@ pub(super) struct Form {
     /// FILTER-4: the cell table, every container and every count, by the
     /// ids the cells were interned with.
     pub(super) cells: cells::Stored,
+    /// FILTER-13: every tally entry and every holder container, by those ids.
+    pub(super) tree: tree::Stored,
 }
 
 /// One write's change to the stored derived state — the rows its own
@@ -323,6 +359,18 @@ pub(super) struct Changes {
     pub(super) cell_bits: Vec<((String, u32, u32), Option<(u64, Vec<u8>)>)>,
     /// FILTER-4: each `(epic, cell)` count that moves; 0: the row goes.
     pub(super) cell_counts: Vec<((String, u32), u64)>,
+    /// FILTER-13: the whole kept tree, written over what is stored — a move
+    /// off a hand-edited cycle, which builds it again.
+    pub(super) tree_all: Option<tree::Stored>,
+    /// FILTER-13: each list whose stored holders all go, `(parent, kids)`,
+    /// before any holder row is written.
+    pub(super) tree_cleared: Vec<(String, String)>,
+    /// FILTER-13: each holder container a write rewrites, as it is after —
+    /// `None`: left empty, the row goes.
+    pub(super) tree_holders: Vec<(tree::HolderKey, Option<(u64, Vec<u8>)>)>,
+    /// FILTER-13: each tally entry that moves, `(parent, epic, cell)`, with
+    /// its count after; 0: the row goes.
+    pub(super) tree_tallies: Vec<((String, String, u32), u32)>,
 }
 
 impl Changes {
@@ -401,8 +449,68 @@ impl Changes {
         for (at, held) in &self.cell_counts {
             put_cell_count(conn, at, *held)?;
         }
+        if let Some(all) = &self.tree_all {
+            write_tree(conn, all)?;
+        }
+        for (parent, kids) in &self.tree_cleared {
+            conn.prepare_cached("DELETE FROM tree_holders WHERE parent = ?1 AND kids = ?2")?
+                .execute(params![parent, kids])?;
+        }
+        for (at, row) in &self.tree_holders {
+            put_holder(conn, at, row.as_ref())?;
+        }
+        for (at, held) in &self.tree_tallies {
+            put_tally(conn, at, *held)?;
+        }
         Ok(())
     }
+}
+
+/// FILTER-13: one tally entry; 0 is no row.
+fn put_tally(conn: &Connection, (parent, epic, cell): &(String, String, u32), held: u32) -> rusqlite::Result<()> {
+    if held == 0 {
+        conn.prepare_cached("DELETE FROM tree_tallies WHERE parent = ?1 AND epic = ?2 AND cell = ?3")?
+            .execute(params![parent, epic, cell])?;
+    } else {
+        conn.prepare_cached(
+            "INSERT INTO tree_tallies (parent, epic, cell, held) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (parent, epic, cell) DO UPDATE SET held = excluded.held",
+        )?
+        .execute(params![parent, epic, cell, held])?;
+    }
+    Ok(())
+}
+
+/// FILTER-13: one holder container as a write leaves it; `None` is no row.
+fn put_holder(conn: &Connection, (parent, kids, epic, cell, hi): &tree::HolderKey, row: Option<&(u64, Vec<u8>)>) -> rusqlite::Result<()> {
+    match row {
+        None => {
+            conn.prepare_cached(
+                "DELETE FROM tree_holders WHERE parent = ?1 AND kids = ?2 AND epic = ?3 AND cell = ?4 AND hi = ?5",
+            )?
+            .execute(params![parent, kids, epic, cell, hi])?;
+        }
+        Some((card, bits)) => {
+            conn.prepare_cached(
+                "INSERT INTO tree_holders (parent, kids, epic, cell, hi, card, bits) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT (parent, kids, epic, cell, hi) DO UPDATE SET card = excluded.card, bits = excluded.bits",
+            )?
+            .execute(params![parent, kids, epic, cell, hi, card, bits])?;
+        }
+    }
+    Ok(())
+}
+
+/// FILTER-13: the kept tree written over whatever is stored.
+fn write_tree(conn: &Connection, t: &tree::Stored) -> rusqlite::Result<()> {
+    conn.execute_batch("DELETE FROM tree_tallies; DELETE FROM tree_holders;")?;
+    for (at, held) in &t.tallies {
+        put_tally(conn, at, *held)?;
+    }
+    for (at, row) in &t.holders {
+        put_holder(conn, at, Some(row))?;
+    }
+    Ok(())
 }
 
 /// FILTER-4: one cell of the table.
@@ -687,6 +795,7 @@ pub(super) fn write_all(conn: &Connection, form: &Form) -> rusqlite::Result<()> 
     for (at, held) in &form.cells.counts {
         put_cell_count(conn, at, *held)?;
     }
+    write_tree(conn, &form.tree)?;
     for (key, held) in &form.statuses {
         put_status(conn, key, *held)?;
     }
@@ -749,7 +858,106 @@ pub(super) fn read(conn: &Connection) -> rusqlite::Result<Form> {
     form.counts = read_counts(conn)?;
     form.unsatisfied = read_unsatisfied(conn)?;
     form.cells = read_cells(conn)?;
+    form.tree = read_tree(conn)?;
     Ok(form)
+}
+
+/// FILTER-13: every tally entry and every holder container, as stored —
+/// what `--verify-derived` compares.
+fn read_tree(conn: &Connection) -> rusqlite::Result<tree::Stored> {
+    let mut out = tree::Stored::default();
+    let mut stmt = conn.prepare("SELECT parent, epic, cell, held FROM tree_tallies")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        out.tallies.insert((r.get(0)?, r.get(1)?, r.get(2)?), r.get(3)?);
+    }
+    let mut stmt = conn.prepare("SELECT parent, kids, epic, cell, hi, card, bits FROM tree_holders")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        out.holders.insert((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?), (r.get(5)?, r.get(6)?));
+    }
+    Ok(out)
+}
+
+/// FILTER-13: the kept tree as the cache holds it, from what is stored, into
+/// the children index read just before it: each tally into its parent's
+/// entry, each holder bitmap — its containers gathered, each checked — into
+/// its list. A row whose parent has no children, or whose list is not one
+/// kept as a bitmap, fails the open, naming it: the file is not what this
+/// build wrote.
+fn load_tree(conn: &Connection, children: &mut Children) -> anyhow::Result<(usize, usize)> {
+    let mut stmt = conn.prepare("SELECT parent, epic, cell, held FROM tree_tallies ORDER BY parent, epic, cell")?;
+    let mut rows = stmt.query([])?;
+    let mut tallied = 0;
+    let mut current: Option<(String, Vec<(u32, u32)>)> = None;
+    let install = |children: &mut Children, (parent, mut t): (String, Vec<(u32, u32)>)| -> anyhow::Result<()> {
+        t.sort_unstable();
+        t.shrink_to_fit();
+        let kids = children
+            .kids_mut(&parent)
+            .ok_or_else(|| anyhow::anyhow!("tree_tallies {parent}: no ticket names it as a parent"))?;
+        kids.tally = t;
+        Ok(())
+    };
+    while let Some(r) = rows.next()? {
+        let parent = r.get_ref(0)?.as_str()?;
+        let (epic, cell, held): (&str, u32, u32) = (r.get_ref(1)?.as_str()?, r.get(2)?, r.get(3)?);
+        let gg = tree::g(children.names_mut().intern(epic), cell);
+        match &mut current {
+            Some((p, t)) if p == parent => t.push((gg, held)),
+            _ => {
+                if let Some(done) = current.take() {
+                    install(children, done)?;
+                }
+                tallied += 1;
+                current = Some((parent.to_string(), vec![(gg, held)]));
+            }
+        }
+    }
+    if let Some(done) = current {
+        install(children, done)?;
+    }
+    let mut stmt = conn.prepare("SELECT parent, kids, epic, cell, hi, card, bits FROM tree_holders ORDER BY parent, kids, epic, cell, hi")?;
+    let mut rows = stmt.query([])?;
+    let mut bitmaps = 0;
+    let mut current: Option<((String, String, u32), roaring::RoaringBitmap)> = None;
+    let place = |children: &mut Children, ((parent, kids, gg), bm): ((String, String, u32), roaring::RoaringBitmap)| -> anyhow::Result<()> {
+        let many = children
+            .kids_mut(&parent)
+            .and_then(|k| k.list_mut(&kids))
+            .and_then(super::children::Seqs::many_mut)
+            .ok_or_else(|| anyhow::anyhow!("tree_holders {parent} {kids}: not a list of more than 256 children"))?;
+        many.holders.push((gg, bm));
+        Ok(())
+    };
+    while let Some(r) = rows.next()? {
+        let (parent, kids, epic) = (r.get_ref(0)?.as_str()?, r.get_ref(1)?.as_str()?, r.get_ref(2)?.as_str()?);
+        let (cell, hi, card): (u32, u32, u64) = (r.get(3)?, r.get(4)?, r.get(5)?);
+        let lows = cells::decode(card, r.get_ref(6)?.as_blob()?)
+            .map_err(|e| anyhow::anyhow!("tree_holders {parent} {kids} {epic} cell {cell} container {hi}: {e}"))?;
+        let gg = tree::g(children.names_mut().intern(epic), cell);
+        let same = matches!(&current, Some(((p, k, x), _)) if p == parent && k == kids && *x == gg);
+        if !same {
+            if let Some(done) = current.take() {
+                place(children, done)?;
+            }
+            bitmaps += 1;
+            current = Some(((parent.to_string(), kids.to_string(), gg), roaring::RoaringBitmap::new()));
+        }
+        let bm = &mut current.as_mut().expect("set above").1;
+        bm.extend(lows.into_iter().map(|low| (hi << 16) | u32::from(low)));
+    }
+    if let Some(done) = current {
+        place(children, done)?;
+    }
+    for (_, kids) in children.every_mut() {
+        for (_, seqs) in kids.lists_mut() {
+            if let Some(many) = seqs.many_mut() {
+                many.holders.sort_by_key(|(gg, _)| *gg);
+            }
+        }
+    }
+    Ok((tallied, bitmaps))
 }
 
 /// A status as stored, as the `&'static str` it is kept under.
@@ -958,8 +1166,10 @@ pub(super) fn load(
     let started = std::time::Instant::now();
     let form = read_tables(conn)?;
     let tables = started.elapsed();
-    let children = read_children(conn)?;
+    let mut children = read_children(conn)?;
     let indexed = started.elapsed();
+    let (tallied, holders) = load_tree(conn, &mut children)?;
+    let treed = started.elapsed();
     let members = read_ready(conn)?;
     let readied = started.elapsed();
     let cells = load_cells(conn)?;
@@ -974,18 +1184,20 @@ pub(super) fn load(
          dangling forward references, {groups} roll-up groups ({cross} cross trees, {marks} marks) \
          and the status counts of {} shortcodes in {:.1} ms, the children of {parents} parents \
          from the index in {:.1} ms, a ready set of {} from its index in {:.1} ms (and the \
-         unsatisfied blockers of {} tickets with their rows), and {} cells' {} bitmaps of {} \
-         tickets from their containers (with the tables); nothing rebuilt",
+         unsatisfied blockers of {} tickets with their rows), {} cells' {} bitmaps of {} \
+         tickets from their containers (with the tables), and the kept tree's tallies of \
+         {tallied} parents and {holders} holder bitmaps in {:.1} ms (FILTER-13); nothing rebuilt",
         started.elapsed().as_secs_f64() * 1000.0,
         ready.shortcodes(),
         tables.as_secs_f64() * 1000.0,
         (indexed - tables).as_secs_f64() * 1000.0,
         ready.size(),
-        (readied - indexed).as_secs_f64() * 1000.0,
+        (readied - treed).as_secs_f64() * 1000.0,
         ready.blocked(),
         cells.keys().len(),
         cells.bitmaps(),
         cells.tickets(),
+        (treed - indexed).as_secs_f64() * 1000.0,
     );
     Ok(Cache::from_parts(rows, ids, rollups, children, ready, cells))
 }
@@ -1007,6 +1219,10 @@ pub enum Verdict {
         /// FILTER-4: the cells occupied, and their (shortcode, cell) bitmaps.
         cells: usize,
         bitmaps: usize,
+        /// FILTER-13: the tally entries of the kept tree, and its holder
+        /// containers.
+        tallies: usize,
+        holders: usize,
     },
     /// Where they differ, one line each, naming the structure and the key.
     Differs(Vec<String>),
@@ -1082,6 +1298,8 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         ready: scanned.ready.size(),
         cells: scanned.cells.keys().len(),
         bitmaps: scanned.cells.bitmaps(),
+        tallies: want.tree.tallies.len(),
+        holders: want.tree.holders.len(),
     })
 }
 
@@ -1135,6 +1353,13 @@ pub(super) fn compare(stored: &Form, scanned: &Form) -> Vec<String> {
     diff(&mut out, "status count", &statuses(&stored.statuses), &statuses(&scanned.statuses), |n| n.to_string());
     diff(&mut out, "ready count", &stored.ready, &scanned.ready, |n| n.to_string());
     out.extend(cell_differences(&stored.cells, &scanned.cells));
+    // FILTER-13: the kept tree, each cell named as what it is on its side.
+    out.extend(tree::differences(
+        &stored.tree,
+        &scanned.tree,
+        |c| stored.cells.keys.get(&c).map(Key::to_string),
+        |c| scanned.cells.keys.get(&c).map(Key::to_string),
+    ));
     out
 }
 

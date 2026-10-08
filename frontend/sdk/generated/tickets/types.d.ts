@@ -716,7 +716,19 @@ export interface TicketsEventError {
     type: 'error';
     message: string;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError;
+/** FILTER-13: one row of `tree` — a parent's child, or a shortcode's top
+row, that matches the filter or holds a match below it: `matched`
+whether it matches itself, `below` how many matches are strictly
+under it (its whole subtree, whatever the nav shows). A row that only
+holds matches has `matched: false` and `below` above 0. Yielded in
+the store's order, then one `page`. */
+export interface TicketsEventNode {
+    type: 'node';
+    below: number;
+    matched: boolean;
+    summary: TicketSummary;
+}
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventNode;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -752,3 +764,4 @@ export declare function isTicketsEventDanglingBlocker(e: TicketsEvent): e is Tic
 export declare function isTicketsEventMember(e: TicketsEvent): e is TicketsEventMember;
 export declare function isTicketsEventNotFound(e: TicketsEvent): e is TicketsEventNotFound;
 export declare function isTicketsEventError(e: TicketsEvent): e is TicketsEventError;
+export declare function isTicketsEventNode(e: TicketsEvent): e is TicketsEventNode;

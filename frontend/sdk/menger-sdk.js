@@ -502,6 +502,10 @@
       const stream = this.rpc.call("tickets.set_status", { id, status });
       yield* extractData(stream);
     }
+    async* tree(filter, after, epic, limit, parent) {
+      const stream = this.rpc.call("tickets.tree", { after, epic, filter, limit, parent });
+      yield* extractData(stream);
+    }
     async* unlinkCommits(commits, id) {
       const stream = this.rpc.call("tickets.unlink_commits", { commits, id });
       yield* extractData(stream);

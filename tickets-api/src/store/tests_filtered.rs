@@ -105,6 +105,12 @@ pub(super) struct Plain {
     pub(super) rows: Vec<Row>,
     pub(super) cells: Vec<Key>,
     at: HashMap<String, usize>,
+    /// FILTER-13: each row's lineage, as FILTER-10's `under` reads it: its
+    /// id, its strict ancestors' ids (the lineage's rule: each once, the
+    /// chain ending at an id that names no ticket, or where it meets one
+    /// met already or the row itself), its shortcode, and the shortcodes
+    /// hosting it (each shortcode's host as the roll-ups settle it, MNG-14).
+    pub(super) lineage: Vec<Vec<String>>,
 }
 
 impl Plain {
@@ -113,7 +119,54 @@ impl Plain {
         let by = scanned(&rows);
         let cells = rows.iter().map(|t| by[&OrderKey::of(t)]).collect();
         let at = rows.iter().enumerate().map(|(i, t)| (t.id.clone(), i)).collect();
-        Self { rows, cells, at }
+        let by_id: HashMap<&str, &Row> = rows.iter().map(|t| (t.id.as_str(), t)).collect();
+        let hosts: HashMap<String, Vec<String>> = {
+            let cache = store.tickets.read().unwrap();
+            let epics: std::collections::BTreeSet<&str> = rows.iter().map(|t| t.epic.as_str()).collect();
+            epics
+                .into_iter()
+                .map(|e| {
+                    let mut chain: Vec<String> = Vec::new();
+                    let mut cur = e.to_string();
+                    while let Some(h) = cache.rollups.host(&cur) {
+                        let Some(he) = by_id.get(h).map(|r| r.epic.clone()) else { break };
+                        if he == e || chain.contains(&he) {
+                            break;
+                        }
+                        chain.push(he.clone());
+                        cur = he;
+                    }
+                    (e.to_string(), chain)
+                })
+                .collect()
+        };
+        let lineage = rows
+            .iter()
+            .map(|t| {
+                let mut l = vec![t.id.clone()];
+                l.extend(super::tests_tree::ancestors_of(&by_id, t));
+                l.push(t.epic.clone());
+                l.extend(hosts[&t.epic].iter().cloned());
+                l
+            })
+            .collect();
+        Self { rows, cells, at, lineage }
+    }
+
+    /// FILTER-13: what the reference evaluator reads of row `t` (cell `k`) —
+    /// its whole lineage included.
+    pub(super) fn facts(&self, t: &Row, k: Key) -> crate::filter::Facts {
+        crate::filter::Facts {
+            id: t.id.clone(),
+            epic: t.epic.clone(),
+            title: t.title.clone(),
+            status: t.status,
+            kind: t.kind,
+            severity: t.severity,
+            blocked: k.blocked(),
+            has_commits: !t.commits.is_empty(),
+            lineage: self.at.get(&t.id).map_or_else(|| vec![t.id.clone(), t.epic.clone()], |i| self.lineage[*i].clone()),
+        }
     }
 
     /// The matches of the filter, `list`'s parameters beside it, by testing

@@ -26,6 +26,8 @@ use crate::store::{
     Status, Step, Store, StoreError, Walk,
 };
 #[cfg(feature = "server")]
+use crate::store::{TreePage, TreeQuery};
+#[cfg(feature = "server")]
 use crate::types::{AnswerSource, InputState};
 // FILTER-15: the reads that take the lens.
 #[cfg(feature = "server")]
@@ -179,7 +181,44 @@ fn wire_event(change: Change) -> Option<TicketsEvent> {
         // way here; the wire carries the input.
         Change::InputChanged { input, .. } => TicketsEvent::InputChanged { input },
         Change::CellsMoved { .. } => return None,
+        // FILTER-13: each `watch { filter }` asking `under` takes its own.
+        Change::UnderMoved { .. } => return None,
     })
+}
+
+/// FILTER-13: one page of `tree` as its events — a `node` per row, then one
+/// `page` (no `first`); a refusal is the one in-band `error`, and nothing
+/// else.
+#[cfg(feature = "server")]
+fn tree_events(page: Result<TreePage, StoreError>) -> Vec<TicketsEvent> {
+    match page {
+        Err(e) => vec![TicketsEvent::Error { message: e.to_string() }],
+        Ok(page) => page
+            .nodes
+            .into_iter()
+            .map(|n| TicketsEvent::Node {
+                summary: n.summary,
+                matched: n.matched,
+                below: n.below,
+            })
+            .chain(std::iter::once(TicketsEvent::Page {
+                next: page.next,
+                remaining: page.remaining,
+                first: None,
+            }))
+            .collect(),
+    }
+}
+
+/// FILTER-4 / FILTER-13: a `watch { filter }`'s membership events as the
+/// wire carries them.
+#[cfg(feature = "server")]
+fn membership_event(m: Membership) -> TicketsEvent {
+    match m {
+        Membership::Entered { id, epic, seq } => TicketsEvent::Entered { id, epic, seq },
+        Membership::Left { id, epic, seq } => TicketsEvent::Left { id, epic, seq },
+        Membership::Recount { epic, held } => TicketsEvent::Recount { epic, held },
+    }
 }
 
 /// A write's own answer: the change it made, which is always one that
@@ -1084,6 +1123,54 @@ impl Tickets {
         }
     }
 
+    /// FILTER-13: the nav under a filter — the rows the nav would show at an
+    /// address unfiltered (`parent`: that ticket's children, as `list {
+    /// parent }` gives them; `epic`: the shortcode's top level — its root,
+    /// or, for a shortcode with none, its tickets as `list { epic }` gives
+    /// them), only those that match `filter` or hold a match below them, in
+    /// the store's order. One `Node { summary, matched, below }` per row —
+    /// `matched` whether the row matches, `below` how many matches are
+    /// strictly under it — then one `Page { next, remaining }`, paged as
+    /// `list` pages (`after` a ticket id, at most `limit`). Answered from the
+    /// kept tree: a parent's children under a filter are (C(P) ∩ M) ∪ the
+    /// holders of every admitted cell, and `below` a sum over the row's
+    /// tally — no subtree is walked. Exactly one of `parent` and `epic`; a
+    /// filter not taken, or one that asks `text`, is one in-band `error` and
+    /// nothing else.
+    #[plexus_macros::method(
+        description = "The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page",
+        params(
+            parent = "Whose children, e.g. FILTER-9 (or give epic)",
+            epic = "A shortcode's top level: its root, or its tickets when it has none (or give parent)",
+            filter = "A filter, e.g. 'status Ready and under SCALE' (FILTER-3's language; empty: every ticket)",
+            after = "Cursor: start strictly after this ticket id (optional)",
+            limit = "At most this many rows; the page event carries the next cursor (optional)"
+        )
+    )]
+    pub async fn tree(
+        &self,
+        parent: Option<String>,
+        epic: Option<String>,
+        filter: String,
+        after: Option<String>,
+        limit: Option<u32>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            let lens = match Lens::parse(&filter) {
+                Ok(lens) => lens,
+                Err(e) => {
+                    yield TicketsEvent::Error { message: e.to_string() };
+                    return;
+                }
+            };
+            let q = TreeQuery { parent, epic, lens };
+            for ev in tree_events(store.tree_page(&q, after.as_deref(), limit)) {
+                yield ev;
+            }
+        }
+    }
+
     /// WAVE-4: the order of work, for a board. Yields one `Placed` per
     /// ticket of the shortcodes `epics` (case-insensitive; one with no
     /// tickets contributes nothing) whose kind is in `kinds` — default
@@ -1263,7 +1350,7 @@ impl Tickets {
         // carries every change and each write's cell moves after them.
         let filtered = (filter.is_some() || membership).then(|| {
             let lens = filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all()));
-            (self.store.subscribe_filtered(), lens.map(|lens| self.store.watcher(lens)))
+            (self.store.subscribe_filtered(), lens.map(|lens| self.store.watcher_in(lens, epic.as_deref())))
         });
         let store = Arc::clone(&self.store);
         let plain = filtered.is_none().then(|| self.store.subscribe());
@@ -1280,11 +1367,14 @@ impl Tickets {
                     match rx.recv().await {
                         Ok(Change::CellsMoved { moves }) => {
                             for m in watcher.membership(&store, &moves, epic.as_deref()) {
-                                yield match m {
-                                    Membership::Entered { id, epic, seq } => TicketsEvent::Entered { id, epic, seq },
-                                    Membership::Left { id, epic, seq } => TicketsEvent::Left { id, epic, seq },
-                                    Membership::Recount { epic, held } => TicketsEvent::Recount { epic, held },
-                                };
+                                yield membership_event(m);
+                            }
+                        }
+                        // FILTER-13: a filter asking `under` — what the write
+                        // worked out for this watch.
+                        Ok(Change::UnderMoved { moves }) => {
+                            for m in watcher.under_membership(&moves) {
+                                yield membership_event(m);
                             }
                         }
                         Ok(change) => {
