@@ -694,6 +694,16 @@ export interface TicketsEventDanglingBlocker {
     type: 'dangling_blocker';
     id: string;
 }
+/** FILTER-15: whether a filter admits one ticket (yielded by `member`,
+one per id asked, in the order asked): `id` as it was asked,
+`matched` whether the filter admits the ticket it names — `false`
+for an id that names no ticket. One lookup in the filter's admitted
+cells, never a test of the ticket. */
+export interface TicketsEventMember {
+    type: 'member';
+    id: string;
+    matched: boolean;
+}
 /** Lookup miss. */
 export interface TicketsEventNotFound {
     type: 'not_found';
@@ -706,7 +716,7 @@ export interface TicketsEventError {
     type: 'error';
     message: string;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventNotFound | TicketsEventError;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -739,5 +749,6 @@ export declare function isTicketsEventInput(e: TicketsEvent): e is TicketsEventI
 export declare function isTicketsEventInputChanged(e: TicketsEvent): e is TicketsEventInputChanged;
 export declare function isTicketsEventBlocker(e: TicketsEvent): e is TicketsEventBlocker;
 export declare function isTicketsEventDanglingBlocker(e: TicketsEvent): e is TicketsEventDanglingBlocker;
+export declare function isTicketsEventMember(e: TicketsEvent): e is TicketsEventMember;
 export declare function isTicketsEventNotFound(e: TicketsEvent): e is TicketsEventNotFound;
 export declare function isTicketsEventError(e: TicketsEvent): e is TicketsEventError;

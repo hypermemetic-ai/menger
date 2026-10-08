@@ -4350,6 +4350,14 @@ pub use cells::{CellMove, Moves, RECOUNT_OVER};
 mod filtered;
 pub use filtered::{Filtered, Lens, Membership, Watcher};
 
+/// FILTER-15: every read takes the lens — `find { query, filter }`,
+/// `inputs { filter }`, `ready_set { filter }` and `member { ids, filter }`:
+/// membership one lookup in the admitted bitmaps, `find` testing only the
+/// candidates the cells admit, the ready set a filtered page of `ready and
+/// (filter)`. Never a walk of the store.
+mod lensed;
+pub use lensed::{narrowing, narrowing_lens, ready_and, MEMBER_MAX};
+
 /// SCALE-28: the derived state, stored — the tables beside the tickets,
 /// what a write's transaction writes to them ([`stored::Changes`]), a start
 /// reads from them, a first open builds into them, and `--verify-derived`
@@ -4482,3 +4490,9 @@ mod tests_filtered;
 /// examples.
 #[cfg(test)]
 mod tests_language;
+
+/// FILTER-15: `find`, `inputs`, `ready_set` and `member` under random
+/// filters, held to the language's evaluator on every row after hundreds of
+/// random writes; each without a filter exactly today's answer.
+#[cfg(test)]
+mod tests_lensed;
