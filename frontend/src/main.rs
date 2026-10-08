@@ -228,6 +228,7 @@ mod components;
 mod counts;
 mod dom;
 mod filter;
+mod flat;
 mod frame;
 mod inputs;
 mod inputs_page;
