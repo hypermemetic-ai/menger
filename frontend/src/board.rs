@@ -279,6 +279,361 @@ fn holes(ext: &Extents, after: Option<&str>, page: &[Key]) -> Vec<Key> {
 }
 
 // ---------------------------------------------------------------------
+// FILTER-12: where every match sits — pure, so a native test can pin it.
+
+/// The board's arithmetic under a filter: `counts { filter }` — each
+/// shortcode's number of matches, in the store's order — and how many come
+/// before each. SCALE-26's [`Extents`] with counts in place of last
+/// sequences: their sum is the board's extent, and position `p` is the
+/// `rank`-th match of shortcode E where `start(E) <= p < start(E) + held(E)`
+/// ([`Matches::locate`]). Which sequence that is, the server knows
+/// (`list { filter, at: p }` selects it); the board knows it of the rows it
+/// holds ([`Ranked`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Matches {
+    runs: Vec<(String, usize)>,
+    before: Vec<usize>,
+    n: usize,
+}
+
+impl Matches {
+    /// From `counts`' answer: a shortcode with no match has no run; sorted
+    /// into the store's order (the server's already), a shortcode said twice
+    /// counted once, its last word.
+    pub(crate) fn new(counts: impl IntoIterator<Item = (String, u64)>) -> Self {
+        let mut runs: Vec<(String, usize)> = Vec::new();
+        for (epic, held) in counts {
+            match runs.iter_mut().find(|(e, _)| *e == epic) {
+                Some(run) => run.1 = held as usize,
+                None => runs.push((epic, held as usize)),
+            }
+        }
+        runs.retain(|(_, held)| *held > 0);
+        runs.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut m = Self { runs, before: Vec::new(), n: 0 };
+        m.sum();
+        m
+    }
+
+    fn sum(&mut self) {
+        let mut acc = 0usize;
+        self.before = self
+            .runs
+            .iter()
+            .map(|(_, held)| {
+                let b = acc;
+                acc += *held;
+                b
+            })
+            .collect();
+        self.n = acc;
+    }
+
+    fn find(&self, epic: &str) -> Result<usize, usize> {
+        self.runs.binary_search_by(|(e, _)| e.as_str().cmp(epic))
+    }
+
+    /// Every match: the board's extent under the filter.
+    pub(crate) fn n(&self) -> usize {
+        self.n
+    }
+
+    /// Each shortcode's matches, in the store's order (FILTER-14's nav sums
+    /// them along the hosts).
+    #[allow(dead_code)] // FILTER-14
+    pub(crate) fn runs(&self) -> &[(String, usize)] {
+        &self.runs
+    }
+
+    /// Shortcode `epic`'s matches.
+    pub(crate) fn held(&self, epic: &str) -> usize {
+        self.find(epic).map_or(0, |i| self.runs[i].1)
+    }
+
+    /// How many matches come before `epic`'s — where its first sits, or
+    /// would.
+    pub(crate) fn start(&self, epic: &str) -> usize {
+        match self.find(epic) {
+            Ok(i) => self.before[i],
+            Err(i) => self.before.get(i).copied().unwrap_or(self.n),
+        }
+    }
+
+    /// Position `p` as (shortcode, rank among its matches) — `None` past the
+    /// end.
+    pub(crate) fn locate(&self, p: usize) -> Option<(&str, usize)> {
+        if p >= self.n {
+            return None;
+        }
+        let i = self.before.partition_point(|b| *b <= p) - 1;
+        Some((self.runs[i].0.as_str(), p - self.before[i]))
+    }
+
+    /// Where the `rank`-th match of `epic` sits — `None` past its last.
+    pub(crate) fn pos(&self, epic: &str, rank: usize) -> Option<usize> {
+        let i = self.find(epic).ok()?;
+        (rank < self.runs[i].1).then(|| self.before[i] + rank)
+    }
+
+    /// `entered`: one more match in `epic` (a new shortcode lands at its
+    /// place in the order).
+    pub(crate) fn entered(&mut self, epic: &str) {
+        match self.find(epic) {
+            Ok(i) => self.runs[i].1 += 1,
+            Err(i) => self.runs.insert(i, (epic.to_string(), 1)),
+        }
+        self.sum();
+    }
+
+    /// `left`: one fewer in `epic` — never below none.
+    pub(crate) fn left(&mut self, epic: &str) {
+        if let Ok(i) = self.find(epic) {
+            self.runs[i].1 -= 1;
+            if self.runs[i].1 == 0 {
+                self.runs.remove(i);
+            }
+            self.sum();
+        }
+    }
+
+    /// `recount`: `epic`'s matches are `held`, as the write left them.
+    pub(crate) fn recount(&mut self, epic: &str, held: u64) {
+        let held = held as usize;
+        match (self.find(epic), held) {
+            (Ok(i), 0) => {
+                self.runs.remove(i);
+            }
+            (Ok(i), h) => self.runs[i].1 = h,
+            (Err(_), 0) => return,
+            (Err(i), h) => self.runs.insert(i, (epic.to_string(), h)),
+        }
+        self.sum();
+    }
+}
+
+/// What the board holds under a filter: its rows by key, each with its rank
+/// among its shortcode's matches — it sits at `start(epic) + rank`. `T` is
+/// what a row carries (the id and the row cache's signal, in the app).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Ranked<T> {
+    rows: BTreeMap<Key, (T, usize)>,
+}
+
+impl<T> Default for Ranked<T> {
+    fn default() -> Self {
+        Self { rows: BTreeMap::new() }
+    }
+}
+
+/// Where an `entered` ticket landed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Landed {
+    /// It was held already — a member before: nothing moved.
+    Held,
+    /// Its position, when the rows held around it say it (`None`: they do
+    /// not), and its rank there; `beside`: a row the board holds is next to
+    /// it — inside a held stretch, so it is held too.
+    At { pos: Option<usize>, rank: Option<usize>, beside: bool },
+}
+
+/// A page that does not fit what the board knows: its rows are not where
+/// the counts put them, or its total is not theirs — the counts are stale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Stale;
+
+impl<T> Ranked<T> {
+    pub(crate) fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub(crate) fn has(&self, k: &Key) -> bool {
+        self.rows.contains_key(k)
+    }
+
+    /// The row held under `k`.
+    pub(crate) fn get(&self, k: &Key) -> Option<&T> {
+        self.rows.get(k).map(|(t, _)| t)
+    }
+
+    /// Where the row held under `k` sits.
+    pub(crate) fn pos_of(&self, m: &Matches, k: &Key) -> Option<usize> {
+        let (_, rank) = self.rows.get(k)?;
+        m.pos(&k.0, *rank)
+    }
+
+    /// The rows of shortcode `epic`, in its order.
+    fn of(&self, epic: &str) -> impl DoubleEndedIterator<Item = (&Key, &(T, usize))> {
+        let lo: Key = (epic.to_string(), 0);
+        let hi: Key = (epic.to_string(), u32::MAX);
+        self.rows.range(lo..=hi)
+    }
+
+    /// The row held at position `p`.
+    pub(crate) fn at(&self, m: &Matches, p: usize) -> Option<(&Key, &T)> {
+        let (epic, rank) = m.locate(p)?;
+        self.of(epic).find(|(_, (_, r))| *r == rank).map(|(k, (t, _))| (k, t))
+    }
+
+    /// The rows held in `lo..hi`, by position — each position once (a row
+    /// whose rank a `recount` left stale yields to the one before it).
+    pub(crate) fn window(&self, m: &Matches, lo: usize, hi: usize) -> Vec<(usize, &Key, &T)> {
+        let mut out: Vec<(usize, &Key, &T)> = Vec::new();
+        for (k, (t, rank)) in &self.rows {
+            let Some(p) = m.pos(&k.0, *rank) else { continue };
+            if p < lo || p >= hi || out.last().is_some_and(|(q, _, _)| *q >= p) {
+                continue;
+            }
+            out.push((p, k, t));
+        }
+        out
+    }
+
+    /// The first and the last position of `lo..hi` the board does not hold —
+    /// what one page must bring.
+    pub(crate) fn missing(&self, m: &Matches, lo: usize, hi: usize) -> Option<(usize, usize)> {
+        let hi = hi.min(m.n());
+        let held: BTreeSet<usize> = self.window(m, lo, hi).into_iter().map(|(p, _, _)| p).collect();
+        let first = (lo..hi).find(|p| !held.contains(p))?;
+        let last = (first..hi).rev().find(|p| !held.contains(p))?;
+        Some((first, last))
+    }
+
+    /// `entered { epic, seq }`, applied: one more match in its shortcode, and
+    /// every held row of the shortcode after it one rank further. Where it
+    /// lands is known when the rows around it are held: the row before it in
+    /// its shortcode and the one at the next rank (or the shortcode's last);
+    /// the first of the shortcode at rank 0; or a shortcode with no match yet.
+    pub(crate) fn entered(&mut self, m: &mut Matches, epic: &str, seq: u32) -> Landed {
+        let key: Key = (epic.to_string(), seq);
+        if self.rows.contains_key(&key) {
+            return Landed::Held;
+        }
+        let count = m.held(epic);
+        let before = self.of(epic).rev().find(|(k, _)| k.1 < seq).map(|(_, (_, r))| *r);
+        let after = self.of(epic).find(|(k, _)| k.1 > seq).map(|(_, (_, r))| *r);
+        let rank = match (before, after) {
+            _ if count == 0 => Some(0),
+            (Some(b), _) if b + 1 == count => Some(b + 1),
+            (Some(b), Some(a)) if a == b + 1 => Some(b + 1),
+            (None, Some(0)) => Some(0),
+            _ => None,
+        };
+        m.entered(epic);
+        for (k, (_, r)) in self.rows.iter_mut() {
+            if k.0 == epic && k.1 > seq {
+                *r += 1;
+            }
+        }
+        let pos = rank.and_then(|r| m.pos(epic, r));
+        let beside = pos.is_some_and(|p| {
+            let held = |q: usize| self.at(m, q).is_some();
+            (p > 0 && held(p - 1)) || held(p + 1)
+        });
+        Landed::At { pos, rank, beside }
+    }
+
+    /// Hold `t` under `k` at `rank` (what an `entered` found beside a held
+    /// row, or a page brought).
+    pub(crate) fn insert(&mut self, k: Key, t: T, rank: usize) {
+        self.rows.insert(k, (t, rank));
+    }
+
+    /// `left { epic, seq }`, applied: one fewer match in its shortcode, its
+    /// row dropped (handed back, to be released), and every held row of the
+    /// shortcode after it one rank nearer.
+    pub(crate) fn left(&mut self, m: &mut Matches, epic: &str, seq: u32) -> Option<T> {
+        m.left(epic);
+        let gone = self.rows.remove(&(epic.to_string(), seq)).map(|(t, _)| t);
+        for (k, (_, r)) in self.rows.iter_mut() {
+            if k.0 == epic && k.1 > seq {
+                *r = r.saturating_sub(1);
+            }
+        }
+        gone
+    }
+
+    /// `recount { epic, held }`, applied to the counts. The ranks of the
+    /// shortcode's rows may be stale until the window is asked again; they
+    /// keep their rows (and their DOM) meanwhile, and [`Ranked::window`]
+    /// draws each position once.
+    pub(crate) fn recount(&mut self, m: &mut Matches, epic: &str, held: u64) {
+        m.recount(epic, held);
+    }
+
+    /// A page `list { filter, at: first }` answered, `total` being its
+    /// `first + rows + remaining`: each row is the match at `first + i`. The
+    /// counts must agree — each row in the shortcode the counts place there,
+    /// the total theirs — or the page is [`Stale`] and nothing is placed.
+    /// Placed: the rows ranked (a row held already re-ranked, keeping its
+    /// payload), and every other held row that claimed one of the page's
+    /// positions, or sits between its first and last row, handed back — it
+    /// is not a match there any more.
+    pub(crate) fn place(&mut self, m: &Matches, first: usize, total: Option<usize>, page: Vec<(Key, T)>) -> Result<Placed<T>, Stale> {
+        if total.is_some_and(|t| t != m.n()) {
+            return Err(Stale);
+        }
+        let mut ranks = Vec::with_capacity(page.len());
+        for (i, (k, _)) in page.iter().enumerate() {
+            match m.locate(first + i) {
+                Some((epic, rank)) if epic == k.0 => ranks.push(rank),
+                _ => return Err(Stale),
+            }
+        }
+        let span = first..first + page.len();
+        let keys: BTreeSet<Key> = page.iter().map(|(k, _)| k.clone()).collect();
+        let (lo, hi) = match (keys.first(), keys.last()) {
+            (Some(a), Some(b)) => (a.clone(), b.clone()),
+            _ => return Ok(Placed { fresh: false, gone: Vec::new() }),
+        };
+        let stale: Vec<Key> = self
+            .rows
+            .iter()
+            .filter(|(k, (_, rank))| {
+                !keys.contains(*k) && ((**k >= lo && **k <= hi) || m.pos(&k.0, *rank).is_some_and(|p| span.contains(&p)))
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        let gone = stale.into_iter().filter_map(|k| self.rows.remove(&k)).map(|(t, _)| t).collect();
+        let mut fresh = false;
+        for ((k, t), rank) in page.into_iter().zip(ranks) {
+            match self.rows.get_mut(&k) {
+                Some(held) => held.1 = rank,
+                None => {
+                    fresh = true;
+                    self.rows.insert(k, (t, rank));
+                }
+            }
+        }
+        Ok(Placed { fresh, gone })
+    }
+
+    /// Every row outside `lo..hi` (or placed nowhere) taken out and handed
+    /// back.
+    pub(crate) fn keep(&mut self, m: &Matches, lo: usize, hi: usize) -> Vec<T> {
+        let gone: Vec<Key> = self
+            .rows
+            .iter()
+            .filter(|(k, (_, rank))| m.pos(&k.0, *rank).is_none_or(|p| p < lo || p >= hi))
+            .map(|(k, _)| k.clone())
+            .collect();
+        gone.into_iter().filter_map(|k| self.rows.remove(&k)).map(|(t, _)| t).collect()
+    }
+
+    /// Every row taken out and handed back.
+    pub(crate) fn clear(&mut self) -> Vec<T> {
+        std::mem::take(&mut self.rows).into_values().map(|(t, _)| t).collect()
+    }
+}
+
+/// What placing a page did: whether it held a row the board did not, and
+/// the rows it displaced (to be released).
+#[derive(Debug, PartialEq)]
+pub(crate) struct Placed<T> {
+    pub(crate) fresh: bool,
+    pub(crate) gone: Vec<T>,
+}
+
+// ---------------------------------------------------------------------
 // The board's rows, live
 
 /// One page of the store, asked of the server.
@@ -657,9 +1012,200 @@ impl Board {
 
 #[cfg(test)]
 mod tests {
-    use super::{cursor, holes, missing, slots, Extents, Held, Slot};
+    use super::{cursor, holes, missing, slots, Extents, Held, Key, Landed, Matches, Placed, Ranked, Slot, Stale};
     use leptos::prelude::*;
     use menger_tickets_api::{Kind, Status, TicketSummary};
+
+    // FILTER-12 ------------------------------------------------------
+
+    fn k(id: &str) -> Key {
+        let (e, s) = id.rsplit_once('-').expect("EPIC-N");
+        (e.to_string(), s.parse().expect("seq"))
+    }
+
+    fn matches() -> Matches {
+        // Out of order, a shortcode with none, one said twice (its last word).
+        Matches::new(vec![("MFE".into(), 3), ("AGS".into(), 9), ("EMPTY".into(), 0), ("ZZ".into(), 1), ("AGS".into(), 12)])
+    }
+
+    /// FILTER-12: a position is (shortcode, rank) by prefix sums over the
+    /// counts, and back — in the store's order, across shortcodes; nothing
+    /// past the end or past a shortcode's last match.
+    #[test]
+    fn a_position_is_a_shortcode_and_a_rank_and_back() {
+        let m = matches();
+        assert_eq!(m.n(), 16);
+        assert_eq!(m.runs().iter().map(|(e, h)| (e.as_str(), *h)).collect::<Vec<_>>(), [("AGS", 12), ("MFE", 3), ("ZZ", 1)]);
+        assert_eq!(m.locate(0), Some(("AGS", 0)));
+        assert_eq!(m.locate(11), Some(("AGS", 11)));
+        assert_eq!(m.locate(12), Some(("MFE", 0)));
+        assert_eq!(m.locate(15), Some(("ZZ", 0)));
+        assert_eq!(m.locate(16), None);
+        for p in 0..m.n() {
+            let (e, r) = m.locate(p).unwrap();
+            assert_eq!(m.pos(e, r), Some(p), "{p}");
+        }
+        assert_eq!(m.pos("MFE", 3), None, "past its last match");
+        assert_eq!(m.pos("EMPTY", 0), None);
+        assert_eq!(m.pos("NOPE", 0), None);
+        assert_eq!((m.start("AGS"), m.start("MFE"), m.start("ZZ")), (0, 12, 15));
+        assert_eq!(m.start("BAM"), 12, "a shortcode with none starts where it would");
+        assert_eq!(m.start("ZZZ"), 16);
+        assert_eq!(m.start("A"), 0);
+        assert_eq!((m.held("AGS"), m.held("EMPTY"), m.held("NOPE")), (12, 0, 0));
+        assert_eq!(Matches::default().locate(0), None);
+        assert_eq!(Matches::new(Vec::new()).n(), 0);
+    }
+
+    /// FILTER-12: `entered` raises a shortcode's count (a new one lands at
+    /// its place), `left` lowers it (never below none; at none the
+    /// shortcode goes), `recount` sets it — and every position after moves.
+    #[test]
+    fn membership_moves_the_counts() {
+        let mut m = matches();
+        m.entered("MFE");
+        assert_eq!((m.n(), m.start("ZZ"), m.locate(15)), (17, 16, Some(("MFE", 3))));
+        m.entered("BAM");
+        assert_eq!((m.n(), m.start("BAM"), m.start("MFE"), m.pos("BAM", 0)), (18, 12, 13, Some(12)));
+        m.left("BAM");
+        assert_eq!((m.n(), m.held("BAM"), m.start("MFE")), (17, 0, 12));
+        m.left("NOPE");
+        assert_eq!(m.n(), 17, "a shortcode with none loses nothing");
+        m.recount("AGS", 5);
+        assert_eq!((m.n(), m.start("MFE"), m.locate(5)), (10, 5, Some(("MFE", 0))));
+        m.recount("NEW", 0);
+        assert_eq!(m.n(), 10);
+        m.recount("NEW", 2);
+        assert_eq!((m.n(), m.start("NEW"), m.start("ZZ")), (12, 9, 11));
+        m.recount("MFE", 0);
+        assert_eq!((m.n(), m.held("MFE"), m.start("NEW")), (8, 0, 5));
+    }
+
+    /// A shortcode A whose matches are A-2, A-4, A-7, A-9, A-12 and B's are
+    /// B-1, B-5, B-6; the board holds A-4, A-7, A-9 and B-1 (positions 1, 2,
+    /// 3 and 5).
+    fn held_ab() -> (Matches, Ranked<String>) {
+        let m = Matches::new(vec![("A".into(), 5), ("B".into(), 3)]);
+        let mut r = Ranked::default();
+        for (id, rank) in [("A-4", 1), ("A-7", 2), ("A-9", 3), ("B-1", 0)] {
+            r.insert(k(id), id.to_string(), rank);
+        }
+        (m, r)
+    }
+
+    fn positions(m: &Matches, r: &Ranked<String>) -> Vec<(usize, String)> {
+        r.window(m, 0, m.n()).into_iter().map(|(p, _, t)| (p, t.clone())).collect()
+    }
+
+    /// FILTER-12: the window under a filter is the rows held at their
+    /// positions, and what is missing in it — one page's worth.
+    #[test]
+    fn a_held_row_sits_at_its_shortcodes_start_plus_its_rank() {
+        let (m, r) = held_ab();
+        assert_eq!(positions(&m, &r), [(1, "A-4".into()), (2, "A-7".into()), (3, "A-9".into()), (5, "B-1".into())]);
+        assert_eq!(r.pos_of(&m, &k("B-1")), Some(5));
+        assert_eq!(r.pos_of(&m, &k("A-2")), None, "not held");
+        assert_eq!(r.at(&m, 2).map(|(_, t)| t.as_str()), Some("A-7"));
+        assert_eq!(r.at(&m, 0), None);
+        assert_eq!(r.missing(&m, 0, 8), Some((0, 7)));
+        assert_eq!(r.missing(&m, 1, 4), None);
+        assert_eq!(r.missing(&m, 1, 6), Some((4, 4)));
+        assert_eq!(r.missing(&m, 6, 99), Some((6, 7)), "clamped to the matches");
+    }
+
+    /// FILTER-12: `entered` and `left` applied to counts and held rows — a
+    /// row after it in its shortcode moves a rank; one that lands between two
+    /// held rows (or after its shortcode's held last, or first of a
+    /// shortcode with none) is placed and, beside a held row, held; one the
+    /// held rows cannot place moves only the counts; one held already moves
+    /// nothing.
+    #[test]
+    fn entered_and_left_move_counts_and_held_rows() {
+        let (mut m, mut r) = held_ab();
+        // A-8, between A-7 (rank 2) and A-9 (rank 3): rank 3, beside A-7.
+        let landed = r.entered(&mut m, "A", 8);
+        assert_eq!(landed, Landed::At { pos: Some(3), rank: Some(3), beside: true });
+        r.insert(k("A-8"), "A-8".into(), 3);
+        assert_eq!(m.n(), 9);
+        assert_eq!(positions(&m, &r), [(1, "A-4".into()), (2, "A-7".into()), (3, "A-8".into()), (4, "A-9".into()), (6, "B-1".into())]);
+        // A-13: after A-9 (rank 4), but A-12 (rank 5) is not held — where
+        // it lands is not known; the counts move, B-1 with them.
+        assert_eq!(r.entered(&mut m, "A", 13), Landed::At { pos: None, rank: None, beside: false });
+        assert_eq!((m.held("A"), r.pos_of(&m, &k("B-1"))), (7, Some(7)));
+        // A-1: before every held A row, the first held not at rank 0.
+        assert_eq!(r.entered(&mut m, "A", 1), Landed::At { pos: None, rank: None, beside: false });
+        assert_eq!(positions(&m, &r)[..2], [(2, "A-4".into()), (3, "A-7".into())]);
+        // Held already: a member before — nothing moves.
+        assert_eq!(r.entered(&mut m, "A", 7), Landed::Held);
+        assert_eq!(m.n(), 11);
+        // A-7 leaves: dropped and handed back; A-8 and A-9 a rank nearer.
+        assert_eq!(r.left(&mut m, "A", 7), Some("A-7".into()));
+        assert_eq!(positions(&m, &r), [(2, "A-4".into()), (3, "A-8".into()), (4, "A-9".into()), (7, "B-1".into())]);
+        // A-3 leaves, not held: A-4 and after a rank nearer.
+        assert_eq!(r.left(&mut m, "A", 3), None);
+        assert_eq!(positions(&m, &r), [(1, "A-4".into()), (2, "A-8".into()), (3, "A-9".into()), (6, "B-1".into())]);
+        assert_eq!(m.n(), 9);
+        // After A's held last when it is A's last: placed at the end of A,
+        // beside it.
+        let mut m2 = Matches::new(vec![("A".into(), 2), ("B".into(), 1)]);
+        let mut r2: Ranked<String> = Ranked::default();
+        r2.insert(k("A-5"), "A-5".into(), 1);
+        assert_eq!(r2.entered(&mut m2, "A", 9), Landed::At { pos: Some(2), rank: Some(2), beside: true });
+        // The first of a shortcode with none: rank 0, beside B's first held.
+        r2.insert(k("B-1"), "B-1".into(), 0);
+        assert_eq!(r2.entered(&mut m2, "AB", 4), Landed::At { pos: Some(3), rank: Some(0), beside: true });
+        assert_eq!((m2.n(), r2.pos_of(&m2, &k("B-1"))), (5, Some(4)));
+        // Before the held rank-0 row of its shortcode: rank 0.
+        assert_eq!(r2.entered(&mut m2, "B", 0), Landed::At { pos: Some(4), rank: Some(0), beside: true });
+        // Far from every held row: placed, not beside.
+        let mut m3 = Matches::new(vec![("A".into(), 0), ("C".into(), 9)]);
+        let mut r3: Ranked<String> = Ranked::default();
+        r3.insert(k("C-40"), "C-40".into(), 8);
+        assert_eq!(r3.entered(&mut m3, "A", 1), Landed::At { pos: Some(0), rank: Some(0), beside: false });
+    }
+
+    /// FILTER-12: `recount` sets the counts; the shortcode's held rows keep
+    /// their rows (and their DOM) until the window is asked again, each
+    /// position drawn once meanwhile.
+    #[test]
+    fn a_recount_sets_the_counts_and_keeps_the_rows() {
+        let (mut m, mut r) = held_ab();
+        r.recount(&mut m, "A", 2);
+        assert_eq!(m.n(), 5);
+        assert_eq!(r.len(), 4, "rows kept until the window is asked again");
+        assert_eq!(positions(&m, &r), [(1, "A-4".into()), (2, "B-1".into())], "A-7, A-9 past A's count; B moved up");
+        r.recount(&mut m, "B", 0);
+        assert_eq!((m.n(), r.pos_of(&m, &k("B-1"))), (2, None));
+    }
+
+    /// FILTER-12: a page at `first` — its rows are the matches there:
+    /// ranked, held rows re-ranked, a held row it passed over (or whose
+    /// position it took) handed back; a page whose rows the counts put in
+    /// another shortcode, or whose total is not theirs, is stale and changes
+    /// nothing.
+    #[test]
+    fn a_page_is_placed_where_the_counts_put_it_or_is_stale() {
+        let (m, mut r) = held_ab();
+        let page = |ids: &[&str]| ids.iter().map(|id| (k(id), id.to_string())).collect::<Vec<_>>();
+        assert_eq!(r.place(&m, 4, None, page(&["A-12", "A-13"])), Err(Stale), "position 5 is B's");
+        assert_eq!(r.place(&m, 0, Some(9), page(&["A-2"])), Err(Stale), "the total is 8");
+        assert_eq!(r.len(), 4, "a stale page changes nothing");
+        // A-7 is not a match any more: the page brings A-2, A-4, A-9.
+        let placed = r.place(&m, 0, Some(8), page(&["A-2", "A-4", "A-9"])).unwrap();
+        assert_eq!(placed, Placed { fresh: true, gone: vec!["A-7".to_string()] });
+        assert_eq!(positions(&m, &r), [(0, "A-2".into()), (1, "A-4".into()), (2, "A-9".into()), (5, "B-1".into())]);
+        // Again: nothing new.
+        assert_eq!(r.place(&m, 1, Some(8), page(&["A-4", "A-9"])).unwrap(), Placed { fresh: false, gone: Vec::new() });
+        // A row whose stale rank claims a position the page fills.
+        r.insert(k("B-9"), "B-9".into(), 1);
+        let placed = r.place(&m, 5, Some(8), page(&["B-1", "B-5"])).unwrap();
+        assert_eq!(placed.gone, vec!["B-9".to_string()]);
+        // Outside the window: given back.
+        assert_eq!(r.keep(&m, 0, 2), vec!["A-9".to_string(), "B-1".to_string(), "B-5".to_string()]);
+        assert_eq!(r.clear(), vec!["A-2".to_string(), "A-4".to_string()]);
+        assert_eq!(r.len(), 0);
+        assert_eq!(r.place(&m, 0, Some(8), Vec::new()).unwrap(), Placed { fresh: false, gone: Vec::new() });
+    }
 
     fn ext() -> Extents {
         // Out of order on purpose, an empty shortcode, a multi-digit seq.
