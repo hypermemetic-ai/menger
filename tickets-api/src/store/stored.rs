@@ -1,3 +1,4 @@
+use super::cells::{self, Cells, Key};
 use super::{children::Children, db, ids::Ids, ready::Ready, rollup::Rollups, Cache, OrderKey, Row};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -15,7 +16,13 @@ use std::path::Path;
 /// `docs` beside each `(total, done)` of a group and of a cross tree — so a
 /// file in form 2 is built again, once, on its first open (it holds no doc,
 /// so every `docs` is 0 and every other number is what it was).
-const FORM: i64 = 3;
+///
+/// FILTER-4 is form 4: the cells — the cell table (`cells`), each
+/// shortcode's bitmap of the sequences in each cell it holds, a row per
+/// 2¹⁶-sequence container (`cell_bits`), and each one's count
+/// (`cell_counts`). A file in form 3 or older is built again, once, on its
+/// first open, and holds them from then on.
+const FORM: i64 = 4;
 
 /// SDLC-11: the columns form 3 adds to the roll-up tables, `(table,
 /// column)` — what a build gives a file from an older form, as it gives one
@@ -67,6 +74,18 @@ const DOCS_COLUMNS: [(&str, &str); 4] = [
 ///   row for each that holds any: what `remaining` on a page of `ready_set`
 ///   sums whole shortcodes from, so only the one a cursor cuts is counted
 ///   in the index.
+/// - `cells` — FILTER-4: the cell table: each cell a ticket has been in,
+///   `(state, kind, severity, blocked, commits)`, by the id it was interned
+///   with (`severity` NULL for none; `blocked` and `commits` 0 or 1).
+/// - `cell_bits` — FILTER-4: per shortcode and cell, the sequences of the
+///   shortcode's tickets in that cell, a row per container of 2¹⁶
+///   sequences (`hi`, the block): `card` members, `bits` the container
+///   serialized as Roaring serializes one — at most 4,096 members as their
+///   low 16 bits, little-endian; more as the block's 8 KiB bitmap. What a
+///   filtered read is a merge of; at most 8 KiB a row whatever the store's
+///   size, and a cell move rewrites two.
+/// - `cell_counts` — FILTER-4: how many tickets each `(epic, cell)` holds,
+///   a row for each that holds any: what `counts { filter }` sums.
 /// - `derived_state` — one row: which form is stored, and whether it is
 ///   behind the tickets (a seed commits its tickets a chunk at a time and
 ///   their derived state after the last; until then the row says so).
@@ -121,6 +140,28 @@ const SCHEMA: &str = "
         CREATE TABLE IF NOT EXISTS ready_counts (
             epic TEXT PRIMARY KEY,
             held INTEGER NOT NULL
+        ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS cells (
+            id       INTEGER PRIMARY KEY,
+            state    TEXT NOT NULL,
+            kind     TEXT NOT NULL,
+            severity TEXT,
+            blocked  INTEGER NOT NULL,
+            commits  INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS cell_bits (
+            epic TEXT NOT NULL,
+            cell INTEGER NOT NULL,
+            hi   INTEGER NOT NULL,
+            card INTEGER NOT NULL,
+            bits BLOB NOT NULL,
+            PRIMARY KEY (epic, cell, hi)
+        ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS cell_counts (
+            epic TEXT NOT NULL,
+            cell INTEGER NOT NULL,
+            held INTEGER NOT NULL,
+            PRIMARY KEY (epic, cell)
         ) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS derived_state (
             one   INTEGER PRIMARY KEY CHECK (one = 1),
@@ -244,6 +285,9 @@ pub(super) struct Form {
     pub(super) statuses: BTreeMap<(String, &'static str), u64>,
     /// SCALE-32: each shortcode's share of the ready set, where it has one.
     pub(super) ready: BTreeMap<String, u64>,
+    /// FILTER-4: the cell table, every container and every count, by the
+    /// ids the cells were interned with.
+    pub(super) cells: cells::Stored,
 }
 
 /// One write's change to the stored derived state — the rows its own
@@ -272,6 +316,13 @@ pub(super) struct Changes {
     /// SCALE-32: each shortcode's share of the ready set that moves; 0: the
     /// row goes.
     pub(super) ready: Vec<(String, u64)>,
+    /// FILTER-4: each cell interned by the write, with its id.
+    pub(super) cells: Vec<(u32, Key)>,
+    /// FILTER-4: each container a cell move rewrites, `(epic, cell, hi)`, as
+    /// it is after the write — `None`: left empty, the row goes.
+    pub(super) cell_bits: Vec<((String, u32, u32), Option<(u64, Vec<u8>)>)>,
+    /// FILTER-4: each `(epic, cell)` count that moves; 0: the row goes.
+    pub(super) cell_counts: Vec<((String, u32), u64)>,
 }
 
 impl Changes {
@@ -341,8 +392,64 @@ impl Changes {
         for (epic, held) in &self.ready {
             put_ready(conn, epic, *held)?;
         }
+        for (id, key) in &self.cells {
+            put_cell(conn, *id, key)?;
+        }
+        for (at, row) in &self.cell_bits {
+            put_bits(conn, at, row.as_ref())?;
+        }
+        for (at, held) in &self.cell_counts {
+            put_cell_count(conn, at, *held)?;
+        }
         Ok(())
     }
+}
+
+/// FILTER-4: one cell of the table.
+fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
+    conn.prepare_cached("INSERT INTO cells (id, state, kind, severity, blocked, commits) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?
+        .execute(params![
+            id,
+            key.status().as_str(),
+            key.kind().as_str(),
+            key.severity().map(|s| s.as_str()),
+            key.blocked(),
+            key.commits()
+        ])?;
+    Ok(())
+}
+
+/// FILTER-4: one container as a write leaves it; `None` is no row.
+fn put_bits(conn: &Connection, (epic, cell, hi): &(String, u32, u32), row: Option<&(u64, Vec<u8>)>) -> rusqlite::Result<()> {
+    match row {
+        None => {
+            conn.prepare_cached("DELETE FROM cell_bits WHERE epic = ?1 AND cell = ?2 AND hi = ?3")?
+                .execute(params![epic, cell, hi])?;
+        }
+        Some((card, bits)) => {
+            conn.prepare_cached(
+                "INSERT INTO cell_bits (epic, cell, hi, card, bits) VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT (epic, cell, hi) DO UPDATE SET card = excluded.card, bits = excluded.bits",
+            )?
+            .execute(params![epic, cell, hi, card, bits])?;
+        }
+    }
+    Ok(())
+}
+
+/// FILTER-4: an `(epic, cell)` count; 0 is no row.
+fn put_cell_count(conn: &Connection, (epic, cell): &(String, u32), held: u64) -> rusqlite::Result<()> {
+    if held == 0 {
+        conn.prepare_cached("DELETE FROM cell_counts WHERE epic = ?1 AND cell = ?2")?
+            .execute(params![epic, cell])?;
+    } else {
+        conn.prepare_cached(
+            "INSERT INTO cell_counts (epic, cell, held) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (epic, cell) DO UPDATE SET held = excluded.held",
+        )?
+        .execute(params![epic, cell, held])?;
+    }
+    Ok(())
 }
 
 /// SCALE-32: one ticket's count of unsatisfied blockers — a birth's, or a
@@ -536,9 +643,9 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     let message = format!(
         "SCALE-28: stored the derived state {why} — {} shortcode runs, {} dangling forward \
          references, {} roll-up groups ({} cross trees, {} marks), the child_count of {} parents, \
-         the unsatisfied blockers of {} tickets, a ready set of {} and the status counts of {} \
-         shortcodes — built once by a scan of {} tickets in {:.1} ms, durably; every later open \
-         reads it",
+         the unsatisfied blockers of {} tickets, a ready set of {}, the status counts of {} \
+         shortcodes and {} cells' {} bitmaps (FILTER-4) — built once by a scan of {} tickets in \
+         {:.1} ms, durably; every later open reads it",
         form.runs.len(),
         form.refs.len(),
         form.groups.len(),
@@ -548,6 +655,8 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
         form.unsatisfied.len(),
         cache.ready.size(),
         cache.ready.shortcodes(),
+        cache.cells.keys().len(),
+        cache.cells.bitmaps(),
         cache.len(),
         started.elapsed().as_secs_f64() * 1000.0
     );
@@ -567,8 +676,17 @@ pub(super) fn write_all(conn: &Connection, form: &Form) -> rusqlite::Result<()> 
     conn.execute_batch(
         "DELETE FROM shortcode_runs; DELETE FROM forward_refs; DELETE FROM rollup_groups;
          DELETE FROM rollup_cross; DELETE FROM rollup_marks; DELETE FROM status_counts;
-         DELETE FROM ready_counts;",
+         DELETE FROM ready_counts; DELETE FROM cells; DELETE FROM cell_bits; DELETE FROM cell_counts;",
     )?;
+    for (id, key) in &form.cells.keys {
+        put_cell(conn, *id, key)?;
+    }
+    for (at, row) in &form.cells.bits {
+        put_bits(conn, at, Some(row))?;
+    }
+    for (at, held) in &form.cells.counts {
+        put_cell_count(conn, at, *held)?;
+    }
     for (key, held) in &form.statuses {
         put_status(conn, key, *held)?;
     }
@@ -630,6 +748,7 @@ pub(super) fn read(conn: &Connection) -> rusqlite::Result<Form> {
     let mut form = read_tables(conn)?;
     form.counts = read_counts(conn)?;
     form.unsatisfied = read_unsatisfied(conn)?;
+    form.cells = read_cells(conn)?;
     Ok(form)
 }
 
@@ -707,6 +826,75 @@ fn read_tables(conn: &Connection) -> rusqlite::Result<Form> {
     Ok(form)
 }
 
+/// A column that names one of a closed set, parsed — or the conversion
+/// failure naming it.
+fn parsed<T: std::str::FromStr<Err = String>>(column: usize, stored: &str) -> rusqlite::Result<T> {
+    stored
+        .parse()
+        .map_err(|e: String| rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, e.into()))
+}
+
+/// FILTER-4: the cell table, by id.
+fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
+    let mut out = BTreeMap::new();
+    let mut stmt = conn.prepare("SELECT id, state, kind, severity, blocked, commits FROM cells ORDER BY id")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let severity = match r.get_ref(3)?.as_str_or_null()? {
+            None => None,
+            Some(s) => Some(parsed(3, s)?),
+        };
+        let key = Key::new(
+            parsed(1, r.get_ref(1)?.as_str()?)?,
+            parsed(2, r.get_ref(2)?.as_str()?)?,
+            severity,
+            r.get(4)?,
+            r.get(5)?,
+        );
+        out.insert(r.get(0)?, key);
+    }
+    Ok(out)
+}
+
+/// FILTER-4: the cell table, every container and every count, as stored —
+/// what `--verify-derived` compares.
+fn read_cells(conn: &Connection) -> rusqlite::Result<cells::Stored> {
+    let mut out = cells::Stored {
+        keys: read_cell_table(conn)?,
+        ..cells::Stored::default()
+    };
+    let mut stmt = conn.prepare("SELECT epic, cell, hi, card, bits FROM cell_bits ORDER BY epic, cell, hi")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        out.bits.insert((r.get(0)?, r.get(1)?, r.get(2)?), (r.get(3)?, r.get(4)?));
+    }
+    let mut stmt = conn.prepare("SELECT epic, cell, held FROM cell_counts")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        out.counts.insert((r.get(0)?, r.get(1)?), r.get(2)?);
+    }
+    Ok(out)
+}
+
+/// FILTER-4: the cells as the cache holds them, from what is stored: the
+/// table, and each container streamed into its bitmap ([`cells::Filling`])
+/// — the counts are the bitmaps' lengths, so `cell_counts` is not read. A
+/// container that cannot be one fails the open, naming it: the file is not
+/// what this build wrote.
+fn load_cells(conn: &Connection) -> anyhow::Result<Cells> {
+    let keys = read_cell_table(conn)?;
+    let mut filling = cells::Filling::default();
+    let mut stmt = conn.prepare("SELECT epic, cell, hi, card, bits FROM cell_bits ORDER BY epic, cell, hi")?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        filling
+            .push(r.get_ref(0)?.as_str()?, r.get(1)?, r.get(2)?, r.get(3)?, r.get_ref(4)?.as_blob()?)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+    let held = filling.finish().map_err(|e| anyhow::anyhow!("{e}"))?;
+    Cells::from_stored(keys, held).map_err(|e| anyhow::anyhow!("{e}"))
+}
+
 /// SCALE-32: the ready set, from its index — in the store's order, so each
 /// shortcode's members arrive together and ascending. The query names the
 /// index's own two terms, which is what lets SQLite answer from it; `INDEXED
@@ -773,6 +961,8 @@ pub(super) fn load(
     let children = read_children(conn)?;
     let indexed = started.elapsed();
     let members = read_ready(conn)?;
+    let readied = started.elapsed();
+    let cells = load_cells(conn)?;
     let (runs, refs, groups, cross, marks) =
         (form.runs.len(), form.refs.len(), form.groups.len(), form.cross.len(), form.marks.len());
     let parents = children.parents();
@@ -784,16 +974,20 @@ pub(super) fn load(
          dangling forward references, {groups} roll-up groups ({cross} cross trees, {marks} marks) \
          and the status counts of {} shortcodes in {:.1} ms, the children of {parents} parents \
          from the index in {:.1} ms, a ready set of {} from its index in {:.1} ms (and the \
-         unsatisfied blockers of {} tickets with their rows); nothing rebuilt",
+         unsatisfied blockers of {} tickets with their rows), and {} cells' {} bitmaps of {} \
+         tickets from their containers (with the tables); nothing rebuilt",
         started.elapsed().as_secs_f64() * 1000.0,
         ready.shortcodes(),
         tables.as_secs_f64() * 1000.0,
         (indexed - tables).as_secs_f64() * 1000.0,
         ready.size(),
-        (started.elapsed() - indexed).as_secs_f64() * 1000.0,
+        (readied - indexed).as_secs_f64() * 1000.0,
         ready.blocked(),
+        cells.keys().len(),
+        cells.bitmaps(),
+        cells.tickets(),
     );
-    Ok(Cache::from_parts(rows, ids, rollups, children, ready))
+    Ok(Cache::from_parts(rows, ids, rollups, children, ready, cells))
 }
 
 /// What `menger --verify-derived` found.
@@ -810,6 +1004,9 @@ pub enum Verdict {
         blocked: usize,
         /// SCALE-32: the ready set.
         ready: usize,
+        /// FILTER-4: the cells occupied, and their (shortcode, cell) bitmaps.
+        cells: usize,
+        bitmaps: usize,
     },
     /// Where they differ, one line each, naming the structure and the key.
     Differs(Vec<String>),
@@ -883,6 +1080,8 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         parents: scanned.children.parents(),
         blocked: want.unsatisfied.len(),
         ready: scanned.ready.size(),
+        cells: scanned.cells.keys().len(),
+        bitmaps: scanned.cells.bitmaps(),
     })
 }
 
@@ -935,6 +1134,84 @@ pub(super) fn compare(stored: &Form, scanned: &Form) -> Vec<String> {
     };
     diff(&mut out, "status count", &statuses(&stored.statuses), &statuses(&scanned.statuses), |n| n.to_string());
     diff(&mut out, "ready count", &stored.ready, &scanned.ready, |n| n.to_string());
+    out.extend(cell_differences(&stored.cells, &scanned.cells));
+    out
+}
+
+/// FILTER-4: where the stored cells and a scan's differ. The two intern in
+/// different orders, so they are compared by cell, not by id: each
+/// container and each count keyed `(shortcode, cell, block)`, the stored
+/// row's id named beside its cell. And the table itself must be one: every
+/// cell once, every id a container or count names in it.
+pub(super) fn cell_differences(stored: &cells::Stored, scanned: &cells::Stored) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen: BTreeMap<Key, u32> = BTreeMap::new();
+    for (id, key) in &stored.keys {
+        if let Some(first) = seen.insert(*key, *id) {
+            out.push(format!("cells {first} and {id}: both are {key}"));
+        }
+    }
+    let name = |keys: &BTreeMap<u32, Key>, cell: u32| -> Result<Key, String> {
+        keys.get(&cell).copied().ok_or_else(|| format!("cell {cell}, which the cell table does not hold"))
+    };
+    // (epic, cell, block) → what the row says, and the id it is under.
+    let mut bits: BTreeMap<(String, Key, u32), ((u64, &[u8]), u32)> = BTreeMap::new();
+    for ((epic, cell, hi), (card, raw)) in &stored.bits {
+        match name(&stored.keys, *cell) {
+            Ok(key) => {
+                bits.insert((epic.clone(), key, *hi), ((*card, raw.as_slice()), *cell));
+            }
+            Err(e) => out.push(format!("cell_bits {epic} {e}, container {hi}: stored {card} members")),
+        }
+    }
+    let mut want: BTreeMap<(String, Key, u32), (u64, &[u8])> = BTreeMap::new();
+    for ((epic, cell, hi), (card, raw)) in &scanned.bits {
+        want.insert((epic.clone(), scanned.keys[cell], *hi), (*card, raw.as_slice()));
+    }
+    let show = |(card, raw): (u64, &[u8])| match cells::decode(card, raw) {
+        Ok(lows) if lows.len() <= 8 => format!("{card} members {lows:?}"),
+        Ok(_) => format!("{card} members"),
+        Err(e) => format!("{card} members, unreadable: {e}"),
+    };
+    for ((epic, key, hi), (row, id)) in &bits {
+        match want.get(&(epic.clone(), *key, *hi)) {
+            Some(w) if *w == *row => {}
+            Some(w) => out.push(format!(
+                "cell_bits {epic} cell {id} {key} container {hi}: stored {}; a scan gives {}",
+                show(*row),
+                show(*w)
+            )),
+            None => out.push(format!("cell_bits {epic} cell {id} {key} container {hi}: stored {}; a scan gives none", show(*row))),
+        }
+    }
+    for ((epic, key, hi), w) in &want {
+        if !bits.contains_key(&(epic.clone(), *key, *hi)) {
+            out.push(format!("cell_bits {epic} {key} container {hi}: none stored; a scan gives {}", show(*w)));
+        }
+    }
+    let mut counts: BTreeMap<(String, Key), (u64, u32)> = BTreeMap::new();
+    for ((epic, cell), held) in &stored.counts {
+        match name(&stored.keys, *cell) {
+            Ok(key) => {
+                counts.insert((epic.clone(), key), (*held, *cell));
+            }
+            Err(e) => out.push(format!("cell_counts {epic} {e}: stored {held}")),
+        }
+    }
+    let want: BTreeMap<(String, Key), u64> =
+        scanned.counts.iter().map(|((epic, cell), n)| ((epic.clone(), scanned.keys[cell]), *n)).collect();
+    for ((epic, key), (held, id)) in &counts {
+        match want.get(&(epic.clone(), *key)) {
+            Some(w) if w == held => {}
+            Some(w) => out.push(format!("cell_counts {epic} cell {id} {key}: stored {held}; a scan gives {w}")),
+            None => out.push(format!("cell_counts {epic} cell {id} {key}: stored {held}; a scan gives none")),
+        }
+    }
+    for ((epic, key), w) in &want {
+        if !counts.contains_key(&(epic.clone(), *key)) {
+            out.push(format!("cell_counts {epic} {key}: none stored; a scan gives {w}"));
+        }
+    }
     out
 }
 

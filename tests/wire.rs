@@ -1748,3 +1748,239 @@ async fn inputs_over_the_wire() {
     collect(call(&client, "tickets.create", json!({"epic": "OTHER", "title": "root", "kind": "scope"})).await).await;
     assert_eq!(content(elsewhere.next().await.unwrap().unwrap())["type"], "created");
 }
+
+// ---------------------------------------------------------------------------
+// FILTER-4: the filter on the wire.
+
+/// One call's single answer.
+async fn answer(client: &WsClient, method: &str, params: Value) -> Value {
+    let mut sub = call(client, method, params).await;
+    content(sub.next().await.unwrap().unwrap())
+}
+
+/// The next `n` events of a watch, each within a deadline.
+async fn next_events(watch: &mut Subscription<Value>, n: usize) -> Vec<Value> {
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let item = tokio::time::timeout(Duration::from_secs(20), watch.next())
+            .await
+            .expect("an event in time")
+            .expect("the watch goes on")
+            .unwrap();
+        out.push(content(item));
+    }
+    out
+}
+
+/// A watch's events up to and including the first `amended` — the marker
+/// write each step ends with, which moves no cell.
+async fn until_marker(watch: &mut Subscription<Value>) -> Vec<Value> {
+    let mut out = Vec::new();
+    loop {
+        let ev = next_events(watch, 1).await.remove(0);
+        let done = ev["type"] == "amended";
+        out.push(ev);
+        if done {
+            return out;
+        }
+    }
+}
+
+fn kinds(evs: &[Value]) -> Vec<String> {
+    evs.iter().map(|e| e["type"].as_str().unwrap().to_string()).collect()
+}
+
+/// Acceptance 4: `watch { filter }` over the real protocol — a created match
+/// is `created` then `entered`; a status change out of the filter is
+/// `status_changed` then `left`; each is its write's last event; `watch {}`
+/// sends none of the three; `membership` sends only them; `epic` filters
+/// them.
+#[tokio::test]
+async fn watch_filter_says_entered_and_left_last() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    answer(&client, "tickets.create", json!({"epic": "WF", "title": "root", "kind": "scope"})).await;
+    answer(&client, "tickets.create", json!({"epic": "OTH", "title": "other root", "kind": "scope"})).await;
+    let filter = "status Pending and kind build";
+    let mut plain = call(&client, "tickets.watch", json!({})).await;
+    let mut filtered = call(&client, "tickets.watch", json!({"filter": filter})).await;
+    let mut members = call(&client, "tickets.watch", json!({"filter": filter, "membership": true})).await;
+    let mut in_wf = call(&client, "tickets.watch", json!({"filter": filter, "epic": "wf"})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // A body, not a title: a root's new title moves its group too (AGS-23).
+    let marker = |n: u32| json!({"id": "WF-1", "body": format!("marker {n}")});
+
+    // A created match: `created`, …, `entered` last.
+    answer(&client, "tickets.create", json!({"epic": "WF", "title": "a build"})).await;
+    answer(&client, "tickets.create", json!({"epic": "OTH", "title": "another"})).await;
+    answer(&client, "tickets.amend", marker(1)).await;
+    let evs = until_marker(&mut filtered).await;
+    assert_eq!(
+        kinds(&evs),
+        ["created", "children_changed", "group_changed", "entered", "created", "children_changed", "group_changed", "entered", "amended"],
+        "{evs:#?}"
+    );
+    assert_eq!(evs[3], json!({"type": "entered", "id": "WF-2", "epic": "WF", "seq": 2}));
+    assert_eq!(evs[7], json!({"type": "entered", "id": "OTH-2", "epic": "OTH", "seq": 2}));
+    let plain_evs = until_marker(&mut plain).await;
+    assert_eq!(kinds(&plain_evs), ["created", "children_changed", "group_changed", "created", "children_changed", "group_changed", "amended"]);
+
+    // A status change out of it: `status_changed`, then `left`.
+    answer(&client, "tickets.set_status", json!({"id": "WF-2", "status": "Ready"})).await;
+    answer(&client, "tickets.amend", marker(2)).await;
+    let evs = until_marker(&mut filtered).await;
+    assert_eq!(kinds(&evs), ["status_changed", "left", "amended"], "{evs:#?}");
+    assert_eq!(evs[1], json!({"type": "left", "id": "WF-2", "epic": "WF", "seq": 2}));
+    assert_eq!(kinds(&until_marker(&mut plain).await), ["status_changed", "amended"], "watch {{}} sends none of the three");
+
+    // `membership`: only the three; `epic`: only its shortcode's.
+    let evs = next_events(&mut members, 3).await;
+    assert_eq!(kinds(&evs), ["entered", "entered", "left"]);
+    let evs = next_events(&mut in_wf, 1).await;
+    assert_eq!(evs[0]["type"], "created");
+    let mut evs = until_marker(&mut in_wf).await;
+    evs.extend(until_marker(&mut in_wf).await);
+    assert_eq!(
+        kinds(&evs),
+        ["children_changed", "group_changed", "entered", "amended", "status_changed", "left", "amended"],
+        "OTH's create and its entered are not WF's: {evs:#?}"
+    );
+
+    // A filter not taken is one error, and the stream ends.
+    let mut bad = call(&client, "tickets.watch", json!({"filter": "under WF-1"})).await;
+    let ev = content(bad.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "error");
+    assert!(ev["message"].as_str().unwrap().contains("FILTER-13"), "{ev}");
+}
+
+/// Acceptance 4: completing a blocker, under `watch { filter: "ready" }`, is
+/// `status_changed` and then one `entered` per ticket it unblocked, in the
+/// store's order.
+#[tokio::test]
+async fn completing_a_blocker_enters_what_it_unblocked_in_order() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    answer(&client, "tickets.create", json!({"epic": "UB", "title": "root", "kind": "scope"})).await;
+    answer(&client, "tickets.create", json!({"epic": "UB", "title": "the blocker"})).await;
+    for i in 3..=6 {
+        answer(&client, "tickets.create", json!({"epic": "UB", "title": format!("waits {i}"), "blocked_by": ["UB-2"]})).await;
+        answer(&client, "tickets.set_status", json!({"id": format!("UB-{i}"), "status": "Ready"})).await;
+    }
+    // UB-6 also waits on the root, which stays open.
+    answer(&client, "tickets.create", json!({"epic": "UB", "title": "waits on two", "blocked_by": ["UB-2", "UB-1"]})).await;
+    answer(&client, "tickets.set_status", json!({"id": "UB-7", "status": "Ready"})).await;
+    let mut watch = call(&client, "tickets.watch", json!({"filter": "ready"})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    answer(&client, "tickets.set_status", json!({"id": "UB-2", "status": "Complete"})).await;
+    answer(&client, "tickets.amend", json!({"id": "UB-1", "body": "marker"})).await;
+    let evs = until_marker(&mut watch).await;
+    let k = kinds(&evs);
+    assert_eq!(k[0], "status_changed", "{evs:#?}");
+    let entered: Vec<&Value> = evs.iter().filter(|e| e["type"] == "entered").collect();
+    assert_eq!(
+        entered.iter().map(|e| e["id"].as_str().unwrap()).collect::<Vec<_>>(),
+        ["UB-3", "UB-4", "UB-5", "UB-6"],
+        "each ticket it unblocked, in order — not UB-7, which waits on UB-1 too: {evs:#?}"
+    );
+    let first_entered = k.iter().position(|t| t == "entered").unwrap();
+    assert!(k[first_entered..k.len() - 1].iter().all(|t| t == "entered"), "the write's last events: {k:?}");
+    assert!(!k.contains(&"left".to_string()));
+}
+
+/// Acceptance 4: a crossing that unblocks 300 gives one `recount` per
+/// shortcode it moved — the count there as it left it — and no `entered`.
+#[tokio::test]
+async fn a_crossing_that_unblocks_three_hundred_recounts() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    answer(&client, "tickets.create", json!({"epic": "RA", "title": "root", "kind": "scope"})).await;
+    answer(&client, "tickets.create", json!({"epic": "RB", "title": "root", "kind": "scope"})).await;
+    answer(&client, "tickets.create", json!({"epic": "RA", "title": "the hub"})).await;
+    for i in 0..300 {
+        let epic = if i % 3 == 0 { "RB" } else { "RA" };
+        let ev = answer(&client, "tickets.create", json!({"epic": epic, "title": format!("w{i}"), "blocked_by": ["RA-2"]})).await;
+        let id = ev["ticket"]["id"].as_str().unwrap().to_string();
+        answer(&client, "tickets.set_status", json!({"id": id, "status": "Ready"})).await;
+    }
+    let mut watch = call(&client, "tickets.watch", json!({"filter": "ready"})).await;
+    let mut plain = call(&client, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    answer(&client, "tickets.set_status", json!({"id": "RA-2", "status": "Complete"})).await;
+    answer(&client, "tickets.amend", json!({"id": "RA-1", "body": "marker"})).await;
+    let evs = until_marker(&mut watch).await;
+    let recounts: Vec<&Value> = evs.iter().filter(|e| e["type"] == "recount").collect();
+    assert_eq!(recounts, [&json!({"type": "recount", "epic": "RA", "held": 200}), &json!({"type": "recount", "epic": "RB", "held": 100})], "{evs:#?}");
+    assert!(!evs.iter().any(|e| e["type"] == "entered" || e["type"] == "left"), "no entered past 256");
+    let counts = collect(call(&client, "tickets.counts", json!({"filter": "ready"})).await).await;
+    assert_eq!(counts, [json!({"type": "count", "epic": "RA", "held": 200}), json!({"type": "count", "epic": "RB", "held": 100})]);
+    let plain_evs = until_marker(&mut plain).await;
+    assert!(!plain_evs.iter().any(|e| matches!(e["type"].as_str(), Some("entered" | "left" | "recount"))), "watch {{}}");
+}
+
+/// The new reads' shapes over the wire: `counts`, `facets`, `list { filter,
+/// at }` with `page.first` — and a page asked neither, which carries no
+/// `first` at all; `at` with `after`, and a filter not taken, one error.
+#[tokio::test]
+async fn counts_facets_and_filtered_pages_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    answer(&client, "tickets.create", json!({"epic": "FW", "title": "root", "kind": "scope"})).await;
+    for i in 0..6 {
+        answer(&client, "tickets.create", json!({"epic": "FW", "title": format!("t{i}"), "severity": if i % 2 == 0 { "High" } else { "Low" }})).await;
+    }
+    answer(&client, "tickets.set_status", json!({"id": "FW-3", "status": "Ready"})).await;
+
+    // Neither filter nor at: the page as it always was — no `first`.
+    let (_, page) = paged(call(&client, "tickets.list", json!({"summary": true, "limit": 2})).await).await;
+    assert_eq!(page, json!({"type": "page", "next": "FW-2", "remaining": 5}));
+    let (_, page) = paged(call(&client, "tickets.list", json!({"limit": 2})).await).await;
+    assert!(page.get("first").is_none(), "{page}");
+
+    let (rows, page) = paged(call(&client, "tickets.list", json!({"filter": "severity high", "summary": true, "limit": 2})).await).await;
+    assert_eq!(rows.iter().map(|r| r["summary"]["id"].as_str().unwrap()).collect::<Vec<_>>(), ["FW-2", "FW-4"]);
+    assert_eq!(page, json!({"type": "page", "next": "FW-4", "remaining": 1, "first": 0}));
+    let (rows, page) = paged(call(&client, "tickets.list", json!({"filter": "severity high", "at": 2, "limit": 5})).await).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["ticket"]["id"], "FW-6", "whole tickets at a position");
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0, "first": 2}));
+    let (rows, page) = paged(call(&client, "tickets.list", json!({"at": 9, "summary": true})).await).await;
+    assert!(rows.is_empty());
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0, "first": 9}), "at past the end");
+    let (_, page) = paged(call(&client, "tickets.list", json!({"filter": "not severity none", "after": "FW-3", "summary": true, "limit": 1})).await).await;
+    // FW-2 and FW-3 match at or before the cursor: the page starts at 2.
+    assert_eq!(page, json!({"type": "page", "next": "FW-4", "remaining": 3, "first": 2}));
+
+    let both = collect(call(&client, "tickets.list", json!({"at": 1, "after": "FW-1"})).await).await;
+    assert_eq!(both.len(), 1);
+    assert_eq!(both[0]["type"], "error");
+    let bad = collect(call(&client, "tickets.list", json!({"filter": "tag x and ready and nonsense"})).await).await;
+    assert_eq!(bad.len(), 1, "one error, nothing else: {bad:?}");
+    let message = bad[0]["message"].as_str().unwrap();
+    assert!(message.contains("`tag x`") && message.contains("`nonsense`"), "{message}");
+
+    let counts = collect(call(&client, "tickets.counts", json!({"filter": "severity in (high, low)"})).await).await;
+    assert_eq!(counts, [json!({"type": "count", "epic": "FW", "held": 6})]);
+    let all = collect(call(&client, "tickets.counts", json!({})).await).await;
+    assert_eq!(all, [json!({"type": "count", "epic": "FW", "held": 7})]);
+    let none = collect(call(&client, "tickets.counts", json!({"filter": "category active"})).await).await;
+    assert!(none.is_empty(), "a shortcode with no match has no count");
+
+    let facets = collect(call(&client, "tickets.facets", json!({"filter": "severity high and status Pending"})).await).await;
+    let of = |field: &str| -> Vec<(String, u64)> {
+        facets
+            .iter()
+            .filter(|f| f["field"] == field)
+            .map(|f| (f["value"].as_str().unwrap().to_string(), f["held"].as_u64().unwrap()))
+            .collect()
+    };
+    // severity's menu: every Pending ticket's severity (FW-1 has none;
+    // FW-2, 4, 6 are high; FW-5, 7 low — FW-3 is Ready); status's: every
+    // high ticket's status (all three Pending); the rest: both groups.
+    assert_eq!(of("severity"), [("high".to_string(), 3), ("low".to_string(), 2), ("none".to_string(), 1)]);
+    assert_eq!(of("status"), [("Pending".to_string(), 3)]);
+    assert_eq!(of("in"), [("FW".to_string(), 3)]);
+    assert_eq!(of("blocked"), [("no".to_string(), 3)]);
+    assert_eq!(facets[0], json!({"type": "facet", "field": "status", "value": "Pending", "held": 3}));
+    let base = collect(call(&client, "tickets.facets", json!({"base": "status Ready"})).await).await;
+    assert!(base.iter().filter(|f| f["field"] == "status").all(|f| f["value"] == "Ready"), "base is never set aside: {base:?}");
+}

@@ -647,7 +647,7 @@ enum Answer {
 
 async fn ask(client: &Client, after: Option<String>, limit: usize) -> Answer {
     match client
-        .list_all(None, None, None, after, Some(limit.max(1) as u32), Some(true))
+        .list_all(None, None, None, after, Some(limit.max(1) as u32), Some(true), None, None)
         .await
     {
         Ok(events) => {

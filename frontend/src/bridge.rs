@@ -185,7 +185,7 @@ pub(crate) async fn run(client: &Client, call: Call) -> Result<Vec<TicketsEvent>
     let answer = match call {
         Call::Get { id } => client.get_all(id).await,
         Call::List { epic, status, parent, after, limit, summary } => {
-            client.list_all(epic, status, parent, after, limit, summary).await
+            client.list_all(epic, status, parent, after, limit, summary, None, None).await
         }
         Call::Find { query, after, limit } => client.find_all(query, after, limit).await,
         Call::Waves { epics, kinds } => client.waves_all(epics, kinds).await,

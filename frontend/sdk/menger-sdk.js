@@ -434,12 +434,20 @@
       const stream = this.rpc.call("tickets.components", {});
       yield* extractData(stream);
     }
+    async* counts(filter) {
+      const stream = this.rpc.call("tickets.counts", { filter });
+      yield* extractData(stream);
+    }
     async* create(epic, title, blockedBy, body, kind, parent, path, severity) {
       const stream = this.rpc.call("tickets.create", { blocked_by: blockedBy, body, epic, kind, parent, path, severity, title });
       yield* extractData(stream);
     }
     async* extents() {
       const stream = this.rpc.call("tickets.extents", {});
+      yield* extractData(stream);
+    }
+    async* facets(base, filter) {
+      const stream = this.rpc.call("tickets.facets", { base, filter });
       yield* extractData(stream);
     }
     async* find(query, after, limit) {
@@ -466,8 +474,8 @@
       const stream = this.rpc.call("tickets.link_commits", { commits, id });
       yield* extractData(stream);
     }
-    async* list(after, epic, limit, parent, status, summary) {
-      const stream = this.rpc.call("tickets.list", { after, epic, limit, parent, status, summary });
+    async* list(after, at, epic, filter, limit, parent, status, summary) {
+      const stream = this.rpc.call("tickets.list", { after, at, epic, filter, limit, parent, status, summary });
       yield* extractData(stream);
     }
     async* readySet(after, epic, limit, summary) {
@@ -494,8 +502,8 @@
       const stream = this.rpc.call("tickets.unlink_commits", { commits, id });
       yield* extractData(stream);
     }
-    async* watch(epic) {
-      const stream = this.rpc.call("tickets.watch", { epic });
+    async* watch(epic, filter, membership) {
+      const stream = this.rpc.call("tickets.watch", { epic, filter, membership });
       yield* extractData(stream);
     }
     async* waves(epics, kinds) {
