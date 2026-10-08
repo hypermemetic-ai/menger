@@ -1,4 +1,4 @@
-use super::{Kind, SeedSpec, Severity, Status, Ticket};
+use super::{Kind, SeedShape, SeedSpec, Severity, Status, Ticket};
 use std::collections::{HashMap, HashSet};
 
 /// Rows per write transaction: a few fsyncs for a million rows, and a
@@ -60,6 +60,16 @@ const KINDS: [(Kind, u32); 5] = [
     (Kind::Build, 52),
     (Kind::Gap, 16),
     (Kind::Spike, 14),
+];
+/// FILTER-13: the nested shape's kinds — the flat mix with docs among them
+/// (a doc is never blocked and never a blocker, as `create` keeps it).
+const NESTED_KINDS: [(Kind, u32); 6] = [
+    (Kind::Scope, 4),
+    (Kind::Execution, 14),
+    (Kind::Build, 52),
+    (Kind::Gap, 12),
+    (Kind::Spike, 12),
+    (Kind::Doc, 6),
 ];
 const SEVERITIES: [(Option<Severity>, u32); 5] = [
     (None, 40),
@@ -177,7 +187,17 @@ fn body(rng: &mut Rng, id: &str, blocked_by: &[String]) -> String {
 /// per-epic maximum sequence already in the store (empty for a fresh
 /// one): a generated epic that collides with an existing one
 /// continues its numbering, as `create` would.
-pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> Vec<Ticket> {
+///
+/// FILTER-13: `shape` is where each ticket hangs. [`SeedShape::Flat`] is
+/// PERF-2's, byte for byte: every non-root under its epic's root.
+/// [`SeedShape::Nested`] is FILTER-3 §6.5's deeper tree — executions under
+/// the root, builds under one of the last 20 executions of their epic,
+/// gaps, spikes and scopes under one of those 60 % of the time (else the
+/// root), and docs (6 % of tickets: born `Doc`, never blocked, never a
+/// blocker) under one of the last 20 builds — so a tree is up to four deep
+/// (root → execution → build → doc).
+pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shape: SeedShape) -> Vec<Ticket> {
+    let nested = shape == SeedShape::Nested;
     let mut rng = Rng(spec.seed ^ 0x5EED_0000_0000_0000);
     let count = spec.count;
     let mut out: Vec<Ticket> = Vec::with_capacity(count);
@@ -211,6 +231,9 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> V
         .collect();
     // Per-epic creation-order index lists (for local blocker choice).
     let mut members: Vec<Vec<usize>> = vec![Vec::new(); k];
+    // FILTER-13: the nested shape's executions and builds so far, per epic.
+    let mut execs: Vec<Vec<usize>> = vec![Vec::new(); k];
+    let mut builds: Vec<Vec<usize>> = vec![Vec::new(); k];
     let mut index: HashMap<String, usize> = HashMap::with_capacity(count);
 
     const BASE_UNIX: i64 = 1_750_000_000; // 2025-06-15T13:20Z
@@ -230,6 +253,13 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> V
                 None,
                 format!("{epic}: {}", title(&mut rng).to_lowercase()),
             )
+        } else if nested {
+            let kind = rng.weighted(&NESTED_KINDS);
+            let (status, severity) = match kind {
+                Kind::Doc => (Status::Doc, None),
+                _ => (rng.weighted(&STATUSES), rng.weighted(&SEVERITIES)),
+            };
+            (kind, status, severity, title(&mut rng))
         } else {
             (
                 rng.weighted(&KINDS),
@@ -243,7 +273,8 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> V
         // in the same epic, sometimes anything created earlier
         // anywhere. Always earlier in creation order — acyclic.
         let mut blocked_by: Vec<String> = Vec::new();
-        if !root && rng.chance(25) {
+        // SDLC-11: a doc is never blocked (the flat shape holds none).
+        if !root && kind != Kind::Doc && rng.chance(25) {
             let want = 1 + usize::from(rng.chance(30)) + usize::from(rng.chance(10));
             for _ in 0..want {
                 let candidate = if rng.chance(90) {
@@ -255,7 +286,8 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> V
                 } else {
                     None
                 };
-                if let Some(c) = candidate {
+                // …nor a blocker.
+                if let Some(c) = candidate.filter(|c| out[*c].kind != Kind::Doc) {
                     let bid = out[c].id.clone();
                     if !blocked_by.contains(&bid) {
                         blocked_by.push(bid);
@@ -283,9 +315,29 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>) -> V
         // seed lands), as `create` leaves a parent's row alone.
         let parent = if root {
             None
+        } else if nested {
+            let last = |xs: &[usize], rng: &mut Rng| -> usize {
+                let w = xs.len().min(20);
+                xs[xs.len() - w + rng.below(w)]
+            };
+            let at = match kind {
+                Kind::Doc if !builds[e].is_empty() => last(&builds[e], &mut rng),
+                Kind::Build if !execs[e].is_empty() => last(&execs[e], &mut rng),
+                Kind::Execution | Kind::Doc | Kind::Build => members[e][0],
+                _ if !execs[e].is_empty() && rng.chance(60) => last(&execs[e], &mut rng),
+                _ => members[e][0],
+            };
+            Some(out[at].id.clone())
         } else {
             Some(out[members[e][0]].id.clone())
         };
+        if nested && !root {
+            match kind {
+                Kind::Execution => execs[e].push(i),
+                Kind::Build => builds[e].push(i),
+                _ => {}
+            }
+        }
         members[e].push(i);
         index.insert(id.clone(), i);
         out.push(Ticket {

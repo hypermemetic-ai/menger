@@ -398,6 +398,13 @@ impl Rollups {
         self.shortcodes.get(epic)?.root.as_deref()
     }
 
+    /// FILTER-13: the ticket `epic`'s row nests under — its settled host,
+    /// drawn or not — or `None` for a top-level shortcode: what a lineage's
+    /// "shortcodes hosting it" follow.
+    pub(super) fn host(&self, epic: &str) -> Option<&str> {
+        self.shortcodes.get(epic)?.host.as_deref()
+    }
+
     /// AGS-23: `epic`'s row as it stands, if the nav draws one — what a
     /// write reports that moves no count but changes the root's own row.
     pub(super) fn group(&self, epic: &str) -> Option<Group> {

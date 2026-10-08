@@ -433,6 +433,7 @@ fn synthetic_bodies_say_nothing_about_components() {
             into_existing: false,
         },
         &HashMap::new(),
+        SeedShape::Flat,
     );
     for t in &generated {
         assert_eq!(components::read(&t.body), (components::Uses::default(), vec![]), "{}", t.id);

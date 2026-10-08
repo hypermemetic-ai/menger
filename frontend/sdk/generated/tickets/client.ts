@@ -53,6 +53,8 @@ export interface TicketsClient {
   setParent(id: string, parent: string): AsyncGenerator<TicketsEvent>;
   /** Set a ticket's status (not a doc's: a doc has no lifecycle) */
   setStatus(id: string, status: string): AsyncGenerator<TicketsEvent>;
+  /** The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page */
+  tree(filter: string, after?: string | null, epic?: string | null, limit?: number | null, parent?: string | null): AsyncGenerator<TicketsEvent>;
   /** Unlink commits from a ticket; yields commits_unlinked { ticket, removed } */
   unlinkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
   /** Subscribe to ticket changes (Created / StatusChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
@@ -178,6 +180,11 @@ class TicketsClientImpl implements TicketsClient {
 
   async *setStatus(id: string, status: string): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.set_status', { id, status });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *tree(filter: string, after?: string | null, epic?: string | null, limit?: number | null, parent?: string | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.tree', { after, epic, filter, limit, parent });
     yield* extractData<TicketsEvent>(stream);
   }
 
