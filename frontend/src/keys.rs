@@ -327,6 +327,9 @@ thread_local! {
     /// SCALE-26: the observer is handing focus back — not a new focus, so a
     /// step on its way stays on its way.
     static REFOCUS: Cell<bool> = const { Cell::new(false) };
+    /// FILTER-12: moves with every step the keys take on the board — a wait
+    /// for a row a filtered board has not fetched yet ends at the next.
+    static BOARD_STEPS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// How long a step waits for its row to be drawn: the scroll's frame, then
@@ -641,6 +644,25 @@ fn board_key(key: &str, target: Option<&web_sys::Element>, board: board::Board) 
     if n == 0 {
         return false;
     }
+    // FILTER-12: under a filter the board knows where the rows it holds sit;
+    // a parked row it gave back (scrolled more than its margins away) is
+    // placed by the server — a deep link, `list { filter, after, limit: 0 }`
+    // — and the step taken from there.
+    if resume.is_none() && board.filtered_untracked() && matches!(key, "j" | "k") {
+        if let Some(id) = parked {
+            let down = key == "j";
+            spawn_local(async move {
+                let next = match board.locate(&id).await {
+                    Some(p) if down => (p + 1).min(board.n_untracked().saturating_sub(1)),
+                    Some(p) => p.saturating_sub(1),
+                    None if down => 0,
+                    None => board.n_untracked().saturating_sub(1),
+                };
+                focus_board_row(&query_all("#board tr[data-ticket-id]"), next, board);
+            });
+            return true;
+        }
+    }
     let last = n - 1;
     let next = match key {
         // A letter with no row focused starts at the near end; an arrow
@@ -676,7 +698,16 @@ fn board_key(key: &str, target: Option<&web_sys::Element>, board: board::Board) 
 /// still have to be fetched, so the wait is longer, the row it waits for is
 /// remembered (the next press steps on from it), and a newer step ends it.
 fn focus_board_row(mounted: &[web_sys::HtmlElement], index: usize, board: board::Board) {
-    let Some(id) = board.id_at(index) else { return };
+    BOARD_STEPS.with(|s| s.set(s.get().wrapping_add(1)));
+    let Some(id) = board.id_at(index) else {
+        // FILTER-12: under a filter, which match sits at a position the
+        // board does not hold only the server knows — scroll there, and step
+        // onto it once the window has it.
+        if board.filtered_untracked() {
+            reach_board_row(index, board);
+        }
+        return;
+    };
     if let Some(el) = mounted_board_row(mounted, &id) {
         BOARD_TARGET.with(|t| *t.borrow_mut() = None);
         focus_board_el(mounted, el, index, board);
@@ -705,6 +736,29 @@ fn focus_board_row(mounted: &[web_sys::HtmlElement], index: usize, board: board:
                 *t = None;
             }
         });
+    });
+}
+
+/// FILTER-12: step onto store row `index` of a filtered board that does not
+/// hold it yet — scrolled in, then focused once its page has come; a newer
+/// step ends the wait.
+fn reach_board_row(index: usize, board: board::Board) {
+    let step = BOARD_STEPS.with(Cell::get);
+    let since = js_sys::Date::now();
+    crate::scroll_board_to(index, board.n_untracked(), board.pitch());
+    spawn_local(async move {
+        while js_sys::Date::now() - since < BOARD_STEP_WAIT_MS {
+            dom::sleep_ms(16).await;
+            if BOARD_STEPS.with(Cell::get) != step {
+                return;
+            }
+            let Some(id) = board.id_at(index) else { continue };
+            let all = query_all("#board tr[data-ticket-id]");
+            if let Some(el) = mounted_board_row(&all, &id) {
+                focus_board_el(&all, el, index, board);
+                return;
+            }
+        }
     });
 }
 

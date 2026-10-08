@@ -42,6 +42,32 @@
 //! The row pitch, the scaled layout above 15 M px and the window's margins
 //! are MFE-12's (`board_layout` in main.rs); this module only decides which
 //! of the window's rows are in hand.
+//!
+//! FILTER-12: **the board under the lens.** It shows its effective filter —
+//! global ∧ board (FILTER-11) — and with none it is everything above,
+//! request for request. With one:
+//!
+//! - **Where a match sits is arithmetic over `counts { filter }`** — each
+//!   shortcode's matches in the store's order ([`Matches`]): their sum is
+//!   the extent (the scrollbar, `aria-rowcount`, the dock's count), and
+//!   position p is the rank-th match of shortcode E by prefix sums.
+//! - **A position is asked by position**: the window's missing stretch is
+//!   `list { filter, at, limit, summary }`, whose rows are the matches at
+//!   `first`, `first + 1`, …; held by rank ([`Ranked`]). A page that does
+//!   not fit the counts (its rows in another shortcode, its total not
+//!   theirs) says the counts are stale: they are asked again. A deep link
+//!   is `list { filter, after: X, limit: 0 }`'s `first` ([`Board::locate`]).
+//! - **Live by membership**: a `watch { filter, membership: true }`
+//!   ([`session::Membership`]), opened before the previous filter's is
+//!   dropped. `entered` raises its shortcode's count, every held row after
+//!   it moves a rank, and the row is held when it lands beside a held one
+//!   (from the row cache, or the row `watch` just carried); `left` lowers
+//!   it and drops the row; `recount` sets the counts and asks the window
+//!   again, rows keeping their DOM; `lagged` or a reconnect asks the counts,
+//!   then the window. Every other event reaches rows through the session's
+//!   `watch`, as before.
+//! - **The extents stay the store's order**, asked as before: COMP-9's
+//!   checks, and every ticket's count beside the matches.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -228,6 +254,28 @@ pub(crate) fn slots(ext: &Extents, held: &Held, lo: usize, hi: usize) -> Vec<Slo
     out
 }
 
+/// FILTER-12: the window `lo..hi` under a filter as rows and gaps, in order —
+/// the rows held at their positions ([`Ranked::window`]).
+pub(crate) fn ranked_slots(m: &Matches, r: &Ranked<(String, cache::RowSignal)>, lo: usize, hi: usize) -> Vec<Slot> {
+    let hi = hi.min(m.n());
+    let mut out = Vec::new();
+    if lo >= hi {
+        return out;
+    }
+    let mut p = lo;
+    for (q, _, (id, sig)) in r.window(m, lo, hi) {
+        if q > p {
+            out.push(Slot::Gap(p, q - p));
+        }
+        out.push(Slot::Row(id.clone(), sig.clone()));
+        p = q + 1;
+    }
+    if p < hi {
+        out.push(Slot::Gap(p, hi - p));
+    }
+    out
+}
+
 /// The first and the last row of `lo..hi` the board neither holds nor knows
 /// to be a hole — what one page must bring.
 pub(crate) fn missing(ext: &Extents, held: &Held, lo: usize, hi: usize) -> Option<(usize, usize)> {
@@ -352,6 +400,7 @@ impl Matches {
 
     /// How many matches come before `epic`'s — where its first sits, or
     /// would.
+    #[allow(dead_code)] // FILTER-14
     pub(crate) fn start(&self, epic: &str) -> usize {
         match self.find(epic) {
             Ok(i) => self.before[i],
@@ -442,17 +491,9 @@ pub(crate) enum Landed {
 pub(crate) struct Stale;
 
 impl<T> Ranked<T> {
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.rows.len()
-    }
-
-    pub(crate) fn has(&self, k: &Key) -> bool {
-        self.rows.contains_key(k)
-    }
-
-    /// The row held under `k`.
-    pub(crate) fn get(&self, k: &Key) -> Option<&T> {
-        self.rows.get(k).map(|(t, _)| t)
     }
 
     /// Where the row held under `k` sits.
@@ -569,16 +610,8 @@ impl<T> Ranked<T> {
     /// positions, or sits between its first and last row, handed back — it
     /// is not a match there any more.
     pub(crate) fn place(&mut self, m: &Matches, first: usize, total: Option<usize>, page: Vec<(Key, T)>) -> Result<Placed<T>, Stale> {
-        if total.is_some_and(|t| t != m.n()) {
-            return Err(Stale);
-        }
-        let mut ranks = Vec::with_capacity(page.len());
-        for (i, (k, _)) in page.iter().enumerate() {
-            match m.locate(first + i) {
-                Some((epic, rank)) if epic == k.0 => ranks.push(rank),
-                _ => return Err(Stale),
-            }
-        }
+        let keys: Vec<Key> = page.iter().map(|(k, _)| k.clone()).collect();
+        let ranks = Self::fits(m, first, total, &keys)?;
         let span = first..first + page.len();
         let keys: BTreeSet<Key> = page.iter().map(|(k, _)| k.clone()).collect();
         let (lo, hi) = match (keys.first(), keys.last()) {
@@ -605,6 +638,27 @@ impl<T> Ranked<T> {
             }
         }
         Ok(Placed { fresh, gone })
+    }
+
+    /// Whether a page of `keys` at `first`, of `total` matches, fits the
+    /// counts — each row in the shortcode they place there, the total
+    /// theirs: the rows' ranks, or [`Stale`].
+    pub(crate) fn fits(m: &Matches, first: usize, total: Option<usize>, keys: &[Key]) -> Result<Vec<usize>, Stale> {
+        if total.is_some_and(|t| t != m.n()) {
+            return Err(Stale);
+        }
+        keys.iter()
+            .enumerate()
+            .map(|(i, k)| match m.locate(first + i) {
+                Some((epic, rank)) if epic == k.0 => Ok(rank),
+                _ => Err(Stale),
+            })
+            .collect()
+    }
+
+    /// Whether a row is held outside `lo..hi` (or placed nowhere).
+    pub(crate) fn outside(&self, m: &Matches, lo: usize, hi: usize) -> bool {
+        self.rows.iter().any(|(k, (_, rank))| m.pos(&k.0, *rank).is_none_or(|p| p < lo || p >= hi))
     }
 
     /// Every row outside `lo..hi` (or placed nowhere) taken out and handed
@@ -671,11 +725,110 @@ async fn ask(client: &Client, after: Option<String>, limit: usize) -> Answer {
     }
 }
 
+/// FILTER-12: what `counts { filter }` answered.
+enum Counted {
+    Counts(Vec<(String, u64)>),
+    /// An in-band refusal — a filter the server does not take.
+    Refused(String),
+    Offline(String),
+}
+
+async fn count(client: &Client, filter: &str) -> Counted {
+    match client.counts_all(Some(filter.to_string())).await {
+        Ok(events) => {
+            let mut runs = Vec::new();
+            for ev in events {
+                match ev {
+                    TicketsEvent::Count { epic, held } => runs.push((epic, held)),
+                    TicketsEvent::Error { message } => return Counted::Refused(message),
+                    _ => {}
+                }
+            }
+            Counted::Counts(runs)
+        }
+        Err(e) => Counted::Offline(session::describe(&e)),
+    }
+}
+
+/// FILTER-12: one page of the matches, from position `at`.
+enum Window {
+    /// Its rows; `first`, the position of the first; `total`, every match
+    /// (`first + rows + remaining`).
+    Page { rows: Vec<TicketSummary>, first: usize, total: usize },
+    Refused(String),
+    Offline(String),
+}
+
+async fn ask_at(client: &Client, filter: &str, at: usize, limit: usize) -> Window {
+    match client
+        .list_all(None, None, None, None, Some(limit.max(1) as u32), Some(true), Some(filter.to_string()), Some(at as u64))
+        .await
+    {
+        Ok(events) => {
+            let mut rows = Vec::new();
+            for ev in events {
+                match ev {
+                    TicketsEvent::Summary { summary } => rows.push(summary),
+                    TicketsEvent::Page { remaining, first, .. } => {
+                        let first = first.map_or(at, |f| f as usize);
+                        let total = first + rows.len() + remaining as usize;
+                        return Window::Page { rows, first, total };
+                    }
+                    TicketsEvent::Error { message } => return Window::Refused(message),
+                    _ => {}
+                }
+            }
+            Window::Refused("list: no page".into())
+        }
+        Err(e) => Window::Offline(session::describe(&e)),
+    }
+}
+
+/// FILTER-12: what a page `list { filter, after: X, limit: 0 }` says: X's
+/// position among the matches (its `first`, less one when X is a match —
+/// the page after X starts right after it).
+async fn ask_place(client: &Client, filter: &str, id: &str) -> Option<usize> {
+    let events = client
+        .list_all(None, None, None, Some(id.to_string()), Some(0), Some(true), Some(filter.to_string()), None)
+        .await
+        .ok()?;
+    events.into_iter().find_map(|ev| match ev {
+        TicketsEvent::Page { first, .. } => first.map(|f| f as usize),
+        _ => None,
+    })
+}
+
+/// FILTER-12: the filter the board shows — its effective filter's groups as
+/// the wire's text — and whether they admit nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Lensing {
+    pub(crate) text: String,
+    pub(crate) nothing: bool,
+}
+
+impl Lensing {
+    /// The board's lensing for its effective filter: `None` with no group
+    /// (SCALE-26's board — the display part filters nothing).
+    pub(crate) fn of(f: &menger_tickets_api::filter::Filter) -> Option<Lensing> {
+        (!f.groups.is_empty()).then(|| Lensing { text: crate::counts::wire_text(f), nothing: f.admits_nothing().is_some() })
+    }
+}
+
+/// A row the board holds under a filter: its id and its signal.
+type Row = (String, cache::RowSignal);
+
 /// The board's model of the store: the extents, the rows it holds, and the
 /// geometry its view last measured (MFE-12's [`Geom`]) — from which the
 /// window is worked out whether or not the board is on screen. Made once by
 /// the App; the session writes the extents and asks for what is shown, the
 /// board's view reads.
+///
+/// FILTER-12: under a filter (the board's effective filter non-empty) the
+/// board is a window over its matches instead: `counts { filter }` is its
+/// arithmetic ([`Matches`]), its rows are held by rank ([`Ranked`]) and
+/// asked by position (`list { filter, at }`), and a membership watch moves
+/// both. The extents stay the store's order (COMP-9's checks, the header's
+/// count of every ticket); with no filter everything is as SCALE-26 left it.
 #[derive(Clone, Copy)]
 pub(crate) struct Board {
     ext: RwSignal<Option<Extents>>,
@@ -693,6 +846,22 @@ pub(crate) struct Board {
     /// Asks in a row that told the board nothing, for one window: a store
     /// that disagrees with its extents cannot spin the board on one gap.
     strikes: StoredValue<((usize, usize), u8)>,
+    /// FILTER-12: the filter shown — `None`: the store, unfiltered.
+    lens: RwSignal<Option<Lensing>>,
+    /// FILTER-12: `counts { filter }`, once answered.
+    matches: RwSignal<Option<Matches>>,
+    /// FILTER-12: the rows held under the filter, by rank.
+    ranked: RwSignal<Ranked<Row>>,
+    /// FILTER-12: moves with every membership event — a page asked before
+    /// one is not placed (its positions may have moved).
+    moved: StoredValue<u64>,
+    /// FILTER-12: the board's membership watch, while it has a filter.
+    member: StoredValue<Option<session::Membership>>,
+    /// FILTER-12: what the server said of a filter it did not take.
+    refused: RwSignal<Option<String>>,
+    /// FILTER-12: counts asked again because a page did not fit them, since
+    /// the last page that did.
+    resyncs: StoredValue<u8>,
 }
 
 impl Board {
@@ -707,29 +876,83 @@ impl Board {
             flight: StoredValue::new(None),
             retry: Trigger::new(),
             strikes: StoredValue::new(((0, 0), 0)),
+            lens: RwSignal::new(None),
+            matches: RwSignal::new(None),
+            ranked: RwSignal::new(Ranked::default()),
+            moved: StoredValue::new(0),
+            member: StoredValue::new(None),
+            refused: RwSignal::new(None),
+            resyncs: StoredValue::new(0),
         }
     }
 
-    /// The extents are in hand (tracked).
-    pub(crate) fn ready(self) -> bool {
-        self.ext.with(Option::is_some)
+    /// FILTER-12: the filter the board shows, if any (tracked).
+    pub(crate) fn lensing(self) -> Option<Lensing> {
+        self.lens.get()
     }
 
-    /// The board's extent — every ticket (tracked).
+    /// FILTER-12: whether the board shows a filter's matches (tracked).
+    pub(crate) fn filtered(self) -> bool {
+        self.lens.with(Option::is_some)
+    }
+
+    pub(crate) fn filtered_untracked(self) -> bool {
+        self.lens.with_untracked(Option::is_some)
+    }
+
+    /// FILTER-12: what the server said of a filter it did not take (tracked).
+    pub(crate) fn refused(self) -> Option<String> {
+        self.refused.get()
+    }
+
+    /// The extents are in hand (tracked) — under a filter, its counts.
+    pub(crate) fn ready(self) -> bool {
+        if self.filtered() {
+            self.matches.with(Option::is_some)
+        } else {
+            self.ext.with(Option::is_some)
+        }
+    }
+
+    /// The board's extent — every ticket (tracked); under a filter, every
+    /// match.
     pub(crate) fn n(self) -> usize {
-        self.ext.with(|e| e.as_ref().map_or(0, Extents::n))
+        if self.filtered() {
+            self.matches.with(|m| m.as_ref().map_or(0, Matches::n))
+        } else {
+            self.ext.with(|e| e.as_ref().map_or(0, Extents::n))
+        }
     }
 
     pub(crate) fn n_untracked(self) -> usize {
-        self.ext.with_untracked(|e| e.as_ref().map_or(0, Extents::n))
+        if self.filtered_untracked() {
+            self.matches.with_untracked(|m| m.as_ref().map_or(0, Matches::n))
+        } else {
+            self.ext.with_untracked(|e| e.as_ref().map_or(0, Extents::n))
+        }
     }
 
-    /// Where `id` sits (tracked: a birth before it moves it).
+    /// FILTER-12: every ticket in the store — the extents' sum, filter or
+    /// none (tracked; `None` before the extents are in).
+    pub(crate) fn store_n(self) -> Option<usize> {
+        self.ext.with(|e| e.as_ref().map(Extents::n))
+    }
+
+    /// Where `id` sits (tracked: a birth before it moves it). Under a
+    /// filter, a row the board holds.
     pub(crate) fn pos_of(self, id: &str) -> Option<usize> {
+        if self.filtered() {
+            let k = owned(crate::kids::key(id)?);
+            return self.matches.with(|m| self.ranked.with(|r| r.pos_of(m.as_ref()?, &k)));
+        }
         self.ext.with(|e| e.as_ref()?.pos_of(id))
     }
 
     pub(crate) fn pos_of_untracked(self, id: &str) -> Option<usize> {
+        if self.filtered_untracked() {
+            let k = owned(crate::kids::key(id)?);
+            return self.matches.with_untracked(|m| self.ranked.with_untracked(|r| r.pos_of(m.as_ref()?, &k)));
+        }
         self.ext.with_untracked(|e| e.as_ref()?.pos_of(id))
     }
 
@@ -752,7 +975,12 @@ impl Board {
     }
 
     /// The id of row `p` — held or not: the keyboard walks every row.
+    /// FILTER-12: under a filter, held — which match sits at a position the
+    /// board does not hold, only the server knows (`None`).
     pub(crate) fn id_at(self, p: usize) -> Option<String> {
+        if self.filtered_untracked() {
+            return self.matches.with_untracked(|m| self.ranked.with_untracked(|r| r.at(m.as_ref()?, p).map(|(_, (id, _))| id.clone())));
+        }
         self.ext.with_untracked(|e| {
             let e = e.as_ref()?;
             let k = owned(e.key_at(p)?);
@@ -762,6 +990,12 @@ impl Board {
 
     /// The window `lo..hi` as the view draws it (tracked).
     pub(crate) fn slots(self, lo: usize, hi: usize) -> Vec<Slot> {
+        if self.filtered() {
+            return self.matches.with(|m| match m {
+                Some(m) => self.ranked.with(|r| ranked_slots(m, r, lo, hi)),
+                None => Vec::new(),
+            });
+        }
         self.ext.with(|e| match e {
             Some(e) => self.held.with(|h| slots(e, h, lo, hi)),
             None => Vec::new(),
@@ -902,6 +1136,10 @@ impl Board {
     /// An answer still out from before is not applied. `Err` only when the
     /// socket died.
     pub(crate) async fn refresh(self, client: &Client) -> Result<(), String> {
+        // FILTER-12: under a filter, its counts and then its window.
+        if self.filtered_untracked() {
+            return self.refresh_lensed(client, true).await;
+        }
         let gen = self.gen.get_value().wrapping_add(1);
         self.gen.set_value(gen);
         self.flight.set_value(Some(gen));
@@ -938,6 +1176,11 @@ impl Board {
     /// request in flight.
     pub(crate) fn drive(self) {
         Effect::new(move |_| {
+            // FILTER-12: under a filter, its window over the matches.
+            if let Some(lens) = self.lens.get() {
+                self.drive_lensed(lens);
+                return;
+            }
             self.retry.track();
             let Some(n) = self.ext.with(|e| e.as_ref().map(Extents::n)) else { return };
             let l = board_layout(n, self.geom.get());
@@ -1008,11 +1251,334 @@ impl Board {
             });
         });
     }
+
+    // -----------------------------------------------------------------
+    // FILTER-12: under a filter
+
+    /// The board follows its effective filter (global ∧ board) for the App's
+    /// lifetime: set now — before the session asks for anything — and again
+    /// whenever it changes.
+    pub(crate) fn follow(self, effective: Signal<menger_tickets_api::filter::Filter>) {
+        self.relens(effective.with_untracked(Lensing::of));
+        Effect::new(move |_| {
+            let next = effective.with(Lensing::of);
+            if self.lens.with_untracked(|l| *l != next) {
+                self.relens(next);
+            }
+        });
+    }
+
+    /// A new filter, or none: what was held for the old one given back; the
+    /// membership watch for the new one opened before the old one is
+    /// dropped; then its counts and its window — now, on the connection
+    /// there is, or by the session once one is up. No filter: SCALE-26's
+    /// board, its window asked after the extents again.
+    fn relens(self, next: Option<Lensing>) {
+        let was = self.lens.get_untracked();
+        if was == next {
+            return;
+        }
+        self.gen.update_value(|g| *g = g.wrapping_add(1));
+        self.flight.set_value(None);
+        self.strikes.set_value(((0, 0), 0));
+        self.resyncs.set_value(0);
+        if was.is_none() {
+            let gone: Vec<String> = self.held.with_untracked(|h| h.rows.values().map(|(id, _)| id.clone()).collect());
+            self.held.set(Held::default());
+            self.holder.with_value(|h| gone.iter().for_each(|id| h.release(id)));
+        }
+        let gone = self.ranked.try_update(Ranked::clear).unwrap_or_default();
+        self.holder.with_value(|h| gone.iter().for_each(|(id, _)| h.release(id)));
+        self.matches.set(None);
+        self.refused.set(None);
+        let watch = next.as_ref().filter(|l| !l.nothing).map(|l| l.text.clone());
+        match (self.member.get_value(), watch) {
+            (Some(m), Some(text)) => m.replace(text),
+            (Some(m), None) => {
+                m.close();
+                self.member.set_value(None);
+            }
+            (None, Some(text)) => self.member.set_value(Some(session::Membership::open(text, move |ev| self.heard(ev)))),
+            (None, None) => {}
+        }
+        let lensed = next.is_some();
+        self.lens.set(next);
+        if lensed {
+            if let Some(client) = session::client() {
+                spawn_local(async move {
+                    let _ = self.refresh_lensed(&client, true).await;
+                });
+            }
+        }
+    }
+
+    /// A membership event: `entered` and `left` move the counts and the rows
+    /// held (a row entering beside a held one is held — from the row cache,
+    /// or the row `watch` just carried; elsewhere nothing is fetched); a
+    /// `recount` sets the counts and asks the window again, the rows keeping
+    /// their DOM; a `lagged` asks the counts, then the window. `Opened` asks
+    /// nothing: the session asks for what is shown on every connection, and
+    /// a new filter asks for itself.
+    fn heard(self, ev: &session::Member) {
+        use session::Member;
+        if !self.filtered_untracked() {
+            return;
+        }
+        match ev {
+            Member::Entered { id, epic, seq } => {
+                self.moved.update_value(|n| *n = n.wrapping_add(1));
+                let Some(mut m) = self.matches.get_untracked() else { return };
+                let landed = self.ranked.try_update(|r| r.entered(&mut m, epic, *seq));
+                self.matches.set(Some(m));
+                if let Some(Landed::At { rank: Some(rank), beside: true, .. }) = landed {
+                    let sig = if self.holder.with_value(|h| h.hold_id(id)) {
+                        cache::get(id)
+                    } else {
+                        session::recent(id).and_then(|t| self.holder.with_value(|h| h.hold(t)))
+                    };
+                    if let Some(sig) = sig {
+                        self.ranked.update(|r| r.insert((epic.clone(), *seq), (id.clone(), sig), rank));
+                    }
+                }
+            }
+            Member::Left { epic, seq, .. } => {
+                self.moved.update_value(|n| *n = n.wrapping_add(1));
+                let Some(mut m) = self.matches.get_untracked() else { return };
+                let gone = self.ranked.try_update(|r| r.left(&mut m, epic, *seq)).flatten();
+                self.matches.set(Some(m));
+                if let Some((id, _)) = gone {
+                    self.holder.with_value(|h| h.release(&id));
+                }
+            }
+            Member::Recount { epic, held } => {
+                self.moved.update_value(|n| *n = n.wrapping_add(1));
+                let Some(mut m) = self.matches.get_untracked() else { return };
+                self.ranked.update(|r| r.recount(&mut m, epic, *held));
+                self.matches.set(Some(m));
+                self.again(false);
+            }
+            Member::Lagged => self.again(true),
+            Member::Refused(message) => self.refused.set(Some(message.clone())),
+            Member::Opened => {}
+        }
+    }
+
+    /// Ask again, on the connection there is — the counts first when
+    /// `counts`.
+    fn again(self, counts: bool) {
+        if let Some(client) = session::client() {
+            spawn_local(async move {
+                let _ = self.refresh_lensed(&client, counts).await;
+            });
+        }
+    }
+
+    /// The board under its filter asked again: its counts (when `counts`,
+    /// or when it has none), then the window's rows in one page, placed over
+    /// the rows held (they keep their DOM); every row outside the window
+    /// given back. A filter that admits nothing asks nothing. An answer to
+    /// an older question is not applied. `Err` only when the socket died.
+    async fn refresh_lensed(self, client: &Client, counts: bool) -> Result<(), String> {
+        let Some(lens) = self.lens.get_untracked() else { return Ok(()) };
+        let gen = self.gen.get_value().wrapping_add(1);
+        self.gen.set_value(gen);
+        self.flight.set_value(Some(gen));
+        self.strikes.set_value(((0, 0), 0));
+        let mut result = self.ask_lensed(client, &lens, gen, counts).await;
+        // A page the counts did not place: they are stale — once more, the
+        // counts first.
+        if result == Ok(false) && !counts && self.gen.get_value() == gen {
+            result = self.ask_lensed(client, &lens, gen, true).await;
+        }
+        if self.gen.get_value() == gen {
+            let (lo, hi) = self.window();
+            self.keep_lensed(lo, hi);
+        }
+        if self.flight.get_value() == Some(gen) {
+            self.flight.set_value(None);
+        }
+        self.retry.notify();
+        result.map(|_| ())
+    }
+
+    /// The asking behind [`Board::refresh_lensed`]: `Ok(false)` when the
+    /// window's page did not fit the counts.
+    async fn ask_lensed(self, client: &Client, lens: &Lensing, gen: u32, counts: bool) -> Result<bool, String> {
+        if lens.nothing {
+            self.matches.set(Some(Matches::default()));
+            return Ok(true);
+        }
+        if counts || self.matches.with_untracked(Option::is_none) {
+            match count(client, &lens.text).await {
+                Counted::Counts(runs) => {
+                    if self.gen.get_value() != gen {
+                        return Ok(true);
+                    }
+                    self.matches.set(Some(Matches::new(runs)));
+                    self.refused.set(None);
+                }
+                Counted::Refused(message) => {
+                    if self.gen.get_value() == gen {
+                        self.matches.set(Some(Matches::default()));
+                        self.refused.set(Some(message));
+                    }
+                    return Ok(true);
+                }
+                Counted::Offline(e) => return Err(e),
+            }
+        }
+        let (lo, hi) = self.window();
+        if hi <= lo {
+            return Ok(true);
+        }
+        let moved = self.moved.get_value();
+        match ask_at(client, &lens.text, lo, hi - lo).await {
+            Window::Page { rows, first, total } => {
+                if self.gen.get_value() != gen || self.moved.get_value() != moved {
+                    return Ok(true); // the board's own asking fills what moved
+                }
+                Ok(self.place_lensed(rows, first, total).is_ok())
+            }
+            Window::Refused(message) => {
+                self.refused.set(Some(message));
+                Ok(true)
+            }
+            Window::Offline(e) => Err(e),
+        }
+    }
+
+    /// A page of the matches came back: held, ranked where the counts put
+    /// it, and the rows it displaced given back — `Ok(true)` when it told
+    /// the board anything; [`Stale`] (nothing held) when it does not fit.
+    fn place_lensed(self, rows: Vec<TicketSummary>, first: usize, total: usize) -> Result<bool, Stale> {
+        let keys: Vec<Key> = rows.iter().map(|t| (t.epic.clone(), t.seq)).collect();
+        self.matches.with_untracked(|m| Ranked::<Row>::fits(m.as_ref().ok_or(Stale)?, first, Some(total), &keys))?;
+        self.resyncs.set_value(0);
+        if !self.holder.with_value(|h| h.hold_page(rows.clone())) {
+            return Ok(false);
+        }
+        let page: Vec<(Key, Row)> = rows.into_iter().filter_map(|t| cache::get(&t.id).map(|sig| ((t.epic, t.seq), (t.id, sig)))).collect();
+        let placed = self.matches.with_untracked(|m| {
+            let m = m.as_ref()?;
+            self.ranked.try_update(|r| r.place(m, first, Some(total), page))
+        });
+        match placed {
+            Some(Ok(p)) => {
+                self.holder.with_value(|h| p.gone.iter().for_each(|(id, _)| h.release(id)));
+                Ok(p.fresh || !p.gone.is_empty())
+            }
+            Some(Err(s)) => Err(s),
+            None => Ok(false),
+        }
+    }
+
+    /// Give back every row held under the filter outside `lo..hi`. Touches
+    /// the rows' signal only when something goes.
+    fn keep_lensed(self, lo: usize, hi: usize) {
+        let any = self.matches.with_untracked(|m| m.as_ref().is_some_and(|m| self.ranked.with_untracked(|r| r.outside(m, lo, hi))));
+        if !any {
+            return;
+        }
+        let gone = self.matches.with_untracked(|m| {
+            let m = m.as_ref()?;
+            self.ranked.try_update(|r| r.keep(m, lo, hi))
+        });
+        self.holder.with_value(|h| gone.into_iter().flatten().for_each(|(id, _)| h.release(&id)));
+    }
+
+    /// [`Board::drive`] under a filter: what is far from the window given
+    /// back, and the window's missing positions asked for — `list { filter,
+    /// at, limit, summary }`, one page, one request in flight. A page asked
+    /// before a membership event moved the positions is asked again; one the
+    /// counts do not place asks the counts again (twice at most, until a
+    /// page fits).
+    fn drive_lensed(self, lens: Lensing) {
+        self.retry.track();
+        let Some(n) = self.matches.with(|m| m.as_ref().map(Matches::n)) else { return };
+        let l = board_layout(n, self.geom.get());
+        let (lo, hi) = (l.start.min(n), l.end.min(n));
+        self.ranked.track();
+        self.keep_lensed(lo.saturating_sub(KEEP), hi + KEEP);
+        if self.flight.get_value().is_some() {
+            return;
+        }
+        if self.strikes.with_value(|(w, k)| *w == (lo, hi) && *k >= 3) {
+            return; // until the window, or the connection, moves
+        }
+        let gap = self.matches.with_untracked(|m| self.ranked.with_untracked(|r| r.missing(m.as_ref()?, lo, hi)));
+        let Some((from, last)) = gap else { return };
+        let gen = self.gen.get_value();
+        let moved = self.moved.get_value();
+        self.flight.set_value(Some(gen));
+        spawn_local(async move {
+            let answer = match session::client() {
+                Some(client) => ask_at(&client, &lens.text, from, last + 1 - from).await,
+                None => Window::Offline("not connected".into()),
+            };
+            if self.flight.try_get_value() == Some(Some(gen)) {
+                self.flight.set_value(None);
+            }
+            if self.gen.try_get_value() != Some(gen) || self.moved.try_get_value() != Some(moved) {
+                self.retry.notify(); // asked again; a no-op once the app is gone
+                return;
+            }
+            let told = match answer {
+                Window::Page { rows, first, total } => match self.place_lensed(rows, first, total) {
+                    Ok(told) => told,
+                    Err(Stale) => {
+                        if self.resyncs.get_value() < 2 {
+                            self.resyncs.update_value(|n| *n += 1);
+                            self.again(true);
+                            return;
+                        }
+                        false
+                    }
+                },
+                Window::Refused(message) => {
+                    self.refused.set(Some(message));
+                    false
+                }
+                // The session sees the socket go and asks again when it is back.
+                Window::Offline(_) => return,
+            };
+            self.strikes.update_value(|(w, k)| {
+                if *w != (lo, hi) || told {
+                    *w = (lo, hi);
+                    *k = 0;
+                }
+                if !told {
+                    *k += 1;
+                }
+            });
+            if !told {
+                self.retry.notify();
+            }
+        });
+    }
+
+    /// FILTER-12: where `id` sits among the board's matches — where the
+    /// board holds it, else the server's word: `list { filter, after: id,
+    /// limit: 0 }`'s `first` is how many matches there are up to it, so it
+    /// sits at `first - 1` (or, not a match, the last match before it does).
+    /// A deep link's position; unfiltered, the extents'.
+    pub(crate) async fn locate(self, id: &str) -> Option<usize> {
+        if let Some(p) = self.pos_of_untracked(id) {
+            return Some(p);
+        }
+        let lens = self.lens.get_untracked()?;
+        if lens.nothing {
+            return None;
+        }
+        let client = session::client()?;
+        let first = ask_place(&client, &lens.text, id).await?;
+        first.checked_sub(1)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{cursor, holes, missing, slots, Extents, Held, Key, Landed, Matches, Placed, Ranked, Slot, Stale};
+    use super::{cursor, holes, missing, ranked_slots, slots, Extents, Held, Key, Landed, Lensing, Matches, Placed, Ranked, Slot, Stale};
+    use menger_tickets_api::filter::Filter;
     use leptos::prelude::*;
     use menger_tickets_api::{Kind, Status, TicketSummary};
 
@@ -1176,6 +1742,41 @@ mod tests {
         assert_eq!(positions(&m, &r), [(1, "A-4".into()), (2, "B-1".into())], "A-7, A-9 past A's count; B moved up");
         r.recount(&mut m, "B", 0);
         assert_eq!((m.n(), r.pos_of(&m, &k("B-1"))), (2, None));
+    }
+
+    /// FILTER-12: the board is filtered exactly when its effective filter
+    /// has a group — the wire gets the groups' text (a display part filters
+    /// nothing, and is not the server's); a clash asks nothing.
+    #[test]
+    fn the_board_is_filtered_by_its_effective_filters_groups() {
+        let of = |t: &str| Lensing::of(&Filter::parse(t).expect("parses"));
+        assert_eq!(of(""), None);
+        assert_eq!(of("· tree"), None, "a display part alone is SCALE-26's board");
+        assert_eq!(of("status Ready"), Some(Lensing { text: "status Ready".into(), nothing: false }));
+        assert_eq!(of("not kind doc and status Ready · flat"), Some(Lensing { text: "not kind doc and status Ready".into(), nothing: false }));
+        assert_eq!(of("status Ready and status Coding").map(|l| l.nothing), Some(true));
+        let global = Filter::parse("not kind doc").unwrap();
+        let own = Filter::parse("status Ready").unwrap();
+        assert_eq!(Lensing::of(&global.and(&own)).map(|l| l.text), Some("not kind doc and status Ready".into()), "global ∧ board");
+    }
+
+    /// FILTER-12: the window drawn under a filter — the rows held at their
+    /// positions, the stretches between them gaps of their length, nothing
+    /// past the matches.
+    #[test]
+    fn a_filtered_window_is_rows_at_their_positions_and_gaps() {
+        let m = Matches::new(vec![("A".into(), 5), ("B".into(), 3)]);
+        let mut r = Ranked::default();
+        for (id, rank) in [("A-4", 1), ("A-7", 2), ("B-1", 0)] {
+            let t = row(id);
+            r.insert(k(id), (id.to_string(), ArcRwSignal::new(t)), rank);
+        }
+        let keys = |lo, hi| ranked_slots(&m, &r, lo, hi).iter().map(Slot::key).collect::<Vec<_>>();
+        assert_eq!(keys(0, 8), ["?0+1", "A-4", "A-7", "?3+2", "B-1", "?6+2"]);
+        assert_eq!(keys(1, 3), ["A-4", "A-7"]);
+        assert_eq!(keys(4, 99), ["?4+1", "B-1", "?6+2"], "clamped to the matches");
+        assert!(keys(8, 20).is_empty());
+        assert!(ranked_slots(&Matches::default(), &r, 0, 10).is_empty());
     }
 
     /// FILTER-12: a page at `first` — its rows are the matches there:

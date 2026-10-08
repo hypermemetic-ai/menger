@@ -1093,6 +1093,40 @@
   .fmenu .frow.fgroup .fhead-l {
     font-family: var(--sans); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
   }
+  /* FILTER-12: the board's bar over its table; the board when nothing
+     matches — the words, the effective filter's pills (the global ones
+     dashed and marked), a button to clear each level; the header's
+     `n of N` beside the global Filter button while the global filter is set. */
+  .bbar { margin: 0 0 .6rem; font-size: .85rem; }
+  .bbar > .fclash { margin-top: .4rem; }
+  .bempty {
+    margin: 1.25rem 0; padding: 1rem 1.25rem; border: 1px dashed var(--line); border-radius: 8px;
+    text-align: center; color: var(--muted);
+  }
+  .bempty-h { margin: 0 0 .6rem; font-size: 1rem; font-weight: 600; color: var(--ink); }
+  .bempty-why { margin: 0 0 .6rem; font-size: .8rem; color: var(--err-fg); overflow-wrap: anywhere; }
+  .bempty-pills { display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem; margin: 0 0 .8rem; }
+  .bempty .pill {
+    display: inline-flex; align-items: stretch; font-size: 12px; line-height: 1.6;
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  }
+  .bempty .pill > * { padding: .05rem .45rem; border-left: 1px solid var(--line); white-space: nowrap; }
+  .bempty .pill > :first-child { border-left: 0; }
+  .bempty .pill .p-cat { color: var(--muted); }
+  .bempty .pill .p-vals { color: var(--ink); }
+  .bempty .pill.inherited { opacity: .72; border-style: dashed; }
+  .bempty .pill .p-lvl {
+    font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--accent); align-self: center;
+  }
+  .bempty-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: .75rem; }
+  .bempty-clear {
+    font: inherit; font-size: .8rem; padding: .15rem .7rem; cursor: pointer;
+    background: var(--card); color: var(--accent); border: 1px solid var(--line); border-radius: 6px;
+  }
+  .bempty-clear:hover { border-color: var(--accent); }
+  header .gcount { align-self: center; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  header .gcount .gcount-n { color: var(--accent); font-weight: 600; }
 </style>
 </head>
 <body></body>

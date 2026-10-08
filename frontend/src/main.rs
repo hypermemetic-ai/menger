@@ -225,6 +225,7 @@ mod bridge;
 mod cache;
 mod card;
 mod components;
+mod counts;
 mod dom;
 mod filter;
 mod frame;
@@ -250,6 +251,8 @@ use std::collections::HashSet;
 
 use leptos::prelude::*;
 use menger_tickets_api::{Status, TicketSummary};
+
+use crate::filter::FilterBar;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
@@ -697,6 +700,22 @@ fn Board(
         let (start, end) = range.get();
         board.slots(start, end)
     });
+    // FILTER-12: a filter that matches nothing is the empty state.
+    let empty = Memo::new(move |_| board.filtered() && board.ready() && n.get() == 0);
+    // FILTER-12: a new filter starts the board at its top — a position
+    // among one filter's matches is nothing among another's.
+    Effect::new(move |prev: Option<Option<board::Lensing>>| {
+        let now = board.lensing();
+        if prev.is_some_and(|p| p != now) {
+            if let Some(Some(tb)) = body.try_get_untracked() {
+                let tb: &web_sys::Element = tb.as_ref();
+                if let Ok(Some(scroller)) = tb.closest(".content") {
+                    scroller.set_scroll_top(0);
+                }
+            }
+        }
+        now
+    });
 
     // Read the geometry off the DOM. `try_` throughout: the deferred call
     // below can land after the board has unmounted.
@@ -746,6 +765,12 @@ fn Board(
     };
 
     view! {
+        // FILTER-12: the board's bar — FILTER-11's generic bar at level
+        // board: the server-backed categories, the inherited global pills,
+        // the menu's counts from `facets`.
+        <div class="bbar">
+            <FilterBar level=lens::Level::Board cats=filter::Cat::SERVER.to_vec() counts=counts::provider(lens::Level::Board) hint="Filter the board (f)" />
+        </div>
         // ARIA's virtualized-table contract: the table says how many rows
         // it has, each mounted row says which one it is (1 is the head).
         <table class="board" aria-rowcount=move || n.get() + 1>
@@ -915,6 +940,46 @@ fn Board(
                 {spacer(|l| l.bottom_px)}
             </tbody>
         </table>
+        {move || empty.get().then(|| view! { <BoardEmpty board /> })}
+    }
+}
+
+/// FILTER-12: the board when nothing matches — "No tickets match", the
+/// pills of its effective filter (the global ones marked), and a button to
+/// clear each level that has a filter: the board's, the global one.
+#[component]
+fn BoardEmpty(board: board::Board) -> impl IntoView {
+    let lens = lens::use_lens();
+    let pills = move || {
+        lens::bar_pills(lens::Level::Board, lens.pills(lens::Level::Global), lens.pills(lens::Level::Board))
+            .into_iter()
+            .map(|(level, p)| {
+                let (cat, words) = filter::pill_words(&p);
+                let global = level == lens::Level::Global;
+                view! {
+                    <span class="pill" class:inherited=global data-level=level.name()>
+                        <span class="p-cat">{cat}</span>
+                        <span class="p-vals">{words}</span>
+                        {global.then(|| view! { <span class="p-lvl">"global"</span> })}
+                    </span>
+                }
+            })
+            .collect_view()
+    };
+    view! {
+        <div class="bempty" role="status">
+            <p class="bempty-h">"No tickets match"</p>
+            {move || board.refused().map(|why| view! { <p class="bempty-why">"The server did not take this filter: "<code>{why}</code></p> })}
+            <div class="bempty-pills">{pills}</div>
+            <div class="bempty-acts">
+                {move || lens.differs(lens::Level::Board).then(|| view! {
+                    <button class="bempty-clear" data-clear="board" on:click=move |_| lens.reset(lens::Level::Board)>"Clear the board's filter"</button>
+                })}
+                {move || lens.differs(lens::Level::Global).then(|| view! {
+                    <button class="bempty-clear" data-clear="global" on:click=move |_| lens.reset(lens::Level::Global)>"Clear the global filter"</button>
+                })}
+            </div>
+        </div>
     }
 }
 
@@ -1493,6 +1558,9 @@ fn App() -> impl IntoView {
     let lens = lens::Lens::new(tree);
     lens.install();
     let route = use_route(lens);
+    // FILTER-12: the board shows its effective filter (global ∧ board) —
+    // set before the session asks for anything.
+    board.follow(lens.effective(lens::Level::Board));
 
     // MFE-9: the whole data plane is one task holding one WebSocket
     // (session.rs) — `watch` first, then MNG-9's summary pages walked with
@@ -1527,6 +1595,13 @@ fn App() -> impl IntoView {
     // store's; `health`'s until then.
     let health_view = move || {
         dock.get().map(|h| {
+            // FILTER-12: under a filter the board's extent is its matches —
+            // of the store's tickets.
+            if board.filtered() {
+                let n = if board.ready() { board.n().to_string() } else { "…".to_string() };
+                let all = board.store_n().map_or(h.ticket_count, |n| n as u64);
+                return format!("menger v{} · {} of {} tickets", h.version, n, all);
+            }
             let count = if board.ready() { board.n() as u64 } else { h.ticket_count };
             format!("menger v{} · {} tickets", h.version, count)
         })
@@ -1638,6 +1713,9 @@ fn App() -> impl IntoView {
                     }}
                     // FILTER-11: the global filter — its groups as a badge.
                     <lens::GlobalButton />
+                    // FILTER-12: while the global filter is non-empty, what
+                    // it admits of every ticket — `n of N`, live.
+                    <counts::GlobalCount board />
                     <span class="tag">
                         {move || match route.get() {
                             Route::Board => "the live board (MFE-3)",

@@ -770,6 +770,18 @@ pub(crate) fn display_order(c: Cat, cl: &Clause, route: Option<&str>, tree: Opti
     }
 }
 
+/// FILTER-12: a pill in words — `Status is any of Ready, Coding`, `Kind is
+/// not doc`, a custom group's text — for where it is shown, not edited.
+pub(crate) fn pill_words(p: &Pill) -> (String, String) {
+    match p {
+        Pill::Clause { cat, clause } => {
+            let values = clause.values.iter().map(|v| cat.value_label(v)).collect::<Vec<_>>().join(", ");
+            (cat.label().to_string(), format!("{} {values}", op_label(*cat, clause.op, clause.values.len())))
+        }
+        Pill::Custom { text, .. } => ("custom".to_string(), text.clone()),
+    }
+}
+
 /// A pill's values: the first, then `+n` for the rest.
 pub(crate) fn pill_values(c: Cat, shown: &[String]) -> (String, Option<String>) {
     let first = shown.first().map(|v| c.value_label(v)).unwrap_or_default();
@@ -802,8 +814,7 @@ impl CountsProvider {
     }
 
     /// The counts a signal holds — a server-backed level's, from `facets`
-    /// (FILTER-12).
-    #[allow(dead_code)] // FILTER-12's
+    /// (FILTER-12's `counts::provider`).
     pub(crate) fn of(s: Signal<Counts>) -> Self {
         CountsProvider(Some(s))
     }
@@ -1015,6 +1026,12 @@ impl Pop {
 
     pub(crate) fn is_open(self) -> bool {
         self.open.with_untracked(Option::is_some)
+    }
+
+    /// FILTER-12: whether it is open (tracked) — when a server-backed
+    /// level's counts are asked.
+    pub(crate) fn open_tracked(self) -> bool {
+        self.open.with(Option::is_some)
     }
 
     /// Opened under `sel` — on `cat`'s values when given (alone when
