@@ -20,11 +20,16 @@
 //!   wins over the stored one, and a malformed value is the level's
 //!   default; a change rewrites the query with `replaceState`; a navigation
 //!   carries `g` and `n` to the new route ([`carry`]). No value is the
-//!   level's default. A page's own query keys (the inputs page's `sc`,
-//!   `state`, `removed`) ride beside the lens's untouched ([`page_query`],
-//!   [`with_page_query`]).
+//!   level's default.
 //! - **WAVE-12's links** (`#/waves/PLEXUS?sc=is:RETURNS&status=not:Complete`)
 //!   still open the board they named; the first change writes it as `f=`.
+//! - FILTER-16: **the inputs page** is the `inputs` level: its own
+//!   categories (State, Removed) ride beside `f=` under their keys, as the
+//!   wave board's do; an INPUT-6 link (`#/inputs?sc=INPUT&state=open&
+//!   removed`) opens the filter it named and is written as `f=` at once
+//!   ([`crate::inputs_page::read_input_6`]). The components and settings
+//!   pages show no ticket: the lens bar says the filter does not apply there
+//!   ([`applies`]).
 //!
 //! Everything that decides — the query both ways, the storage keys, the
 //! carrying, what a route's surface is — is a pure function here, pinned by
@@ -298,17 +303,10 @@ pub(crate) fn lens_hash(hash: &str, g: Option<&str>, n: Option<&str>, surface: O
     }
 }
 
-/// A page's own query — the route's, without the lens's keys — for a page
-/// that reads its own filter from the URL (the inputs page).
-pub(crate) fn page_query(hash: &str) -> String {
-    join(&pairs(query_of(hash)).into_iter().filter(|p| !lens_owns(&p.key, &[])).collect::<Vec<_>>())
-}
-
-/// `hash` with the page's own query replaced by `q`, the lens's keys kept.
-pub(crate) fn with_page_query(hash: &str, q: &str) -> String {
-    let mut out: Vec<Pair> = pairs(query_of(hash)).into_iter().filter(|p| lens_owns(&p.key, &[])).collect();
-    out.extend(pairs(q));
-    with_query(hash, &join(&out))
+/// FILTER-16: whether the lens applies on `route` — every route but the
+/// components and settings pages, which show no ticket.
+pub(crate) fn applies(route: &Route) -> bool {
+    !matches!(route, Route::Components(_) | Route::Settings)
 }
 
 // ---------------------------------------------------------------------
@@ -472,10 +470,12 @@ impl Clausal for Kept {
     }
 }
 
-/// The local categories a level's surface has (the wave board's).
+/// The local categories a level's surface has (the wave board's; the
+/// inputs page's, FILTER-16).
 pub(crate) fn locals(level: Level) -> &'static [Cat] {
     match level {
         Level::Waves => &[Cat::Wave, Cat::Readiness, Cat::OffBoard, Cat::Title],
+        Level::Inputs => &[Cat::State, Cat::Removed],
         _ => &[],
     }
 }
@@ -484,10 +484,15 @@ pub(crate) fn locals(level: Level) -> &'static [Cat] {
 /// dropped on the first change.
 const WAVE_12_KEYS: [&str; 9] = ["sc", "status", "wave", "kind", "sev", "ready", "off", "q", "all"];
 
+/// FILTER-16: INPUT-6's keys an inputs page's URL may still carry — read
+/// as its filter, written as `f=` and its local pairs at once.
+pub(crate) const INPUT_6_KEYS: [&str; 3] = ["sc", "state", "removed"];
+
 /// The keys the lens owns on `level`'s route besides `g`, `n`, `f`.
 fn owned_keys(level: Option<Level>) -> &'static [&'static str] {
     match level {
         Some(Level::Waves) => &WAVE_12_KEYS,
+        Some(Level::Inputs) => &INPUT_6_KEYS,
         _ => &[],
     }
 }
@@ -726,7 +731,12 @@ impl Lens {
                         legacy = k.is_some();
                         k
                     }
-                    None => load_stored(&storage_key(level, sc.as_deref())).and_then(|s| read(&s, level)).flatten(),
+                    // FILTER-16: an INPUT-6 link's filter, written as `f=`
+                    // at once (below).
+                    None => match (level == Level::Inputs).then(|| crate::inputs_page::read_input_6(&q)).flatten() {
+                        Some(k) => k,
+                        None => load_stored(&storage_key(level, sc.as_deref())).and_then(|s| read(&s, level)).flatten(),
+                    },
                 },
             };
             self.set_kept(level, k, false);
@@ -986,8 +996,10 @@ pub(crate) fn GlobalButton() -> impl IntoView {
 
 /// Under the header while the global filter is non-empty: its pills, the
 /// text toggle and `clear` — and the global menu, which hangs from here.
+/// FILTER-16: on a route it does not apply to (`applies` false: the
+/// components and settings pages) it says so.
 #[component]
-pub(crate) fn LensBar() -> impl IntoView {
+pub(crate) fn LensBar(#[prop(into)] applies: Signal<bool>) -> impl IntoView {
     let lens = use_lens();
     // FILTER-12: the global menu's counts are `facets { filter: global }`.
     lens.pop(Level::Global).configure(&Cat::SERVER, crate::counts::provider(Level::Global));
@@ -995,8 +1007,11 @@ pub(crate) fn LensBar() -> impl IntoView {
     let shown = Memo::new(move |_| lens.differs(Level::Global) || texting.get());
     view! {
         {move || shown.get().then(|| view! {
-            <div class="lensbar fbar" data-fbar="global" data-level="global">
+            <div class="lensbar fbar" data-fbar="global" data-level="global" class:na=move || !applies.get()>
                 <span class="lens-l" title="the global filter: every view shows what it admits">"global"</span>
+                {move || (!applies.get()).then(|| view! {
+                    <span class="lens-na" role="note" title="this page shows no ticket">"The filter doesn't apply here"</span>
+                })}
                 {move || (!texting.get()).then(|| view! { <Pills bar=Level::Global /> })}
                 <TextMode level=Level::Global texting />
                 <Reset level=Level::Global />
@@ -1107,15 +1122,46 @@ mod tests {
         assert_eq!(lens_hash("#/waves/PLEXUS?f=x&wave=is:1", None, None, Some((None, &[], &["wave"]))), "#/waves/PLEXUS");
     }
 
-    /// A page's own query is the route's without the lens's keys, and is
-    /// written back with them kept.
+    /// FILTER-16: the lens applies on every route but the components and
+    /// settings pages.
     #[test]
-    fn a_page_keeps_its_own_query_beside_the_lens() {
-        assert_eq!(page_query("#/inputs?g=ready&sc=INPUT,MNG&n=x&state=open&removed&f=y"), "sc=INPUT,MNG&state=open&removed");
-        assert_eq!(page_query("#/inputs"), "");
-        assert_eq!(with_page_query("#/inputs?g=ready&sc=A", "state=open"), "#/inputs?g=ready&state=open");
-        assert_eq!(with_page_query("#/inputs?sc=A", ""), "#/inputs");
-        assert_eq!(with_page_query("#/inputs?g=ready&f=x", ""), "#/inputs?g=ready&f=x");
+    fn the_filter_applies_where_tickets_are_shown() {
+        for r in [Route::Board, Route::Ticket("MNG-4".into()), Route::Waves("PLEXUS".into()), Route::Waves(String::new()), Route::Inputs] {
+            assert!(applies(&r), "{r:?}");
+        }
+        for r in [Route::Components(None), Route::Components(Some("m-stat".into())), Route::Settings] {
+            assert!(!applies(&r), "{r:?}");
+        }
+    }
+
+    /// FILTER-16: the inputs page's level — its local categories ride
+    /// beside `f=` under their keys, both ways; INPUT-6's keys are dropped
+    /// when the lens writes its part.
+    #[test]
+    fn the_inputs_level_rides_the_query_with_its_own_categories() {
+        assert_eq!(locals(Level::Inputs), [Cat::State, Cat::Removed]);
+        let mut k = Kept::default();
+        k.set(Cat::Shortcode, Op::Is, ["INPUT".to_string(), "MNG".to_string()]);
+        k.set(Cat::Kind, Op::Is, ["build".to_string()]);
+        k.set(Cat::State, Op::Is, ["answered".to_string(), "open".to_string()]);
+        k.set(Cat::Removed, Op::Is, ["yes".to_string()]);
+        assert_eq!(k.filter.format(), "in (INPUT, MNG) and kind build");
+        let q = join(&pairs_of(Level::Inputs, &k));
+        assert_eq!(q, "f=in%20%28INPUT%2C%20MNG%29%20and%20kind%20build&state=is:open,answered&removed=is:yes");
+        assert_eq!(read(&q, Level::Inputs), Some(Some(k.clone())), "round trip");
+        assert_eq!(read("f=&state=is:closed", Level::Inputs).flatten().map(|k| k.local.get(Cat::State).cloned()).flatten().map(|c| c.values), Some(vec!["closed".to_string()]));
+        assert_eq!(read("f=kind%20bogus", Level::Inputs), Some(None), "malformed: the default");
+        assert_eq!(read("f=&removed", Level::Inputs), Some(None), "a local key with no value is malformed");
+        // The wave board's local keys are not the inputs page's.
+        assert_eq!(read("f=&wave=is:1", Level::Inputs), Some(Some(Kept::default())));
+        // The lens's part written: INPUT-6's keys go, f= and the local pairs come.
+        let local = k.local.to_pairs();
+        let f = k.filter.format();
+        assert_eq!(
+            lens_hash("#/inputs?g=ready&sc=INPUT,MNG&state=open,answered&removed", Some("ready"), None, Some((Some(&f), &local, &INPUT_6_KEYS))),
+            "#/inputs?g=ready&f=in%20%28INPUT%2C%20MNG%29%20and%20kind%20build&state=is:open,answered&removed=is:yes"
+        );
+        assert_eq!(lens_hash("#/inputs?sc=A&removed", None, None, Some((None, &[], &INPUT_6_KEYS))), "#/inputs", "the default: no query");
     }
 
     /// The hash's query, read and replaced.

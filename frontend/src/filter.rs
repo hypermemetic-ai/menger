@@ -8,7 +8,8 @@
 //!   Severity, and the flags Ready, Blocked, Commits (yes · no) — each a
 //!   group of FILTER-10's language; and a surface's own (local) ones, which
 //!   the language has not got: the wave board's Wave, Readiness, Off-board
-//!   blockers and Title (WAVE-12, FILTER-9 decision 6).
+//!   blockers and Title (WAVE-12, FILTER-9 decision 6); the inputs page's
+//!   State and Removed (FILTER-16).
 //! - **A pill** ([`Pill`]) is a category's clause — `[Category] [is any of |
 //!   is not] [values +n] [×]`: the operator toggles, the values reopen the
 //!   category, × removes it — or a group no category draws (`(blocked or
@@ -68,6 +69,10 @@ pub(crate) enum Cat {
     Readiness,
     OffBoard,
     Title,
+    /// FILTER-16: the inputs page's — an input's state (open · answered ·
+    /// closed), and whether the removed show.
+    State,
+    Removed,
 }
 
 /// The kinds of work, in the menu's order — the default three first. Docs
@@ -97,11 +102,33 @@ pub(crate) const SEVERITIES: [&str; 5] = ["critical", "high", "medium", "low", "
 /// A flag's two values.
 pub(crate) const FLAG: [&str; 2] = ["yes", "no"];
 
+/// FILTER-16: State's values — the inputs page's groups but the removed
+/// (Removed's), in its order.
+pub(crate) const INPUT_STATES: [&str; 3] = ["open", "answered", "closed"];
+
 /// The query an empty filter was written as by WAVE-12 (`?all`).
 pub(crate) const ALL: &str = "all";
 
 impl Cat {
-    pub(crate) const ALL: [Cat; 11] = [
+    pub(crate) const ALL: [Cat; 13] = [
+        Cat::Shortcode,
+        Cat::Status,
+        Cat::Kind,
+        Cat::Severity,
+        Cat::Ready,
+        Cat::Blocked,
+        Cat::Commits,
+        Cat::Wave,
+        Cat::Readiness,
+        Cat::OffBoard,
+        Cat::Title,
+        Cat::State,
+        Cat::Removed,
+    ];
+
+    /// The categories a WAVE-12 link may name (its query names nothing
+    /// else).
+    pub(crate) const WAVE_12: [Cat; 11] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Kind,
@@ -135,15 +162,22 @@ impl Cat {
         Cat::Title,
     ];
 
+    /// FILTER-16: the inputs page's categories, in its menu's order — its
+    /// own (State, Removed) first, then the server-backed ones, which filter
+    /// the inputs' tickets.
+    pub(crate) const INPUTS: [Cat; 9] =
+        [Cat::State, Cat::Removed, Cat::Shortcode, Cat::Status, Cat::Kind, Cat::Severity, Cat::Ready, Cat::Blocked, Cat::Commits];
+
     /// A surface's own category — evaluated by the surface, kept beside the
     /// language (it has no words for it).
     pub(crate) fn is_local(self) -> bool {
-        matches!(self, Cat::Wave | Cat::Readiness | Cat::OffBoard | Cat::Title)
+        matches!(self, Cat::Wave | Cat::Readiness | Cat::OffBoard | Cat::Title | Cat::State | Cat::Removed)
     }
 
-    /// A yes · no category.
+    /// A yes · no category — the server's flags, and the inputs page's
+    /// Removed (`yes`: the removed show).
     pub(crate) fn is_flag(self) -> bool {
-        matches!(self, Cat::Ready | Cat::Blocked | Cat::Commits)
+        matches!(self, Cat::Ready | Cat::Blocked | Cat::Commits | Cat::Removed)
     }
 
     /// The category's key — WAVE-12's in the URL for the wave board's (and
@@ -161,6 +195,8 @@ impl Cat {
             Cat::Readiness => "ready",
             Cat::OffBoard => "off",
             Cat::Title => "q",
+            Cat::State => "state",
+            Cat::Removed => "removed",
         }
     }
 
@@ -182,6 +218,8 @@ impl Cat {
             Cat::Readiness => "Readiness",
             Cat::OffBoard => "Off-board blockers",
             Cat::Title => "Title",
+            Cat::State => "State",
+            Cat::Removed => "Removed",
         }
     }
 
@@ -206,6 +244,8 @@ impl Cat {
             Cat::Readiness => "▸",
             Cat::OffBoard => "⧖",
             Cat::Title => "T",
+            Cat::State => "?",
+            Cat::Removed => "⌫",
         }
     }
 
@@ -216,8 +256,9 @@ impl Cat {
             Cat::Status => &STATUSES,
             Cat::Kind => &KINDS,
             Cat::Severity => &SEVERITIES,
-            Cat::Ready | Cat::Blocked | Cat::Commits => &FLAG,
+            Cat::Ready | Cat::Blocked | Cat::Commits | Cat::Removed => &FLAG,
             Cat::Readiness => &["workable", "waiting", "missing"],
+            Cat::State => &INPUT_STATES,
             Cat::OffBoard => &["some", "none"],
             Cat::Shortcode | Cat::Wave | Cat::Title => &[],
         }
@@ -277,6 +318,8 @@ impl Cat {
             (Cat::Commits, "no") => "none".into(),
             (Cat::Readiness, "workable") => "workable now".into(),
             (Cat::OffBoard, "some") => "has some".into(),
+            (Cat::Removed, "yes") => "shown".into(),
+            (Cat::Removed, "no") => "hidden".into(),
             (Cat::Title, t) => format!("\u{201c}{t}\u{201d}"),
             (_, t) => t.into(),
         }
@@ -513,23 +556,30 @@ impl Clauses {
     /// none of its category's); `all` is none. `keys`: the categories it
     /// may name (the rest of the query is someone else's).
     pub(crate) fn parse_query(q: &str) -> Option<Self> {
-        Clauses::parse_pairs(&lens::pairs(q), &Cat::ALL)
+        Clauses::parse(&lens::pairs(q), &Cat::WAVE_12, true)
     }
 
     /// The pairs naming `cats` as clauses (the rest ignored) — `None` when
     /// none does, or one is malformed.
     pub(crate) fn parse_pairs(ps: &[lens::Pair], cats: &[Cat]) -> Option<Self> {
+        Clauses::parse(ps, cats, false)
+    }
+
+    /// `ps` as clauses of `cats` — `wave_12`: a WAVE-12 query, which names
+    /// nothing else (`all` is none of them); otherwise the pairs naming none
+    /// of `cats` are someone else's.
+    fn parse(ps: &[lens::Pair], cats: &[Cat], wave_12: bool) -> Option<Self> {
         let mut f = Clauses::default();
         let mut any = false;
         for p in ps {
-            if p.key == ALL && p.value.is_none() && cats.len() == Cat::ALL.len() {
+            if p.key == ALL && p.value.is_none() && wave_12 {
                 if ps.len() > 1 {
                     return None;
                 }
                 return Some(Clauses::default());
             }
             let Some(c) = Cat::of_key(&p.key).filter(|c| cats.contains(c)) else {
-                if cats.len() == Cat::ALL.len() {
+                if wave_12 {
                     return None; // a WAVE-12 query names nothing else
                 }
                 continue;
