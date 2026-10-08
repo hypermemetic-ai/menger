@@ -1175,7 +1175,7 @@ pub(crate) async fn find_under(query: String, limit: u32, filter: Option<String>
     if filter.is_some() {
         return Ok(Err("find { filter }: FILTER-15 is not merged yet".to_string()));
     }
-    let events = client.find_all(query, None, Some(limit)).await.map_err(|e| describe(&e))?;
+    let events = client.find_all(query, None, Some(limit), None).await.map_err(|e| describe(&e))?;
     let mut rows = Vec::new();
     let mut remaining = 0;
     for ev in events {

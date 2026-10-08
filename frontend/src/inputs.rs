@@ -196,7 +196,7 @@ fn fetch() {
     });
     HEARD.with(|h| *h.borrow_mut() = Some(Vec::new()));
     spawn_local(async move {
-        let answer = client.inputs_all(None, None, None).await;
+        let answer = client.inputs_all(None, None, None, None).await;
         if FETCH.with(Cell::get) != n {
             return; // a newer fetch went out; its answer is the one kept
         }

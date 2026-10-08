@@ -794,7 +794,7 @@ clear.onclick = () =>
 // input: the generated `Input`, `open`, its history ending { action: 'cleared', source: 'app', atUnix }
 
 // this ticket's inputs, typed (`ticket` is null in a frame that renders no ticket's body)
-for await (const ev of this.menger.tickets.inputs(undefined, undefined, this.menger.input.ticket)) { … }
+for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefined, this.menger.input.ticket)) { … }
 ```
 
 - **`menger.input.ticket`** — the ticket whose stored body the frame
