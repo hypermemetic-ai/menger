@@ -111,6 +111,18 @@ impl Inputs {
     pub(crate) fn open_count(&self) -> usize {
         self.list.iter().filter(|i| i.state == InputState::Open).count()
     }
+
+    /// FILTER-16: `ticket`'s inputs, in the store's order.
+    pub(crate) fn of_ticket(&self, ticket: &str) -> Vec<Input> {
+        self.list.iter().filter(|i| i.ticket == ticket).cloned().collect()
+    }
+
+    /// FILTER-16: `ticket`'s inputs taken out; whether any were held.
+    pub(crate) fn drop_ticket(&mut self, ticket: &str) -> bool {
+        let before = self.list.len();
+        self.list.retain(|i| i.ticket != ticket);
+        self.list.len() != before
+    }
 }
 
 /// The fetch's rule: `answer`, then every event heard while it was out, in

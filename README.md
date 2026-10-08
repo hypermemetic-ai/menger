@@ -754,11 +754,18 @@ and id, its kind, its question, its options with the recommended one marked
 (★) and the chosen ones ticked (✓), the recommendation where it says more
 than that option's label, the current answer — value, rationale, source
 (`app` / `api`) and time (relative; exact on hover) — and its history,
-folded. The filter bar narrows by shortcode and by state, each value with
-its count; the filter is the route's query, rewritten in place —
-`#/inputs?sc=INPUT,MNG&state=open,answered&removed` (no query: every
-shortcode, the three states, the removed hidden; a malformed one is the
-default) — so a reload or a pasted link restores it.
+folded. FILTER-16: the filter bar is the app's generic one at the `inputs`
+level — the page's own categories, **State** (open · answered · closed:
+which groups show) and **Removed** (shown: the removed group, last), then
+the ticket categories (Shortcode, Status, Kind, …), which filter the inputs
+by their ticket together with the global filter: the rows are then `inputs
+{ filter }`, kept live (`member` for a ticket it does not know, the
+membership watch's `entered` / `left`). The menu counts the page's own
+categories on its rows and the ticket categories by `facets`. The filter
+rides the route's query as every level's does —
+`#/inputs?f=in%20(INPUT%2C%20MNG)&state=is:open,answered&removed=is:yes` —
+and is kept per viewer; an INPUT-6 link (`#/inputs?sc=INPUT,MNG&state=open,
+answered&removed`) still opens the filter it named and is rewritten as `f=`.
 
 The page is the app's own copy of the inputs (`frontend/src/inputs.rs`),
 held to the component registry's rule (COMP-5): **nothing at startup asks

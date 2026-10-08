@@ -1088,6 +1088,11 @@ fn refetch_open_children(last_error: RwSignal<Option<String>>) {
 /// the rows (`holder`). `list { parent }` costs the page at any size of parent
 /// (the server keeps an index of children), so this is one round trip
 /// whether the ticket has two children or 163,530.
+///
+/// FILTER-16: under the global filter, the list's filter (`Kids::
+/// list_filter`) rides the same call — `list { parent, filter }` — and a
+/// page asked under another filter than the list's when it lands is
+/// dropped ([`Kids::page_under`]).
 pub(crate) fn load_children(
     id: String,
     after: Option<String>,
@@ -1100,17 +1105,30 @@ pub(crate) fn load_children(
             return; // not connected yet: the page asks again when it is
         };
         let first = after.is_none();
+        let Some(filter) = kids.try_with_untracked(|k| k.list_filter().map(str::to_string)) else {
+            return; // the page is gone
+        };
         match client
-            .list_all(None, None, Some(id.clone()), after, Some(KIDS_LIMIT), Some(true), None, None)
+            .list_all(None, None, Some(id.clone()), after, Some(KIDS_LIMIT), Some(true), filter.clone(), None)
             .await
         {
             Ok(events) => {
                 let mut page: Vec<TicketSummary> = Vec::new();
                 let mut next = None;
+                let mut remaining = 0;
                 for ev in events {
                     match ev {
                         TicketsEvent::Summary { summary } => page.push(summary),
-                        TicketsEvent::Page { next: n, .. } => next = n,
+                        TicketsEvent::Page { next: n, remaining: r, .. } => {
+                            next = n;
+                            remaining = r;
+                        }
+                        // FILTER-16: a filter the server did not take is the
+                        // list's to say, not the banner's.
+                        TicketsEvent::Error { message } if filter.is_some() => {
+                            kids.try_update(|k| k.refuse(filter.as_deref(), message));
+                            return;
+                        }
                         TicketsEvent::Error { message } => {
                             last_error.set(Some(format!("children of {id}: {message}")))
                         }
@@ -1119,7 +1137,7 @@ pub(crate) fn load_children(
                 }
                 let ids: Vec<String> = page.iter().map(|t| t.id.clone()).collect();
                 holder.hold_page(page);
-                kids.try_update(|k| k.page(first, ids, next));
+                kids.try_update(|k| k.page_under(filter.as_deref(), first, ids, next, remaining));
             }
             Err(e) => last_error.set(Some(format!("children of {id}: {}", describe(&e)))),
         }
@@ -1130,3 +1148,82 @@ pub(crate) fn load_children(
 /// body, and it is menger's own type. If the server renames the field this
 /// stops compiling — which is the whole point of the crate split.
 const _: fn(&Ticket) -> &String = |t| &t.body;
+
+// ---------------------------------------------------------------------
+// FILTER-16: the reads the palette, the inputs page and the ticket page
+// make under the global filter (FILTER-4's `list { parent, filter }`,
+// FILTER-15's `member`) — one block, beside the session's own.
+
+/// FILTER-15: the most ids one `member` call takes.
+const MEMBER_MAX: usize = 1000;
+
+/// FILTER-16: `member { ids, filter }` — whether `filter` admits each id,
+/// in the order asked, asked in parts of [`MEMBER_MAX`]. `Err`: no
+/// connection, or the server's words (a filter it did not take).
+pub(crate) async fn member(ids: Vec<String>, filter: String) -> Result<Vec<(String, bool)>, String> {
+    let client = client().ok_or_else(|| "not connected".to_string())?;
+    let mut out = Vec::with_capacity(ids.len());
+    for part in ids.chunks(MEMBER_MAX) {
+        for ev in client.member_all(part.to_vec(), filter.clone()).await.map_err(|e| describe(&e))? {
+            match ev {
+                TicketsEvent::Member { id, matched } => out.push((id, matched)),
+                TicketsEvent::Error { message } => return Err(message),
+                _ => {}
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// FILTER-16: the palette's `find { query, limit, filter }` — its rows and
+/// `remaining`, or (`Ok(Err)`) the server's words for a filter it did not
+/// take. `Err`: the call failed (the socket).
+pub(crate) async fn find_under(query: String, limit: u32, filter: Option<String>) -> Result<Result<(Vec<TicketSummary>, u64), String>, String> {
+    let client = client().ok_or_else(|| "not connected".to_string())?;
+    let events = client.find_all(query, None, Some(limit), filter).await.map_err(|e| describe(&e))?;
+    let mut rows = Vec::new();
+    let mut remaining = 0;
+    for ev in events {
+        match ev {
+            TicketsEvent::Summary { summary } => rows.push(summary),
+            TicketsEvent::Page { remaining: r, .. } => remaining = r,
+            TicketsEvent::Error { message } => return Ok(Err(message)),
+            _ => {}
+        }
+    }
+    Ok(Ok((rows, remaining)))
+}
+
+/// FILTER-16: `inputs { filter }` — every input (every state) of the
+/// tickets `filter` admits, in the store's order (FILTER-15). `Err`: no
+/// connection, or the server's words.
+pub(crate) async fn inputs_under(filter: String) -> Result<Vec<TicketsEvent>, String> {
+    let client = client().ok_or_else(|| "not connected".to_string())?;
+    let events = client.inputs_all(None, None, None, Some(filter)).await.map_err(|e| describe(&e))?;
+    if let Some(message) = events.iter().find_map(|ev| match ev {
+        TicketsEvent::Error { message } => Some(message.clone()),
+        _ => None,
+    }) {
+        return Err(message);
+    }
+    Ok(events)
+}
+
+/// FILTER-16: how many of `parent`'s children `filter` admits — `list {
+/// parent, filter, limit: 0 }`'s `remaining`, from the cells (FILTER-4).
+pub(crate) async fn children_matching(parent: String, filter: String) -> Result<u64, String> {
+    let client = client().ok_or_else(|| "not connected".to_string())?;
+    let mut remaining = None;
+    for ev in client
+        .list_all(None, None, Some(parent), None, Some(0), Some(true), Some(filter), None)
+        .await
+        .map_err(|e| describe(&e))?
+    {
+        match ev {
+            TicketsEvent::Page { remaining: r, .. } => remaining = Some(r),
+            TicketsEvent::Error { message } => return Err(message),
+            _ => {}
+        }
+    }
+    remaining.ok_or_else(|| "no page".to_string())
+}

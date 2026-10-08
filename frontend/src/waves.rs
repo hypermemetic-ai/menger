@@ -579,7 +579,7 @@ pub(crate) fn value_of(c: Cat, card: &Card, off: bool) -> Option<String> {
             Placement::Done => None,
         },
         Cat::OffBoard => Some(if off { "some" } else { "none" }.into()),
-        Cat::Title => None,
+        Cat::Title | Cat::State | Cat::Removed => None,
     }
 }
 
