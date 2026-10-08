@@ -122,7 +122,8 @@ pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
     ("Enter", "open the focused ticket"),
     ("/ or Ctrl+K", "jump to a ticket (⌘K on a Mac)"),
     ("g h", "go to the board"),
-    ("f", "filter the wave board (on a wave board)"),
+    ("f", "filter this view (the wave board)"),
+    ("F", "filter every view (the global filter)"),
     ("?", "this list"),
     ("Esc", "close the palette or this list"),
 ];
@@ -1234,7 +1235,8 @@ mod tests {
             "Enter",       // open
             "/ or Ctrl+K", // palette
             "g h",         // board
-            "f",           // the wave board's filter (WAVE-12)
+            "f",           // the view's filter (WAVE-12)
+            "F",           // the global filter (FILTER-11)
             "?",           // this list
             "Esc",         // close
         ] {
