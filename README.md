@@ -260,6 +260,26 @@ ticket's row (its kept `placement`, fetched and held while shown); it moves
 live, and an id that is no ticket is left as written. A body without one
 renders byte for byte as before.
 
+**Filters** (FILTER-9) reach every view. There is one **global** filter
+(the header's `Filter` button, or <kbd>F</kbd>; a bar under the header while
+it holds anything, and `n of N` beside the button) and one per surface: the
+**board**, the **wave board**, the **nav** and the **inputs** page (each
+surface's own bar, or <kbd>f</kbd> on it). A surface shows what *both*
+admit — `global.and(own)`, which merges groups on the same field (lists
+intersect, exclusions unite) and names a contradiction under the bar. Every
+bar is the same component (WAVE-12's menu made generic, `src/lens.rs`):
+categories with counts (`facets`, Linear's: a category's counts ignore its
+own clause, never the global one), pills, a text mode in FILTER-3's
+language, and the global pills shown muted in each surface's bar. The
+board windows over `counts` (FILTER-12); the nav shows each shortcode with
+its matches and, inside, the matches plus the ancestors that hold them —
+dimmed — each row with the matches below it (`tree`, FILTER-13/14); the
+palette searches inside the global filter with a "Search everything" row,
+and a ticket page says when its ticket is outside and filters its children
+(FILTER-16). Each level rides the route's query — `g=` global, `n=` nav,
+`f=` the surface's own — and the viewer's local storage, so global and nav
+filters survive navigation and reload.
+
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service
@@ -1117,7 +1137,11 @@ scripts/sdk-codegen.sh the frames' typed SDK, generated (COMP-10; Docker)
 web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
                        src/waves.rs the wave board (WAVE-5, WAVE-6),
-                       src/filter.rs its filter and menu (WAVE-12),
+                       src/filter.rs the generic filter bar and menu (WAVE-12,
+                       FILTER-11), src/lens.rs the levels — global, nav,
+                       board, waves, inputs — their URL and storage, the
+                       header's bar (FILTER-11), src/counts.rs menu counts and
+                       the header's n of N (FILTER-12),
                        src/notes.rs its annotation and the body editor (WAVE-11),
                        src/frame.rs framed bodies and their messages (COMP-4,
                        COMP-5), sdk/menger-sdk.js the SDK every frame runs,
