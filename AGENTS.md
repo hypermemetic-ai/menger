@@ -66,6 +66,19 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets watch          # open-ended stream
   ```
 
+  **Filters** (FILTER-4) are one quoted flag in FILTER-3's language —
+  `ready and kind build and in SCALE`, `status in (Pending, Ready)`,
+  `category in (active, review)`, `not category static`; answered from the
+  cells, never by testing a ticket. `under` (FILTER-13) and `text` (the
+  palette's `find`) are refused, as is any chunk the language cannot read:
+
+  ```sh
+  synapse -P 4455 menger tickets counts --filter 'ready and kind build'    # per shortcode
+  synapse -P 4455 menger tickets list --filter 'blocked' --at 1000 --summary --limit 20
+  synapse -P 4455 menger tickets facets --filter 'status Ready and kind build'   # menu counts
+  synapse -P 4455 menger tickets watch --filter 'category in (active, review)'   # + entered/left
+  ```
+
   **Params are individual flags, not a JSON blob** — treat synapse as a
   normal CLI: `--kebab-case-flag value` after the method path, and
   `<method> --help` prints each parameter's name and type. **A list

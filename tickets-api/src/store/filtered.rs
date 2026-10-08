@@ -1,0 +1,454 @@
+//! FILTER-4: what a filter answers — `counts`, a filtered page by cursor or
+//! by position (`list { filter, at }`), and `watch { filter }`'s membership.
+//!
+//! A filter reaches the store as a [`Lens`]: the shortcodes it names and how
+//! it judges one (shortcode, cell). The lens is compiled against the cell
+//! table under the read lock ([`cells::Admit`]) — once per cell per
+//! shortcode it names, and once for every other shortcode — and every
+//! answer is then a sum or a merge over the bitmaps it admits
+//! ([`cells::View`]): no ticket is tested. A filtered page's rows are looked
+//! up by position, as a page of the ready set's are.
+
+use super::cells::{Admit, Key, View, SEVERITIES};
+use super::*;
+use crate::filter::{Category, Facts, Field, Filter};
+use roaring::RoaringBitmap;
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+/// A filter as the store judges it: the shortcodes it names (each judged on
+/// its own) and, for a shortcode and a cell, whether the filter admits it.
+/// Judged once per (shortcode, cell) pair at a compile, never per ticket.
+#[derive(Clone)]
+pub struct Lens {
+    /// The filter as text, canonical — what two lenses are compared by.
+    text: String,
+    named: Vec<String>,
+    judge: Arc<dyn Fn(&str, Key) -> bool + Send + Sync>,
+}
+
+impl Lens {
+    /// A lens over `named` shortcodes that admits what `judge` admits. The
+    /// rest of the store is judged as the shortcode `""`, which no `in`
+    /// names.
+    pub(crate) fn new(text: String, named: Vec<String>, judge: impl Fn(&str, Key) -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            text,
+            named,
+            judge: Arc::new(judge),
+        }
+    }
+
+    /// The empty filter: every ticket.
+    pub fn all() -> Self {
+        Self::new(String::new(), Vec::new(), |_, _| true)
+    }
+
+    /// A filter's text, read by the language (FILTER-10) and judged by its
+    /// own evaluator — or the in-band refusal: every chunk the language did
+    /// not take, or every predicate that is answered elsewhere.
+    pub fn parse(text: &str) -> Result<Self, StoreError> {
+        let filter = Filter::parse(text).map_err(|e| StoreError::Filter(e.to_string()))?;
+        Self::of(&filter)
+    }
+
+    /// `filter`, compiled the way the store compiles it: its `in`
+    /// shortcodes named, each (shortcode, cell) judged by the language's own
+    /// evaluator ([`Filter::matches`]) on the facts a cell holds — so a
+    /// compiled filter admits exactly what the reference evaluator passes.
+    /// `under` and `text` are refused ([`refuse`]).
+    pub fn of(filter: &Filter) -> Result<Self, StoreError> {
+        refuse(filter)?;
+        let named: BTreeSet<String> = filter
+            .groups
+            .iter()
+            .flat_map(|g| &g.preds)
+            .filter_map(|p| match &p.field {
+                Field::In(e) => Some(e.to_ascii_uppercase()),
+                _ => None,
+            })
+            .collect();
+        let judged = filter.clone();
+        Ok(Self::new(filter.format(), named.into_iter().collect(), move |epic, key| {
+            judged.matches(&facts(epic, key))
+        }))
+    }
+
+    /// The filter's text.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Compiled against `keys`, `list`'s `status` folded in as the sugar it
+    /// is (its `epic` restricts the shortcodes a [`View`] holds: a shortcode
+    /// exactly as named, as `list { epic }` always took it).
+    pub(super) fn admit(&self, keys: &[Key], status: Option<Status>) -> Admit {
+        Admit::compile(keys, self.named.iter().cloned(), |e, k| {
+            status.is_none_or(|s| k.status() == s) && (self.judge)(e, k)
+        })
+    }
+}
+
+/// What the evaluator reads of a cell in a shortcode: everything but a
+/// ticket's id, title and lineage — which only `text` and `under` read, and
+/// neither is compiled.
+fn facts(epic: &str, key: Key) -> Facts {
+    Facts {
+        id: String::new(),
+        epic: epic.to_string(),
+        title: String::new(),
+        status: key.status(),
+        kind: key.kind(),
+        severity: key.severity(),
+        blocked: key.blocked(),
+        has_commits: key.commits(),
+        lineage: Vec::new(),
+    }
+}
+
+/// FILTER-4: the predicates every filtered read refuses in-band, naming each
+/// chunk that holds one and where it is answered instead: `under` comes
+/// with FILTER-13 (the kept tree); `text` is the palette's (`find`) until
+/// SCALE-13's B5 indexes it.
+pub fn refuse(filter: &Filter) -> Result<(), StoreError> {
+    let mut bad: Vec<String> = Vec::new();
+    for g in &filter.groups {
+        let mut why: Vec<&str> = Vec::new();
+        if g.preds.iter().any(|p| matches!(p.field, Field::Under(_))) {
+            why.push("`under` is not answered here yet: it comes with FILTER-13, the kept tree");
+        }
+        if g.preds.iter().any(|p| matches!(p.field, Field::Text(_))) {
+            why.push("text is the palette's — ask `find` (a filter's text waits for SCALE-13's B5)");
+        }
+        if !why.is_empty() {
+            bad.push(format!("`{}` — {}", g.format(), why.join("; ")));
+        }
+    }
+    match bad.is_empty() {
+        true => Ok(()),
+        false => Err(StoreError::Filter(format!("not answered here: {}", bad.join("; ")))),
+    }
+}
+
+/// FILTER-4: the fields `facets` counts, in the order it answers them — each
+/// as the language spells it.
+pub const FACET_FIELDS: [&str; 8] = ["status", "category", "kind", "severity", "blocked", "ready", "has commits", "in"];
+
+/// One field's tally: a count per value, in the order `facets` answers.
+fn tally(field: &str) -> Vec<(String, u64)> {
+    let yes_no = || vec![("yes".to_string(), 0), ("no".to_string(), 0)];
+    match field {
+        "status" => Status::ALL.iter().map(|s| (s.as_str().to_string(), 0)).collect(),
+        "category" => Category::ALL.iter().map(|c| (c.as_str().to_string(), 0)).collect(),
+        "kind" => Kind::ALL.iter().map(|k| (k.as_str().to_string(), 0)).collect(),
+        // The language's order: critical, high, medium, low, none.
+        "severity" => SEVERITIES[1..]
+            .iter()
+            .chain(&SEVERITIES[..1])
+            .map(|s| (Field::Severity(*s).value().expect("a severity has a value"), 0))
+            .collect(),
+        "blocked" | "ready" | "has commits" => yes_no(),
+        _ => Vec::new(),
+    }
+}
+
+/// Where in [`tally`]'s order a cell's value of `field` sits.
+fn slot(field: &str, k: Key) -> usize {
+    let flag = |b: bool| usize::from(!b);
+    match field {
+        "status" => Status::ALL.iter().position(|s| *s == k.status()).expect("a status"),
+        "category" => {
+            let c = crate::filter::category_of(k.status());
+            Category::ALL.iter().position(|x| *x == c).expect("a category")
+        }
+        "kind" => Kind::ALL.iter().position(|x| *x == k.kind()).expect("a kind"),
+        "severity" => match SEVERITIES.iter().position(|s| *s == k.severity()).expect("a severity") {
+            0 => 4,
+            i => i - 1,
+        },
+        "blocked" => flag(k.blocked()),
+        "ready" => flag(crate::filter::category_of(k.status()) == Category::Ready && !k.blocked()),
+        "has commits" => flag(k.commits()),
+        other => unreachable!("not a cell field: {other}"),
+    }
+}
+
+impl PartialEq for Lens {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
+
+impl std::fmt::Debug for Lens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Lens({:?})", self.text)
+    }
+}
+
+/// FILTER-4: a filtered `list` — the filter, and `list`'s three old
+/// parameters, which are sugar beside it: `epic` for `in`, `status` for a
+/// status, `parent` for a parent's page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Filtered {
+    pub lens: Lens,
+    pub epic: Option<String>,
+    pub status: Option<Status>,
+    pub parent: Option<String>,
+}
+
+/// FILTER-4: what `watch { filter }` adds to a write's events.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Membership {
+    /// The write moved the ticket into the filter.
+    Entered { id: String, epic: String, seq: u32 },
+    /// …or out of it.
+    Left { id: String, epic: String, seq: u32 },
+    /// The write moved more than [`RECOUNT_OVER`] memberships: the filter's
+    /// count of each shortcode it moved, as the write left it.
+    Recount { epic: String, held: u64 },
+}
+
+/// FILTER-4: one `watch { filter }`'s filter, compiled — and compiled again
+/// when a write names a cell interned since.
+pub struct Watcher {
+    lens: Lens,
+    admit: Admit,
+}
+
+/// The matches of `q` under the read lock: the admitted bitmaps, and — for
+/// a parent's page — inside its children.
+fn view<'c>(cache: &'c Cache, q: &Filtered) -> View<'c> {
+    let admit = q.lens.admit(cache.cells.keys(), q.status);
+    let view = View::of(&cache.cells, &admit, q.epic.as_deref());
+    match q.parent.as_deref() {
+        None => view,
+        Some(parent) => view.within(|epic| {
+            let seqs = cache.children.in_shortcode(parent, epic);
+            (!seqs.is_empty()).then(|| RoaringBitmap::from_sorted_iter(seqs.iter().copied()).expect("children are sorted"))
+        }),
+    }
+}
+
+impl Store {
+    /// FILTER-4: `counts { filter }` — each shortcode that holds a match,
+    /// with how many, in shortcode order: the sum of the counts of the cells
+    /// the filter admits there. The empty lens is each shortcode's tickets.
+    pub fn counts(&self, lens: &Lens) -> Vec<(String, u64)> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let admit = lens.admit(cache.cells.keys(), None);
+        let out = View::of(&cache.cells, &admit, None).counts().map(|(e, n)| (e.to_string(), n)).collect();
+        out
+    }
+
+    /// FILTER-4: `facets { filter, base }` — the counts behind every menu
+    /// (Linear's facets). For each field of [`FACET_FIELDS`], in that order:
+    /// the tickets matching `base` and `filter` with `filter`'s own groups
+    /// for that field set aside (a group is a field's own when every
+    /// predicate in it names that field; `base`'s are never set aside),
+    /// counted by their value of the field — `(field, value, held)` for
+    /// each value held, statuses in [`Status::ALL`]'s order, shortcodes in
+    /// the store's. A sum over the kept cell counts: each distinct filter
+    /// the fields leave is compiled once, and its admitted bitmaps' lengths
+    /// are tallied for every field that left it.
+    pub fn facets(&self, filter: &Filter, base: &Filter) -> Result<Vec<(String, String, u64)>, StoreError> {
+        refuse(filter)?;
+        refuse(base)?;
+        // Each field's filter, and the fields that share one.
+        let mut distinct: Vec<(Filter, Vec<&str>)> = Vec::new();
+        for field in FACET_FIELDS {
+            let own = |g: &crate::filter::Group| g.preds.iter().all(|p| p.field.name() == field);
+            let rest = Filter {
+                groups: filter.groups.iter().filter(|g| !own(g)).cloned().collect(),
+                display: Default::default(),
+            };
+            match distinct.iter_mut().find(|(f, _)| *f == rest) {
+                Some((_, fields)) => fields.push(field),
+                None => distinct.push((rest, vec![field])),
+            }
+        }
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let mut tallies: Vec<Vec<(String, u64)>> = FACET_FIELDS.iter().map(|f| tally(f)).collect();
+        let mut shortcodes: Vec<(String, u64)> = Vec::new();
+        for (rest, fields) in &distinct {
+            let both = Lens::of(&base.and(rest))?;
+            let admit = both.admit(cache.cells.keys(), None);
+            let mut by_epic: Vec<(&str, u64)> = Vec::new();
+            for (epic, held) in cache.cells.shortcodes() {
+                let table = admit.of(epic);
+                let mut in_epic = 0;
+                for (cell, bm) in held.iter().filter(|(c, _)| table.get(*c as usize).copied().unwrap_or(false)) {
+                    let (n, key) = (bm.len(), cache.cells.keys()[*cell as usize]);
+                    in_epic += n;
+                    for field in fields.iter().filter(|f| **f != "in") {
+                        let i = FACET_FIELDS.iter().position(|f| f == field).expect("a facet field");
+                        tallies[i][slot(field, key)].1 += n;
+                    }
+                }
+                if in_epic > 0 {
+                    by_epic.push((epic, in_epic));
+                }
+            }
+            if fields.contains(&"in") {
+                shortcodes = by_epic.into_iter().map(|(e, n)| (e.to_string(), n)).collect();
+            }
+        }
+        *tallies.last_mut().expect("`in` is the last field") = shortcodes;
+        Ok(FACET_FIELDS
+            .iter()
+            .zip(tallies)
+            .flat_map(|(field, values)| {
+                values.into_iter().filter(|(_, n)| *n > 0).map(move |(v, n)| (field.to_string(), v, n))
+            })
+            .collect())
+    }
+
+    /// FILTER-4: one page of `q`'s matches, in the store's order — starting
+    /// strictly after `after` (a ticket id, any ticket: a position), or at
+    /// the `at`-th match (0-based), or at the first; at most `limit`. Its
+    /// `first` is the position of its first row among the matches (for an
+    /// empty page, where it would start); `remaining` the matches after it,
+    /// exactly. `at` past the end is an empty page at `at`. Both `at` and
+    /// `after` is [`StoreError::AtAndAfter`].
+    pub fn filtered_page(
+        &self,
+        q: &Filtered,
+        after: Option<&str>,
+        at: Option<u64>,
+        limit: Option<u32>,
+    ) -> Result<Page, StoreError> {
+        let q = Filtered {
+            epic: q.epic.as_deref().map(str::to_ascii_uppercase),
+            parent: q.parent.as_deref().map(str::to_ascii_uppercase),
+            ..q.clone()
+        };
+        let after = after.map(str::to_ascii_uppercase);
+        let cache = self.tickets.read().expect("store lock poisoned");
+        Self::cut_filtered(&cache, &q, after.as_deref(), at, limit, Rest::Count)
+    }
+
+    /// What a filtered page — and each step of a filtered [`Walk`] — is cut
+    /// from, under the read lock the caller holds.
+    pub(super) fn cut_filtered(
+        cache: &Cache,
+        q: &Filtered,
+        after: Option<&str>,
+        at: Option<u64>,
+        limit: Option<u32>,
+        rest: Rest,
+    ) -> Result<Page, StoreError> {
+        let cursor = match (after, at) {
+            (Some(_), Some(_)) => return Err(StoreError::AtAndAfter),
+            (Some(id), None) => Some(cache.at.get(id).cloned().ok_or_else(|| StoreError::CursorNotFound(id.to_string()))?),
+            _ => None,
+        };
+        let view = view(cache, q);
+        let take = limit.map_or(usize::MAX, |n| n as usize);
+        let (first, keys) = match (&cursor, at) {
+            (Some(key), _) => (view.rank(key), view.page_after(key, take)),
+            (None, Some(p)) => match view.select(p) {
+                Some(start) => (p, view.page(Some(start), take)),
+                None => (p, Vec::new()),
+            },
+            (None, None) => (0, view.page(None, take)),
+        };
+        let tickets: Vec<Row> = keys
+            .into_iter()
+            .filter_map(|(epic, seq)| cache.order.get(&OrderKey { epic: epic.to_string(), seq }).cloned())
+            .collect();
+        let remaining = match rest {
+            Rest::Count => view.total().saturating_sub(first).saturating_sub(tickets.len() as u64),
+            Rest::Skip => 0,
+        };
+        let next = if remaining == 0 {
+            None
+        } else {
+            // The page's last id; for an empty page, the cursor it was cut
+            // with — or, cut at a position, the match before it, which is
+            // where `after` resumes at that position (none before the first).
+            tickets.last().map(|t| t.id.clone()).or_else(|| match (after, first) {
+                (Some(id), _) => Some(id.to_string()),
+                (None, 0) => None,
+                (None, p) => view
+                    .select(p - 1)
+                    .and_then(|(epic, seq)| cache.order.get(&OrderKey { epic: epic.to_string(), seq }))
+                    .map(|t| t.id.clone()),
+            })
+        };
+        Ok(Page {
+            tickets,
+            next,
+            remaining,
+            first: Some(first),
+        })
+    }
+
+    /// FILTER-4: a `watch { filter }`'s filter, compiled against the cells
+    /// as they stand.
+    pub fn watcher(&self, lens: Lens) -> Watcher {
+        let admit = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            lens.admit(cache.cells.keys(), None)
+        };
+        Watcher { lens, admit }
+    }
+}
+
+impl Watcher {
+    /// What one write's cell moves are to this filter — in `epic` alone,
+    /// when one is asked for: each ticket moved into it (`Entered`) or out
+    /// of it (`Left`), in the store's order; or, when there are more than
+    /// [`RECOUNT_OVER`] of those, one `Recount` per shortcode they are in,
+    /// with the filter's count there as the write left it.
+    pub fn membership(&mut self, store: &Store, moves: &Moves, epic: Option<&str>) -> Vec<Membership> {
+        let highest = moves.moves.iter().flat_map(|m| m.from.into_iter().chain([m.to])).max();
+        if highest.is_some_and(|c| c as usize >= self.admit.len()) {
+            // A cell interned after the compile: compile again — the table
+            // only grows, and every id it held means what it meant.
+            *self = store.watcher(self.lens.clone());
+        }
+        let admits = |e: &str, c: u32| self.admit.admits(e, c).unwrap_or(false);
+        let moved: Vec<(&CellMove, bool)> = moves
+            .moves
+            .iter()
+            .filter(|m| epic.is_none_or(|e| e == &*m.epic))
+            .filter_map(|m| {
+                let was = m.from.is_some_and(|c| admits(&m.epic, c));
+                let now = admits(&m.epic, m.to);
+                (was != now).then_some((m, now))
+            })
+            .collect();
+        if moved.is_empty() {
+            return Vec::new();
+        }
+        if moved.len() <= RECOUNT_OVER {
+            // Each ticket's id is its row's — read here, for the few said.
+            let cache = store.tickets.read().expect("store lock poisoned");
+            return moved
+                .into_iter()
+                .map(|(m, now)| {
+                    let (epic, seq) = (m.epic.to_string(), m.seq);
+                    let key = OrderKey { epic, seq };
+                    let id = cache.order.get(&key).map_or_else(|| format!("{}-{}", key.epic, seq), |t| t.id.clone());
+                    let epic = key.epic;
+                    if now {
+                        Membership::Entered { id, epic, seq }
+                    } else {
+                        Membership::Left { id, epic, seq }
+                    }
+                })
+                .collect();
+        }
+        let counts = moves.counts.as_ref().expect("a write past the threshold carries its counts");
+        let mut epics: Vec<&str> = moved.iter().map(|(m, _)| &*m.epic).collect();
+        epics.dedup();
+        epics
+            .into_iter()
+            .map(|e| Membership::Recount {
+                epic: e.to_string(),
+                held: counts
+                    .get(e)
+                    .map_or(0, |held| held.iter().filter(|(c, _)| admits(e, *c)).map(|(_, n)| n).sum()),
+            })
+            .collect()
+    }
+}

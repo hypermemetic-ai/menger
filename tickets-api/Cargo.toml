@@ -40,6 +40,7 @@ server = [
     "dep:chrono",
     "dep:anyhow",
     "dep:tracing",
+    "dep:roaring",
 ]
 # WAVE-3, measurement only: a build of the store without WAVE-6's
 # re-placement pass and its startup placement — the "without" half of the
@@ -84,6 +85,9 @@ rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 chrono = { version = "0.4", optional = true }
 anyhow = { version = "1", optional = true }
 tracing = { version = "0.1", optional = true }
+# FILTER-4: the cells' bitmaps (FILTER-3 §6.1) — pure Rust, and the server's
+# only: the wasm build (default-features = false) never pulls it in.
+roaring = { version = "0.10", optional = true }
 
 [dev-dependencies]
 # The wire-casing tests assert what serde writes; the store's tests open
