@@ -207,6 +207,14 @@
 //! - **A deep link** to a ticket outside the filter does not draw it: the
 //!   chain opens down to the deepest row the tree shows ([`reveal_from`]),
 //!   which is brought into view.
+//!
+//! FILTER-20: **a flat view beside the tree.** The header's `Tree | Flat`
+//! chooses what the nav draws under its bar, and the choice is kept with the
+//! nav's other state (`menger.nav.view`). Flat is every ticket the nav's
+//! filter admits as one list in id order — the tree's leaf rows, no nesting,
+//! windowed and paged and live (src/flat.rs). Tree is everything above,
+//! unchanged: while Flat is chosen the tree is unmounted and its deep-link
+//! reveal waits; while Tree is chosen the flat list does not exist.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -218,6 +226,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::counts::{wire_text, LiveCounts};
 use crate::filter::{Cat, FilterBar, ScTree};
+use crate::flat::{self, View};
 use crate::kids::key;
 use crate::lens::{use_lens, Lens, Level};
 use crate::session::Member;
@@ -255,7 +264,7 @@ fn is_gap(el: &web_sys::Element) -> bool {
 /// Seed the tree's tab stop after a render: the selected row when it is
 /// on screen, else the first row — so Tab from a cold load lands in the
 /// nav at the ticket the page is showing.
-fn ensure_tree_tab_stop() {
+pub(crate) fn ensure_tree_tab_stop() {
     keys::ensure_tab_stop("#nav .tree [role=treeitem]", Some("#nav .tree .row.sel"));
 }
 
@@ -266,7 +275,7 @@ const MENGER_DOCS_KEY: &str = "menger.nav.mengerDocs";
 
 /// localStorage, or None where it is unavailable (private mode, blocked
 /// site data). Every persistence call degrades to "not remembered".
-fn storage() -> Option<web_sys::Storage> {
+pub(crate) fn storage() -> Option<web_sys::Storage> {
     dom::window().local_storage().ok().flatten()
 }
 
@@ -1523,7 +1532,7 @@ fn scroll_selected_into_view() -> bool {
 }
 
 /// The nav's scroller.
-fn scroller() -> Option<web_sys::HtmlElement> {
+pub(crate) fn scroller() -> Option<web_sys::HtmlElement> {
     dom::window()
         .document()?
         .query_selector("#nav .tree-scroll")
@@ -1642,6 +1651,30 @@ fn to_the_end() {
     });
 }
 
+/// FILTER-20: Home, when the nav begins in a gap — the flat list scrolled
+/// away from its top (the tree's top rows are always mounted). Scroll to the
+/// top and focus the first row once it is a row.
+fn to_the_top() {
+    spawn_local(async move {
+        for _ in 0..240 {
+            let els = walkable();
+            match els.first() {
+                Some(first) if !is_gap(first) => {
+                    keys::focus_and_rove(&tree_items(), first);
+                    return;
+                }
+                None => return,
+                Some(_) => {
+                    if let Some(sc) = scroller() {
+                        sc.set_scroll_top(0);
+                    }
+                }
+            }
+            dom::sleep_ms(16).await;
+        }
+    });
+}
+
 /// The WAI-ARIA tree key map (AGS-18), one handler on the tree itself —
 /// keystrokes arrive here having bubbled from whichever row has focus,
 /// so there is no per-row listener and no second notion of "current".
@@ -1731,7 +1764,11 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, expanded: RwSignal<BTreeSet<String>>
             true
         }
         "Home" => {
-            keys::focus_and_rove(&all, &items[0]);
+            match steps.first() {
+                // FILTER-20: the flat list away from its top.
+                Some(first) if is_gap(first) => to_the_top(),
+                _ => keys::focus_and_rove(&all, &items[0]),
+            }
             true
         }
         "End" => {
@@ -2037,6 +2074,24 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
     let under = Under::new(lens);
     session::follow_membership(move || under.text.get(), move |ev| under.heard(ev));
     let ctx = Ctx { tree, route, expanded, menger_docs, under };
+    // FILTER-20: Tree or Flat, the choice kept with the nav's other state. A
+    // switch starts the nav at its top (the open ticket is brought back into
+    // view by the view it switched to).
+    let nav_view = RwSignal::new(flat::load_view());
+    Effect::new(move |prev: Option<View>| {
+        let now = nav_view.get();
+        if prev.is_some_and(|p| p != now) {
+            flat::save_view(now);
+            if let Some(sc) = scroller() {
+                sc.set_scroll_top(0);
+            }
+        }
+        now
+    });
+    // FILTER-20: what the flat list shows — the nav's filter, or every ticket
+    // — and the line it has to say under itself.
+    let flat_filter = Memo::new(move |_| flat::list_filter(under.on.get(), under.text.get()));
+    let flat_note = RwSignal::new(None::<flat::Note>);
     let top = tree.top;
     // AGS-23: the top-level rows, each shortcode as the node it is drawn as;
     // the last of them by its key. FILTER-14: under the lens, those with a
@@ -2094,6 +2149,12 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
         if tree.epoch.get() == 0 {
             return; // no groups yet: this effect re-runs when there are
         }
+        // FILTER-20: the flat list brings the open ticket into view its own
+        // way; back in the tree, its chain is revealed again.
+        if nav_view.get() != View::Tree {
+            revealed.set_value(None);
+            return;
+        }
         if revealed.get_value().as_deref() == Some(id.as_str()) {
             return;
         }
@@ -2135,6 +2196,28 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
             <div class="brand">
                 "menger"
                 <span class="muted">"· tickets"</span>
+                // FILTER-20: the nav's view — the tree, or every ticket its
+                // filter admits as one list.
+                <span class="nview" role="group" aria-label="the nav's view">
+                    {View::ALL
+                        .map(|v| {
+                            view! {
+                                <button
+                                    class="nview-b"
+                                    data-view=v.name()
+                                    aria-pressed=move || (nav_view.get() == v).to_string()
+                                    title=match v {
+                                        View::Tree => "the nav as a tree: shortcodes, their tickets, their children",
+                                        View::Flat => "the nav as one list: every ticket its filter admits, in id order",
+                                    }
+                                    on:click=move |_| nav_view.set(v)
+                                >
+                                    {v.label()}
+                                </button>
+                            }
+                        })
+                        .to_vec()}
+                </span>
                 // WAVE-10: show or hide the `_MENGER/` documents.
                 <button
                     class="menger-docs"
@@ -2164,16 +2247,27 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                     class="tree"
                     role="tree"
                     aria-label="tickets"
+                    data-view=move || nav_view.get().name()
                     node_ref=tree_ref
                     on:keydown=move |ev| tree_keydown(ev, expanded)
                 >
-                    <For
-                        each=move || top_nodes.get()
-                        key=|n: &Node| n.key().to_string()
-                        children=move |n: Node| node_view(n, ctx, Arc::new(Vec::new()), top_last, None)
-                    />
+                    {move || match nav_view.get() {
+                        View::Tree => view! {
+                            <For
+                                each=move || top_nodes.get()
+                                key=|n: &Node| n.key().to_string()
+                                children=move |n: Node| node_view(n, ctx, Arc::new(Vec::new()), top_last, None)
+                            />
+                        }
+                        .into_any(),
+                        // FILTER-20: every ticket the nav's filter admits, as one list.
+                        View::Flat => flat::flat_list(flat_filter, route, menger_docs, tree.viewport, flat_note),
+                    }}
                 </div>
-                {lens_line}
+                {move || match nav_view.get() {
+                    View::Tree => lens_line(),
+                    View::Flat => flat_note.get().map(|n| flat::note_view(n, under.on.get())),
+                }}
             </div>
         </aside>
     }

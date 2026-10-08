@@ -210,6 +210,14 @@ asks the server: `find` once the typing pauses (80 ms), only the newest
 question's answer shown, its count the answer's rows plus `remaining` —
 `map-12` shows MAP-12 first ~0.26 s after the last keystroke at 10^6.
 
+The nav's header chooses `Tree | Flat` (FILTER-20), kept in local storage
+with its other state (`menger.nav.view`). Flat lists every ticket the nav's
+filter admits — every ticket with none — as the tree's leaf rows in id order,
+windowed like the board: `counts { filter }` places each row, and a page is
+`list { filter, after: <the row before it> }` scrolling on or `list { filter,
+at }` after a jump; a membership watch keeps it live. At 10^6 its first rows
+show in ~0.3 s and the last ticket is a scroll away (five pages).
+
 The wave board (WAVE-5) is `#/waves/<SHORTCODE>` — e.g.
 `http://127.0.0.1:4456/app/#/waves/PLEXUS`, the platform's work in order:
 the shortcode and every shortcode hosted under it (the nav's `host` chain
