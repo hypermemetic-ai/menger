@@ -1123,6 +1123,18 @@
   .fmenu .frow.fgroup .fhead-l {
     font-family: var(--sans); font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
   }
+  /* FILTER-19: the operator switch heading a category's values — one
+     button, its two words as segments, the clause's operator lit. */
+  .fmenu .fop-row { padding: 2px 4px 6px; }
+  .fmenu button.fop {
+    display: inline-flex; padding: 0; font: inherit; font-size: 11.5px; background: var(--card); color: var(--muted);
+    border: 1px solid var(--line); border-radius: 6px; overflow: hidden; cursor: pointer;
+  }
+  .fmenu button.fop .fop-w { padding: 1px 9px; }
+  .fmenu button.fop .fop-w + .fop-w { border-left: 1px solid var(--line); }
+  .fmenu button.fop .fop-w.on { background: var(--sel); color: var(--accent); }
+  .fmenu button.fop:hover { border-color: var(--accent); }
+  .fmenu button.fop:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* FILTER-12: the board's bar over its table; the board when nothing
      matches — the words, the effective filter's pills (the global ones
      dashed and marked), a button to clear each level; the header's

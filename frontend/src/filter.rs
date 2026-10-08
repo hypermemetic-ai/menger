@@ -33,6 +33,16 @@
 //!   (none shows while a level has no provider). Placed under its anchor
 //!   with the ticket menu's [`menu::clamp`]; Escape or a mousedown outside
 //!   closes it.
+//! - **The operator switch** (FILTER-19): a category's values open with
+//!   `[ is | is not ]` — Title's `[ contains | does not contain ]`; a flag
+//!   has none, its `yes` · `no` being the negation already ([`switch_words`]).
+//!   It shows the clause's operator, or — no clause yet — the one the pane
+//!   holds, `is` until it is set ([`switch_op`]). Set, it turns the clause's
+//!   operator exactly as a pill's toggle does ([`Clausal::set_op`]); a value
+//!   checked in the pane starts a clause under it ([`Clausal::edit_as`]); a
+//!   value checked from the search's results keeps its clause's operator
+//!   (`is` for a new one). One button: Tab from the search reaches it, Space
+//!   or Enter flips it.
 //!
 //! Everything that decides — the categories and their values, a clause's
 //! edits, the tree and its tri-state, the menu's rows, a pill's words — is
@@ -361,6 +371,20 @@ pub(crate) fn op_label(c: Cat, op: Op, n: usize) -> &'static str {
     }
 }
 
+/// FILTER-19: the words of the operator switch heading `c`'s values in the
+/// menu — `is` / `is not`, Title's `contains` / `does not contain` (a
+/// pill's, for one value); a flag has none: its `yes` / `no` is already the
+/// negation.
+pub(crate) fn switch_words(c: Cat) -> Option<(&'static str, &'static str)> {
+    (!c.is_flag()).then(|| (op_label(c, Op::Is, 1), op_label(c, Op::Not, 1)))
+}
+
+/// FILTER-19: the operator the switch shows — the clause's; with no clause,
+/// `held`, the one the open pane holds (`is` until the switch is set).
+pub(crate) fn switch_op(cl: Option<&Clause>, held: Op) -> Op {
+    cl.map_or(held, |cl| cl.op)
+}
+
 /// One category's clause: its operator and its values — canonical, in the
 /// category's order, distinct, never none (a clause left with no value is
 /// no clause). Title's one value is its text; a flag's one value is `yes`
@@ -466,6 +490,28 @@ pub(crate) trait Clausal {
         if let Some(cl) = self.clause(c) {
             let op = if c.is_flag() { Op::Not } else { cl.op.flip() };
             self.set(c, op, cl.values);
+        }
+    }
+
+    /// FILTER-19: the menu's switch — `c`'s operator set to `op`, the same
+    /// clause a pill's toggle makes ([`Clausal::flip`]); with no clause, or
+    /// on a flag (no switch), nothing.
+    fn set_op(&mut self, c: Cat, op: Op) {
+        if !c.is_flag() && self.clause(c).is_some_and(|cl| cl.op != op) {
+            self.flip(c);
+        }
+    }
+
+    /// FILTER-19: the edit `f` makes of `c` in the menu, a clause it starts
+    /// taking `op` (the switch's) — one already there keeps its own.
+    fn edit_as(&mut self, c: Cat, op: Op, f: impl FnOnce(&mut Self))
+    where
+        Self: Sized,
+    {
+        let new = self.clause(c).is_none();
+        f(self);
+        if new {
+            self.set_op(c, op);
         }
     }
 
@@ -1034,6 +1080,9 @@ pub(crate) struct Pop {
     query: RwSignal<String>,
     /// The highlighted row among the active list's actionable rows.
     hi: RwSignal<usize>,
+    /// FILTER-19: the operator the open category's switch holds while it
+    /// has no clause — `is` as a category opens.
+    held: RwSignal<Op>,
     /// What the level's bar offers: its categories and its counts — set by
     /// the view that draws it; `mounted` while it does.
     cats: RwSignal<Vec<Cat>>,
@@ -1049,6 +1098,7 @@ impl Pop {
             cat: RwSignal::new(None),
             query: RwSignal::new(String::new()),
             hi: RwSignal::new(0),
+            held: RwSignal::new(Op::Is),
             cats: RwSignal::new(Cat::SERVER.to_vec()),
             counts: RwSignal::new(CountsProvider::none()),
             mounted: RwSignal::new(0),
@@ -1092,6 +1142,7 @@ impl Pop {
         }
         self.query.set(String::new());
         self.hi.set(0);
+        self.held.set(Op::Is);
         self.cat.set(cat);
         self.open.set(Some(Anchor { sel, direct: direct && cat.is_some() }));
     }
@@ -1109,6 +1160,7 @@ impl Pop {
         }
         self.open.set(None);
         self.cat.set(None);
+        self.held.set(Op::Is);
         self.query.set(String::new());
         if restore {
             keys::restore_focus();
@@ -1129,6 +1181,7 @@ impl Pop {
     }
 
     fn open_cat(self, c: Cat) {
+        self.held.set(Op::Is);
         self.cat.set(Some(c));
         self.query.set(String::new());
         self.hi.set(0);
@@ -1137,10 +1190,43 @@ impl Pop {
     /// Back from a category's values to the categories, on it.
     fn back(self) {
         if let Some(c) = self.cat.get_untracked() {
+            self.held.set(Op::Is);
             self.cat.set(None);
             self.query.set(String::new());
             self.hi.set(self.cats.with_untracked(|cs| cs.iter().position(|x| *x == c).unwrap_or(0)));
         }
+    }
+
+    /// FILTER-19: the operator `c`'s switch shows. Tracked.
+    fn op(self, lens: Lens, c: Cat) -> Op {
+        let held = self.held.get();
+        switch_op(lens.clauses(self.level).get(c), held)
+    }
+
+    /// FILTER-19: the operator a value checked in `c`'s pane is checked
+    /// under — what the switch shows, which the pane now holds, so a clause
+    /// emptied there leaves the switch as it was.
+    fn pane_op(self, lens: Lens, c: Cat) -> Op {
+        let op = untrack(|| self.op(lens, c));
+        self.held.set(op);
+        op
+    }
+
+    /// FILTER-19: the switch flipped — the clause's operator turned, as a
+    /// pill's toggle turns it; no clause yet, the operator the next one
+    /// takes.
+    fn flip_switch(self, lens: Lens, c: Cat) {
+        let next = untrack(|| self.op(lens, c)).flip();
+        self.held.set(next);
+        lens.edit(self.level, |k| k.set_op(c, next));
+    }
+
+    /// A value's box clicked (or Enter on its row): in the open category's
+    /// pane, under its switch; from the search's results (`scoped`), its
+    /// clause's operator kept — `is` for a new one.
+    fn check(self, lens: Lens, c: Cat, token: &str, scoped: bool) {
+        let op = if scoped { Op::Is } else { self.pane_op(lens, c) };
+        lens.toggle(self.level, c, token, op);
     }
 
     /// The menu's facts, read (and tracked) for `f`.
@@ -1166,8 +1252,11 @@ impl Pop {
     fn act(self, lens: Lens, row: &Row) {
         match row {
             Row::Cat(c) => self.open_cat(*c),
-            Row::Value { cat, token, .. } => lens.toggle(self.level, *cat, token),
-            Row::Group { cat, tokens, .. } => lens.edit(self.level, |k| k.toggle_all(*cat, tokens)),
+            Row::Value { cat, token, scoped, .. } => self.check(lens, *cat, token, *scoped),
+            Row::Group { cat, tokens, .. } => {
+                let op = self.pane_op(lens, *cat);
+                lens.edit(self.level, |k| k.edit_as(*cat, op, |k| k.toggle_all(*cat, tokens)));
+            }
             Row::TitleContains(text) => {
                 let text = text.clone();
                 lens.edit(self.level, |k| k.set(Cat::Title, Op::Is, [text]));
@@ -1179,7 +1268,8 @@ impl Pop {
 
     /// The search field's keys: the arrows move, Enter picks the highlighted
     /// row (the first match), → opens a category, ← or a Backspace on an
-    /// empty field goes back, Esc closes.
+    /// empty field goes back, Esc closes; Tab moves on to the open
+    /// category's operator switch (FILTER-19), or — none — closes.
     fn key(self, lens: Lens, ev: web_sys::KeyboardEvent) {
         let key = ev.key();
         let empty = self.query.with_untracked(String::is_empty);
@@ -1213,6 +1303,8 @@ impl Pop {
                 ev.prevent_default();
                 self.back();
             }
+            // The switch follows the field: Tab's own move reaches it.
+            "Tab" if !ev.shift_key() && self.cat.get_untracked().and_then(switch_words).is_some() => {}
             "Tab" => self.close(false),
             _ => {}
         }
@@ -1667,6 +1759,7 @@ fn popover(lens: Lens, pop: Pop) -> impl IntoView {
                             <span class="glyph">"‹"</span>
                             <span class="flabel">{c.menu_label()}</span>
                         </div>
+                        {switch_view(lens, pop, c)}
                         {if c == Cat::Title {
                             title_view(lens, pop).into_any()
                         } else {
@@ -1679,11 +1772,47 @@ fn popover(lens: Lens, pop: Pop) -> impl IntoView {
     }
 }
 
-/// Title's pane: its text, matched as you type.
+/// FILTER-19: the operator switch heading `c`'s values — one button, its
+/// two words as segments, the operator's lit: `[ is | is not ]` (Title's
+/// `[ contains | does not contain ]`); none for a flag. Tab from the search
+/// reaches it, Space or Enter flips it (a button's own keys), and a click
+/// flips it leaving focus in the search; Tab on from it closes the menu as
+/// the search's does — but into Title's field, which follows it.
+fn switch_view(lens: Lens, pop: Pop, c: Cat) -> Option<impl IntoView> {
+    let (is, not) = switch_words(c)?;
+    let op = move || pop.op(lens, c);
+    Some(view! {
+        <div class="fop-row">
+            <button
+                type="button"
+                class="fop"
+                role="switch"
+                data-cat=c.key()
+                data-op=move || op().word()
+                aria-checked=move || (op() == Op::Not).to_string()
+                aria-label=format!("{} {not}", c.label())
+                title=format!("{is} / {not} — Space or Enter flips it")
+                on:mousedown=|ev| ev.prevent_default()
+                on:click=move |_| pop.flip_switch(lens, c)
+                on:keydown=move |ev: web_sys::KeyboardEvent| {
+                    if ev.key() == "Tab" && !ev.shift_key() && c != Cat::Title {
+                        pop.close(false);
+                    }
+                }
+            >
+                <span class="fop-w" class:on=move || op() == Op::Is>{is}</span>
+                <span class="fop-w" class:on=move || op() == Op::Not>{not}</span>
+            </button>
+        </div>
+    })
+}
+
+/// Title's pane: its text, matched as you type — under the switch's
+/// operator (FILTER-19).
 fn title_view(lens: Lens, pop: Pop) -> impl IntoView {
     let level = pop.level;
     let seed = untrack(|| lens.clauses(level).get(Cat::Title).map(|cl| cl.values[0].clone()).unwrap_or_default());
-    let op = move || lens.clauses(level).get(Cat::Title).map_or(Op::Is, |cl| cl.op);
+    let op = move || pop.op(lens, Cat::Title);
     let field = NodeRef::<leptos::html::Input>::new();
     field.on_load(|el: web_sys::HtmlInputElement| {
         let _ = el.focus();
@@ -1700,10 +1829,8 @@ fn title_view(lens: Lens, pop: Pop) -> impl IntoView {
                 value=seed
                 on:input=move |ev| {
                     let text = event_target_value(&ev);
-                    lens.edit(level, |k| {
-                        let op = k.clause(Cat::Title).map_or(Op::Is, |cl| cl.op);
-                        k.set(Cat::Title, op, [text].into_iter().filter(|t| !t.trim().is_empty()));
-                    });
+                    let op = pop.pane_op(lens, Cat::Title);
+                    lens.edit(level, |k| k.set(Cat::Title, op, [text].into_iter().filter(|t| !t.trim().is_empty())));
                 }
                 on:keydown=move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
                     "Enter" => {
@@ -1776,7 +1903,7 @@ fn row_view(lens: Lens, pop: Pop, row: Row, at: Option<usize>, live: impl Fn() -
                     data-group=label
                     on:mousedown=|ev| ev.prevent_default()
                     on:mouseenter=hover
-                    on:click=move |_| lens.edit(level, |k| k.toggle_all(c, tokens))
+                    on:click=move |_| pop.act(lens, &Row::Group { cat: c, label, tokens })
                 >
                     {tri_box(state)}
                     <span class="flabel fhead-l">{label}</span>
@@ -1848,13 +1975,13 @@ fn row_view(lens: Lens, pop: Pop, row: Row, at: Option<usize>, live: impl Fn() -
             };
             let click = {
                 let token = token.clone();
-                move |_| lens.toggle(level, c, &token)
+                move |_| pop.check(lens, c, &token, scoped)
             };
             let only = {
                 let token = token.clone();
                 move |ev: web_sys::MouseEvent| {
                     ev.stop_propagation();
-                    lens.only(level, &token);
+                    lens.only(level, &token, pop.pane_op(lens, Cat::Shortcode));
                 }
             };
             let pad = format!("padding-left: {}px", 8 + depth * 14);
@@ -2267,5 +2394,99 @@ pub(crate) mod tests {
         assert_ne!(f, d);
         assert_eq!(d.local(), Clauses::default());
         assert_eq!(d.server(), d);
+    }
+
+    /// FILTER-19: a category's values open with an operator switch — `is` /
+    /// `is not` on every category with values, the surface's own included;
+    /// Title's `contains` / `does not contain`; none on a flag. It shows the
+    /// clause's operator, or — no clause — the pane's (`is` for a new one).
+    #[test]
+    fn a_categorys_values_open_with_an_operator_switch() {
+        for c in [Cat::Shortcode, Cat::Status, Cat::Kind, Cat::Severity, Cat::Wave, Cat::Readiness, Cat::OffBoard, Cat::State] {
+            assert_eq!(switch_words(c), Some(("is", "is not")), "{c:?}");
+        }
+        assert_eq!(switch_words(Cat::Title), Some(("contains", "does not contain")));
+        for c in [Cat::Ready, Cat::Blocked, Cat::Commits, Cat::Removed] {
+            assert_eq!(switch_words(c), None, "{c:?}: its yes / no is the negation");
+        }
+        assert_eq!(Cat::ALL.into_iter().filter(|c| switch_words(*c).is_some()).count(), 9, "every category but the flags");
+
+        let not = Clause { op: Op::Not, values: strs(&["doc"]) };
+        let is = Clause { op: Op::Is, values: strs(&["doc"]) };
+        assert_eq!(switch_op(None, Op::Is), Op::Is, "a new clause: is");
+        assert_eq!(switch_op(None, Op::Not), Op::Not, "set before any value is checked");
+        assert_eq!(switch_op(Some(&not), Op::Is), Op::Not, "the clause's operator");
+        assert_eq!(switch_op(Some(&is), Op::Not), Op::Is);
+    }
+
+    /// FILTER-19: the switch set to `is not` is a pill's toggle — the same
+    /// clause; values checked under it join as excluded values; one checked
+    /// from the search's results keeps its clause's operator (`is` for a new
+    /// one); a flag has no switch to set.
+    #[test]
+    fn the_switch_builds_a_not() {
+        // A clause there: the switch turns it as the pill's toggle does.
+        let k = Clauses::default().with(Cat::Status, Op::Is, strs(&["Ready", "Coding"]));
+        let mut by_pill = k.clone();
+        by_pill.flip(Cat::Status);
+        let mut by_switch = k.clone();
+        by_switch.set_op(Cat::Status, Op::Not);
+        assert_eq!(by_switch, by_pill);
+        let cl = by_switch.get(Cat::Status).unwrap().clone();
+        assert_eq!(cl, Clause { op: Op::Not, values: strs(&["Coding", "Ready"]) });
+        assert_eq!(pill_words(&Pill::Clause { cat: Cat::Status, clause: cl }), ("Status".into(), "is not Coding, Ready".into()));
+        by_switch.set_op(Cat::Status, Op::Not);
+        assert_eq!(by_switch, by_pill, "set again: as it was");
+        by_switch.set_op(Cat::Status, Op::Is);
+        assert_eq!(by_switch, k, "and back");
+
+        // No clause yet: the switch alone writes nothing (a clause is never
+        // empty); the values checked under it are excluded.
+        let mut f = Clauses::default();
+        f.set_op(Cat::Kind, Op::Not);
+        assert_eq!(f, Clauses::default());
+        f.edit_as(Cat::Kind, Op::Not, |k| k.toggle(Cat::Kind, "doc"));
+        f.edit_as(Cat::Kind, Op::Not, |k| k.toggle(Cat::Kind, "spike"));
+        let kind = f.get(Cat::Kind).unwrap().clone();
+        assert_eq!(kind, Clause { op: Op::Not, values: strs(&["spike", "doc"]) });
+        assert!(!kind.admits(Some("doc")) && !kind.admits(Some("spike")) && kind.admits(Some("build")));
+        assert_eq!(pill_words(&Pill::Clause { cat: Cat::Kind, clause: kind }), ("Kind".into(), "is not spike, doc".into()));
+
+        // From the search's results (checked under `is`): a clause keeps its
+        // operator; a new one is `is`.
+        f.edit_as(Cat::Kind, Op::Is, |k| k.toggle(Cat::Kind, "gap"));
+        assert_eq!(f.get(Cat::Kind), Some(&Clause { op: Op::Not, values: strs(&["spike", "gap", "doc"]) }));
+        f.edit_as(Cat::Severity, Op::Is, |k| k.toggle(Cat::Severity, "high"));
+        assert_eq!(f.get(Cat::Severity), Some(&Clause { op: Op::Is, values: strs(&["high"]) }));
+
+        // Unchecked under the switch, the last value takes the clause.
+        for v in ["spike", "gap", "doc"] {
+            f.edit_as(Cat::Kind, Op::Not, |k| k.toggle(Cat::Kind, v));
+        }
+        assert!(f.get(Cat::Kind).is_none());
+
+        // A Status group's header, a shortcode's subtree, a surface's own
+        // category: under the switch.
+        f.edit_as(Cat::Status, Op::Not, |k| k.toggle_all(Cat::Status, STATUS_GROUPS[3].1));
+        assert_eq!(f.get(Cat::Status), Some(&Clause { op: Op::Not, values: strs(&["Complete", "Superseded"]) }));
+        let t = platform();
+        f.edit_as(Cat::Shortcode, Op::Not, |k| k.toggle_code(&t, "MACRO"));
+        assert_eq!(f.get(Cat::Shortcode), Some(&Clause { op: Op::Not, values: strs(&["CODEGEN", "GEN", "MACRO"]) }));
+        f.edit_as(Cat::Wave, Op::Not, |k| k.toggle(Cat::Wave, "missing"));
+        assert_eq!(f.to_pairs().iter().find(|p| p.key == "wave"), Some(&lens::Pair::new("wave", Some("not:missing".into()))));
+
+        // Title: `does not contain`, as its pill says it.
+        let mut q = Clauses::default().with(Cat::Title, Op::Is, strs(&["envelope"]));
+        q.set_op(Cat::Title, Op::Not);
+        let title = q.get(Cat::Title).unwrap();
+        assert_eq!(op_label(Cat::Title, title.op, 1), switch_words(Cat::Title).unwrap().1);
+        assert_eq!(q.to_pairs(), [lens::Pair::new("q", Some("not:envelope".into()))]);
+
+        // A flag: no switch — nothing to set; its value is the negation.
+        let mut g = Clauses::default().with(Cat::Ready, Op::Is, strs(&["yes"]));
+        g.set_op(Cat::Ready, Op::Not);
+        assert_eq!(g.get(Cat::Ready), Some(&Clause { op: Op::Is, values: strs(&["yes"]) }));
+        g.edit_as(Cat::Blocked, Op::Not, |k| k.toggle(Cat::Blocked, "yes"));
+        assert_eq!(g.get(Cat::Blocked), Some(&Clause { op: Op::Is, values: strs(&["yes"]) }), "not turned over");
     }
 }
