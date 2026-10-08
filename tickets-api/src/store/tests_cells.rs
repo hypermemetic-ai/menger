@@ -461,7 +461,7 @@ async fn fan_out_phases() {
         let (_ready, touched) = cache.ready.status_changed_touching(rows, &row, previous);
         let t_ready = t.elapsed();
         let t = std::time::Instant::now();
-        let cells = cache.recell(&row, false, &touched);
+        let (cells, _tree) = cache.recell(rows, &row, false, &touched);
         let t_cells = t.elapsed();
         let t = std::time::Instant::now();
         let mut stored = stored::Changes::default();

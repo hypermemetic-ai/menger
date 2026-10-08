@@ -69,8 +69,11 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   **Filters** (FILTER-4) are one quoted flag in FILTER-3's language —
   `ready and kind build and in SCALE`, `status in (Pending, Ready)`,
   `category in (active, review)`, `not category static`; answered from the
-  cells, never by testing a ticket. `under` (FILTER-13) and `text` (the
-  palette's `find`) are refused, as is any chunk the language cannot read:
+  cells, never by testing a ticket. `under X` (FILTER-13) is X and its
+  descendants for a ticket, and a shortcode, its root and every shortcode
+  hosted under it for a shortcode — answered from the kept tree, on every
+  filtered read. `text` (the palette's `find`) is refused, as is any chunk
+  the language cannot read:
 
   ```sh
   synapse -P 4455 menger tickets counts --filter 'ready and kind build'    # per shortcode
@@ -88,6 +91,17 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets ready_set --filter 'kind build and in SCALE' --summary
   synapse -P 4455 menger tickets inputs --state open --filter 'kind build'
   synapse -P 4455 menger tickets member --ids FILTER-4,FILTER-5 --filter 'status Ready'
+  ```
+
+  **The nav under a filter** is `tree` (FILTER-13): a parent's children —
+  or a shortcode's top row (its root; a rootless shortcode's tickets) —
+  that match or hold a match, each a `node { summary, matched, below }`
+  (`below`: the matches strictly under it), then a `page`, paged as `list`:
+
+  ```sh
+  synapse -P 4455 menger tickets tree --epic FILTER --filter 'status Ready'
+  synapse -P 4455 menger tickets tree --parent FILTER-9 --filter 'not category done' --limit 50
+  synapse -P 4455 menger tickets counts --filter 'ready and under FILTER-9'
   ```
 
   **Params are individual flags, not a JSON blob** — treat synapse as a

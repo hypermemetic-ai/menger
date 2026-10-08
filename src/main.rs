@@ -1,6 +1,6 @@
 use clap::Parser;
-use menger::store::{SeedSpec, Store, Verdict};
-use menger::{build_rpc_with, default_db_path, shell};
+use menger::store::{SeedShape, SeedSpec, Store, Verdict};
+use menger::{build_rpc_seeded, default_db_path, shell};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::{RestHttpConfig, RouteFn, TransportServer};
 use std::path::PathBuf;
@@ -64,6 +64,13 @@ struct Args {
     #[arg(long, env = "MENGER_SEED_VALUE", default_value = "1", value_name = "U64")]
     seed_value: u64,
 
+    /// FILTER-13: where --seed-synthetic hangs its tickets: `flat` (every
+    /// ticket under its shortcode's root, PERF-2's) or `nested` (FILTER-3
+    /// §6.5's tree: executions under the root, builds under executions,
+    /// docs under builds).
+    #[arg(long, env = "MENGER_SEED_SHAPE", default_value = "flat", value_name = "SHAPE")]
+    seed_shape: SeedShape,
+
     /// Let --seed-synthetic add to a database that already holds tickets
     /// (ids continue after the existing ones). As an env var, 1/true/yes
     /// enable it.
@@ -80,7 +87,8 @@ struct Args {
     /// forward references, roll-ups, children and child_count, and
     /// (SCALE-32) each ticket's unsatisfied blockers, the ready set and
     /// every shortcode's status counts, and (FILTER-4) the cell table with
-    /// every shortcode's bitmap and count of each cell — by a scan
+    /// every shortcode's bitmap and count of each cell, and (FILTER-13) the
+    /// kept tree's tallies and holders — by a scan
     /// of its tickets, compare with what it stores, print each difference
     /// or "consistent", and exit 0 when consistent, 1 on any difference
     /// (or none stored), 2 when it cannot be read. Read-only: changes
@@ -113,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
         seed: args.seed_value,
         into_existing: args.seed_into_existing,
     });
-    let hub = build_rpc_with(&db_path, seed).await?;
+    let hub = build_rpc_seeded(&db_path, seed, args.seed_shape).await?;
 
     let activations = hub.list_activations_info();
     tracing::info!("Activations ({}):", activations.len());
@@ -194,12 +202,15 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             ready,
             cells,
             bitmaps,
+            tallies,
+            holders,
         }) => {
             println!(
                 "consistent: {} — {tickets} tickets; {runs} shortcode runs, {refs} dangling forward \
                  references, {groups} roll-up groups, the children and child_count of {parents} \
                  parents, the unsatisfied blockers of {blocked} tickets, a ready set of {ready}, \
-                 every shortcode's status counts and {cells} cells' {bitmaps} bitmaps and counts \
+                 every shortcode's status counts, {cells} cells' {bitmaps} bitmaps and counts, \
+                 and the kept tree's {tallies} tally entries and {holders} holder containers \
                  are what a scan of the tickets gives",
                 db_path.display()
             );

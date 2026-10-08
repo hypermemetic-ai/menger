@@ -264,7 +264,7 @@ impl Broadcast {
     /// filtered channel alone; anything else to both.
     fn send(&self, change: Change) {
         let watched = self.filtered.receiver_count() > 0;
-        if let Change::CellsMoved { .. } = change {
+        if let Change::CellsMoved { .. } | Change::UnderMoved { .. } = change {
             if watched {
                 let _ = self.filtered.send(change);
             }
@@ -733,6 +733,13 @@ pub enum Change {
     #[serde(skip)]
     #[schemars(skip)]
     CellsMoved { moves: std::sync::Arc<cells::Moves> },
+    /// FILTER-13: what the write moved for each open `watch { filter }`
+    /// whose filter asks `under` — worked out by the write, before it
+    /// committed and after it applied — sent last, after its `CellsMoved`.
+    /// Never on the wire as itself: each such watch takes its own events.
+    #[serde(skip)]
+    #[schemars(skip)]
+    UnderMoved { moves: std::sync::Arc<lineage::UnderMoves> },
 }
 
 impl Change {
@@ -760,6 +767,8 @@ impl Change {
             Self::InputChanged { epic, .. } => epic,
             // FILTER-4: one per write, its moves in any shortcode.
             Self::CellsMoved { .. } => "",
+            // FILTER-13: one per write, each watch's events already in its epic.
+            Self::UnderMoved { .. } => "",
         }
     }
 
@@ -777,7 +786,7 @@ impl Change {
             }
             Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => Some(self),
             // FILTER-4: each move filtered where it is turned into events.
-            Self::CellsMoved { .. } => Some(self),
+            Self::CellsMoved { .. } | Self::UnderMoved { .. } => Some(self),
             other => (other.epic() == epic).then_some(other),
         }
     }
@@ -863,6 +872,28 @@ pub struct SeedSpec {
     /// When on, ids continue after the existing per-epic maxima exactly
     /// as `create` would allocate them.
     pub into_existing: bool,
+}
+
+/// FILTER-13: where a seed hangs its tickets ([`Store::seed_synthetic_shaped`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SeedShape {
+    /// PERF-2's: every non-root under its shortcode's root — one level.
+    #[default]
+    Flat,
+    /// FILTER-3 §6.5's deeper tree: executions under the root, builds under
+    /// executions, docs under builds (`synthetic::generate`).
+    Nested,
+}
+
+impl std::str::FromStr for SeedShape {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.to_ascii_lowercase().as_str() {
+            "flat" => Ok(Self::Flat),
+            "nested" => Ok(Self::Nested),
+            other => Err(format!("a seed shape is flat or nested, not {other:?}")),
+        }
+    }
 }
 
 /// What a seed run did, for the startup log.
@@ -991,6 +1022,9 @@ pub enum StoreError {
     /// FILTER-4: a filter the store cannot answer — not understood, or a
     /// predicate that lives elsewhere; the message names every such chunk.
     Filter(String),
+    /// FILTER-13: `tree` asked with both a `parent` and an `epic`, or with
+    /// neither — it answers one address.
+    TreeAddress,
 }
 
 impl StoreError {
@@ -1197,6 +1231,10 @@ impl std::fmt::Display for StoreError {
                  where the page starts"
             ),
             Self::Filter(message) => f.write_str(message),
+            Self::TreeAddress => write!(
+                f,
+                "tree: give `parent` (a ticket's children) or `epic` (a shortcode's top level), exactly one of them"
+            ),
         }
     }
 }
@@ -1468,8 +1506,9 @@ impl<'a> Rows<'a> {
         let order = self.order;
         self.children
             .in_shortcode(&t.id, &t.epic)
-            .iter()
-            .filter_map(move |&seq| {
+            .into_iter()
+            .flat_map(|seqs| seqs.iter())
+            .filter_map(move |seq| {
                 order.get(&OrderKey {
                     epic: t.epic.clone(),
                     seq,
@@ -1544,6 +1583,9 @@ struct Moved {
     /// FILTER-4: the cells a birth, a status change (and its fan-out) or a
     /// first or last commit moves.
     cells: Option<cells::Move>,
+    /// FILTER-13: what those moves, and a `set_parent`, do to the kept
+    /// tree's tallies and holders.
+    tree: Option<tree::Move>,
 }
 
 impl Moved {
@@ -1578,6 +1620,7 @@ impl Derived {
                 ready: None,
                 placed: None,
                 cells: None,
+                tree: None,
             },
         }
     }
@@ -1597,6 +1640,14 @@ impl Derived {
     fn celled(mut self, cells: cells::Move) -> Self {
         cells.store(&mut self.stored);
         self.moved.cells = Some(cells);
+        self
+    }
+
+    /// FILTER-13: and what it does to the kept tree — its tallies and
+    /// holders stored in the same transaction, taken with the rest.
+    fn treed(mut self, tree: tree::Move) -> Self {
+        tree.store(&mut self.stored);
+        self.moved.tree = Some(tree);
         self
     }
 
@@ -1706,6 +1757,16 @@ impl Cache {
             order.len(),
             started.elapsed().as_secs_f64() * 1000.0
         );
+        let mut children = children;
+        let started = std::time::Instant::now();
+        let (tallies, holders) = Self::plant(&order, &at, &mut children, &cells, &ready);
+        tracing::info!(
+            "kept the tree over {} tickets in {:.1} ms (FILTER-13): {tallies} tally entries over {} \
+             parents, {holders} holder bitmaps",
+            order.len(),
+            started.elapsed().as_secs_f64() * 1000.0,
+            children.parents()
+        );
         Self {
             order,
             at,
@@ -1722,6 +1783,30 @@ impl Cache {
             inputs: inputs::Inputs::default(),
             written: 0,
         }
+    }
+
+    /// FILTER-13: the kept tree's tallies and holders, built into `children`
+    /// from the rows by a scan ([`tree::build`]) — at a build, after a seed,
+    /// and for `--verify-derived`. Returns how many tally entries and holder
+    /// bitmaps it made.
+    fn plant(
+        order: &BTreeMap<OrderKey, Row>,
+        at: &HashMap<String, OrderKey>,
+        children: &mut children::Children,
+        cells: &cells::Cells,
+        ready: &ready::Ready,
+    ) -> (usize, usize) {
+        let none = children::Children::filling();
+        let rows = Rows { order, at, children: &none, patch: None };
+        tree::build(rows, children, |t| {
+            cells.id(cells::Key::of(t, ready.count(&t.id))).expect("every ticket's cell is interned")
+        });
+        let tallies = children.every().map(|(_, k)| k.tally.len()).sum();
+        let holders = children
+            .every()
+            .flat_map(|(_, k)| k.lists().filter_map(|(_, s)| s.many()).map(|m| m.holders.len()))
+            .sum();
+        (tallies, holders)
     }
 
     /// SCALE-28: the cache from the tickets' rows — each carrying its stored
@@ -1777,6 +1862,7 @@ impl Cache {
             statuses,
             ready,
             cells: self.cells.stored(),
+            tree: tree::stored(&self.children),
         }
     }
 
@@ -1854,8 +1940,8 @@ impl Cache {
         let mut rollups = self.rollups.clone();
         let groups = rollups.created(rows, newborn);
         let (ready, touched) = self.ready.born_touching(rows, newborn);
-        let cells = self.recell(newborn, true, &touched);
-        let mut derived = Derived::rolled(self, rollups, groups).readied(ready).celled(cells);
+        let (cells, tree) = self.recell(rows, newborn, true, &touched);
+        let mut derived = Derived::rolled(self, rollups, groups).readied(ready).celled(cells).treed(tree);
         birth.store(&mut derived.stored);
         if let Some(p) = &newborn.parent {
             derived.stored.counts.push((p.clone(), self.children.count(p) + 1));
@@ -1930,8 +2016,8 @@ impl Cache {
             Derived::none()
         };
         let (ready, touched) = self.ready.status_changed_touching(rows, row, previous);
-        let cells = self.recell(row, false, &touched);
-        let mut derived = derived.readied(ready).celled(cells);
+        let (cells, tree) = self.recell(rows, row, false, &touched);
+        let mut derived = derived.readied(ready).celled(cells).treed(tree);
         if satisfied(previous) != satisfied(row.status) {
             derived.moved.placed = Some(Self::replace(rows, row, false));
         }
@@ -1944,8 +2030,15 @@ impl Cache {
     /// it, its count before and after), each from the cell it is in to the
     /// one its row and its count put it in now ([`cells::Cells::moved`]).
     /// The written ticket's cell before is its row before (`born`: none).
-    fn recell(&self, written: &Row, born: bool, touched: &[ready::Touched<'_>]) -> cells::Move {
-        let mut moves: Vec<(&Row, Option<cells::Key>, cells::Key)> = Vec::with_capacity(touched.len());
+    ///
+    /// FILTER-13: and what those moves do to the kept tree ([`tree::Plan`]):
+    /// each moved ticket's count leaves its old cell and joins its new one
+    /// in each of its ancestors' tallies; a newborn joins its parent's
+    /// children — and, where a hand edit had named its id as a parent, its
+    /// subtree's tally is counted in its ancestors too. `rows` are the rows
+    /// as the write leaves them.
+    fn recell<'a>(&'a self, rows: Rows<'a>, written: &'a Row, born: bool, touched: &[ready::Touched<'a>]) -> (cells::Move, tree::Move) {
+        let mut moves: Vec<(&'a Row, Option<cells::Key>, cells::Key)> = Vec::with_capacity(touched.len());
         for (t, was, now) in touched {
             let before = if t.id != written.id {
                 Some(cells::Key::of(t, *was))
@@ -1954,9 +2047,29 @@ impl Cache {
             } else {
                 self.get(&t.id).map(|old| cells::Key::of(old, *was))
             };
-            moves.push((t, before, cells::Key::of(t, *now)));
+            moves.push((*t, before, cells::Key::of(t, *now)));
         }
-        self.cells.moved(moves)
+        let cells = self.cells.moved(moves.iter().copied());
+        let mut plan = tree::Plan::new(&self.children, rows);
+        for (t, before, after) in &moves {
+            if *before == Some(*after) {
+                continue;
+            }
+            if let Some(b) = before {
+                plan.count(t, cells.id_of(&self.cells, *b), -1);
+            }
+            plan.count(t, cells.id_of(&self.cells, *after), 1);
+        }
+        if born {
+            if self.children.kids(&written.id).is_some() {
+                let chain = tree::ancestors(rows, &written.id, written.parent.as_deref());
+                plan.subtree(written, None, &chain, 1);
+            }
+            if let Some(p) = written.parent.as_deref() {
+                plan.join(p, written);
+            }
+        }
+        (cells, plan.finish())
     }
 
     /// FILTER-4: what a `link_commits` or `unlink_commits` does to the derived
@@ -1964,7 +2077,8 @@ impl Cache {
     /// commit or takes its last — then the ticket moves cell.
     fn commits_change(&self, row: &Row) -> Derived {
         let count = self.ready.count(&row.id);
-        Derived::none().celled(self.recell(row, false, &[(row, count, count)]))
+        let (cells, tree) = self.recell(self.rows().with(row), row, false, &[(row, count, count)]);
+        Derived::none().celled(cells).treed(tree)
     }
 
     /// FILTER-4: a `link_commits` or `unlink_commits`, once it has committed:
@@ -2049,7 +2163,49 @@ impl Cache {
         if let Some(p) = previous {
             derived.stored.counts.push((p.to_string(), self.children.count(p).saturating_sub(1)));
         }
-        derived
+        derived.treed(self.regraft(child, previous))
+    }
+
+    /// FILTER-13: what moving `child` (as the move leaves it) off `previous`
+    /// does to the kept tree: its subtree's tally — its own cell and its
+    /// tally — leaves each of its old ancestors and joins each of its new
+    /// ones; it leaves the old parent's list and joins the new one's. Its
+    /// descendants' tallies do not move, and none of them is looked at. A
+    /// ticket on a hand-edited cycle has a subtree that holds its own
+    /// ancestors: the move breaks the cycle, and the tree is built again.
+    fn regraft(&self, child: &Row, previous: Option<&str>) -> tree::Move {
+        let rows = self.rows();
+        let moved = rows.with(child);
+        let cell = self
+            .cells
+            .id(cells::Key::of(child, self.ready.count(&child.id)))
+            .expect("every ticket's cell is interned");
+        if tree::on_cycle(rows, &child.id, previous) {
+            tracing::warn!(
+                "{} is on a parent cycle (a hand edit): moving it breaks the cycle, and the kept tree is built \
+                 again from the rows",
+                child.id
+            );
+            let none = children::Children::filling();
+            let bare = Rows { children: &none, ..moved };
+            let mut rebuilt = children::Children::build(bare.tickets());
+            tree::build(bare, &mut rebuilt, |t| {
+                self.cells.id(cells::Key::of(t, self.ready.count(&t.id))).expect("every ticket's cell is interned")
+            });
+            return tree::Move::rebuilt(rebuilt);
+        }
+        let mut plan = tree::Plan::new(&self.children, moved);
+        let before = tree::ancestors(rows, &child.id, previous);
+        let after = tree::ancestors(moved, &child.id, child.parent.as_deref());
+        plan.subtree(child, Some(cell), &before, -1);
+        plan.subtree(child, Some(cell), &after, 1);
+        if let Some(p) = previous {
+            plan.leave(p, child);
+        }
+        if let Some(p) = child.parent.as_deref() {
+            plan.join(p, child);
+        }
+        plan.finish()
     }
 
     /// MNG-10: a `set_parent`, once it has committed. SCALE-4: the child is
@@ -2092,6 +2248,9 @@ impl Cache {
         }
         if let Some(cells) = moved.cells {
             self.cells.take(cells);
+        }
+        if let Some(tree) = moved.tree {
+            tree::take(&mut self.children, tree);
         }
         moved.groups.into_iter().map(|g| self.dress(g)).collect()
     }
@@ -2238,6 +2397,9 @@ pub struct Store {
     /// cache gave it knows no commit can have reached its snapshot that
     /// the rows it holds do not show ([`Store::full`]).
     committing: Arc<AtomicU64>,
+    /// FILTER-13: the open `watch { filter }`s whose filter asks `under` —
+    /// what each write works out membership for, while any is open.
+    unders: Arc<lineage::UnderWatches>,
     /// Serializes mutations end to end: id allocation, the durable write,
     /// the cache update, and the broadcast happen atomically with respect
     /// to other writers, so ids are unique under concurrent creates and
@@ -2352,6 +2514,7 @@ impl Store {
             db,
             readers: Arc::new(readers),
             committing: Arc::new(AtomicU64::new(0)),
+            unders: Arc::default(),
             write_serial: Arc::new(AsyncMutex::new(())),
         })
     }
@@ -2646,7 +2809,7 @@ impl Store {
         // every ticket in the store. This read phase computes everything
         // and mutates nothing: a rejection leaves no trace, in the
         // tickets or in what is kept about them.
-        let (ticket, touched, unlocks_added, parent_epic, derived, registered, asked) = {
+        let (ticket, touched, unlocks_added, parent_epic, derived, registered, asked, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let tickets = &cache;
             let seq = tickets.ids.next_seq(&epic);
@@ -2836,10 +2999,24 @@ impl Store {
             // SCALE-28: and what the birth does to the derived state — its
             // shortcode's run, the forward references, its parent's count,
             // the roll-ups — worked out now, while nothing has changed.
-            let derived = tickets.birth(&Row::from(&ticket));
+            let newborn = Row::from(&ticket);
+            let derived = tickets.birth(&newborn);
             // WAVE-6: born placed — `created` carries it.
             ticket.placement = derived.moved.placement().flatten();
-            (ticket, touched, unlocks_added, parent_epic, derived, registered, asked)
+            // FILTER-13: what an open `watch { filter }` asking `under` sees
+            // of it — the newborn, and (a hand edit's) the subtree that named
+            // its id as a parent, and any shortcode it re-hosts.
+            let under = self.under_before(tickets, || {
+                let mut t = lineage::Touched::of_moves(derived.announced().as_deref());
+                if tickets.children.kids(&newborn.id).is_some() {
+                    t.subtree(tickets, &newborn.id, None);
+                }
+                if let Some(after) = &derived.moved.rollups {
+                    t.hosts(tickets, after, tickets.rows().with(&newborn), Some(&newborn.epic));
+                }
+                t
+            });
+            (ticket, touched, unlocks_added, parent_epic, derived, registered, asked, under)
         };
 
         // SCALE-14: the newborn is written whole — the one ticket a write
@@ -2866,6 +3043,7 @@ impl Store {
         let input_list = asked.list.take();
         let input_rows = input_list.clone();
         let born_id = ticket.id.clone();
+        let cache = Arc::clone(&self.tickets);
         self.write(
             serial,
             move |tx| {
@@ -2925,6 +3103,9 @@ impl Store {
                 }
                 if let Some(moves) = announced {
                     let _ = tx.send(Change::CellsMoved { moves });
+                }
+                if let Some(change) = under.and_then(|u| u.after(&cache)) {
+                    let _ = tx.send(change);
                 }
                 ticket
             },
@@ -3364,12 +3545,14 @@ impl Store {
         let previous = row.status;
         row.status = status;
         row.updated_unix = chrono::Utc::now().timestamp();
-        // SCALE-28: the roll-ups it moves, stored with the row.
-        let derived = self
-            .tickets
-            .read()
-            .expect("store lock poisoned")
-            .status_change(&row, previous);
+        // SCALE-28: the roll-ups it moves, stored with the row. FILTER-13:
+        // and what an open `watch { filter }` asking `under` sees of it.
+        let (derived, under) = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let derived = cache.status_change(&row, previous);
+            let under = self.under_before(&cache, || lineage::Touched::of_moves(derived.announced().as_deref()));
+            (derived, under)
+        };
         // FILTER-4: the cells it moves — its own and its fan-out's — said
         // last.
         let announced = derived.announced();
@@ -3382,6 +3565,7 @@ impl Store {
         }
         let placed = moved.placed.as_ref().and_then(Change::placed);
         let commit = Self::row_commit(row);
+        let cache = Arc::clone(&self.tickets);
 
         self.write(
             serial,
@@ -3403,6 +3587,9 @@ impl Store {
                 }
                 if let Some(moves) = announced {
                     let _ = tx.send(Change::CellsMoved { moves });
+                }
+                if let Some(change) = under.and_then(|u| u.after(&cache)) {
+                    let _ = tx.send(change);
                 }
                 change
             },
@@ -3478,14 +3665,25 @@ impl Store {
         };
 
         // SCALE-28: both parents' counts and the roll-ups it moves, stored
-        // with the child's row.
-        let Derived { stored, moved } = self
-            .tickets
-            .read()
-            .expect("store lock poisoned")
-            .reparent(&child, previous.as_deref());
+        // with the child's row. FILTER-13: and what an open `watch { filter
+        // }` asking `under` sees of it — the moved subtree, and any
+        // shortcode it re-hosts.
+        let (Derived { stored, moved }, under) = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let derived = cache.reparent(&child, previous.as_deref());
+            let under = self.under_before(&cache, || {
+                let mut t = lineage::Touched::default();
+                t.subtree(&cache, &child.id, cache.get(&child.id));
+                if let Some(after) = &derived.moved.rollups {
+                    t.hosts(&cache, after, cache.rows().with(&child), None);
+                }
+                t
+            });
+            (derived, under)
+        };
         let left_behind = previous.clone();
         let commit = Self::row_commit(child);
+        let cache = Arc::clone(&self.tickets);
         self.write(
             serial,
             move |tx| {
@@ -3515,6 +3713,9 @@ impl Store {
                     });
                 }
                 broadcast_groups(tx, groups);
+                if let Some(change) = under.and_then(|u| u.after(&cache)) {
+                    let _ = tx.send(change);
+                }
                 change
             },
         )
@@ -3809,10 +4010,11 @@ impl Store {
         row.commits.extend(added.iter().cloned());
         row.updated_unix = chrono::Utc::now().timestamp();
         // FILTER-4: a first commit moves the ticket's cell.
-        let derived = self.tickets.read().expect("store lock poisoned").commits_change(&row);
+        let (derived, under) = self.commits_derived(&row);
         let announced = derived.announced();
         let Derived { stored, moved } = derived;
         let commit = Self::row_commit(row);
+        let cache = Arc::clone(&self.tickets);
 
         self.write(
             serial,
@@ -3831,10 +4033,22 @@ impl Store {
                 if let Some(moves) = announced {
                     let _ = tx.send(Change::CellsMoved { moves });
                 }
+                if let Some(change) = under.and_then(|u| u.after(&cache)) {
+                    let _ = tx.send(change);
+                }
                 change
             },
         )
         .await
+    }
+
+    /// FILTER-4 / FILTER-13: what a link or an unlink does to the derived
+    /// state, and what an open `watch { filter }` asking `under` sees of it.
+    fn commits_derived(&self, row: &Row) -> (Derived, Option<lineage::UnderBefore>) {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let derived = cache.commits_change(row);
+        let under = self.under_before(&cache, || lineage::Touched::of_moves(derived.announced().as_deref()));
+        (derived, under)
     }
 
     /// SDLC-9: unlinks `entries` from the ticket `id` — every entry the
@@ -3866,10 +4080,11 @@ impl Store {
         }
         row.updated_unix = chrono::Utc::now().timestamp();
         // FILTER-4: taking the last commit moves the ticket's cell.
-        let derived = self.tickets.read().expect("store lock poisoned").commits_change(&row);
+        let (derived, under) = self.commits_derived(&row);
         let announced = derived.announced();
         let Derived { stored, moved } = derived;
         let commit = Self::row_commit(row);
+        let cache = Arc::clone(&self.tickets);
 
         self.write(
             serial,
@@ -3887,6 +4102,9 @@ impl Store {
                 let _ = tx.send(change.clone());
                 if let Some(moves) = announced {
                     let _ = tx.send(Change::CellsMoved { moves });
+                }
+                if let Some(change) = under.and_then(|u| u.after(&cache)) {
+                    let _ = tx.send(change);
                 }
                 change
             },
@@ -3998,6 +4216,12 @@ impl Store {
     /// would only lag the channel. Blocking I/O: call from a blocking
     /// context (the builder wraps it in `spawn_blocking`).
     pub fn seed_synthetic(&self, spec: SeedSpec) -> Result<SeedReport, StoreError> {
+        self.seed_synthetic_shaped(spec, SeedShape::Flat)
+    }
+
+    /// FILTER-13: [`Store::seed_synthetic`] in a given shape — PERF-2's flat
+    /// one, or FILTER-3 §6.5's nested one ([`SeedShape`]).
+    pub fn seed_synthetic_shaped(&self, spec: SeedSpec, shape: SeedShape) -> Result<SeedReport, StoreError> {
         // Mutations stay serialized even here: a concurrent writer means
         // this was called while serving, which it must not be.
         let _serial = self
@@ -4023,7 +4247,7 @@ impl Store {
             (next_seq, cache.len())
         };
 
-        let generated = synthetic::generate(spec, &next_seq);
+        let generated = synthetic::generate(spec, &next_seq, shape);
         let generate = started.elapsed();
         let epics = {
             let mut seen: HashSet<&str> = HashSet::new();
@@ -4129,6 +4353,9 @@ impl Store {
             // FILTER-4: and the cells, from the rows and those counts.
             let cells = cells::Cells::build(tickets.rows(), |id| tickets.ready.count(id));
             tickets.cells = cells;
+            // FILTER-13: and the kept tree, from the rows, the children and
+            // the cells.
+            Cache::plant(&tickets.order, &tickets.at, &mut tickets.children, &tickets.cells, &tickets.ready);
             // WAVE-6: and every placement, over the seeded store.
             tickets.place_all();
             tickets.form()
@@ -4344,11 +4571,21 @@ mod inputs;
 mod cells;
 pub use cells::{CellMove, Moves, RECOUNT_OVER};
 
+/// FILTER-13: the kept tree — for each internal ticket a tally of its
+/// descendants by (shortcode, cell), and for each long list of children the
+/// holders of each cell — worked out per write, stored as form 5, read at
+/// start, verified.
+mod tree;
+
 /// FILTER-4: what a filter answers — `counts`, a filtered page by cursor or
 /// position, and `watch { filter }`'s membership — compiled against the
 /// cells and answered from their bitmaps.
 mod filtered;
 pub use filtered::{Filtered, Lens, Membership, Watcher};
+
+/// FILTER-13: a filter compiled with its lineage (`under`), and `tree`.
+mod lineage;
+pub use lineage::{Node, TreePage, TreeQuery, UnderMoves, UNDERS_MAX};
 
 /// FILTER-15: every read takes the lens — `find { query, filter }`,
 /// `inputs { filter }`, `ready_set { filter }` and `member { ids, filter }`:
@@ -4483,6 +4720,11 @@ mod tests_cells;
 /// the same filter tested on every row, after hundreds of random writes.
 #[cfg(test)]
 mod tests_filtered;
+
+/// FILTER-13: the kept tree — tallies and holders held to an oracle from
+/// the rows after every write, in the cache and the file.
+#[cfg(test)]
+mod tests_tree;
 
 /// FILTER-4: random filters from the language's own AST, sent as text,
 /// against its reference evaluator on every row — every read and `facets`;

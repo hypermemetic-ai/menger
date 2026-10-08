@@ -16,38 +16,44 @@ use super::tests_ready::{random_write, Rng, Tally};
 use super::*;
 use crate::filter::{category_of, Category, Display, Facts, Field, Filter, Group, Predicate, Shape};
 
-/// The facts the reference evaluator reads of a row — `blocked` the scan's.
-pub(super) fn facts(t: &Row, k: Key) -> Facts {
-    Facts {
-        id: t.id.clone(),
-        epic: t.epic.clone(),
-        title: t.title.clone(),
-        status: t.status,
-        kind: t.kind,
-        severity: t.severity,
-        blocked: k.blocked(),
-        has_commits: !t.commits.is_empty(),
-        lineage: vec![t.id.clone(), t.epic.clone()],
-    }
-}
-
-fn random_field(rng: &mut Rng, field: usize, epics: &[String]) -> Field {
+/// The names a random filter draws on: `in` the shortcodes among them (no
+/// `-`), `under` any of them — shortcodes and ticket ids. (FILTER-13: the
+/// facts the reference evaluator reads of a row, its whole lineage
+/// included, are [`Plain::facts`].)
+fn random_field(rng: &mut Rng, field: usize, names: &[String]) -> Field {
+    let shortcodes: Vec<&String> = names.iter().filter(|n| !n.contains('-')).collect();
     match field {
         0 => Field::Status(Status::ALL[rng.below(Status::ALL.len())]),
         1 => Field::Category(Category::ALL[rng.below(Category::ALL.len())]),
         2 => Field::Kind(Kind::ALL[rng.below(Kind::ALL.len())]),
         3 => Field::Severity(SEVERITIES[rng.below(SEVERITIES.len())]),
-        4 => Field::In(epics[rng.below(epics.len())].to_ascii_uppercase()),
+        4 if !shortcodes.is_empty() => Field::In(shortcodes[rng.below(shortcodes.len())].to_ascii_uppercase()),
+        4 => Field::In("NONE".into()),
         5 => Field::Blocked,
         6 => Field::Ready,
+        // FILTER-13: `under` a shortcode or a ticket.
+        8 => Field::Under(names[rng.below(names.len())].to_ascii_uppercase()),
         _ => Field::HasCommits,
     }
 }
 
-fn random_pred(rng: &mut Rng, epics: &[String]) -> Predicate {
-    let which = rng.below(8);
-    let field = random_field(rng, which, epics);
+fn random_pred(rng: &mut Rng, names: &[String]) -> Predicate {
+    let which = rng.below(10);
+    let field = random_field(rng, if which == 9 { 8 } else { which }, names);
     Predicate { field, not: rng.below(2) == 0 }
+}
+
+/// FILTER-13: what random filters name — the store's shortcodes, one it
+/// does not hold, and ticket ids: every parent (the subtrees `under` cuts),
+/// some leaves, and one that names nothing.
+pub(super) fn filter_names(store: &Store) -> Vec<String> {
+    let mut out: Vec<String> = store.extents().into_iter().map(|(e, _)| e).chain(["NONE".into()]).collect();
+    let rows = super::tests_ready::rows(store);
+    let parents: std::collections::BTreeSet<&str> = rows.iter().filter_map(|t| t.parent.as_deref()).collect();
+    out.extend(parents.iter().take(24).map(|p| p.to_string()));
+    out.extend(rows.iter().filter(|t| !parents.contains(t.id.as_str())).step_by(7).take(8).map(|t| t.id.clone()));
+    out.push("NONE-1".into());
+    out
 }
 
 /// A group of every shape the language has but `text` and `under`.
@@ -55,8 +61,10 @@ fn random_group(rng: &mut Rng, epics: &[String]) -> Group {
     match rng.below(5) {
         0 | 1 => Group::one(random_pred(rng, epics)),
         2 => {
-            // `field in (a, b)`, or `not field in (a, b)`.
-            let (field, incl, n) = (rng.below(5), rng.below(2) == 0, 2 + rng.below(2));
+            // `field in (a, b)`, or `not field in (a, b)` — FILTER-13: of
+            // `under` too.
+            let field = [0, 1, 2, 3, 4, 8][rng.below(6)];
+            let (incl, n) = (rng.below(2) == 0, 2 + rng.below(2));
             let preds = (0..n).map(|_| Predicate { field: random_field(rng, field, epics), not: !incl }).collect();
             if incl {
                 Group::any(preds)
@@ -99,7 +107,7 @@ fn facets_by_rows(plain: &Plain, filter: &Filter, base: &Filter) -> Vec<(String,
             None => tally.push((v, 1)),
         };
         for (t, k) in plain.rows.iter().zip(&plain.cells) {
-            let f = facts(t, *k);
+            let f = plain.facts(t, *k);
             if !(base.matches(&f) && rest.matches(&f)) {
                 continue;
             }
@@ -143,7 +151,7 @@ fn facets_by_rows(plain: &Plain, filter: &Filter, base: &Filter) -> Vec<(String,
 fn assert_filter_is_a_scan(store: &Store, plain: &Plain, rng: &mut Rng, epics: &[String], what: &str) {
     let filter = random_filter(rng, epics);
     let lens = Lens::parse(&filter.format()).unwrap();
-    let judge = |t: &Row, k: Key| filter.matches(&facts(t, k));
+    let judge = |t: &Row, k: Key| filter.matches(&plain.facts(t, k));
     assert_lens_is_a_scan(store, plain, &lens, &judge, rng, what);
     let base = if rng.below(2) == 0 { Filter::default() } else { random_filter(rng, epics) };
     assert_eq!(
@@ -158,7 +166,7 @@ fn assert_filter_is_a_scan(store: &Store, plain: &Plain, rng: &mut Rng, epics: &
 async fn walk(store: Store, path: &Path, seed: u64, writes: usize, every: usize, epics: &[&str]) -> Store {
     let mut rng = Rng(seed);
     let mut tally = Tally::default();
-    let names = |store: &Store| -> Vec<String> { store.extents().into_iter().map(|(e, _)| e).chain(["NONE".into()]).collect() };
+    let names = filter_names;
     for step in 0..writes {
         let what = random_write(&store, &mut rng, epics, &mut tally).await;
         if step % every == every - 1 {
@@ -244,7 +252,7 @@ async fn every_filter_3_filter_is_answered_as_the_evaluator_answers() {
         let filter = Filter::parse(&text).unwrap();
         assert_eq!(filter.format(), text, "canonical");
         let lens = Lens::parse(&text).unwrap();
-        let judge = |t: &Row, k: Key| filter.matches(&facts(t, k));
+        let judge = |t: &Row, k: Key| filter.matches(&plain.facts(t, k));
         assert_lens_is_a_scan(&store, &plain, &lens, &judge, &mut rng, &text);
         assert_eq!(store.facets(&filter, &Filter::default()).unwrap(), facets_by_rows(&plain, &filter, &Filter::default()), "{text}");
     }
@@ -288,21 +296,23 @@ async fn the_empty_filter_counts_every_ticket_of_every_shortcode() {
     assert_eq!(store.counts(&Lens::parse("· flat · order code").unwrap()), extents, "the display is ignored");
 }
 
-/// `under` and `text` are in the language and answered elsewhere: every
-/// filtered read refuses them in-band, naming each chunk that holds one and
-/// where it lives; a chunk the language cannot read is its error, naming
-/// every one.
+/// `text` is in the language and answered elsewhere: every filtered read
+/// refuses it in-band, naming each chunk that holds one and where it lives;
+/// a chunk the language cannot read is its error, naming every one.
+/// FILTER-13: `under` is answered — by the same reads, with no refusal.
 #[test]
-fn under_and_text_are_refused_naming_where_each_lives() {
+fn text_is_refused_naming_where_it_lives_and_under_is_answered() {
     let refused = Lens::parse(r#"ready and under SCALE-13 and text "watch" and (in SCALE or under MNG)"#).unwrap_err().to_string();
-    assert!(refused.contains("`under SCALE-13` — `under` is not answered here yet: it comes with FILTER-13"), "{refused}");
     assert!(refused.contains("`text \"watch\"` — text is the palette's — ask `find`"), "{refused}");
-    assert!(refused.contains("`(in SCALE or under MNG)` — `under`"), "{refused}");
+    assert!(!refused.contains("under"), "under is not refused: {refused}");
     assert!(!refused.contains("`ready` —"), "{refused}");
+    assert!(Lens::parse("ready and under SCALE-13 and (in SCALE or under MNG)").is_ok());
     let store = Store::new();
     let under = Filter::parse("under SCALE").unwrap();
-    assert!(store.facets(&under, &Filter::default()).is_err());
-    assert!(store.facets(&Filter::default(), &under).is_err(), "the base too");
+    assert!(store.facets(&under, &Filter::default()).is_ok());
+    assert!(store.facets(&Filter::default(), &under).is_ok(), "the base too");
+    let text = Filter::parse("text \"x\"").unwrap();
+    assert!(store.facets(&text, &Filter::default()).is_err());
     let bad = Lens::parse("tag x and ready and created today and nonsense").unwrap_err().to_string();
     for chunk in ["`tag x`", "`created today`", "`nonsense`"] {
         assert!(bad.contains(chunk), "{bad}");
@@ -310,6 +320,9 @@ fn under_and_text_are_refused_naming_where_each_lives() {
     assert!(!bad.contains("`ready` —"), "a chunk it took is not named: {bad}");
     let unknown = Lens::parse("status Bogus").unwrap_err().to_string();
     assert!(unknown.contains("Pending") && unknown.contains("In Review"), "an unknown status lists the known ones: {unknown}");
+    let many: Vec<String> = (0..=UNDERS_MAX).map(|i| format!("under X-{i}")).collect();
+    let too_many = Lens::parse(&many.join(" and ")).unwrap_err().to_string();
+    assert!(too_many.contains("at most 64 names"), "{too_many}");
 }
 
 /// A group is a field's own — and set aside for that field's facet — only
@@ -368,7 +381,7 @@ async fn hand_edited_shortcodes_are_read_as_the_language_reads_them() {
     for _ in 0..40 {
         let filter = random_filter(&mut rng, &epics);
         let lens = Lens::parse(&filter.format()).unwrap();
-        let judge = |t: &Row, k: Key| filter.matches(&facts(t, k));
+        let judge = |t: &Row, k: Key| filter.matches(&plain.facts(t, k));
         assert_lens_is_a_scan(&store, &plain, &lens, &judge, &mut rng, "hand-edited shortcodes");
     }
 }

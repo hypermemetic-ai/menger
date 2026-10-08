@@ -1303,6 +1303,17 @@ pub enum TicketsEvent {
     /// A *data* event: the call succeeded and the activation said no,
     /// which is not the same thing as a transport or remote failure.
     Error { message: String },
+    /// FILTER-13: one row of `tree` — a parent's child, or a shortcode's top
+    /// row, that matches the filter or holds a match below it: `matched`
+    /// whether it matches itself, `below` how many matches are strictly
+    /// under it (its whole subtree, whatever the nav shows). A row that only
+    /// holds matches has `matched: false` and `below` above 0. Yielded in
+    /// the store's order, then one `page`.
+    Node {
+        summary: TicketSummary,
+        matched: bool,
+        below: u64,
+    },
 }
 
 #[cfg(test)]

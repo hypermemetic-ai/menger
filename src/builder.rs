@@ -1,5 +1,5 @@
 use menger_tickets_api::Tickets;
-use menger_tickets_api::store::{SeedSpec, Store, StoreError};
+use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError};
 use plexus_core::plexus::DynamicHub;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,6 +37,15 @@ pub async fn build_rpc_with(
     db_path: &Path,
     seed: Option<SeedSpec>,
 ) -> anyhow::Result<Arc<DynamicHub>> {
+    build_rpc_seeded(db_path, seed, SeedShape::Flat).await
+}
+
+/// FILTER-13: [`build_rpc_with`], the seed in a given shape ([`SeedShape`]).
+pub async fn build_rpc_seeded(
+    db_path: &Path,
+    seed: Option<SeedSpec>,
+    shape: SeedShape,
+) -> anyhow::Result<Arc<DynamicHub>> {
     let path = db_path.to_path_buf();
     let started = Instant::now();
     let store = tokio::task::spawn_blocking(move || Store::open(&path)).await??;
@@ -51,19 +60,20 @@ pub async fn build_rpc_with(
         None => store,
         Some(spec) => {
             let (store, report) = tokio::task::spawn_blocking(move || {
-                let outcome = store.seed_synthetic(spec);
+                let outcome = store.seed_synthetic_shaped(spec, shape);
                 (store, outcome)
             })
             .await?;
             match report {
                 Ok(r) => {
                     tracing::info!(
-                        "seeded {} synthetic tickets in {:.1} ms (seed value {}, {} epics, \
+                        "seeded {} synthetic tickets in {:.1} ms (seed value {}, shape {:?}, {} epics, \
                          {} blocked_by edges; generate {:.1} ms, persist {:.1} ms); \
                          store now holds {} tickets",
                         r.count,
                         r.elapsed.as_secs_f64() * 1000.0,
                         spec.seed,
+                        shape,
                         r.epics,
                         r.edges,
                         r.generate.as_secs_f64() * 1000.0,

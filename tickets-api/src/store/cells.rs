@@ -193,6 +193,17 @@ impl Move {
         into.cell_counts.extend(self.counts.iter().cloned());
     }
 
+    /// FILTER-13: `key`'s id as the write leaves the table — the cache's,
+    /// or one this write interns.
+    pub(super) fn id_of(&self, cells: &Cells, key: Key) -> u32 {
+        cells
+            .ids
+            .get(&key)
+            .copied()
+            .or_else(|| self.interned.iter().find(|(_, k)| *k == key).map(|(id, _)| *id))
+            .expect("a cell the write moves is interned")
+    }
+
     /// What the write's broadcast says of it — `None` when it moves no
     /// ticket's cell.
     pub(super) fn announced(&self) -> Option<Arc<Moves>> {
@@ -354,7 +365,7 @@ impl Filling {
 /// cut from Roaring's own serialization, whose container bodies are exactly
 /// the stored form: Roaring keeps a container an array of its members' low
 /// 16 bits up to 4,096 of them and the block's 8 KiB bitmap past it.
-fn containers(bm: &RoaringBitmap) -> Vec<(u32, u64, Vec<u8>)> {
+pub(super) fn containers(bm: &RoaringBitmap) -> Vec<(u32, u64, Vec<u8>)> {
     let mut buf = Vec::with_capacity(bm.serialized_size());
     bm.serialize_into(&mut buf).expect("a Vec takes every byte");
     let n = u32::from_le_bytes(buf[4..8].try_into().expect("4 bytes")) as usize;
@@ -464,6 +475,16 @@ impl Cells {
     /// The cell table: id → cell.
     pub(super) fn keys(&self) -> &[Key] {
         &self.keys
+    }
+
+    /// FILTER-13: `key`'s id, when it is interned.
+    pub(super) fn id(&self, key: Key) -> Option<u32> {
+        self.ids.get(&key).copied()
+    }
+
+    /// FILTER-13: `epic`'s cells and their bitmaps.
+    pub(super) fn held_in(&self, epic: &str) -> Option<&Held> {
+        self.held.get(epic)
     }
 
     /// Each shortcode that holds a ticket, in the store's order, with each
@@ -718,23 +739,9 @@ pub(super) struct View<'a> {
 }
 
 impl<'a> View<'a> {
-    /// The admitted bitmaps of every shortcode — of `only`, when one is
-    /// given (`list`'s `epic`: the shortcode exactly as named).
-    pub(super) fn of(cells: &'a Cells, admit: &Admit, only: Option<&str>) -> Self {
-        let by_epic = cells
-            .held
-            .iter()
-            .filter(|(epic, _)| only.is_none_or(|o| o == epic.as_str()))
-            .filter_map(|(epic, held)| {
-                let table = admit.of(epic);
-                let bms: Vec<_> = held
-                    .iter()
-                    .filter(|(c, _)| table.get(*c as usize).copied().unwrap_or(false))
-                    .map(|(_, b)| std::borrow::Cow::Borrowed(b))
-                    .collect();
-                (!bms.is_empty()).then_some((epic.as_str(), bms))
-            })
-            .collect();
+    /// FILTER-13: a view made elsewhere — per shortcode, in the store's
+    /// order, the disjoint bitmaps whose union is its matches.
+    pub(super) fn from_parts(by_epic: Vec<(&'a str, Vec<std::borrow::Cow<'a, RoaringBitmap>>)>) -> Self {
         Self { by_epic }
     }
 

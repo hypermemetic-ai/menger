@@ -1847,10 +1847,71 @@ async fn watch_filter_says_entered_and_left_last() {
     );
 
     // A filter not taken is one error, and the stream ends.
-    let mut bad = call(&client, "tickets.watch", json!({"filter": "under WF-1"})).await;
+    let mut bad = call(&client, "tickets.watch", json!({"filter": "text \"x\""})).await;
     let ev = content(bad.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "error");
-    assert!(ev["message"].as_str().unwrap().contains("FILTER-13"), "{ev}");
+    assert!(ev["message"].as_str().unwrap().contains("palette"), "{ev}");
+}
+
+/// FILTER-13 over the real protocol: `tree` — a parent's children and a
+/// shortcode's top row that match or hold a match, each a `node { summary,
+/// matched, below }`, then one `page` with no `first`; one address, or one
+/// error; `under` taken everywhere — and `watch { filter }` asking `under`:
+/// a re-parent, which moves no cell, enters and leaves the moved subtree,
+/// as the write's last events.
+#[tokio::test]
+async fn tree_and_under_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let mk = |kind: &str, parent: Option<&str>| json!({"epic": "TW", "title": format!("a {kind}"), "kind": kind, "parent": parent});
+    answer(&client, "tickets.create", mk("scope", None)).await; // TW-1
+    answer(&client, "tickets.create", mk("execution", Some("TW-1"))).await; // TW-2
+    answer(&client, "tickets.create", mk("execution", Some("TW-1"))).await; // TW-3
+    answer(&client, "tickets.create", mk("build", Some("TW-2"))).await; // TW-4
+    answer(&client, "tickets.create", mk("build", Some("TW-3"))).await; // TW-5
+    answer(&client, "tickets.create", mk("doc", Some("TW-4"))).await; // TW-6
+    answer(&client, "tickets.set_status", json!({"id": "TW-4", "status": "Ready"})).await;
+
+    let nodes = |evs: &[Value]| -> Vec<(String, bool, u64)> {
+        evs.iter()
+            .map(|e| {
+                assert_eq!(e["type"], "node", "{e}");
+                (e["summary"]["id"].as_str().unwrap().to_string(), e["matched"].as_bool().unwrap(), e["below"].as_u64().unwrap())
+            })
+            .collect()
+    };
+    let (rows, page) = paged(call(&client, "tickets.tree", json!({"parent": "TW-1", "filter": "status Ready"})).await).await;
+    assert_eq!(nodes(&rows), [("TW-2".to_string(), false, 1)], "TW-2 holds the Ready build; TW-3 holds nothing");
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}), "no `first`");
+    assert_eq!(rows[0]["summary"]["title"], "a execution", "the row is the summary");
+    let (rows, _) = paged(call(&client, "tickets.tree", json!({"epic": "tw", "filter": "status Ready"})).await).await;
+    assert_eq!(nodes(&rows), [("TW-1".to_string(), false, 1)], "the shortcode's top row: its root");
+    let (rows, page) = paged(call(&client, "tickets.tree", json!({"parent": "TW-1", "filter": "", "limit": 1})).await).await;
+    assert_eq!(nodes(&rows), [("TW-2".to_string(), true, 2)]);
+    assert_eq!(page, json!({"type": "page", "next": "TW-2", "remaining": 1}));
+    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "TW-1", "filter": "kind doc and under TW-2"})).await).await;
+    assert_eq!(nodes(&rows), [("TW-2".to_string(), false, 1)]);
+    for bad in [json!({"filter": ""}), json!({"parent": "TW-1", "epic": "TW", "filter": ""}), json!({"parent": "TW-1", "filter": "text \"x\""})] {
+        let evs = collect(call(&client, "tickets.tree", bad.clone()).await).await;
+        assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("error")), "{bad}: {evs:?}");
+    }
+    let counts = collect(call(&client, "tickets.counts", json!({"filter": "under TW-2"})).await).await;
+    assert_eq!(counts, [json!({"type": "count", "epic": "TW", "held": 3})], "TW-2, TW-4, TW-6");
+
+    // `watch { filter }` asking `under`: TW-5 moved under TW-2 enters; back, it leaves.
+    let mut watch = call(&client, "tickets.watch", json!({"filter": "under TW-2"})).await;
+    let mut members = call(&client, "tickets.watch", json!({"filter": "under TW-2", "membership": true})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    answer(&client, "tickets.set_parent", json!({"id": "TW-5", "parent": "TW-2"})).await;
+    answer(&client, "tickets.amend", json!({"id": "TW-1", "body": "marker"})).await;
+    let evs = until_marker(&mut watch).await;
+    let k = kinds(&evs);
+    assert_eq!(k.first().map(String::as_str), Some("parent_changed"), "{evs:#?}");
+    assert_eq!(&k[k.len() - 2..], ["entered", "amended"], "entered is the move's last event: {evs:#?}");
+    assert_eq!(evs[k.len() - 2], json!({"type": "entered", "id": "TW-5", "epic": "TW", "seq": 5}));
+    answer(&client, "tickets.set_parent", json!({"id": "TW-5", "parent": "TW-3"})).await;
+    let evs = next_events(&mut members, 2).await;
+    assert_eq!(evs, [json!({"type": "entered", "id": "TW-5", "epic": "TW", "seq": 5}), json!({"type": "left", "id": "TW-5", "epic": "TW", "seq": 5})]);
 }
 
 /// Acceptance 4: completing a blocker, under `watch { filter: "ready" }`, is
@@ -2094,9 +2155,13 @@ async fn reads_take_the_lens_over_the_wire() {
     assert_eq!(too_many.len(), 1, "{too_many:?}");
     assert_eq!(too_many[0]["type"], "error");
     assert!(too_many[0]["message"].as_str().unwrap().contains("at most 1000 ids"), "{too_many:?}");
+    // FILTER-13: `under` is answered by these reads too — LN-1 roots LN.
+    let under = collect(call(&client, "tickets.ready_set", json!({"filter": "under LN-1", "summary": true})).await).await;
+    let in_ln = collect(call(&client, "tickets.ready_set", json!({"filter": "in LN", "summary": true})).await).await;
+    assert!(under.len() > 1 && under == in_ln, "{under:?}");
     for (method, params) in [
         ("tickets.find", json!({"query": "watch", "filter": "text \"watch\""})),
-        ("tickets.ready_set", json!({"filter": "under LN-1"})),
+        ("tickets.ready_set", json!({"filter": "under LN-1 and text \"x\""})),
         ("tickets.inputs", json!({"filter": "tag x and nonsense"})),
         ("tickets.member", json!({"ids": ["LN-2"], "filter": "status Bogus"})),
         ("tickets.find", json!({"query": "x", "filter": "nonsense"})),
