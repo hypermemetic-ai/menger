@@ -36,7 +36,7 @@ use leptos::prelude::*;
 use menger_tickets_api::{AnswerSource, Input, InputAction, InputKind, InputOption, InputState, InputValue};
 
 use crate::inputs::{self, ticket_order};
-use crate::{dom, filter, fmt_relative, fmt_unix, now_unix};
+use crate::{dom, fmt_relative, fmt_unix, lens, now_unix};
 
 /// The states the filter chooses among, in the page's order; `removed` is
 /// the toggle's.
@@ -533,14 +533,15 @@ fn bar_view(facets: Memo<Facets>, f: RwSignal<Filter>) -> impl IntoView {
 
 /// The route's query rewritten to `q` in place — `replaceState`, so no
 /// history entry and no `hashchange` (the page stays mounted) — and only
-/// while the hash is still this page's (the wave board's `write_query`).
+/// while the hash is still this page's. FILTER-11: the lens's keys (`g`,
+/// `n`, `f`) ride beside the page's own, kept.
 fn write_query(q: &str) {
     let win = dom::window();
     let hash = win.location().hash().unwrap_or_default();
-    if filter::with_query(&hash, "").trim_end_matches('/') != "#/inputs" {
+    if lens::path_of(&hash).trim_end_matches('/') != "#/inputs" {
         return;
     }
-    let next = filter::with_query(&hash, q);
+    let next = lens::with_page_query(&hash, q);
     if next != hash {
         if let Ok(history) = win.history() {
             let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&next));
@@ -553,7 +554,7 @@ fn write_query(q: &str) {
 pub(crate) fn InputsPage() -> impl IntoView {
     inputs::want();
     let held = inputs::signal();
-    let f = RwSignal::new(Filter::parse_query(filter::query_of(&dom::window().location().hash().unwrap_or_default())));
+    let f = RwSignal::new(Filter::parse_query(&lens::page_query(&dom::window().location().hash().unwrap_or_default())));
     Effect::new(move |_| write_query(&f.with(Filter::to_query)));
     let held_groups = held.clone();
     let all = Memo::new(move |_| held_groups.with(|h| h.as_ref().map(|h| f.with(|f| groups(h.list(), f)))));

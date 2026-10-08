@@ -212,6 +212,14 @@
 //! inputs are the app's copy (src/inputs.rs), asked for only once the page
 //! is opened — the badge shows from then on, live.
 
+//! FILTER-11: the lens (src/lens.rs) — a filter at every level, each the
+//! same generic filter (FILTER-10's language) and the same bar
+//! (src/filter.rs): a global one — the header's `Filter` button with its
+//! groups as a badge, a lens bar under the header while it is non-empty,
+//! `F` — and one per surface, combined with it (`global ∧ own`). Each is
+//! kept per viewer and in the route's query (`g=`, `n=`, `f=`); a
+//! navigation carries `g` and `n`. The wave board is its first surface.
+
 mod board;
 mod bridge;
 mod cache;
@@ -225,6 +233,7 @@ mod inputs_page;
 mod inspect;
 mod keys;
 mod kids;
+mod lens;
 mod md;
 mod menu;
 mod nav;
@@ -330,7 +339,8 @@ pub(crate) enum Route {
 fn parse_route(hash: &str) -> Route {
     let path = hash.strip_prefix('#').unwrap_or(hash);
     let path = path.strip_prefix('/').unwrap_or(path);
-    // WAVE-12: the query is the wave board's filter, not part of the route.
+    // WAVE-12, FILTER-11: the query is the filters' (`g=`, `n=`, `f=`) and a
+    // page's own, not part of the route.
     let path = path.split_once('?').map_or(path, |(p, _)| p);
     match path.split_once('/') {
         Some(("ticket", id)) if !id.is_empty() => Route::Ticket(id.to_string()),
@@ -353,10 +363,16 @@ fn current_route() -> Route {
 
 /// The route as a signal: seeded from the URL (deep links / cold loads),
 /// updated on every hashchange — link clicks, row clicks, and the
-/// browser's back/forward all funnel through the hash.
-fn use_route() -> RwSignal<Route> {
+/// browser's back/forward all funnel through the hash. FILTER-11: the lens
+/// follows each hash first (its levels from the URL, `g` and `n` carried
+/// into it), so a view mounted by the move reads its filter already set.
+fn use_route(lens: lens::Lens) -> RwSignal<Route> {
+    lens.follow(&dom::window().location().hash().unwrap_or_default());
     let route = RwSignal::new(current_route());
-    let cb = Closure::<dyn FnMut()>::new(move || route.set(current_route()));
+    let cb = Closure::<dyn FnMut()>::new(move || {
+        lens.follow(&dom::window().location().hash().unwrap_or_default());
+        route.set(current_route());
+    });
     dom::window()
         .add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref())
         .expect("hashchange listener");
@@ -1469,10 +1485,14 @@ fn App() -> impl IntoView {
     let conn = RwSignal::new(Conn::Connecting);
     let socket = RwSignal::new(0u32);
     let last_error = RwSignal::new(None::<String>);
-    let route = use_route();
     // SCALE-24: the nav's model of the store — the server's roll-ups, which
     // the session fetches and keeps.
     let tree = nav::Tree::new();
+    // FILTER-11: the lens — every level's filter, provided to every view;
+    // `F` and `f` open the menus.
+    let lens = lens::Lens::new(tree);
+    lens.install();
+    let route = use_route(lens);
 
     // MFE-9: the whole data plane is one task holding one WebSocket
     // (session.rs) — `watch` first, then MNG-9's summary pages walked with
@@ -1547,6 +1567,9 @@ fn App() -> impl IntoView {
         <div id="app" class:nonav=move || nav_hidden.get() data-rows-held=move || held.get()>
             <nav::Nav tree route hidden=nav_hidden />
             <div class="content" on:scroll=move |_| viewport.notify()>
+                // FILTER-11: the header, the lens bar under it, and the
+                // global menu hanging from both.
+                <div id="lens-top">
                 <header>
                     {move || {
                         nav_hidden.get().then(|| view! {
@@ -1613,6 +1636,8 @@ fn App() -> impl IntoView {
                             }
                         })
                     }}
+                    // FILTER-11: the global filter — its groups as a badge.
+                    <lens::GlobalButton />
                     <span class="tag">
                         {move || match route.get() {
                             Route::Board => "the live board (MFE-3)",
@@ -1635,6 +1660,8 @@ fn App() -> impl IntoView {
                     // AGS-17: the theme toggle (system → light → dark).
                     <theme::Toggle />
                 </header>
+                <lens::LensBar />
+                </div>
                 <main>
                     <div id="health">{health_view}</div>
                     {move || {
