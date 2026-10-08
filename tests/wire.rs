@@ -1984,3 +1984,127 @@ async fn counts_facets_and_filtered_pages_over_the_wire() {
     let base = collect(call(&client, "tickets.facets", json!({"base": "status Ready"})).await).await;
     assert!(base.iter().filter(|f| f["field"] == "status").all(|f| f["value"] == "Ready"), "base is never set aside: {base:?}");
 }
+
+/// FILTER-15 over the real protocol: `find`, `ready_set` and `inputs` take a
+/// filter — the rows the filter admits, paged as without it, no `first`;
+/// without one, or with one that narrows nothing, today's answer — and
+/// `member` says which of some ids a filter admits, one event per id in the
+/// order asked. A filter the language does not take, one asking `text`, and
+/// more than 1,000 ids are each one in-band error and nothing else.
+#[tokio::test]
+async fn reads_take_the_lens_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let ids = |rows: &[Value], shape: &str| -> Vec<String> { rows.iter().map(|r| r[shape]["id"].as_str().unwrap().to_string()).collect() };
+    answer(&client, "tickets.create", json!({"epic": "LN", "title": "the lens root", "kind": "scope"})).await;
+    let decision = "<m-decision data-field=\"decision\" id=\"pick\">\n<m-question data-field=\"question\">Pick?</m-question>\n\
+                    <m-option data-field=\"option\" name=\"A\"></m-option>\n<m-option data-field=\"option\" name=\"B\"></m-option>\n</m-decision>\n";
+    for (title, severity, body) in [
+        ("watch the board", "High", decision),
+        ("watch the nav", "Low", ""),
+        ("watch the palette", "High", ""),
+        ("a gap to close", "High", ""),
+        ("watch the inputs", "Low", ""),
+    ] {
+        answer(&client, "tickets.create", json!({"epic": "LN", "title": title, "severity": severity, "body": body})).await;
+    }
+    // LN-2, LN-4 and LN-6 are Ready, LN-3 Coding; LN-7 (below) is Ready but
+    // waits on LN-5.
+    answer(&client, "tickets.create", json!({"epic": "LX", "title": "watch elsewhere", "kind": "scope", "body": decision})).await;
+    for (id, status) in [("LN-2", "Ready"), ("LN-4", "Ready"), ("LN-6", "Ready"), ("LN-3", "Coding"), ("LX-1", "Ready")] {
+        answer(&client, "tickets.set_status", json!({"id": id, "status": status})).await;
+    }
+    let blocked = collect(call(&client, "tickets.create", json!({"epic": "LN", "title": "watch it wait", "blocked_by": ["LN-5"], "body": decision})).await).await;
+    assert_eq!(blocked[0]["ticket"]["id"], "LN-7");
+    answer(&client, "tickets.set_status", json!({"id": "LN-7", "status": "Ready"})).await;
+
+    // find: without a filter, and with one that narrows nothing — the same
+    // bytes; with one, the text matches it admits, in order, paged as ever.
+    let (rows, page) = paged(call(&client, "tickets.find", json!({"query": "WATCH", "limit": 3})).await).await;
+    assert_eq!(ids(&rows, "summary"), ["LN-2", "LN-3", "LN-4"]);
+    assert_eq!(page, json!({"type": "page", "next": "LN-4", "remaining": 3}));
+    for narrows_nothing in ["", "· flat"] {
+        let same = collect(call(&client, "tickets.find", json!({"query": "WATCH", "limit": 3, "filter": narrows_nothing})).await).await;
+        assert_eq!(same, collect(call(&client, "tickets.find", json!({"query": "WATCH", "limit": 3})).await).await, "{narrows_nothing:?}");
+    }
+    let (rows, page) = paged(call(&client, "tickets.find", json!({"query": "watch", "filter": "status Ready", "limit": 2})).await).await;
+    assert_eq!(ids(&rows, "summary"), ["LN-2", "LN-4"]);
+    assert_eq!(page, json!({"type": "page", "next": "LN-4", "remaining": 3}), "no first on a find page");
+    let (rows, page) = paged(call(&client, "tickets.find", json!({"query": "watch", "filter": "status Ready", "after": "LN-4"})).await).await;
+    assert_eq!(ids(&rows, "summary"), ["LN-6", "LN-7", "LX-1"]);
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
+    let (rows, _) = paged(call(&client, "tickets.find", json!({"query": "watch", "filter": "status Ready and in LN and not blocked"})).await).await;
+    assert_eq!(ids(&rows, "summary"), ["LN-2", "LN-4", "LN-6"]);
+
+    // ready_set: the ready set and the filter — LN-7 waits on LN-5.
+    let (rows, page) = paged(call(&client, "tickets.ready_set", json!({"summary": true})).await).await;
+    assert_eq!(ids(&rows, "summary"), ["LN-2", "LN-4", "LN-6", "LX-1"]);
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
+    let (rows, page) = paged(call(&client, "tickets.ready_set", json!({"summary": true, "filter": "severity low", "limit": 5})).await).await;
+    assert_eq!(ids(&rows, "summary"), ["LN-6"]);
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}), "no first on a ready_set page");
+    let (rows, page) = paged(call(&client, "tickets.ready_set", json!({"filter": "not severity low", "limit": 1})).await).await;
+    assert_eq!(ids(&rows, "ticket"), ["LN-2"], "whole tickets");
+    assert_eq!(rows[0]["ticket"]["body"], decision);
+    assert_eq!(page, json!({"type": "page", "next": "LN-2", "remaining": 2}));
+    let (rows, _) = paged(call(&client, "tickets.ready_set", json!({"summary": true, "epic": "lx", "filter": "kind scope"})).await).await;
+    assert_eq!(ids(&rows, "summary"), ["LX-1"]);
+
+    // inputs: of the tickets the filter admits — LN-2, LN-7 and LX-1 declare one.
+    let inputs = |params: Value| {
+        let client = &client;
+        async move {
+            collect(call(client, "tickets.inputs", params).await)
+                .await
+                .into_iter()
+                .map(|e| e["input"]["ticket"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(inputs(json!({})).await, ["LN-2", "LN-7", "LX-1"]);
+    assert_eq!(inputs(json!({"filter": "ready"})).await, ["LN-2", "LX-1"], "LN-7 waits on LN-5");
+    assert_eq!(inputs(json!({"filter": "kind build", "state": "open"})).await, ["LN-2", "LN-7"]);
+    assert_eq!(inputs(json!({"filter": "kind scope", "epic": "ln"})).await, Vec::<String>::new());
+    let missing = collect(call(&client, "tickets.inputs", json!({"ticket": "LN-99", "filter": "ready"})).await).await;
+    assert_eq!(missing, [json!({"type": "not_found", "id": "LN-99"})]);
+
+    // member: one event per id, in the order asked, then done.
+    let asked = json!(["LN-4", "LN-2", "NOPE-1", "ln-6", "LN-7", "LN-2"]);
+    let members = collect(call(&client, "tickets.member", json!({"ids": asked, "filter": "ready"})).await).await;
+    assert_eq!(
+        members,
+        [
+            json!({"type": "member", "id": "LN-4", "matched": true}),
+            json!({"type": "member", "id": "LN-2", "matched": true}),
+            json!({"type": "member", "id": "NOPE-1", "matched": false}),
+            json!({"type": "member", "id": "ln-6", "matched": true}),
+            json!({"type": "member", "id": "LN-7", "matched": false}),
+            json!({"type": "member", "id": "LN-2", "matched": true}),
+        ]
+    );
+    let all = collect(call(&client, "tickets.member", json!({"ids": ["LN-3", "LX-1"], "filter": ""})).await).await;
+    assert!(all.iter().all(|m| m["matched"] == true), "the empty filter admits every ticket: {all:?}");
+    assert!(collect(call(&client, "tickets.member", json!({"ids": [], "filter": "ready"})).await).await.is_empty());
+
+    // The refusals: each one error, nothing else.
+    let thousand: Vec<String> = (1..=1000).map(|i| format!("LN-{i}")).collect();
+    assert_eq!(collect(call(&client, "tickets.member", json!({"ids": thousand, "filter": "ready"})).await).await.len(), 1000);
+    let more: Vec<String> = (1..=1001).map(|i| format!("LN-{i}")).collect();
+    let too_many = collect(call(&client, "tickets.member", json!({"ids": more, "filter": "ready"})).await).await;
+    assert_eq!(too_many.len(), 1, "{too_many:?}");
+    assert_eq!(too_many[0]["type"], "error");
+    assert!(too_many[0]["message"].as_str().unwrap().contains("at most 1000 ids"), "{too_many:?}");
+    for (method, params) in [
+        ("tickets.find", json!({"query": "watch", "filter": "text \"watch\""})),
+        ("tickets.ready_set", json!({"filter": "under LN-1"})),
+        ("tickets.inputs", json!({"filter": "tag x and nonsense"})),
+        ("tickets.member", json!({"ids": ["LN-2"], "filter": "status Bogus"})),
+        ("tickets.find", json!({"query": "x", "filter": "nonsense"})),
+    ] {
+        let refused = collect(call(&client, method, params.clone()).await).await;
+        assert_eq!(refused.len(), 1, "{method} {params}: one error, nothing else: {refused:?}");
+        assert_eq!(refused[0]["type"], "error", "{method} {params}");
+        let listed = collect(call(&client, "tickets.list", json!({"filter": params["filter"]})).await).await;
+        assert_eq!(refused, listed, "{method} {params}: list's own refusal");
+    }
+}

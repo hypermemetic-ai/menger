@@ -767,6 +767,17 @@ export interface TicketsEventDanglingBlocker {
   id: string;
 }
 
+/** FILTER-15: whether a filter admits one ticket (yielded by `member`,
+one per id asked, in the order asked): `id` as it was asked,
+`matched` whether the filter admits the ticket it names — `false`
+for an id that names no ticket. One lookup in the filter's admitted
+cells, never a test of the ticket. */
+export interface TicketsEventMember {
+  type: 'member';
+  id: string;
+  matched: boolean;
+}
+
 /** Lookup miss. */
 export interface TicketsEventNotFound {
   type: 'not_found';
@@ -781,7 +792,7 @@ export interface TicketsEventError {
   message: string;
 }
 
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventNotFound | TicketsEventError;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError;
 
 export function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth { return e.type === 'health'; }
 export function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated { return e.type === 'created'; }
@@ -815,5 +826,6 @@ export function isTicketsEventInput(e: TicketsEvent): e is TicketsEventInput { r
 export function isTicketsEventInputChanged(e: TicketsEvent): e is TicketsEventInputChanged { return e.type === 'input_changed'; }
 export function isTicketsEventBlocker(e: TicketsEvent): e is TicketsEventBlocker { return e.type === 'blocker'; }
 export function isTicketsEventDanglingBlocker(e: TicketsEvent): e is TicketsEventDanglingBlocker { return e.type === 'dangling_blocker'; }
+export function isTicketsEventMember(e: TicketsEvent): e is TicketsEventMember { return e.type === 'member'; }
 export function isTicketsEventNotFound(e: TicketsEvent): e is TicketsEventNotFound { return e.type === 'not_found'; }
 export function isTicketsEventError(e: TicketsEvent): e is TicketsEventError { return e.type === 'error'; }
