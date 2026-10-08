@@ -38,7 +38,7 @@ use std::collections::HashSet;
 use menger_tickets_api::filter::{Conj, Field, Filter, Group, Predicate};
 
 use crate::filter::{
-    pop_id, Cat, Clash, Clausal, Clause, Clauses, CountsProvider, FilterButton, Op, Pill, Pills, Pop, Popover, Reset, ScTree, TextMode,
+    pop_id, Cat, Clash, Clausal, Clause, Clauses, FilterButton, Op, Pill, Pills, Pop, Popover, Reset, ScTree, TextMode,
     DEFAULT_KINDS,
 };
 use crate::{dom, keys, nav, Route};
@@ -989,7 +989,8 @@ pub(crate) fn GlobalButton() -> impl IntoView {
 #[component]
 pub(crate) fn LensBar() -> impl IntoView {
     let lens = use_lens();
-    lens.pop(Level::Global).configure(&Cat::SERVER, CountsProvider::none());
+    // FILTER-12: the global menu's counts are `facets { filter: global }`.
+    lens.pop(Level::Global).configure(&Cat::SERVER, crate::counts::provider(Level::Global));
     let texting = RwSignal::new(false);
     let shown = Memo::new(move |_| lens.differs(Level::Global) || texting.get());
     view! {

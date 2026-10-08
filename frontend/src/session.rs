@@ -136,6 +136,22 @@
 //! moves its cards from that, and the session sets each moved placement on
 //! the rows views hold.
 
+//!
+//! # Membership watches (FILTER-12)
+//!
+//! A view windowed over a filter's matches — the board under the lens, the
+//! header's `n of N`, and next the nav and the inputs page — keeps its
+//! counts live with `watch { filter, membership: true }`: only `entered`,
+//! `left`, `recount` and `lagged`, since its rows already ride the
+//! session's own `watch`. A view holds a [`Membership`] (open, replace,
+//! close; [`follow_membership`] for one that follows a signal). Views of one
+//! filter share one stream; a replaced filter's stream is dropped only once
+//! the new one is subscribed; and every stream is opened again on each new
+//! connection, right after the session's `watch` — none while no filter is
+//! set, so the session's startup is what it was. A view is told
+//! [`Member::Opened`] whenever its watch is open on a connection: when to
+//! ask its counts.
+
 use crate::kids::Kids;
 use crate::{board, cache, dom, frame, inputs, nav, registry, settings, Conn, Dock};
 use futures::StreamExt;
@@ -222,6 +238,302 @@ fn hear(ev: &TicketsEvent) {
     let ears: Vec<Rc<dyn Fn(&TicketsEvent)>> = EARS.with(|e| e.borrow().iter().map(|(_, f)| f.clone()).collect());
     for ear in ears {
         ear(ev);
+    }
+}
+
+// ---------------------------------------------------------------------
+// FILTER-12: membership watches
+
+/// What a membership watch — `watch { filter, membership: true }` —
+/// tells its consumers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Member {
+    /// A write moved the ticket into the filter (`entered`).
+    Entered { id: String, epic: String, seq: u32 },
+    /// A write moved it out (`left`).
+    Left { id: String, epic: String, seq: u32 },
+    /// A write moved more than 256: the shortcode's count as the write
+    /// left it (`recount`) — ask the window again.
+    Recount { epic: String, held: u64 },
+    /// The stream fell behind (`lagged`): what was counted may be stale —
+    /// ask the counts again, then what is shown.
+    Lagged,
+    /// The watch is open on this connection — the first time, after a
+    /// reconnect (a new socket, a new subscription), or at once for a
+    /// consumer joining a stream already open: ask the counts now.
+    Opened,
+    /// The server did not take the filter (in-band `error`; the stream ends).
+    Refused(String),
+}
+
+/// One stream per distinct filter: its consumers, and the pump reading it
+/// on the current connection.
+struct Feed {
+    filter: String,
+    ears: Vec<(u64, Rc<dyn Fn(&Member)>)>,
+    /// The pump on this connection, and the number it was started under —
+    /// `None` while there is no connection.
+    pump: Option<(u64, futures::future::AbortHandle)>,
+}
+
+thread_local! {
+    /// FILTER-12: the membership watches the app's views hold, by filter.
+    static FEEDS: RefCell<Vec<Feed>> = const { RefCell::new(Vec::new()) };
+    static NEXT_MEMBER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+
+    /// FILTER-12: the newest rows `watch` carried — what an `entered` beside
+    /// a held row is drawn from without asking (its `status_changed` came on
+    /// the session's stream; the cache dropped it, as no view held it).
+    static RECENT: RefCell<std::collections::VecDeque<TicketSummary>> = const { RefCell::new(std::collections::VecDeque::new()) };
+}
+
+/// How many of the newest rows [`recent`] remembers.
+const RECENT_ROWS: usize = 64;
+
+fn next_member() -> u64 {
+    NEXT_MEMBER.with(|c| {
+        let n = c.get().wrapping_add(1);
+        c.set(n);
+        n
+    })
+}
+
+fn remember(t: &TicketSummary) {
+    RECENT.with(|r| {
+        let mut r = r.borrow_mut();
+        r.retain(|x| x.id != t.id);
+        r.push_back(t.clone());
+        while r.len() > RECENT_ROWS {
+            r.pop_front();
+        }
+    });
+}
+
+/// FILTER-12: the row `watch` last carried for `id`, if it was recent.
+pub(crate) fn recent(id: &str) -> Option<TicketSummary> {
+    RECENT.with(|r| r.borrow().iter().rev().find(|t| t.id == id).cloned())
+}
+
+/// FILTER-12: a consumer's membership watch — `watch { filter, membership:
+/// true }` for its filter (canonical text), kept across reconnects: opened
+/// on each new connection right after the session's own `watch`. Consumers
+/// of one filter share one stream. A handle; nothing closes it but
+/// [`Membership::close`] ([`follow_membership`] does that on cleanup).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Membership(u64);
+
+impl Membership {
+    /// Hear `filter`'s membership: `ear` is told every [`Member`] event,
+    /// and [`Member::Opened`] whenever the watch is open on a connection —
+    /// when to ask the counts.
+    pub(crate) fn open(filter: String, ear: impl Fn(&Member) + 'static) -> Self {
+        let me = Membership(next_member());
+        attach(me.0, filter, Rc::new(ear), None);
+        me
+    }
+
+    /// The filter replaced: the new filter's watch is opened before the old
+    /// one is dropped (when no one else hears it). The same filter changes
+    /// nothing.
+    pub(crate) fn replace(self, filter: String) {
+        let found = FEEDS.with(|f| {
+            f.borrow().iter().find_map(|feed| {
+                feed.ears.iter().find(|(id, _)| *id == self.0).map(|(_, ear)| (feed.filter.clone(), ear.clone()))
+            })
+        });
+        let Some((old, ear)) = found else { return };
+        if old == filter {
+            return;
+        }
+        // Out of the old feed first (it hears nothing more), but its stream
+        // is dropped only once the new one is subscribed.
+        let then = detach(self.0, &old);
+        attach(self.0, filter, ear, then);
+    }
+
+    /// Dropped: its stream goes once no consumer hears it.
+    pub(crate) fn close(self) {
+        let old = FEEDS.with(|f| f.borrow().iter().find(|feed| feed.ears.iter().any(|(id, _)| *id == self.0)).map(|feed| feed.filter.clone()));
+        if let Some(old) = old {
+            if let Some(abort) = detach(self.0, &old) {
+                abort.abort(); // drops the stream: `call_unsub`
+            }
+        }
+    }
+
+    /// The filter it hears.
+    #[allow(dead_code)] // FILTER-14, FILTER-16
+    pub(crate) fn filter(self) -> Option<String> {
+        FEEDS.with(|f| f.borrow().iter().find(|feed| feed.ears.iter().any(|(id, _)| *id == self.0)).map(|feed| feed.filter.clone()))
+    }
+}
+
+/// FILTER-12: a membership watch that follows `filter` for the current
+/// owner's lifetime — opened when it says a filter, replaced (new first)
+/// when it says another, dropped when it says none and on cleanup.
+#[allow(dead_code)] // FILTER-14, FILTER-16
+pub(crate) fn follow_membership(filter: impl Fn() -> Option<String> + 'static, ear: impl Fn(&Member) + 'static) {
+    let ear: Rc<dyn Fn(&Member)> = Rc::new(ear);
+    let held = StoredValue::new(None::<Membership>);
+    Effect::new(move |_| {
+        let next = filter();
+        match (held.get_value(), next) {
+            (Some(m), Some(f)) => m.replace(f),
+            (Some(m), None) => {
+                m.close();
+                held.set_value(None);
+            }
+            (None, Some(f)) => {
+                let ear = ear.clone();
+                held.set_value(Some(Membership::open(f, move |e| ear(e))));
+            }
+            (None, None) => {}
+        }
+    });
+    on_cleanup(move || {
+        if let Some(Some(m)) = held.try_get_value() {
+            m.close();
+        }
+    });
+}
+
+/// `id` hears `filter`: joins its stream, or opens one (at once when there
+/// is a connection; else the next session does). `then`: a stream to drop
+/// once this one is subscribed (the filter it replaces).
+fn attach(id: u64, filter: String, ear: Rc<dyn Fn(&Member)>, then: Option<futures::future::AbortHandle>) {
+    let live = FEEDS.with(|f| {
+        let mut feeds = f.borrow_mut();
+        match feeds.iter_mut().find(|feed| feed.filter == filter) {
+            Some(feed) => {
+                feed.ears.push((id, ear.clone()));
+                Some(feed.pump.is_some())
+            }
+            None => {
+                feeds.push(Feed { filter: filter.clone(), ears: vec![(id, ear.clone())], pump: None });
+                None
+            }
+        }
+    });
+    let opened = match live {
+        // Joined a stream open on this connection: it is open for this ear
+        // too — and what it replaces can go now.
+        Some(true) => {
+            spawn_local(async move { ear(&Member::Opened) });
+            then
+        }
+        // Joined one waiting for a connection: the next session opens it.
+        Some(false) => then,
+        None => match client() {
+            Some(client) => {
+                pump(client, &filter, then);
+                None
+            }
+            None => then,
+        },
+    };
+    if let Some(abort) = opened {
+        abort.abort();
+    }
+}
+
+/// `id` no longer hears `filter`. The feed goes with its last ear: its
+/// pump's handle is handed back, to be aborted (which drops the stream —
+/// `call_unsub`).
+fn detach(id: u64, filter: &str) -> Option<futures::future::AbortHandle> {
+    let gone = FEEDS.with(|f| {
+        let mut feeds = f.borrow_mut();
+        let at = feeds.iter().position(|feed| feed.filter == filter)?;
+        feeds[at].ears.retain(|(e, _)| *e != id);
+        feeds[at].ears.is_empty().then(|| feeds.remove(at))
+    });
+    gone.and_then(|feed| feed.pump).map(|(_, abort)| abort)
+}
+
+/// Every consumer of `filter`, at this moment.
+fn ears(filter: &str) -> Vec<Rc<dyn Fn(&Member)>> {
+    FEEDS.with(|f| {
+        f.borrow().iter().find(|feed| feed.filter == filter).map(|feed| feed.ears.iter().map(|(_, e)| e.clone()).collect()).unwrap_or_default()
+    })
+}
+
+/// Open `filter`'s membership watch on `client` and pump it into its
+/// consumers until the stream ends or the feed goes: the subscribe frame is
+/// written as the pump starts (MACRO-6), then `then` (the stream it
+/// replaces) is dropped, then each consumer is told it is
+/// [`Member::Opened`].
+fn pump(client: Client, filter: &str, then: Option<futures::future::AbortHandle>) {
+    let n = next_member();
+    let (abort, reg) = futures::future::AbortHandle::new_pair();
+    let old = FEEDS.with(|f| {
+        f.borrow_mut().iter_mut().find(|feed| feed.filter == filter).and_then(|feed| feed.pump.replace((n, abort)))
+    });
+    if let Some((_, old)) = old {
+        old.abort();
+    }
+    let filter = filter.to_string();
+    let run = async move {
+        let mut stream = client.watch(None, Some(filter.clone()), Some(true));
+        if let Some(then) = then {
+            then.abort();
+        }
+        for ear in ears(&filter) {
+            ear(&Member::Opened);
+        }
+        while let Some(ev) = stream.next().await {
+            let member = match ev {
+                Ok(ClientEvent::Data(TicketsEvent::Entered { id, epic, seq })) => Member::Entered { id, epic, seq },
+                Ok(ClientEvent::Data(TicketsEvent::Left { id, epic, seq })) => Member::Left { id, epic, seq },
+                Ok(ClientEvent::Data(TicketsEvent::Recount { epic, held })) => Member::Recount { epic, held },
+                Ok(ClientEvent::Data(TicketsEvent::Lagged { missed })) => {
+                    leptos::logging::log!("membership watch lagged: {missed} change(s) missed; counting again");
+                    Member::Lagged
+                }
+                Ok(ClientEvent::Data(TicketsEvent::Error { message })) => Member::Refused(message),
+                Ok(_) => continue,
+                Err(_) => break, // the socket: the next session opens it again
+            };
+            for ear in ears(&filter) {
+                ear(&member);
+            }
+        }
+        FEEDS.with(|f| {
+            if let Some(feed) = f.borrow_mut().iter_mut().find(|feed| feed.filter == filter) {
+                if feed.pump.as_ref().is_some_and(|(m, _)| *m == n) {
+                    feed.pump = None;
+                }
+            }
+        });
+    };
+    spawn_local(async move {
+        let _ = futures::future::Abortable::new(run, reg).await;
+    });
+}
+
+/// A new connection: every membership watch the views hold, opened on it
+/// — right after the session's own `watch`, before anything is counted.
+/// True when there was one: its pump subscribes once the session yields.
+fn reopen_memberships() -> bool {
+    let filters: Vec<String> = FEEDS.with(|f| f.borrow().iter().map(|feed| feed.filter.clone()).collect());
+    for filter in &filters {
+        if let Some(client) = client() {
+            pump(client, filter, None);
+        }
+    }
+    !filters.is_empty()
+}
+
+/// Lets every task already queued run first — once.
+struct YieldNow(bool);
+
+impl std::future::Future for YieldNow {
+    type Output = ();
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        if self.0 {
+            return std::task::Poll::Ready(());
+        }
+        self.0 = true;
+        cx.waker().wake_by_ref();
+        std::task::Poll::Pending
     }
 }
 
@@ -407,6 +719,13 @@ async fn session(
     // 1. `watch` first — subscribed eagerly, so a ticket born while the
     //    calls below are out arrives behind them (MNG-9 acceptance 5).
     let mut live = client.watch(None, None, None);
+    // FILTER-12: the views' membership watches, on this connection — after
+    // `watch`, before anything they count is asked (none while no filter is
+    // set: nothing new at startup).
+    if reopen_memberships() {
+        // Their subscribe frames next, behind `watch`'s, before `health`.
+        YieldNow(false).await;
+    }
     // COMP-5: the component registry, if a view wants it — after `watch`,
     // so nothing it misses is lost (src/registry.rs).
     registry::refresh();
@@ -466,6 +785,7 @@ async fn session(
             // and by an open page that was waiting for it.
             ClientEvent::Data(TicketsEvent::Created { ticket }) => {
                 let summary = TicketSummary::from(&ticket);
+                remember(&summary);
                 // SCALE-24: the `children_changed` behind it names it.
                 nav::arrived(&summary, true);
                 wanted(&summary);
@@ -477,7 +797,9 @@ async fn session(
                 TicketsEvent::StatusChanged { ticket, .. }
                 | TicketsEvent::UnlocksChanged { ticket, .. },
             ) => {
-                cache::put(TicketSummary::from(&ticket));
+                let summary = TicketSummary::from(&ticket);
+                remember(&summary);
+                cache::put(summary);
             }
             // SCALE-4: the parent's id, the child and the new count — the
             // child's own row arrived with its `created`.
@@ -494,6 +816,7 @@ async fn session(
             // a re-hosted shortcode moves with its `group_changed`.
             ClientEvent::Data(TicketsEvent::ParentChanged { ticket, .. }) => {
                 let summary = TicketSummary::from(&ticket);
+                remember(&summary);
                 nav::arrived(&summary, false);
                 cache::put(summary);
             }
@@ -516,7 +839,9 @@ async fn session(
             // MNG-16: the row's title in place; the open page's body too.
             ClientEvent::Data(TicketsEvent::Amended { ticket, .. }) => {
                 show_body(&ticket);
-                cache::put(TicketSummary::from(&ticket));
+                let summary = TicketSummary::from(&ticket);
+                remember(&summary);
+                cache::put(summary);
             }
             // SDLC-9: commits linked or unlinked. They are on the row, so
             // the row takes them — and the open ticket page, which renders
@@ -525,7 +850,9 @@ async fn session(
                 TicketsEvent::CommitsLinked { ticket, .. }
                 | TicketsEvent::CommitsUnlinked { ticket, .. },
             ) => {
-                cache::put(TicketSummary::from(&ticket));
+                let summary = TicketSummary::from(&ticket);
+                remember(&summary);
+                cache::put(summary);
             }
             // SCALE-5: the server dropped `missed` changes this stream never
             // saw. What the rows hold may be stale: fetch again what is
