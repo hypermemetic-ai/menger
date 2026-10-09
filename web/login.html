@@ -118,17 +118,43 @@
     }
     const n = document.getElementById("nostr");
     if (n) {
-      if (!window.nostr) { n.disabled = true; n.title = "needs a nostr extension (NIP-07) in this browser"; }
+      // IDENTITY-30: say what is happening — an extension may take its time
+      // (a hardware wallet asks its owner), and a refusal says why.
+      const say = (text, bad) => {
+        let p = document.getElementById("nostr-status");
+        if (!p) { p = document.createElement("p"); p.id = "nostr-status"; p.setAttribute("role", "status"); n.after(p); }
+        p.className = bad ? "error" : "note";
+        p.textContent = text;
+      };
+      if (!window.nostr) n.title = "needs a nostr extension (NIP-07) in this browser";
       n.addEventListener("click", async () => {
+        if (!window.nostr) { say("No nostr extension (NIP-07) answers in this browser.", true); return; }
         const url = location.origin + "/login/nostr";
+        n.disabled = true;
+        say("Waiting for your nostr extension to sign…");
+        const slow = setTimeout(() => say("Still waiting for your nostr extension. Approve the request there (and on your signing device, if it uses one); a signature has to arrive within a minute."), 15000);
+        let ev;
         try {
-          const ev = await window.nostr.signEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000),
+          ev = await window.nostr.signEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000),
             content: "", tags: [["u", url], ["method", "POST"]] });
-          const r = await fetch(url + "?next=" + encodeURIComponent(n.dataset.next), {
-            method: "POST", headers: { authorization: "Nostr " + btoa(JSON.stringify(ev)) }, redirect: "follow" });
-          location.href = r.redirected ? r.url : "/login?error=" + encodeURIComponent("Your nostr key was not accepted.");
         } catch (e) {
-          location.href = "/login?error=" + encodeURIComponent("Your nostr extension did not sign.");
+          clearTimeout(slow); n.disabled = false;
+          say("Your nostr extension did not sign" + (e && e.message ? ": " + e.message : "."), true);
+          return;
+        }
+        clearTimeout(slow);
+        if (!ev || !ev.sig) { n.disabled = false; say("Your nostr extension answered without a signature.", true); return; }
+        say("Signed. Signing in…");
+        try {
+          const r = await fetch(url + "?next=" + encodeURIComponent(n.dataset.next), {
+            method: "POST", headers: { authorization: "Nostr " + btoa(JSON.stringify(ev)), accept: "application/json" } });
+          const body = await r.json().catch(() => ({}));
+          if (r.ok && body.next) { location.href = body.next; return; }
+          n.disabled = false;
+          say(body.error || "menger did not accept the signature (" + r.status + ").", true);
+        } catch (e) {
+          n.disabled = false;
+          say("menger could not be reached: " + (e && e.message ? e.message : e), true);
         }
       });
     }

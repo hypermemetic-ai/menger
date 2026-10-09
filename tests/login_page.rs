@@ -495,6 +495,35 @@ async fn a_nostr_extension_signs_in() {
 }
 
 #[tokio::test]
+async fn the_page_s_nostr_script_gets_json_and_reasons() {
+    let m = start().await;
+    let keys = Keys::generate();
+    let tag = |t: [&str; 2]| Tag::parse(t).unwrap();
+    let sign = |u: &str| {
+        let ev = EventBuilder::new(Kind::HttpAuth, "").tags([tag(["u", u]), tag(["method", "POST"])]).finalize(&keys).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(serde_json::to_string(&ev).unwrap())
+    };
+    let post = |b64: String, origin: String| {
+        m.http.post(m.url("/login/nostr?next=/app/")).header("authorization", format!("Nostr {b64}"))
+            .header("origin", origin).header("accept", "application/json").send()
+    };
+    // Signed for localhost, the shell's other name: accepted, as JSON.
+    let local = format!("http://localhost:{}/login/nostr", m.shell);
+    let b64 = sign(&local);
+    let r = post(b64.clone(), format!("http://localhost:{}", m.shell)).await.unwrap();
+    assert_eq!(r.status(), 200);
+    let id = session_from(&r).expect("a session cookie with the JSON");
+    assert_eq!(r.json::<Value>().await.unwrap()["next"], "/app/");
+    let ws = socket(&m, Some(&id), Some(&m.origin())).await.unwrap();
+    assert_eq!(call(&ws, "session.whoami").await[0]["principal"], format!("nostr:{}", keys.public_key().to_hex()));
+    // The same signature again: refused, and the reason said.
+    let again = post(b64, m.origin()).await.unwrap();
+    assert_eq!(again.status(), 401);
+    let why = again.json::<Value>().await.unwrap()["error"].as_str().unwrap().to_string();
+    assert!(why.contains("already used"), "{why}");
+}
+
+#[tokio::test]
 async fn sign_out_ends_the_session_and_its_open_socket_stops_answering() {
     let m = start().await;
     let id = sign_in(&m).await;

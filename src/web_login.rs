@@ -96,9 +96,15 @@ impl Login {
         let public_url = cfg.public_url.trim_end_matches('/').to_string();
         let mut providers = HashMap::new();
         let mut nostr = None;
+        // The NIP-98 event names the page's own URL: any origin the shell is
+        // reached at (127.0.0.1 and localhost), not only the public URL.
+        let nostr_urls: Vec<String> = std::iter::once(origin_of(&public_url))
+            .chain(cfg.also.iter().map(|o| origin_of(o)))
+            .map(|o| format!("{o}/login/nostr"))
+            .collect();
         for p in &cfg.providers {
             if matches!(p, Provider::Nostr { .. }) {
-                nostr = Some(Nip98Adapter::new([format!("{public_url}/login/nostr")])?.for_method("POST"));
+                nostr = Some(Nip98Adapter::new(nostr_urls.clone())?.for_method("POST"));
             }
             providers.insert(p.name().to_string(), (p.clone(), p.adapter()?));
         }
@@ -240,10 +246,14 @@ impl Login {
 
     /// A session for an identity, and the response that hands it over.
     fn sign_in(&self, ctx: AuthContext, next: &str) -> Response {
+        self.hand_over(ctx, see_other(next))
+    }
+
+    /// A session for an identity, its cookies set on `r`.
+    fn hand_over(&self, ctx: AuthContext, mut r: Response) -> Response {
         let (id, expires) = self.sessions.create(ctx);
         let max_age = (expires - sessions::now()).max(0);
         let secure = if self.public_url.starts_with("https://") { "; Secure" } else { "" };
-        let mut r = see_other(next);
         let h = r.headers_mut();
         h.append(
             header::SET_COOKIE,
@@ -562,9 +572,24 @@ pub async fn nostr(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q)
     let Some(token) = event else {
         return (StatusCode::BAD_REQUEST, "an Authorization: Nostr <event> header is required").into_response();
     };
+    // The page's own script asks for JSON (IDENTITY-30): where to go, or
+    // why not, in words it shows beside the button.
+    let json = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|a| a.contains("application/json"));
     match adapter.authenticate(&Presentation::Bearer { token }).await {
+        Ok(a) if json => login.hand_over(a.into_auth_context(), axum::Json(json!({ "next": next })).into_response()),
         Ok(a) => login.sign_in(a.into_auth_context(), &next),
+        Err(e) if json => (StatusCode::UNAUTHORIZED, axum::Json(json!({ "error": nostr_refusal(&e) }))).into_response(),
         Err(_) => (StatusCode::UNAUTHORIZED, "the nostr event was not accepted").into_response(),
+    }
+}
+
+/// Why a NIP-98 event was refused, for the person who signed it.
+fn nostr_refusal(e: &plexus_auth_core::identity::AuthnRejection) -> String {
+    use plexus_auth_core::identity::AuthnRejection as R;
+    match e {
+        R::Expired => "The signature is too old: menger takes one signed within a minute. Press the button again and approve it promptly.".into(),
+        R::Malformed(m) if m.contains("already used") => "That signature was already used. Press the button again.".into(),
+        other => format!("Your nostr key's signature was not accepted ({other})."),
     }
 }
 
