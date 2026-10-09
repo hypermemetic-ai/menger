@@ -2,7 +2,7 @@
 //!
 //! | route | what it does |
 //! | --- | --- |
-//! | `GET /login` | the page: a password form (one provider's password grant), a button per `--login-button`, nostr when offered |
+//! | `GET /login` | the page: a password form (one provider's password grant), a button per `--login-button`, nostr when offered; with `--login-hosted`, straight out to that IdP's own page instead (IDENTITY-30), and menger's page at `/login?page` |
 //! | `POST /login` | the password grant at that provider, from the shell |
 //! | `GET /login/start` | out to an OIDC provider's authorization endpoint: code flow with PKCE, a connection hint (Google, Apple, SAML) |
 //! | `GET /login/callback` | back: the state checked against the browser's own, the code traded for a token |
@@ -57,7 +57,15 @@ pub struct LoginConfig {
     /// Whether anonymous visitors are sent to the page.
     pub require: bool,
     pub title: &'static str,
+    /// IDENTITY-30: the IdP whose own page is the sign-in page
+    /// (`--login-hosted workos:authkit`): `/login` goes straight there.
+    /// menger's page stays at `/login?page` (automation's password form,
+    /// nostr) and shows when a sign-in fails.
+    pub hosted: Option<LoginButton>,
 }
+
+/// The hosted IdP's button, as `/login/start?button=` names it.
+const HOSTED: &str = "hosted";
 
 #[derive(Clone, Debug)]
 struct Discovery {
@@ -71,6 +79,7 @@ pub struct Login {
     providers: HashMap<String, (Provider, Arc<dyn Authenticator>)>,
     password: Option<String>,
     buttons: Vec<LoginButton>,
+    hosted: Option<LoginButton>,
     forgot: Option<String>,
     public_url: String,
     origins: Vec<String>,
@@ -107,7 +116,12 @@ impl Login {
             }
             None => cfg.providers.iter().find(|p| p.oidc().is_some() && p.takes_passwords()).map(|p| p.name().to_string()),
         };
-        for b in &cfg.buttons {
+        let hosted = cfg.hosted.map(|h| LoginButton { label: HOSTED.into(), ..h });
+        anyhow::ensure!(
+            !cfg.buttons.iter().any(|b| b.label == HOSTED),
+            "--login-button {HOSTED}: that label is the hosted IdP's"
+        );
+        for b in cfg.buttons.iter().chain(hosted.iter()) {
             let Some((p, _)) = providers.get(&b.provider) else {
                 anyhow::bail!("--login-button {}: no --auth-provider is named {}", b.label, b.provider);
             };
@@ -125,6 +139,7 @@ impl Login {
             providers,
             password,
             buttons: cfg.buttons,
+            hosted,
             forgot: cfg.forgot,
             public_url,
             origins,
@@ -246,10 +261,17 @@ impl Login {
                 .as_ref()
                 .map(|u| format!(r#"<a href="{}">Forgot password?</a>"#, esc(u)))
                 .unwrap_or_default();
+            // IDENTITY-30: beside a hosted IdP, the form is plainly not
+            // where a person's IdP password goes.
+            let caption = match (&self.hosted, &self.password) {
+                (Some(_), Some(p)) => format!(r#"<p class="caption">With a {} account</p>
+      "#, esc(p)),
+                _ => String::new(),
+            };
             format!(
                 r#"<form method="post" action="/login" autocomplete="on">
       <input type="hidden" name="next" value="{next_e}">
-      <label for="username">Email or username</label>
+      {caption}<label for="username">Email or username</label>
       <input id="username" name="username" type="text" autocomplete="username" required autofocus>
       <div class="row"><label for="password">Password</label>{forgot}</div>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
@@ -281,6 +303,19 @@ impl Login {
             })
             .collect::<Vec<_>>()
             .join("\n      ");
+        // IDENTITY-30: the hosted IdP's own page comes first — what a person
+        // signs in with; the password form (automation's) and the other
+        // ways in follow the "or".
+        let (password, buttons) = match &self.hosted {
+            Some(_) => {
+                let hosted = format!(
+                    r#"<form method="get" action="/login/start"><input type="hidden" name="button" value="{HOSTED}"><input type="hidden" name="next" value="{next_e}"><button class="primary" type="submit" id="hosted">Continue to sign in</button></form>"#
+                );
+                let rest = [password.unwrap_or_default(), buttons].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n      ");
+                (Some(hosted), rest)
+            }
+            None => (password, buttons),
+        };
         let nostr = self.nostr.as_ref().map(|_| {
             format!(r#"<button class="alt" type="button" id="nostr" data-next="{next_e}">{KEY_ICON}Continue with nostr</button>"#)
         });
@@ -305,12 +340,18 @@ impl Login {
 pub struct PageQuery {
     next: Option<String>,
     error: Option<String>,
+    /// IDENTITY-30: menger's own page, even with a hosted IdP.
+    page: Option<String>,
 }
 
 pub async fn page(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<PageQuery>) -> Response {
     let next = safe_next(q.next.as_deref());
     if login.session(&headers).is_some() {
         return see_other(&next);
+    }
+    // IDENTITY-30: the hosted IdP's page is the sign-in page.
+    if let (Some(h), None, None) = (login.hosted.clone(), &q.error, &q.page) {
+        return begin(&login, &h, None, next).await;
     }
     page_response(&login, &next, q.error.as_deref(), StatusCode::OK)
 }
@@ -356,9 +397,16 @@ pub struct StartQuery {
 
 pub async fn start(State(login): State<Arc<Login>>, Query(q): Query<StartQuery>) -> Response {
     let next = safe_next(q.next.as_deref());
-    let Some(b) = login.buttons.iter().find(|b| b.label == q.button).cloned() else {
+    let Some(b) = login.buttons.iter().chain(login.hosted.iter()).find(|b| b.label == q.button).cloned() else {
         return page_response(&login, &next, Some("That sign-in is not offered here."), StatusCode::NOT_FOUND);
     };
+    begin(&login, &b, q.login_hint.as_deref(), next).await
+}
+
+/// Out to a button's provider: the authorization code flow with PKCE, the
+/// state bound to this browser by the transaction cookie.
+async fn begin(login: &Login, b: &LoginButton, login_hint: Option<&str>, next: String) -> Response {
+    let login = login;
     let (provider, _) = &login.providers[&b.provider];
     let (issuer, audience, client) = provider.oidc().expect("checked at start");
     let client = client.expect("checked at start");
@@ -388,7 +436,7 @@ pub async fn start(State(login): State<Arc<Login>>, Query(q): Query<StartQuery>)
         for (k, v) in provider.authorize_hint(b.connection.as_deref()) {
             qp.append_pair(k, &v);
         }
-        if let Some(h) = q.login_hint.as_deref().filter(|h| !h.trim().is_empty()) {
+        if let Some(h) = login_hint.filter(|h| !h.trim().is_empty()) {
             qp.append_pair("login_hint", h.trim());
         }
     }

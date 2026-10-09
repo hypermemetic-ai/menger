@@ -1171,6 +1171,7 @@ naming another `Host` are refused.
 | flag | |
 |---|---|
 | `--login-button <Label>=<provider>[:<connection>]` | a button; the provider needs `client=<id>` in its `--auth-provider` |
+| `--login-hosted <provider>[:<connection>]` | the IdP whose own page is the sign-in page (`workos:authkit`); menger's page moves to `/login?page` |
 | `--login-password <provider>` | where the password form goes (default: the first OIDC provider that takes passwords, not WorkOS); `none`: no form |
 | `--login-forgot <url>` | a "Forgot password?" link |
 | `--public-url <url>` | where people reach the shell; the redirect URI's base (default `http://127.0.0.1:<shell-port>`) |
@@ -1181,24 +1182,29 @@ naming another `Host` are refused.
 so a restart signs everyone out (IDENTITY-18 G2). `tests/login_page.rs` runs
 each way in against fixture issuers.
 
-**WorkOS** (IDENTITY-30) is the hosted IdP. menger is a public client: the
-code flow runs with PKCE and no secret, and menger holds no API key. A button
-names WorkOS's way in, sent as `provider`. `authkit` is WorkOS's own page:
-email and password, passkeys, a code by email, and SSO chosen by the email's
-domain. `GoogleOAuth`, `AppleOAuth`, `GitHubOAuth` and `MicrosoftOAuth` are
-also `provider` values. A `conn_…` connection or an `org_…` organization is
-sent as `connection_id` or `organization_id`. WorkOS's access token names
-nobody, so the person's name and email come from the authenticate response's
-`user`, which must be the token's own subject. Signing out also ends the WorkOS
-session, then returns to `/login`. The environment must list
-`<public-url>/login/callback` as a redirect URI and `<public-url>/login` as a
-logout URI (`workos authkit redirect-uris set …`, `workos authkit logout-uris
-set …`).
+**WorkOS** (IDENTITY-30) is the hosted IdP, and its page is the sign-in page:
+with `--login-hosted workos:authkit`, `/login` goes straight to AuthKit,
+which offers whatever the WorkOS environment turns on (email and password,
+passkeys, a code by email, Google, Microsoft, GitHub, Apple, and SSO chosen by
+the email's domain) under the environment's branding. menger is a public
+client: the code flow runs with PKCE and no secret, and menger holds no API
+key. WorkOS's access token names nobody, so the person's name and email come
+from the authenticate response's `user`, which must be the token's own
+subject. Signing out ends the WorkOS session too, and comes back to `/login`.
+The environment lists `<public-url>/login/callback` as a redirect URI and
+`<public-url>/login` as a logout URI (`workos authkit redirect-uris set …`,
+`workos authkit logout-uris set …`).
+
+menger's own page stays at **`/login?page`**, and shows when a sign-in fails
+(with a button back to the IdP). **Automation signs in there with
+plexus-idp** (`--auth-provider idp=…`, the default password form), so the
+smoke and the end-to-end scripts never depend on the hosted IdP. Buttons
+(`--login-button Google=workos:GoogleOAuth`, a `conn_…` or `org_…`) still
+work and show on that page.
 
 ```sh
-menger --auth-provider 'workos=client_01…' --login-password none \
-  --login-button Google=workos:GoogleOAuth --login-button Apple=workos:AppleOAuth \
-  --login-button Email=workos:authkit --login-button SSO=workos:authkit
+menger --auth-provider 'workos=client_01…' --login-hosted workos:authkit \
+  --auth-provider idp=http://127.0.0.1:4481,plexus:menger
 ```
 
 ### Members and roles (IDENTITY-21)

@@ -141,6 +141,13 @@ struct Args {
     #[arg(long = "login-button", env = "MENGER_LOGIN_BUTTONS", value_name = "SPEC", value_delimiter = ';')]
     login_button: Vec<LoginButton>,
 
+    /// IDENTITY-30: the IdP whose own page is the sign-in page,
+    /// `<provider>[:<connection>]`, e.g. `workos:authkit`: `/login` goes
+    /// straight there. menger's page stays at `/login?page` (the password
+    /// form automation signs in with, nostr) and shows when a sign-in fails.
+    #[arg(long, env = "MENGER_LOGIN_HOSTED", value_name = "SPEC", value_parser = parse_hosted)]
+    login_hosted: Option<LoginButton>,
+
     /// IDENTITY-19: the provider the login page's password form goes to;
     /// default the first OIDC `--auth-provider` that takes passwords (not
     /// WorkOS). `none`: no password form (IDENTITY-30).
@@ -232,6 +239,7 @@ async fn main() -> anyhow::Result<()> {
             LoginConfig {
                 providers: args.auth_provider.clone(),
                 buttons: args.login_button.clone(),
+                hosted: args.login_hosted.clone(),
                 password: args.login_password.clone(),
                 forgot: args.login_forgot.clone(),
                 public_url: public_url.clone(),
@@ -377,4 +385,10 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             2
         }
     }
+}
+
+/// IDENTITY-30: `--login-hosted <provider>[:<connection>]`, a button with no
+/// label of its own.
+fn parse_hosted(spec: &str) -> Result<LoginButton, String> {
+    format!("hosted={spec}").parse()
 }
