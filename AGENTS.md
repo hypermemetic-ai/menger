@@ -96,11 +96,19 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   **The nav under a filter** is `tree` (FILTER-13): a parent's children —
   or a shortcode's top row (its root; a rootless shortcode's tickets) —
   that match or hold a match, each a `node { summary, matched, below }`
-  (`below`: the matches strictly under it), then a `page`, paged as `list`:
+  (`below`: the matches strictly under it; `matched: false` a holder), then
+  a `page`, paged as `list`. The nav asks it with `--matches-only`
+  (FILTER-23): only matches — at a parent, the matches nearest below it (a
+  ticket that does not match is no row; the matches under it are answered
+  at its nearest matching ancestor, or at the shortcode's top), then the
+  hosted shortcodes whose row is drawn there, each its root's node
+  (`matched: false`: a heading); at `--epic`, the root if it matches, else
+  the shortcode's top:
 
   ```sh
   synapse -P 4455 menger tickets tree --epic FILTER --filter 'status Ready'
   synapse -P 4455 menger tickets tree --parent FILTER-9 --filter 'not category done' --limit 50
+  synapse -P 4455 menger tickets tree --epic MENGER --filter 'kind build' --matches-only true
   synapse -P 4455 menger tickets counts --filter 'ready and under FILTER-9'
   ```
 

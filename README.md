@@ -280,8 +280,10 @@ categories with counts (`facets`, Linear's: a category's counts ignore its
 own clause, never the global one), pills, a text mode in FILTER-3's
 language, and the global pills shown muted in each surface's bar. The
 board windows over `counts` (FILTER-12); the nav shows each shortcode with
-its matches and, inside, the matches plus the ancestors that hold them —
-dimmed — each row with the matches below it (`tree`, FILTER-13/14); the
+its matches and, inside, only the matches, each with the matches below it —
+a ticket the filter excludes is not drawn, and the matches under it move up
+to its nearest matching ancestor or the top of the shortcode, whose row is
+then a heading (`tree { matches_only }`, FILTER-13/14/23); the
 palette searches inside the global filter with a "Search everything" row,
 and a ticket page says when its ticket is outside and filters its children
 (FILTER-16). Each level rides the route's query — `g=` global, `n=` nav,
