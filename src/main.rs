@@ -1,7 +1,7 @@
 use clap::Parser;
 use menger::store::{SeedShape, SeedSpec, Store, Verdict};
 use menger::login::{self, Provider};
-use menger::{build_rpc_seeded, default_db_path, shell};
+use menger::{build_rpc_offering, default_db_path, shell};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::{RestHttpConfig, RouteFn, TransportServer};
 use std::path::PathBuf;
@@ -159,7 +159,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     let boundary = login::boundary(&args.auth_provider)?;
-    let hub = build_rpc_seeded(&db_path, seed, args.seed_shape).await?;
+    let offers = args.auth_provider.iter().map(Provider::offer).collect();
+    let hub = build_rpc_offering(&db_path, seed, args.seed_shape, offers).await?;
 
     let activations = hub.list_activations_info();
     tracing::info!("Activations ({}):", activations.len());

@@ -1,4 +1,4 @@
-use menger_tickets_api::{Comments, Session, Tickets};
+use menger_tickets_api::{Comments, ProviderOffer, Session, Tickets};
 use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError};
 use plexus_core::plexus::DynamicHub;
 use std::path::{Path, PathBuf};
@@ -46,6 +46,17 @@ pub async fn build_rpc_seeded(
     db_path: &Path,
     seed: Option<SeedSpec>,
     shape: SeedShape,
+) -> anyhow::Result<Arc<DynamicHub>> {
+    build_rpc_offering(db_path, seed, shape, Vec::new()).await
+}
+
+/// IDENTITY-15: [`build_rpc_seeded`], with `session.providers` offering
+/// these providers (main's `--auth-provider`s).
+pub async fn build_rpc_offering(
+    db_path: &Path,
+    seed: Option<SeedSpec>,
+    shape: SeedShape,
+    offers: Vec<ProviderOffer>,
 ) -> anyhow::Result<Arc<DynamicHub>> {
     let path = db_path.to_path_buf();
     let started = Instant::now();
@@ -103,6 +114,6 @@ pub async fn build_rpc_seeded(
         DynamicHub::new("menger")
             .register(Tickets::new(Arc::clone(&store)))
             .register(Comments::new(store))
-            .register(Session::new()),
+            .register(Session::offering(offers)),
     ))
 }

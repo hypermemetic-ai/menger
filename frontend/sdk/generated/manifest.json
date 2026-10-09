@@ -28,6 +28,7 @@
       "watch": []
     },
     "session": {
+      "providers": [],
       "schema": [],
       "whoami": []
     },

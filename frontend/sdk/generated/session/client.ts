@@ -7,6 +7,8 @@ import type { SessionEvent } from './types';
 
 /** Typed client interface for session plugin */
 export interface SessionClient {
+  /** The providers this menger admits callers through: provider { name, kind, issuer, audience } */
+  providers(): AsyncGenerator<SessionEvent>;
   /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
   schema(): Promise<unknown>;
   /** Who this connection is: identity { principal, name, roles, tenant, provider }, or anonymous */
@@ -17,6 +19,11 @@ export interface SessionClient {
 class SessionClientImpl implements SessionClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
+
+  async *providers(): AsyncGenerator<SessionEvent> {
+    const stream = this.rpc.call('session.providers', {});
+    yield* extractData<SessionEvent>(stream);
+  }
 
   async schema(): Promise<unknown> {
     const stream = this.rpc.call('session.schema', {});

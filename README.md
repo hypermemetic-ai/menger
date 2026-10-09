@@ -1113,6 +1113,7 @@ not `https://` off loopback, stops startup.
 | method | yields |
 |---|---|
 | `session.whoami {}` | `identity { principal, name, roles, tenant, provider }`, or `anonymous` |
+| `session.providers {}` | one `provider { name, kind, issuer, audience }` per `--auth-provider` (`kind` `oidc` or `nostr`), none when login is off: what a sign-in needs, nothing secret |
 
 `comments.add` by a signed-in connection is authored by its identity's
 name, whatever `author` says; anonymous, it keeps `author` as before. The
@@ -1130,6 +1131,19 @@ synapse -P 4460 --cookie nostr="$EVENT" menger session whoami
 
 `tests/login.rs` runs each provider over the real wire against fixture
 issuers.
+
+**In the app** (IDENTITY-15): `#/settings` opens on a **Sign in** group
+with one button per provider that `session.providers` lists. For an OIDC
+provider, the app reads the provider's discovery and sends the username and
+password to its token endpoint (the password grant, which plexus-idp
+offers and Auth0 offers when enabled). It keeps the token in the
+`access_token` cookie for the token's lifetime. For nostr, a NIP-07
+extension signs a fresh NIP-98 event for the WebSocket URL before every
+connect, and the event goes in the `nostr` cookie for a minute. menger
+never sees a password. Signing in or out reloads the app, so a new session
+connects with the credential. The header shows `whoami`'s name, or
+`sign in`. The cookies are this page's host's, so sign-in reaches only a
+backend on the same host, not one set from `#/settings` elsewhere.
 
 ## Diagrams — the `diagrams` service (COMPILE-4)
 

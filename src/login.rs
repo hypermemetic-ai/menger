@@ -21,6 +21,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use menger_tickets_api::{ProviderKind, ProviderOffer};
 use plexus_auth_core::adapters::{Carriers, ClaimMap, Nip98Adapter, OidcAdapter};
 use plexus_auth_core::identity::{Authenticator, AuthenticatorChain};
 
@@ -50,6 +51,23 @@ impl Provider {
             Self::Auth0 { .. } => "auth0",
             Self::Oidc { name, .. } => name,
             Self::Nostr { .. } => "nostr",
+        }
+    }
+
+    /// What `session.providers` says of it (IDENTITY-15): its name and how
+    /// to reach it, nothing secret.
+    pub fn offer(&self) -> ProviderOffer {
+        let oidc = |issuer: &str, audience: &str| ProviderOffer {
+            name: self.name().to_string(),
+            kind: ProviderKind::Oidc,
+            issuer: Some(issuer.to_string()),
+            audience: Some(audience.to_string()),
+        };
+        match self {
+            Self::PlexusIdp { issuer, audience } => oidc(issuer, audience),
+            Self::Auth0 { domain, audience, .. } => oidc(domain, audience),
+            Self::Oidc { issuer, audience, .. } => oidc(issuer, audience),
+            Self::Nostr { .. } => ProviderOffer { name: "nostr".into(), kind: ProviderKind::Nostr, issuer: None, audience: None },
         }
     }
 

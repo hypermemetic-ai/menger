@@ -266,6 +266,7 @@ mod registry;
 mod saved;
 mod session;
 mod settings;
+mod signin;
 mod tags;
 mod theme;
 mod waves;
@@ -2172,6 +2173,8 @@ fn App() -> impl IntoView {
                             Route::Comments => "comments (COMMENT-3)",
                         }}
                     </span>
+                    // IDENTITY-15: who this connection is, or `sign in`.
+                    <signin::Who />
                     // MFE-21: `override` marks a backend other than this
                     // page's server (highlighted, its URL in the words).
                     <span

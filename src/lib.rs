@@ -22,4 +22,4 @@ pub mod shell;
 pub use menger_tickets_api::store;
 pub use menger_tickets_api::{Comments, CommentsClient, Session, SessionClient, Tickets, TicketsClient};
 
-pub use builder::{build_rpc, build_rpc_seeded, build_rpc_with, default_db_path};
+pub use builder::{build_rpc, build_rpc_offering, build_rpc_seeded, build_rpc_with, default_db_path};

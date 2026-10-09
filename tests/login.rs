@@ -14,7 +14,7 @@ use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{HeaderMap, HeaderValue, WsClient, WsClientBuilder};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use menger::build_rpc;
+use menger::build_rpc_offering;
 use menger::login::{self, Provider};
 use nostr::event::{EventBuilder, FinalizeEvent, Kind, Tag};
 use nostr::key::Keys;
@@ -150,7 +150,10 @@ async fn providers() -> Providers {
 /// `require_login`.
 async fn start(port: u16, providers: &[Provider], require_login: bool) {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
-    let hub = build_rpc(&dir.path().join("tickets.db")).await.expect("open database");
+    let offers = providers.iter().map(Provider::offer).collect();
+    let hub = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers)
+        .await
+        .expect("open database");
     let boundary = login::boundary(providers).expect("providers");
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
     tokio::spawn(async move {
@@ -335,4 +338,21 @@ async fn require_login_refuses_an_upgrade_that_proves_no_one() {
     assert!(refused.contains("401"), "{refused}");
     let alice = connect(p.port, &[("cookie", format!("access_token={}", idp_token(&p.idp, now() + 600)))]).await.unwrap();
     assert_eq!(whoami(&alice).await["principal"], format!("idp:{ALICE}"));
+}
+
+#[tokio::test]
+async fn providers_says_what_a_sign_in_needs_and_nothing_more() {
+    let p = providers().await;
+    start(p.port, &p.list, false).await;
+    let client = connect(p.port, &[]).await.unwrap();
+    assert_eq!(call(&client, "session.providers", json!({})).await, vec![
+        json!({ "type": "provider", "name": "plexus-idp", "kind": "oidc", "issuer": p.idp, "audience": IDP_AUD }),
+        json!({ "type": "provider", "name": "auth0", "kind": "oidc", "issuer": p.auth0, "audience": AUTH0_AUD }),
+        json!({ "type": "provider", "name": "nostr", "kind": "nostr", "issuer": null, "audience": null }),
+    ]);
+
+    let port = free_port().await;
+    start(port, &[], false).await;
+    let client = connect(port, &[]).await.unwrap();
+    assert!(call(&client, "session.providers", json!({})).await.is_empty(), "login off: none");
 }

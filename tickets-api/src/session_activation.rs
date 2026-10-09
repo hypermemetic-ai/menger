@@ -2,11 +2,17 @@
 //! `tickets` and `comments` are (MFE-11): the server's [`Session`] and the
 //! browser's `SessionClient`.
 //!
-//! It holds nothing. Its one method reads the connection's
+//! `whoami` reads the connection's
 //! [`AuthContext`](plexus_core::plexus::AuthContext), which the transport
-//! attached at the upgrade, and reports it as Plexus types.
+//! attached at the upgrade, and reports it as Plexus types. IDENTITY-15:
+//! `providers` lists what menger was configured to admit, so a sign-in knows
+//! where to go.
 
 use crate::session::SessionEvent;
+#[cfg(feature = "server")]
+use crate::session::ProviderOffer;
+#[cfg(feature = "server")]
+use std::sync::Arc;
 #[cfg(feature = "server")]
 use async_stream::stream;
 #[cfg(feature = "server")]
@@ -14,15 +20,24 @@ use futures::Stream;
 #[cfg(feature = "server")]
 use plexus_core::plexus::AuthContext;
 
-/// The activation. Server-only, like the others, though it holds nothing.
+/// The activation. Server-only, like the others; it holds only the
+/// providers it offers.
 #[cfg(feature = "server")]
 #[derive(Clone, Default)]
-pub struct Session;
+pub struct Session {
+    offers: Arc<Vec<ProviderOffer>>,
+}
 
 #[cfg(feature = "server")]
 impl Session {
+    /// A session offering no provider: `whoami` is always `anonymous`.
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// A session offering these providers.
+    pub fn offering(offers: Vec<ProviderOffer>) -> Self {
+        Self { offers: Arc::new(offers) }
     }
 }
 
@@ -64,6 +79,22 @@ impl Session {
         let event = identity(auth);
         stream! {
             yield event;
+        }
+    }
+
+    /// IDENTITY-15: the providers this menger admits callers through, one
+    /// `provider { name, kind, issuer, audience }` each, in the order they
+    /// were configured; none when login is off. Nothing here is secret: it
+    /// is what a sign-in needs to find the provider.
+    #[plexus_macros::method(
+        description = "The providers this menger admits callers through: provider { name, kind, issuer, audience }"
+    )]
+    pub async fn providers(&self) -> impl Stream<Item = SessionEvent> + Send + 'static {
+        let offers = Arc::clone(&self.offers);
+        stream! {
+            for offer in offers.iter() {
+                yield SessionEvent::from(offer.clone());
+            }
         }
     }
 }

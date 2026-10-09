@@ -190,6 +190,10 @@
   header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
   header .tag { color: var(--muted); font-size: .8rem; }
   #conn { color: var(--muted); font-size: .8rem; margin-left: auto; }
+  /* IDENTITY-15: who this connection is, just before its state. */
+  header #who { margin-left: auto; }
+  header #who + #conn { margin-left: .6rem; }
+  header #who.signed-in { color: var(--ink); }
   #conn.live { color: var(--live); }
   #conn.reconnecting { color: var(--err-fg); }
   /* AGS-17: the theme toggle — a header control in the nav-reveal's
@@ -226,11 +230,11 @@
   #settings label { font-size: .85rem; }
   #settings .control { min-width: 0; }
   #settings .line { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
-  #settings input#ws-url, #settings input#test-url {
+  #settings input#ws-url, #settings input#test-url, #settings input#signin-user, #settings input#signin-pass {
     flex: 1 1 16rem; min-width: 0; font: inherit; padding: .25rem .5rem;
     background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; outline: none;
   }
-  #settings input#ws-url:focus, #settings input#test-url:focus { border-color: var(--accent); }
+  #settings input#ws-url:focus, #settings input#test-url:focus, #settings input#signin-user:focus, #settings input#signin-pass:focus { border-color: var(--accent); }
   #settings input#ws-url[aria-invalid="true"], #settings input#test-url[aria-invalid="true"] { border-color: var(--err-fg); }
   #settings button {
     font: inherit; font-size: .8rem; padding: .1rem .65rem; cursor: pointer;
@@ -257,6 +261,10 @@
     background: none; border: 0; padding: 0; font-size: .8rem; color: var(--accent); overflow-wrap: anywhere;
   }
   #settings .recent button.fill:hover { text-decoration: underline; }
+  /* IDENTITY-15: the sign-in group — a provider a line, the credentials above. */
+  #settings .signin-providers { list-style: none; margin: .6rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .45rem; }
+  #settings .signin-providers .lbl { color: var(--muted); font-size: .8rem; }
+  #settings #signin-now strong { color: var(--ink); }
   @container (max-width: 36rem) {
     #settings .field { grid-template-columns: minmax(0, 1fr); }
   }

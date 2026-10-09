@@ -30,6 +30,42 @@ pub enum SessionEvent {
     },
     /// The connection proved no one.
     Anonymous,
+    /// IDENTITY-15, `providers`: one provider this menger admits callers
+    /// through — what a sign-in needs to reach it, and nothing secret.
+    Provider {
+        /// Its name, as `identity`'s `provider` says it.
+        name: String,
+        kind: ProviderKind,
+        /// An OIDC provider's issuer: discovery is under it.
+        issuer: Option<String>,
+        /// The audience its tokens must be minted for.
+        audience: Option<String>,
+    },
+}
+
+/// How a provider proves a caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    /// An OIDC token, in the `access_token` cookie or a bearer header.
+    Oidc,
+    /// A NIP-98 event for the WebSocket URL, in the `nostr` cookie.
+    Nostr,
+}
+
+/// A provider as `session.providers` offers it ([`SessionEvent::Provider`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderOffer {
+    pub name: String,
+    pub kind: ProviderKind,
+    pub issuer: Option<String>,
+    pub audience: Option<String>,
+}
+
+impl From<ProviderOffer> for SessionEvent {
+    fn from(o: ProviderOffer) -> Self {
+        Self::Provider { name: o.name, kind: o.kind, issuer: o.issuer, audience: o.audience }
+    }
 }
 
 impl SessionEvent {
@@ -37,7 +73,7 @@ impl SessionEvent {
     pub fn name(&self) -> Option<&str> {
         match self {
             Self::Identity { name, .. } => Some(name),
-            Self::Anonymous => None,
+            Self::Anonymous | Self::Provider { .. } => None,
         }
     }
 }

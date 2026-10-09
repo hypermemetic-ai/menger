@@ -153,7 +153,7 @@
 //! ask its counts.
 
 use crate::kids::Kids;
-use crate::{board, cache, comments, dom, frame, inputs, nav, registry, settings, Conn, Dock};
+use crate::{board, cache, comments, dom, frame, inputs, nav, registry, settings, signin, Conn, Dock};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::{CommentsClient, TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
@@ -726,6 +726,9 @@ async fn session(
     // MFE-21: the override from #/settings when one is set, else this
     // page's server (`dom::ws_url()`) as before — fixed for the page's life.
     let url = settings::effective_ws_url();
+    // IDENTITY-15: a browser signed in with nostr signs this connect's
+    // event into its cookie first; a token's cookie is already there.
+    signin::before_connect(&url).await;
     let transport = Rc::new(
         WsTransport::connect(&url, HUB)
             .await
@@ -733,6 +736,8 @@ async fn session(
     );
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport.clone()));
     LINK.with(|l| l.set(true));
+    // IDENTITY-15: who this connection is, for the header.
+    signin::after_connect(transport.clone());
     // A connection exists — announced here, before the board's window,
     // because an open ticket page needs only two point queries and must not
     // wait for the board.

@@ -81,7 +81,7 @@ pub use comments_activation::Comments;
 /// IDENTITY-14: who a connection is — [`SessionEvent`], wasm-safe like
 /// [`comments`].
 pub mod session;
-pub use session::SessionEvent;
+pub use session::{ProviderKind, ProviderOffer, SessionEvent};
 /// IDENTITY-14: the `session` activation, declared once: the server's
 /// [`Session`] and the browser's [`SessionClient`].
 pub mod session_activation;
