@@ -71,6 +71,9 @@
        the light palette's inks so each reads on --panel. */
     --kind-scope: #7a5d00; --kind-build: #0066cc; --kind-execution: #256b1a;
     --kind-gap: #a23; --kind-spike: #5b3a8c;
+    /* COMMENT-3: annotation mode — every element's outline, and the hovered
+       one's (with its label). Frames receive both (src/frame.rs). */
+    --annot: rgba(0, 102, 204, .32); --annot-hi: #0066cc;
     /* AGS-16: the drop shadow under floating chrome (the ticket menu, the
        copy toast) — manifest's menu shadow, 20% black. */
     --shadow: #0003;
@@ -132,6 +135,7 @@
       --err-bg: #2b1517; --err-fg: #e89393; --err-line: #5a2626;
       --kind-scope: #e3c56a; --kind-build: #8ab4f8; --kind-execution: #5dbb63;
       --kind-gap: #e89393; --kind-spike: #c7abf2;
+      --annot: rgba(138, 180, 248, .32); --annot-hi: #8ab4f8;
       --shadow: #0008;
     --scrim: rgba(0, 0, 0, .55);
     }
@@ -157,6 +161,7 @@
     --err-bg: #2b1517; --err-fg: #e89393; --err-line: #5a2626;
     --kind-scope: #e3c56a; --kind-build: #8ab4f8; --kind-execution: #5dbb63;
     --kind-gap: #e89393; --kind-spike: #c7abf2;
+    --annot: rgba(138, 180, 248, .32); --annot-hi: #8ab4f8;
     --shadow: #0008;
     --scrim: rgba(0, 0, 0, .55);
   }
@@ -1288,6 +1293,129 @@
   #save-as .sacts button:hover { border-color: var(--accent); color: var(--accent); }
   #save-as .sacts button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
   #save-as .sacts button:disabled { opacity: .5; cursor: default; }
+  /* COMMENT-3: annotation mode. Every element of the app outlined (a frame's
+     body is outlined by its SDK), the crosshair; the header's Annotate
+     button pressed. Nothing here applies with the mode off. */
+  #app.annotating * {
+    outline: 1px dashed var(--annot) !important; outline-offset: -1px !important; cursor: crosshair !important;
+  }
+  #app.annotating #annotate { cursor: pointer !important; }
+  header .hbtn {
+    background: var(--bg); border: 1px solid var(--line); color: var(--muted);
+    font: inherit; font-size: 11px; line-height: 1.3; padding: 0 6px; border-radius: 4px; cursor: pointer;
+  }
+  header .hbtn:hover { color: var(--accent); border-color: var(--accent); }
+  header .hbtn.on { background: var(--annot-hi); border-color: var(--annot-hi); color: var(--bg); }
+  /* What the mode draws, over everything (outside #app): the hover box and
+     its label, the flash a link back makes, the pins, a pin's list, the
+     comment box. Only the pins, the list and the box take the pointer. */
+  #annot-layer { position: fixed; inset: 0; pointer-events: none; z-index: 900; }
+  #annot-layer .annot-hover {
+    position: fixed; outline: 2px solid var(--annot-hi); outline-offset: 0; border-radius: 2px;
+    background: color-mix(in srgb, var(--annot-hi) 7%, transparent);
+  }
+  #annot-layer .annot-label {
+    position: absolute; left: -2px; bottom: 100%; margin-bottom: 2px; max-width: 28rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    background: var(--annot-hi); color: var(--bg); font: 11px/1.6 var(--mono); padding: 0 6px; border-radius: 3px;
+  }
+  #annot-layer .annot-flash {
+    position: fixed; border-radius: 3px; outline: 3px solid var(--accent);
+    animation: annot-flash 1.8s ease-out forwards;
+  }
+  @keyframes annot-flash { 0%, 40% { outline-color: var(--accent); } 100% { outline-color: transparent; } }
+  #annot-layer .annot-pin {
+    position: fixed; pointer-events: auto; min-width: 22px; height: 22px; padding: 0 6px;
+    border-radius: 11px 11px 11px 3px; border: 2px solid var(--bg); cursor: pointer;
+    background: var(--accent); color: var(--bg); font: 600 11px/18px var(--mono);
+    box-shadow: 0 2px 6px var(--shadow);
+  }
+  #annot-layer .annot-pin.moved { background: var(--err-fg); }
+  #annot-layer .annot-box, #annot-layer .annot-list {
+    position: fixed; pointer-events: auto; width: 22rem; max-width: calc(100vw - 16px);
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: 0 12px 32px var(--shadow); padding: .55rem .65rem; font: 13px/1.45 var(--sans);
+  }
+  #annot-layer .annot-list { width: 21rem; max-height: 60vh; overflow: auto; }
+  #annot-layer .annot-for { display: flex; align-items: baseline; gap: .5rem; margin-bottom: .4rem; min-width: 0; }
+  #annot-layer .annot-what { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  #annot-layer .annot-where { margin-left: auto; color: var(--muted); font: 11px/1.5 var(--mono); white-space: nowrap; }
+  #annot-layer textarea {
+    display: block; width: 100%; resize: vertical; font: 13px/1.45 var(--sans); color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: .35rem .45rem;
+  }
+  #annot-layer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  #annot-layer .annot-acts { display: flex; gap: .45rem; justify-content: flex-end; align-items: center; margin-top: .45rem; }
+  #annot-layer .annot-acts button, #annot-layer .annot-x {
+    font: 12px/1.5 var(--sans); cursor: pointer; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px; padding: .05rem .6rem;
+  }
+  #annot-layer .annot-acts button:hover, #annot-layer .annot-x:hover { border-color: var(--accent); color: var(--accent); }
+  #annot-layer button.annot-save { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  #annot-layer button.annot-save:hover { color: var(--bg); }
+  #annot-layer button:disabled { opacity: .55; cursor: default; }
+  #annot-layer .annot-x { margin-left: auto; padding: 0 .4rem; }
+  #annot-layer .annot-err { margin: .35rem 0 0; color: var(--err-fg); font-size: 12px; overflow-wrap: anywhere; }
+  #annot-layer .annot-moved {
+    font: 10px/1.5 var(--mono); color: var(--err-fg); border: 1px solid var(--err-line); background: var(--err-bg);
+    border-radius: 6px; padding: 0 5px; white-space: nowrap;
+  }
+  #annot-layer .annot-list ul { list-style: none; margin: 0; padding: 0; }
+  #annot-layer .annot-list li { border-top: 1px solid var(--line); padding: .4rem 0 .25rem; }
+  #annot-layer .annot-meta { display: flex; gap: .5rem; align-items: baseline; color: var(--muted); font: 11px/1.5 var(--mono); }
+  #annot-layer .annot-body { white-space: pre-wrap; overflow-wrap: anywhere; margin: .15rem 0; }
+  /* COMMENT-3: the ticket page's count of its open comments. */
+  dd#t-comments a.ccount { color: var(--accent); text-decoration: none; font-size: 12.5px; }
+  dd#t-comments a.ccount:hover { text-decoration: underline; }
+  /* COMMENT-3: #/comments — the filters, then a card per comment, newest first. */
+  #comments { max-width: 64rem; }
+  #comments h2 { font-size: 1rem; margin: 0 0 .4rem; }
+  #comments .lede { margin: 0 0 .75rem; color: var(--muted); font-size: .85rem; }
+  #comments .lede kbd { font-family: var(--mono); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+  #comments .cbar { display: flex; flex-wrap: wrap; gap: .5rem .75rem; align-items: flex-end; margin: 0 0 .75rem; }
+  #comments .cfield { display: flex; flex-direction: column; gap: .1rem; font-size: .75rem; color: var(--muted); }
+  #comments .cfield input, #comments .cfield select {
+    font: inherit; font-size: .8rem; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 4px; padding: .15rem .4rem; min-width: 8rem;
+  }
+  #comments .creset {
+    font: inherit; font-size: .8rem; cursor: pointer; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px; padding: .15rem .6rem;
+  }
+  #comments .creset:disabled { opacity: .5; cursor: default; }
+  #comments .crefused { margin: 0 0 .75rem; font-size: .8rem; color: var(--err-fg); overflow-wrap: anywhere; }
+  #comments .ccount { margin: 0 0 .5rem; color: var(--muted); font-size: .8rem; }
+  #comments .none, #comments .loading { color: var(--muted); }
+  #comments ul.crows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
+  #comments .crow {
+    border: 1px solid var(--line); border-radius: 6px; background: var(--card); padding: .5rem .7rem;
+    font-family: var(--sans); font-size: 13px;
+  }
+  #comments .crow[data-state="open"] { border-left: 3px solid var(--accent); }
+  #comments .crow[data-state="resolved"] { opacity: .8; }
+  #comments .chead { display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem; }
+  #comments a.cplace { color: var(--accent); font-weight: 600; text-decoration: none; }
+  #comments a.cplace:hover { text-decoration: underline; }
+  #comments .code {
+    font-family: var(--mono); font-size: 11.5px; text-decoration: none; padding: 0 5px; border-radius: 6px;
+    border: 1px solid var(--chip-line); background: var(--chip-bg); color: var(--chip-fg);
+  }
+  #comments a.code:hover { color: var(--accent); border-color: var(--accent); }
+  #comments .cstate { font: 11px/1.5 var(--mono); border: 1px solid var(--line); border-radius: 6px; padding: 0 5px; }
+  #comments .cstate[data-state="open"] { background: var(--sel); color: var(--accent); border-color: var(--accent); }
+  #comments .cstate[data-state="resolved"] { color: var(--live); border-color: var(--live); }
+  #comments .cwho, #comments .cwhen, #comments .cid { color: var(--muted); font-size: .75rem; }
+  #comments .cwhen[title] { cursor: help; }
+  #comments .cbody { white-space: pre-wrap; overflow-wrap: anywhere; margin: .3rem 0 .2rem; }
+  #comments .cexcerpt { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  #comments .cacts { display: flex; align-items: center; gap: .6rem; margin-top: .3rem; }
+  #comments .croute { color: var(--muted); font: 11px/1.5 var(--mono); margin-right: auto; overflow-wrap: anywhere; }
+  #comments .cflip {
+    font: inherit; font-size: .75rem; cursor: pointer; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px; padding: 0 .55rem;
+  }
+  #comments .cflip:hover { border-color: var(--accent); color: var(--accent); }
+  #comments .cerr { color: var(--err-fg); font-size: .75rem; }
 </style>
 </head>
 <body></body>

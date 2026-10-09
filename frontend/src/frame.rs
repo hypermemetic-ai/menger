@@ -83,6 +83,21 @@
 //! as the clear left it, the wire's spelling) or `{ id, error }` after the
 //! bridge's checks and `tickets.clear_answer` with source `app`.
 //!
+//! COMMENT-3: **annotation mode reaches into the body.** The host tells every
+//! frame when the mode turns (`menger:annotate { on }`, and a frame that
+//! loads meanwhile on its `menger:ready`): on, the SDK outlines every element
+//! of the body, takes every click for the mode (the body's handlers never see
+//! it), shows a component's info card on hover (and only then), and posts
+//! `menger:hover { chain, rect, text }` (`chain: null` when the pointer
+//! leaves), `menger:pick { id, chain, rect, text }` for a click, and
+//! `menger:key { key }` for `a`/`A` (and Esc in the mode) — the app's keys.
+//! The host decides what an element is from its chain (src/anchor.rs) and
+//! asks back: `menger:probe { id, selectors }` → `menger:probed { id, ok }`
+//! (which select the picked element alone), and `menger:locate { id, paths
+//! }` → `menger:located { id, found: [{ rect, text } | null] }` (where
+//! anchored elements are, for pins). Everything the mode draws over a frame
+//! the host draws (src/annotate.rs).
+//!
 //! What decides — the srcdoc, the theme block, the init block, which
 //! messages count — is pure and pinned by native tests; the rest is DOM.
 
@@ -96,7 +111,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{board, bridge, dom, inspect, mermaid, notes, registry, session};
+use crate::{anchor, annotate, board, bridge, dom, inspect, mermaid, notes, registry, session};
 
 /// The SDK's version — `window.menger.version` inside every frame (pinned
 /// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
@@ -104,8 +119,9 @@ use crate::{board, bridge, dom, inspect, mermaid, notes, registry, session};
 /// `tickets`, the generated typed client over the same bridge; COMP-9's 1.2
 /// adds `navigate`, and the badges, tooltips and docs cards; INPUT-4's 1.3
 /// adds `input` — `submit`, the one write, and `ticket` — and `inputs`
-/// among the reads; INPUT-9's 1.4 adds `input.clear`, the second write.
-pub(crate) const SDK_VERSION: &str = "1.4.0";
+/// among the reads; INPUT-9's 1.4 adds `input.clear`, the second write;
+/// COMMENT-3's 1.5 adds annotation mode (the info card only in it).
+pub(crate) const SDK_VERSION: &str = "1.5.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -139,11 +155,11 @@ const MAX_HEIGHT: f64 = 50_000.0;
 /// COMP-1 pin 10: the theme tokens a frame receives — every custom property
 /// of index.html's light `:root` block (pinned equal to it by a native
 /// test in main.rs), sent with the values the app paints now.
-pub(crate) const THEME_TOKENS: [&str; 27] = [
+pub(crate) const THEME_TOKENS: [&str; 29] = [
     "--bg", "--panel", "--card", "--ink", "--muted", "--line", "--accent", "--hover", "--row-sel", "--sel",
     "--chip-bg", "--chip-fg", "--chip-line", "--tree-line", "--live", "--err-bg", "--err-fg", "--err-line",
     "--scrim", "--shadow", "--kind-scope", "--kind-build", "--kind-execution", "--kind-gap", "--kind-spike",
-    "--mono", "--sans",
+    "--annot", "--annot-hi", "--mono", "--sans",
 ];
 
 /// The painted mode, as a frame's `color-scheme` and `data-theme`.
@@ -285,6 +301,16 @@ pub(crate) enum Msg {
     Submit,
     /// INPUT-9: `menger.input.clear` — read as a submit is.
     Clear,
+    /// COMMENT-3: the element under the pointer in annotation mode.
+    Hover,
+    /// COMMENT-3: a click in annotation mode.
+    Pick,
+    /// COMMENT-3: which selectors pick the clicked element alone.
+    Probed,
+    /// COMMENT-3: where anchored elements are.
+    Located,
+    /// COMMENT-3: `a`/`A`, or Esc in the mode — the app's keys.
+    Key,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -297,6 +323,11 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:revealed" => Some(Msg::Revealed),
         "menger:submit" => Some(Msg::Submit),
         "menger:clear" => Some(Msg::Clear),
+        "menger:hover" => Some(Msg::Hover),
+        "menger:pick" => Some(Msg::Pick),
+        "menger:probed" => Some(Msg::Probed),
+        "menger:located" => Some(Msg::Located),
+        "menger:key" => Some(Msg::Key),
         "menger:size" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Size { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32, settled: settled.unwrap_or(false) })
@@ -597,6 +628,11 @@ fn on_message(ev: web_sys::MessageEvent) {
     match parse_msg(&kind, field("height").and_then(|v| v.as_f64()), field("settled").and_then(|v| v.as_bool())) {
         Some(Msg::Ready) => {
             post(&frame, &theme_message(&channel));
+            // COMMENT-3: a frame born in annotation mode is in it too.
+            if annotate::is_on() {
+                post(&frame, &annotate_message(&channel, true));
+            }
+            annotate::frame_changed(&channel);
             // COMP-5: what moved since the srcdoc was built.
             if let Some(list) = registry::snapshot() {
                 let msg = message("menger:components", &channel);
@@ -632,6 +668,8 @@ fn on_message(ev: web_sys::MessageEvent) {
         }
         Some(Msg::Size { height, settled }) => {
             let _ = web_sys::HtmlElement::style(&frame).set_property("height", &format!("{height}px"));
+            // COMMENT-3: its elements may have moved under their pins.
+            annotate::frame_changed(&channel);
             // A first frame shows at once; a re-render waits until drawn.
             if frame.get_attribute("data-state").as_deref() == Some("pending") && (settled || !has_live_sibling(&frame)) {
                 promote(&frame);
@@ -666,6 +704,50 @@ fn on_message(ev: web_sys::MessageEvent) {
             set(&msg, "inspection", &to_js(&inspection));
             post(&frame, &msg.into());
         }
+        Some(Msg::Hover) => {
+            let chain = field("chain").and_then(read_chain);
+            let rect = field("rect").map(read_rect).unwrap_or_default();
+            let text = field("text").and_then(|v| v.as_string()).unwrap_or_default();
+            annotate::frame_hover(frame, chain, rect, text);
+        }
+        Some(Msg::Pick) => {
+            let Some(id) = field("id").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0) else { return };
+            let Some(chain) = field("chain").and_then(read_chain) else { return };
+            let rect = field("rect").map(read_rect).unwrap_or_default();
+            let text = field("text").and_then(|v| v.as_string()).unwrap_or_default();
+            annotate::frame_pick(frame, &channel, id as u32, chain, rect, text);
+        }
+        Some(Msg::Probed) => {
+            let Some(id) = field("id").and_then(|v| v.as_f64()) else { return };
+            let ok = field("ok")
+                .and_then(|v| v.dyn_into::<js_sys::Array>().ok())
+                .map(|l| l.iter().map(|b| b.as_bool() == Some(true)).collect())
+                .unwrap_or_default();
+            annotate::frame_probed(&channel, id as u32, ok);
+        }
+        Some(Msg::Located) => {
+            let Some(id) = field("id").and_then(|v| v.as_f64()) else { return };
+            let found = field("found")
+                .and_then(|v| v.dyn_into::<js_sys::Array>().ok())
+                .map(|l| {
+                    l.iter()
+                        .map(|f| {
+                            f.is_object().then(|| {
+                                let rect = Reflect::get(&f, &JsValue::from_str("rect")).map(read_rect).unwrap_or_default();
+                                let text = Reflect::get(&f, &JsValue::from_str("text")).ok().and_then(|t| t.as_string()).unwrap_or_default();
+                                (rect, text)
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            annotate::frame_located(&channel, id as u32, found);
+        }
+        Some(Msg::Key) => {
+            if let Some(key) = field("key").and_then(|v| v.as_string()) {
+                annotate::frame_key(&key);
+            }
+        }
         Some(Msg::Revealed) => {
             let name = field("component").and_then(|v| v.as_string()).unwrap_or_default();
             let top = field("top").and_then(|v| v.as_f64()).filter(|t| t.is_finite()).unwrap_or(0.0);
@@ -689,6 +771,59 @@ fn read_pairs(v: JsValue) -> Vec<(String, String)> {
         })
         .take(256)
         .collect()
+}
+
+/// COMMENT-3: a chain of nodes as the SDK posts it (src/anchor.rs's
+/// `Node`, the same fields) — plain data, read into the typed struct.
+fn read_chain(v: JsValue) -> Option<Vec<anchor::Node>> {
+    if !v.is_object() {
+        return None;
+    }
+    let json = js_sys::JSON::stringify(&v).ok()?.as_string()?;
+    serde_json::from_str::<Vec<anchor::Node>>(&json).ok()
+}
+
+/// COMMENT-3: `{ x, y, w, h }`, px in the frame's document.
+fn read_rect(v: JsValue) -> annotate::Rect {
+    let n = |k: &str| Reflect::get(&v, &JsValue::from_str(k)).ok().and_then(|x| x.as_f64()).filter(|x| x.is_finite()).unwrap_or(0.0);
+    annotate::Rect { x: n("x"), y: n("y"), w: n("w"), h: n("h") }
+}
+
+/// COMMENT-3: `menger:annotate { on }` for the frame on `channel`.
+fn annotate_message(channel: &str, on: bool) -> JsValue {
+    let msg = message("menger:annotate", channel);
+    set(&msg, "on", &JsValue::from_bool(on));
+    msg.into()
+}
+
+/// COMMENT-3: annotation mode turned — every frame is told.
+pub(crate) fn broadcast_annotate(on: bool) {
+    for f in frames() {
+        if let Some(channel) = f.get_attribute("data-channel") {
+            post(&f, &annotate_message(&channel, on));
+        }
+    }
+}
+
+fn strings(list: &[String]) -> js_sys::Array {
+    list.iter().map(|s| JsValue::from_str(s)).collect()
+}
+
+/// COMMENT-3: `menger:probe { id, selectors }` — which select the element
+/// the frame's pick `id` named, and nothing else.
+pub(crate) fn post_probe(frame: &web_sys::HtmlIFrameElement, channel: &str, id: u32, selectors: &[String]) {
+    let msg = message("menger:probe", channel);
+    set(&msg, "id", &JsValue::from_f64(f64::from(id)));
+    set(&msg, "selectors", &strings(selectors));
+    post(frame, &msg.into());
+}
+
+/// COMMENT-3: `menger:locate { id, paths }` — where these elements are.
+pub(crate) fn post_locate(frame: &web_sys::HtmlIFrameElement, channel: &str, id: u32, paths: &[String]) {
+    let msg = message("menger:locate", channel);
+    set(&msg, "id", &JsValue::from_f64(f64::from(id)));
+    set(&msg, "paths", &strings(paths));
+    post(frame, &msg.into());
 }
 
 /// `menger:reveal { component }` for the frame on `channel`.
@@ -726,7 +861,7 @@ fn anchor_changed(hash: &str) {
 
 /// Scroll the app so the point `top` px down `frame`'s document sits at the
 /// top of the view — a marker in the frame's container, scrolled into view.
-fn scroll_into_frame(frame: &web_sys::HtmlIFrameElement, top: f64) {
+pub(crate) fn scroll_into_frame(frame: &web_sys::HtmlIFrameElement, top: f64) {
     let Some(parent) = frame.parent_element() else { return };
     let Some(doc) = dom::window().document() else { return };
     let Ok(marker) = doc.create_element("div") else { return };
@@ -973,9 +1108,15 @@ mod tests {
         assert_eq!(parse_msg("menger:revealed", None, None), Some(Msg::Revealed));
         assert_eq!(parse_msg("menger:submit", None, None), Some(Msg::Submit));
         assert_eq!(parse_msg("menger:clear", None, None), Some(Msg::Clear));
+        // COMMENT-3: annotation mode's inbound five.
+        assert_eq!(parse_msg("menger:hover", None, None), Some(Msg::Hover));
+        assert_eq!(parse_msg("menger:pick", None, None), Some(Msg::Pick));
+        assert_eq!(parse_msg("menger:probed", None, None), Some(Msg::Probed));
+        assert_eq!(parse_msg("menger:located", None, None), Some(Msg::Located));
+        assert_eq!(parse_msg("menger:key", None, None), Some(Msg::Key));
         for outbound in [
             "menger:theme", "menger:result", "menger:components", "menger:change", "menger:inspected", "menger:reveal",
-            "menger:submitted", "menger:cleared",
+            "menger:submitted", "menger:cleared", "menger:annotate", "menger:probe", "menger:locate",
         ] {
             assert_eq!(parse_msg(outbound, None, None), None, "{outbound}: outbound only");
         }
@@ -1012,7 +1153,8 @@ mod tests {
         for kind in [
             "menger:ready", "menger:size", "menger:theme", "menger:call", "menger:result", "menger:components", "menger:change",
             "menger:navigate", "menger:inspect", "menger:inspected", "menger:reveal", "menger:revealed", "menger:submit",
-            "menger:submitted", "menger:clear", "menger:cleared",
+            "menger:submitted", "menger:clear", "menger:cleared", "menger:annotate", "menger:hover", "menger:pick",
+            "menger:probe", "menger:probed", "menger:locate", "menger:located", "menger:key",
         ] {
             assert!(SDK_JS.contains(&format!("\"{kind}\"")), "{kind}");
         }

@@ -153,10 +153,10 @@
 //! ask its counts.
 
 use crate::kids::Kids;
-use crate::{board, cache, dom, frame, inputs, nav, registry, settings, Conn, Dock};
+use crate::{board, cache, comments, dom, frame, inputs, nav, registry, settings, Conn, Dock};
 use futures::StreamExt;
 use leptos::prelude::*;
-use menger_tickets_api::{TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
+use menger_tickets_api::{CommentsClient, TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
 use plexus_client::{ClientEvent, WsTransport};
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -672,6 +672,13 @@ pub(crate) fn client() -> Option<Client> {
         .map(TicketsClient::new)
 }
 
+/// COMMENT-3: the `comments` activation's typed client, over the same
+/// connection — `CommentsClient`, emitted from the activation's own `impl`
+/// (COMMENT-2) as `TicketsClient` is.
+pub(crate) fn comments_client() -> Option<CommentsClient<Rc<WsTransport>>> {
+    TRANSPORT.with(|t| t.borrow().clone()).map(CommentsClient::new)
+}
+
 /// Renders a failed call for the banner. The two layers stay distinct:
 /// `transport` means the socket, `remote` means the server refused the
 /// call itself — neither is the activation's own in-band `Error` event,
@@ -747,6 +754,9 @@ async fn session(
     registry::refresh();
     // INPUT-6: the inputs, likewise — only once #/inputs has asked.
     inputs::refresh();
+    // COMMENT-3: the comments — `comments.watch`, then the list — only once
+    // a view has asked (annotation mode, #/comments, a ticket page's count).
+    comments::refresh();
 
     // 2. The dock.
     for ev in client.health_all().await.map_err(|e| describe(&e))? {

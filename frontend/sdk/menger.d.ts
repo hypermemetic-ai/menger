@@ -1,7 +1,9 @@
 /**
- * menger SDK 1.4 — the types of `window.menger` and of a component script's
+ * menger SDK 1.5 — the types of `window.menger` and of a component script's
  * `this`, inside every framed body (COMP-4, COMP-5, COMP-10, COMP-9,
- * INPUT-4, INPUT-9).
+ * INPUT-4, INPUT-9). 1.5 (COMMENT-3) changes nothing here: annotation mode
+ * is the host's, spoken over the frame's own messages, and a component's
+ * badge and info card show in that mode only.
  *
  * Published by the app at /app/sdk/menger.d.ts, beside the SDK itself
  * (/app/sdk/menger-sdk.js) and the generated client's declarations
@@ -98,7 +100,7 @@ export interface MengerInput {
 
 /** `window.menger` — frozen; also `this.menger` in a component script. */
 export interface Menger {
-  /** "1.4.0". */
+  /** "1.5.0". */
   readonly version: string;
 
   /**
