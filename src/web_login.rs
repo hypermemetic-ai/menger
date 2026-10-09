@@ -309,13 +309,23 @@ impl Login {
         // with; the other ways in (and, at /login?password, automation's
         // form) follow the "or".
         let (password, buttons) = match &self.email {
-            Some(_) => {
+            Some(e) => {
+                // An address with no account yet: the IdP's own sign-up, the
+                // address filled in. menger cannot know which it is (nor should
+                // a page say whether an address has an account).
+                let sign_up = self
+                    .providers
+                    .get(&e.provider)
+                    .and_then(|(p, _)| p.sign_up_hint())
+                    .map(|_| r#"
+      <button class="link" type="submit" name="signup" value="1" formnovalidate id="email-signup">New here? Create an account</button>"#)
+                    .unwrap_or_default();
                 let email = format!(
                     r#"<form method="get" action="/login/start" id="email-form">
       <input type="hidden" name="button" value="{EMAIL}"><input type="hidden" name="next" value="{next_e}">
       <label for="email">Email</label>
       <input id="email" name="login_hint" type="email" placeholder="you@company.com" autocomplete="email" required autofocus>
-      <button class="primary" type="submit" id="email-continue">Continue</button>
+      <button class="primary" type="submit" id="email-continue">Continue</button>{sign_up}
     </form>"#
                 );
                 let rest = [buttons, password.unwrap_or_default()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n      ");
@@ -397,6 +407,8 @@ pub struct StartQuery {
     button: String,
     login_hint: Option<String>,
     next: Option<String>,
+    /// IDENTITY-30: open the provider's sign-up instead of its sign-in.
+    signup: Option<String>,
 }
 
 pub async fn start(State(login): State<Arc<Login>>, Query(q): Query<StartQuery>) -> Response {
@@ -404,12 +416,12 @@ pub async fn start(State(login): State<Arc<Login>>, Query(q): Query<StartQuery>)
     let Some(b) = login.buttons.iter().chain(login.email.iter()).find(|b| b.label == q.button).cloned() else {
         return page_response(&login, &next, Some("That sign-in is not offered here."), StatusCode::NOT_FOUND);
     };
-    begin(&login, &b, q.login_hint.as_deref(), next).await
+    begin(&login, &b, q.login_hint.as_deref(), q.signup.is_some(), next).await
 }
 
 /// Out to a button's provider: the authorization code flow with PKCE, the
 /// state bound to this browser by the transaction cookie.
-async fn begin(login: &Login, b: &LoginButton, login_hint: Option<&str>, next: String) -> Response {
+async fn begin(login: &Login, b: &LoginButton, login_hint: Option<&str>, sign_up: bool, next: String) -> Response {
     let login = login;
     let (provider, _) = &login.providers[&b.provider];
     let (issuer, audience, client) = provider.oidc().expect("checked at start");
@@ -439,6 +451,9 @@ async fn begin(login: &Login, b: &LoginButton, login_hint: Option<&str>, next: S
             .append_pair("code_challenge_method", "S256");
         for (k, v) in provider.authorize_hint(b.connection.as_deref()) {
             qp.append_pair(k, &v);
+        }
+        if let Some((k, v)) = provider.sign_up_hint().filter(|_| sign_up) {
+            qp.append_pair(k, v);
         }
         if let Some(h) = login_hint.filter(|h| !h.trim().is_empty()) {
             qp.append_pair("login_hint", h.trim());

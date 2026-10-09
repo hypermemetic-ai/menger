@@ -99,6 +99,18 @@ impl Provider {
         }
     }
 
+    /// The authorization request's parameter that opens the provider's
+    /// sign-up screen instead of its sign-in (IDENTITY-30): WorkOS's
+    /// `screen_hint=sign-up`, Auth0's `screen_hint=signup`. `None`: the
+    /// provider has none, and the page offers no "Create an account".
+    pub fn sign_up_hint(&self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::WorkOs { .. } => Some(("screen_hint", "sign-up")),
+            Self::Auth0 { .. } => Some(("screen_hint", "signup")),
+            _ => None,
+        }
+    }
+
     /// Where a browser goes to end the provider's own session after
     /// menger's, when the provider keeps one menger can end: WorkOS's
     /// `sessions/logout`, back to `return_to` (one of the environment's
@@ -379,6 +391,16 @@ mod tests {
         let a: Provider = "auth0=https://acme.auth0.com/,aud,client=menger".parse().unwrap();
         assert_eq!(a.authorize_hint(Some("google-oauth2")), vec![("connection", "google-oauth2".to_string())]);
         assert!(a.authorize_hint(None).is_empty());
+    }
+
+    #[test]
+    fn a_provider_says_how_to_open_its_sign_up() {
+        let w: Provider = "workos=client_x".parse().unwrap();
+        assert_eq!(w.sign_up_hint(), Some(("screen_hint", "sign-up")));
+        let a: Provider = "auth0=https://acme.auth0.com/,aud".parse().unwrap();
+        assert_eq!(a.sign_up_hint(), Some(("screen_hint", "signup")));
+        let i: Provider = "idp=http://127.0.0.1:4481,plexus:menger".parse().unwrap();
+        assert_eq!(i.sign_up_hint(), None);
     }
 
     #[test]

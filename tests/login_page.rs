@@ -550,10 +550,16 @@ async fn our_page_first_and_the_email_goes_to_workos_which_names_the_person() {
     }
     assert!(!page.contains("name=\"password\""), "no password form for people");
 
+    assert!(page.contains("Create an account"), "an address with no account yet can make one");
+    // "Create an account": AuthKit's sign-up, the address filled in.
+    let (q, _) = through_workos(&m, "button=email&signup=1&login_hint=new%40example.com").await;
+    assert_eq!((q["provider"].as_str(), q["screen_hint"].as_str(), q["login_hint"].as_str()), ("authkit", "sign-up", "new@example.com"));
+
     // The address goes to AuthKit as login_hint, `next` carried through.
     let (q, done) = through_workos(&m, "button=email&login_hint=ada%40example.com&next=/app/").await;
     assert_eq!(q["provider"], "authkit");
     assert_eq!(q["login_hint"], "ada@example.com");
+    assert!(!q.contains_key("screen_hint"), "signing in, not up");
     assert_eq!((q["client_id"].as_str(), q["code_challenge_method"].as_str()), (WORKOS_CLIENT, "S256"));
     assert_eq!(done.status(), 303, "the fixture refuses a client secret, so none was sent");
     assert_eq!(location(&done), "/app/");
