@@ -199,9 +199,19 @@ async fn app_asset(
     serve_dist_file(&st.app_dist, &path, st.ws_port, st.title).await
 }
 
+/// MNG-22: whether `rel` names a path inside dist — only plain components.
+/// axum hands the wildcard over percent-decoded, so `/app//etc/x` and
+/// `/app/%2Fetc%2Fx` both arrive as `/etc/x`, and `Path::join` with an
+/// absolute path discards the base: a root, a prefix, `.` and `..` are all
+/// refused, as are NUL and a backslash (no file in dist has one).
+fn inside_dist(rel: &str) -> bool {
+    use std::path::{Component, Path};
+    !rel.contains(['\0', '\\']) && Path::new(rel).components().all(|c| matches!(c, Component::Normal(_)))
+}
+
 async fn serve_dist_file(dist: &std::path::Path, rel: &str, ws_port: u16, title: &str) -> Response {
     // No traversal: the wildcard must stay inside dist.
-    if rel.split(['/', '\\']).any(|c| c == "..") || rel.contains('\0') {
+    if !inside_dist(rel) {
         return (StatusCode::BAD_REQUEST, "bad path").into_response();
     }
     let with_index;
@@ -316,6 +326,18 @@ mod tests {
         assert_eq!(tab_title(Some("prod")), "menger");
         assert_eq!(tab_title(Some("dev")), "menger");
         assert_eq!(tab_title(None), "menger");
+    }
+
+    /// MNG-22: an absolute path once escaped dist (`dist.join("/etc/x")` is
+    /// `/etc/x`); only plain components are inside it.
+    #[test]
+    fn only_plain_components_are_inside_dist() {
+        for ok in ["", "index.html", "app.js", "vendor/mermaid-1.2.3.min.js", "sdk/", "a//b", "a/./b", "..x/y.js"] {
+            assert!(inside_dist(ok), "{ok:?} is inside dist");
+        }
+        for bad in ["/etc/hostname", "//etc/hostname", "../Cargo.toml", "a/../../b", "./index.html", "..", "x\0", "a\\b"] {
+            assert!(!inside_dist(bad), "{bad:?} must be refused");
+        }
     }
 
     #[test]

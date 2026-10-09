@@ -244,6 +244,35 @@ async fn app_url_serves_dist_from_disk() {
     );
 }
 
+/// MNG-22: an absolute path in the wildcard — `/app//abs` or its
+/// percent-encoded `/app/%2Fabs`, both decoded to `/abs` — once replaced
+/// dist outright (`dist.join("/abs")` is `/abs`) and served any file the
+/// process could read. A secret beside dist, by its absolute path, is
+/// refused; dist itself still serves.
+#[tokio::test]
+async fn app_refuses_an_absolute_path_out_of_dist() {
+    let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let dist = root.path().join("dist");
+    std::fs::create_dir(&dist).unwrap();
+    std::fs::write(dist.join("index.html"), "<html>stub</html>").unwrap();
+    std::fs::write(dist.join("app.js"), "console.log('stub')").unwrap();
+    let secret = root.path().join("secret.txt");
+    std::fs::write(&secret, "the secret").unwrap();
+    let secret = secret.canonicalize().unwrap();
+    let abs = secret.to_str().unwrap();
+    assert!(abs.starts_with('/'));
+    let s = spawn_server(&dist, true).await;
+
+    let encoded = abs.replace('/', "%2F");
+    for path in [format!("/app/{abs}"), format!("/app/{encoded}"), format!("/app/%2E%2E/secret.txt")] {
+        let (status, _, body) = fetch(s.shell_port, Method::GET, &path, "").await;
+        assert_ne!(status, StatusCode::OK, "{path} must not serve");
+        assert!(!String::from_utf8_lossy(&body).contains("the secret"), "{path} leaked the file");
+    }
+    let (status, _, _) = fetch(s.shell_port, Method::GET, "/app/app.js", "").await;
+    assert_eq!(status, StatusCode::OK, "dist still serves");
+}
+
 /// AGS-14: the vendored mermaid bundle is a multi-megabyte file under a
 /// `vendor/` subdirectory of dist (trunk copies `frontend/vendor/mermaid/`
 /// there). The wildcard route must serve a nested path, as
