@@ -2,7 +2,7 @@
 //!
 //! | route | what it does |
 //! | --- | --- |
-//! | `GET /login` | the page: a password form (one provider's password grant), a button per `--login-button`, nostr when offered; with `--login-hosted`, straight out to that IdP's own page instead (IDENTITY-30), and menger's page at `/login?page` |
+//! | `GET /login` | the page: an email field handed to the IdP (`--login-email`, IDENTITY-30), a button per `--login-button`, nostr when offered, and a password form (one provider's password grant) — beside an email field, only at `/login?password`, automation's way in |
 //! | `POST /login` | the password grant at that provider, from the shell |
 //! | `GET /login/start` | out to an OIDC provider's authorization endpoint: code flow with PKCE, a connection hint (Google, Apple, SAML) |
 //! | `GET /login/callback` | back: the state checked against the browser's own, the code traded for a token |
@@ -57,15 +57,16 @@ pub struct LoginConfig {
     /// Whether anonymous visitors are sent to the page.
     pub require: bool,
     pub title: &'static str,
-    /// IDENTITY-30: the IdP whose own page is the sign-in page
-    /// (`--login-hosted workos:authkit`): `/login` goes straight there.
-    /// menger's page stays at `/login?page` (automation's password form,
-    /// nostr) and shows when a sign-in fails.
-    pub hosted: Option<LoginButton>,
+    /// IDENTITY-30: the email field's provider (`--login-email
+    /// workos:authkit`): the address goes to it as `login_hint`, so an SSO
+    /// domain goes straight to its company's IdP and anyone else finishes on
+    /// the IdP's page with the address filled in. Beside it, the password
+    /// form shows only at `/login?password` (automation's way in).
+    pub email: Option<LoginButton>,
 }
 
-/// The hosted IdP's button, as `/login/start?button=` names it.
-const HOSTED: &str = "hosted";
+/// The email field's button, as `/login/start?button=` names it.
+const EMAIL: &str = "email";
 
 #[derive(Clone, Debug)]
 struct Discovery {
@@ -79,7 +80,7 @@ pub struct Login {
     providers: HashMap<String, (Provider, Arc<dyn Authenticator>)>,
     password: Option<String>,
     buttons: Vec<LoginButton>,
-    hosted: Option<LoginButton>,
+    email: Option<LoginButton>,
     forgot: Option<String>,
     public_url: String,
     origins: Vec<String>,
@@ -116,12 +117,12 @@ impl Login {
             }
             None => cfg.providers.iter().find(|p| p.oidc().is_some() && p.takes_passwords()).map(|p| p.name().to_string()),
         };
-        let hosted = cfg.hosted.map(|h| LoginButton { label: HOSTED.into(), ..h });
+        let email = cfg.email.map(|e| LoginButton { label: EMAIL.into(), ..e });
         anyhow::ensure!(
-            !cfg.buttons.iter().any(|b| b.label == HOSTED),
-            "--login-button {HOSTED}: that label is the hosted IdP's"
+            !cfg.buttons.iter().any(|b| b.label == EMAIL),
+            "--login-button {EMAIL}: that label is the email field's"
         );
-        for b in cfg.buttons.iter().chain(hosted.iter()) {
+        for b in cfg.buttons.iter().chain(email.iter()) {
             let Some((p, _)) = providers.get(&b.provider) else {
                 anyhow::bail!("--login-button {}: no --auth-provider is named {}", b.label, b.provider);
             };
@@ -139,7 +140,7 @@ impl Login {
             providers,
             password,
             buttons: cfg.buttons,
-            hosted,
+            email,
             forgot: cfg.forgot,
             public_url,
             origins,
@@ -252,18 +253,19 @@ impl Login {
         r
     }
 
-    /// The page, with `error` shown and `next` carried.
-    pub fn page(&self, next: &str, error: Option<&str>) -> String {
+    /// The page, with `error` shown and `next` carried. `with_password`:
+    /// the password form even beside an email field (`/login?password`).
+    pub fn page(&self, next: &str, error: Option<&str>, with_password: bool) -> String {
         let next_e = esc(next);
-        let password = self.password.as_ref().map(|_| {
+        let password = self.password.as_ref().filter(|_| self.email.is_none() || with_password).map(|_| {
             let forgot = self
                 .forgot
                 .as_ref()
                 .map(|u| format!(r#"<a href="{}">Forgot password?</a>"#, esc(u)))
                 .unwrap_or_default();
-            // IDENTITY-30: beside a hosted IdP, the form is plainly not
+            // IDENTITY-30: beside the email field, the form is plainly not
             // where a person's IdP password goes.
-            let caption = match (&self.hosted, &self.password) {
+            let caption = match (&self.email, &self.password) {
                 (Some(_), Some(p)) => format!(r#"<p class="caption">With a {} account</p>
       "#, esc(p)),
                 _ => String::new(),
@@ -303,16 +305,21 @@ impl Login {
             })
             .collect::<Vec<_>>()
             .join("\n      ");
-        // IDENTITY-30: the hosted IdP's own page comes first — what a person
-        // signs in with; the password form (automation's) and the other
-        // ways in follow the "or".
-        let (password, buttons) = match &self.hosted {
+        // IDENTITY-30: the email field comes first — what a person signs in
+        // with; the other ways in (and, at /login?password, automation's
+        // form) follow the "or".
+        let (password, buttons) = match &self.email {
             Some(_) => {
-                let hosted = format!(
-                    r#"<form method="get" action="/login/start"><input type="hidden" name="button" value="{HOSTED}"><input type="hidden" name="next" value="{next_e}"><button class="primary" type="submit" id="hosted">Continue to sign in</button></form>"#
+                let email = format!(
+                    r#"<form method="get" action="/login/start" id="email-form">
+      <input type="hidden" name="button" value="{EMAIL}"><input type="hidden" name="next" value="{next_e}">
+      <label for="email">Email</label>
+      <input id="email" name="login_hint" type="email" placeholder="you@company.com" autocomplete="email" required autofocus>
+      <button class="primary" type="submit" id="email-continue">Continue</button>
+    </form>"#
                 );
-                let rest = [password.unwrap_or_default(), buttons].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n      ");
-                (Some(hosted), rest)
+                let rest = [buttons, password.unwrap_or_default()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n      ");
+                (Some(email), rest)
             }
             None => (password, buttons),
         };
@@ -340,8 +347,8 @@ impl Login {
 pub struct PageQuery {
     next: Option<String>,
     error: Option<String>,
-    /// IDENTITY-30: menger's own page, even with a hosted IdP.
-    page: Option<String>,
+    /// IDENTITY-30: the password form beside an email field (automation).
+    password: Option<String>,
 }
 
 pub async fn page(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<PageQuery>) -> Response {
@@ -349,11 +356,8 @@ pub async fn page(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q):
     if login.session(&headers).is_some() {
         return see_other(&next);
     }
-    // IDENTITY-30: the hosted IdP's page is the sign-in page.
-    if let (Some(h), None, None) = (login.hosted.clone(), &q.error, &q.page) {
-        return begin(&login, &h, None, next).await;
-    }
-    page_response(&login, &next, q.error.as_deref(), StatusCode::OK)
+    (StatusCode::OK, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(login.page(&next, q.error.as_deref(), q.password.is_some())))
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -397,7 +401,7 @@ pub struct StartQuery {
 
 pub async fn start(State(login): State<Arc<Login>>, Query(q): Query<StartQuery>) -> Response {
     let next = safe_next(q.next.as_deref());
-    let Some(b) = login.buttons.iter().chain(login.hosted.iter()).find(|b| b.label == q.button).cloned() else {
+    let Some(b) = login.buttons.iter().chain(login.email.iter()).find(|b| b.label == q.button).cloned() else {
         return page_response(&login, &next, Some("That sign-in is not offered here."), StatusCode::NOT_FOUND);
     };
     begin(&login, &b, q.login_hint.as_deref(), next).await
@@ -592,7 +596,7 @@ fn page_response(login: &Login, next: &str, error: Option<&str>, status: StatusC
     (
         status,
         [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")],
-        Html(login.page(next, error)),
+        Html(login.page(next, error, false)),
     )
         .into_response()
 }
@@ -638,6 +642,10 @@ fn icon_for(b: &LoginButton) -> &'static str {
         r##"<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5a5.6 5.6 0 0 1-2.4 3.6v3h3.9c2.3-2.1 3.5-5.2 3.5-8.8z"/><path fill="#34A853" d="M12 24c3.2 0 6-1.1 8-2.9l-3.9-3c-1.1.7-2.5 1.2-4.1 1.2-3.1 0-5.8-2.1-6.7-5H1.3v3.1A12 12 0 0 0 12 24z"/><path fill="#FBBC05" d="M5.3 14.3a7.2 7.2 0 0 1 0-4.6V6.6H1.3a12 12 0 0 0 0 10.8z"/><path fill="#EA4335" d="M12 4.8c1.8 0 3.3.6 4.6 1.8l3.4-3.4A12 12 0 0 0 1.3 6.6l4 3.1c.9-2.9 3.6-4.9 6.7-4.9z"/></svg>"##
     } else if k.contains("email") || k.contains("mail ") {
         r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M3 6h18v12H3zM3 7l9 6 9-6"/></svg>"#
+    } else if k.contains("microsoft") {
+        r##"<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#F25022" d="M2 2h9.5v9.5H2z"/><path fill="#7FBA00" d="M12.5 2H22v9.5h-9.5z"/><path fill="#00A4EF" d="M2 12.5h9.5V22H2z"/><path fill="#FFB900" d="M12.5 12.5H22V22h-9.5z"/></svg>"##
+    } else if k.contains("github") {
+        r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 1.5a10.5 10.5 0 0 0-3.3 20.5c.5.1.7-.2.7-.5v-1.8c-2.9.6-3.5-1.4-3.5-1.4-.5-1.2-1.2-1.5-1.2-1.5-.9-.7.1-.6.1-.6 1 .1 1.6 1.1 1.6 1.1.9 1.6 2.5 1.1 3.1.9.1-.7.4-1.1.6-1.4-2.3-.3-4.8-1.2-4.8-5.2 0-1.1.4-2.1 1.1-2.8-.1-.3-.5-1.4.1-2.8 0 0 .9-.3 2.9 1.1a10 10 0 0 1 5.3 0c2-1.4 2.9-1.1 2.9-1.1.6 1.4.2 2.5.1 2.8.7.7 1.1 1.7 1.1 2.8 0 4-2.5 4.9-4.8 5.2.4.3.7 1 .7 2v3c0 .3.2.6.7.5A10.5 10.5 0 0 0 12 1.5z"/></svg>"#
     } else if k.contains("apple") {
         r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.4 12.7c0-2.6 2.1-3.8 2.2-3.9a4.8 4.8 0 0 0-3.8-2c-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.4-.9a5 5 0 0 0-4.2 2.6c-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8 1.6 0 2 .8 3.4.8s2.3-1.3 3.1-2.5a11 11 0 0 0 1.4-2.9 4.5 4.5 0 0 1-2.6-4.1zM13.9 5.1c.7-.9 1.2-2 1-3.1-1 0-2.2.7-2.9 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.2-.6 2.9-1.4z"/></svg>"#
     } else {

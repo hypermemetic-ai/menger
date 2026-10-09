@@ -220,9 +220,7 @@ cmd_smoke() {
   if [[ -n $login ]]; then
     # IDENTITY-23: the app is behind the login page.
     local to; to=$(curl -s -o /dev/null -m 5 -w '%{redirect_url}' "http://127.0.0.1:$MENGER_SHELL_PORT/")
-    # IDENTITY-30: /login may go straight on to a hosted IdP; menger's own
-    # page is at /login?page either way.
-    if [[ $to == */login?next=* ]] && curl -fsS -m 5 "http://127.0.0.1:$MENGER_SHELL_PORT/login?page" | grep -q '<h1>Sign in</h1>'; then
+    if [[ $to == */login?next=* ]] && curl -fsS -m 5 "http://127.0.0.1:$MENGER_SHELL_PORT/login" | grep -q '<h1>Sign in</h1>'; then
       say "ok   app on :$MENGER_SHELL_PORT behind its login page"
     else
       say "FAIL app on :$MENGER_SHELL_PORT: not behind its login page ($to)"; fail=1

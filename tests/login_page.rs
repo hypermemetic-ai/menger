@@ -270,8 +270,9 @@ async fn start() -> Menger {
 }
 
 /// menger as main wires it: plexus-idp, an Auth0 tenant and nostr; or,
-/// with `with_workos`, WorkOS as the hosted sign-in page and plexus-idp's
-/// password form on menger's own page (`/login?page`), for automation.
+/// with `with_workos`, menger's page with an email field handed to WorkOS,
+/// WorkOS's social buttons, nostr, and plexus-idp's password form at
+/// `/login?password` for automation.
 async fn start_with(with_workos: bool) -> (Menger, Option<WorkOs>) {
     let idp = issuer(false, "idp-1", KEY_2_PEM, JWK_2).await;
     let auth0 = issuer(true, "acme-1", KEY_1_PEM, JWK_1).await;
@@ -284,7 +285,11 @@ async fn start_with(with_workos: bool) -> (Menger, Option<WorkOs>) {
             format!("auth0={},https://menger.example,client=menger", auth0.iss),
             format!("nostr=ws://127.0.0.1:{ws}/"),
         ],
-        Some(w) => vec![format!("workos={WORKOS_CLIENT},{}", w.base), format!("idp={},plexus:menger", idp.iss)],
+        Some(w) => vec![
+            format!("workos={WORKOS_CLIENT},{}", w.base),
+            format!("idp={},plexus:menger", idp.iss),
+            format!("nostr=ws://127.0.0.1:{ws}/"),
+        ],
     };
     let providers: Vec<Provider> = specs.iter().map(|s| s.parse().unwrap()).collect();
     let button_specs: &[&str] = match &w {
@@ -292,7 +297,7 @@ async fn start_with(with_workos: bool) -> (Menger, Option<WorkOs>) {
         Some(_) => &["Google=workos:GoogleOAuth", "Apple=workos:AppleOAuth", "Other=workos:OtherClient"],
     };
     let buttons: Vec<LoginButton> = button_specs.iter().map(|s| s.parse().unwrap()).collect();
-    let hosted: Option<LoginButton> = w.as_ref().map(|_| "hosted=workos:authkit".parse().unwrap());
+    let email: Option<LoginButton> = w.as_ref().map(|_| "email=workos:authkit".parse().unwrap());
     let password = None;
 
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
@@ -323,7 +328,7 @@ async fn start_with(with_workos: bool) -> (Menger, Option<WorkOs>) {
             also: origins,
             require: true,
             title: "menger",
-            hosted,
+            email,
         },
         sessions,
     )
@@ -532,23 +537,24 @@ async fn through_workos(m: &Menger, query: &str) -> (HashMap<String, String>, re
 }
 
 #[tokio::test]
-async fn workos_s_page_is_the_sign_in_page_and_names_the_person() {
+async fn our_page_first_and_the_email_goes_to_workos_which_names_the_person() {
     let (m, w) = start_with(true).await;
     let w = w.unwrap();
-    // A stranger at the app goes to /login, and /login goes straight to
-    // AuthKit, the next page carried through the flow.
-    let r = m.http.get(m.url("/app/")).send().await.unwrap();
-    assert_eq!(location(&r), "/login?next=%2Fapp%2F");
-    let out = m.http.get(m.url("/login?next=/app/")).send().await.unwrap();
-    assert_eq!(out.status(), 302, "no menger page in between");
-    let to = url::Url::parse(&location(&out)).unwrap();
-    assert_eq!(to.as_str().split('?').next().unwrap(), format!("{}/user_management/authorize", w.base));
-    let q: HashMap<_, _> = to.query_pairs().into_owned().collect();
-    assert_eq!((q["provider"].as_str(), q["client_id"].as_str(), q["code_challenge_method"].as_str()), ("authkit", WORKOS_CLIENT, "S256"));
-    let txn = out.headers().get_all("set-cookie").iter().filter_map(|v| v.to_str().ok())
-        .find_map(|c| c.strip_prefix("menger_login=").map(|v| v.split(';').next().unwrap().to_string())).unwrap();
-    let callback = location(&m.http.get(to.as_str()).send().await.unwrap());
-    let done = m.http.get(&callback).header("cookie", format!("menger_login={txn}")).send().await.unwrap();
+    // menger's own page first: an email field, the curated ways in, nostr;
+    // no password form for people.
+    let page = m.http.get(m.url("/login?next=/app/")).send().await.unwrap();
+    assert_eq!(page.status(), 200);
+    let page = page.text().await.unwrap();
+    for want in ["id=\"email\"", "name=\"login_hint\"", "Continue with Google", "Continue with Apple", "Continue with nostr"] {
+        assert!(page.contains(want), "the page shows {want}");
+    }
+    assert!(!page.contains("name=\"password\""), "no password form for people");
+
+    // The address goes to AuthKit as login_hint, `next` carried through.
+    let (q, done) = through_workos(&m, "button=email&login_hint=ada%40example.com&next=/app/").await;
+    assert_eq!(q["provider"], "authkit");
+    assert_eq!(q["login_hint"], "ada@example.com");
+    assert_eq!((q["client_id"].as_str(), q["code_challenge_method"].as_str()), (WORKOS_CLIENT, "S256"));
     assert_eq!(done.status(), 303, "the fixture refuses a client secret, so none was sent");
     assert_eq!(location(&done), "/app/");
     let id = session_from(&done).expect("a session");
@@ -572,23 +578,16 @@ async fn workos_s_page_is_the_sign_in_page_and_names_the_person() {
 }
 
 #[tokio::test]
-async fn automation_signs_in_with_plexus_idp_on_menger_s_own_page() {
+async fn automation_signs_in_with_plexus_idp_at_login_password() {
     let (m, _) = start_with(true).await;
-    // menger's page is still there, asked for by name.
-    let page = m.http.get(m.url("/login?page")).send().await.unwrap();
-    assert_eq!(page.status(), 200);
-    let page = page.text().await.unwrap();
-    for want in ["name=\"password\"", "Continue to sign in", "Continue with Google", "Continue with Apple"] {
-        assert!(page.contains(want), "menger's page shows {want}");
+    let page = m.http.get(m.url("/login?password")).send().await.unwrap().text().await.unwrap();
+    for want in ["name=\"password\"", "With a plexus-idp account", "id=\"email\""] {
+        assert!(page.contains(want), "/login?password shows {want}");
     }
     // plexus-idp's password grant: what the smoke and the e2e scripts use.
     let id = sign_in(&m).await;
     let ws = socket(&m, Some(&id), Some(&m.origin())).await.unwrap();
     assert_eq!(call(&ws, "session.whoami").await[0]["principal"], format!("idp:{ALICE}"));
-    // A failed sign-in shows menger's page with the error, not a loop.
-    let failed = m.http.get(m.url("/login?error=The+sign-in+was+cancelled.")).send().await.unwrap();
-    assert_eq!(failed.status(), 200);
-    assert!(failed.text().await.unwrap().contains("The sign-in was cancelled."));
 }
 
 #[tokio::test]
@@ -599,7 +598,7 @@ async fn each_workos_button_names_its_way_in() {
     assert_eq!(done.status(), 303);
     let (q, _) = through_workos(&m, "button=Apple").await;
     assert_eq!(q["provider"], "AppleOAuth");
-    let (q, _) = through_workos(&m, "button=hosted&login_hint=ada%40acme.example").await;
+    let (q, _) = through_workos(&m, "button=email&login_hint=ada%40acme.example").await;
     assert_eq!((q["provider"].as_str(), q["login_hint"].as_str()), ("authkit", "ada@acme.example"), "AuthKit routes by the email's domain");
 }
 

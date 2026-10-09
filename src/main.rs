@@ -141,12 +141,13 @@ struct Args {
     #[arg(long = "login-button", env = "MENGER_LOGIN_BUTTONS", value_name = "SPEC", value_delimiter = ';')]
     login_button: Vec<LoginButton>,
 
-    /// IDENTITY-30: the IdP whose own page is the sign-in page,
-    /// `<provider>[:<connection>]`, e.g. `workos:authkit`: `/login` goes
-    /// straight there. menger's page stays at `/login?page` (the password
-    /// form automation signs in with, nostr) and shows when a sign-in fails.
-    #[arg(long, env = "MENGER_LOGIN_HOSTED", value_name = "SPEC", value_parser = parse_hosted)]
-    login_hosted: Option<LoginButton>,
+    /// IDENTITY-30: an email field on the login page, `<provider>[:<connection>]`,
+    /// e.g. `workos:authkit`: the address goes to that IdP as `login_hint`,
+    /// so an SSO domain goes straight to its company's IdP and anyone else
+    /// finishes on the IdP's page with the address filled in. Beside it, the
+    /// password form shows only at `/login?password` (automation's way in).
+    #[arg(long, env = "MENGER_LOGIN_EMAIL", value_name = "SPEC", value_parser = parse_email)]
+    login_email: Option<LoginButton>,
 
     /// IDENTITY-19: the provider the login page's password form goes to;
     /// default the first OIDC `--auth-provider` that takes passwords (not
@@ -239,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
             LoginConfig {
                 providers: args.auth_provider.clone(),
                 buttons: args.login_button.clone(),
-                hosted: args.login_hosted.clone(),
+                email: args.login_email.clone(),
                 password: args.login_password.clone(),
                 forgot: args.login_forgot.clone(),
                 public_url: public_url.clone(),
@@ -387,8 +388,8 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
     }
 }
 
-/// IDENTITY-30: `--login-hosted <provider>[:<connection>]`, a button with no
+/// IDENTITY-30: `--login-email <provider>[:<connection>]`, a button with no
 /// label of its own.
-fn parse_hosted(spec: &str) -> Result<LoginButton, String> {
-    format!("hosted={spec}").parse()
+fn parse_email(spec: &str) -> Result<LoginButton, String> {
+    format!("email={spec}").parse()
 }
