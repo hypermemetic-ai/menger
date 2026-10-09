@@ -335,38 +335,40 @@
   /* AGS-20: the ancestor chain, root first, after the board crumb. */
   #ticket-page .crumbs .sep { color: var(--muted); }
   #ticket-page .crumbs .crumb { font-family: var(--mono); font-size: 12.5px; }
-  /* AGS-22: the issue layout — the prose in one column, the properties in
-     a quiet column beside it: the page's own background, a hairline to its
-     left, no box. The crumb spans both. Placement is explicit, so the two
-     items of the page's dynamic slot cannot auto-flow into the wrong cell. */
-  #ticket-page {
-    display: grid; grid-template-columns: minmax(0, 1fr) 260px;
-    column-gap: 1.75rem; align-items: start;
-  }
-  #ticket-page .crumbs { grid-column: 1 / -1; grid-row: 1; }
-  #ticket-page article.ticket { grid-column: 1; grid-row: 2; min-width: 0; }
-  #ticket-page aside.props { grid-column: 2; grid-row: 2; min-width: 0; }
-  #ticket-page #notfound, #ticket-page .loading { grid-column: 1 / -1; }
-  aside.props {
-    border-left: 1px solid var(--line); padding: .15rem 0 0 1.25rem;
+  /* MFE-24 (owner, 2026-10-09: "I want the full screen width to be
+     usable"): the ticket page is one column at every width — the form
+     AGS-22 gave it under 840px, now the only one. The crumb, the title, the
+     properties as a band, then the body and the children, each as wide as
+     the content column: no side column, and no cap on the page or the body
+     (rules below). The article gives up its box so its title and its body
+     can sit either side of the band; every selector into it still matches. */
+  #ticket-page { display: flex; flex-direction: column; }
+  #ticket-page article.ticket { display: contents; }
+  #ticket-page article.ticket > * { order: 3; }
+  #ticket-page article.ticket > h2 { order: 1; }
+  main:has(#ticket-page) { max-width: none; }
+  #ticket-page .md, #ticket-page .mframe { max-width: none; }
+  /* The band: label/value pairs in a wrapping row, the stamps on one line,
+     the relations side by side; a hairline under it all. */
+  #ticket-page aside.props {
+    order: 2; min-width: 0; padding: 0 0 .9rem; margin-bottom: 1.25rem;
+    border-bottom: 1px solid var(--line);
     font-family: var(--sans); font-size: 13px; line-height: 1.5;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 2rem;
   }
-  /* The narrow form (the content column under ~840px — a container query,
-     so hiding the nav widens the page rather than the viewport having to):
-     one column — the title, then the properties, then the body. The
-     article gives up its box so its title and its body can sit either side
-     of the aside; every selector into it still matches. */
-  @container (max-width: 840px) {
-    #ticket-page { grid-template-columns: minmax(0, 1fr); }
-    #ticket-page .crumbs, #ticket-page aside.props { grid-column: 1; grid-row: auto; }
-    #ticket-page article.ticket { display: contents; }
-    #ticket-page article.ticket > * { order: 3; }
-    #ticket-page article.ticket > h2 { order: 1; }
-    #ticket-page aside.props {
-      order: 2; border-left: 0; padding: 0 0 .9rem; margin-bottom: 1.25rem;
-      border-bottom: 1px solid var(--line);
-    }
+  #ticket-page aside.props dl.meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem 1.5rem; }
+  #ticket-page aside.props dl.meta div { display: flex; align-items: baseline; gap: .45rem; min-width: 0; }
+  #ticket-page aside.props .stamps {
+    flex-direction: row; flex-wrap: wrap; gap: 0 1rem; margin: 0; padding: 0; border: 0;
   }
+  #ticket-page aside.props section.dag {
+    flex: 1 1 100%; margin: 0; padding-top: .2rem; border-top: 1px solid var(--line);
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: column;
+    grid-template-rows: auto auto; column-gap: 2rem;
+  }
+  #ticket-page aside.props section.dag.empty { display: none; }
+  #ticket-page aside.props section.dag h3 { margin-top: .5rem; }
+  #ticket-page #notfound, #ticket-page .loading { order: 4; }
   /* The house code chip (`#nav .code`'s face, rule below) wherever the
      page names an id or a shortcode; the page's chips set their own mono
      face, and a linked one lights up like every other link. */
@@ -520,9 +522,9 @@
   #app { display: grid; grid-template-columns: 360px minmax(0, 1fr); height: 100vh; }
   #app.nonav { grid-template-columns: minmax(0, 1fr); }
   #app.nonav #nav { display: none; }
-  /* AGS-22: the content column is a query container, so the ticket page's
-     two-column form answers to the space it has (hiding the nav widens it
-     by 360px), not to the viewport. */
+  /* AGS-22: the content column is a query container, so a page's narrow
+     form answers to the space it has (hiding the nav widens it by 360px),
+     not to the viewport. */
   #app .content { min-width: 0; height: 100vh; overflow: auto; container-type: inline-size; }
   #nav {
     background: var(--panel); border-right: 1px solid var(--line);
