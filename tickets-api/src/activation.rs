@@ -1195,14 +1195,27 @@ impl Tickets {
     /// tally — no subtree is walked. Exactly one of `parent` and `epic`; a
     /// filter not taken, or one that asks `text`, is one in-band `error` and
     /// nothing else.
+    ///
+    /// FILTER-23: `matches_only` — the nav that draws only matches, no
+    /// ticket that only holds them. At `parent`, the matches nearest below
+    /// it: its children that match and, in place of a child that does not,
+    /// that child's own nearest matches, at any depth, in the store's order
+    /// — then the hosted shortcodes whose row is drawn there (hosted at the
+    /// parent, or at a ticket between that is not drawn), in shortcode
+    /// order, each as its root's node, whether or not it holds a match. At
+    /// `epic`, the root when it matches, else the top of the shortcode: what
+    /// the root's `parent` address answers (a shortcode with no root: its
+    /// tickets that match). Paged the same way. Off, `tree` is FILTER-13's,
+    /// byte for byte.
     #[plexus_macros::method(
-        description = "The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page",
+        description = "The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page; matches_only: the matches nearest below instead, then the hosted shortcodes drawn there",
         params(
             parent = "Whose children, e.g. FILTER-9 (or give epic)",
             epic = "A shortcode's top level: its root, or its tickets when it has none (or give parent)",
             filter = "A filter, e.g. 'status Ready and under SCALE' (FILTER-3's language; empty: every ticket)",
             after = "Cursor: start strictly after this ticket id (optional)",
-            limit = "At most this many rows; the page event carries the next cursor (optional)"
+            limit = "At most this many rows; the page event carries the next cursor (optional)",
+            matches_only = "Only matches (optional, default false): a ticket that does not match is not a row, and the matches below it are answered in its place, at the nearest ancestor that matches or at the top of the shortcode; then the hosted shortcodes drawn there"
         )
     )]
     pub async fn tree(
@@ -1212,6 +1225,7 @@ impl Tickets {
         filter: String,
         after: Option<String>,
         limit: Option<u32>,
+        matches_only: Option<bool>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         stream! {
@@ -1222,7 +1236,7 @@ impl Tickets {
                     return;
                 }
             };
-            let q = TreeQuery { parent, epic, lens };
+            let q = TreeQuery { parent, epic, lens, matches_only: matches_only.unwrap_or(false) };
             for ev in tree_events(store.tree_page(&q, after.as_deref(), limit)) {
                 yield ev;
             }

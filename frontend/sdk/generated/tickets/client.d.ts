@@ -20,7 +20,7 @@ export interface TicketsClient {
     create(epic: string, title: string, blockedBy?: string[] | null, body?: string | null, kind?: string | null, parent?: string | null, path?: string | null, severity?: string | null): AsyncGenerator<TicketsEvent>;
     /** Each shortcode's last sequence, in shortcode order — where each shortcode ends in the store's order */
     extents(): AsyncGenerator<TicketsEvent>;
-    /** Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, in), the matches of base and filter without filter's own groups for that field, by value */
+    /** Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, menger doc, in), the matches of base and filter without filter's own groups for that field, by value */
     facets(base?: string | null, filter?: string | null): AsyncGenerator<TicketsEvent>;
     /** Find tickets whose id or title contains the query (case-insensitive), optionally under a filter; summary rows, paged with after + limit */
     find(query: string, after?: string | null, filter?: string | null, limit?: number | null): AsyncGenerator<TicketsEvent>;
@@ -50,8 +50,8 @@ export interface TicketsClient {
     setParent(id: string, parent: string): AsyncGenerator<TicketsEvent>;
     /** Set a ticket's status (not a doc's: a doc has no lifecycle) */
     setStatus(id: string, status: string): AsyncGenerator<TicketsEvent>;
-    /** The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page */
-    tree(filter: string, after?: string | null, epic?: string | null, limit?: number | null, parent?: string | null): AsyncGenerator<TicketsEvent>;
+    /** The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page; matches_only: the matches nearest below instead, then the hosted shortcodes drawn there */
+    tree(filter: string, after?: string | null, epic?: string | null, limit?: number | null, matchesOnly?: boolean | null, parent?: string | null): AsyncGenerator<TicketsEvent>;
     /** Unlink commits from a ticket; yields commits_unlinked { ticket, removed } */
     unlinkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
     /** Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */

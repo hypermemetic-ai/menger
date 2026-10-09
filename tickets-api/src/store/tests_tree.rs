@@ -371,8 +371,153 @@ fn tree_by_rule(
     Ok((page, next, remaining))
 }
 
+/// FILTER-23: where a hosted shortcode's row is drawn in the nav that shows
+/// only matches, by the rule: under a ticket, or at the top of a shortcode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Placed {
+    Ticket(String),
+    Top(String),
+}
+
+/// FILTER-23: `tree { matches_only }` by the rule, from the rows alone and
+/// each shortcode's host as the roll-ups settle it (MNG-14, held to plan()
+/// by their own tests). A ticket's nearest matches: walking down by the
+/// `parent` field from it, each child that matches, and in place of a child
+/// that does not but has a match among the tickets whose lineage holds it,
+/// that child's own — each ticket once; a hosted shortcode's root is never
+/// one of them, nor gone below. A hosted shortcode is placed from its host
+/// up at the first ticket that matches or is its shortcode's root (lowest
+/// seq of a kind that roots one); past a ticket with no parent, at the top
+/// of its shortcode; nowhere if the chain names no ticket or comes back. At
+/// a parent: its nearest matches in the store's order, then the hosted
+/// shortcodes placed there, in shortcode order, as their roots. At a
+/// shortcode: its root if it matches, else the root's answer; with no root,
+/// its tickets that match, then those placed at its top. Paged: a cursor
+/// that is one of the placed roots is a place among them, any other ticket
+/// a place in the store's order among the matches.
+#[allow(clippy::too_many_arguments)]
+fn tree_matches_by_rule(
+    store: &Store,
+    plain: &Plain,
+    filter: &Filter,
+    parent: Option<&str>,
+    epic: Option<&str>,
+    after: Option<&str>,
+    limit: Option<u32>,
+) -> Result<TreeAnswer, String> {
+    let rows = &plain.rows;
+    let by_id: HashMap<&str, &Row> = rows.iter().map(|t| (t.id.as_str(), t)).collect();
+    let at: HashMap<&str, usize> = rows.iter().enumerate().map(|(i, t)| (t.id.as_str(), i)).collect();
+    let matches: Vec<bool> = rows.iter().zip(&plain.cells).map(|(t, k)| filter.matches(&plain.facts(t, *k))).collect();
+    let mut below: HashMap<String, u64> = HashMap::new();
+    for (t, _) in rows.iter().zip(&matches).filter(|(_, m)| **m) {
+        for a in ancestors_of(&by_id, t) {
+            *below.entry(a).or_insert(0) += 1;
+        }
+    }
+    let holds = |i: usize| below.get(&rows[i].id).copied().unwrap_or(0) > 0;
+    let root_of = |e: &str| (0..rows.len()).filter(|i| rows[*i].epic == e && rows[*i].kind.roots_a_shortcode()).min_by_key(|i| rows[*i].seq);
+    let hosts: BTreeMap<String, String> = {
+        let cache = store.tickets.read().unwrap();
+        let epics: std::collections::BTreeSet<&str> = rows.iter().map(|t| t.epic.as_str()).collect();
+        epics.into_iter().filter_map(|e| cache.rollups.host(e).map(|h| (e.to_string(), h.to_string()))).collect()
+    };
+    let hosted: HashSet<usize> = hosts.keys().filter_map(|e| root_of(e)).collect();
+    let mut kids: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, t) in rows.iter().enumerate() {
+        if let Some(p) = &t.parent {
+            kids.entry(p.as_str()).or_default().push(i);
+        }
+    }
+    let nearest = |p: &str| -> Vec<usize> {
+        let mut out: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        let mut stack = vec![p.to_string()];
+        let mut seen: HashSet<String> = HashSet::from([p.to_string()]);
+        while let Some(x) = stack.pop() {
+            for &c in kids.get(x.as_str()).into_iter().flatten() {
+                if hosted.contains(&c) {
+                    continue;
+                }
+                if matches[c] {
+                    out.insert(c);
+                } else if holds(c) && seen.insert(rows[c].id.clone()) {
+                    stack.push(rows[c].id.clone());
+                }
+            }
+        }
+        let mut v: Vec<usize> = out.into_iter().collect();
+        v.sort_by_key(|i| OrderKey::of(&rows[*i]));
+        v
+    };
+    let place = |host: &str| -> Option<Placed> {
+        let mut cur = host.to_string();
+        let mut seen: HashSet<String> = HashSet::new();
+        loop {
+            let i = *at.get(cur.as_str())?;
+            if !seen.insert(cur.clone()) {
+                return None;
+            }
+            let t = &rows[i];
+            if root_of(&t.epic) == Some(i) || matches[i] {
+                return Some(Placed::Ticket(t.id.clone()));
+            }
+            match &t.parent {
+                None => return Some(Placed::Top(t.epic.clone())),
+                Some(p) => cur = p.clone(),
+            }
+        }
+    };
+    let tail = |here: Placed| -> Vec<usize> { hosts.iter().filter(|(_, h)| place(h).as_ref() == Some(&here)).filter_map(|(e, _)| root_of(e)).collect() };
+    let (seg, tail) = match (parent.map(|p| p.trim().to_ascii_uppercase()), epic.map(|e| e.trim().to_ascii_uppercase())) {
+        (Some(p), None) => (nearest(&p), tail(Placed::Ticket(p.clone()))),
+        (None, Some(e)) => match root_of(&e) {
+            Some(r) if matches[r] => (vec![r], Vec::new()),
+            Some(r) => (nearest(&rows[r].id), tail(Placed::Ticket(rows[r].id.clone()))),
+            None => ((0..rows.len()).filter(|i| rows[*i].epic == e && matches[*i]).collect(), tail(Placed::Top(e.clone()))),
+        },
+        _ => return Err("tree: give `parent` or `epic`".into()),
+    };
+    let shown: Vec<usize> = seg.iter().chain(&tail).copied().collect();
+    let after = after.map(|a| a.trim().to_ascii_uppercase());
+    let from = match after.as_deref() {
+        None => 0,
+        Some(id) => {
+            let Some(c) = rows.iter().position(|t| t.id == id) else { return Err(format!("after: no ticket {id}")) };
+            match tail.iter().position(|i| *i == c) {
+                Some(k) => seg.len() + k + 1,
+                None => {
+                    let key = OrderKey::of(&rows[c]);
+                    seg.iter().filter(|i| OrderKey::of(&rows[**i]) <= key).count()
+                }
+            }
+        }
+    };
+    let to = limit.map_or(shown.len(), |n| (from + n as usize).min(shown.len()));
+    let page: Vec<(String, bool, u64)> = shown[from..to]
+        .iter()
+        .map(|i| (rows[*i].id.clone(), matches[*i], below.get(&rows[*i].id).copied().unwrap_or(0)))
+        .collect();
+    let remaining = (shown.len() - to) as u64;
+    let next = if remaining == 0 { None } else { page.last().map(|p| p.0.clone()).or(after) };
+    Ok((page, next, remaining))
+}
+
 fn tree_answered(store: &Store, filter: &Filter, parent: Option<&str>, epic: Option<&str>, after: Option<&str>, limit: Option<u32>) -> Result<TreeAnswer, String> {
-    let q = TreeQuery { parent: parent.map(String::from), epic: epic.map(String::from), lens: Lens::of(filter).unwrap() };
+    tree_answered_in(store, filter, parent, epic, after, limit, false)
+}
+
+/// `tree`'s answer — FILTER-23: in the nav that shows only matches when
+/// `matches_only`.
+fn tree_answered_in(
+    store: &Store,
+    filter: &Filter,
+    parent: Option<&str>,
+    epic: Option<&str>,
+    after: Option<&str>,
+    limit: Option<u32>,
+    matches_only: bool,
+) -> Result<TreeAnswer, String> {
+    let q = TreeQuery { parent: parent.map(String::from), epic: epic.map(String::from), lens: Lens::of(filter).unwrap(), matches_only };
     store
         .tree_page(&q, after, limit)
         .map(|p| (p.nodes.into_iter().map(|n| (n.summary.id, n.matched, n.below)).collect(), p.next, p.remaining))
@@ -386,6 +531,12 @@ struct TreeSeen {
     holding: usize,
     pages: usize,
     with_under: usize,
+    /// FILTER-23: pages of the nav that shows only matches; the rows on
+    /// them drawn away from their parent (moved up); the hosted shortcodes'
+    /// roots after them.
+    only_pages: usize,
+    moved_up: usize,
+    placed: usize,
 }
 
 /// Random addresses under random filters (half with an `under` of their
@@ -435,6 +586,18 @@ fn assert_tree_reads_are_a_scan(store: &Store, rng: &mut Rng, seen: &mut TreeSee
                 (Err(_), Err(_)) => {}
                 _ => panic!("{what}: tree {parent:?} {epic:?} under `{}` after {after:?}: {got:?} vs {want:?}", filter.format()),
             }
+            // FILTER-23: the same address, page and filter, only matches.
+            let want = tree_matches_by_rule(store, &plain, &filter, parent.as_deref(), epic.as_deref(), after.as_deref(), limit);
+            let got = tree_answered_in(store, &filter, parent.as_deref(), epic.as_deref(), after.as_deref(), limit, true);
+            match (&got, &want) {
+                (Ok(g), Ok(w)) => {
+                    assert_eq!(g, w, "{what}: tree {parent:?} {epic:?} matches only under `{}` after {after:?} limit {limit:?}", filter.format());
+                    seen.only_pages += 1;
+                    count_moved(&plain, g, parent.as_deref(), seen);
+                }
+                (Err(_), Err(_)) => {}
+                _ => panic!("{what}: tree {parent:?} {epic:?} matches only under `{}` after {after:?}: {got:?} vs {want:?}", filter.format()),
+            }
         }
         // A walk by `next` is the whole answer.
         if let Some(p) = parents.get(rng.below(parents.len().max(1))) {
@@ -451,10 +614,40 @@ fn assert_tree_reads_are_a_scan(store: &Store, rng: &mut Rng, seen: &mut TreeSee
             if rows.iter().all(|t| t.id == t.id.to_ascii_uppercase()) {
                 assert_eq!(walked, whole, "{what}: a walk of {p}'s tree under `{}`", filter.format());
             }
+            // FILTER-23: and of the nav that shows only matches, the moved-up
+            // matches and the placed shortcodes paged in their new place.
+            let whole = tree_matches_by_rule(store, &plain, &filter, Some(p), None, None, None).unwrap().0;
+            let (mut after, mut walked) = (None::<String>, Vec::new());
+            loop {
+                let (page, next, _) = tree_answered_in(store, &filter, Some(p), None, after.as_deref(), Some(2), true).unwrap();
+                walked.extend(page);
+                match next {
+                    Some(n) => after = Some(n),
+                    None => break,
+                }
+            }
+            if rows.iter().all(|t| t.id == t.id.to_ascii_uppercase()) {
+                assert_eq!(walked, whole, "{what}: a walk of {p}'s matches under `{}`", filter.format());
+            }
         }
         // `under` in FILTER-4's reads: counts and pages, by the same oracle.
         let lens = Lens::of(&filter).unwrap();
         assert_lens_is_a_scan(store, &plain, &lens, &|t: &Row, k: Key| filter.matches(&plain.facts(t, k)), rng, what);
+    }
+}
+
+/// FILTER-23: what a page of the nav that shows only matches exercised —
+/// its rows whose parent is not the address (moved up), and the rows that
+/// do not match (the placed shortcodes' roots).
+fn count_moved(plain: &Plain, page: &TreeAnswer, parent: Option<&str>, seen: &mut TreeSeen) {
+    let Some(p) = parent.map(|p| p.trim().to_ascii_uppercase()) else { return };
+    for (id, matched, _) in &page.0 {
+        let row = plain.rows.iter().find(|t| t.id == *id);
+        if !matched {
+            seen.placed += 1;
+        } else if row.and_then(|t| t.parent.as_deref()) != Some(p.as_str()) {
+            seen.moved_up += 1;
+        }
     }
 }
 
@@ -487,6 +680,7 @@ async fn tree_and_under_equal_the_rule_on_a_nested_seed() {
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     let seen = tree_walk(store, &path, 0x7EE_A131, 240, 12, &epics).await;
     assert!(seen.pages > 300 && seen.matched > 100 && seen.holding > 10 && seen.with_under > 40, "{seen:?}");
+    assert!(seen.only_pages > 300 && seen.moved_up > 20, "{seen:?}");
 }
 
 /// Every parent and every shortcode of a nested seed, whole answers, under
@@ -501,6 +695,7 @@ async fn every_address_of_a_nested_seed_answers_as_the_rule_does() {
     let mut rng = Rng(0x5EE_E13);
     let mut tally = Tally::default();
     let (mut matched, mut holding) = (0, 0);
+    let (mut moved, mut tops) = (0, 0);
     for round in 0..3 {
         let plain = Plain::of(&store);
         let parents: std::collections::BTreeSet<String> = plain.rows.iter().filter_map(|t| t.parent.clone()).collect();
@@ -535,12 +730,27 @@ async fn every_address_of_a_nested_seed_answers_as_the_rule_does() {
             for e in store.extents().into_iter().map(|(e, _)| e) {
                 assert_eq!(tree_answered(&store, &filter, None, Some(&e), None, None), tree_by_rule(&plain, &filter, None, Some(&e), None, None), "{e} `{text}`");
             }
+            // FILTER-23: every address again, in the nav that shows only matches.
+            for p in &parents {
+                let want = tree_matches_by_rule(&store, &plain, &filter, Some(p), None, None, None);
+                let got = tree_answered_in(&store, &filter, Some(p), None, None, None, true);
+                assert_eq!(got, want, "round {round}: {p} matches only under `{text}`");
+                let rows = got.unwrap().0;
+                assert!(rows.iter().all(|r| r.1), "a nested seed hosts nothing: every row matches");
+                moved += rows.iter().filter(|r| plain.rows.iter().find(|t| t.id == r.0).and_then(|t| t.parent.as_deref()) != Some(p.as_str())).count();
+            }
+            for e in store.extents().into_iter().map(|(e, _)| e) {
+                let want = tree_matches_by_rule(&store, &plain, &filter, None, Some(&e), None, None);
+                assert_eq!(tree_answered_in(&store, &filter, None, Some(&e), None, None, true), want, "{e} matches only `{text}`");
+                tops += want.unwrap().0.len();
+            }
         }
         for _ in 0..60 {
             random_write(&store, &mut rng, &epic_refs, &mut tally).await;
         }
     }
     assert!(matched > 1_000 && holding > 300, "{matched} matching rows, {holding} holding only");
+    assert!(moved > 300 && tops > 100, "{moved} matches drawn above their parent, {tops} rows at the shortcodes' tops");
 }
 
 #[tokio::test]
@@ -592,6 +802,11 @@ async fn tree_and_under_equal_the_rule_on_hand_edited_shapes() {
                 tree_by_rule(&plain, &filter, parent, epic, None, None),
                 "{parent:?} {epic:?} `{text}`"
             );
+            assert_eq!(
+                tree_answered_in(&store, &filter, parent, epic, None, None, true),
+                tree_matches_by_rule(&store, &plain, &filter, parent, epic, None, None),
+                "{parent:?} {epic:?} matches only `{text}`"
+            );
         }
     }
     let tran = tree_answered(&store, &Filter::parse("under PLEX").unwrap(), Some("PLEX-1"), None, None, None).unwrap();
@@ -606,6 +821,98 @@ async fn tree_and_under_equal_the_rule_on_hand_edited_shapes() {
     assert!(seen.pages > 100, "{seen:?}");
 }
 
+/// FILTER-23, the ticket's examples: in the nav that shows only matches a
+/// ticket that does not match is not a row — the matches below it are
+/// drawn under its nearest matching ancestor, or at the top of their
+/// shortcode; matches below a match stay under it; a hosted shortcode's row
+/// is drawn where its host would be, or moves up the same way; and a write
+/// that makes a ticket match or stop matching moves them back.
+#[tokio::test]
+async fn only_matches_move_up_to_the_nearest_match_or_the_shortcodes_top() {
+    let store = Store::new();
+    let mk = |epic: &str, kind: Kind, parent: Option<&str>| new_ticket(epic, kind, parent.map(String::from), Vec::new());
+    for (epic, kind, parent) in [
+        ("MENGER", Kind::Scope, None),            // MENGER-1, the root
+        ("MENGER", Kind::Scope, Some("MENGER-1")), // MENGER-2, an area
+        ("MENGER", Kind::Build, Some("MENGER-2")), // MENGER-3
+        ("FILTER", Kind::Scope, Some("MENGER-2")), // FILTER-1, hosted at MENGER-2
+        ("FILTER", Kind::Build, Some("FILTER-1")), // FILTER-2
+        ("FILTER", Kind::Execution, Some("FILTER-1")), // FILTER-3
+        ("FILTER", Kind::Build, Some("FILTER-3")), // FILTER-4
+        ("PLEXUS", Kind::Scope, None),            // PLEXUS-1
+        ("RETURNS", Kind::Scope, Some("PLEXUS-1")), // RETURNS-1, hosted at PLEXUS's root
+        ("RETURNS", Kind::Build, Some("RETURNS-1")), // RETURNS-2 (the example's RETURNS-14)
+        ("RETURNS", Kind::Execution, Some("RETURNS-1")), // RETURNS-3
+        ("RETURNS", Kind::Build, Some("RETURNS-3")), // RETURNS-4
+        ("RETURNS", Kind::Build, Some("RETURNS-4")), // RETURNS-5
+    ] {
+        store.create(mk(epic, kind, parent)).await.unwrap();
+    }
+    store.set_status("RETURNS-1", Status::Pending).await.unwrap();
+    store.set_status("RETURNS-3", Status::Ready).await.unwrap();
+    let ask = |text: &str, parent: Option<&str>, epic: Option<&str>| -> Vec<(String, bool, u64)> {
+        let filter = Filter::parse(text).unwrap();
+        let got = tree_answered_in(&store, &filter, parent, epic, None, None, true);
+        assert_eq!(got, tree_matches_by_rule(&store, &Plain::of(&store), &filter, parent, epic, None, None), "{parent:?} {epic:?} `{text}`");
+        got.unwrap().0
+    };
+    let row = |id: &str, matched: bool, below: u64| (id.to_string(), matched, below);
+
+    // `kind build`: the scopes are not rows; their builds move up.
+    assert_eq!(ask("kind build", None, Some("RETURNS")), [row("RETURNS-2", true, 0), row("RETURNS-4", true, 1)], "under the heading RETURNS");
+    assert_eq!(ask("kind build", Some("RETURNS-4"), None), [row("RETURNS-5", true, 0)], "a match below a match stays under it");
+    assert_eq!(ask("kind build", Some("RETURNS-3"), None), [row("RETURNS-4", true, 1)]);
+    assert_eq!(
+        ask("kind build", None, Some("FILTER")),
+        [row("FILTER-2", true, 0), row("FILTER-4", true, 0)],
+        "FILTER as a heading: its builds, FILTER-4 up past FILTER-3"
+    );
+    assert_eq!(
+        ask("kind build", None, Some("MENGER")),
+        [row("MENGER-3", true, 0), row("FILTER-1", false, 2)],
+        "MENGER-2 is not drawn: its build moves up, and FILTER's row with it"
+    );
+    assert_eq!(ask("kind build", None, Some("PLEXUS")), [row("RETURNS-1", false, 3)], "RETURNS's row, hosted at PLEXUS's root");
+    assert_eq!(ask("kind build", Some("MENGER-2"), None), [row("MENGER-3", true, 0)], "MENGER-2's own address: FILTER is not drawn here");
+
+    // `status Pending`: RETURNS-1 matches; RETURNS-2 stays under it; RETURNS-3
+    // is Ready, so its Pending build moves up beside RETURNS-2.
+    assert_eq!(ask("status Pending", None, Some("RETURNS")), [row("RETURNS-1", true, 3)]);
+    assert_eq!(ask("status Pending", Some("RETURNS-1"), None), [row("RETURNS-2", true, 0), row("RETURNS-4", true, 1)]);
+
+    // A scope filter: the areas match, so FILTER's row stays at its host.
+    assert_eq!(ask("kind scope", None, Some("MENGER")), [row("MENGER-1", true, 2)]);
+    assert_eq!(ask("kind scope", Some("MENGER-1"), None), [row("MENGER-2", true, 1)]);
+    assert_eq!(ask("kind scope", Some("MENGER-2"), None), [row("FILTER-1", true, 0)]);
+
+    // Paged in their new place: one row a page, across the matches and the
+    // shortcodes drawn after them.
+    let filter = Filter::parse("kind build").unwrap();
+    let (mut after, mut walked) = (None::<String>, Vec::new());
+    loop {
+        let (page, next, _) = tree_answered_in(&store, &filter, None, Some("MENGER"), after.as_deref(), Some(1), true).unwrap();
+        walked.extend(page.into_iter().map(|r| r.0));
+        match next {
+            Some(n) => after = Some(n),
+            None => break,
+        }
+    }
+    assert_eq!(walked, ["MENGER-3", "FILTER-1"]);
+    let (page, next, remaining) = tree_answered_in(&store, &filter, Some("MENGER-1"), None, Some("FILTER-1"), None, true).unwrap();
+    assert_eq!((page, next, remaining), (Vec::new(), None, 0), "after the last shortcode, nothing");
+
+    // Live: MENGER-2 becomes a build — it is drawn, and holds what had moved
+    // up past it; a build that stops matching lets its match move up.
+    store.set_kind("MENGER-2", Kind::Build, None).await.unwrap();
+    assert_eq!(ask("kind build", None, Some("MENGER")), [row("MENGER-2", true, 3)]);
+    assert_eq!(ask("kind build", Some("MENGER-2"), None), [row("MENGER-3", true, 0), row("FILTER-1", false, 2)]);
+    store.set_kind("RETURNS-4", Kind::Gap, None).await.unwrap();
+    assert_eq!(ask("kind build", None, Some("RETURNS")), [row("RETURNS-2", true, 0), row("RETURNS-5", true, 0)], "RETURNS-5 moves up past RETURNS-4");
+    // Off, `tree` is FILTER-13's: the holders are rows.
+    let off = tree_answered(&store, &filter, None, Some("RETURNS"), None, None).unwrap().0;
+    assert_eq!(off, [row("RETURNS-1", false, 2)]);
+}
+
 /// `tree`'s address: exactly one of `parent` and `epic`.
 #[tokio::test]
 async fn tree_answers_one_address() {
@@ -613,11 +920,11 @@ async fn tree_answers_one_address() {
     store.create(new_ticket("TA", Kind::Scope, None, Vec::new())).await.unwrap();
     let lens = Lens::parse("").unwrap();
     for (parent, epic) in [(None, None), (Some("TA-1"), Some("TA"))] {
-        let q = TreeQuery { parent: parent.map(String::from), epic: epic.map(String::from), lens: lens.clone() };
+        let q = TreeQuery { parent: parent.map(String::from), epic: epic.map(String::from), lens: lens.clone(), matches_only: false };
         let e = store.tree_page(&q, None, None).unwrap_err().to_string();
         assert!(e.contains("exactly one of them"), "{e}");
     }
-    let q = TreeQuery { parent: None, epic: Some("ta".into()), lens };
+    let q = TreeQuery { parent: None, epic: Some("ta".into()), lens, matches_only: false };
     let page = store.tree_page(&q, None, None).unwrap();
     assert_eq!(page.nodes.iter().map(|n| (n.summary.id.as_str(), n.matched, n.below)).collect::<Vec<_>>(), [("TA-1", true, 0)]);
     assert_eq!((page.next, page.remaining), (None, 0));

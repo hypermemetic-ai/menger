@@ -219,8 +219,8 @@
       const stream = this.rpc.call("tickets.set_status", { id, status });
       yield* extractData(stream);
     }
-    async* tree(filter, after, epic, limit, parent) {
-      const stream = this.rpc.call("tickets.tree", { after, epic, filter, limit, parent });
+    async* tree(filter, after, epic, limit, matchesOnly, parent) {
+      const stream = this.rpc.call("tickets.tree", { after, epic, filter, limit, matches_only: matchesOnly, parent });
       yield* extractData(stream);
     }
     async* unlinkCommits(commits, id) {

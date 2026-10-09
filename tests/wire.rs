@@ -1997,6 +1997,63 @@ async fn tree_and_under_over_the_wire() {
     assert_eq!(evs, [json!({"type": "entered", "id": "TW-5", "epic": "TW", "seq": 5}), json!({"type": "left", "id": "TW-5", "epic": "TW", "seq": 5})]);
 }
 
+/// FILTER-23 over the real protocol: `tree { matches_only }` — the nav that
+/// shows only matches. A ticket that does not match is no row: its matches
+/// are answered at its nearest matching ancestor, or at the shortcode's top;
+/// a hosted shortcode's row follows its host up; paged in the new place;
+/// without the flag, FILTER-13's answer.
+#[tokio::test]
+async fn tree_matches_only_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let mk = |epic: &str, kind: &str, parent: Option<&str>| json!({"epic": epic, "title": format!("a {kind}"), "kind": kind, "parent": parent});
+    answer(&client, "tickets.create", mk("TM", "scope", None)).await; // TM-1
+    answer(&client, "tickets.create", mk("TM", "execution", Some("TM-1"))).await; // TM-2
+    answer(&client, "tickets.create", mk("TM", "build", Some("TM-2"))).await; // TM-3
+    answer(&client, "tickets.create", mk("TM", "build", Some("TM-3"))).await; // TM-4
+    answer(&client, "tickets.create", mk("TN", "scope", Some("TM-2"))).await; // TN-1, hosted at TM-2
+    answer(&client, "tickets.create", mk("TN", "build", Some("TN-1"))).await; // TN-2
+
+    let nodes = |evs: &[Value]| -> Vec<(String, bool, u64)> {
+        evs.iter()
+            .map(|e| {
+                assert_eq!(e["type"], "node", "{e}");
+                (e["summary"]["id"].as_str().unwrap().to_string(), e["matched"].as_bool().unwrap(), e["below"].as_u64().unwrap())
+            })
+            .collect()
+    };
+    let row = |id: &str, m: bool, b: u64| (id.to_string(), m, b);
+    // The heading TM: TM-1 and TM-2 are not builds; TM-3 moves up, TM-4
+    // stays under it, and TN's row follows its host TM-2 up to TM's top.
+    let (rows, page) = paged(call(&client, "tickets.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true})).await).await;
+    assert_eq!(nodes(&rows), [row("TM-3", true, 1), row("TN-1", false, 1)]);
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
+    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "TM-1", "filter": "kind build", "matches_only": true})).await).await;
+    assert_eq!(nodes(&rows), [row("TM-3", true, 1), row("TN-1", false, 1)], "the root's address answers the same");
+    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "TM-3", "filter": "kind build", "matches_only": true})).await).await;
+    assert_eq!(nodes(&rows), [row("TM-4", true, 0)]);
+    let (rows, _) = paged(call(&client, "tickets.tree", json!({"epic": "TN", "filter": "kind build", "matches_only": true})).await).await;
+    assert_eq!(nodes(&rows), [row("TN-2", true, 0)]);
+    // Paged across the matches and the shortcodes after them.
+    let (rows, page) = paged(call(&client, "tickets.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true, "limit": 1})).await).await;
+    assert_eq!((nodes(&rows), page), (vec![row("TM-3", true, 1)], json!({"type": "page", "next": "TM-3", "remaining": 1})));
+    let (rows, page) = paged(call(&client, "tickets.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true, "after": "TM-3"})).await).await;
+    assert_eq!((nodes(&rows), page), (vec![row("TN-1", false, 1)], json!({"type": "page", "next": null, "remaining": 0})));
+    // Without the flag (or with it false), FILTER-13's answer: the holders.
+    for off in [json!({"parent": "TM-1", "filter": "kind build"}), json!({"parent": "TM-1", "filter": "kind build", "matches_only": false})] {
+        let (rows, _) = paged(call(&client, "tickets.tree", off.clone()).await).await;
+        assert_eq!(nodes(&rows), [row("TM-2", false, 3)], "{off}");
+    }
+    // TM-2 made a build: it is drawn, and TM-3 and TN's row are under it again.
+    answer(&client, "tickets.set_kind", json!({"id": "TM-2", "kind": "build"})).await;
+    let (rows, _) = paged(call(&client, "tickets.tree", json!({"epic": "TM", "filter": "kind build", "matches_only": true})).await).await;
+    assert_eq!(nodes(&rows), [row("TM-2", true, 3)]);
+    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "TM-2", "filter": "kind build", "matches_only": true})).await).await;
+    assert_eq!(nodes(&rows), [row("TM-3", true, 1), row("TN-1", false, 1)]);
+    let evs = collect(call(&client, "tickets.tree", json!({"parent": "TM-1", "epic": "TM", "filter": "", "matches_only": true})).await).await;
+    assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("error")), "one address: {evs:?}");
+}
+
 /// Acceptance 4: completing a blocker, under `watch { filter: "ready" }`, is
 /// `status_changed` and then one `entered` per ticket it unblocked, in the
 /// store's order.
