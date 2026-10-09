@@ -3,7 +3,7 @@
 //!
 //! | Consumer | Features | Gets |
 //! |---|---|---|
-//! | `menger` (the server binary) | *(default: `server`)* | [`types`], [`store`], [`Tickets`] — the activation with its real bodies — and [`TicketsClient`]; COMMENT-2's [`comments`], [`Comments`] and [`CommentsClient`] beside them |
+//! | `menger` (the server binary) | *(default: `server`)* | [`types`], [`store`], [`Tickets`] — the activation with its real bodies — and [`TicketsClient`]; COMMENT-2's [`comments`], [`Comments`] and [`CommentsClient`] beside them; IDENTITY-14's [`session`], [`Session`] and [`SessionClient`] |
 //! | `menger-app` (wasm32) | `default-features = false` | [`types`] and [`TicketsClient`] over four wasm-safe crates: no plexus-core, tokio, jsonrpsee or rusqlite; [`comments`] and [`CommentsClient`] the same way |
 //!
 //! The client is emitted by `#[plexus_macros::activation(client, …)]` on
@@ -77,3 +77,14 @@ pub mod comments_activation;
 pub use comments_activation::CommentsClient;
 #[cfg(feature = "server")]
 pub use comments_activation::Comments;
+
+/// IDENTITY-14: who a connection is — [`SessionEvent`], wasm-safe like
+/// [`comments`].
+pub mod session;
+pub use session::SessionEvent;
+/// IDENTITY-14: the `session` activation, declared once: the server's
+/// [`Session`] and the browser's [`SessionClient`].
+pub mod session_activation;
+pub use session_activation::SessionClient;
+#[cfg(feature = "server")]
+pub use session_activation::Session;

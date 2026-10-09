@@ -1080,6 +1080,57 @@ comment, filtered by the route's query (`?ticket=&under=&state=&author=&text=`),
 each linking back to its page and element (`…?comment=<id>`); a ticket page's
 side panel counts its open ones. All of it is live through `comments.watch`.
 
+### Login (IDENTITY-14)
+
+menger does not know identity providers; it knows **Plexus identities**.
+Each `--auth-provider` names a provider, and becomes that provider's
+**adapter** (plexus-auth-core's `adapters`, IDENTITY-13). The adapters sit
+in one chain at the WebSocket upgrade. Whichever claims a caller's
+credential verifies it and turns it into the same Plexus types: a
+principal, a name, roles and a tenant. Past the upgrade there is only the
+connection's identity: `session.whoami` reports it, and `comments.add`
+signs with it. No `--auth-provider` means no chain, and menger serves
+exactly as before.
+
+| `--auth-provider` | the credential | principal |
+|---|---|---|
+| `idp=<issuer>,<audience>` | a plexus-idp token (its password grant, or its nostr grant) | `idp:<uuid>` |
+| `auth0=<domain>,<audience>[,<roles-claim>]` | an Auth0 access token; roles from the namespaced claim an Auth0 Action adds | `oidc:auth0/<sub>` |
+| `oidc:<name>=<issuer>,<audience>[,<roles-claim>]` | any OIDC provider's RS256 token (Logto, Keycloak, …) | `oidc:<name>/<sub>` |
+| `nostr=<ws-url>[,<ws-url>…]` | a NIP-98 event (kind 27235) naming that URL, method GET, under a minute old, used once | `nostr:<hex>` |
+
+Several providers can be configured together. An OIDC adapter claims a
+token by its `iss`, and the nostr adapter claims an event, so each
+credential reaches its own adapter. The credential rides the upgrade in the `access_token`
+cookie (a token), the `nostr` cookie (an event: a browser can only send
+cookies), or `Authorization: Bearer`. A credential that fails, or no credential at all,
+leaves the connection anonymous. `--require-login` refuses such an upgrade
+(401) instead. It needs `--no-rest`, because the REST bridge cannot carry
+an identity yet. `MENGER_AUTH_PROVIDERS` takes the specs separated by `;`, and
+`MENGER_REQUIRE_LOGIN=1` sets the flag. A bad spec, or an issuer that is
+not `https://` off loopback, stops startup.
+
+| method | yields |
+|---|---|
+| `session.whoami {}` | `identity { principal, name, roles, tenant, provider }`, or `anonymous` |
+
+`comments.add` by a signed-in connection is authored by its identity's
+name, whatever `author` says; anonymous, it keeps `author` as before. The
+schemas of `tickets` and `comments` are unchanged.
+
+```sh
+# a dev server admitting plexus-idp, an Auth0 tenant and nostr keys
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 --db-path /tmp/menger-dev.db \
+  --auth-provider idp=http://127.0.0.1:4481,plexus:menger \
+  --auth-provider auth0=https://acme.auth0.com/,https://menger.example,https://menger.example/roles \
+  --auth-provider nostr=ws://127.0.0.1:4460/
+synapse -P 4460 -t "$TOKEN" menger session whoami        # -t sends Cookie: access_token=<jwt>
+synapse -P 4460 --cookie nostr="$EVENT" menger session whoami
+```
+
+`tests/login.rs` runs each provider over the real wire against fixture
+issuers.
+
 ## Diagrams — the `diagrams` service (COMPILE-4)
 
 A second Plexus service beside menger, in `diagrams/` (`menger-diagrams`):

@@ -27,6 +27,10 @@
       "schema": [],
       "watch": []
     },
+    "session": {
+      "schema": [],
+      "whoami": []
+    },
     "tickets": {
       "amend": [
         "body",

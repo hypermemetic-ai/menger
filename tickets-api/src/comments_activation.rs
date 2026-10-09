@@ -21,6 +21,8 @@ use async_stream::stream;
 #[cfg(feature = "server")]
 use futures::Stream;
 #[cfg(feature = "server")]
+use plexus_core::plexus::AuthContext;
+#[cfg(feature = "server")]
 use std::sync::Arc;
 
 /// The activation. Server-only: it holds the store.
@@ -60,8 +62,10 @@ impl Comments {
     /// `excerpt` (what was there, in words; the excerpt may be empty), and
     /// `ticket` when the element belongs to one, which must name a ticket
     /// and is kept with that ticket's `updated_unix` as `version` (set by
-    /// the server). `author` is `owner` unless given. Yields exactly one
-    /// event: `comment` — the comment as kept: its id, state `open`, the
+    /// the server). `author` is `owner` unless given; IDENTITY-14: a
+    /// signed-in caller's comment is its identity's name, whatever `author`
+    /// says (the description stays as it was, so the schema does). Yields
+    /// exactly one event: `comment` — the comment as kept: its id, state `open`, the
     /// time (`at`, unix seconds), the author, its anchor and body — or an
     /// in-band `error` naming the problem (an empty body, a blank author, a
     /// malformed anchor, a ticket that is none), with nothing kept. `watch`
@@ -74,8 +78,9 @@ impl Comments {
             author = "Who left it (optional; default owner)"
         )
     )]
-    pub async fn add(&self, anchor: Anchor, body: String, author: Option<String>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    pub async fn add(&self, auth: Option<&AuthContext>, anchor: Anchor, body: String, author: Option<String>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
+        let author = crate::session_activation::identity(auth).name().map(str::to_string).or(author);
         stream! {
             yield answer(store.add_comment(anchor, body, author).await);
         }

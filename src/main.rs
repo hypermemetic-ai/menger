@@ -1,5 +1,6 @@
 use clap::Parser;
 use menger::store::{SeedShape, SeedSpec, Store, Verdict};
+use menger::login::{self, Provider};
 use menger::{build_rpc_seeded, default_db_path, shell};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::{RestHttpConfig, RouteFn, TransportServer};
@@ -95,6 +96,29 @@ struct Args {
     /// nothing, migrates nothing, serves nothing.
     #[arg(long)]
     verify_derived: bool,
+
+    /// IDENTITY-14: admit callers through this identity provider
+    /// (repeatable): `idp=<issuer>,<audience>`,
+    /// `auth0=<domain>,<audience>[,<roles-claim>]`,
+    /// `oidc:<name>=<issuer>,<audience>[,<roles-claim>]` or
+    /// `nostr=<ws-url>[,<ws-url>…]`. A caller's credential rides the
+    /// `access_token` or `nostr` cookie, or `Authorization: Bearer`, and its
+    /// provider's adapter makes it a Plexus identity at the WebSocket
+    /// upgrade. In the env var, specs are separated by `;`. None: no login,
+    /// as before.
+    #[arg(long = "auth-provider", env = "MENGER_AUTH_PROVIDERS", value_name = "SPEC", value_delimiter = ';')]
+    auth_provider: Vec<Provider>,
+
+    /// IDENTITY-14: refuse a WebSocket upgrade that proves no one. Needs an
+    /// --auth-provider, and --no-rest: the REST bridge cannot carry an
+    /// identity yet. As an env var, 1/true/yes enable it.
+    #[arg(
+        long,
+        env = "MENGER_REQUIRE_LOGIN",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
+    require_login: bool,
 }
 
 #[tokio::main]
@@ -121,6 +145,20 @@ async fn main() -> anyhow::Result<()> {
         seed: args.seed_value,
         into_existing: args.seed_into_existing,
     });
+    // IDENTITY-14: the login boundary is settled before anything opens, so
+    // a bad --auth-provider stops startup rather than serving without it.
+    if args.require_login {
+        if args.auth_provider.is_empty() {
+            anyhow::bail!("--require-login needs at least one --auth-provider to log in with");
+        }
+        if !args.no_rest && !args.stdio {
+            anyhow::bail!(
+                "--require-login closes the WebSocket, but the REST bridge cannot carry an \
+                 identity yet and would stay open: add --no-rest"
+            );
+        }
+    }
+    let boundary = login::boundary(&args.auth_provider)?;
     let hub = build_rpc_seeded(&db_path, seed, args.seed_shape).await?;
 
     let activations = hub.list_activations_info();
@@ -141,9 +179,24 @@ async fn main() -> anyhow::Result<()> {
     if args.stdio {
         builder = builder.with_stdio();
         tracing::info!("Starting stdio transport");
+        if boundary.is_some() {
+            tracing::warn!("--auth-provider is ignored over stdio: there is no upgrade to carry a credential");
+        }
     } else {
         builder = builder.with_websocket(args.port);
         tracing::info!("WebSocket: ws://127.0.0.1:{}", args.port);
+        if let Some(validator) = boundary {
+            builder = builder.with_session_validator(validator);
+            if args.require_login {
+                builder = builder.reject_upgrade_on_auth_failure();
+            }
+            let names: Vec<&str> = args.auth_provider.iter().map(|p| p.name()).collect();
+            tracing::info!(
+                "Login:     {} — anonymous callers {}",
+                names.join(", "),
+                if args.require_login { "refused" } else { "admitted" }
+            );
+        }
         if !args.no_rest {
             let route_hub = hub.clone();
             let route_fn: RouteFn = Arc::new(move |method, params| {
