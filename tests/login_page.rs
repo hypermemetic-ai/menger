@@ -4,8 +4,11 @@
 //! Two fixture OIDC issuers stand in for plexus-idp (password grant) and an
 //! Auth0 tenant (authorization code with PKCE, `connection` hints); both
 //! serve discovery and a JWKS on loopback, so the shell asks them as it
-//! would the real ones. Keys are synthetic. Every server is on free ports
-//! with a throwaway database.
+//! would the real ones. IDENTITY-30: a third stands in for WorkOS, shaped
+//! as a real staging sign-in answered (a per-client issuer under
+//! `/user_management/`, no `aud`, `client_id`, the person in the response's
+//! `user`). Keys are synthetic. Every server is on free ports with a
+//! throwaway database.
 
 use axum::extract::{Form, Query, State};
 use axum::response::{IntoResponse, Redirect};
@@ -198,20 +201,98 @@ impl Menger {
     }
 }
 
+// ── IDENTITY-30: a WorkOS-shaped issuer ───────────────────────────────────
+
+const WORKOS_CLIENT: &str = "client_01TESTCLIENT";
+
+#[derive(Clone)]
+struct WorkOs {
+    base: String,
+    codes: Arc<Mutex<HashMap<String, (String, String, String, String)>>>, // code → (challenge, redirect, client, provider)
+}
+
+async fn workos_authorize(State(w): State<WorkOs>, Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let code = format!("code-{}-{}", now(), w.codes.lock().unwrap().len());
+    let way = q.get("provider").or(q.get("connection_id")).or(q.get("organization_id")).cloned().unwrap_or_default();
+    w.codes.lock().unwrap().insert(code.clone(), (q["code_challenge"].clone(), q["redirect_uri"].clone(), q["client_id"].clone(), way));
+    Redirect::to(&format!("{}?code={code}&state={}", q["redirect_uri"], q["state"]))
+}
+
+async fn workos_authenticate(State(w): State<WorkOs>, Form(f): Form<HashMap<String, String>>) -> impl IntoResponse {
+    let refuse = |e: &str| (axum::http::StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response();
+    if f.get("grant_type").map(String::as_str) != Some("authorization_code") || f.contains_key("client_secret") {
+        return refuse("invalid_request");
+    }
+    let Some((challenge, redirect, client, way)) = w.codes.lock().unwrap().remove(&f["code"]) else {
+        return refuse("invalid_grant");
+    };
+    let got = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(f["code_verifier"].as_bytes()));
+    if got != challenge || f["redirect_uri"] != redirect || f["client_id"] != client {
+        return refuse("invalid_grant");
+    }
+    // `OtherClient`: a token another client of the account was issued.
+    let for_client = if way == "OtherClient" { "client_01SOMEONEELSE" } else { WORKOS_CLIENT };
+    let mut h = Header::new(Algorithm::RS256);
+    h.kid = Some("acme-1".into());
+    let token = encode(&h, &json!({
+        "iss": format!("{}/user_management/{WORKOS_CLIENT}", w.base), "sub": "user_01ADA", "sid": "session_01ADA",
+        "jti": "01JTI", "client_id": for_client, "org_id": "org_01ACME", "role": "member", "roles": ["member"],
+        "permissions": [], "exp": now() + 300, "iat": now() - 5,
+    }), &EncodingKey::from_rsa_pem(KEY_1_PEM.as_bytes()).unwrap()).unwrap();
+    Json(json!({
+        "user": { "object": "user", "id": "user_01ADA", "email": "ada@example.com", "first_name": "Ada", "last_name": "Lovelace" },
+        "organization_id": "org_01ACME", "access_token": token, "refresh_token": "r", "authentication_method": way,
+    }))
+    .into_response()
+}
+
+async fn workos() -> WorkOs {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let w = WorkOs { base: base.clone(), codes: Arc::default() };
+    let issuer = format!("{base}/user_management/{WORKOS_CLIENT}");
+    let discovery = json!({ "issuer": issuer, "jwks_uri": format!("{base}/sso/jwks/{WORKOS_CLIENT}"),
+        "authorization_endpoint": format!("{base}/user_management/authorize"),
+        "token_endpoint": format!("{base}/user_management/authenticate"), "response_types_supported": ["code"] });
+    let jwks = json!({ "keys": [serde_json::from_str::<Value>(JWK_1).unwrap()] });
+    let app = Router::new()
+        .route(&format!("/user_management/{WORKOS_CLIENT}/.well-known/openid-configuration"), get(move || async move { Json(discovery) }))
+        .route(&format!("/sso/jwks/{WORKOS_CLIENT}"), get(move || async move { Json(jwks) }))
+        .route("/user_management/authorize", get(workos_authorize))
+        .route("/user_management/authenticate", post(workos_authenticate))
+        .with_state(w.clone());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    w
+}
+
 async fn start() -> Menger {
+    start_with(false).await.0
+}
+
+/// menger as main wires it: plexus-idp, an Auth0 tenant and nostr; or,
+/// with `with_workos`, WorkOS's buttons and no password form beside
+/// plexus-idp.
+async fn start_with(with_workos: bool) -> (Menger, Option<WorkOs>) {
     let idp = issuer(false, "idp-1", KEY_2_PEM, JWK_2).await;
     let auth0 = issuer(true, "acme-1", KEY_1_PEM, JWK_1).await;
     let (ws, shell_port) = (free_port().await, free_port().await);
     let public_url = format!("http://127.0.0.1:{shell_port}");
-    let providers: Vec<Provider> = [
-        format!("idp={},plexus:menger", idp.iss),
-        format!("auth0={},https://menger.example,client=menger", auth0.iss),
-        format!("nostr=ws://127.0.0.1:{ws}/"),
-    ]
-    .iter()
-    .map(|s| s.parse().unwrap())
-    .collect();
-    let buttons: Vec<LoginButton> = ["Google=auth0:google-oauth2", "SSO=auth0:samlp"].iter().map(|s| s.parse().unwrap()).collect();
+    let w = if with_workos { Some(workos().await) } else { None };
+    let specs = match &w {
+        None => vec![
+            format!("idp={},plexus:menger", idp.iss),
+            format!("auth0={},https://menger.example,client=menger", auth0.iss),
+            format!("nostr=ws://127.0.0.1:{ws}/"),
+        ],
+        Some(w) => vec![format!("workos={WORKOS_CLIENT},{}", w.base), format!("idp={},plexus:menger", idp.iss)],
+    };
+    let providers: Vec<Provider> = specs.iter().map(|s| s.parse().unwrap()).collect();
+    let button_specs: &[&str] = match &w {
+        None => &["Google=auth0:google-oauth2", "SSO=auth0:samlp"],
+        Some(_) => &["Google=workos:GoogleOAuth", "Apple=workos:AppleOAuth", "Email=workos:authkit", "SSO=workos:authkit", "Other=workos:OtherClient"],
+    };
+    let buttons: Vec<LoginButton> = button_specs.iter().map(|s| s.parse().unwrap()).collect();
+    let password = w.as_ref().map(|_| "none".to_string());
 
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let sessions = Arc::new(Sessions::new(3600));
@@ -235,7 +316,7 @@ async fn start() -> Menger {
         LoginConfig {
             providers,
             buttons,
-            password: None,
+            password,
             forgot: Some("https://idp.example/reset".into()),
             public_url,
             also: origins,
@@ -261,7 +342,7 @@ async fn start() -> Menger {
         }
     }
     let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-    Menger { ws, shell: shell_port, http }
+    (Menger { ws, shell: shell_port, http }, w)
 }
 
 /// The `menger_session` a response sets, with its attributes checked.
@@ -430,4 +511,76 @@ async fn other_pages_and_other_names_are_refused() {
     assert!(socket(&m, Some(&id), Some("null")).await.unwrap_err().contains("403"), "a sandboxed frame");
     let rebound = m.http.get(m.url("/login")).header("host", "evil.example").send().await.unwrap();
     assert_eq!(rebound.status(), 421, "DNS rebinding");
+}
+
+// ── IDENTITY-30: WorkOS ───────────────────────────────────────────────────
+
+/// A button's whole round trip through the WorkOS fixture: the authorize
+/// request's parameters, and the callback's answer.
+async fn through_workos(m: &Menger, query: &str) -> (HashMap<String, String>, reqwest::Response) {
+    let out = m.http.get(m.url(&format!("/login/start?{query}"))).send().await.unwrap();
+    assert_eq!(out.status(), 302, "{query}");
+    let to = url::Url::parse(&location(&out)).unwrap();
+    let q: HashMap<_, _> = to.query_pairs().into_owned().collect();
+    let txn = out.headers().get_all("set-cookie").iter().filter_map(|v| v.to_str().ok())
+        .find_map(|c| c.strip_prefix("menger_login=").map(|v| v.split(';').next().unwrap().to_string())).unwrap();
+    let callback = location(&m.http.get(to.as_str()).send().await.unwrap());
+    let done = m.http.get(&callback).header("cookie", format!("menger_login={txn}")).send().await.unwrap();
+    (q, done)
+}
+
+#[tokio::test]
+async fn workos_signs_in_with_no_secret_and_names_the_person() {
+    let (m, w) = start_with(true).await;
+    let w = w.unwrap();
+    let page = m.http.get(m.url("/login")).send().await.unwrap().text().await.unwrap();
+    assert!(!page.contains("name=\"password\""), "WorkOS takes passwords on its own page");
+    for want in ["Continue with Google", "Continue with Apple", "Continue with Email", "Continue with SSO"] {
+        assert!(page.contains(want), "the page shows {want}");
+    }
+
+    let (q, done) = through_workos(&m, "button=Email&next=/app/").await;
+    assert_eq!(q["provider"], "authkit");
+    assert_eq!(q["client_id"], WORKOS_CLIENT);
+    assert_eq!(q["code_challenge_method"], "S256");
+    assert_eq!(done.status(), 303, "the fixture refuses a client secret, so none was sent");
+    assert_eq!(location(&done), "/app/");
+    let id = session_from(&done).expect("a session");
+
+    let me: Value = m.http.get(m.url("/login/me")).header("cookie", format!("menger_session={id}")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(me["principal"], "oidc:workos/user_01ADA");
+    assert_eq!(me["name"], "Ada Lovelace", "named by the response's user, not the token");
+    assert_eq!(me["provider"], "workos");
+    let ws = socket(&m, Some(&id), Some(&m.origin())).await.unwrap();
+    assert_eq!(call(&ws, "session.whoami").await[0]["principal"], "oidc:workos/user_01ADA");
+
+    // Signing out ends menger's session, then WorkOS's.
+    let out = m.http.post(m.url("/logout")).header("cookie", format!("menger_session={id}")).header("origin", m.origin()).send().await.unwrap();
+    assert_eq!(out.status(), 303);
+    let to = url::Url::parse(&location(&out)).unwrap();
+    assert_eq!(to.as_str().split('?').next().unwrap(), format!("{}/user_management/sessions/logout", w.base));
+    let q: HashMap<_, _> = to.query_pairs().into_owned().collect();
+    assert_eq!(q["session_id"], "session_01ADA");
+    assert_eq!(q["return_to"], m.url("/login"));
+    assert_eq!(m.http.get(m.url("/login/me")).header("cookie", format!("menger_session={id}")).send().await.unwrap().status(), 401);
+}
+
+#[tokio::test]
+async fn each_workos_button_names_its_way_in() {
+    let (m, _) = start_with(true).await;
+    let (q, done) = through_workos(&m, "button=Google").await;
+    assert_eq!(q["provider"], "GoogleOAuth");
+    assert_eq!(done.status(), 303);
+    let (q, _) = through_workos(&m, "button=Apple").await;
+    assert_eq!(q["provider"], "AppleOAuth");
+    let (q, _) = through_workos(&m, "button=SSO&login_hint=ada%40acme.example").await;
+    assert_eq!((q["provider"].as_str(), q["login_hint"].as_str()), ("authkit", "ada@acme.example"), "AuthKit routes by the email's domain");
+}
+
+#[tokio::test]
+async fn a_workos_token_for_another_client_signs_no_one_in() {
+    let (m, _) = start_with(true).await;
+    let (_, done) = through_workos(&m, "button=Other").await;
+    assert_eq!(done.status(), 401);
+    assert!(session_from(&done).is_none());
 }

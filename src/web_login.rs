@@ -7,7 +7,7 @@
 //! | `GET /login/start` | out to an OIDC provider's authorization endpoint: code flow with PKCE, a connection hint (Google, Apple, SAML) |
 //! | `GET /login/callback` | back: the state checked against the browser's own, the code traded for a token |
 //! | `POST /login/nostr` | a NIP-98 event a NIP-07 extension signed for this URL |
-//! | `POST /logout` | the session ended |
+//! | `POST /logout` | the session ended (and the provider's, where it keeps one: WorkOS) |
 //! | `GET /login/me` | who the session is, as JSON, or 401 |
 //!
 //! Every way in verifies the provider's token (or event) with that
@@ -43,7 +43,9 @@ const TXN_COOKIE: &str = "menger_login";
 pub struct LoginConfig {
     pub providers: Vec<Provider>,
     pub buttons: Vec<LoginButton>,
-    /// The provider the password form goes to; `None`: the first OIDC one.
+    /// The provider the password form goes to; `None`: the first OIDC one
+    /// that takes passwords; `none`: no password form (IDENTITY-30: the IdP
+    /// takes passwords on its own page).
     pub password: Option<String>,
     pub forgot: Option<String>,
     /// Where the shell is reached, e.g. `http://127.0.0.1:4451`: the
@@ -91,14 +93,19 @@ impl Login {
             providers.insert(p.name().to_string(), (p.clone(), p.adapter()?));
         }
         let password = match cfg.password {
+            Some(none) if none == "none" => None,
             Some(name) => {
                 anyhow::ensure!(
                     providers.get(&name).is_some_and(|(p, _)| p.oidc().is_some()),
                     "--login-password {name}: no OIDC --auth-provider has that name"
                 );
+                anyhow::ensure!(
+                    providers[&name].0.takes_passwords(),
+                    "--login-password {name}: {name} takes passwords on its own page; give it a --login-button instead"
+                );
                 Some(name)
             }
-            None => cfg.providers.iter().find(|p| p.oidc().is_some()).map(|p| p.name().to_string()),
+            None => cfg.providers.iter().find(|p| p.oidc().is_some() && p.takes_passwords()).map(|p| p.name().to_string()),
         };
         for b in &cfg.buttons {
             let Some((p, _)) = providers.get(&b.provider) else {
@@ -183,9 +190,9 @@ impl Login {
         Ok(d)
     }
 
-    /// POSTs a form to a provider's token endpoint; the access token, or
-    /// the words to show.
-    async fn token(&self, endpoint: &str, form: &[(&str, &str)]) -> Result<String, String> {
+    /// POSTs a form to a provider's token endpoint; the access token and
+    /// the whole response, or the words to show.
+    async fn token(&self, endpoint: &str, form: &[(&str, &str)]) -> Result<(String, Value), String> {
         let body = url::form_urlencoded::Serializer::new(String::new()).extend_pairs(form).finish();
         let resp = self
             .http
@@ -197,7 +204,7 @@ impl Login {
             .map_err(|_| "the sign-in service is unreachable".to_string())?;
         let v: Value = resp.json().await.map_err(|_| "the sign-in service answered oddly".to_string())?;
         if let Some(t) = v.get("access_token").and_then(Value::as_str) {
-            return Ok(t.to_string());
+            return Ok((t.to_string(), v.clone()));
         }
         Err(match v.get("error").and_then(Value::as_str) {
             Some("invalid_grant") => "Wrong username or password.".to_string(),
@@ -331,7 +338,7 @@ pub async fn password(State(login): State<Arc<Login>>, headers: HeaderMap, Form(
         if let Some(c) = client {
             form.push(("client_id", c));
         }
-        let token = login.token(&d.token_endpoint, &form).await?;
+        let (token, _) = login.token(&d.token_endpoint, &form).await?;
         login.verify(&name, token).await
     };
     match attempt.await {
@@ -378,8 +385,8 @@ pub async fn start(State(login): State<Arc<Login>>, Query(q): Query<StartQuery>)
             .append_pair("state", &state)
             .append_pair("code_challenge", &challenge)
             .append_pair("code_challenge_method", "S256");
-        if let Some(c) = &b.connection {
-            qp.append_pair("connection", c);
+        for (k, v) in provider.authorize_hint(b.connection.as_deref()) {
+            qp.append_pair(k, &v);
         }
         if let Some(h) = q.login_hint.as_deref().filter(|h| !h.trim().is_empty()) {
             qp.append_pair("login_hint", h.trim());
@@ -432,12 +439,38 @@ pub async fn callback(State(login): State<Arc<Login>>, headers: HeaderMap, Query
             ("client_id", client.unwrap_or_default()),
             ("code_verifier", pending.verifier.as_str()),
         ];
-        let token = login.token(&d.token_endpoint, &form).await?;
-        login.verify(&pending.provider, token).await
+        let (token, response) = login.token(&d.token_endpoint, &form).await?;
+        let mut ctx = login.verify(&pending.provider, token).await?;
+        named_by(&mut ctx, &pending.provider, &response);
+        Ok::<_, String>(ctx)
     };
     match attempt.await {
         Ok(ctx) => login.sign_in(ctx, &pending.next),
         Err(e) => fail(&e),
+    }
+}
+
+/// IDENTITY-30: a token response that names the person — WorkOS's `user`,
+/// whose access token names nobody — gives the session its name and email,
+/// when that user is the verified token's own subject. It came from the
+/// provider's token endpoint over the same exchange as the token.
+fn named_by(ctx: &mut AuthContext, provider: &str, response: &Value) {
+    let Some(user) = response.get("user") else { return };
+    let s = |k: &str| user.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
+    let Some(id) = s("id") else { return };
+    let ours = plexus_auth_core::identity::Principal::oidc(provider, id).ok();
+    if ours.is_none() || ctx.principal() != ours {
+        return;
+    }
+    let full = [s("first_name"), s("last_name")].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    let name = s("name").map(str::to_string).or((!full.is_empty()).then_some(full)).or(s("email").map(str::to_string));
+    let Some(meta) = ctx.metadata.as_object_mut() else { return };
+    if let Some(name) = name {
+        meta.insert("name".into(), Value::String(name.clone()));
+        meta.insert("username".into(), Value::String(name));
+    }
+    if let Some(email) = s("email") {
+        meta.insert("email".into(), Value::String(email.to_string()));
     }
 }
 
@@ -472,10 +505,19 @@ pub async fn logout(State(login): State<Arc<Login>>, headers: HeaderMap) -> Resp
     if login.foreign(&headers) {
         return (StatusCode::FORBIDDEN, "Forbidden").into_response();
     }
+    // IDENTITY-30: where the provider keeps a session of its own (WorkOS),
+    // the browser goes on to end it, and comes back to the page.
+    let onward = login.session(&headers).and_then(|ctx| {
+        let (p, _) = login.providers.get(&ctx.get_metadata_string("provider")?)?;
+        p.sign_out_url(&ctx.session_id, &format!("{}/login", login.public_url))
+    });
     if let Some(id) = headers.get(header::COOKIE).and_then(|c| c.to_str().ok()).and_then(|c| sessions::cookie(c, COOKIE)) {
         login.sessions.end(id);
     }
-    let mut r = see_other("/login");
+    let mut r = match onward {
+        Some(url) => (StatusCode::SEE_OTHER, [(header::LOCATION, url), (header::CACHE_CONTROL, "no-store".to_string())]).into_response(),
+        None => see_other("/login"),
+    };
     r.headers_mut().append(header::SET_COOKIE, HeaderValue::from_static("menger_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"));
     r
 }
@@ -546,6 +588,8 @@ fn icon_for(b: &LoginButton) -> &'static str {
     let k = format!("{} {}", b.label, b.connection.as_deref().unwrap_or("")).to_ascii_lowercase();
     if k.contains("google") {
         r##"<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5a5.6 5.6 0 0 1-2.4 3.6v3h3.9c2.3-2.1 3.5-5.2 3.5-8.8z"/><path fill="#34A853" d="M12 24c3.2 0 6-1.1 8-2.9l-3.9-3c-1.1.7-2.5 1.2-4.1 1.2-3.1 0-5.8-2.1-6.7-5H1.3v3.1A12 12 0 0 0 12 24z"/><path fill="#FBBC05" d="M5.3 14.3a7.2 7.2 0 0 1 0-4.6V6.6H1.3a12 12 0 0 0 0 10.8z"/><path fill="#EA4335" d="M12 4.8c1.8 0 3.3.6 4.6 1.8l3.4-3.4A12 12 0 0 0 1.3 6.6l4 3.1c.9-2.9 3.6-4.9 6.7-4.9z"/></svg>"##
+    } else if k.contains("email") || k.contains("mail ") {
+        r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M3 6h18v12H3zM3 7l9 6 9-6"/></svg>"#
     } else if k.contains("apple") {
         r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.4 12.7c0-2.6 2.1-3.8 2.2-3.9a4.8 4.8 0 0 0-3.8-2c-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.4-.9a5 5 0 0 0-4.2 2.6c-1.8 3.1-.5 7.7 1.3 10.2.9 1.2 1.9 2.6 3.2 2.6 1.3-.1 1.8-.8 3.3-.8 1.6 0 2 .8 3.4.8s2.3-1.3 3.1-2.5a11 11 0 0 0 1.4-2.9 4.5 4.5 0 0 1-2.6-4.1zM13.9 5.1c.7-.9 1.2-2 1-3.1-1 0-2.2.7-2.9 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.2-.6 2.9-1.4z"/></svg>"#
     } else {
@@ -564,6 +608,26 @@ mod tests {
             assert_eq!(safe_next(Some(bad)), "/", "{bad:?}");
         }
         assert_eq!(safe_next(None), "/");
+    }
+
+    #[test]
+    fn the_response_names_only_the_token_s_own_subject() {
+        use plexus_auth_core::identity::{Authenticated, Principal};
+        let ctx = || {
+            let p = Principal::oidc("workos", "user_01ADA").unwrap();
+            Authenticated::new(p, "session_01ADA", vec![], json!({ "name": "user_01ADA", "provider": "workos" })).into_auth_context()
+        };
+        let user = |id: &str| json!({ "user": { "id": id, "email": "ada@example.com", "first_name": "Ada", "last_name": "Lovelace" } });
+        let mut c = ctx();
+        named_by(&mut c, "workos", &user("user_01ADA"));
+        assert_eq!(c.get_metadata_string("name").as_deref(), Some("Ada Lovelace"));
+        assert_eq!(c.get_metadata_string("email").as_deref(), Some("ada@example.com"));
+        let mut c = ctx();
+        named_by(&mut c, "workos", &user("user_01EVE"));
+        assert_eq!(c.get_metadata_string("name").as_deref(), Some("user_01ADA"), "another user's name is not taken");
+        let mut c = ctx();
+        named_by(&mut c, "workos", &json!({ "user": { "id": "user_01ADA", "email": "ada@example.com" } }));
+        assert_eq!(c.get_metadata_string("name").as_deref(), Some("ada@example.com"), "no name: the email");
     }
 
     #[test]

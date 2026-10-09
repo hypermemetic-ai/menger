@@ -13,6 +13,7 @@
 //! | `idp=<issuer>,<audience>` | plexus-idp | `idp:<uuid>` |
 //! | `auth0=<domain>,<audience>[,<roles-claim>]` | Auth0 | `oidc:auth0/<sub>` |
 //! | `oidc:<name>=<issuer>,<audience>[,<roles-claim>]` | any OIDC provider | `oidc:<name>/<sub>` |
+//! | `workos=<client-id>[,<api-base>]` | WorkOS (AuthKit, SSO) | `oidc:workos/<user id>` |
 //! | `nostr=<service-url>[,<service-url>…]` | NIP-98 | `nostr:<hex>` |
 //!
 //! No provider, no chain: menger serves as it did before.
@@ -43,6 +44,11 @@ pub enum Provider {
     /// `nostr=<service-url>[,<service-url>…]`: NIP-98 events naming one of
     /// these URLs, the WebSocket URLs callers connect to.
     Nostr { urls: Vec<String> },
+    /// IDENTITY-30: `workos=<client-id>[,<api-base>]`: a WorkOS
+    /// environment's client. Its issuer is `<api-base>/user_management/
+    /// <client-id>` (`https://api.workos.com` unless given), and the client
+    /// id is the audience and the code flow's client: no secret.
+    WorkOs { client: String, base: Option<String>, issuer: String },
 }
 
 impl Provider {
@@ -53,6 +59,7 @@ impl Provider {
             Self::Auth0 { .. } => "auth0",
             Self::Oidc { name, .. } => name,
             Self::Nostr { .. } => "nostr",
+            Self::WorkOs { .. } => "workos",
         }
     }
 
@@ -63,7 +70,48 @@ impl Provider {
             Self::PlexusIdp { issuer, audience, client } => Some((issuer, audience, client.as_deref())),
             Self::Auth0 { domain, audience, client, .. } => Some((domain, audience, client.as_deref())),
             Self::Oidc { issuer, audience, client, .. } => Some((issuer, audience, client.as_deref())),
+            Self::WorkOs { client, issuer, .. } => Some((issuer, client, Some(client))),
             Self::Nostr { .. } => None,
+        }
+    }
+
+    /// Whether the login page's password form may go to it: WorkOS takes
+    /// passwords on its own page, never from menger (a password grant
+    /// there needs the API key, which menger does not hold).
+    pub fn takes_passwords(&self) -> bool {
+        !matches!(self, Self::WorkOs { .. } | Self::Nostr { .. })
+    }
+
+    /// The authorization request's parameters that say which way in a
+    /// button means. Auth0 and other OIDC providers take `connection`.
+    /// WorkOS (IDENTITY-30) takes `provider` — `authkit` (its hosted page:
+    /// email, password, passkey, a code by email, and SSO by the email's
+    /// domain), `GoogleOAuth`, `AppleOAuth`, … — or an SSO connection
+    /// (`conn_…`) or organization (`org_…`); no connection is `authkit`.
+    pub fn authorize_hint(&self, connection: Option<&str>) -> Vec<(&'static str, String)> {
+        match (self, connection) {
+            (Self::WorkOs { .. }, None) => vec![("provider", "authkit".into())],
+            (Self::WorkOs { .. }, Some(c)) if c.starts_with("conn_") => vec![("connection_id", c.into())],
+            (Self::WorkOs { .. }, Some(c)) if c.starts_with("org_") => vec![("organization_id", c.into())],
+            (Self::WorkOs { .. }, Some(c)) => vec![("provider", c.into())],
+            (_, Some(c)) => vec![("connection", c.into())],
+            (_, None) => Vec::new(),
+        }
+    }
+
+    /// Where a browser goes to end the provider's own session after
+    /// menger's, when the provider keeps one menger can end: WorkOS's
+    /// `sessions/logout`, back to `return_to` (one of the environment's
+    /// logout URIs).
+    pub fn sign_out_url(&self, session_id: &str, return_to: &str) -> Option<String> {
+        match self {
+            Self::WorkOs { base, .. } if session_id.starts_with("session_") => {
+                let base = base.as_deref().unwrap_or(plexus_auth_core::adapters::WORKOS_API).trim_end_matches('/');
+                let mut url = url::Url::parse(&format!("{base}/user_management/sessions/logout")).ok()?;
+                url.query_pairs_mut().append_pair("session_id", session_id).append_pair("return_to", return_to);
+                Some(url.to_string())
+            }
+            _ => None,
         }
     }
 
@@ -77,7 +125,7 @@ impl Provider {
                 issuer: Some(issuer.to_string()),
                 audience: Some(audience.to_string()),
             },
-            None => ProviderOffer { name: "nostr".into(), kind: ProviderKind::Nostr, issuer: None, audience: None },
+            None => ProviderOffer { name: self.name().to_string(), kind: ProviderKind::Nostr, issuer: None, audience: None },
         }
     }
 
@@ -96,6 +144,7 @@ impl Provider {
                 Arc::new(OidcAdapter::generic(name, issuer, audience, claims)?)
             }
             Self::Nostr { urls } => Arc::new(Nip98Adapter::new(urls)?),
+            Self::WorkOs { client, base, .. } => Arc::new(OidcAdapter::workos(client, base.as_deref())?),
         })
     }
 }
@@ -107,6 +156,7 @@ impl FromStr for Provider {
         let usage = "an --auth-provider is idp=<issuer>,<audience>[,client=<id>] · \
                      auth0=<domain>,<audience>[,<roles-claim>][,client=<id>] · \
                      oidc:<name>=<issuer>,<audience>[,<roles-claim>][,client=<id>] · \
+                     workos=<client-id>[,<api-base>] · \
                      nostr=<service-url>[,<service-url>…]";
         let (kind, rest) = spec.trim().split_once('=').ok_or_else(|| format!("`{spec}`: {usage}"))?;
         let parts: Vec<String> = rest.split(',').map(|p| p.trim().to_string()).collect();
@@ -138,6 +188,17 @@ impl FromStr for Provider {
                 Ok(Self::Auth0 { domain, audience, roles_claim, client })
             }
             "nostr" => Ok(Self::Nostr { urls: parts }),
+            "workos" => match parts.as_slice() {
+                [client] | [client, _] if client.starts_with("client_") && !client.contains(['/', '?', '#']) => {
+                    let base = parts.get(1).cloned();
+                    if base.as_deref().is_some_and(|b| url::Url::parse(b).is_err()) {
+                        return Err(format!("`{spec}`: the API base is not a URL; {usage}"));
+                    }
+                    let api = base.as_deref().unwrap_or(plexus_auth_core::adapters::WORKOS_API).trim_end_matches('/');
+                    Ok(Self::WorkOs { issuer: format!("{api}/user_management/{client}"), client: client.clone(), base })
+                }
+                _ => Err(format!("`{spec}`: a WorkOS client id is client_…; {usage}")),
+            },
             other => match other.strip_prefix("oidc:") {
                 Some(name) => {
                     let (issuer, audience, roles_claim, client) = oidc(true)?;
@@ -163,6 +224,7 @@ impl fmt::Display for Provider {
                 write!(f, "oidc:{name}={issuer},{audience}{}{}", opt(roles_claim, ""), opt(client, "client="))
             }
             Self::Nostr { urls } => write!(f, "nostr={}", urls.join(",")),
+            Self::WorkOs { client, base, .. } => write!(f, "workos={client}{}", opt(base, "")),
         }
     }
 }
@@ -170,8 +232,10 @@ impl fmt::Display for Provider {
 /// IDENTITY-19: a button on the login page, `--login-button
 /// <Label>=<provider>[:<connection>]`: it sends the browser to that OIDC
 /// provider's authorization endpoint, naming the connection (Auth0's
-/// `connection`, e.g. `google-oauth2`, `apple`, `samlp`) when given. A
-/// connection containing `saml` or `sso` asks for a work email first.
+/// `connection`, e.g. `google-oauth2`, `apple`, `samlp`; WorkOS's
+/// `GoogleOAuth`, `AppleOAuth`, `authkit`, a `conn_…` or an `org_…` —
+/// [`Provider::authorize_hint`]) when given. A connection containing
+/// `saml` or `sso`, or the label `SSO`, asks for a work email first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginButton {
     pub label: String,
@@ -286,5 +350,46 @@ mod tests {
     fn an_issuer_that_is_not_https_off_loopback_is_refused_at_startup() {
         let p: Provider = "idp=http://idp.example,plexus:menger".parse().unwrap();
         assert!(boundary(&[p]).is_err());
+    }
+
+    #[test]
+    fn a_workos_client_is_a_provider_with_a_per_client_issuer() {
+        let w: Provider = "workos=client_01M4GRE0HND6SKGPV780GPTYDX".parse().unwrap();
+        assert_eq!(w.name(), "workos");
+        let iss = "https://api.workos.com/user_management/client_01M4GRE0HND6SKGPV780GPTYDX";
+        assert_eq!(w.oidc(), Some((iss, "client_01M4GRE0HND6SKGPV780GPTYDX", Some("client_01M4GRE0HND6SKGPV780GPTYDX"))));
+        assert!(!w.takes_passwords(), "WorkOS takes passwords on its own page");
+        assert_eq!(w.to_string(), "workos=client_01M4GRE0HND6SKGPV780GPTYDX");
+        let local: Provider = "workos=client_x,http://127.0.0.1:4490/".parse().unwrap();
+        assert_eq!(local.oidc().unwrap().0, "http://127.0.0.1:4490/user_management/client_x");
+        assert_eq!(local.to_string(), "workos=client_x,http://127.0.0.1:4490/");
+        for bad in ["workos=", "workos=x", "workos=client_a,client_b,c", "workos=client_a/b", "workos=client_a,not a url"] {
+            assert!(bad.parse::<Provider>().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_button_says_which_way_in_as_its_provider_takes_it() {
+        let w: Provider = "workos=client_x".parse().unwrap();
+        let hint = |c: Option<&str>| w.authorize_hint(c);
+        assert_eq!(hint(None), vec![("provider", "authkit".to_string())]);
+        assert_eq!(hint(Some("GoogleOAuth")), vec![("provider", "GoogleOAuth".to_string())]);
+        assert_eq!(hint(Some("conn_01ABC")), vec![("connection_id", "conn_01ABC".to_string())]);
+        assert_eq!(hint(Some("org_01ABC")), vec![("organization_id", "org_01ABC".to_string())]);
+        let a: Provider = "auth0=https://acme.auth0.com/,aud,client=menger".parse().unwrap();
+        assert_eq!(a.authorize_hint(Some("google-oauth2")), vec![("connection", "google-oauth2".to_string())]);
+        assert!(a.authorize_hint(None).is_empty());
+    }
+
+    #[test]
+    fn signing_out_of_workos_ends_its_session_too() {
+        let w: Provider = "workos=client_x".parse().unwrap();
+        assert_eq!(
+            w.sign_out_url("session_01ABC", "http://127.0.0.1:4451/login").as_deref(),
+            Some("https://api.workos.com/user_management/sessions/logout?session_id=session_01ABC&return_to=http%3A%2F%2F127.0.0.1%3A4451%2Flogin")
+        );
+        assert_eq!(w.sign_out_url("not-a-workos-session", "http://x/login"), None);
+        let a: Provider = "auth0=https://acme.auth0.com/,aud".parse().unwrap();
+        assert_eq!(a.sign_out_url("session_01ABC", "http://x/login"), None);
     }
 }

@@ -110,7 +110,8 @@ struct Args {
     /// IDENTITY-14: admit callers through this identity provider
     /// (repeatable): `idp=<issuer>,<audience>`,
     /// `auth0=<domain>,<audience>[,<roles-claim>]`,
-    /// `oidc:<name>=<issuer>,<audience>[,<roles-claim>]` or
+    /// `oidc:<name>=<issuer>,<audience>[,<roles-claim>]`,
+    /// `workos=<client-id>[,<api-base>]` (IDENTITY-30) or
     /// `nostr=<ws-url>[,<ws-url>…]`. A caller's credential rides the
     /// `access_token` or `nostr` cookie, or `Authorization: Bearer`, and its
     /// provider's adapter makes it a Plexus identity at the WebSocket
@@ -132,14 +133,17 @@ struct Args {
 
     /// IDENTITY-19: a button on the login page (repeatable),
     /// `<Label>=<provider>[:<connection>]`, e.g. `Google=auth0:google-oauth2`,
-    /// `Apple=auth0:apple`, `SSO=auth0:samlp` (asks for a work email). The
-    /// provider needs `client=<id>` in its `--auth-provider`. In the env var,
-    /// separated by `;`.
+    /// `Apple=auth0:apple`, `SSO=auth0:samlp` (asks for a work email); for
+    /// WorkOS `Google=workos:GoogleOAuth`, `Apple=workos:AppleOAuth`,
+    /// `Email=workos:authkit`, `SSO=workos:authkit`. The provider needs
+    /// `client=<id>` in its `--auth-provider` (WorkOS's is its spec). In the
+    /// env var, separated by `;`.
     #[arg(long = "login-button", env = "MENGER_LOGIN_BUTTONS", value_name = "SPEC", value_delimiter = ';')]
     login_button: Vec<LoginButton>,
 
     /// IDENTITY-19: the provider the login page's password form goes to;
-    /// default the first OIDC `--auth-provider`.
+    /// default the first OIDC `--auth-provider` that takes passwords (not
+    /// WorkOS). `none`: no password form (IDENTITY-30).
     #[arg(long, env = "MENGER_LOGIN_PASSWORD", value_name = "PROVIDER")]
     login_password: Option<String>,
 

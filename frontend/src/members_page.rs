@@ -156,7 +156,7 @@ pub(crate) fn MembersPage() -> impl IntoView {
             </table>
             <h3>"Grant a role"</h3>
             <div class="line" id="grant-form">
-                <input id="grant-principal" placeholder="idp:… · oidc:auth0/… · nostr:…" prop:value=move || p_text.get()
+                <input id="grant-principal" placeholder="oidc:workos/user_… · idp:… · nostr:…" prop:value=move || p_text.get()
                     on:input=move |ev| p_text.set(event_target_value(&ev)) />
                 <input id="grant-scope" placeholder="SHORTCODE or *" prop:value=move || s_text.get()
                     on:input=move |ev| s_text.set(event_target_value(&ev)) />

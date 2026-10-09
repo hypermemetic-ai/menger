@@ -1097,6 +1097,7 @@ exactly as before.
 | `idp=<issuer>,<audience>` | a plexus-idp token (its password grant, or its nostr grant) | `idp:<uuid>` |
 | `auth0=<domain>,<audience>[,<roles-claim>]` | an Auth0 access token; roles from the namespaced claim an Auth0 Action adds | `oidc:auth0/<sub>` |
 | `oidc:<name>=<issuer>,<audience>[,<roles-claim>]` | any OIDC provider's RS256 token (Logto, Keycloak, …) | `oidc:<name>/<sub>` |
+| `workos=<client-id>[,<api-base>]` | a WorkOS access token (AuthKit, social, SSO) for that client: issuer `…/user_management/<client-id>`, audience in `client_id` (IDENTITY-30) | `oidc:workos/<user id>` |
 | `nostr=<ws-url>[,<ws-url>…]` | a NIP-98 event (kind 27235) naming that URL, method GET, under a minute old, used once | `nostr:<hex>` |
 
 Several providers can be configured together. An OIDC adapter claims a
@@ -1170,7 +1171,7 @@ naming another `Host` are refused.
 | flag | |
 |---|---|
 | `--login-button <Label>=<provider>[:<connection>]` | a button; the provider needs `client=<id>` in its `--auth-provider` |
-| `--login-password <provider>` | where the password form goes (default: the first OIDC provider) |
+| `--login-password <provider>` | where the password form goes (default: the first OIDC provider that takes passwords, not WorkOS); `none`: no form |
 | `--login-forgot <url>` | a "Forgot password?" link |
 | `--public-url <url>` | where people reach the shell; the redirect URI's base (default `http://127.0.0.1:<shell-port>`) |
 | `--allowed-origin <origin>` | another origin whose pages may open the socket |
@@ -1179,6 +1180,26 @@ naming another `Host` are refused.
 `GET /login/me` answers who the session is, or 401. Sessions live in memory,
 so a restart signs everyone out (IDENTITY-18 G2). `tests/login_page.rs` runs
 each way in against fixture issuers.
+
+**WorkOS** (IDENTITY-30) is the hosted IdP. menger is a public client: the
+code flow runs with PKCE and no secret, and menger holds no API key. A button
+names WorkOS's way in, sent as `provider`. `authkit` is WorkOS's own page:
+email and password, passkeys, a code by email, and SSO chosen by the email's
+domain. `GoogleOAuth`, `AppleOAuth`, `GitHubOAuth` and `MicrosoftOAuth` are
+also `provider` values. A `conn_…` connection or an `org_…` organization is
+sent as `connection_id` or `organization_id`. WorkOS's access token names
+nobody, so the person's name and email come from the authenticate response's
+`user`, which must be the token's own subject. Signing out also ends the WorkOS
+session, then returns to `/login`. The environment must list
+`<public-url>/login/callback` as a redirect URI and `<public-url>/login` as a
+logout URI (`workos authkit redirect-uris set …`, `workos authkit logout-uris
+set …`).
+
+```sh
+menger --auth-provider 'workos=client_01…' --login-password none \
+  --login-button Google=workos:GoogleOAuth --login-button Apple=workos:AppleOAuth \
+  --login-button Email=workos:authkit --login-button SSO=workos:authkit
+```
 
 ### Members and roles (IDENTITY-21)
 
