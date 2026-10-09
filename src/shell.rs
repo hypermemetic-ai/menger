@@ -58,6 +58,9 @@ pub struct ShellConfig {
     /// MFE-23: the environment's name (`MENGER_ENV`), which titles the
     /// browser tab ([`tab_title`]).
     pub env: Option<String>,
+    /// IDENTITY-19: the login page and its routes, when providers are
+    /// configured; with `require`, the app's routes need a session.
+    pub login: Option<Arc<crate::web_login::Login>>,
 }
 
 /// MFE-23: the tab's title — `menger.test` on the test environment,
@@ -113,20 +116,77 @@ pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
         client: hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
             .build_http(),
     });
-    let app = Router::new()
+    // The app's routes: behind a session when login is required
+    // (IDENTITY-19 — no anonymous view).
+    let mut app = Router::new()
         .route("/", get(root_index))
         .route("/vanilla", get(vanilla))
-        .route("/favicon.svg", get(favicon))
         .route("/app", get(app_index))
         .route("/app/", get(app_index))
         .route("/app/{*path}", get(app_asset))
         .route("/rest/{*path}", any(proxy_rest))
-        .with_state(state);
+        .with_state(state.clone());
+    if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
+        app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));
+    }
+    let mut app = app.merge(Router::new().route("/favicon.svg", get(favicon)));
+    if let Some(login) = cfg.login.clone() {
+        use crate::web_login as w;
+        app = app.merge(
+            Router::new()
+                .route("/login", get(w::page).post(w::password))
+                .route("/login/start", get(w::start))
+                .route("/login/callback", get(w::callback))
+                .route("/login/nostr", axum::routing::post(w::nostr))
+                .route("/login/me", get(w::me))
+                .route("/logout", axum::routing::post(w::logout))
+                .with_state(login.clone()),
+        );
+        // DNS rebinding: a page on another name resolving here gets nothing.
+        let hosts = Arc::new(allowed_hosts(cfg.port, &login));
+        app = app.layer(axum::middleware::from_fn_with_state(hosts, host_is_ours));
+        tracing::info!("Login:     http://127.0.0.1:{}/login", cfg.port);
+    }
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", cfg.port)).await?;
     tracing::info!("App:       http://127.0.0.1:{}/", cfg.port);
     tracing::info!("Vanilla:   http://127.0.0.1:{}/vanilla", cfg.port);
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// IDENTITY-19: the app's routes without a session go to the login page;
+/// the REST proxy answers 401.
+async fn require_session(
+    State(login): State<Arc<crate::web_login::Login>>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if login.session(req.headers()).is_some() {
+        return next.run(req).await;
+    }
+    let path = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    if path.starts_with("/rest/") {
+        return (StatusCode::UNAUTHORIZED, "sign in first").into_response();
+    }
+    let to = format!("/login?next={}", url::form_urlencoded::byte_serialize(path.as_bytes()).collect::<String>());
+    (StatusCode::SEE_OTHER, [(header::LOCATION, to)]).into_response()
+}
+
+/// The `Host` values this shell answers to: its port on 127.0.0.1 and
+/// localhost, and the public URL's host.
+fn allowed_hosts(port: u16, login: &crate::web_login::Login) -> Vec<String> {
+    let mut hosts = vec![format!("127.0.0.1:{port}"), format!("localhost:{port}")];
+    hosts.extend(login.hosts());
+    hosts
+}
+
+/// IDENTITY-24 #1: a request naming another host (DNS rebinding) is refused.
+async fn host_is_ours(State(hosts): State<Arc<Vec<String>>>, req: Request, next: axum::middleware::Next) -> Response {
+    let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).map(str::to_ascii_lowercase);
+    match host {
+        Some(h) if hosts.iter().any(|a| *a == h) => next.run(req).await,
+        _ => (StatusCode::MISDIRECTED_REQUEST, "this server does not answer to that name").into_response(),
+    }
 }
 
 /// The degraded answer when `frontend/dist` holds no build. 200 on

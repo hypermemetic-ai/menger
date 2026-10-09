@@ -21,6 +21,8 @@ use async_stream::stream;
 #[cfg(feature = "server")]
 use futures::Stream;
 #[cfg(feature = "server")]
+use crate::access::Access;
+#[cfg(feature = "server")]
 use plexus_core::plexus::AuthContext;
 #[cfg(feature = "server")]
 use std::sync::Arc;
@@ -30,12 +32,20 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct Comments {
     store: Arc<Store>,
+    /// IDENTITY-19: the rule every method asks first ([`crate::access`]).
+    access: Access,
 }
 
 #[cfg(feature = "server")]
 impl Comments {
+    /// No login: every call admitted, as always.
     pub fn new(store: Arc<Store>) -> Self {
-        Self { store }
+        Self::with_access(store, Access::open())
+    }
+
+    /// IDENTITY-19: behind [`Access`].
+    pub fn with_access(store: Arc<Store>, access: Access) -> Self {
+        Self { store, access }
     }
 }
 
@@ -80,8 +90,13 @@ impl Comments {
     )]
     pub async fn add(&self, auth: Option<&AuthContext>, anchor: Anchor, body: String, author: Option<String>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
+        let admitted = self.access.admit(auth);
         let author = crate::session_activation::identity(auth).name().map(str::to_string).or(author);
         stream! {
+            if let Err(message) = admitted {
+                yield CommentsEvent::Error { message };
+                return;
+            }
             yield answer(store.add_comment(anchor, body, author).await);
         }
     }
@@ -115,7 +130,7 @@ impl Comments {
         )
     )]
     pub async fn list(
-        &self,
+        &self, auth: Option<&AuthContext>,
         ticket: Option<String>,
         under: Option<String>,
         route: Option<String>,
@@ -127,7 +142,12 @@ impl Comments {
         limit: Option<u32>,
     ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
+        let admitted = self.access.admit(auth);
         stream! {
+            if let Err(message) = admitted {
+                yield CommentsEvent::Error { message };
+                return;
+            }
             let state = match state.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::parse::<CommentState>) {
                 None => None,
                 Some(Ok(s)) => Some(s),
@@ -157,9 +177,14 @@ impl Comments {
         description = "Resolve a comment; yields the comment, resolved",
         params(id = "The comment's id, e.g. 1")
     )]
-    pub async fn resolve(&self, id: u64) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    pub async fn resolve(&self, auth: Option<&AuthContext>, id: u64) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
+        let admitted = self.access.admit(auth);
         stream! {
+            if let Err(message) = admitted {
+                yield CommentsEvent::Error { message };
+                return;
+            }
             yield answer(store.resolve_comment(id).await);
         }
     }
@@ -171,9 +196,14 @@ impl Comments {
         description = "Reopen a resolved comment; yields the comment, open",
         params(id = "The comment's id, e.g. 1")
     )]
-    pub async fn reopen(&self, id: u64) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    pub async fn reopen(&self, auth: Option<&AuthContext>, id: u64) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
+        let admitted = self.access.admit(auth);
         stream! {
+            if let Err(message) = admitted {
+                yield CommentsEvent::Error { message };
+                return;
+            }
             yield answer(store.reopen_comment(id).await);
         }
     }
@@ -187,11 +217,23 @@ impl Comments {
         streaming,
         description = "Subscribe to comments: added / resolved / reopened, each with the comment, until disconnect; lagged { missed } where a slow subscriber lost changes"
     )]
-    pub async fn watch(&self) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    pub async fn watch(&self, auth: Option<&AuthContext>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let mut rx = self.store.subscribe_comments();
+        // IDENTITY-19: admitted now and at every change, as tickets.watch.
+        let access = self.access.clone();
+        let who = auth.cloned();
         stream! {
+            if let Err(message) = access.admit(who.as_ref()) {
+                yield CommentsEvent::Error { message };
+                return;
+            }
             loop {
-                match rx.recv().await {
+                let next = rx.recv().await;
+                if let Err(message) = access.admit(who.as_ref()) {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+                match next {
                     Ok(CommentChange::Added(comment)) => yield CommentsEvent::Added { comment },
                     Ok(CommentChange::Resolved(comment)) => yield CommentsEvent::Resolved { comment },
                     Ok(CommentChange::Reopened(comment)) => yield CommentsEvent::Reopened { comment },

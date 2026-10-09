@@ -14,6 +14,8 @@
 mod builder;
 
 pub mod login;
+pub mod sessions;
+pub mod web_login;
 
 pub mod shell;
 

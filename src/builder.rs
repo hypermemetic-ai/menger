@@ -1,3 +1,4 @@
+use menger_tickets_api::access::Access;
 use menger_tickets_api::{Comments, ProviderOffer, Session, Tickets};
 use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError};
 use plexus_core::plexus::DynamicHub;
@@ -47,16 +48,18 @@ pub async fn build_rpc_seeded(
     seed: Option<SeedSpec>,
     shape: SeedShape,
 ) -> anyhow::Result<Arc<DynamicHub>> {
-    build_rpc_offering(db_path, seed, shape, Vec::new()).await
+    build_rpc_offering(db_path, seed, shape, Vec::new(), Access::open()).await
 }
 
 /// IDENTITY-15: [`build_rpc_seeded`], with `session.providers` offering
-/// these providers (main's `--auth-provider`s).
+/// these providers (main's `--auth-provider`s). IDENTITY-19: and every
+/// `tickets` and `comments` method behind `access`.
 pub async fn build_rpc_offering(
     db_path: &Path,
     seed: Option<SeedSpec>,
     shape: SeedShape,
     offers: Vec<ProviderOffer>,
+    access: Access,
 ) -> anyhow::Result<Arc<DynamicHub>> {
     let path = db_path.to_path_buf();
     let started = Instant::now();
@@ -112,8 +115,8 @@ pub async fn build_rpc_offering(
     let store = Arc::new(store);
     Ok(Arc::new(
         DynamicHub::new("menger")
-            .register(Tickets::new(Arc::clone(&store)))
-            .register(Comments::new(store))
+            .register(Tickets::with_access(Arc::clone(&store), access.clone()))
+            .register(Comments::with_access(store, access))
             .register(Session::offering(offers)),
     ))
 }

@@ -1,6 +1,9 @@
 use clap::Parser;
 use menger::store::{SeedShape, SeedSpec, Store, Verdict};
-use menger::login::{self, Provider};
+use menger::login::{self, LoginButton, Provider};
+use menger::sessions::{Gate, Sessions};
+use menger::web_login::{Login, LoginConfig};
+use menger_tickets_api::access::Access;
 use menger::{build_rpc_offering, default_db_path, shell};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::{RestHttpConfig, RouteFn, TransportServer};
@@ -119,6 +122,38 @@ struct Args {
         value_parser = clap::builder::FalseyValueParser::new()
     )]
     require_login: bool,
+
+    /// IDENTITY-19: a button on the login page (repeatable),
+    /// `<Label>=<provider>[:<connection>]`, e.g. `Google=auth0:google-oauth2`,
+    /// `Apple=auth0:apple`, `SSO=auth0:samlp` (asks for a work email). The
+    /// provider needs `client=<id>` in its `--auth-provider`. In the env var,
+    /// separated by `;`.
+    #[arg(long = "login-button", env = "MENGER_LOGIN_BUTTONS", value_name = "SPEC", value_delimiter = ';')]
+    login_button: Vec<LoginButton>,
+
+    /// IDENTITY-19: the provider the login page's password form goes to;
+    /// default the first OIDC `--auth-provider`.
+    #[arg(long, env = "MENGER_LOGIN_PASSWORD", value_name = "PROVIDER")]
+    login_password: Option<String>,
+
+    /// IDENTITY-19: a "Forgot password?" link on the login page.
+    #[arg(long, env = "MENGER_LOGIN_FORGOT", value_name = "URL")]
+    login_forgot: Option<String>,
+
+    /// IDENTITY-19: where people reach this shell (the login page's base for
+    /// the code flow's redirect URI and the nostr URL); default
+    /// http://127.0.0.1:<shell-port>.
+    #[arg(long, env = "MENGER_PUBLIC_URL", value_name = "URL")]
+    public_url: Option<String>,
+
+    /// IDENTITY-29: another origin whose pages may open the socket
+    /// (repeatable); the shell's own are always allowed.
+    #[arg(long = "allowed-origin", env = "MENGER_ALLOWED_ORIGINS", value_name = "ORIGIN", value_delimiter = ';')]
+    allowed_origin: Vec<String>,
+
+    /// IDENTITY-19: how long a sign-in lasts.
+    #[arg(long, env = "MENGER_SESSION_HOURS", default_value = "12", value_name = "HOURS")]
+    session_hours: i64,
 }
 
 #[tokio::main]
@@ -160,7 +195,34 @@ async fn main() -> anyhow::Result<()> {
     }
     let boundary = login::boundary(&args.auth_provider)?;
     let offers = args.auth_provider.iter().map(Provider::offer).collect();
-    let hub = build_rpc_offering(&db_path, seed, args.seed_shape, offers).await?;
+    // IDENTITY-19: sessions, the rule every method asks, and the page.
+    let login_on = !args.auth_provider.is_empty();
+    let sessions = Arc::new(Sessions::new(args.session_hours * 3600));
+    let access = if login_on { Access::with_login(sessions.clone(), args.require_login) } else { Access::open() };
+    let public_url = args.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", args.shell_port));
+    let shell_origins = vec![
+        format!("http://127.0.0.1:{}", args.shell_port),
+        format!("http://localhost:{}", args.shell_port),
+        menger::web_login::origin_of(&public_url),
+    ];
+    let web_login = if login_on && !args.no_shell && !args.stdio {
+        Some(Arc::new(Login::new(
+            LoginConfig {
+                providers: args.auth_provider.clone(),
+                buttons: args.login_button.clone(),
+                password: args.login_password.clone(),
+                forgot: args.login_forgot.clone(),
+                public_url: public_url.clone(),
+                also: shell_origins.clone(),
+                require: args.require_login,
+                title: shell::tab_title(args.env.as_deref()),
+            },
+            sessions.clone(),
+        )?))
+    } else {
+        None
+    };
+    let hub = build_rpc_offering(&db_path, seed, args.seed_shape, offers, access).await?;
 
     let activations = hub.list_activations_info();
     tracing::info!("Activations ({}):", activations.len());
@@ -186,8 +248,14 @@ async fn main() -> anyhow::Result<()> {
     } else {
         builder = builder.with_websocket(args.port);
         tracing::info!("WebSocket: ws://127.0.0.1:{}", args.port);
-        if let Some(validator) = boundary {
-            builder = builder.with_session_validator(validator);
+        // IDENTITY-29: only menger's own pages may open the socket from a
+        // browser, login or not; synapse sends no Origin and is unaffected.
+        let mut origins = shell_origins.clone();
+        origins.extend(args.allowed_origin.iter().cloned());
+        builder = builder.with_allowed_origins(origins);
+        if let Some(carriers) = boundary {
+            let gate = Gate::new(sessions.clone(), Some(carriers));
+            builder = builder.with_session_validator(Arc::new(gate));
             if args.require_login {
                 builder = builder.reject_upgrade_on_auth_failure();
             }
@@ -224,6 +292,7 @@ async fn main() -> anyhow::Result<()> {
                 rest_port: (!args.no_rest).then_some(args.rest_port),
                 app_dist: args.app_dist.unwrap_or_else(shell::default_app_dist),
                 env: args.env.clone(),
+                login: web_login,
             };
             tokio::spawn(async move {
                 if let Err(e) = shell::serve(cfg).await {

@@ -50,6 +50,11 @@ pub use types::{
     PlacementChange, RootRow, Severity, Status, Ticket, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
 };
 
+/// IDENTITY-19: the rule every method asks first — who a call acts as, or
+/// why it is refused. Server-only.
+#[cfg(feature = "server")]
+pub mod access;
+
 /// The cache and its storage — the server's system of record (MNG-2).
 #[cfg(feature = "server")]
 pub mod store;

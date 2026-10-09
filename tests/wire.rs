@@ -935,6 +935,7 @@ async fn shell_serves_the_page() {
             rest_port: None,
             app_dist: std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")),
             env: None,
+            login: None,
         })
         .await;
     });

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin">
+<title>Sign in · {{TITLE}}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- IDENTITY-19: menger's login page. Self-contained (no app, no fonts, no
+     scripts but the one below), so it can be handed to an IdP as its hosted
+     login page later. The shell fills the {{…}} placeholders, escaped. -->
+<script>try{var t=localStorage.getItem("menger.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<style>
+  /* menger's palette (frontend/index.html :root), the tokens this page uses. */
+  :root {
+    color-scheme: light;
+    --bg: #fbfbf9; --panel: #f4f3ee; --card: #fff; --ink: #1f2328; --muted: #8a8f98;
+    --line: #e3e1d8; --accent: #0066cc; --accent-ink: #fff; --hover: #ecebe4;
+    --err-bg: #fdecec; --err-fg: #a23; --err-line: #f3c5c5; --shadow: rgba(31, 35, 40, .08);
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #101014; --panel: #17171d; --card: #1e1e26; --ink: #d8d8e0; --muted: #7a7a88;
+      --line: #26262e; --accent: #8ab4f8; --accent-ink: #101014; --hover: #1f1f28;
+      --err-bg: #2b1517; --err-fg: #e89393; --err-line: #5a2626; --shadow: rgba(0, 0, 0, .4);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #101014; --panel: #17171d; --card: #1e1e26; --ink: #d8d8e0; --muted: #7a7a88;
+    --line: #26262e; --accent: #8ab4f8; --accent-ink: #101014; --hover: #1f1f28;
+    --err-bg: #2b1517; --err-fg: #e89393; --err-line: #5a2626; --shadow: rgba(0, 0, 0, .4);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--ink); font: 15px/1.45 var(--sans);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 32px 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; font: 600 20px var(--mono); letter-spacing: -.01em; }
+  .brand .mark {
+    width: 30px; height: 30px; border-radius: 7px; background: var(--ink); color: var(--bg);
+    display: grid; place-items: center; font: 700 17px var(--mono);
+  }
+  .card {
+    width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 28px 28px 24px; box-shadow: 0 1px 2px var(--shadow), 0 8px 24px var(--shadow);
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--muted); margin: 0 0 22px; font-size: 14px; }
+  .error {
+    background: var(--err-bg); color: var(--err-fg); border: 1px solid var(--err-line);
+    border-radius: 8px; padding: 9px 12px; font-size: 13.5px; margin: 0 0 16px;
+  }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; }
+  .row a { font-size: 13px; }
+  input[type=text], input[type=password], input[type=email] {
+    width: 100%; font: inherit; padding: 9px 11px; margin: 0 0 14px; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px; outline: none;
+  }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button {
+    width: 100%; font: inherit; font-weight: 600; padding: 10px 12px; border-radius: 8px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); margin-top: 4px; }
+  button.primary:hover { filter: brightness(1.05); }
+  button.alt { background: var(--card); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+  button.alt:hover { background: var(--hover); }
+  button:disabled { opacity: .55; cursor: default; }
+  .or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12.5px; margin: 20px 0 16px; }
+  .or::before, .or::after { content: ""; height: 1px; background: var(--line); flex: 1; }
+  .alts { display: grid; gap: 10px; }
+  .alts svg { width: 18px; height: 18px; flex: none; }
+  .sso { display: none; margin-top: 2px; }
+  .sso.open { display: block; }
+  .sso input { margin-bottom: 10px; }
+  .foot { margin-top: 18px; color: var(--muted); font-size: 12.5px; text-align: center; }
+  .foot a { color: var(--muted); }
+  .note { color: var(--muted); font-size: 12.5px; margin: 14px 0 0; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="brand"><span class="mark">m</span>{{TITLE}}</div>
+  <main class="card">
+    <h1>Sign in</h1>
+    <p class="sub">to continue to {{TITLE}}</p>
+    {{ERROR}}
+    {{PASSWORD}}
+    {{OR}}
+    <div class="alts">
+      {{BUTTONS}}
+      {{NOSTR}}
+    </div>
+    <p class="note">Don't have access? Sign in, then send an admin the id you are shown.</p>
+  </main>
+  <p class="foot">{{TITLE}} v{{VERSION}}</p>
+  <script>
+    // SSO asks for a work email first; nostr signs one NIP-98 event with the
+    // browser's NIP-07 extension. Everything else is a plain form or link.
+    for (const b of document.querySelectorAll("[data-sso]")) {
+      b.addEventListener("click", () => {
+        const f = document.getElementById(b.dataset.sso);
+        f.classList.add("open");
+        f.querySelector("input[type=email]").focus();
+      });
+    }
+    const n = document.getElementById("nostr");
+    if (n) {
+      if (!window.nostr) { n.disabled = true; n.title = "needs a nostr extension (NIP-07) in this browser"; }
+      n.addEventListener("click", async () => {
+        const url = location.origin + "/login/nostr";
+        try {
+          const ev = await window.nostr.signEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000),
+            content: "", tags: [["u", url], ["method", "POST"]] });
+          const r = await fetch(url + "?next=" + encodeURIComponent(n.dataset.next), {
+            method: "POST", headers: { authorization: "Nostr " + btoa(JSON.stringify(ev)) }, redirect: "follow" });
+          location.href = r.redirected ? r.url : "/login?error=" + encodeURIComponent("Your nostr key was not accepted.");
+        } catch (e) {
+          location.href = "/login?error=" + encodeURIComponent("Your nostr extension did not sign.");
+        }
+      });
+    }
+  </script>
+</body>
+</html>

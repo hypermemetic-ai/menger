@@ -1145,6 +1145,41 @@ connects with the credential. The header shows `whoami`'s name, or
 `sign in`. The cookies are this page's host's, so sign-in reaches only a
 backend on the same host, not one set from `#/settings` elsewhere.
 
+### The login page (IDENTITY-19)
+
+With providers configured, the shell serves **`/login`**, a traditional
+sign-in page: a username and password (one provider's password grant),
+**Continue with …** buttons (`--login-button Google=auth0:google-oauth2`,
+`Apple=auth0:apple`, `SSO=auth0:samlp`) that run the provider's
+authorization code flow with PKCE and a connection hint, and **Continue with
+nostr** when a NIP-07 extension is present. Each way in ends the same way:
+the provider's token is verified by its adapter **in the shell**, a session
+starts, and the browser gets an `HttpOnly; SameSite=Lax` `menger_session`
+cookie. No script on any page can read a credential. The page is
+self-contained (`web/login.html`), so an IdP can host it later.
+
+`--require-login` puts the whole app behind it. `/`, `/app/…` and `/vanilla`
+redirect to `/login?next=…`, the socket refuses an upgrade without a session
+or a provider token, and **every method re-checks its caller on every call**
+(`tickets-api/src/access.rs`). Signing out (`POST /logout`) or a session
+expiring stops an open socket from answering, and ends its `watch`. The socket
+admits browser pages only from the shell's own origins (IDENTITY-29, with or
+without login; synapse sends no Origin). POSTs from another origin and requests
+naming another `Host` are refused.
+
+| flag | |
+|---|---|
+| `--login-button <Label>=<provider>[:<connection>]` | a button; the provider needs `client=<id>` in its `--auth-provider` |
+| `--login-password <provider>` | where the password form goes (default: the first OIDC provider) |
+| `--login-forgot <url>` | a "Forgot password?" link |
+| `--public-url <url>` | where people reach the shell; the redirect URI's base (default `http://127.0.0.1:<shell-port>`) |
+| `--allowed-origin <origin>` | another origin whose pages may open the socket |
+| `--session-hours <n>` | how long a sign-in lasts (default 12) |
+
+`GET /login/me` answers who the session is, or 401. Sessions live in memory,
+so a restart signs everyone out (IDENTITY-18 G2). `tests/login_page.rs` runs
+each way in against fixture issuers.
+
 ## Diagrams — the `diagrams` service (COMPILE-4)
 
 A second Plexus service beside menger, in `diagrams/` (`menger-diagrams`):

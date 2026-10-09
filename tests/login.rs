@@ -16,6 +16,8 @@ use jsonrpsee::ws_client::{HeaderMap, HeaderValue, WsClient, WsClientBuilder};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use menger::build_rpc_offering;
 use menger::login::{self, Provider};
+use menger::sessions::{Gate, Sessions};
+use menger_tickets_api::access::Access;
 use nostr::event::{EventBuilder, FinalizeEvent, Kind, Tag};
 use nostr::key::Keys;
 use nostr::nips::nip19::ToBech32;
@@ -151,7 +153,10 @@ async fn providers() -> Providers {
 async fn start(port: u16, providers: &[Provider], require_login: bool) {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
     let offers = providers.iter().map(Provider::offer).collect();
-    let hub = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers)
+    // As main wires it (IDENTITY-19): sessions, the per-call rule, the gate.
+    let sessions = Arc::new(Sessions::new(3600));
+    let access = if providers.is_empty() { Access::open() } else { Access::with_login(sessions.clone(), require_login) };
+    let hub = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers, access)
         .await
         .expect("open database");
     let boundary = login::boundary(providers).expect("providers");
@@ -159,8 +164,8 @@ async fn start(port: u16, providers: &[Provider], require_login: bool) {
     tokio::spawn(async move {
         let _keep = dir;
         let mut builder = TransportServer::builder(hub, conv).with_websocket(port);
-        if let Some(validator) = boundary {
-            builder = builder.with_session_validator(validator);
+        if let Some(carriers) = boundary {
+            builder = builder.with_session_validator(Arc::new(Gate::new(sessions, Some(carriers))));
             if require_login {
                 builder = builder.reject_upgrade_on_auth_failure();
             }
