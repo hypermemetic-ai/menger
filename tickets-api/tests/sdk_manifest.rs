@@ -1,27 +1,27 @@
 //! COMP-10: the SDK's drift guard. `menger.tickets.*` inside a frame is the
 //! client hub-codegen generated from this activation's schema — a snapshot,
 //! committed in `frontend/sdk/generated/` by `scripts/sdk-codegen.sh`, which
-//! writes beside it `manifest.json`: each method of the activation and its
-//! parameter names, as the generator read them. This test holds the
-//! activation to that manifest, so a method or parameter added, removed or
-//! renamed fails `cargo test --workspace` until the client is generated
-//! again — never silently shipping a frame SDK that calls what is gone.
-//! (Events and types are not compared: a renamed field already fails the
-//! wasm app's build, MFE-11, and the script regenerates them all at once.)
+//! writes beside it `manifest.json`: each activation on the hub, its methods
+//! and their parameter names, as the generator read them. This test holds
+//! the activations — `tickets`, and (COMMENT-2) `comments` — to that
+//! manifest, so a method or parameter added, removed or renamed, or an
+//! activation added, fails `cargo test --workspace` until the client is
+//! generated again — never silently shipping a generated client that calls
+//! what is gone. (Events and types are not compared: a renamed field
+//! already fails the wasm app's build, MFE-11, and the script regenerates
+//! them all at once.)
 #![cfg(feature = "server")]
 
-use menger_tickets_api::{Store, Tickets};
-use plexus_core::plexus::Activation;
+use menger_tickets_api::{Comments, Store, Tickets};
+use plexus_core::plexus::{Activation, PluginSchema};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// Each method's parameter names, sorted, by method name.
+/// Each method's parameter names, sorted, by `namespace.method`.
 type Surface = BTreeMap<String, Vec<String>>;
 
-/// The activation's surface, from its own schema.
-fn activation() -> Surface {
-    let schema = Tickets::new(Arc::new(Store::new())).plugin_schema();
-    assert_eq!(schema.namespace, "tickets");
+/// One activation's surface, from its own schema.
+fn surface(schema: PluginSchema) -> Surface {
     schema
         .methods
         .iter()
@@ -35,9 +35,21 @@ fn activation() -> Surface {
                 .map(|props| props.keys().cloned().collect())
                 .unwrap_or_default();
             params.sort();
-            (m.name.clone(), params)
+            (format!("{}.{}", schema.namespace, m.name), params)
         })
         .collect()
+}
+
+/// The hub's activations' surfaces, from their own schemas — the ones
+/// `menger::build_rpc` registers.
+fn activation() -> Surface {
+    let store = Arc::new(Store::new());
+    let tickets = Tickets::new(Arc::clone(&store)).plugin_schema();
+    let comments = Comments::new(store).plugin_schema();
+    assert_eq!((tickets.namespace.as_str(), comments.namespace.as_str()), ("tickets", "comments"));
+    let mut out = surface(tickets);
+    out.extend(surface(comments));
+    out
 }
 
 /// The generated client's surface, from the manifest the script wrote.
@@ -46,8 +58,12 @@ fn generated() -> Surface {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("{path}: {e} — run scripts/sdk-codegen.sh to generate the SDK's client"));
     let manifest: serde_json::Value = serde_json::from_str(&text).expect("manifest.json is JSON");
-    assert_eq!(manifest["namespace"], "tickets");
-    serde_json::from_value(manifest["methods"].clone()).expect("manifest.json's methods: { name: [param, …] }")
+    let activations: BTreeMap<String, BTreeMap<String, Vec<String>>> = serde_json::from_value(manifest["activations"].clone())
+        .unwrap_or_else(|e| panic!("manifest.json's activations: {{ namespace: {{ method: [param, …] }} }} — {e}; run scripts/sdk-codegen.sh"));
+    activations
+        .into_iter()
+        .flat_map(|(ns, methods)| methods.into_iter().map(move |(m, params)| (format!("{ns}.{m}"), params)))
+        .collect()
 }
 
 /// What differs, one line each.
@@ -71,7 +87,7 @@ fn the_generated_sdk_matches_the_activation() {
     let problems = drift(&activation(), &generated());
     assert!(
         problems.is_empty(),
-        "the tickets activation's surface changed since the SDK's client was generated — run scripts/sdk-codegen.sh \
+        "the activations' surface changed since the SDK's client was generated — run scripts/sdk-codegen.sh \
          (and commit frontend/sdk/):\n  {}",
         problems.join("\n  ")
     );

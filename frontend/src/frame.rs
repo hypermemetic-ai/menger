@@ -1044,7 +1044,9 @@ mod tests {
         assert!(bundle.contains("mengerTyped = {"), "the bundle hands the shell its client");
         let manifest: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("generated/manifest.json")).unwrap()).unwrap();
-        let methods = manifest["methods"].as_object().expect("methods");
+        // COMMENT-2: the manifest holds every activation; the bundle is the
+        // bridge's, which reaches `tickets`.
+        let methods = manifest["activations"]["tickets"].as_object().expect("the tickets activation's methods");
         assert!(methods.contains_key("waves") && methods.contains_key("set_status"), "{methods:?}");
         for name in methods.keys() {
             assert!(bundle.contains(&format!("\"tickets.{name}\"")), "the bundle calls tickets.{name}");

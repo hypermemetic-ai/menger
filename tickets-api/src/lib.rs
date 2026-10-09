@@ -3,8 +3,8 @@
 //!
 //! | Consumer | Features | Gets |
 //! |---|---|---|
-//! | `menger` (the server binary) | *(default: `server`)* | [`types`], [`store`], [`Tickets`] — the activation with its real bodies — and [`TicketsClient`] |
-//! | `menger-app` (wasm32) | `default-features = false` | [`types`] and [`TicketsClient`] over four wasm-safe crates: no plexus-core, tokio, jsonrpsee or rusqlite |
+//! | `menger` (the server binary) | *(default: `server`)* | [`types`], [`store`], [`Tickets`] — the activation with its real bodies — and [`TicketsClient`]; COMMENT-2's [`comments`], [`Comments`] and [`CommentsClient`] beside them |
+//! | `menger-app` (wasm32) | `default-features = false` | [`types`] and [`TicketsClient`] over four wasm-safe crates: no plexus-core, tokio, jsonrpsee or rusqlite; [`comments`] and [`CommentsClient`] the same way |
 //!
 //! The client is emitted by `#[plexus_macros::activation(client, …)]` on
 //! the activation's own `impl`, so its parameters and events *are* the
@@ -65,3 +65,15 @@ pub mod activation;
 pub use activation::TicketsClient;
 #[cfg(feature = "server")]
 pub use activation::Tickets;
+
+/// COMMENT-2: the comments vocabulary — [`Anchor`], [`Comment`],
+/// [`CommentState`], [`CommentsEvent`] — and the rules `add` keeps them by.
+/// Wasm-safe, like [`types`].
+pub mod comments;
+pub use comments::{Anchor, Comment, CommentState, CommentsEvent};
+/// COMMENT-2: the `comments` activation, declared once as `tickets` is: the
+/// server's [`Comments`] and the browser's [`CommentsClient`].
+pub mod comments_activation;
+pub use comments_activation::CommentsClient;
+#[cfg(feature = "server")]
+pub use comments_activation::Comments;

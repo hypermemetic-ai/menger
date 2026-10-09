@@ -527,12 +527,12 @@ async fn verify_derived_names_an_altered_tally_and_holder_and_a_form_4_file_is_b
     drop(conn);
     let (code, out, _) = verify(&db);
     assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("stored in form 4; this build reads 6"), "{out}");
+    assert!(out.contains("stored in form 4; this build reads 7"), "{out}");
     let s = spawn_server(&db, dir.path(), "form4").await;
     let c = connect(s.port).await;
     one(&c, "tickets.health", json!({})).await.unwrap();
     let log = s.log();
-    assert!(log.contains("it was stored in form 4, this build writes 6"), "{log}");
+    assert!(log.contains("it was stored in form 4, this build writes 7"), "{log}");
     assert!(log.contains("kept the tree over 6000 tickets"), "{log}");
     drop(c);
     s.kill9();
@@ -547,7 +547,8 @@ async fn verify_derived_names_an_altered_tally_and_holder_and_a_form_4_file_is_b
     s.kill9();
 }
 
-/// FILTER-21, "a file in form 5 is opened", through the binary: a nested
+/// FILTER-21, "a file in form 5 is opened", through the binary (COMMENT-2:
+/// built to form 7 now, the comments table with it): a nested
 /// seed with menger's own documents beside ordinary docs (two shortcodes'
 /// board notes), its answers taken over the wire; then the file as a form-5
 /// build leaves it — the cell table without its `menger` column, a board
@@ -653,14 +654,14 @@ async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
     drop(conn);
     let (code, out, _) = verify(&db);
     assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("stored in form 5; this build reads 6"), "{out}");
+    assert!(out.contains("stored in form 5; this build reads 7"), "{out}");
 
     // The first open gains form 6, once, and answers as before.
     let s = spawn_server(&db, dir.path(), "form5").await;
     let after = answers(connect(s.port).await).await;
     let log = s.log();
-    let built = log.lines().find(|l| l.contains("it was stored in form 5, this build writes 6")).unwrap_or_else(|| panic!("{log}"));
-    eprintln!("form 5 → 6: {}", &built[built.find("built once").unwrap_or(0)..]);
+    let built = log.lines().find(|l| l.contains("it was stored in form 5, this build writes 7")).unwrap_or_else(|| panic!("{log}"));
+    eprintln!("form 5 → 7: {}", &built[built.find("built once").unwrap_or(0)..]);
     assert_eq!(after.len(), before.len());
     for (i, (a, b)) in after.iter().zip(&before).enumerate() {
         assert_eq!(a, b, "answer {i} after the upgrade");
@@ -670,7 +671,7 @@ async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
     assert_eq!(code, Some(0), "{out}\n{err}");
     let conn = rusqlite::Connection::open(&db).unwrap();
     let form: i64 = conn.query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
-    assert_eq!(form, 6);
+    assert_eq!(form, 7, "COMMENT-2: a build writes form 7");
     assert_eq!(docs_cells(&conn), 2, "the board notes' cell and the ordinary docs' apart");
     let menger: i64 = conn.query_row("SELECT count(*) FROM cells WHERE menger = 1", [], |r| r.get(0)).unwrap();
     assert!(menger >= 1);
@@ -679,5 +680,91 @@ async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
     let again = answers(connect(s.port).await).await;
     assert_eq!(again, before, "the next open reads what the upgrade stored");
     assert!(!s.log().contains("SCALE-28: stored"), "built once: {}", s.log());
+    s.kill9();
+}
+
+/// COMMENT-2, "a file in form 6 is opened", through the binary: a nested
+/// seed with a few tickets of its own, its answers taken over the wire; then
+/// the file as a form-6 build leaves it — no `comments` table, the derived
+/// state saying form 6. `--verify-derived` says it is not this build's form
+/// and that the next open only adds the table; the first open gains form 7
+/// once, in place — logged, the table empty, nothing derived built again —
+/// and answers exactly what it answered before; a comment added then is
+/// kept; the file verifies; the next open reads it, upgrading nothing, the
+/// comment there.
+#[tokio::test]
+async fn a_form_6_file_gains_form_7_once_and_answers_as_before() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    let s = spawn_with(&db, dir.path(), "seed", &["--seed-synthetic", "2000", "--seed-shape", "nested"]).await;
+    let c = connect(s.port).await;
+    for (epic, title, kind, parent) in [
+        ("DEMAND", "demands", "scope", None),
+        ("DEMAND", "the parent chip", "build", None),
+        ("SUBD", "a hosted shortcode", "scope", Some("DEMAND-2")),
+    ] {
+        let ev = one(&c, "tickets.create", json!({"epic": epic, "title": title, "kind": kind, "parent": parent})).await.unwrap();
+        assert_eq!(ev["type"], "created", "{ev}");
+    }
+    let answers = |c: WsClient| async move {
+        let mut out = Vec::new();
+        for filter in ["", "kind build", "under DEMAND", "status Pending and under DEMAND-2"] {
+            out.push(all(&c, "tickets.counts", json!({"filter": filter})).await);
+            out.push(all(&c, "tickets.list", json!({"filter": filter, "summary": true, "limit": 40})).await);
+            out.push(all(&c, "tickets.tree", json!({"epic": "DEMAND", "filter": filter})).await);
+        }
+        out.push(all(&c, "tickets.groups", json!({})).await);
+        out.push(all(&c, "tickets.extents", json!({})).await);
+        out.push(all(&c, "tickets.get", json!({"id": "SUBD-1"})).await);
+        out
+    };
+    let before = answers(c).await;
+    s.kill9();
+
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let tables = |conn: &rusqlite::Connection| -> i64 {
+        conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'comments'", [], |r| r.get(0)).unwrap()
+    };
+    assert_eq!(tables(&conn), 1, "a form-7 build's file holds the table");
+    conn.execute_batch("DROP TABLE comments; UPDATE derived_state SET form = 6;").unwrap();
+    drop(conn);
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(1), "{out}");
+    assert!(out.contains("stored in form 6; this build reads 7 (the next open adds the comments table, and builds nothing again)"), "{out}");
+
+    // The first open gains form 7, once, in place, and answers as before.
+    let s = spawn_server(&db, dir.path(), "form6").await;
+    let c = connect(s.port).await;
+    let after = answers(connect(s.port).await).await;
+    let log = s.log();
+    let gained = log.lines().find(|l| l.contains("COMMENT-2: the file gained stored form 7")).unwrap_or_else(|| panic!("{log}"));
+    assert!(gained.contains("the comments table (0 comments)") && gained.contains("it was in form 6"), "{gained}");
+    eprintln!("form 6 → 7: {}", &gained[gained.find("COMMENT-2").unwrap_or(0)..]);
+    assert!(!log.contains("SCALE-28: stored"), "nothing derived built again: {log}");
+    assert_eq!(after.len(), before.len());
+    for (i, (a, b)) in after.iter().zip(&before).enumerate() {
+        assert_eq!(a, b, "answer {i} after the upgrade");
+    }
+    assert_eq!(all(&c, "comments.list", json!({})).await, [json!({"type": "page", "next": null})], "the table starts empty");
+    let anchor = json!({"route": "#/ticket/DEMAND-2", "ticket": "DEMAND-2", "path": "main > h1", "label": "Title", "excerpt": "the parent chip"});
+    let kept = one(&c, "comments.add", json!({"anchor": anchor, "body": "after the upgrade"})).await.unwrap();
+    assert_eq!((kept["type"].as_str(), kept["id"].as_u64()), (Some("comment"), Some(1)), "{kept}");
+    drop(c);
+    s.kill9();
+    let (code, out, err) = verify(&db);
+    assert_eq!(code, Some(0), "{out}\n{err}");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let form: i64 = conn.query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
+    assert_eq!((form, tables(&conn)), (7, 1));
+    drop(conn);
+
+    // The next open reads: nothing gained, nothing built; the comment kept.
+    let s = spawn_server(&db, dir.path(), "form7").await;
+    let c = connect(s.port).await;
+    assert_eq!(answers(connect(s.port).await).await, before, "the next open answers the same");
+    let listed = all(&c, "comments.list", json!({"under": "DEMAND"})).await;
+    assert_eq!(listed, [kept, json!({"type": "page", "next": null})]);
+    let log = s.log();
+    assert!(!log.contains("COMMENT-2: the file gained") && !log.contains("SCALE-28: stored"), "once: {log}");
     s.kill9();
 }

@@ -112,6 +112,18 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets counts --filter 'ready and under FILTER-9'
   ```
 
+  **Comments** (COMMENT-2) are the `comments` activation beside `tickets`:
+  a reader's notes on the app and on ticket bodies, kept as records of
+  their own — `add { anchor, body, author? }`, `list` (newest first; `ticket`,
+  `under`, `route`, `path` prefix, `state` open/resolved, `author`, `text`;
+  `after` + `limit`), `resolve`, `reopen`, `watch`. The anchor goes as
+  `--anchor.route … --anchor.path …`; `list`'s `path` goes in `-p` (synapse
+  rewrites a `--path` flag into a file path). README "Comments" has the rest:
+
+  ```sh
+  synapse -P 4455 menger comments list --under FILTER --state open --text title
+  ```
+
   **Params are individual flags, not a JSON blob** — treat synapse as a
   normal CLI: `--kebab-case-flag value` after the method path, and
   `<method> --help` prints each parameter's name and type. **A list
@@ -135,7 +147,8 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   4455 is inside its `_self scan` range.
 - **The macro-emitted Rust client** — `TicketsClient<T>`, emitted by
   `#[plexus_macros::activation(client, …)]` from the activation's own
-  `impl` in `tickets-api/` (MFE-11). Compile-time and Rust-only: the
+  `impl` in `tickets-api/` (MFE-11); `CommentsClient<T>` the same way
+  (COMMENT-2). Compile-time and Rust-only: the
   browser app takes the crate with `default-features = false` and a
   renamed field or parameter fails its build. Nothing is generated or
   checked in.

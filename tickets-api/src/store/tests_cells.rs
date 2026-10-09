@@ -430,7 +430,7 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 606, .. }));
     let conn = Connection::open(&path).unwrap();
     assert!(db::has_column(&conn, "cells", "menger").unwrap());
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 6);
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 7, "COMMENT-2: built to form 7");
     drop(conn);
     let store = Store::open(&path).unwrap();
     assert_eq!(answers(&store), before, "the next open reads what the first stored");

@@ -10,4 +10,5 @@ export * from './rpc';
 export * from './transport';
 
 // Namespace modules (types + clients)
+export * as Comments from './comments';
 export * as Tickets from './tickets';
