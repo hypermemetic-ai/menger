@@ -2655,6 +2655,10 @@ impl Store {
         // the `inputs` and `answers` tables here, once, durably, with every
         // body's inputs read in; after it, every open reads them.
         inputs::migrate(&mut conn)?;
+        // SEARCH-2: a database written before SEARCH-2 — or a new one — gains
+        // the search index here, once, durably, every ticket's title and text
+        // indexed; after it, every write that changes either keeps it.
+        search::migrate(&mut conn)?;
         // SCALE-28: the derived state is read from the file — each
         // shortcode's run, the dangling forward references, the roll-ups,
         // the children index — beside the rows, each carrying its stored
@@ -3234,6 +3238,8 @@ impl Store {
             serial,
             move |tx| {
                 db::upsert(tx, &born)?;
+                // SEARCH-2: and its row in the search index.
+                search::put(tx, &born.id, &born.title, &born.body)?;
                 if let Some(list) = &input_rows {
                     inputs::store(tx, &born.id, list)?;
                 }
@@ -4132,6 +4138,8 @@ impl Store {
         let row = Row::from(&ticket);
         let body = changed.iter().any(|c| c == "body").then(|| ticket.body.clone());
         let title_changed = changed.iter().any(|c| c == "title");
+        // SEARCH-2: the title and body the search index holds from now on.
+        let indexed = (ticket.title.clone(), ticket.body.clone());
         let registry_moves = std::mem::take(&mut registered.moves);
         let registry_rows = registry_moves.clone();
         let input_list = asked.list.take();
@@ -4143,6 +4151,7 @@ impl Store {
                 if let Some(body) = body {
                     db::set_body(tx, &row.id, &body)?;
                 }
+                search::put(tx, &row.id, &indexed.0, &indexed.1)?;
                 components::store(tx, &registry_rows)?;
                 if let Some(list) = &input_rows {
                     inputs::store(tx, &row.id, list)?;
@@ -4738,6 +4747,8 @@ impl Store {
                     }
                 }
                 db::insert_many(&tx, chunk, open)?;
+                // SEARCH-2: indexed in the transaction that writes them.
+                search::put_many(&tx, chunk)?;
                 tx.commit()?;
             }
         }
@@ -5027,6 +5038,12 @@ pub use lensed::{narrowing, narrowing_lens, ready_and, MEMBER_MAX};
 mod stored;
 
 pub use stored::Verdict;
+
+/// SEARCH-2: search inside tickets — the FTS5 index of every ticket's title
+/// and text beside them in the file, kept by every write that changes
+/// either, and `search`: prefix, typo-tolerant, ranked, marked, filtered.
+mod search;
+pub use search::{SearchHit, SearchPage, SEARCH_LIMIT, SEARCH_MAX};
 pub use waves::{Placed, Waves};
 
 #[cfg(test)]
@@ -5048,6 +5065,12 @@ mod tests_paging;
 /// code, and its pages to MNG-9's rules.
 #[cfg(test)]
 mod tests_find;
+
+/// SEARCH-2: search inside tickets — the text a body is indexed as, how a
+/// query is read and corrected, the order, the filter, the pages; the index
+/// built by a first open, kept by every write, held to the tickets.
+#[cfg(test)]
+mod tests_search;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).

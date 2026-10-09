@@ -2401,6 +2401,88 @@ async fn reads_take_the_lens_over_the_wire() {
 }
 
 // ---------------------------------------------------------------------------
+// SEARCH-2: search inside tickets over the real protocol
+// ---------------------------------------------------------------------------
+
+/// SEARCH-2 over the real protocol: `search { query }` yields one `hit` per
+/// ticket, best first — its summary row (no body), its title and passage as
+/// marked stretches, `corrected` — then one `searched { matched, next,
+/// words }`. A typo matches through its correction, after what matched as
+/// typed; a filter (`under` too) keeps what it admits; `offset` + `limit`
+/// page; a filter asking `text` is one error, as `list`'s.
+#[tokio::test]
+async fn search_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    for (title, kind, parent, body) in [
+        ("Search", "scope", None, "the root"),
+        ("Placements kept", "build", None, "every non-doc row carries its <strong>placement</strong>, equal at every moment"),
+        ("The order of work", "build", None, "each ticket's wave, and its placement among them"),
+        ("Rows under the order", "build", Some("SR-3"), "a placement for the child as well"),
+        ("Nothing", "build", None, "<m-option name=\"Elsewhere\"></m-option> no match here"),
+    ] {
+        let created = answer(&client, "tickets.create", json!({"epic": "SR", "title": title, "kind": kind, "parent": parent, "body": body})).await;
+        assert_eq!(created["type"], "created", "{created}");
+    }
+    answer(&client, "tickets.set_status", json!({"id": "SR-3", "status": "Ready"})).await;
+
+    let mut evs = collect(call(&client, "tickets.search", json!({"query": "placement"})).await).await;
+    let end = evs.pop().unwrap();
+    assert_eq!(
+        end,
+        json!({"type": "searched", "matched": 3, "next": null, "words": [{"word": "placement", "also": []}]})
+    );
+    let order: Vec<String> = evs.iter().map(|e| e["summary"]["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(order[0], "SR-2", "the title match first: {order:?}");
+    let mut all = order.clone();
+    all.sort();
+    assert_eq!(all, ["SR-2", "SR-3", "SR-4"]);
+    let first = &evs[0];
+    assert_eq!(first["type"], "hit");
+    assert!(first["summary"].get("body").is_none(), "a summary row: {first}");
+    assert_eq!(first["corrected"], false);
+    assert_eq!(first["title"], json!([{"text": "Placements", "hit": true}, {"text": " kept", "hit": false}]));
+    assert_eq!(
+        first["snippet"],
+        json!([
+            {"text": "every non-doc row carries its ", "hit": false},
+            {"text": "placement", "hit": true},
+            {"text": ", equal at every moment", "hit": false}
+        ])
+    );
+
+    // A typo: corrected, said, and every hit marked as corrected.
+    let mut evs = collect(call(&client, "tickets.search", json!({"query": "wave plcement"})).await).await;
+    let end = evs.pop().unwrap();
+    assert_eq!(end["words"], json!([{"word": "wave", "also": []}, {"word": "plcement", "also": ["placement", "placements"]}]), "nearest, then commonest");
+    assert_eq!(evs.len(), 1);
+    assert_eq!((evs[0]["summary"]["id"].as_str(), evs[0]["corrected"].as_bool()), (Some("SR-3"), Some(true)));
+
+    // Under a filter; and under a ticket's lineage.
+    let evs = collect(call(&client, "tickets.search", json!({"query": "placement", "filter": "status Ready"})).await).await;
+    assert_eq!((evs[0]["summary"]["id"].as_str(), evs.len(), &evs[1]["matched"]), (Some("SR-3"), 2, &json!(1)));
+    let evs = collect(call(&client, "tickets.search", json!({"query": "placement", "filter": "under SR-3"})).await).await;
+    let mut ids: Vec<&str> = evs.iter().filter_map(|e| e["summary"]["id"].as_str()).collect();
+    ids.sort();
+    assert_eq!(ids, ["SR-3", "SR-4"], "SR-3 and its child");
+
+    // Pages: offset + limit, next the offset to ask for.
+    let evs = collect(call(&client, "tickets.search", json!({"query": "placement", "limit": 2})).await).await;
+    assert_eq!((evs.len(), &evs[2]["next"], &evs[2]["matched"]), (3, &json!(2), &json!(3)));
+    assert_eq!((evs[0]["summary"]["id"].as_str(), evs[1]["summary"]["id"].as_str()), (Some(order[0].as_str()), Some(order[1].as_str())));
+    let evs = collect(call(&client, "tickets.search", json!({"query": "placement", "limit": 2, "offset": 2})).await).await;
+    assert_eq!((evs[0]["summary"]["id"].as_str(), &evs[1]["next"]), (Some(order[2].as_str()), &json!(null)));
+
+    // A blank query: nothing, said so; a filter asking text: one error.
+    let evs = collect(call(&client, "tickets.search", json!({"query": "  "})).await).await;
+    assert_eq!(evs, [json!({"type": "searched", "matched": 0, "next": null, "words": []})]);
+    let params = json!({"query": "placement", "filter": "text \"placement\""});
+    let refused = collect(call(&client, "tickets.search", params.clone()).await).await;
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused, collect(call(&client, "tickets.list", json!({"filter": params["filter"]})).await).await);
+}
+
+// ---------------------------------------------------------------------------
 // COMMENT-2: the `comments` activation over the real protocol
 // ---------------------------------------------------------------------------
 

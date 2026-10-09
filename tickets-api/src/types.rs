@@ -577,6 +577,27 @@ pub struct PlacementChange {
     pub placement: Placement,
 }
 
+/// SEARCH-2: a stretch of a search hit's title or passage, in order — `hit`
+/// when it is a word the query matched, which a client marks; the stretches
+/// of one title or passage, joined, are its text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Marked {
+    pub text: String,
+    pub hit: bool,
+}
+
+/// SEARCH-2: one word of a `search`, as the query was read — and the
+/// index's words it also matched, being one or two edits away (a typo).
+/// `also` is empty for a word the index holds — as itself, or as the start
+/// of its words — in more than a few tickets: such a word is never
+/// corrected (one it holds in a few, only to far commoner words). A phrase (`"…"`, or a word joined by `-`, `_`, `.`,
+/// `/`) is one entry, its words joined by spaces, never corrected.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SearchWord {
+    pub word: String,
+    pub also: Vec<String>,
+}
+
 /// COMP-3: one entry of the **component registry** — a custom element some
 /// ticket defined in a ` ```component <name> ` block (COMP-1 decisions 2, 3,
 /// pins 6–8), as the server keeps it.
@@ -1342,6 +1363,26 @@ pub enum TicketsEvent {
         summary: TicketSummary,
         matched: bool,
         below: u64,
+    },
+    /// SEARCH-2: one ticket a `search` matched, best first — its row; its
+    /// title and a passage of its body's text (at most 24 words, around the
+    /// matches), each as stretches with the matched words marked; and
+    /// `corrected` when it matched only through a word's correction (those
+    /// follow every ticket matched without one).
+    Hit {
+        summary: TicketSummary,
+        title: Vec<Marked>,
+        snippet: Vec<Marked>,
+        corrected: bool,
+    },
+    /// SEARCH-2: the last data event of a `search` — `matched`, how many
+    /// tickets match (under its filter); `next`, the `offset` of the next
+    /// page, or null when this page holds the last match; `words`, the
+    /// query's words as they were read, with their corrections.
+    Searched {
+        matched: u64,
+        next: Option<u32>,
+        words: Vec<SearchWord>,
     },
 }
 

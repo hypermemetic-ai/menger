@@ -291,6 +291,14 @@ given. A shortcode's root never becomes a kind that roots nothing
 doc becomes its shortcode's root. */
 export type Kind = "scope" | "execution" | "build" | "gap" | "spike" | "doc";
 
+/** SEARCH-2: a stretch of a search hit's title or passage, in order — `hit`
+when it is a word the query matched, which a client marks; the stretches
+of one title or passage, joined, are its text. */
+export interface Marked {
+  hit: boolean;
+  text: string;
+}
+
 export interface PlacementWave {
   type: 'wave';
   n: number;
@@ -328,6 +336,17 @@ export interface RootRow {
   kind: Kind;
   status: Status;
   title: string;
+}
+
+/** SEARCH-2: one word of a `search`, as the query was read — and the
+index's words it also matched, being one or two edits away (a typo).
+`also` is empty for a word the index holds — as itself, or as the start
+of its words — in more than a few tickets: such a word is never
+corrected (one it holds in a few, only to far commoner words). A phrase (`"…"`, or a word joined by `-`, `_`, `.`,
+`/`) is one entry, its words joined by spaces, never corrected. */
+export interface SearchWord {
+  also: string[];
+  word: string;
 }
 
 export type Severity = "Critical" | "High" | "Medium" | "Low";
@@ -830,7 +849,31 @@ export interface TicketsEventNode {
   summary: TicketSummary;
 }
 
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventNode;
+/** SEARCH-2: one ticket a `search` matched, best first — its row; its
+title and a passage of its body's text (at most 24 words, around the
+matches), each as stretches with the matched words marked; and
+`corrected` when it matched only through a word's correction (those
+follow every ticket matched without one). */
+export interface TicketsEventHit {
+  type: 'hit';
+  corrected: boolean;
+  snippet: Marked[];
+  summary: TicketSummary;
+  title: Marked[];
+}
+
+/** SEARCH-2: the last data event of a `search` — `matched`, how many
+tickets match (under its filter); `next`, the `offset` of the next
+page, or null when this page holds the last match; `words`, the
+query's words as they were read, with their corrections. */
+export interface TicketsEventSearched {
+  type: 'searched';
+  matched: number;
+  next: number | null;
+  words: SearchWord[];
+}
+
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventNode | TicketsEventHit | TicketsEventSearched;
 
 export function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth { return e.type === 'health'; }
 export function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated { return e.type === 'created'; }
@@ -869,3 +912,5 @@ export function isTicketsEventMember(e: TicketsEvent): e is TicketsEventMember {
 export function isTicketsEventNotFound(e: TicketsEvent): e is TicketsEventNotFound { return e.type === 'not_found'; }
 export function isTicketsEventError(e: TicketsEvent): e is TicketsEventError { return e.type === 'error'; }
 export function isTicketsEventNode(e: TicketsEvent): e is TicketsEventNode { return e.type === 'node'; }
+export function isTicketsEventHit(e: TicketsEvent): e is TicketsEventHit { return e.type === 'hit'; }
+export function isTicketsEventSearched(e: TicketsEvent): e is TicketsEventSearched { return e.type === 'searched'; }

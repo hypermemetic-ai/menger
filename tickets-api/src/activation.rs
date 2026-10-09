@@ -32,6 +32,9 @@ use crate::types::{AnswerSource, InputState};
 // FILTER-15: the reads that take the lens.
 #[cfg(feature = "server")]
 use crate::store::{narrowing, narrowing_lens, ready_and, MEMBER_MAX};
+// SEARCH-2: search inside tickets.
+#[cfg(feature = "server")]
+use crate::store::{SearchPage, SEARCH_LIMIT, SEARCH_MAX};
 #[cfg(feature = "server")]
 use async_stream::stream;
 #[cfg(feature = "server")]
@@ -824,6 +827,64 @@ impl Tickets {
             };
             for ev in page_events(page) {
                 yield ev;
+            }
+        }
+    }
+
+    /// SEARCH-2: search inside tickets — the tickets whose title or body's
+    /// text holds every word of `query`, best first, from the search index
+    /// in the database (the store's `search`): a word matches itself and as
+    /// a prefix; one of four letters or more that the index does not know,
+    /// or holds in only a few tickets, also matches the index's words one
+    /// edit away (two from eight letters); a word joined by `-` `_` `.` `/`, or a `"quoted phrase"`,
+    /// is a phrase. Tickets matched without a correction come first, then
+    /// the rest; BM25 within each, a title weighing 4 to the text's 1.
+    ///
+    /// Yields one `hit { summary, title, snippet, corrected }` per ticket of
+    /// the page, then one `searched { matched, next, words }`. `filter` (the
+    /// language's text, FILTER-10) keeps the matches it admits (`under`
+    /// too); one not taken, or one that asks `text`, is one in-band `error`
+    /// and nothing else. `limit` is [`SEARCH_LIMIT`] unless given, at most
+    /// [`SEARCH_MAX`]; `offset` skips that many matches.
+    #[plexus_macros::method(
+        description = "Search inside tickets: the tickets whose title or body holds every word of the query (prefixes and typos too), best first, each with the passage that matched; optionally under a filter, paged with offset + limit",
+        params(
+            query = "Words to find, e.g. 'plcement wave' — each also as a prefix; a misspelt one also as the words a typo away; FILTER-23 or \"a phrase\" as a phrase",
+            filter = "A filter, e.g. 'not category done' (FILTER-3's language; optional): only the matches it admits",
+            limit = "At most this many hits (default 20, at most 100) (optional)",
+            offset = "Skip this many matches — the searched event's next (optional)"
+        )
+    )]
+    pub async fn search(
+        &self,
+        query: String,
+        filter: Option<String>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            let lens = match narrowing_lens(filter.as_deref()) {
+                Ok(lens) => lens,
+                Err(e) => {
+                    yield TicketsEvent::Error { message: e.to_string() };
+                    return;
+                }
+            };
+            let limit = Some(limit.unwrap_or(SEARCH_LIMIT).min(SEARCH_MAX));
+            match store.search(&query, lens, limit, offset).await {
+                Ok(SearchPage { hits, matched, next, words }) => {
+                    for hit in hits {
+                        yield TicketsEvent::Hit {
+                            summary: hit.summary,
+                            title: hit.title,
+                            snippet: hit.snippet,
+                            corrected: hit.corrected,
+                        };
+                    }
+                    yield TicketsEvent::Searched { matched, next, words };
+                }
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
             }
         }
     }

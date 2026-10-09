@@ -1284,6 +1284,9 @@ pub enum Verdict {
         /// containers.
         tallies: usize,
         holders: usize,
+        /// SEARCH-2: the tickets the search index holds — `None` when the
+        /// file has no index yet (the next open makes it).
+        indexed: Option<usize>,
     },
     /// Where they differ, one line each, naming the structure and the key.
     Differs(Vec<String>),
@@ -1351,6 +1354,14 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         ));
     }
     out.extend(ready_differences(&stored_ready, scanned.ready.members()));
+    // SEARCH-2: the search index, against the tickets' titles and bodies.
+    let indexed = match super::search::check(&tx)? {
+        super::search::Checked::Absent => None,
+        super::search::Checked::Checked { indexed, differs } => {
+            out.extend(differs);
+            Some(indexed)
+        }
+    };
     tx.commit()?;
     if !out.is_empty() {
         return Ok(Verdict::Differs(out));
@@ -1367,6 +1378,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         bitmaps: scanned.cells.bitmaps(),
         tallies: want.tree.tallies.len(),
         holders: want.tree.holders.len(),
+        indexed,
     })
 }
 

@@ -207,6 +207,10 @@
       const stream = this.rpc.call("tickets.schema", {});
       return collectOne(stream);
     }
+    async* search(query, filter, limit, offset) {
+      const stream = this.rpc.call("tickets.search", { filter, limit, offset, query });
+      yield* extractData(stream);
+    }
     async* setKind(id, kind, status) {
       const stream = this.rpc.call("tickets.set_kind", { id, kind, status });
       yield* extractData(stream);

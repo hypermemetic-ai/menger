@@ -44,6 +44,8 @@ export interface TicketsClient {
     reopenInput(input: string, ticket: string): AsyncGenerator<TicketsEvent>;
     /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
     schema(): Promise<unknown>;
+    /** Search inside tickets: the tickets whose title or body holds every word of the query (prefixes and typos too), best first, each with the passage that matched; optionally under a filter, paged with offset + limit */
+    search(query: string, filter?: string | null, limit?: number | null, offset?: number | null): AsyncGenerator<TicketsEvent>;
     /** Set a ticket's kind; everything kept by kind moves with it (to a doc: status Doc; from a doc: the status given, else Epic for a scope and Pending otherwise) */
     setKind(id: string, kind: string, status?: string | null): AsyncGenerator<TicketsEvent>;
     /** Set a ticket's parent — the ticket it is an output of; adopts a parentless ticket or moves one */
