@@ -156,7 +156,7 @@ use crate::kids::Kids;
 use crate::{board, cache, comments, dom, frame, inputs, nav, registry, settings, Conn, Dock};
 use futures::StreamExt;
 use leptos::prelude::*;
-use menger_tickets_api::{CommentsClient, TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
+use menger_tickets_api::{CommentsClient, Marked, SearchWord, TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
 use plexus_client::{ClientEvent, WsTransport};
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -1220,6 +1220,40 @@ pub(crate) async fn find_under(query: String, limit: u32, filter: Option<String>
         }
     }
     Ok(Ok((rows, remaining)))
+}
+
+/// SEARCH-3: one hit of the palette's `search` — its row, its title and
+/// passage as marked stretches, and whether it matched only through a
+/// word's correction.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Hit {
+    pub(crate) summary: TicketSummary,
+    pub(crate) title: Vec<Marked>,
+    pub(crate) snippet: Vec<Marked>,
+    pub(crate) corrected: bool,
+}
+
+/// SEARCH-3: the palette's `search { query, limit, filter }` — its hits, how
+/// many tickets match, and the words as the server read them; or
+/// (`Ok(Err)`) the server's words for a filter it did not take. `Err`: the
+/// call failed (the socket).
+pub(crate) async fn search_under(
+    query: String,
+    limit: u32,
+    filter: Option<String>,
+) -> Result<Result<(Vec<Hit>, u64, Vec<SearchWord>), String>, String> {
+    let client = client().ok_or_else(|| "not connected".to_string())?;
+    let events = client.search_all(query, filter, Some(limit), None).await.map_err(|e| describe(&e))?;
+    let (mut hits, mut matched, mut words) = (Vec::new(), 0, Vec::new());
+    for ev in events {
+        match ev {
+            TicketsEvent::Hit { summary, title, snippet, corrected } => hits.push(Hit { summary, title, snippet, corrected }),
+            TicketsEvent::Searched { matched: m, words: w, .. } => (matched, words) = (m, w),
+            TicketsEvent::Error { message } => return Ok(Err(message)),
+            _ => {}
+        }
+    }
+    Ok(Ok((hits, matched, words)))
 }
 
 /// FILTER-16: `inputs { filter }` — every input (every state) of the

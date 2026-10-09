@@ -210,6 +210,10 @@ the board, the nav and the ticket page share. The jump palette (SCALE-25)
 asks the server: `find` once the typing pauses (80 ms), only the newest
 question's answer shown, its count the answer's rows plus `remaining` —
 `map-12` shows MAP-12 first ~0.26 s after the last keystroke at 10^6.
+Beside each `find` it asks `search` (SEARCH-3): below the jump rows, an
+"In bodies" section with the best eight hits no jump row shows, each with
+its passage, the matched words marked; when a word was corrected the
+heading says what was searched for (`In bodies · annotation mode`).
 
 The nav's header chooses `Tree | Flat` (FILTER-20), kept in local storage
 with its other state (`menger.nav.view`). Flat lists every ticket the nav's
