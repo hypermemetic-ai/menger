@@ -449,6 +449,13 @@ pub fn is_menger_path(path: &str) -> bool {
     path.len() > MENGER_PATH_PREFIX.len() && path.starts_with(MENGER_PATH_PREFIX)
 }
 
+/// FILTER-21: whether a ticket with this path is one of menger's own
+/// documents — its path starts with `_MENGER/`. What the filter's `menger
+/// doc` flag admits, and what a ticket's cell keeps.
+pub fn is_menger_doc(path: Option<&str>) -> bool {
+    path.is_some_and(|p| p.starts_with(MENGER_PATH_PREFIX))
+}
+
 /// WAVE-10: a **path address** — `<SHORTCODE>/<path>` — split into the
 /// shortcode (upper-cased: shortcodes are case-insensitive) and the path
 /// (exactly as written). `None` for anything else — an `EPIC-N` id has no

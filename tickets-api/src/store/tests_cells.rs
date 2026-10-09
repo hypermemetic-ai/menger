@@ -15,14 +15,16 @@ use std::collections::BTreeSet;
 
 /// The oracle: each ticket's cell from its row and the distinct ids it
 /// names that are not a `Complete` or `Superseded` ticket — written out
-/// here, owing the code under test nothing.
+/// here, owing the code under test nothing. FILTER-21: a menger doc is one
+/// whose path starts with `_MENGER/`.
 pub(super) fn scanned(rows: &[Row]) -> BTreeMap<OrderKey, Key> {
     let by_id: HashMap<&str, &Row> = rows.iter().map(|t| (t.id.as_str(), t)).collect();
     rows.iter()
         .map(|t| {
             let named: BTreeSet<&str> = t.blocked_by.iter().map(String::as_str).collect();
             let blocked = named.iter().any(|b| !by_id.get(b).is_some_and(|bt| done(bt.status)));
-            (OrderKey::of(t), Key::new(t.status, t.kind, t.severity, blocked, !t.commits.is_empty()))
+            let menger = t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/"));
+            (OrderKey::of(t), Key::new(t.status, t.kind, t.severity, blocked, !t.commits.is_empty(), menger))
         })
         .collect()
 }
@@ -110,7 +112,8 @@ fn diff(before: &BTreeMap<OrderKey, Key>, after: &BTreeMap<OrderKey, Key>) -> BT
 /// reopen, which reads the cells it kept.
 async fn walk(store: Store, path: &Path, seed: u64, writes: usize, epics: &[&str]) -> Store {
     let mut rng = Rng(seed);
-    let mut tally = Tally::default();
+    // FILTER-21: board notes among the docs.
+    let mut tally = Tally::filing_menger_docs();
     let mut rx = store.subscribe_filtered();
     let mut moved = 0;
     for step in 0..writes {
@@ -190,7 +193,7 @@ async fn exactly_the_writes_that_change_a_cell_move_one() {
     let ids = |set: &BTreeSet<(OrderKey, Option<Key>, Key)>| -> Vec<String> {
         set.iter().map(|(k, _, _)| format!("{}-{}", k.epic, k.seq)).collect()
     };
-    let key = |status, blocked, commits| Some(Key::new(status, Kind::Build, None, blocked, commits));
+    let key = |status, blocked, commits| Some(Key::new(status, Kind::Build, None, blocked, commits, false));
 
     store.create(new_ticket("MV", Kind::Scope, None, vec![])).await.unwrap();
     let born = announced(&mut rx, &store);
@@ -245,6 +248,26 @@ async fn exactly_the_writes_that_change_a_cell_move_one() {
     store.set_parent("MV-5", "MV-4").await.unwrap();
     store.link_commits("MV-5", vec![]).await.unwrap();
     assert!(announced(&mut rx, &store).is_empty(), "amend, set_parent and a no-op move no cell");
+
+    // FILTER-21: a board note is born into a menger doc's cell, an ordinary
+    // doc beside it into the cell it would share without the flag; nothing
+    // after its birth moves it — its path is set then and never again.
+    let note = NewTicket { path: Some("_MENGER/board".into()), ..new_ticket("MV", Kind::Doc, None, vec![]) };
+    store.create(note).await.unwrap();
+    store.create(new_ticket("MV", Kind::Doc, None, vec![])).await.unwrap();
+    let born: Vec<_> = announced(&mut rx, &store).into_iter().collect();
+    assert_eq!(born.iter().map(|(k, _, _)| k.seq).collect::<Vec<_>>(), [6, 7]);
+    let doc = |menger| Key::new(Status::Doc, Kind::Doc, None, false, false, menger);
+    assert_eq!((born[0].2, born[1].2), (doc(true), doc(false)), "two cells, the flag apart");
+    assert!(born[0].2.menger() && born[0].2.to_string().ends_with(", menger doc)"), "{}", born[0].2);
+    assert_eq!(born[1].2.to_string(), "(Doc, doc, none, not blocked, no commits)", "an ordinary doc is named as before");
+    store.amend("MV-6", Some("board: MV".into()), Some("notes".into())).await.unwrap();
+    store.set_parent("MV-6", "MV-4").await.unwrap();
+    assert!(announced(&mut rx, &store).is_empty(), "amend and set_parent leave a menger doc in its cell");
+    store.link_commits("MV-6", vec!["abc1236".into()]).await.unwrap();
+    let moved: Vec<_> = announced(&mut rx, &store).into_iter().collect();
+    assert_eq!(moved.len(), 1);
+    assert!(moved[0].1.unwrap().menger() && moved[0].2.menger() && moved[0].2.commits(), "a commit moves it within the flag");
     assert_cells_are_a_scan(&store, Some(&path), "the writes");
 }
 
@@ -333,6 +356,86 @@ async fn a_file_in_form_3_gains_the_cells_once_on_first_open() {
     assert_eq!(store.tickets.read().unwrap().cells.cell_of(&gone), None, "read, not rebuilt: {gone:?} is in no cell");
 }
 
+/// FILTER-21, "a file in form 5 is opened": a seeded file with board notes
+/// beside ordinary docs, as a form-5 build leaves it — the cell table with
+/// no `menger` column, each board note in an ordinary doc's cell — gains
+/// form 6 once, on its first open: the column, every cell a scan's, the
+/// counts and pages of every filter as before, and `--verify-derived`
+/// consistent; the next open reads it.
+#[tokio::test]
+async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("form5.db");
+    let store = Store::open(&path).unwrap();
+    store.seed_synthetic(SeedSpec { count: 600, seed: 21, into_existing: false }).unwrap();
+    for epic in ["PLX", "MNG"] {
+        let root = store.create(new_ticket(epic, Kind::Scope, None, vec![])).await.unwrap().id;
+        store.create(NewTicket { path: Some("_MENGER/board".into()), ..new_ticket(epic, Kind::Doc, None, vec![]) }).await.unwrap();
+        store.create(new_ticket(epic, Kind::Doc, Some(root), vec![])).await.unwrap();
+    }
+    let want = scanned(&rows(&store));
+    assert_eq!(want.values().filter(|k| k.menger()).count(), 2);
+    let filters = ["", "menger doc", "not menger doc", "kind doc", "not menger doc and kind doc", "(menger doc or ready)"];
+    let answers = |store: &Store| -> Vec<(Vec<(String, u64)>, Vec<String>)> {
+        filters
+            .iter()
+            .map(|text| {
+                let lens = Lens::parse(text).unwrap();
+                let q = Filtered { lens: lens.clone(), epic: None, status: None, parent: None };
+                let page = store.filtered_page(&q, None, Some(3), Some(50)).unwrap();
+                (store.counts(&lens), page.tickets.into_iter().map(|t| t.id).collect())
+            })
+            .collect()
+    };
+    let before = answers(&store);
+    assert_eq!(before[1].0, [("MNG".to_string(), 1), ("PLX".to_string(), 1)], "`menger doc`: the board notes");
+    drop(store);
+
+    // The file as a form-5 build leaves it: the derived state built with no
+    // path in sight, then the cell table as form 5 declared it, the paths
+    // back, and the form 5.
+    let conn = Connection::open(&path).unwrap();
+    let paths: Vec<(String, String)> = conn
+        .prepare("SELECT id, path FROM tickets WHERE path IS NOT NULL")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    conn.execute_batch("UPDATE tickets SET path = NULL; UPDATE derived_state SET form = 5;").unwrap();
+    drop(conn);
+    drop(Store::open(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE cells_form5 (id INTEGER PRIMARY KEY, state TEXT NOT NULL, kind TEXT NOT NULL, severity TEXT,
+                                   blocked INTEGER NOT NULL, commits INTEGER NOT NULL);
+         INSERT INTO cells_form5 SELECT id, state, kind, severity, blocked, commits FROM cells;
+         DROP TABLE cells;
+         ALTER TABLE cells_form5 RENAME TO cells;
+         UPDATE derived_state SET form = 5;",
+    )
+    .unwrap();
+    for (id, p) in &paths {
+        conn.execute("UPDATE tickets SET path = ?2 WHERE id = ?1", rusqlite::params![id, p]).unwrap();
+    }
+    assert!(!db::has_column(&conn, "cells", "menger").unwrap());
+    drop(conn);
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 5")));
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.tickets.read().unwrap().cells.by_ticket(), want, "built on first open, the flag apart");
+    assert_cells_are_a_scan(&store, Some(&path), "the first open of a form-5 file");
+    assert_eq!(answers(&store), before, "every filter answers as before");
+    drop(store);
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 606, .. }));
+    let conn = Connection::open(&path).unwrap();
+    assert!(db::has_column(&conn, "cells", "menger").unwrap());
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 6);
+    drop(conn);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(answers(&store), before, "the next open reads what the first stored");
+}
+
 /// Acceptance 3: `--verify-derived` names the row when one `cell_bits`
 /// container or one `cell_counts` row is altered by hand.
 #[tokio::test]
@@ -402,8 +505,8 @@ fn a_container_round_trips_at_the_threshold() {
 }
 
 /// The cells' bitmaps against the scan on a store with every status, kind,
-/// severity, blocked and commits mixed in — and none of them testing a row
-/// per ticket: a count is the bitmap's length.
+/// severity, blocked, commits and — FILTER-21 — menger doc mixed in, and
+/// none of them testing a row per ticket: a count is the bitmap's length.
 #[tokio::test]
 async fn every_dimension_of_a_cell_is_kept() {
     let store = Store::new();
@@ -426,6 +529,7 @@ async fn every_dimension_of_a_cell_is_kept() {
             }
         }
     }
+    store.create(NewTicket { path: Some("_MENGER/board".into()), ..new_ticket("DIM", Kind::Doc, None, vec![]) }).await.unwrap();
     assert_cells_are_a_scan(&store, None, "every dimension");
     let kept = store.tickets.read().unwrap().cells.by_ticket();
     let seen = |f: fn(&Key) -> String| kept.values().map(f).collect::<BTreeSet<String>>().len();
@@ -433,6 +537,7 @@ async fn every_dimension_of_a_cell_is_kept() {
     assert_eq!(seen(|k| format!("{:?}", k.severity())), 5);
     assert_eq!(seen(|k| k.blocked().to_string()), 2);
     assert_eq!(seen(|k| k.commits().to_string()), 2);
+    assert_eq!(seen(|k| k.menger().to_string()), 2);
     assert!(seen(|k| k.status().as_str().into()) >= 9);
 }
 

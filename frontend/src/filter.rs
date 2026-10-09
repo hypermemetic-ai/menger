@@ -5,7 +5,8 @@
 //! - **The categories** ([`Cat`]): the server-backed ones, offered at every
 //!   level — Shortcode (the hosting tree, tri-state), Status (grouped, most
 //!   important first; a group's header checks its statuses), Kind,
-//!   Severity, and the flags Ready, Blocked, Commits (yes · no) — each a
+//!   Severity, and the flags Ready, Blocked, Commits, Menger docs (yes · no;
+//!   FILTER-21's `menger doc`, which the nav's default excludes) — each a
 //!   group of FILTER-10's language; and a surface's own (local) ones, which
 //!   the language has not got: the wave board's Wave, Readiness, Off-board
 //!   blockers and Title (WAVE-12, FILTER-9 decision 6); the inputs page's
@@ -75,6 +76,8 @@ pub(crate) enum Cat {
     Ready,
     Blocked,
     Commits,
+    /// FILTER-21: menger's own documents (`_MENGER/` paths) — `menger doc`.
+    MengerDocs,
     Wave,
     Readiness,
     OffBoard,
@@ -120,7 +123,7 @@ pub(crate) const INPUT_STATES: [&str; 3] = ["open", "answered", "closed"];
 pub(crate) const ALL: &str = "all";
 
 impl Cat {
-    pub(crate) const ALL: [Cat; 13] = [
+    pub(crate) const ALL: [Cat; 14] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Kind,
@@ -128,6 +131,7 @@ impl Cat {
         Cat::Ready,
         Cat::Blocked,
         Cat::Commits,
+        Cat::MengerDocs,
         Cat::Wave,
         Cat::Readiness,
         Cat::OffBoard,
@@ -154,11 +158,12 @@ impl Cat {
 
     /// The server-backed categories, offered at every level, in the menu's
     /// order.
-    pub(crate) const SERVER: [Cat; 7] = [Cat::Shortcode, Cat::Status, Cat::Kind, Cat::Severity, Cat::Ready, Cat::Blocked, Cat::Commits];
+    pub(crate) const SERVER: [Cat; 8] =
+        [Cat::Shortcode, Cat::Status, Cat::Kind, Cat::Severity, Cat::Ready, Cat::Blocked, Cat::Commits, Cat::MengerDocs];
 
     /// The wave board's categories, in its menu's order: WAVE-12's, with the
     /// server's flags after Severity.
-    pub(crate) const WAVES: [Cat; 11] = [
+    pub(crate) const WAVES: [Cat; 12] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Wave,
@@ -167,6 +172,7 @@ impl Cat {
         Cat::Ready,
         Cat::Blocked,
         Cat::Commits,
+        Cat::MengerDocs,
         Cat::Readiness,
         Cat::OffBoard,
         Cat::Title,
@@ -175,8 +181,18 @@ impl Cat {
     /// FILTER-16: the inputs page's categories, in its menu's order — its
     /// own (State, Removed) first, then the server-backed ones, which filter
     /// the inputs' tickets.
-    pub(crate) const INPUTS: [Cat; 9] =
-        [Cat::State, Cat::Removed, Cat::Shortcode, Cat::Status, Cat::Kind, Cat::Severity, Cat::Ready, Cat::Blocked, Cat::Commits];
+    pub(crate) const INPUTS: [Cat; 10] = [
+        Cat::State,
+        Cat::Removed,
+        Cat::Shortcode,
+        Cat::Status,
+        Cat::Kind,
+        Cat::Severity,
+        Cat::Ready,
+        Cat::Blocked,
+        Cat::Commits,
+        Cat::MengerDocs,
+    ];
 
     /// A surface's own category — evaluated by the surface, kept beside the
     /// language (it has no words for it).
@@ -187,7 +203,7 @@ impl Cat {
     /// A yes · no category — the server's flags, and the inputs page's
     /// Removed (`yes`: the removed show).
     pub(crate) fn is_flag(self) -> bool {
-        matches!(self, Cat::Ready | Cat::Blocked | Cat::Commits | Cat::Removed)
+        matches!(self, Cat::Ready | Cat::Blocked | Cat::Commits | Cat::MengerDocs | Cat::Removed)
     }
 
     /// The category's key — WAVE-12's in the URL for the wave board's (and
@@ -201,6 +217,7 @@ impl Cat {
             Cat::Ready => "isready",
             Cat::Blocked => "blocked",
             Cat::Commits => "commits",
+            Cat::MengerDocs => "menger",
             Cat::Wave => "wave",
             Cat::Readiness => "ready",
             Cat::OffBoard => "off",
@@ -224,6 +241,7 @@ impl Cat {
             Cat::Ready => "Ready",
             Cat::Blocked => "Blocked",
             Cat::Commits => "Commits",
+            Cat::MengerDocs => "Menger docs",
             Cat::Wave => "Wave",
             Cat::Readiness => "Readiness",
             Cat::OffBoard => "Off-board blockers",
@@ -250,6 +268,7 @@ impl Cat {
             Cat::Ready => "✓",
             Cat::Blocked => "⊘",
             Cat::Commits => "⑂",
+            Cat::MengerDocs => "§",
             Cat::Wave => "≋",
             Cat::Readiness => "▸",
             Cat::OffBoard => "⧖",
@@ -266,7 +285,7 @@ impl Cat {
             Cat::Status => &STATUSES,
             Cat::Kind => &KINDS,
             Cat::Severity => &SEVERITIES,
-            Cat::Ready | Cat::Blocked | Cat::Commits | Cat::Removed => &FLAG,
+            Cat::Ready | Cat::Blocked | Cat::Commits | Cat::MengerDocs | Cat::Removed => &FLAG,
             Cat::Readiness => &["workable", "waiting", "missing"],
             Cat::State => &INPUT_STATES,
             Cat::OffBoard => &["some", "none"],
@@ -2327,6 +2346,7 @@ pub(crate) mod tests {
                 "Ready",
                 "Blocked",
                 "Commits",
+                "Menger docs",
                 "Readiness",
                 "Off-board blockers",
                 "Title contains…"
@@ -2356,7 +2376,10 @@ pub(crate) mod tests {
 
         // The global menu: the server's categories, no Title to offer.
         let g = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &Clauses::default(), counts: &HashMap::new() };
-        assert_eq!(search("", &g).len(), 7);
+        assert_eq!(search("", &g).len(), 8);
+        // FILTER-21: typing finds Menger docs, by its name.
+        assert_eq!(search("menger", &g)[0], Row::Cat(Cat::MengerDocs));
+        assert_eq!(offered(Cat::MengerDocs, &g), [val(Cat::MengerDocs, "yes"), val(Cat::MengerDocs, "no")]);
         assert!(!search("ret", &g).iter().any(|r| matches!(r, Row::TitleContains(_))));
         assert!(!search("wave", &g).iter().any(|r| matches!(r, Row::Cat(Cat::Wave))));
     }
@@ -2406,7 +2429,7 @@ pub(crate) mod tests {
             assert_eq!(switch_words(c), Some(("is", "is not")), "{c:?}");
         }
         assert_eq!(switch_words(Cat::Title), Some(("contains", "does not contain")));
-        for c in [Cat::Ready, Cat::Blocked, Cat::Commits, Cat::Removed] {
+        for c in [Cat::Ready, Cat::Blocked, Cat::Commits, Cat::MengerDocs, Cat::Removed] {
             assert_eq!(switch_words(c), None, "{c:?}: its yes / no is the negation");
         }
         assert_eq!(Cat::ALL.into_iter().filter(|c| switch_words(*c).is_some()).count(), 9, "every category but the flags");

@@ -9,7 +9,9 @@
 //!   page read `global` alone.
 //! - **The state** of a level is what the reader chose, or — nothing chosen
 //!   — its default: the empty filter, except the wave board's, which opens
-//!   on its shortcode tree (WAVE-12). What a level keeps is [`Kept`]: its
+//!   on its shortcode tree (WAVE-12), and the nav's, which leaves menger's own
+//!   documents out — `not menger doc` (FILTER-21, [`nav_default`]; `reset`
+//!   returns to it). What a level keeps is [`Kept`]: its
 //!   filter, and the surface's own (local) clauses — the wave board's Wave,
 //!   Readiness, Off-board blockers and Title, which the language does not
 //!   have (FILTER-9 decision 6).
@@ -324,6 +326,7 @@ pub(crate) fn field_of(c: Cat, t: &str) -> Option<Field> {
         Cat::Ready => Field::Ready,
         Cat::Blocked => Field::Blocked,
         Cat::Commits => Field::HasCommits,
+        Cat::MengerDocs => Field::MengerDoc,
         _ => return None,
     })
 }
@@ -340,6 +343,7 @@ pub(crate) fn token_of(f: &Field) -> Option<(Cat, Option<String>)> {
         Field::Ready => (Cat::Ready, None),
         Field::Blocked => (Cat::Blocked, None),
         Field::HasCommits => (Cat::Commits, None),
+        Field::MengerDoc => (Cat::MengerDocs, None),
         Field::Category(_) | Field::Under(_) | Field::Text(_) => return None,
     })
 }
@@ -546,6 +550,16 @@ pub(crate) fn read_wave_12(q: &str) -> Option<Option<Kept>> {
     }))
 }
 
+/// FILTER-21: the nav a viewer who chose nothing sees — menger's own
+/// documents (each shortcode's board note, `_MENGER/…`) left out: `not
+/// menger doc`, the Menger docs pill at `no`. Choosing every ticket is the
+/// empty filter, kept as `n=` like any choice.
+pub(crate) fn nav_default() -> Kept {
+    let mut k = Kept::default();
+    k.set(Cat::MengerDocs, Op::Is, ["no".to_string()]);
+    k
+}
+
 /// The wave board a route opens on (WAVE-12): Shortcode is any of the
 /// route's tree, Kind is any of build, spike, gap —
 /// `in (…) and kind in (build, spike, gap)`.
@@ -662,7 +676,8 @@ impl Lens {
                 _ => None,
             })
         });
-        let defaults = [empty(), empty(), empty(), waves, empty()];
+        let nav = Memo::new(|_| Some(nav_default()));
+        let defaults = [empty(), nav, empty(), waves, empty()];
         let filters: [Memo<Filter>; 5] = std::array::from_fn(|i| {
             Memo::new(move |_| {
                 chosen[i].with(|c| match c {
@@ -1196,7 +1211,7 @@ mod tests {
     #[test]
     fn each_categorys_pill_is_its_group() {
         use Op::{Is, Not};
-        let cases: [(Cat, Clause, &str); 21] = [
+        let cases: [(Cat, Clause, &str); 23] = [
             (Cat::Shortcode, clause(Is, &["MNG"]), "in MNG"),
             (Cat::Shortcode, clause(Is, &["CONTEXT", "RETURNS"]), "in (CONTEXT, RETURNS)"),
             (Cat::Shortcode, clause(Not, &["CONTEXT", "RETURNS"]), "not in (CONTEXT, RETURNS)"),
@@ -1216,6 +1231,8 @@ mod tests {
             (Cat::Blocked, clause(Is, &["no"]), "not blocked"),
             (Cat::Commits, clause(Is, &["yes"]), "has commits"),
             (Cat::Commits, clause(Is, &["no"]), "not has commits"),
+            (Cat::MengerDocs, clause(Is, &["yes"]), "menger doc"),
+            (Cat::MengerDocs, clause(Is, &["no"]), "not menger doc"),
             (Cat::Status, clause(Is, &["In Review"]), "status \"In Review\""),
             (Cat::Kind, clause(Is, &["scope", "execution"]), "kind in (scope, execution)"),
         ];
@@ -1397,6 +1414,55 @@ mod tests {
         assert_eq!(d.filter.format(), format!("in ({}) and kind in (build, spike, gap)", PLEXUS_TREE.join(", ")));
         assert_eq!(d.local, Clauses::default());
         assert_eq!(waves_default("WAVE", &t).filter.format(), "in WAVE and kind in (build, spike, gap)");
+    }
+
+    /// FILTER-21: the nav opens on `not menger doc` — one pill, Menger docs
+    /// at `no` — which leaves a board note out and keeps every other ticket,
+    /// an ordinary doc included. A stored or linked `n=` that says the same
+    /// reads as the default; the empty filter chosen (every ticket, menger's
+    /// own included) is a choice of its own, kept as `n=`; and a global
+    /// `menger doc` against it is a clash the nav's bar names.
+    #[test]
+    fn the_nav_opens_without_menger_docs() {
+        let d = nav_default();
+        assert_eq!(d.filter.format(), "not menger doc");
+        assert_eq!(d.pills(), vec![Pill::Clause { cat: Cat::MengerDocs, clause: clause(Op::Is, &["no"]) }]);
+        assert_eq!(d.clauses().get(Cat::MengerDocs), Some(&clause(Op::Is, &["no"])));
+        assert_eq!(d.local, Clauses::default());
+        let ticket = |id: &str, kind: menger_tickets_api::Kind, path: Option<&str>| menger_tickets_api::filter::Facts {
+            id: id.into(),
+            epic: "PLEXUS".into(),
+            title: String::new(),
+            status: if kind == menger_tickets_api::Kind::Doc { menger_tickets_api::Status::Doc } else { menger_tickets_api::Status::Ready },
+            kind,
+            severity: None,
+            blocked: false,
+            has_commits: false,
+            menger_doc: menger_tickets_api::is_menger_doc(path),
+            lineage: vec![id.into(), "PLEXUS".into()],
+        };
+        use menger_tickets_api::Kind::{Build, Doc};
+        assert!(!d.filter.matches(&ticket("PLEXUS-2", Doc, Some("_MENGER/board"))), "the board note: out");
+        assert!(d.filter.matches(&ticket("PLEXUS-3", Doc, None)), "an ordinary doc: in");
+        assert!(d.filter.matches(&ticket("PLEXUS-4", Build, None)));
+        // The pill turned over is menger's own documents alone.
+        let mut only = d.clone();
+        only.flip(Cat::MengerDocs);
+        assert_eq!(only.filter.format(), "menger doc");
+        // Said by a link or by storage, the default reads as itself; the
+        // empty filter is a choice, kept as `n=`.
+        assert_eq!(read("n=not%20menger%20doc", Level::Nav), Some(Some(d.clone())));
+        assert_eq!(read("n=", Level::Nav), Some(Some(Kept::default())));
+        assert_ne!(Kept::default(), d, "every ticket is not the nav's default");
+        assert_eq!(join(&pairs_of(Level::Nav, &Kept::default())), "n=");
+        // Under the global filter the nav shows both; a global `menger doc`
+        // meets the default and nothing can match — named in the nav's bar.
+        let global = parsed("menger doc");
+        assert_eq!(
+            clash_of(&global, &d.filter, Level::Nav),
+            Some(vec![("menger doc".to_string(), vec![Level::Global]), ("not menger doc".to_string(), vec![Level::Nav])])
+        );
+        assert_eq!(parsed("kind doc").and(&d.filter).format(), "kind doc and not menger doc");
     }
 
     /// Acceptance 1: a surface's bar shows the global pills first, each

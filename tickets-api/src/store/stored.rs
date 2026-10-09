@@ -29,7 +29,16 @@ use std::path::Path;
 /// each list of more than 256 children (`tree_holders`, a row per
 /// container). A file in form 4 or older is built again, once, on its first
 /// open.
-const FORM: i64 = 5;
+///
+/// FILTER-21 is form 6: a cell says whether its tickets are menger's own
+/// documents (`menger doc`) — the cell table gains a `menger` column, and a
+/// board note no longer shares a cell with an ordinary doc, so every cell id
+/// the derived state names may move. A file in form 5 or older gains the
+/// column and is built again, once, on its first open. One way: an older
+/// build reads the table without the column, so a board note's cell reads
+/// as an ordinary doc's — a file holding both is refused as interning one
+/// cell twice (`promote`'s rollback restores the backup it took first).
+const FORM: i64 = 6;
 
 /// SDLC-11: the columns form 3 adds to the roll-up tables, `(table,
 /// column)` — what a build gives a file from an older form, as it gives one
@@ -40,6 +49,11 @@ const DOCS_COLUMNS: [(&str, &str); 4] = [
     ("rollup_groups", "docs"),
     ("rollup_cross", "docs"),
 ];
+
+/// FILTER-21: the column form 6 adds to the cell table, `(table, column)` —
+/// what a build gives a file in form 4 or 5, as it gives the roll-ups their
+/// `docs`.
+const MENGER_COLUMN: (&str, &str) = ("cells", "menger");
 
 /// The tables the derived state is stored in, and the index children are
 /// read from — each keyed the way the read that will answer from it asks
@@ -82,8 +96,9 @@ const DOCS_COLUMNS: [(&str, &str); 4] = [
 ///   sums whole shortcodes from, so only the one a cursor cuts is counted
 ///   in the index.
 /// - `cells` — FILTER-4: the cell table: each cell a ticket has been in,
-///   `(state, kind, severity, blocked, commits)`, by the id it was interned
-///   with (`severity` NULL for none; `blocked` and `commits` 0 or 1).
+///   `(state, kind, severity, blocked, commits, menger)`, by the id it was
+///   interned with (`severity` NULL for none; `blocked`, `commits` and —
+///   FILTER-21, form 6 — `menger` 0 or 1).
 /// - `cell_bits` — FILTER-4: per shortcode and cell, the sequences of the
 ///   shortcode's tickets in that cell, a row per container of 2¹⁶
 ///   sequences (`hi`, the block): `card` members, `bits` the container
@@ -164,7 +179,8 @@ const SCHEMA: &str = "
             kind     TEXT NOT NULL,
             severity TEXT,
             blocked  INTEGER NOT NULL,
-            commits  INTEGER NOT NULL
+            commits  INTEGER NOT NULL,
+            menger   INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS cell_bits (
             epic TEXT NOT NULL,
@@ -515,14 +531,15 @@ fn write_tree(conn: &Connection, t: &tree::Stored) -> rusqlite::Result<()> {
 
 /// FILTER-4: one cell of the table.
 fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
-    conn.prepare_cached("INSERT INTO cells (id, state, kind, severity, blocked, commits) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?
+    conn.prepare_cached("INSERT INTO cells (id, state, kind, severity, blocked, commits, menger) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")?
         .execute(params![
             id,
             key.status().as_str(),
             key.kind().as_str(),
             key.severity().map(|s| s.as_str()),
             key.blocked(),
-            key.commits()
+            key.commits(),
+            key.menger()
         ])?;
     Ok(())
 }
@@ -729,7 +746,9 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     tx.execute_batch(SCHEMA)?;
     // SDLC-11: a roll-up table from an older form gains its `docs` columns
     // (a new one was just created with them); `write_all` fills them.
-    for (table, column) in DOCS_COLUMNS {
+    // FILTER-21: and the cell table from form 4 or 5 its `menger` column —
+    // every cell is written again below, so none keeps the default.
+    for (table, column) in DOCS_COLUMNS.into_iter().chain([MENGER_COLUMN]) {
         if !db::has_column(&tx, table, column)? {
             tx.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"), [])?;
         }
@@ -1045,7 +1064,7 @@ fn parsed<T: std::str::FromStr<Err = String>>(column: usize, stored: &str) -> ru
 /// FILTER-4: the cell table, by id.
 fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
     let mut out = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT id, state, kind, severity, blocked, commits FROM cells ORDER BY id")?;
+    let mut stmt = conn.prepare("SELECT id, state, kind, severity, blocked, commits, menger FROM cells ORDER BY id")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let severity = match r.get_ref(3)?.as_str_or_null()? {
@@ -1058,6 +1077,7 @@ fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
             severity,
             r.get(4)?,
             r.get(5)?,
+            r.get(6)?,
         );
         out.insert(r.get(0)?, key);
     }

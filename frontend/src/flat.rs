@@ -5,8 +5,8 @@
 //!
 //! - **The choice** ([`View`]) is the nav header's `Tree | Flat`, kept in this
 //!   browser beside the nav's other state — `menger.nav.view` ([`VIEW_KEY`]),
-//!   as `menger.nav.expanded`, `.hidden` and `.mengerDocs` are: no value is the
-//!   tree, `flat` the flat list. Choosing Tree draws the tree exactly as it was;
+//!   as `menger.nav.expanded` and `.hidden` are: no value is the tree, `flat`
+//!   the flat list. Choosing Tree draws the tree exactly as it was;
 //!   the flat list is unmounted then, and asks nothing.
 //! - **The list** is the nav's effective filter's matches (`global ∧ nav`,
 //!   FILTER-14's) — with no group in it, every ticket (the empty filter, `""`)
@@ -36,8 +36,9 @@
 //!   the id's.
 //! - **A row is the tree's leaf**: kind glyph, id, title, status tag; a real
 //!   link to `#/ticket/{id}`, selected when it is the open ticket; the ticket
-//!   menu's `data-ticket-id`; a menger document (WAVE-10) hidden unless the
-//!   nav shows them. Rows are treeitems of the nav's tree, so AGS-18's keys
+//!   menu's `data-ticket-id`. A menger document (WAVE-10) is a row like any
+//!   other, listed when the nav's filter admits it — its default does not
+//!   (FILTER-21). Rows are treeitems of the nav's tree, so AGS-18's keys
 //!   walk them, and the stretches not yet in hand are gaps the keys scroll
 //!   across (SCALE-24).
 //! - **A deep link** brings the open ticket's place into view when the list
@@ -719,7 +720,7 @@ fn measure(list: &web_sys::Element, pitch: f64) -> Option<Geom> {
     let sc = nav::scroller()?;
     let (s, k) = (sc.get_bounding_client_rect(), list.get_bounding_client_rect());
     let measured = list
-        .query_selector(".row:not(.menger-off)")
+        .query_selector(".row")
         .ok()
         .flatten()
         .and_then(|row| dom::window().get_computed_style(&row).ok().flatten())
@@ -736,7 +737,6 @@ fn measure(list: &web_sys::Element, pitch: f64) -> Option<Geom> {
 pub(crate) fn flat_list(
     filter: Memo<Option<String>>,
     route: RwSignal<Route>,
-    menger_docs: RwSignal<bool>,
     viewport: Trigger,
     note: RwSignal<Option<Note>>,
 ) -> AnyView {
@@ -857,7 +857,7 @@ pub(crate) fn flat_list(
                 each=move || slots.get()
                 key=Slot::key
                 children=move |slot: Slot| match slot {
-                    Slot::Row(id, sig) => flat_row(id, sig, f, n, route, menger_docs),
+                    Slot::Row(id, sig) => flat_row(id, sig, f, n, route),
                     Slot::Gap(at, len) => view! {
                         <div
                             class="pending gap"
@@ -901,7 +901,6 @@ fn flat_row(
     f: Flat,
     n: Memo<usize>,
     route: RwSignal<Route>,
-    menger_docs: RwSignal<bool>,
 ) -> AnyView {
     let ticket = RwSignal::from(sig);
     let sel = {
@@ -913,14 +912,11 @@ fn flat_row(
     let kind = Memo::new(move |_| ticket.with(|t| t.kind.as_str()));
     let key: Key = ticket.with_untracked(|t| (t.epic.clone(), t.seq));
     let posinset = Memo::new(move |_| f.matches.with(|m| f.ranked.with(|r| r.pos_of(m.as_ref()?, &key))).map(|p| p + 1));
-    // WAVE-10: one of menger's own documents only when the nav shows them.
-    let off = move || ticket.with(|t| !nav::nav_shows(t, menger_docs.get()));
     let href = format!("#/ticket/{id}");
     view! {
         <a
             class="row leaf"
             class:sel=move || sel.get()
-            class:menger-off=off
             role="treeitem"
             tabindex="-1"
             aria-selected=move || sel.get().to_string()
@@ -974,7 +970,7 @@ mod tests {
     #[test]
     fn the_choice_is_kept_beside_the_navs_other_state() {
         assert_eq!(VIEW_KEY, "menger.nav.view");
-        assert!(VIEW_KEY.starts_with("menger.nav."), "with expanded, hidden and mengerDocs");
+        assert!(VIEW_KEY.starts_with("menger.nav."), "with expanded and hidden");
         assert_eq!(View::default(), View::Tree);
         assert_eq!(View::from_stored(None), View::Tree, "never chosen: the tree");
         assert_eq!(View::from_stored(Some("flat")), View::Flat);

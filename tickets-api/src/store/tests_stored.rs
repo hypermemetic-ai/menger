@@ -166,6 +166,8 @@ struct Tally {
     /// SDLC-13: writes made (what picks a `set_kind`), and kinds changed.
     writes: usize,
     kinds: usize,
+    /// FILTER-21: menger docs born.
+    mengers: usize,
 }
 
 /// One random write — any of the seven, legal or refused — against the store
@@ -239,11 +241,20 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
             if kind == Kind::Doc && !tally.attempts.is_multiple_of(4) {
                 blocked_by.clear();
             }
+            // FILTER-21: every other doc that is no root one of menger's own,
+            // filed under the shortcode's root — its cell kept and stored
+            // apart. By the count: the draws stay the walk's.
+            let path = (kind == Kind::Doc && exists && tally.attempts % 18 == 13).then(|| format!("_MENGER/note-{}", tally.attempts));
+            let parent = if path.is_some() { None } else { parent };
+            if path.is_some() {
+                blocked_by.clear();
+            }
             let forward = blocked_by.iter().any(|b| !all.iter().any(|t| &t.id == b));
-            let what = format!("create {epic} {kind} under {parent:?} blocked by {blocked_by:?}");
-            match store.create(new_ticket(epic, kind, parent, blocked_by)).await {
+            let what = format!("create {epic} {kind} under {parent:?} blocked by {blocked_by:?} at {path:?}");
+            match store.create(NewTicket { path: path.clone(), ..new_ticket(epic, kind, parent, blocked_by) }).await {
                 Ok(_) => {
                     tally.created += 1;
+                    tally.mengers += usize::from(path.is_some());
                     tally.forward += usize::from(forward);
                     tally.docs += usize::from(kind == Kind::Doc);
                 }
@@ -362,7 +373,12 @@ async fn the_stored_state_is_a_scan_after_every_write_on_a_store_built_by_create
     let path = dir.path().join("created.db");
     let store = Store::open(&path).unwrap();
     assert_stored_is_a_scan(&store, &path, "a fresh open");
-    walk(store, &path, 0x5CA1_E028, 400, &["AA", "MAP", "SUB", "ZED", "QQ"]).await;
+    let store = walk(store, &path, 0x5CA1_E028, 400, &["AA", "MAP", "SUB", "ZED", "QQ"]).await;
+    // FILTER-21: the walk filed menger docs, each kept in a cell of its own.
+    let mengers = store.page(PageQuery::default()).unwrap().tickets.iter().filter(|t| crate::is_menger_doc(t.path.as_deref())).count();
+    assert!(mengers > 0, "the walk files board notes");
+    let cells = store.tickets.read().unwrap().form().cells;
+    assert!(cells.keys.values().any(|k| k.menger()), "a menger doc's cell is stored");
 }
 
 /// Acceptance 1, on a seeded store: a seed's state is stored whole, a write

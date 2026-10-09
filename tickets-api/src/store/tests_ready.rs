@@ -365,6 +365,18 @@ pub(super) struct Tally {
     writes: usize,
     pub(super) kinds: usize,
     pub(super) reroots: usize,
+    /// FILTER-21: whether some docs are filed as menger's own — a walk
+    /// that holds filters or cells to a scan asks for them; the others walk
+    /// exactly as they did. And how many were born.
+    pub(super) file_menger_docs: bool,
+    pub(super) mengers: usize,
+}
+
+impl Tally {
+    /// FILTER-21: a walk that files board notes among its docs.
+    pub(super) fn filing_menger_docs() -> Self {
+        Self { file_menger_docs: true, ..Self::default() }
+    }
 }
 
 /// One random write against the store as it stands, weighted to what moves
@@ -430,13 +442,25 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
             if kind == Kind::Doc && !tally.attempts.is_multiple_of(3) {
                 blocked_by.clear();
             }
+            // FILTER-21: when the walk asks, every other doc one of menger's
+            // own — a path under `_MENGER/`, filed under the shortcode's
+            // root (refused where it has none). By the count again: the
+            // draws stay the walk's.
+            let menger = tally.file_menger_docs && kind == Kind::Doc && tally.attempts % 16 == 11;
+            let path = menger.then(|| format!("_MENGER/note-{}", tally.attempts));
+            let parent = if path.is_some() { None } else { parent };
+            if path.is_some() {
+                blocked_by.clear();
+            }
             let next = format!("{}-{}", epic.to_ascii_uppercase(), extents.get(epic).copied().unwrap_or(0) + 1);
             let resolves = !store.tickets.read().unwrap().ids.waiting_on(&next).is_empty();
             let forward = blocked_by.iter().any(|b| !all.iter().any(|t| &t.id == b));
-            let what = format!("create {epic} under {parent:?} blocked by {blocked_by:?}");
+            let what = format!("create {epic} under {parent:?} blocked by {blocked_by:?} at {path:?}");
             // A refusal (a parent outside the shortcode) is a write too.
-            if store.create(new_ticket(epic, kind, parent, blocked_by.clone())).await.is_ok() {
+            let new = NewTicket { path: path.clone(), ..new_ticket(epic, kind, parent, blocked_by.clone()) };
+            if store.create(new).await.is_ok() {
                 tally.created += 1;
+                tally.mengers += usize::from(path.is_some());
                 tally.docs += usize::from(kind == Kind::Doc);
                 tally.with_blockers += usize::from(!blocked_by.is_empty());
                 tally.forward += usize::from(forward);

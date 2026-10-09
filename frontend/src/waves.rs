@@ -556,6 +556,7 @@ pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&s
         severity: s.severity,
         blocked: !card.waiting_on.is_empty(),
         has_commits: !s.commits.is_empty(),
+        menger_doc: menger_tickets_api::is_menger_doc(s.path.as_deref()),
         lineage,
     }
 }
@@ -574,6 +575,7 @@ pub(crate) fn value_of(c: Cat, card: &Card, off: bool) -> Option<String> {
         Cat::Ready => flag(s.status == Status::Ready && card.waiting_on.is_empty()),
         Cat::Blocked => flag(!card.waiting_on.is_empty()),
         Cat::Commits => flag(!s.commits.is_empty()),
+        Cat::MengerDocs => flag(menger_tickets_api::is_menger_doc(s.path.as_deref())),
         Cat::Wave => Some(match card.placement {
             Placement::Wave { n } => n.to_string(),
             Placement::MissingBlocker => "missing".into(),
@@ -1563,6 +1565,13 @@ mod tests {
         let c4 = a.cards.iter().find(|c| c.summary.id == "CONTEXT-4").unwrap();
         assert!(facts_of(c4, None, &|_| None).blocked);
         assert!(facts_of(&a.cards[0], None, &|_| None).has_commits);
+        // FILTER-21: a card is never one of menger's own documents (docs are
+        // never cards); a summary with a `_MENGER/` path would be.
+        assert!(a.cards.iter().all(|c| !facts_of(c, None, &|_| None).menger_doc));
+        let mut note = a.cards[0].clone();
+        note.summary.path = Some("_MENGER/board".into());
+        assert!(facts_of(&note, None, &|_| None).menger_doc);
+        assert_eq!(value_of(Cat::MengerDocs, &note, false).as_deref(), Some("yes"));
     }
 
     /// Acceptance 1 (WAVE-12): the default for a route — what it asks
@@ -1606,6 +1615,7 @@ mod tests {
         assert_eq!((n(Cat::Readiness, "workable"), n(Cat::Readiness, "waiting"), n(Cat::Readiness, "missing")), (Some(3), Some(3), Some(1)));
         assert_eq!((n(Cat::OffBoard, "some"), n(Cat::OffBoard, "none")), (Some(2), Some(7)));
         assert_eq!((n(Cat::Ready, "yes"), n(Cat::Blocked, "yes"), n(Cat::Commits, "yes")), (Some(1), Some(4), Some(1)));
+        assert_eq!((n(Cat::MengerDocs, "yes"), n(Cat::MengerDocs, "no")), (Some(0), Some(9)), "no card is a menger doc");
         assert!(!k.contains_key(&Cat::Title));
     }
 }

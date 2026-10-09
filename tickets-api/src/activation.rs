@@ -1143,19 +1143,19 @@ impl Tickets {
 
     /// FILTER-4: the counts behind every menu (Linear's facets). For each
     /// field — `status`, `category`, `kind`, `severity`, `blocked`, `ready`,
-    /// `has commits`, `in`, in that order — the tickets matching `base` and
-    /// `filter` with `filter`'s own groups for that field set aside (a group
-    /// is a field's own when every predicate in it names that field;
-    /// `base`'s are never set aside), counted by value: one `Facet { field,
-    /// value, held }` per value with `held` above 0 — `field` as the
-    /// language spells it, `value` canonical (`Coding`, `build`, `none`,
-    /// `yes`/`no` for the three flags, the shortcode for `in`), statuses in
-    /// the store's order of statuses, shortcodes in shortcode order — then
-    /// the stream's done. A sum over kept cell counts, never a ticket. A
-    /// filter not taken, or one that asks `under` or `text`, is one in-band
-    /// `error` and nothing else.
+    /// `has commits`, `menger doc` (FILTER-21), `in`, in that order — the
+    /// tickets matching `base` and `filter` with `filter`'s own groups for
+    /// that field set aside (a group is a field's own when every predicate
+    /// in it names that field; `base`'s are never set aside), counted by
+    /// value: one `Facet { field, value, held }` per value with `held` above
+    /// 0 — `field` as the language spells it, `value` canonical (`Coding`,
+    /// `build`, `none`, `yes`/`no` for the four flags, the shortcode for
+    /// `in`), statuses in the store's order of statuses, shortcodes in
+    /// shortcode order — then the stream's done. A sum over kept cell
+    /// counts, never a ticket. A filter not taken, or one that asks `under`
+    /// or `text`, is one in-band `error` and nothing else.
     #[plexus_macros::method(
-        description = "Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, in), the matches of base and filter without filter's own groups for that field, by value",
+        description = "Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, menger doc, in), the matches of base and filter without filter's own groups for that field, by value",
         params(
             filter = "The filter whose menus are counted (optional): its own groups for a field are set aside for that field's counts",
             base = "A filter that always applies, e.g. the global one (optional): never set aside"

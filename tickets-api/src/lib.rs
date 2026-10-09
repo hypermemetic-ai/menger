@@ -45,7 +45,7 @@ pub mod inputs;
 /// compiles it against its cells, the app parses what a reader types.
 pub mod filter;
 pub use types::{
-    is_menger_path, path_address, Answer, AnswerSource, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, Input,
+    is_menger_doc, is_menger_path, path_address, Answer, AnswerSource, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, Input,
     InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, SlotDoc, Kind, Placement,
     PlacementChange, RootRow, Severity, Status, Ticket, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
 };

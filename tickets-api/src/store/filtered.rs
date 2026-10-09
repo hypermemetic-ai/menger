@@ -150,6 +150,7 @@ fn facts(epic: &str, key: Key, lineage: &[&str]) -> Facts {
         severity: key.severity(),
         blocked: key.blocked(),
         has_commits: key.commits(),
+        menger_doc: key.menger(),
         lineage: lineage.iter().map(|l| l.to_string()).collect(),
     }
 }
@@ -176,8 +177,9 @@ pub fn refuse(filter: &Filter) -> Result<(), StoreError> {
 }
 
 /// FILTER-4: the fields `facets` counts, in the order it answers them — each
-/// as the language spells it.
-pub const FACET_FIELDS: [&str; 8] = ["status", "category", "kind", "severity", "blocked", "ready", "has commits", "in"];
+/// as the language spells it. FILTER-21: `menger doc` after the other flags.
+pub const FACET_FIELDS: [&str; 9] =
+    ["status", "category", "kind", "severity", "blocked", "ready", "has commits", "menger doc", "in"];
 
 /// One field's tally: a count per value, in the order `facets` answers.
 fn tally(field: &str) -> Vec<(String, u64)> {
@@ -192,7 +194,7 @@ fn tally(field: &str) -> Vec<(String, u64)> {
             .chain(&SEVERITIES[..1])
             .map(|s| (Field::Severity(*s).value().expect("a severity has a value"), 0))
             .collect(),
-        "blocked" | "ready" | "has commits" => yes_no(),
+        "blocked" | "ready" | "has commits" | "menger doc" => yes_no(),
         _ => Vec::new(),
     }
 }
@@ -214,6 +216,7 @@ fn slot(field: &str, k: Key) -> usize {
         "blocked" => flag(k.blocked()),
         "ready" => flag(crate::filter::category_of(k.status()) == Category::Ready && !k.blocked()),
         "has commits" => flag(k.commits()),
+        "menger doc" => flag(k.menger()),
         other => unreachable!("not a cell field: {other}"),
     }
 }
