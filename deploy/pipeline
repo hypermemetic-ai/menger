@@ -186,18 +186,46 @@ cmd_smoke() {
   for u in $(units_of "$env"); do
     systemctl --user is-active --quiet "$u" && say "ok   $u active" || { say "FAIL $u not active"; fail=1; }
   done
-  local h=""
-  for _ in $(seq 1 60); do
-    h=$(timeout 5 synapse -P "$MENGER_WS_PORT" menger tickets health 2>/dev/null | grep -E 'ticket_count' || true)
-    [[ -n $h ]] && break; sleep 0.5
-  done
+  local h="" login=""
+  # IDENTITY-23: an environment that requires login is checked as a person
+  # would meet it — signed in as the smoke account, and refused without it.
+  [[ ${MENGER_REQUIRE_LOGIN:-} =~ ^(1|true|yes)$ ]] && login=1
+  if [[ -n $login ]]; then
+    local token=""
+    token=$(curl -fsS -m 5 -X POST "${MENGER_SMOKE_TOKEN_URL:-}" -d grant_type=password \
+              --data-urlencode "username=${MENGER_SMOKE_USER:-}" --data-urlencode "password=${MENGER_SMOKE_PASSWORD:-}" \
+              --data-urlencode "audience=${MENGER_SMOKE_AUDIENCE:-}" 2>/dev/null | jq -r '.access_token // empty' || true)
+    [[ -n $token ]] && say "ok   the smoke account signs in" || { say "FAIL the smoke account signs in (MENGER_SMOKE_*)"; fail=1; }
+    for _ in $(seq 1 60); do
+      h=$(timeout 12 node "$REPO/deploy/smoke-health.mjs" "$MENGER_WS_PORT" "$token" 2>/dev/null | grep -E 'ticket_count' || true)
+      [[ -n $h ]] && break; sleep 0.5
+    done
+    if node "$REPO/deploy/smoke-health.mjs" "$MENGER_WS_PORT" >/dev/null 2>&1; then
+      say "ok   an anonymous upgrade on :$MENGER_WS_PORT is refused"
+    else
+      say "FAIL an anonymous upgrade on :$MENGER_WS_PORT is admitted"; fail=1
+    fi
+  else
+    for _ in $(seq 1 60); do
+      h=$(timeout 5 synapse -P "$MENGER_WS_PORT" menger tickets health 2>/dev/null | grep -E 'ticket_count' || true)
+      [[ -n $h ]] && break; sleep 0.5
+    done
+  fi
   [[ -n $h ]] && say "ok   tickets.health on :$MENGER_WS_PORT —${h#*:} tickets" || { say "FAIL tickets.health on :$MENGER_WS_PORT"; fail=1; }
   if "$bin/menger" --verify-derived --db-path "$MENGER_DB_PATH" >/dev/null 2>&1; then
     say "ok   --verify-derived consistent"
   else
     say "FAIL --verify-derived"; fail=1
   fi
-  if curl -fsS -m 5 "http://127.0.0.1:$MENGER_SHELL_PORT/" | grep -q "name=\"menger-ws-port\" content=\"$MENGER_WS_PORT\""; then
+  if [[ -n $login ]]; then
+    # IDENTITY-23: the app is behind the login page.
+    local to; to=$(curl -s -o /dev/null -m 5 -w '%{redirect_url}' "http://127.0.0.1:$MENGER_SHELL_PORT/")
+    if [[ $to == */login?next=* ]] && curl -fsS -m 5 "http://127.0.0.1:$MENGER_SHELL_PORT/login" | grep -q '<h1>Sign in</h1>'; then
+      say "ok   app on :$MENGER_SHELL_PORT behind its login page"
+    else
+      say "FAIL app on :$MENGER_SHELL_PORT: not behind its login page ($to)"; fail=1
+    fi
+  elif curl -fsS -m 5 "http://127.0.0.1:$MENGER_SHELL_PORT/" | grep -q "name=\"menger-ws-port\" content=\"$MENGER_WS_PORT\""; then
     say "ok   app on :$MENGER_SHELL_PORT, stamped with :$MENGER_WS_PORT"
   else
     say "FAIL app on :$MENGER_SHELL_PORT"; fail=1

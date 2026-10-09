@@ -27,8 +27,15 @@ struct Args {
     #[arg(long, default_value = "4457")]
     rest_port: u16,
 
-    /// Disable the REST HTTP listener
-    #[arg(long)]
+    /// Disable the REST HTTP listener. IDENTITY-23: also `MENGER_NO_REST`
+    /// (1/true/yes), so an environment that requires login can say it in
+    /// its env file.
+    #[arg(
+        long,
+        env = "MENGER_NO_REST",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
     no_rest: bool,
 
     /// Directory holding the built Leptos app (frontend/dist), served at
