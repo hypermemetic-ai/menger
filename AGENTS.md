@@ -296,6 +296,13 @@ nested parameter as one string (SYNAPSE-9).
   ticketing skill. Tickets are `Pending`
   until the human promotes them to `Ready`; implementation does not begin
   on `Pending` tickets.
+- **Three roots** (owner, 2026-10-08: "we need fewer root scopes"): MENGER
+  (menger itself), PLEXUS (the platform) and OUGHT (the methodology). A new
+  shortcode never adds a root: create its root ticket with `--parent` set to
+  where it belongs. menger's areas are MENGER-2 *the app*, MENGER-3 *the
+  store and the server*, MENGER-4 *tickets*, MENGER-5 *running it*; work on
+  the platform goes under PLEXUS-1. To move a shortcode, `set_parent` its
+  root; a hosted root can't return to the top level.
 - Ticketing follows **ought** (`../ought`, the house methodology — its
   `ticketing/`, `building/`, `methodology/` skills). Its lifecycle is
   `Pending → Ready → active → in review → done` (+ `archived`, always
