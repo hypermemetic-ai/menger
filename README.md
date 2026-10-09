@@ -1065,6 +1065,21 @@ synapse -P 4455 menger comments resolve --id 1
 synapse -P 4455 -p '{"path": "[data-tag=\"ticket", "state": "open"}' menger comments list
 ```
 
+**In the app** (COMMENT-3): `a` (or Annotate in the header) is annotation
+mode — every element outlined, ticket bodies' frames too; hovering names an
+element (and shows a component's info card, which no longer appears on plain
+hover); a click opens a comment box at it, nothing else; numbered pins mark
+what has open comments, each listing them with Resolve; `a` or Esc leaves.
+The anchor's `path` is a CSS selector, stable attributes first
+(`#t-status`, `#t-parent [data-tag="id:DEMAND-1"]`, `m-ticket[ticket="RETURNS-1"]`),
+positions last; inside a framed body it is the frame, ` >> `, then the
+element in it (`iframe[data-ticket="RETURNS-2"] >> body > table > tbody >
+tr:nth-of-type(1) > td:nth-of-type(1)`). A comment whose element is gone is
+marked "moved" and pinned to its ticket's heading. `#/comments` lists every
+comment, filtered by the route's query (`?ticket=&under=&state=&author=&text=`),
+each linking back to its page and element (`…?comment=<id>`); a ticket page's
+side panel counts its open ones. All of it is live through `comments.watch`.
+
 ## Diagrams — the `diagrams` service (COMPILE-4)
 
 A second Plexus service beside menger, in `diagrams/` (`menger-diagrams`):

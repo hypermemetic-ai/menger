@@ -311,9 +311,10 @@ pub(crate) fn lens_hash(hash: &str, g: Option<&str>, n: Option<&str>, surface: O
 }
 
 /// FILTER-16: whether the lens applies on `route` — every route but the
-/// components and settings pages, which show no ticket.
+/// components and settings pages, which show no ticket, and (COMMENT-3) the
+/// comments page, which has filters of its own.
 pub(crate) fn applies(route: &Route) -> bool {
-    !matches!(route, Route::Components(_) | Route::Settings)
+    !matches!(route, Route::Components(_) | Route::Settings | Route::Comments)
 }
 
 // ---------------------------------------------------------------------
@@ -1156,7 +1157,7 @@ mod tests {
         for r in [Route::Board, Route::Ticket("MNG-4".into()), Route::Waves("PLEXUS".into()), Route::Waves(String::new()), Route::Inputs] {
             assert!(applies(&r), "{r:?}");
         }
-        for r in [Route::Components(None), Route::Components(Some("m-stat".into())), Route::Settings] {
+        for r in [Route::Components(None), Route::Components(Some("m-stat".into())), Route::Settings, Route::Comments] {
             assert!(!applies(&r), "{r:?}");
         }
     }

@@ -228,10 +228,22 @@
 //! one; a tag inside a row is the tag's, the rest of the row the ticket
 //! menu's. The palette takes `filter <shortcode>`.
 
+//! COMMENT-3: annotation mode (src/annotate.rs) — `a`, or Annotate in the
+//! header, outlines every element (the bodies' frames too); a click leaves a
+//! comment there, anchored by src/anchor.rs and kept by the server's
+//! `comments` (COMMENT-2, the app's copy in src/comments.rs); numbered pins
+//! mark what has open comments. `#/comments` (src/comments_page.rs) lists
+//! them all, filtered; the header counts the open ones, and a ticket page's
+//! side panel its own, linking there.
+
+mod anchor;
+mod annotate;
 mod board;
 mod bridge;
 mod cache;
 mod card;
+mod comments;
+mod comments_page;
 mod components;
 mod counts;
 mod dom;
@@ -348,6 +360,9 @@ pub(crate) enum Route {
     Inputs,
     /// MFE-21: `#/settings`.
     Settings,
+    /// COMMENT-3: `#/comments` — every comment. A query after it (`?ticket=…
+    /// &under=…&state=…&author=…&text=…`) is the page's filter.
+    Comments,
 }
 
 fn parse_route(hash: &str) -> Route {
@@ -367,7 +382,25 @@ fn parse_route(hash: &str) -> Route {
         None if path == "components" => Route::Components(None),
         _ if path.trim_end_matches('/') == "inputs" => Route::Inputs,
         _ if path.trim_end_matches('/') == "settings" => Route::Settings,
+        _ if path.trim_end_matches('/') == "comments" => Route::Comments,
         _ => Route::Board,
+    }
+}
+
+/// COMMENT-3: a route as an anchor spells it — the page alone, no query,
+/// one spelling per page (`#/` for the board), so a comment left on a page
+/// is found there whatever the hash said beside it.
+pub(crate) fn route_text(route: &Route) -> String {
+    match route {
+        Route::Board => "#/".to_string(),
+        Route::Ticket(id) => format!("#/ticket/{id}"),
+        Route::Waves(sc) if sc.is_empty() => "#/waves".to_string(),
+        Route::Waves(sc) => format!("#/waves/{sc}"),
+        Route::Components(None) => "#/components".to_string(),
+        Route::Components(Some(tag)) => format!("#/components/{tag}"),
+        Route::Inputs => "#/inputs".to_string(),
+        Route::Settings => "#/settings".to_string(),
+        Route::Comments => "#/comments".to_string(),
     }
 }
 
@@ -1393,6 +1426,14 @@ fn ticket_view(
     // (`set_kind`), so whether this is a doc is followed.
     let header_id = ticket.with_untracked(|t| t.id.clone());
     let me = header_id.clone();
+    // COMMENT-3: the open comments on this ticket, live — `None` until the
+    // app holds the comments (the page asks for them).
+    let comments_id = header_id.clone();
+    let open_comments = {
+        let held = comments::signal();
+        let id = header_id.clone();
+        Memo::new(move |_| held.with(|h| h.as_ref().map(|h| h.open_on(&id))))
+    };
     let is_doc = Memo::new(move |_| ticket.with(|t| !t.kind.has_lifecycle()));
     // A doc is never blocked and never a blocker (SDLC-11): its relations
     // are not drawn while they are empty, which they always are.
@@ -1480,6 +1521,15 @@ fn ticket_view(
                     </dd>
                 </div>
                 <div><dt>"Commits"</dt><dd id="t-commits">{commits_view}</dd></div>
+                // COMMENT-3: its open comments, linking to them on #/comments.
+                <div>
+                    <dt>"Comments"</dt>
+                    <dd id="t-comments">
+                        <a class="ccount" href=comments_page::ticket_link(&comments_id) title="this ticket's open comments, on #/comments">
+                            {move || open_comments.get().map_or_else(|| "…".to_string(), comments::count_words)}
+                        </a>
+                    </dd>
+                </div>
             </dl>
             // The stamps, relative; the exact time (fmt_unix) on hover.
             <p class="stamps">
@@ -1703,6 +1753,8 @@ fn TicketPage(
 ) -> impl IntoView {
     let not_found = RwSignal::new(false);
     let blockers_loaded = RwSignal::new(false);
+    // COMMENT-3: the side panel counts this ticket's open comments.
+    comments::want();
     // The one body the app holds. `None` until `get` answers.
     let body = RwSignal::new(None::<String>);
     // MNG-16: lent to the session while the page is mounted, so an
@@ -1927,6 +1979,8 @@ fn App() -> impl IntoView {
     // FILTER-6: saved filters — each level's `Saved ▾` and Save as….
     saved::Saved::new(lens);
     let route = use_route(lens);
+    // COMMENT-3: annotation mode — its state, its listeners, its layer.
+    let annot = annotate::install(route);
     // FILTER-12: the board shows its effective filter (global ∧ board) —
     // set before the session asks for anything.
     board.follow(lens.effective(lens::Level::Board));
@@ -2006,9 +2060,14 @@ fn App() -> impl IntoView {
         let held = inputs::signal();
         Memo::new(move |_| held.with(|h| h.as_ref().map(inputs::Inputs::open_count)))
     };
+    // COMMENT-3: the header's open-comment count — once the app holds them.
+    let open_comments = {
+        let held = comments::signal();
+        Memo::new(move |_| held.with(comments_page::open_count))
+    };
 
     view! {
-        <div id="app" class:nonav=move || nav_hidden.get() data-rows-held=move || held.get()>
+        <div id="app" class:nonav=move || nav_hidden.get() class:annotating=move || annot.on.get() data-rows-held=move || held.get()>
             <nav::Nav tree route hidden=nav_hidden />
             <div class="content" on:scroll=move |_| viewport.notify()>
                 // FILTER-11: the header, the lens bar under it, and the
@@ -2059,6 +2118,21 @@ fn App() -> impl IntoView {
                             })
                         }}
                     </a>
+                    // COMMENT-3: every comment, beside them — the open count
+                    // once the app holds the comments.
+                    <a
+                        class="hlink"
+                        id="comments-link"
+                        href="#/comments"
+                        aria-current=move || matches!(route.get(), Route::Comments).then_some("page")
+                    >
+                        "comments"
+                        {move || {
+                            open_comments.get().map(|n| view! {
+                                <span class="hbadge" class:zero=n == 0 title=format!("{n} open comment{}", if n == 1 { "" } else { "s" })>{n}</span>
+                            })
+                        }}
+                    </a>
                     // MFE-21: the settings, beside them.
                     <a
                         class="hlink"
@@ -2095,6 +2169,7 @@ fn App() -> impl IntoView {
                             Route::Components(_) => "components (COMP-6)",
                             Route::Inputs => "inputs (INPUT-6)",
                             Route::Settings => "settings (MFE-21)",
+                            Route::Comments => "comments (COMMENT-3)",
                         }}
                     </span>
                     // MFE-21: `override` marks a backend other than this
@@ -2106,6 +2181,17 @@ fn App() -> impl IntoView {
                     >
                         {conn_words}
                     </span>
+                    // COMMENT-3: annotation mode (a).
+                    <button
+                        id="annotate"
+                        class="hbtn"
+                        class:on=move || annot.on.get()
+                        aria-pressed=move || annot.on.get().to_string()
+                        title=move || if annot.on.get() { "Leave annotation mode (a or Esc)" } else { "Annotate: outline the page, click anything to comment on it (a)" }
+                        on:click=move |_| annotate::toggle()
+                    >
+                        "Annotate"
+                    </button>
                     // AGS-17: the theme toggle (system → light → dark).
                     <theme::Toggle />
                 </header>
@@ -2133,6 +2219,7 @@ fn App() -> impl IntoView {
                         Route::Components(only) => view! { <components::ComponentsPage only /> }.into_any(),
                         Route::Inputs => view! { <inputs_page::InputsPage /> }.into_any(),
                         Route::Settings => view! { <settings::SettingsPage test_link /> }.into_any(),
+                        Route::Comments => view! { <comments_page::CommentsPage /> }.into_any(),
                     }}
                 </main>
             </div>
@@ -2147,6 +2234,9 @@ fn App() -> impl IntoView {
             // FILTER-6: Save as…, mounted once.
             <saved::SaveDialog />
         </div>
+        // COMMENT-3: what annotation mode draws — outside #app, so nothing
+        // of it is ever an element to annotate, nor moves a path's steps.
+        <annotate::Layer />
     }
 }
 
@@ -2198,6 +2288,36 @@ mod tests {
         assert_eq!(parse_route("#/settings"), Route::Settings);
         assert_eq!(parse_route("#/settings/"), Route::Settings);
         assert_eq!(parse_route("#/settingsX"), Route::Board);
+        // COMMENT-3: the comments page; its filters ride in the query.
+        assert_eq!(parse_route("#/comments"), Route::Comments);
+        assert_eq!(parse_route("#/comments/?under=RETURNS&state=open"), Route::Comments);
+        assert_eq!(parse_route("#/commentsX"), Route::Board);
+    }
+
+    /// COMMENT-3: a page as an anchor spells it — one spelling per page, no
+    /// query; a hash with one, or with the lens's keys, is the same page.
+    #[test]
+    fn an_anchors_route_is_the_page_alone() {
+        use super::route_text;
+        let at = |h: &str| route_text(&parse_route(h));
+        assert_eq!(at(""), "#/");
+        assert_eq!(at("#/"), "#/");
+        assert_eq!(at("#/?g=kind%20build&f=ready"), "#/");
+        assert_eq!(at("#/ticket/DEMAND-2"), "#/ticket/DEMAND-2");
+        assert_eq!(at("#/ticket/DEMAND-2?comment=7&g=x"), "#/ticket/DEMAND-2");
+        assert_eq!(at("#/waves/returns/?status=open"), "#/waves/RETURNS");
+        assert_eq!(at("#/waves"), "#/waves");
+        assert_eq!(at("#/components/M-Ticket"), "#/components/m-ticket");
+        assert_eq!(at("#/components"), "#/components");
+        assert_eq!(at("#/inputs?state=open"), "#/inputs");
+        assert_eq!(at("#/settings"), "#/settings");
+        assert_eq!(at("#/comments?under=RETURNS"), "#/comments");
+        // Every route spells itself back.
+        for r in [Route::Board, Route::Ticket("A-1".into()), Route::Waves("A".into()), Route::Waves(String::new()), Route::Components(None),
+            Route::Components(Some("m-x".into())), Route::Inputs, Route::Settings, Route::Comments]
+        {
+            assert_eq!(parse_route(&route_text(&r)), r);
+        }
     }
     use crate::nav::roll_label;
 

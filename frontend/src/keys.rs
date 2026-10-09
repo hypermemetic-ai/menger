@@ -90,6 +90,11 @@
 //! ([`filter_offers`]); chosen, the global filter becomes that shortcode's
 //! clause, the one a right-click on its tag's Filter makes (src/tags.rs),
 //! and the palette closes where it was.
+//!
+//! COMMENT-3: **`a` (or `A`) is annotation mode** (src/annotate.rs) — on, and
+//! off again; Esc closes what the mode has open (a pin's list, a comment
+//! box) and then leaves it. A body's frame that has focus posts the same
+//! keys to the app (`menger:key`, src/frame.rs).
 
 use std::cell::{Cell, RefCell};
 
@@ -99,7 +104,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::filter::Cat;
-use crate::{board, counts, dom, lens, navigate_to_ticket, session, st_class, tags};
+use crate::{annotate, board, counts, dom, lens, navigate_to_ticket, session, st_class, tags};
 use menger_tickets_api::TicketSummary;
 use std::collections::{BTreeSet, HashSet};
 
@@ -144,8 +149,9 @@ pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
     ("f", "filter this view (the board, the wave board, the nav)"),
     ("F", "filter every view (the global filter)"),
     ("/ filter SC", "the global filter becomes a shortcode (its tree)"),
+    ("a or A", "annotation mode: outline the page, click anything to comment on it"),
     ("?", "this list"),
-    ("Esc", "close the palette or this list"),
+    ("Esc", "close the palette or this list; leave annotation mode"),
 ];
 
 // ---------------------------------------------------------------------
@@ -656,6 +662,12 @@ pub(crate) fn install(overlay: RwSignal<Overlay>, board: board::Board) {
     on_focus.forget(); // lives as long as the app
 }
 
+/// COMMENT-3: no overlay (the palette, the cheat sheet) is up — a key a
+/// frame posts is the app's then.
+pub(crate) fn no_overlay() -> bool {
+    dom::window().document().and_then(|d| d.query_selector(".overlay").ok().flatten()).is_none()
+}
+
 /// True where a keystroke belongs to whatever already has focus: a text
 /// field, a `<select>`, a dialog (the overlays run their own key maps),
 /// or a menu (AGS-16).
@@ -694,6 +706,11 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
     if overlay.get_untracked() != Overlay::None {
         return;
     }
+    // COMMENT-3: Esc closes what annotation mode has open, then leaves it.
+    if key == "Escape" && annotate::escape() {
+        ev.prevent_default();
+        return;
+    }
     if cmd {
         // ⌘K / Ctrl+K is the palette; every other chord stays the
         // browser's (Ctrl+R, ⌘L, …).
@@ -715,6 +732,12 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         "?" => {
             ev.prevent_default();
             open_overlay(overlay, Overlay::Cheats);
+            return;
+        }
+        // COMMENT-3: annotation mode, on and off.
+        "a" | "A" => {
+            ev.prevent_default();
+            annotate::toggle();
             return;
         }
         _ => {}
@@ -1558,6 +1581,7 @@ mod tests {
             "f",           // the view's filter (WAVE-12)
             "F",           // the global filter (FILTER-11)
             "/ filter SC", // the palette's filter (FILTER-22)
+            "a or A",      // annotation mode (COMMENT-3)
             "?",           // this list
             "Esc",         // close
         ] {
