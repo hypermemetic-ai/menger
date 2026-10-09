@@ -177,6 +177,29 @@ struct Args {
     #[arg(long = "admin", env = "MENGER_ADMINS", value_name = "PRINCIPAL", value_delimiter = ';')]
     admin: Vec<String>,
 
+    /// IDENTITY-35: the dev sign-in, test only (refused with `--env prod`):
+    /// the login page's checkbox sends this browser's sign-in to this
+    /// `--auth-provider` (plexus-idp's name, e.g. `plexus-idp`), where a
+    /// seeded user is one click and any username can be signed in as.
+    #[arg(long, env = "MENGER_DEV_LOGIN", value_name = "PROVIDER", requires_all = ["dev_password", "dev_idp_ws"])]
+    dev_login: Option<String>,
+
+    /// IDENTITY-35: the password every dev user has at plexus-idp.
+    #[arg(long, env = "MENGER_DEV_PASSWORD", value_name = "PASSWORD", hide_env_values = true)]
+    dev_password: Option<String>,
+
+    /// IDENTITY-35: plexus-idp's Plexus socket, where the dev sign-in
+    /// registers accounts, e.g. `ws://127.0.0.1:4480`.
+    #[arg(long, env = "MENGER_DEV_IDP_WS", value_name = "URL")]
+    dev_idp_ws: Option<String>,
+
+    /// IDENTITY-35: a seeded dev user (repeatable),
+    /// `name=role@SCOPE[,role@SCOPE…]`, e.g. `viewer=viewer@*`,
+    /// `mixed=editor@OUGHT,viewer@PLEXUS`, `nobody=`. In the env var,
+    /// separated by `;`.
+    #[arg(long = "dev-user", env = "MENGER_DEV_USERS", value_name = "SPEC", value_delimiter = ';')]
+    dev_user: Vec<menger::dev_login::DevUser>,
+
     /// IDENTITY-19: how long a sign-in lasts.
     #[arg(long, env = "MENGER_SESSION_HOURS", default_value = "12", value_name = "HOURS")]
     session_hours: i64,
@@ -235,6 +258,22 @@ async fn main() -> anyhow::Result<()> {
         format!("http://localhost:{}", args.shell_port),
         menger::web_login::origin_of(&public_url),
     ];
+    // IDENTITY-35: the dev sign-in is the test environment's, never prod's.
+    let dev = match &args.dev_login {
+        None => None,
+        Some(_) if args.env.as_deref() == Some("prod") => {
+            anyhow::bail!("--dev-login is refused with --env prod: it lets anyone be anyone")
+        }
+        Some(provider) => {
+            tracing::warn!("dev sign-in on through {provider}: anyone who reaches the login page can be anyone");
+            Some(menger::dev_login::DevLogin {
+                provider: provider.clone(),
+                password: args.dev_password.clone().expect("clap requires it"),
+                idp_ws: args.dev_idp_ws.clone().expect("clap requires it"),
+                users: args.dev_user.clone(),
+            })
+        }
+    };
     let web_login = if login_on && !args.no_shell && !args.stdio {
         Some(Arc::new(Login::new(
             LoginConfig {
@@ -247,6 +286,8 @@ async fn main() -> anyhow::Result<()> {
                 also: shell_origins.clone(),
                 require: args.require_login,
                 title: shell::tab_title(args.env.as_deref()),
+                dev,
+                access: Some(access.clone()),
             },
             sessions.clone(),
         )?))

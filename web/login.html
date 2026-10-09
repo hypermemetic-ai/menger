@@ -89,6 +89,21 @@
   .foot { margin-top: 18px; color: var(--muted); font-size: 12.5px; text-align: center; }
   .foot a { color: var(--muted); }
   .note { color: var(--muted); font-size: 12.5px; margin: 14px 0 0; text-align: center; }
+  /* IDENTITY-35: the dev sign-in (test only). */
+  .dev-toggle {
+    display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 13px; margin: 0 0 18px;
+    padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; background: var(--panel); cursor: pointer;
+  }
+  .dev-toggle span { margin-left: auto; color: var(--muted); font-size: 11.5px; font-weight: 400; }
+  .dev-toggle input { margin: 0; }
+  button.who { justify-content: space-between; padding: 8px 12px; }
+  button.who span { color: var(--muted); font-size: 12.5px; font-weight: 400; text-align: right; }
+  .roster { gap: 6px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  select {
+    width: 100%; font: inherit; padding: 9px 11px; margin: 0 0 14px; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  }
 </style>
 </head>
 <body>
@@ -96,6 +111,7 @@
   <main class="card">
     <h1>Sign in</h1>
     <p class="sub">to continue to {{TITLE}}</p>
+    {{DEV}}
     {{ERROR}}
     {{PASSWORD}}
     {{OR}}
@@ -107,6 +123,13 @@
   </main>
   <p class="foot">{{TITLE}} v{{VERSION}}</p>
   <script>
+    // IDENTITY-35: the dev sign-in's checkbox — this browser's sign-in to
+    // plexus-idp, or back to the ordinary page.
+    const dev = document.getElementById("dev-login");
+    if (dev) dev.addEventListener("change", () => {
+      document.cookie = "menger_dev_login=" + (dev.checked ? "1; Max-Age=2592000" : "; Max-Age=0") + "; Path=/; SameSite=Lax";
+      location.reload();
+    });
     // SSO asks for a work email first; nostr signs one NIP-98 event with the
     // browser's NIP-07 extension. Everything else is a plain form or link.
     for (const b of document.querySelectorAll("[data-sso]")) {

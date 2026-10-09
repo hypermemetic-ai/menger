@@ -9,6 +9,7 @@
 //! | `POST /login/nostr` | a NIP-98 event a NIP-07 extension signed for this URL |
 //! | `POST /logout` | the session ended (and the provider's, where it keeps one: WorkOS) |
 //! | `GET /login/me` | who the session is, as JSON, or 401 |
+//! | `POST /login/dev` | IDENTITY-35, test only: be a seeded or any user, through plexus-idp ([`crate::dev_login`]) |
 //!
 //! Every way in verifies the provider's token (or event) with that
 //! provider's adapter — the same check the socket makes — and then starts a
@@ -32,6 +33,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use menger_tickets_api::access::Access;
+use menger_tickets_api::members::Role;
+
+use crate::dev_login::{self, DevLogin};
 use crate::login::{LoginButton, Provider};
 use crate::sessions::{self, Sessions, COOKIE};
 
@@ -63,6 +68,10 @@ pub struct LoginConfig {
     /// the IdP's page with the address filled in. Beside it, the password
     /// form shows only at `/login?password` (automation's way in).
     pub email: Option<LoginButton>,
+    /// IDENTITY-35: the dev sign-in (test only), and the rule its grants
+    /// are written through.
+    pub dev: Option<DevLogin>,
+    pub access: Option<Access>,
 }
 
 /// The email field's button, as `/login/start?button=` names it.
@@ -89,6 +98,8 @@ pub struct Login {
     discovery: Mutex<HashMap<String, Discovery>>,
     pub require: bool,
     title: &'static str,
+    dev: Option<DevLogin>,
+    access: Option<Access>,
 }
 
 impl Login {
@@ -139,6 +150,14 @@ impl Login {
                 b.provider
             );
         }
+        if let Some(d) = &cfg.dev {
+            anyhow::ensure!(
+                providers.get(&d.provider).is_some_and(|(p, _)| p.oidc().is_some() && p.takes_passwords()),
+                "--dev-login {}: no --auth-provider of that name takes passwords (name plexus-idp's, e.g. plexus-idp)",
+                d.provider
+            );
+            anyhow::ensure!(cfg.access.is_some(), "--dev-login needs the members rule to write its grants");
+        }
         let mut origins = vec![origin_of(&public_url)];
         origins.extend(cfg.also.iter().map(|o| origin_of(o)));
         Ok(Self {
@@ -155,6 +174,8 @@ impl Login {
             discovery: Mutex::new(HashMap::new()),
             require: cfg.require,
             title: cfg.title,
+            dev: cfg.dev,
+            access: cfg.access,
         })
     }
 
@@ -244,6 +265,31 @@ impl Login {
             .map_err(|_| "The sign-in service's answer could not be verified.".to_string())
     }
 
+    /// A password grant at an OIDC provider, its token verified: the
+    /// identity, or the words to show.
+    async fn password_grant(&self, name: &str, username: &str, password: &str) -> Result<AuthContext, String> {
+        let (provider, _) = self.providers.get(name).ok_or("unknown provider")?;
+        let (issuer, audience, client) = provider.oidc().ok_or("that provider takes no passwords")?;
+        let d = self.discover(name, issuer).await?;
+        let mut form = vec![("grant_type", "password"), ("username", username), ("password", password), ("audience", audience), ("scope", "openid profile email")];
+        if let Some(c) = client {
+            form.push(("client_id", c));
+        }
+        let (token, _) = self.token(&d.token_endpoint, &form).await?;
+        self.verify(name, token).await
+    }
+
+    /// IDENTITY-35: whether this browser's sign-in goes to plexus-idp (the
+    /// dev sign-in configured, and its checkbox ticked).
+    pub fn dev_on(&self, headers: &HeaderMap) -> bool {
+        self.dev.is_some()
+            && headers
+                .get(header::COOKIE)
+                .and_then(|c| c.to_str().ok())
+                .and_then(|c| sessions::cookie(c, dev_login::COOKIE))
+                .is_some_and(|v| v == "1")
+    }
+
     /// A session for an identity, and the response that hands it over.
     fn sign_in(&self, ctx: AuthContext, next: &str) -> Response {
         self.hand_over(ctx, see_other(next))
@@ -266,7 +312,23 @@ impl Login {
     /// The page, with `error` shown and `next` carried. `with_password`:
     /// the password form even beside an email field (`/login?password`).
     pub fn page(&self, next: &str, error: Option<&str>, with_password: bool) -> String {
+        self.page_for(next, error, with_password, false)
+    }
+
+    /// The page; `dev`: plexus-idp alone, the dev sign-in's panel
+    /// (IDENTITY-35).
+    pub fn page_for(&self, next: &str, error: Option<&str>, with_password: bool, dev: bool) -> String {
         let next_e = esc(next);
+        let toggle = self.dev.as_ref().map(|d| {
+            format!(
+                r#"<label class="dev-toggle"><input type="checkbox" id="dev-login"{}> Send all sign-in to {} <span>test only</span></label>"#,
+                if dev { " checked" } else { "" },
+                esc(&d.provider)
+            )
+        });
+        if let (true, Some(d)) = (dev, &self.dev) {
+            return self.fill(error, toggle, Some(dev_panel(d, &next_e)), String::new(), None, false);
+        }
         let password = self.password.as_ref().filter(|_| self.email.is_none() || with_password).map(|_| {
             let forgot = self
                 .forgot
@@ -347,7 +409,12 @@ impl Login {
             format!(r#"<button class="alt" type="button" id="nostr" data-next="{next_e}">{KEY_ICON}Continue with nostr</button>"#)
         });
         let alts = !buttons.is_empty() || nostr.is_some();
+        self.fill(error, toggle, password, buttons, nostr, alts)
+    }
+
+    fn fill(&self, error: Option<&str>, toggle: Option<String>, password: Option<String>, buttons: String, nostr: Option<String>, alts: bool) -> String {
         include_str!("../web/login.html")
+            .replace("{{DEV}}", &toggle.unwrap_or_default())
             .replace("{{TITLE}}", self.title)
             .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
             .replace(
@@ -376,8 +443,8 @@ pub async fn page(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q):
     if login.session(&headers).is_some() {
         return see_other(&next);
     }
-    (StatusCode::OK, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(login.page(&next, q.error.as_deref(), q.password.is_some())))
-        .into_response()
+    let html = login.page_for(&next, q.error.as_deref(), q.password.is_some(), login.dev_on(&headers));
+    (StatusCode::OK, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(html)).into_response()
 }
 
 #[derive(Deserialize)]
@@ -395,18 +462,7 @@ pub async fn password(State(login): State<Arc<Login>>, headers: HeaderMap, Form(
     let Some(name) = login.password.clone() else {
         return page_response(&login, &next, Some("Passwords are not taken here."), StatusCode::NOT_FOUND);
     };
-    let (provider, _) = &login.providers[&name];
-    let (issuer, audience, client) = provider.oidc().expect("checked at start");
-    let attempt = async {
-        let d = login.discover(&name, issuer).await?;
-        let mut form = vec![("grant_type", "password"), ("username", f.username.as_str()), ("password", f.password.as_str()), ("audience", audience), ("scope", "openid profile email")];
-        if let Some(c) = client {
-            form.push(("client_id", c));
-        }
-        let (token, _) = login.token(&d.token_endpoint, &form).await?;
-        login.verify(&name, token).await
-    };
-    match attempt.await {
+    match login.password_grant(&name, &f.username, &f.password).await {
         Ok(ctx) => login.sign_in(ctx, &next),
         Err(e) => page_response(&login, &next, Some(&e), StatusCode::UNAUTHORIZED),
     }
@@ -421,8 +477,12 @@ pub struct StartQuery {
     signup: Option<String>,
 }
 
-pub async fn start(State(login): State<Arc<Login>>, Query(q): Query<StartQuery>) -> Response {
+pub async fn start(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<StartQuery>) -> Response {
     let next = safe_next(q.next.as_deref());
+    // IDENTITY-35: with the checkbox ticked, every way in is plexus-idp.
+    if login.dev_on(&headers) {
+        return see_other(&format!("/login?next={}", url::form_urlencoded::byte_serialize(next.as_bytes()).collect::<String>()));
+    }
     let Some(b) = login.buttons.iter().chain(login.email.iter()).find(|b| b.label == q.button).cloned() else {
         return page_response(&login, &next, Some("That sign-in is not offered here."), StatusCode::NOT_FOUND);
     };
@@ -647,6 +707,135 @@ fn nostr_refusal(e: &plexus_auth_core::identity::AuthnRejection) -> String {
         R::Malformed(m) if m.contains("already used") => "That signature was already used. Press the button again.".into(),
         other => format!("Your nostr key's signature was not accepted ({other})."),
     }
+}
+
+#[derive(Deserialize)]
+pub struct DevForm {
+    user: String,
+    /// An existing plexus-idp account's own password: signs in as it, no
+    /// registration and no grants.
+    password: Option<String>,
+    /// For a user not in the roster: `none`, or a role on `scope`.
+    role: Option<String>,
+    scope: Option<String>,
+    next: Option<String>,
+}
+
+/// IDENTITY-35: `POST /login/dev` — a seeded user, any username (registered
+/// at plexus-idp if new, with the role asked for), or a plexus-idp account
+/// by its password. Always a real password grant, verified.
+pub async fn dev(State(login): State<Arc<Login>>, headers: HeaderMap, Form(f): Form<DevForm>) -> Response {
+    let next = safe_next(f.next.as_deref());
+    if login.foreign(&headers) {
+        return (StatusCode::FORBIDDEN, "Forbidden: sign in from menger's own page").into_response();
+    }
+    let (Some(d), Some(access)) = (login.dev.clone(), login.access.clone()) else {
+        return page_response(&login, &next, Some("The dev sign-in is not offered here."), StatusCode::NOT_FOUND);
+    };
+    let refuse = |e: &str, status| {
+        (status, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(login.page_for(&next, Some(e), false, true)))
+            .into_response()
+    };
+    // A plexus-idp account by its own password: exactly that account.
+    if let Some(pw) = f.password.as_deref().filter(|p| !p.is_empty()) {
+        return match login.password_grant(&d.provider, f.user.trim(), pw).await {
+            Ok(ctx) => login.sign_in(ctx, &next),
+            Err(e) => refuse(&e, StatusCode::UNAUTHORIZED),
+        };
+    }
+    let name = match dev_login::username(&f.user) {
+        Ok(n) => n,
+        Err(e) => return refuse(&e, StatusCode::BAD_REQUEST),
+    };
+    let grants: Vec<(Role, String)> = match d.user(&name) {
+        Some(u) => u.grants.clone(),
+        None => match f.role.as_deref().map(str::trim).filter(|r| !r.is_empty() && *r != "none") {
+            None => Vec::new(),
+            Some(r) => {
+                let scope = f.scope.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("*");
+                match (r.parse::<Role>(), menger_tickets_api::members::scope_of(scope)) {
+                    (Ok(r), Ok(s)) => vec![(r, s)],
+                    (Err(e), _) | (_, Err(e)) => return refuse(&e, StatusCode::BAD_REQUEST),
+                }
+            }
+        },
+    };
+    let ctx = match login.password_grant(&d.provider, &name, &d.password).await {
+        Ok(ctx) => ctx,
+        Err(first) => match d.register(&name).await {
+            Ok(true) => match login.password_grant(&d.provider, &name, &d.password).await {
+                Ok(ctx) => ctx,
+                Err(e) => return refuse(&format!("{name} was registered, but signing in failed: {e}"), StatusCode::BAD_GATEWAY),
+            },
+            Ok(false) => {
+                return refuse(
+                    &format!("{name} already has a plexus-idp account with another password ({first}). Sign in with its password below."),
+                    StatusCode::UNAUTHORIZED,
+                )
+            }
+            Err(e) => return refuse(&e, StatusCode::BAD_GATEWAY),
+        },
+    };
+    let principal = ctx.principal().map(|p| p.to_string()).unwrap_or_else(|| ctx.user_id.clone());
+    for (role, scope) in &grants {
+        if let Err(e) = access.dev_grant(&principal, scope, *role).await {
+            return refuse(&format!("{name} signed in, but the grant {role}@{scope} failed: {e}"), StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+    tracing::info!(user = %name, %principal, grants = %dev_login::describe(&grants), "dev sign-in");
+    login.sign_in(ctx, &next)
+}
+
+/// The dev sign-in's panel: the roster, anyone, an account's own password.
+fn dev_panel(d: &DevLogin, next_e: &str) -> String {
+    let roster: String = d
+        .users
+        .iter()
+        .map(|u| {
+            format!(
+                r#"<form method="post" action="/login/dev"><input type="hidden" name="next" value="{next_e}"><input type="hidden" name="user" value="{n}"><button class="alt who" type="submit"><b>{n}</b><span>{g}</span></button></form>"#,
+                n = esc(&u.name),
+                g = esc(&dev_login::describe(&u.grants))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n      ");
+    let roster = if roster.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<p class="caption">Sign in as</p>
+    <div class="alts roster">
+      {roster}
+    </div>
+    <div class="or">or anyone</div>"#
+        )
+    };
+    format!(
+        r#"{roster}
+    <form method="post" action="/login/dev" id="dev-any">
+      <input type="hidden" name="next" value="{next_e}">
+      <label for="dev-user">Username</label>
+      <input id="dev-user" name="user" type="text" required autocomplete="off" pattern="[A-Za-z0-9._\-]{{1,64}}" placeholder="new or existing">
+      <div class="pair">
+        <div><label for="dev-role">Role</label>
+        <select id="dev-role" name="role"><option value="none">none</option><option value="viewer" selected>viewer</option><option value="editor">editor</option><option value="admin">admin</option></select></div>
+        <div><label for="dev-scope">On</label>
+        <input id="dev-scope" name="scope" type="text" value="*" placeholder="* or SHORTCODE"></div>
+      </div>
+      <p class="caption">Registered at plexus-idp if new. A roster name keeps its own roles.</p>
+      <button class="primary" type="submit">Sign in as this user</button>
+    </form>
+    <div class="or">or a plexus-idp account</div>
+    <form method="post" action="/login/dev" autocomplete="on">
+      <input type="hidden" name="next" value="{next_e}">
+      <label for="dev-account">Username</label>
+      <input id="dev-account" name="user" type="text" autocomplete="username" required>
+      <label for="dev-password">Password</label>
+      <input id="dev-password" name="password" type="password" autocomplete="current-password" required>
+      <button class="alt" type="submit">Sign in</button>
+    </form>"#
+    )
 }
 
 pub async fn logout(State(login): State<Arc<Login>>, headers: HeaderMap) -> Response {

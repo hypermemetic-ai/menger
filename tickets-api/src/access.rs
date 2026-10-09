@@ -33,6 +33,9 @@ pub const SESSION_KEY: &str = "menger_session";
 /// The grantor named on `--admin` grants.
 pub const OPERATOR: &str = "--admin";
 
+/// IDENTITY-35: `granted_by` of the grants the dev sign-in makes.
+pub const DEV_LOGIN: &str = "dev-login";
+
 /// Whether a session the server issued still stands.
 pub trait SessionCheck: Send + Sync {
     fn alive(&self, key: &str) -> bool;
@@ -216,6 +219,17 @@ impl Access {
     /// The operator's `--admin` principals.
     pub fn admins(&self) -> Vec<String> {
         self.admins.as_ref().clone()
+    }
+
+    /// IDENTITY-35: a grant the operator's dev sign-in makes (test only),
+    /// kept in the store like any other and signed `granted_by` `dev-login`.
+    pub async fn dev_grant(&self, principal: &str, scope: &str, role: Role) -> Result<Grant, String> {
+        let store = self.store().ok_or("no store is attached")?;
+        let scope = crate::members::scope_of(scope)?;
+        let g = Grant { principal: principal.into(), scope, role, granted_by: DEV_LOGIN.into(), at: now() };
+        let g = store.grant(g).await.map_err(|e| e.to_string())?;
+        self.granted(principal);
+        Ok(g)
     }
 
     /// A grant was made: its principal waits no longer.

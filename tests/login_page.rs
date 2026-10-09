@@ -146,6 +146,13 @@ async fn token(State(i): State<Issuer>, Form(f): Form<HashMap<String, String>>) 
     let refuse = |e: &str| (axum::http::StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response();
     match f.get("grant_type").map(String::as_str) {
         Some("password") => {
+            // IDENTITY-35: the dev accounts plexus-idp holds, with the dev
+            // password.
+            if let (Some((_, sub)), Some(DEV_PASSWORD)) =
+                (DEV_ACCOUNTS.iter().find(|(n, _)| Some(*n) == f.get("username").map(String::as_str)), f.get("password").map(String::as_str))
+            {
+                return Json(json!({ "access_token": mint(&i, sub, &f["audience"], &f["username"]), "expires_in": 600 })).into_response();
+            }
             if f.get("username").map(String::as_str) != Some("alice") || f.get("password").map(String::as_str) != Some("s3cret") {
                 return refuse("invalid_grant");
             }
@@ -269,11 +276,36 @@ async fn start() -> Menger {
     start_with(false).await.0
 }
 
+/// IDENTITY-35: the accounts the fixture plexus-idp holds with the dev
+/// password, and their subjects.
+const DEV_PASSWORD: &str = "dev-pass";
+const DEV_ACCOUNTS: &[(&str, &str)] = &[
+    ("viewer", "0b6d1c0e-3f0a-4d55-9d1e-6f0c2a7b9e01"),
+    ("mixed", "0b6d1c0e-3f0a-4d55-9d1e-6f0c2a7b9e02"),
+    ("drifter", "0b6d1c0e-3f0a-4d55-9d1e-6f0c2a7b9e03"),
+];
+
+/// menger with the dev sign-in on: plexus-idp is the fixture issuer; its
+/// socket (for registering) is a port nothing listens on.
+async fn start_dev() -> Menger {
+    let dev = menger::dev_login::DevLogin {
+        provider: "plexus-idp".into(),
+        password: DEV_PASSWORD.into(),
+        idp_ws: format!("ws://127.0.0.1:{}", free_port().await),
+        users: vec!["viewer=viewer@*".parse().unwrap(), "mixed=editor@OUGHT,viewer@PLEXUS".parse().unwrap()],
+    };
+    start_full(false, Some(dev)).await.0
+}
+
 /// menger as main wires it: plexus-idp, an Auth0 tenant and nostr; or,
 /// with `with_workos`, menger's page with an email field handed to WorkOS,
 /// WorkOS's social buttons, nostr, and plexus-idp's password form at
 /// `/login?password` for automation.
 async fn start_with(with_workos: bool) -> (Menger, Option<WorkOs>) {
+    start_full(with_workos, None).await
+}
+
+async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>) -> (Menger, Option<WorkOs>) {
     let idp = issuer(false, "idp-1", KEY_2_PEM, JWK_2).await;
     let auth0 = issuer(true, "acme-1", KEY_1_PEM, JWK_1).await;
     let (ws, shell_port) = (free_port().await, free_port().await);
@@ -304,7 +336,7 @@ async fn start_with(with_workos: bool) -> (Menger, Option<WorkOs>) {
     let sessions = Arc::new(Sessions::new(3600));
     let access = Access::with_login(sessions.clone(), true, Vec::new());
     let offers = providers.iter().map(Provider::offer).collect();
-    let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access).await.unwrap();
+    let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();
     let carriers = login::boundary(&providers).unwrap();
     let origins = vec![public_url.clone(), format!("http://localhost:{shell_port}")];
     let gate = Arc::new(Gate::new(sessions.clone(), carriers));
@@ -329,6 +361,8 @@ async fn start_with(with_workos: bool) -> (Menger, Option<WorkOs>) {
             require: true,
             title: "menger",
             email,
+            access: dev.as_ref().map(|_| access),
+            dev,
         },
         sessions,
     )
@@ -643,4 +677,79 @@ async fn a_workos_token_for_another_client_signs_no_one_in() {
     let (_, done) = through_workos(&m, "button=Other").await;
     assert_eq!(done.status(), 401);
     assert!(session_from(&done).is_none());
+}
+
+// ── IDENTITY-35: the dev sign-in ──────────────────────────────────────────
+
+async fn dev_post(m: &Menger, form: &[(&str, &str)]) -> reqwest::Response {
+    m.http.post(m.url("/login/dev")).header("origin", m.origin()).form(form).send().await.unwrap()
+}
+
+#[tokio::test]
+async fn the_checkbox_sends_this_browser_s_sign_in_to_plexus_idp() {
+    let m = start_dev().await;
+    let plain = m.http.get(m.url("/login")).send().await.unwrap().text().await.unwrap();
+    assert!(plain.contains(r#"id="dev-login""#) && !plain.contains(r#"id="dev-login" checked"#), "the checkbox, unticked");
+    assert!(plain.contains("Continue with Google") && !plain.contains("/login/dev"), "the ordinary page");
+
+    let dev = m.http.get(m.url("/login")).header("cookie", "menger_dev_login=1").send().await.unwrap().text().await.unwrap();
+    assert!(dev.contains(r#"id="dev-login" checked"#));
+    for want in ["<b>viewer</b>", "viewer everywhere", "<b>mixed</b>", "editor on OUGHT, viewer on PLEXUS", r#"name="role""#, r#"name="password""#] {
+        assert!(dev.contains(want), "the dev panel shows {want}");
+    }
+    assert!(!dev.contains("Continue with Google") && !dev.contains("Continue with nostr"), "plexus-idp alone");
+
+    let r = m.http.get(m.url("/login/start?button=Google&next=/app/")).header("cookie", "menger_dev_login=1").send().await.unwrap();
+    assert_eq!(r.status(), 303);
+    assert_eq!(location(&r), "/login?next=%2Fapp%2F", "every way in is plexus-idp");
+}
+
+#[tokio::test]
+async fn a_seeded_user_signs_in_with_its_roles() {
+    let m = start_dev().await;
+    let r = dev_post(&m, &[("user", "mixed"), ("role", "admin"), ("scope", "*"), ("next", "/app/")]).await;
+    assert_eq!(r.status(), 303, "{}", r.text().await.unwrap());
+    assert_eq!(location(&r), "/app/");
+    let id = session_from(&r).unwrap();
+    let ws = socket(&m, Some(&id), Some(&m.origin())).await.unwrap();
+    let mine = call(&ws, "members.mine").await;
+    let grants: Vec<(String, String, String)> = mine
+        .iter()
+        .filter(|e| e["type"] == "grant")
+        .map(|e| (e["grant"]["scope"].as_str().unwrap().into(), e["grant"]["role"].as_str().unwrap().into(), e["grant"]["granted_by"].as_str().unwrap().into()))
+        .collect();
+    assert_eq!(
+        grants,
+        vec![("OUGHT".into(), "editor".into(), "dev-login".into()), ("PLEXUS".into(), "viewer".into(), "dev-login".into())],
+        "the roster's roles, not the form's"
+    );
+}
+
+#[tokio::test]
+async fn anyone_signs_in_with_the_role_asked_for() {
+    let m = start_dev().await;
+    let r = dev_post(&m, &[("user", "Drifter"), ("role", "editor"), ("scope", "identity"), ("next", "/")]).await;
+    assert_eq!(r.status(), 303, "{}", r.text().await.unwrap());
+    let ws = socket(&m, Some(&session_from(&r).unwrap()), Some(&m.origin())).await.unwrap();
+    let mine = call(&ws, "members.mine").await;
+    assert!(mine.iter().any(|e| e["grant"]["scope"] == "IDENTITY" && e["grant"]["role"] == "editor"), "{mine:?}");
+
+    // An account plexus-idp lacks is registered there; this one's socket is
+    // down, and the page says so.
+    let r = dev_post(&m, &[("user", "newcomer"), ("role", "none")]).await;
+    assert_eq!(r.status(), 502);
+    assert!(r.text().await.unwrap().contains("plexus-idp&#39;s socket"));
+
+    // An account by its own password: exactly that account, no grants.
+    let r = dev_post(&m, &[("user", "alice"), ("password", "s3cret")]).await;
+    assert_eq!(r.status(), 303);
+    let r = dev_post(&m, &[("user", "alice"), ("password", "nope")]).await;
+    assert_eq!(r.status(), 401);
+}
+
+#[tokio::test]
+async fn the_dev_sign_in_is_not_offered_unless_configured() {
+    let m = start().await;
+    assert!(!m.http.get(m.url("/login")).header("cookie", "menger_dev_login=1").send().await.unwrap().text().await.unwrap().contains(r#"id="dev-login""#));
+    assert_eq!(dev_post(&m, &[("user", "viewer")]).await.status(), 404);
 }

@@ -13,6 +13,7 @@
 
 mod builder;
 
+pub mod dev_login;
 pub mod login;
 pub mod sessions;
 pub mod web_login;
