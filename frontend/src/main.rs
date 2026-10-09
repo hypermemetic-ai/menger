@@ -220,6 +220,14 @@
 //! kept per viewer and in the route's query (`g=`, `n=`, `f=`); a
 //! navigation carries `g` and `n`. The wave board is its first surface.
 
+//! FILTER-22: a right-click on any tag the app draws — a shortcode, a
+//! ticket id, a status, a kind, a severity, on the ticket page, the board,
+//! the nav and the wave board — opens the tag menu (src/tags.rs): Filter …
+//! at once, Add … to the filter, Build a filter from … (the menu opens on
+//! its category). The surface's filter, or on the ticket page the global
+//! one; a tag inside a row is the tag's, the rest of the row the ticket
+//! menu's. The palette takes `filter <shortcode>`.
+
 mod board;
 mod bridge;
 mod cache;
@@ -246,6 +254,7 @@ mod registry;
 mod saved;
 mod session;
 mod settings;
+mod tags;
 mod theme;
 mod waves;
 
@@ -775,7 +784,8 @@ fn Board(
         </div>
         // ARIA's virtualized-table contract: the table says how many rows
         // it has, each mounted row says which one it is (1 is the head).
-        <table class="board" aria-rowcount=move || n.get() + 1>
+        // FILTER-22: a tag on the board builds the board's filter.
+        <table class="board" data-tag-level="board" aria-rowcount=move || n.get() + 1>
             <thead>
                 <tr aria-rowindex="1">
                     <th class="c-id">"id"</th><th class="c-title">"title"</th><th class="c-kind">"kind"</th>
@@ -849,7 +859,10 @@ fn Board(
                                 }
                             >
                                 <td class="id">
-                                    <a href=format!("#/ticket/{href_id}")>{row_id.clone()}</a>
+                                    // FILTER-22: the id, the kind, the status and
+                                    // the severity are tags; the rest of the row
+                                    // keeps the ticket menu.
+                                    <a href=format!("#/ticket/{href_id}") data-tag=tags::Tag::ticket(&href_id).attr()>{row_id.clone()}</a>
                                     // AGS-20: no `parent` column — just the
                                     // mark that this row decomposes, and how
                                     // far (the nav is where the tree is).
@@ -874,11 +887,16 @@ fn Board(
                                 // geometry rests on it); a title cut short
                                 // keeps its whole text on hover.
                                 <td title=move || ticket.with(|t| t.title.clone())>{move || ticket.with(|t| t.title.clone())}</td>
-                                <td class="kind">{move || ticket.with(|t| t.kind.to_string())}</td>
+                                <td class="kind">
+                                    <span data-tag=move || ticket.with(|t| tags::Tag::kind(t.kind).attr())>{move || ticket.with(|t| t.kind.to_string())}</span>
+                                </td>
                                 <td class="status">
                                     {move || if is_doc.get() {
                                         view! {
-                                            <span class=move || format!("status chip {}", ticket.with(|t| st_class(t.status.as_str())))>
+                                            <span
+                                                class=move || format!("status chip {}", ticket.with(|t| st_class(t.status.as_str())))
+                                                data-tag=move || ticket.with(|t| tags::Tag::status(t.status).attr())
+                                            >
                                                 {move || ticket.with(|t| t.status.to_string())}
                                             </span>
                                         }
@@ -890,6 +908,7 @@ fn Board(
                                                 // The control is the chip: it wears the
                                                 // server-confirmed status's color (AGS-15).
                                                 class=move || format!("status {}", ticket.with(|t| st_class(t.status.as_str())))
+                                                data-tag=move || ticket.with(|t| tags::Tag::status(t.status).attr())
                                                 prop:value=move || ticket.with(|t| t.status.as_str())
                                                 on:change=move |ev| {
                                                     let Some(sel) = ev
@@ -934,7 +953,9 @@ fn Board(
                                             .into_any()
                                     }}
                                 </td>
-                                <td>{move || ticket.with(|t| t.severity.map(|s| s.to_string()).unwrap_or_default())}</td>
+                                <td>
+                                    {move || ticket.with(|t| t.severity).map(|s| view! { <span data-tag=tags::Tag::severity(s).attr()>{s.to_string()}</span> })}
+                                </td>
                                 <td title=move || ticket.with(|t| t.blocked_by.join(" "))>{move || ticket.with(|t| t.blocked_by.join(" "))}</td>
                             </tr>
                         }
@@ -1033,13 +1054,20 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>, lensed: Option<U
                     let t = RwSignal::from(t);
                     let href = format!("#/ticket/{id}");
                     let kind = move || t.with(|x| x.kind.as_str());
+                    // FILTER-22: its kind, its id and its status are tags;
+                    // its title keeps the ticket menu.
                     view! {
-                        <span class="glyph" title=kind aria-hidden="true">{move || nav::kind_glyph(kind())}</span>
-                        <a class="code" href=href>{id.clone()}</a>
+                        <span class="glyph" title=kind aria-hidden="true" data-tag=move || t.with(|x| tags::Tag::kind(x.kind).attr())>
+                            {move || nav::kind_glyph(kind())}
+                        </span>
+                        <a class="code" href=href data-tag=tags::Tag::ticket(&id).attr()>{id.clone()}</a>
                         <span class="btitle" title=move || t.with(|x| x.title.clone())>
                             {move || t.with(|x| x.title.clone())}
                         </span>
-                        <span class=move || format!("bstatus {}", t.with(|x| st_class(x.status.as_str())))>
+                        <span
+                            class=move || format!("bstatus {}", t.with(|x| st_class(x.status.as_str())))
+                            data-tag=move || t.with(|x| tags::Tag::status(x.status).attr())
+                        >
                             {move || t.with(|x| x.status.to_string())}
                         </span>
                     }
@@ -1053,7 +1081,7 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>, lensed: Option<U
                 }
                 None => {
                     let href = format!("#/ticket/{id}");
-                    view! { <a class="code" href=href>{id.clone()}</a> }.into_any()
+                    view! { <a class="code" href=href data-tag=tags::Tag::ticket(&id).attr()>{id.clone()}</a> }.into_any()
                 }
             }}
         </li>
@@ -1372,7 +1400,7 @@ fn ticket_view(
     view! {
         <article class="ticket">
             <h2 data-ticket-id=header_id>
-                <span class="id code">{move || ticket.with(|t| t.id.clone())}</span>
+                <span class="id code" data-tag=move || ticket.with(|t| tags::Tag::ticket(&t.id).attr())>{move || ticket.with(|t| t.id.clone())}</span>
                 <span class="t">{move || ticket.with(|t| t.title.clone())}</span>
             </h2>
             {move || lensed.outside(&me).then(outside_notice)}
@@ -1396,6 +1424,7 @@ fn ticket_view(
                     <dd
                         id="t-status"
                         class=move || format!("status {}", ticket.with(|t| st_class(t.status.as_str())))
+                        data-tag=move || ticket.with(|t| tags::Tag::status(t.status).attr())
                         title=move || is_doc.get().then_some("A doc has no lifecycle: it holds Doc, and no status moves it")
                     >
                         {move || ticket.with(|t| t.status.to_string())}
@@ -1403,7 +1432,12 @@ fn ticket_view(
                 </div>
                 <div>
                     <dt>"Kind"</dt>
-                    <dd id="t-kind" class="kind" data-kind=move || ticket.with(|t| t.kind.as_str())>
+                    <dd
+                        id="t-kind"
+                        class="kind"
+                        data-kind=move || ticket.with(|t| t.kind.as_str())
+                        data-tag=move || ticket.with(|t| tags::Tag::kind(t.kind).attr())
+                    >
                         <span class="glyph" aria-hidden="true">
                             {move || nav::kind_glyph(ticket.with(|t| t.kind.as_str()))}
                         </span>
@@ -1412,7 +1446,12 @@ fn ticket_view(
                 </div>
                 <div>
                     <dt>"Severity"</dt>
-                    <dd>{move || ticket.with(|t| t.severity.map_or_else(|| "—".to_string(), |s| s.to_string()))}</dd>
+                    <dd id="t-sev">
+                        {move || match ticket.with(|t| t.severity) {
+                            Some(s) => view! { <span data-tag=tags::Tag::severity(s).attr()>{s.to_string()}</span> }.into_any(),
+                            None => view! { "—" }.into_any(),
+                        }}
+                    </dd>
                 </div>
                 // AGS-20: the ticket this one is an output of, as a link
                 // (the crumb above walks the whole chain).
@@ -1422,7 +1461,10 @@ fn ticket_view(
                         {move || match parent_id.get() {
                             Some(p) => {
                                 let (href, code) = (format!("#/ticket/{p}"), p.clone());
-                                view! { <a class="crumb code" data-ticket-id=p href=href>{code}</a> }
+                                // FILTER-22: the parent is a tag — its shortcode,
+                                // or `under` it.
+                                let tag = tags::Tag::ticket(&p).attr();
+                                view! { <a class="crumb code" data-ticket-id=p data-tag=tag href=href>{code}</a> }
                                     .into_any()
                             }
                             None => view! { "—" }.into_any(),
@@ -1431,7 +1473,11 @@ fn ticket_view(
                 </div>
                 <div>
                     <dt>"Shortcode"</dt>
-                    <dd><span class="code">{move || ticket.with(|t| t.epic.clone())}</span></dd>
+                    <dd id="t-epic">
+                        <span class="code" data-tag=move || ticket.with(|t| tags::Tag::shortcode(&t.epic).attr())>
+                            {move || ticket.with(|t| t.epic.clone())}
+                        </span>
+                    </dd>
                 </div>
                 <div><dt>"Commits"</dt><dd id="t-commits">{commits_view}</dd></div>
             </dl>
@@ -1830,7 +1876,9 @@ fn TicketPage(
 
     let id_view = id.clone();
     view! {
-        <div id="ticket-page">
+        // FILTER-22: a tag on the ticket page builds the global filter — the
+        // page has no filter of its own.
+        <div id="ticket-page" data-tag-level="global">
             <p class="crumbs"><a href="#/">"← board"</a>{crumbs}</p>
             {move || match ticket.get() {
                 Some(t) => ticket_view(RwSignal::from(t), body, blockers_loaded, kids, more, all, lensed, refs).into_any(),
@@ -2091,6 +2139,10 @@ fn App() -> impl IntoView {
             // AGS-16: mounted once, outside every ticket element, so a
             // right-click inside the menu itself never re-targets it.
             <menu::TicketMenu last_error />
+            // FILTER-22: the tag menu — a right-click on any tag the app
+            // draws builds a filter from it; mounted once, as the ticket
+            // menu is.
+            <tags::TagMenu />
             <keys::Overlays overlay />
             // FILTER-6: Save as…, mounted once.
             <saved::SaveDialog />

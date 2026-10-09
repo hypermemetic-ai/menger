@@ -63,6 +63,10 @@
 //! WAVE-5: opened on a shortcode's row in the nav — the root's row, which
 //! carries `data-shortcode` — it offers that shortcode's **Wave board**
 //! (`#/waves/<SHORTCODE>`) after Open in new tab.
+//!
+//! FILTER-22: a tag the app draws inside a ticket element — a row's id,
+//! status, kind or severity chip — opens the tag's filter menu instead
+//! (src/tags.rs); a right-click anywhere else on the element opens this one.
 
 use js_sys::Reflect;
 use leptos::prelude::*;
@@ -70,7 +74,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use crate::{cache, dom, keys, session, st_class};
+use crate::{cache, dom, keys, session, st_class, tags};
 use menger_tickets_api::Status;
 
 /// The menu's DOM id — the one element the document-level listeners
@@ -148,7 +152,7 @@ fn menu_element() -> Option<web_sys::Element> {
 
 /// The menu's focusable items in document order — only what is mounted,
 /// so the status list counts exactly while it is open.
-fn items(root: &web_sys::Element) -> Vec<web_sys::HtmlElement> {
+pub(crate) fn items(root: &web_sys::Element) -> Vec<web_sys::HtmlElement> {
     let Ok(list) = root.query_selector_all("[role='menuitem'], [role='menuitemradio']") else {
         return Vec::new();
     };
@@ -164,8 +168,8 @@ fn focus(el: &web_sys::HtmlElement) {
 
 /// Measure the mounted menu and move it inside the viewport (see
 /// [`clamp`]). Called once it is in the DOM and again whenever its height
-/// changes (the status list opening).
-fn place(el: &web_sys::HtmlElement, x: f64, y: f64) {
+/// changes (the status list opening). FILTER-22: the tag menu's too.
+pub(crate) fn place(el: &web_sys::HtmlElement, x: f64, y: f64) {
     let rect = el.get_bounding_client_rect();
     let win = dom::window();
     let dim = |v: Result<JsValue, JsValue>| v.ok().and_then(|v| v.as_f64()).unwrap_or(f64::INFINITY);
@@ -219,10 +223,13 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
     let win = dom::window();
 
     let on_context = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
-        let host = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-            .and_then(|el| el.closest("[data-ticket-id]").ok().flatten());
+        let el = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+        // FILTER-22: a tag inside the row is the tag menu's (src/tags.rs);
+        // the rest of the row is still this one's.
+        if el.as_ref().and_then(tags::tag_at).is_some() {
+            return;
+        }
+        let host = el.and_then(|el| el.closest("[data-ticket-id]").ok().flatten());
         if let Some((id, shortcode)) = host.and_then(|el| Some((el.get_attribute("data-ticket-id")?, el.get_attribute("data-shortcode")))) {
             // Only here: a right-click anywhere else keeps the native menu.
             ev.prevent_default();

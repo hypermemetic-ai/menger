@@ -928,14 +928,18 @@ fn flat_row(
             data-kind=move || kind.get()
             href=href
         >
-            <span class="toggle kind" title=move || kind.get()>{move || nav::kind_glyph(kind.get())}</span>
-            <span class="code">{id.clone()}</span>
+            // FILTER-22: the kind, the id and the status are tags, as in
+            // the tree.
+            <span class="toggle kind" title=move || kind.get() data-tag=move || crate::tags::Tag::kind(ticket.with(|t| t.kind)).attr()>
+                {move || nav::kind_glyph(kind.get())}
+            </span>
+            <span class="code" data-tag=crate::tags::Tag::ticket(&id).attr()>{id.clone()}</span>
             <span class="label">{move || ticket.with(|t| t.title.clone())}</span>
             // The status tag, its paint and its word one effect: they move
             // together.
             {move || {
                 let st = ticket.with(|t| t.status);
-                view! { <span class=format!("tag {}", st_class(st.as_str()))>{st.as_str()}</span> }
+                view! { <span class=format!("tag {}", st_class(st.as_str())) data-tag=crate::tags::Tag::status(st).attr()>{st.as_str()}</span> }
             }}
         </a>
     }

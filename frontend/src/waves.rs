@@ -80,6 +80,7 @@ use crate::keys::palette_match;
 use crate::lens::{self, Level};
 use crate::nav::kind_glyph;
 use crate::notes::BoardNotes;
+use crate::tags::Tag;
 use crate::{cache, dom, nav, session, st_class};
 
 // ---------------------------------------------------------------------
@@ -894,7 +895,8 @@ pub(crate) fn WaveBoard(
     };
 
     view! {
-        <section id="waves" data-shortcode=sc.clone() data-layout=move || layout.get().as_str()>
+        // FILTER-22: a tag on a card builds the wave board's filter.
+        <section id="waves" data-shortcode=sc.clone() data-tag-level="waves" data-layout=move || layout.get().as_str()>
             <div class="wbar">
                 <FilterBar level=Level::Waves cats=Cat::WAVES.to_vec() counts />
                 <span class="layout" role="group" aria-label="layout">"[ "{seg(Layout::Waves)}" | "{seg(Layout::Stages)}" ]"</span>
@@ -1034,11 +1036,14 @@ fn card_view(p: Placed, on_board: Memo<HashSet<String>>) -> impl IntoView {
     };
     view! {
         <li class="card" data-ticket-id=id.clone() data-placement=placement data-kind=kind on:click=open>
+            // FILTER-22: the id, the kind, the severity, the status and each
+            // off-board blocker are tags; the rest of the card keeps the
+            // ticket menu.
             <div class="top">
-                <a class="code" href=href.clone()>{id.clone()}</a>
-                <span class="kind" title=kind>{kind_glyph(kind)}" "{kind}</span>
+                <a class="code" href=href.clone() data-tag=Tag::ticket(&id).attr()>{id.clone()}</a>
+                <span class="kind" title=kind data-tag=Tag::kind(card.summary.kind).attr()>{kind_glyph(kind)}" "{kind}</span>
                 {move || row.with(|t| t.severity).map(|s| view! {
-                    <span class="sev" data-sev=s.as_str() title=format!("severity: {}", s.as_str())>{severity_mark(s)}</span>
+                    <span class="sev" data-sev=s.as_str() title=format!("severity: {}", s.as_str()) data-tag=Tag::severity(s).attr()>{severity_mark(s)}</span>
                 })}
                 {move || (row.with(|t| t.status) == Status::Blocked).then(|| view! {
                     <span class="blocked-mark" title="status: Blocked">"⊘"</span>
@@ -1049,11 +1054,11 @@ fn card_view(p: Placed, on_board: Memo<HashSet<String>>) -> impl IntoView {
             <div class="foot">
                 {move || {
                     let st = row.with(|t| t.status);
-                    view! { <span class=format!("tag {}", st_class(st.as_str()))>{st.as_str()}</span> }
+                    view! { <span class=format!("tag {}", st_class(st.as_str())) data-tag=Tag::status(st).attr()>{st.as_str()}</span> }
                 }}
                 {off.into_iter().map(|b| {
                     let href = format!("#/ticket/{b}");
-                    view! { <a class="off" href=href title=format!("waits on {b}, not on this board")>"⧖ "{b.clone()}" ↗"</a> }
+                    view! { <a class="off" href=href title=format!("waits on {b}, not on this board") data-tag=Tag::ticket(&b).attr()>"⧖ "{b.clone()}" ↗"</a> }
                 }).collect_view()}
             </div>
         </li>

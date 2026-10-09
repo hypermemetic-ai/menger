@@ -2152,6 +2152,8 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
         <aside
             id="nav"
             class="nav"
+            // FILTER-22: a tag in the nav builds the nav's filter.
+            data-tag-level="nav"
             class:lensed=move || under.on.get()
             // FILTER-14: `f` opens the nav's filter while the nav has focus.
             on:keydown=move |ev| nav_f(ev, lens)
@@ -2945,6 +2947,7 @@ fn group_row(
     owns_attr: impl Fn() -> Option<String> + Send + Sync + 'static,
 ) -> AnyView {
     let code = key.clone();
+    let tag = crate::tags::Tag::shortcode(&code).attr();
     view! {
         <div
             class="row grouprow"
@@ -2966,7 +2969,8 @@ fn group_row(
             <span class="prefix">{prefix}</span>
             <span class="toggle clickable">{toggle_glyph}</span>
             <span class="toggle mark" aria-hidden="true">" "</span>
-            <span class="code">{code}</span>
+            // FILTER-22: the shortcode is a tag.
+            <span class="code" data-tag=tag>{code}</span>
             {roll_tag(rollup, face)}
         </div>
     }
@@ -3088,8 +3092,12 @@ fn leaf_row(
             >
                 {toggle_glyph}
             </span>
-            <span class="toggle kind" title=move || kind.get()>{move || kind_glyph(kind.get())}</span>
-            <span class="code">{id.clone()}</span>
+            // FILTER-22: the kind, the id and the status are tags; a
+            // right-click anywhere else on the row is the ticket menu's.
+            <span class="toggle kind" title=move || kind.get() data-tag=move || crate::tags::Tag::kind(ticket.with(|t| t.kind)).attr()>
+                {move || kind_glyph(kind.get())}
+            </span>
+            <span class="code" data-tag=crate::tags::Tag::ticket(&id).attr()>{id.clone()}</span>
             <span class="label">{move || ticket.with(|t| t.title.clone())}</span>
             // FILTER-14: the matches under the row, as its badge (a
             // shortcode's row has its tally instead).
@@ -3104,7 +3112,7 @@ fn leaf_row(
             // together.
             {move || {
                 let st = ticket.with(|t| t.status);
-                view! { <span class=format!("tag {}", st_class(st.as_str()))>{st.as_str()}</span> }
+                view! { <span class=format!("tag {}", st_class(st.as_str())) data-tag=crate::tags::Tag::status(st).attr()>{st.as_str()}</span> }
             }}
         </a>
     }

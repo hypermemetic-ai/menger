@@ -83,6 +83,13 @@
 //! turns it back. The rows, the 50-row budget, the keys and the numbering
 //! of questions are SCALE-25's; with the global filter empty the palette is
 //! exactly what it was ([`pass`]).
+//!
+//! FILTER-22: **the palette filters by a shortcode.** `filter <shortcode>`
+//! ([`filter_command`]) offers, above the tickets, a row per shortcode it
+//! names — the one typed, then each the groups know that it begins
+//! ([`filter_offers`]); chosen, the global filter becomes that shortcode's
+//! clause, the one a right-click on its tag's Filter makes (src/tags.rs),
+//! and the palette closes where it was.
 
 use std::cell::{Cell, RefCell};
 
@@ -91,9 +98,10 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{board, counts, dom, lens, navigate_to_ticket, session, st_class};
+use crate::filter::Cat;
+use crate::{board, counts, dom, lens, navigate_to_ticket, session, st_class, tags};
 use menger_tickets_api::TicketSummary;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// How long a `g` stays armed as the first key of a `g …` sequence.
 const GO_WINDOW_MS: f64 = 1500.0;
@@ -135,6 +143,7 @@ pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
     ("g h", "go to the board"),
     ("f", "filter this view (the board, the wave board, the nav)"),
     ("F", "filter every view (the global filter)"),
+    ("/ filter SC", "the global filter becomes a shortcode (its tree)"),
     ("?", "this list"),
     ("Esc", "close the palette or this list"),
 ];
@@ -170,6 +179,37 @@ pub(crate) fn narrows(before: &str, query: &str) -> bool {
     // the scan itself is never handed an empty needle.
     let before = before.trim();
     before.is_empty() || contains_ignore_ascii_case(query.trim(), before)
+}
+
+/// FILTER-22: the palette's `filter <shortcode>` — the shortcode, upper
+/// case, when what is typed is the word `filter` (any case) and one
+/// shortcode; `None` for anything else.
+pub(crate) fn filter_command(query: &str) -> Option<String> {
+    let mut words = query.split_whitespace();
+    if !words.next()?.eq_ignore_ascii_case("filter") {
+        return None;
+    }
+    let code = words.next()?;
+    if words.next().is_some() {
+        return None;
+    }
+    Cat::Shortcode.token(code)
+}
+
+/// How many shortcodes `filter <shortcode>` offers at most.
+pub(crate) const FILTER_OFFERS: usize = 5;
+
+/// FILTER-22: the shortcodes `filter <typed>` offers: `typed` when the
+/// groups know it, then each they know that it begins, in order — at most
+/// [`FILTER_OFFERS`]; while the groups are not known, `typed` alone.
+pub(crate) fn filter_offers(typed: &str, known: Option<&BTreeSet<String>>) -> Vec<String> {
+    let Some(known) = known else { return vec![typed.to_string()] };
+    let exact = known.contains(typed).then(|| typed.to_string());
+    exact
+        .into_iter()
+        .chain(known.iter().filter(|c| c.as_str() != typed && c.starts_with(typed)).cloned())
+        .take(FILTER_OFFERS)
+        .collect()
 }
 
 /// FILTER-16: what one palette question asks `find` with, and what its
@@ -988,7 +1028,8 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     let hi = RwSignal::new(0usize);
     // FILTER-16: the global filter (read as the palette opens: it is modal),
     // and which pass is asked — inside it, or everything.
-    let global = lens::use_lens().filter(lens::Level::Global).with_untracked(|g| (!g.groups.is_empty()).then(|| counts::wire_text(g)));
+    let lens = lens::use_lens();
+    let global = lens.filter(lens::Level::Global).with_untracked(|g| (!g.groups.is_empty()).then(|| counts::wire_text(g)));
     let under = global.is_some();
     let global = StoredValue::new(global);
     let everything = RwSignal::new(false);
@@ -999,6 +1040,13 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     let results = Memo::new(move |_| {
         let q = query.get();
         found.with(|f| f.shown(&q))
+    });
+    // FILTER-22: `filter <shortcode>` — the shortcodes it offers, above the
+    // tickets.
+    let sctree = lens.sctree();
+    let offers = Memo::new(move |_| {
+        let typed = filter_command(&query.get());
+        typed.map(|t| sctree.with(|tree| filter_offers(&t, tree.as_ref().map(|t| t.known())))).unwrap_or_default()
     });
     // Enter pressed while the answer was on its way, with nothing to open.
     let enter_waits = StoredValue::new(false);
@@ -1011,7 +1059,16 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
         let n = found.try_update(|f| f.ask_pass(e)).unwrap_or(0);
         ask_find(found, n, query.get_untracked(), pass_now(), || {});
     };
+    // Row `i` of every row: the shortcodes offered, the tickets, then —
+    // under a global filter — the other pass.
     let open_at = move |i: usize| {
+        let cmds = offers.with_untracked(Vec::len);
+        if let Some(code) = offers.with_untracked(|o| o.get(i).cloned()) {
+            close_overlay(overlay);
+            tags::filter_globally(lens, &code);
+            return;
+        }
+        let i = i - cmds;
         let hit = results.with_untracked(|r| r.get(i).map(|t| t.id.clone()));
         if let Some(id) = hit {
             close_overlay(overlay);
@@ -1023,10 +1080,11 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     let answered = move || {
         if enter_waits.try_get_value() == Some(true) {
             enter_waits.set_value(false);
-            let at = hi.get_untracked();
+            let cmds = offers.with_untracked(Vec::len);
+            let at = hi.get_untracked().saturating_sub(cmds);
             let len = results.with_untracked(Vec::len);
             if len > 0 {
-                open_at(at.min(len - 1));
+                open_at(cmds + at.min(len - 1));
             }
         }
     };
@@ -1058,9 +1116,11 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     let on_key = move |ev: web_sys::KeyboardEvent| {
         let key = ev.key();
         let len = results.with_untracked(Vec::len);
+        // FILTER-22: the shortcodes offered come first.
+        let cmds = offers.with_untracked(Vec::len);
         // FILTER-16: under a global filter the last row ("Search everything")
         // is a row like the others.
-        let items = len + usize::from(under);
+        let items = cmds + len + usize::from(under);
         let cur = hi.get_untracked().min(items.saturating_sub(1));
         match key.as_str() {
             "Escape" => {
@@ -1069,7 +1129,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
             }
             "Enter" => {
                 ev.prevent_default();
-                if len == 0 && found.with_untracked(Found::pending) {
+                if cmds == 0 && len == 0 && found.with_untracked(Found::pending) {
                     // SCALE-25: the answer is on its way — open its first.
                     enter_waits.set_value(true);
                 } else if items > 0 {
@@ -1155,20 +1215,47 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                     {move || {
                         let shown = results.get();
                         let len = shown.len();
-                        let cur = hi.get().min((len + usize::from(under)).saturating_sub(1));
+                        // FILTER-22: the shortcodes `filter …` offers, first.
+                        let cmds = offers.get();
+                        let base = cmds.len();
+                        let cur = hi.get().min((base + len + usize::from(under)).saturating_sub(1));
+                        let cmd_rows = cmds
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, code)| {
+                                let hint = format!("the global filter becomes Shortcode is {code}");
+                                let at = code.clone();
+                                view! {
+                                    <li
+                                        id=format!("pal-{i}")
+                                        role="option"
+                                        class="pal-cmd"
+                                        data-pal-filter=at
+                                        aria-selected=if i == cur { "true" } else { "false" }
+                                        class:hi=i == cur
+                                        on:click=move |_| open_at(i)
+                                    >
+                                        <span class="pal-do">"Filter"</span>
+                                        <span class="code">{code}</span>
+                                        <span class="label pal-hint">{hint}</span>
+                                    </li>
+                                }
+                            })
+                            .collect_view();
                         // FILTER-16: the last row under a global filter — the
                         // other pass.
                         let wide = under.then(|| {
                             let e = everything.get();
+                            let at = base + len;
                             view! {
                                 <li
-                                    id=format!("pal-{len}")
+                                    id=format!("pal-{at}")
                                     role="option"
                                     class="pal-wide"
                                     data-pal-wide=if e { "inside" } else { "everything" }
-                                    aria-selected=if cur == len { "true" } else { "false" }
-                                    class:hi=cur == len
-                                    on:click=move |_| open_at(len)
+                                    aria-selected=if cur == at { "true" } else { "false" }
+                                    class:hi=cur == at
+                                    on:click=move |_| open_at(at)
                                 >
                                     <span class="label">{if e { "Search inside the filter" } else { "Search everything" }}</span>
                                     <span class="pal-hint">{if e { "only what the global filter admits" } else { "without the global filter" }}</span>
@@ -1189,7 +1276,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                                     "no ticket matches".to_string()
                                 }
                             });
-                            return view! { <li class="empty">{word}</li> {wide} }.into_any();
+                            return view! { {cmd_rows} <li class="empty">{word}</li> {wide} }.into_any();
                         }
                         let outside = found.with(|f| f.outside.clone());
                         let rows = shown
@@ -1199,6 +1286,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                                 let id = t.id.clone();
                                 let (title, status) = (t.title.clone(), t.status);
                                 let out = outside.contains(&id);
+                                let i = base + i;
                                 view! {
                                     <li
                                         id=format!("pal-{i}")
@@ -1217,7 +1305,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                                 }
                             })
                             .collect_view();
-                        view! { {rows} {wide} }.into_any()
+                        view! { {cmd_rows} {rows} {wide} }.into_any()
                     }}
                 </ul>
                 <div class="hint">
@@ -1229,7 +1317,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                             found.with(|f| count_words(f, under))
                         }}
                     </span>
-                    " · ↑↓ move · Enter opens · Esc closes"
+                    " · ↑↓ move · Enter opens · Esc closes · filter SC"
                 </div>
             </div>
         </div>
@@ -1293,7 +1381,10 @@ fn Cheats(overlay: RwSignal<Overlay>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_words, narrows, palette_match, pass, Found, Pass, SHORTCUTS};
+    use super::{count_words, filter_command, filter_offers, narrows, palette_match, pass, Found, Pass, FILTER_OFFERS, SHORTCUTS};
+    use crate::filter::tests::{platform, strs};
+    use crate::lens::Kept;
+    use crate::tags::{self, Act, Tag};
     use menger_tickets_api::{Kind, Status, TicketSummary};
 
     /// The palette's v1 filter: a case-insensitive substring of either
@@ -1466,10 +1557,52 @@ mod tests {
             "g h",         // board
             "f",           // the view's filter (WAVE-12)
             "F",           // the global filter (FILTER-11)
+            "/ filter SC", // the palette's filter (FILTER-22)
             "?",           // this list
             "Esc",         // close
         ] {
             assert!(keys.contains(&required), "cheat sheet is missing {required}: {keys:?}");
         }
+    }
+
+    /// FILTER-22: the palette reads `filter <shortcode>` — the word in any
+    /// case, one shortcode after it, upper case; anything else is a search.
+    #[test]
+    fn the_palette_reads_filter_and_a_shortcode() {
+        assert_eq!(filter_command("filter demand"), Some("DEMAND".into()));
+        assert_eq!(filter_command("  Filter   DEMAND "), Some("DEMAND".into()));
+        assert_eq!(filter_command("FILTER plexus_2"), Some("PLEXUS_2".into()));
+        for not in ["", "filter", "filter ", "filters demand", "filter demand now", "filter de$mand", "demand", "find demand"] {
+            assert_eq!(filter_command(not), None, "{not:?}");
+        }
+    }
+
+    /// FILTER-22: what `filter <typed>` offers — the shortcode typed when the
+    /// groups know it, then the ones it begins, at most five; none it names;
+    /// before the groups, what was typed.
+    #[test]
+    fn the_palette_offers_the_shortcodes_typed() {
+        let t = platform();
+        let known = Some(t.known());
+        assert_eq!(filter_offers("MACRO", known), strs(&["MACRO"]));
+        assert_eq!(filter_offers("C", known), strs(&["CODEGEN", "CONTEXT"]));
+        assert_eq!(filter_offers("GEN", known), strs(&["GEN"]), "the shortcodes it begins, not every one holding it");
+        assert_eq!(filter_offers("NOPE", known), Vec::<String>::new());
+        assert_eq!(filter_offers("", known).len(), FILTER_OFFERS);
+        assert_eq!(filter_offers("NOPE", None), strs(&["NOPE"]));
+    }
+
+    /// FILTER-22: `filter demand` makes the global filter what the Filter
+    /// item of DEMAND's tag makes: Shortcode is DEMAND's tree, nothing else.
+    #[test]
+    fn the_palettes_filter_is_the_tags() {
+        let t = platform();
+        let code = filter_command("filter macro").unwrap();
+        let first = tags::offers(&Tag::shortcode(&code), Some(&t)).remove(0);
+        let item = &tags::items(&Tag::shortcode(&code), Some(&t))[0];
+        assert_eq!((item.act, &item.clause), (Act::Filter, &first.clause));
+        let mut was = Kept::default();
+        was.filter = menger_tickets_api::filter::Filter::parse("kind build and status Ready").unwrap();
+        assert_eq!(tags::apply(Act::Filter, &first.clause, &was).filter.format(), "in (CODEGEN, GEN, MACRO)");
     }
 }
