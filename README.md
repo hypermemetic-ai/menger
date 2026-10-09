@@ -119,7 +119,10 @@ cargo run                              # serves it at http://127.0.0.1:4456/
 
 Dev loop: keep `cargo run` up and run `cd frontend && trunk watch` — it
 rebuilds `dist/` on every source change; reload the browser to pick it
-up (the server reads `dist/` from disk per request, no restart needed).
+up, no restart needed. The server holds the build as a table (ACCESS-33):
+`/app/…` answers only the files of the build it read — a request path is
+a key, never a path on disk — and a new `index.html` (every trunk build
+writes one) has it read the build again.
 `--app-dist DIR` / `MENGER_APP_DIST` point the server at a `dist`
 elsewhere.
 
@@ -144,13 +147,12 @@ Data plane (MFE-1 pins: REST for calls, SSE for `watch`; the view layer
 owns no routing):
 
 - The REST port (:4457) emits **no CORS headers**, so the app never
-  calls it cross-origin. Instead the shell server hosts a same-origin
-  reverse proxy: `/rest/{*}` on :4456 forwards verbatim to :4457. The
-  REST surface stays the contract; the proxy adds no data path — its one
-  liberty is prepending an ignorable SSE comment line (`:`) to
-  `text/event-stream` responses, because Firefox does not resolve a
-  `fetch()` until the first body bytes arrive and `watch` sends no
-  preamble of its own.
+  called it cross-origin: until MFE-9 the shell hosted a same-origin
+  reverse proxy, `/rest/{*}` on :4456 forwarding verbatim to :4457.
+  **ACCESS-33 removed it** — the app speaks the WebSocket (below), nothing
+  else called it, and it forwarded anything to a bridge that carries no
+  identity. The shell serves menger's pages and the app's build, nothing
+  else; the REST port itself, where it runs, is for curl and scripts.
 - `tickets.watch` streams SSE **over POST**, which browser `EventSource`
   (GET-only) cannot consume — the reason the app was written against
   `fetch` + ReadableStream up to MFE-8. It no longer is: since **MFE-9**
@@ -1164,8 +1166,8 @@ src/
   builder.rs           build_rpc() → Arc<DynamicHub> ("menger")
   shell.rs             / (the Leptos app, degrading to the vanilla page when
                        unbuilt), /vanilla (the embedded day-one page), /app/
-                       (the app + its assets from disk), /rest/* (same-origin
-                       proxy to the REST port)
+                       (the app's build, read into a table — ACCESS-33);
+                       nothing else
 tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        typed Plexus client it emits — ONE declaration, shared by
                        the server (default features: `server`) and the app

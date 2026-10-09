@@ -164,10 +164,6 @@ async fn main() -> anyhow::Result<()> {
             let cfg = shell::ShellConfig {
                 port: args.shell_port,
                 ws_port: args.port,
-                // MFE-2: /rest on the shell port reverse-proxies to the
-                // REST port (same-origin for the browser app; the REST
-                // transport emits no CORS headers).
-                rest_port: (!args.no_rest).then_some(args.rest_port),
                 app_dist: args.app_dist.unwrap_or_else(shell::default_app_dist),
                 env: args.env.clone(),
             };

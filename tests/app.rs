@@ -7,11 +7,9 @@
 //!   never a crash or a 500 (criterion 4)
 //! - `/app/` with build output on disk serves it with sane content types
 //!   (a synthetic dist — real trunk output is criterion 1, verified live)
-//! - `/rest/{*}` on the shell port reverse-proxies to the REST port:
-//!   unary calls round-trip and `watch` streams SSE through the proxy
-//!   (the same-origin data plane the Leptos app rides)
-//! - `--no-rest` turns the proxy into a clear 503, and the vanilla page
-//!   at `/` keeps working throughout (criterion 5)
+//! - ACCESS-33: nothing else — `/app/` answers only the build the server
+//!   read (a request path is never a path on disk), and there is no
+//!   `/rest` pass-through to the REST port
 
 #![cfg(unix)]
 
@@ -20,7 +18,6 @@ use hyper::body::Bytes;
 use hyper::client::conn::http1;
 use hyper::{header, Method, Request, StatusCode};
 use hyper_util::rt::TokioIo;
-use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -311,243 +308,49 @@ async fn app_serves_nested_vendor_asset_whole() {
     assert!(!String::from_utf8_lossy(&text).contains("frontend not built"));
 }
 
-/// The same-origin data plane: a unary REST call through the shell port's
-/// /rest proxy round-trips exactly like a direct REST call.
+/// ACCESS-33: the shell is not a way to anything but menger. The `/rest`
+/// pass-through to the REST port is gone — the REST port itself, where it
+/// runs, is unchanged — and every method on it answers 404.
 #[tokio::test]
-async fn rest_proxy_round_trips_unary_calls() {
+async fn the_shell_has_no_rest_pass_through() {
     let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let s = spawn_server(empty.path(), true).await;
-
-    let (status, _, body) = fetch(
-        s.shell_port,
-        Method::POST,
-        "/rest/tickets/create",
-        &json!({"epic": "PRX", "title": "born through the proxy", "kind": "scope"}).to_string(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-    let v: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["data"][0]["type"], "created");
-    assert_eq!(v["data"][0]["ticket"]["id"], "PRX-1");
-
-    // Transport-level mappings survive the hop.
-    let (status, _, _) = fetch(s.shell_port, Method::POST, "/rest/tickets/frobnicate", "{}").await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "404 passes through");
+    for (method, path) in [(Method::POST, "/rest/tickets/list"), (Method::GET, "/rest/tickets/health"), (Method::POST, "/rest/tickets/watch")] {
+        let (status, _, _) = fetch(s.shell_port, method.clone(), path, "{}").await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+    }
 }
 
-/// The live half of the data plane: `watch` opened through the proxy
-/// BEFORE a create receives the created event promptly, as SSE — proving
-/// the proxy streams instead of buffering (what the Leptos app rides).
+/// ACCESS-33: `/app/` answers the files of the build the server read, by
+/// their paths in it — a request path is a key, never a path on disk. A
+/// file dropped into dist without a rebuild is not served; a rebuild (a
+/// new entrypoint, as `trunk watch` writes one) is read whole, so a reload
+/// picks it up without a restart.
 #[tokio::test]
-async fn rest_proxy_streams_watch_sse() {
-    let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let s = spawn_server(empty.path(), true).await;
+async fn app_answers_only_the_build_it_read() {
+    let dist = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    std::fs::write(dist.path().join("index.html"), "<html>build one</html>").unwrap();
+    std::fs::write(dist.path().join("app.js"), "console.log('one')").unwrap();
+    let s = spawn_server(dist.path(), true).await;
 
-    let mut sender = connect(s.shell_port).await;
-    let resp = sender
-        .send_request(request(
-            s.shell_port,
-            Method::POST,
-            "/rest/tickets/watch",
-            &json!({"epic": "PRX"}).to_string(),
-        ))
-        .await
-        .expect("open watch through proxy");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let ctype = resp
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default()
-        .to_owned();
-    assert!(
-        ctype.starts_with("text/event-stream"),
-        "SSE content type survives the proxy, got {ctype:?}"
-    );
-    let mut watch_body = resp.into_body();
-
-    let (status, _, body) = fetch(
-        s.shell_port,
-        Method::POST,
-        "/rest/tickets/create",
-        &json!({"epic": "PRX", "title": "watched through the proxy", "kind": "scope"}).to_string(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-
-    let sse = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut buf = String::new();
-        loop {
-            let frame = watch_body
-                .frame()
-                .await
-                .expect("watch stream stays open")
-                .expect("clean frame");
-            if let Ok(data) = frame.into_data() {
-                buf.push_str(std::str::from_utf8(&data).expect("utf-8 SSE"));
-                // A complete frame carrying data (the proxy prepends an
-                // ignorable `:` comment frame — see src/shell.rs — so the
-                // first blank line alone is not the event).
-                if let Some(complete) = buf.rfind("\n\n") {
-                    if buf[..complete].contains("data: ") {
-                        return buf;
-                    }
-                }
-            }
-        }
-    })
-    .await
-    .expect("created event streams through the proxy promptly (within 5s)");
-
-    assert!(
-        sse.starts_with(':'),
-        "proxy's SSE open-comment preamble leads the stream, got:\n{sse}"
-    );
-    let payload = sse
-        .lines()
-        .find_map(|l| l.strip_prefix("data: "))
-        .expect("SSE data line");
-    let event: Value = serde_json::from_str(payload).expect("SSE data is JSON");
-    assert_eq!(event["content"]["type"], "created");
-    assert_eq!(event["content"]["ticket"]["id"], "PRX-1");
-}
-
-/// MFE-3's data plane, end to end through the proxy: `set_status`
-/// round-trips (the board's per-row control) and the change is broadcast
-/// to an already-open `watch` stream as `status_changed` — how one
-/// window's edit reaches every other open client.
-#[tokio::test]
-async fn rest_proxy_set_status_round_trips_and_watch_broadcasts_it() {
-    let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let s = spawn_server(empty.path(), true).await;
-
-    let (status, _, body) = fetch(
-        s.shell_port,
-        Method::POST,
-        "/rest/tickets/create",
-        &json!({"epic": "PRX", "title": "status via proxy", "kind": "scope"}).to_string(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-
-    // Watch opened before the mutation, like a second browser window.
-    let mut sender = connect(s.shell_port).await;
-    let resp = sender
-        .send_request(request(
-            s.shell_port,
-            Method::POST,
-            "/rest/tickets/watch",
-            "{}",
-        ))
-        .await
-        .expect("open watch through proxy");
-    assert_eq!(resp.status(), StatusCode::OK);
-    let mut watch_body = resp.into_body();
-
-    let (status, _, body) = fetch(
-        s.shell_port,
-        Method::POST,
-        "/rest/tickets/set_status",
-        &json!({"id": "PRX-1", "status": "Ready"}).to_string(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-    let v: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["data"][0]["type"], "status_changed");
-    assert_eq!(v["data"][0]["ticket"]["status"], "Ready");
-    assert_eq!(v["data"][0]["previous"], "Pending");
-
-    let sse = tokio::time::timeout(Duration::from_secs(5), async {
-        let mut buf = String::new();
-        loop {
-            let frame = watch_body
-                .frame()
-                .await
-                .expect("watch stream stays open")
-                .expect("clean frame");
-            if let Ok(data) = frame.into_data() {
-                buf.push_str(std::str::from_utf8(&data).expect("utf-8 SSE"));
-                if buf.contains("status_changed") && buf.rfind("\n\n").is_some() {
-                    return buf;
-                }
-            }
-        }
-    })
-    .await
-    .expect("status_changed reaches the open watch within 5s");
-    let payload = sse
-        .lines()
-        .find_map(|l| l.strip_prefix("data: "))
-        .expect("SSE data line");
-    let event: Value = serde_json::from_str(payload).expect("SSE data is JSON");
-    assert_eq!(event["content"]["type"], "status_changed");
-    assert_eq!(event["content"]["ticket"]["id"], "PRX-1");
-    assert_eq!(event["content"]["ticket"]["status"], "Ready");
-}
-
-/// The server stays the validator through the proxy: a status outside
-/// the closed vocabulary comes back as an in-band `error` event inside a
-/// 2xx — the exact shape the app's error banner consumes — and the
-/// ticket is left unchanged.
-#[tokio::test]
-async fn rest_proxy_passes_in_band_error_for_bad_status() {
-    let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let s = spawn_server(empty.path(), true).await;
-
-    let (status, _, _) = fetch(
-        s.shell_port,
-        Method::POST,
-        "/rest/tickets/create",
-        &json!({"epic": "PRX", "title": "rejects bad status", "kind": "scope"}).to_string(),
-    )
-    .await;
+    let (status, _, _) = fetch(s.shell_port, Method::GET, "/app/app.js", "").await;
     assert_eq!(status, StatusCode::OK);
 
-    let (status, _, body) = fetch(
-        s.shell_port,
-        Method::POST,
-        "/rest/tickets/set_status",
-        &json!({"id": "PRX-1", "status": "Bogus"}).to_string(),
-    )
-    .await;
-    assert!(status.is_success(), "in-band error rides a 2xx, got {status}");
-    let v: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["data"][0]["type"], "error", "got {v}");
-    assert!(
-        v["data"][0]["message"]
-            .as_str()
-            .unwrap_or_default()
-            // The server normalizes case before validating, and reports
-            // the normalized value.
-            .contains("unknown status 'bogus'"),
-        "error names the offending value, got {v}"
-    );
+    std::fs::write(dist.path().join("dropped.js"), "console.log('dropped')").unwrap();
+    let (status, _, _) = fetch(s.shell_port, Method::GET, "/app/dropped.js", "").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "not in the build the server read");
 
-    let (_, _, body) = fetch(
-        s.shell_port,
-        Method::POST,
-        "/rest/tickets/get",
-        &json!({"id": "PRX-1"}).to_string(),
-    )
-    .await;
-    let v: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["data"][0]["ticket"]["status"], "Pending", "unchanged");
+    std::fs::write(dist.path().join("two.js"), "console.log('two')").unwrap();
+    std::fs::write(dist.path().join("index.html"), "<html>build two</html>").unwrap();
+    let index = std::fs::File::options().write(true).open(dist.path().join("index.html")).unwrap();
+    index.set_modified(std::time::SystemTime::now() + Duration::from_secs(60)).unwrap();
+    let (status, _, body) = fetch(s.shell_port, Method::GET, "/app/", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&body).contains("build two"), "the rebuild is served");
+    let (status, _, _) = fetch(s.shell_port, Method::GET, "/app/two.js", "").await;
+    assert_eq!(status, StatusCode::OK, "with its assets");
 }
 
-/// --no-rest: the proxy has no upstream and says so — a deliberate 503,
-/// not a hang or a connection error surfaced as a 500.
-#[tokio::test]
-async fn rest_proxy_without_rest_is_clear_503() {
-    let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let s = spawn_server(empty.path(), false).await;
-
-    let (status, _, body) = fetch(s.shell_port, Method::POST, "/rest/tickets/health", "{}").await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert!(
-        String::from_utf8_lossy(&body).contains("--no-rest"),
-        "names the cause"
-    );
-}
 
 /// MFE-2 criterion 5 + MFE-4 acceptance 2: the vanilla page still loads
 /// on the same listener, WS port injected, untouched by the /app and

@@ -925,15 +925,16 @@ async fn shell_serves_the_page() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let shell_port = free_port().await;
+    let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let app_dist = empty.path().to_path_buf();
     tokio::spawn(async move {
         // Same call, MFE-2 signature: config struct instead of two ports.
-        // No REST upstream and an empty app dist — this test only cares
-        // that the vanilla page at `/` still serves, unchanged.
+        // An empty app dist — this test only cares that the vanilla page
+        // at `/` still serves, unchanged.
         let _ = menger::shell::serve(menger::shell::ShellConfig {
             port: shell_port,
             ws_port: 4455,
-            rest_port: None,
-            app_dist: std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")),
+            app_dist,
             env: None,
         })
         .await;
