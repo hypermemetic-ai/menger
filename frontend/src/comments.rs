@@ -337,6 +337,7 @@ pub(crate) mod tests {
                 version: ticket.map(|_| 1),
             },
             body: format!("body {id}"),
+            principal: None,
         }
     }
 

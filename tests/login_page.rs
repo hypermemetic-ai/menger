@@ -215,7 +215,7 @@ async fn start() -> Menger {
 
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let sessions = Arc::new(Sessions::new(3600));
-    let access = Access::with_login(sessions.clone(), true);
+    let access = Access::with_login(sessions.clone(), true, Vec::new());
     let offers = providers.iter().map(Provider::offer).collect();
     let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access).await.unwrap();
     let carriers = login::boundary(&providers).unwrap();

@@ -1579,6 +1579,9 @@ struct Cache {
     /// COMMENT-2: every comment ([`comments::Comments`]) — read from its
     /// table at open, moved by a comment's own write and by nothing else.
     comments: comments::Comments,
+    /// IDENTITY-21: every grant ([`members::Members`]) — read at open, moved
+    /// by `grant` and `revoke` alone.
+    members: members::Members,
     written: u64,
 }
 
@@ -1903,6 +1906,8 @@ impl Cache {
             inputs: inputs::Inputs::default(),
             // COMMENT-2: and the comments.
             comments: comments::Comments::default(),
+            // IDENTITY-21: and the members.
+            members: members::Members::default(),
             written: 0,
         }
     }
@@ -1959,6 +1964,8 @@ impl Cache {
             inputs: inputs::Inputs::default(),
             // COMMENT-2: and the comments.
             comments: comments::Comments::default(),
+            // IDENTITY-21: and the members.
+            members: members::Members::default(),
             written: 0,
         }
     }
@@ -2688,6 +2695,8 @@ impl Store {
         cache.inputs = inputs::load(&conn)?;
         // COMMENT-2: the comments, as stored.
         cache.comments = comments::load(&conn)?;
+        // IDENTITY-21: the members, as stored.
+        cache.members = members::load(&conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
             Some(path) => Readers::open(path)?,
@@ -4300,6 +4309,17 @@ impl Store {
     /// committed, the cache moved, `Added` broadcast; the comment as kept is
     /// the answer. A refusal keeps nothing.
     pub async fn add_comment(&self, anchor: crate::comments::Anchor, body: String, author: Option<String>) -> Result<crate::comments::Comment, StoreError> {
+        self.add_comment_as(anchor, body, author, None).await
+    }
+
+    /// IDENTITY-21: [`Store::add_comment`], signed by `principal`.
+    pub async fn add_comment_as(
+        &self,
+        anchor: crate::comments::Anchor,
+        body: String,
+        author: Option<String>,
+        principal: Option<String>,
+    ) -> Result<crate::comments::Comment, StoreError> {
         let (mut anchor, author) = crate::comments::check(anchor, &body, author.as_deref()).map_err(StoreError::CommentRefused)?;
         let serial = self.serial().await;
         let comment = {
@@ -4316,6 +4336,7 @@ impl Store {
                 at: chrono::Utc::now().timestamp(),
                 anchor,
                 body,
+                principal,
             }
         };
         let (stored, kept) = (comment.clone(), comment.clone());
@@ -4327,6 +4348,43 @@ impl Store {
                 tx.comment(CommentChange::Added(comment.clone()));
                 comment
             },
+        )
+        .await
+    }
+
+    /// IDENTITY-21: a principal's grants, from the cache.
+    pub fn grants_of(&self, principal: &str) -> Vec<crate::members::Grant> {
+        self.tickets.read().expect("store lock poisoned").members.of(principal)
+    }
+
+    /// IDENTITY-21: every grant, by principal then scope, from the cache.
+    pub fn grants(&self) -> Vec<crate::members::Grant> {
+        self.tickets.read().expect("store lock poisoned").members.all()
+    }
+
+    /// IDENTITY-21: keeps a grant (replacing the principal's role on that
+    /// scope): one row committed, then the cache moved. The grant as kept.
+    pub async fn grant(&self, g: crate::members::Grant) -> Result<crate::members::Grant, StoreError> {
+        let serial = self.serial().await;
+        let (stored, kept) = (g.clone(), g.clone());
+        self.write(
+            serial,
+            move |tx| Ok(members::store(tx, &stored)?),
+            move |cache, _| cache.members.put(kept),
+            move |(), (), _| g,
+        )
+        .await
+    }
+
+    /// IDENTITY-21: removes a grant; whether there was one.
+    pub async fn revoke(&self, principal: String, scope: String) -> Result<bool, StoreError> {
+        let serial = self.serial().await;
+        let (p, sc) = (principal.clone(), scope.clone());
+        self.write(
+            serial,
+            move |tx| Ok(members::delete(tx, &principal, &scope)? > 0),
+            move |cache, _| cache.members.remove(&p, &sc).is_some(),
+            move |existed, _, _| existed,
         )
         .await
     }
@@ -4984,6 +5042,10 @@ mod inputs;
 /// beside the tickets, behind the cache.
 mod comments;
 pub use comments::{CommentChange, CommentPage, CommentQuery};
+/// IDENTITY-21: the members store — every grant of a role on a scope, kept
+/// beside the tickets, behind the cache.
+mod members;
+pub use members::Members;
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
 /// has commits)` interned as one cell; per shortcode and cell, a Roaring

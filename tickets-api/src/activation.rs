@@ -39,7 +39,9 @@ use futures::{Stream, StreamExt};
 #[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
-use crate::access::Access;
+use crate::access::{Access, Caller};
+#[cfg(feature = "server")]
+use crate::members::Role;
 #[cfg(feature = "server")]
 use plexus_core::plexus::AuthContext;
 
@@ -272,7 +274,7 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
@@ -282,7 +284,8 @@ impl Tickets {
             yield TicketsEvent::Health {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 unix_now: chrono::Utc::now().timestamp(),
-                ticket_count: store.count() as u64,
+                // IDENTITY-21: what this caller can see.
+                ticket_count: visible_count(&store, &caller),
             };
         }
     }
@@ -342,13 +345,28 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            // IDENTITY-21: editor on the parent, or on the shortcode's root;
+            // a shortcode with neither needs editor everywhere.
+            let anchor = match parent.as_deref() {
+                Some(p) => Some(p.to_string()),
+                None => store.groups().into_iter().find(|g| g.epic.eq_ignore_ascii_case(&epic)).and_then(|g| g.root),
+            };
+            let allowed = match &anchor {
+                Some(a) => caller.require(Role::Editor, &[a.as_str()], &store),
+                None if caller.everywhere(Role::Editor) => Ok(()),
+                None => Err(format!("a new shortcode {} needs editor on *", epic.to_ascii_uppercase())),
+            };
+            if let Err(message) = allowed {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             let kind = match kind.as_deref().map(str::parse::<Kind>) {
                 None => Kind::Build,
                 Some(Ok(k)) => k,
@@ -393,13 +411,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if caller.require(Role::Viewer, &[id.as_str()], &store).is_err() {
+                yield TicketsEvent::NotFound { id: id };
+                return;
+            }
             match store.get(&id).await {
                 Ok(ticket) => yield TicketsEvent::Ticket { ticket },
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
@@ -463,8 +485,15 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            let filter = match caller.scoped(filter.as_deref()) {
+                Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
@@ -548,13 +577,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if let Err(message) = caller.require(Role::Editor, &[id.as_str()], &store) {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             let status = match status.parse::<Status>() {
                 Ok(s) => s,
                 Err(e) => {
@@ -605,13 +638,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if let Err(message) = caller.require(Role::Editor, &[id.as_str()], &store) {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             let kind = match kind.parse::<Kind>() {
                 Ok(k) => k,
                 Err(e) => {
@@ -658,13 +695,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if let Err(message) = caller.require(Role::Editor, &[id.as_str(), parent.as_str()], &store) {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             match store.set_parent(&id, &parent).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
@@ -703,13 +744,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if let Err(message) = caller.require(Role::Editor, &[id.as_str()], &store) {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             match store.amend(&id, title, body).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
@@ -747,13 +792,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if let Err(message) = caller.require(Role::Editor, &[id.as_str()], &store) {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             match store.link_commits(&id, commits).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
@@ -784,13 +833,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if let Err(message) = caller.require(Role::Editor, &[id.as_str()], &store) {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             match store.unlink_commits(&id, commits).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
@@ -835,8 +888,15 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            let filter = match caller.scoped(filter.as_deref()) {
+                Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
@@ -916,8 +976,15 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            let filter = match caller.scoped(filter.as_deref()) {
+                Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
@@ -957,8 +1024,15 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            let filter = match caller.scoped_text(&filter) {
+                Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
@@ -1003,14 +1077,24 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            let visible = match visible_epics(&store, &caller) {
+                Ok(v) => v,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
             for group in store.groups() {
+                if visible.as_ref().is_some_and(|v| !v.contains(&group.epic)) {
+                    continue;
+                }
                 yield TicketsEvent::Group { group };
             }
         }
@@ -1035,13 +1119,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if let Err(message) = caller.reach_filter(Role::Viewer) {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             for component in store.components() {
                 yield TicketsEvent::Component { component };
             }
@@ -1086,13 +1174,26 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            let filter = match caller.scoped(filter.as_deref()) {
+                Ok(v) => v,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            if let Some(t) = ticket.as_deref() {
+                if caller.require(Role::Viewer, &[t], &store).is_err() {
+                    yield TicketsEvent::NotFound { id: t.to_string() };
+                    return;
+                }
+            }
             let state = match state.as_deref().map(str::parse::<InputState>) {
                 None => None,
                 Some(Ok(s)) => Some(s),
@@ -1154,13 +1255,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if let Err(message) = caller.require(Role::Editor, &[ticket.as_str()], &store) {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             let source = match source.as_deref().map(str::parse::<AnswerSource>) {
                 None => AnswerSource::Api,
                 Some(Ok(s)) => s,
@@ -1196,13 +1301,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if let Err(message) = caller.require(Role::Editor, &[ticket.as_str()], &store) {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             let source = match source.as_deref().map(str::parse::<AnswerSource>) {
                 None => AnswerSource::Api,
                 Some(Ok(s)) => s,
@@ -1228,13 +1337,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if let Err(message) = caller.require(Role::Editor, &[ticket.as_str()], &store) {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             yield input_event(store.close_input(&ticket, &input).await, ticket);
         }
     }
@@ -1251,13 +1364,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if let Err(message) = caller.require(Role::Editor, &[ticket.as_str()], &store) {
+                yield TicketsEvent::Error { message };
+                return;
+            }
             yield input_event(store.reopen_input(&ticket, &input).await, ticket);
         }
     }
@@ -1280,14 +1397,24 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            let visible = match visible_epics(&store, &caller) {
+                Ok(v) => v,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
             for (epic, last_seq) in store.extents() {
+                if visible.as_ref().is_some_and(|v| !v.contains(&epic)) {
+                    continue;
+                }
                 yield TicketsEvent::Extent { epic, last_seq };
             }
         }
@@ -1311,8 +1438,15 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            let filter = match caller.scoped(filter.as_deref()) {
+                Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
@@ -1353,8 +1487,22 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            let filter = match caller.scoped(filter.as_deref()) {
+                Ok(v) => v,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            let base = match caller.scoped(base.as_deref()) {
+                Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
@@ -1426,8 +1574,15 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            let filter = match caller.scoped_text(&filter) {
+                Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
@@ -1480,8 +1635,15 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            let visible = match visible_epics(&store, &caller) {
+                Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
@@ -1492,6 +1654,12 @@ impl Tickets {
                     message: "waves: epics is empty — name at least one shortcode, e.g. [\"MNG\"]".into(),
                 };
                 return;
+            }
+            if let Some(v) = &visible {
+                if let Some(hidden) = epics.iter().find(|e| !v.contains(&e.to_ascii_uppercase())) {
+                    yield TicketsEvent::Error { message: format!("waves: no access to {hidden}") };
+                    return;
+                }
             }
             let kinds: Vec<Kind> = match kinds {
                 None => crate::store::waves::DEFAULT_KINDS.to_vec(),
@@ -1535,13 +1703,17 @@ impl Tickets {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            let _caller = match admitted {
+            let caller = match admitted {
                 Ok(caller) => caller,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
+            if caller.require(Role::Viewer, &[id.as_str()], &store).is_err() {
+                yield TicketsEvent::NotFound { id: id };
+                return;
+            }
             match store.blockers(&id).await {
                 Ok(refs) => {
                     for r in refs {
@@ -1644,6 +1816,22 @@ impl Tickets {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let membership = membership.unwrap_or(false);
         let epic = epic.map(|e| e.to_ascii_uppercase());
+        // IDENTITY-19, IDENTITY-21: who is watching, and through what reach.
+        let access = self.access.clone();
+        let who = auth.cloned();
+        let admitted = access.admit(who.as_ref());
+        let (filter, refused) = match &admitted {
+            Ok(caller) => match caller.scoped(filter.as_deref()) {
+                Ok(f) => (f, None),
+                Err(e) => (None, Some(e)),
+            },
+            Err(e) => (None, Some(e.clone())),
+        };
+        let reach: Option<Lens> = admitted
+            .as_ref()
+            .ok()
+            .and_then(|c| c.reach_filter(Role::Viewer).ok().flatten())
+            .and_then(|f| Lens::of(&f).ok());
         // FILTER-4: a filtered watch reads the filtered channel, which
         // carries every change and each write's cell moves after them.
         let filtered = (filter.is_some() || membership).then(|| {
@@ -1653,11 +1841,10 @@ impl Tickets {
         let store = Arc::clone(&self.store);
         let plain = filtered.is_none().then(|| self.store.subscribe());
         // IDENTITY-19: admitted now, and asked again at every change it
-        // relays, so a watch ends when its session does.
-        let access = self.access.clone();
-        let who = auth.cloned();
+        // relays, so a watch ends when its session does. IDENTITY-21: and a
+        // restricted caller hears only of the tickets it can see.
         stream! {
-            if let Err(message) = access.admit(who.as_ref()) {
+            if let Some(message) = refused {
                 yield TicketsEvent::Error { message };
                 return;
             }
@@ -1693,7 +1880,9 @@ impl Tickets {
                                 continue;
                             }
                             if let Some(ev) = change.in_epic(epic.as_deref()).and_then(wire_event) {
-                                yield ev;
+                                if let Some(ev) = within(&store, reach.as_ref(), ev) {
+                                    yield ev;
+                                }
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
@@ -1716,7 +1905,9 @@ impl Tickets {
                         // WAVE-6: of a `placements_changed`, the changes in
                         // the epic.
                         if let Some(ev) = change.in_epic(epic.as_deref()).and_then(wire_event) {
-                            yield ev;
+                            if let Some(ev) = within(&store, reach.as_ref(), ev) {
+                                yield ev;
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
@@ -1726,6 +1917,65 @@ impl Tickets {
                 }
             }
         }
+    }
+}
+
+/// IDENTITY-21: a watched event as a restricted caller may hear it: itself
+/// when every ticket it names is within `reach`, the part of it that is
+/// (a placements change), or nothing. Events naming no ticket pass.
+#[cfg(feature = "server")]
+fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> Option<TicketsEvent> {
+    let Some(reach) = reach else { return Some(ev) };
+    let sees = |id: &str| store.member(&[id.to_string()], reach).first().copied().unwrap_or(false);
+    let id: Option<String> = match &ev {
+        TicketsEvent::Created { ticket }
+        | TicketsEvent::Ticket { ticket }
+        | TicketsEvent::StatusChanged { ticket, .. }
+        | TicketsEvent::KindChanged { ticket, .. }
+        | TicketsEvent::Amended { ticket, .. }
+        | TicketsEvent::CommitsLinked { ticket, .. }
+        | TicketsEvent::CommitsUnlinked { ticket, .. }
+        | TicketsEvent::UnlocksChanged { ticket, .. }
+        | TicketsEvent::ParentChanged { ticket, .. }
+        | TicketsEvent::Blocker { ticket } => Some(ticket.id.clone()),
+        TicketsEvent::Summary { summary } | TicketsEvent::Placed { summary, .. } | TicketsEvent::Node { summary, .. } => {
+            Some(summary.id.clone())
+        }
+        TicketsEvent::ChildrenChanged { id, .. }
+        | TicketsEvent::ChildRemoved { id, .. }
+        | TicketsEvent::Entered { id, .. }
+        | TicketsEvent::Left { id, .. } => Some(id.clone()),
+        TicketsEvent::Group { group } | TicketsEvent::GroupChanged { group } => Some(group.root.clone().unwrap_or_default()),
+        TicketsEvent::InputChanged { input } | TicketsEvent::Input { input } => Some(input.ticket.clone()),
+        TicketsEvent::PlacementsChanged { changes } => {
+            let kept: Vec<_> = changes.iter().filter(|c| sees(&c.id)).cloned().collect();
+            return (!kept.is_empty()).then_some(TicketsEvent::PlacementsChanged { changes: kept });
+        }
+        _ => None,
+    };
+    match id {
+        Some(id) if !sees(&id) => None,
+        _ => Some(ev),
+    }
+}
+
+/// IDENTITY-21: the shortcodes a caller can see — `None`: all of them. A
+/// grant covers whole shortcodes (`under`), so a shortcode is visible
+/// exactly when the caller's reach admits any of its tickets.
+#[cfg(feature = "server")]
+fn visible_epics(store: &Store, caller: &Caller) -> Result<Option<std::collections::HashSet<String>>, String> {
+    let Some(reach) = caller.reach_filter(Role::Viewer)? else { return Ok(None) };
+    let lens = Lens::of(&reach).map_err(|e| e.to_string())?;
+    Ok(Some(store.counts(&lens).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect()))
+}
+
+/// IDENTITY-21: how many tickets a caller can see.
+#[cfg(feature = "server")]
+fn visible_count(store: &Store, caller: &Caller) -> u64 {
+    match caller.reach_filter(Role::Viewer) {
+        Ok(None) => store.count() as u64,
+        Ok(Some(reach)) => Lens::of(&reach).map(|lens| store.counts(&lens).into_iter().map(|(_, n)| n).sum()).unwrap_or(0),
+        Err(_) => 0,
     }
 }
 

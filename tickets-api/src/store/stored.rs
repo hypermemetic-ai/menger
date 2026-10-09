@@ -47,10 +47,25 @@ use std::path::Path;
 /// or older is built again as before ([`build`]) and gains it with the rest.
 /// Both ways: an older build reads a form-7 file as its own form (it never
 /// looks at the table), and `--verify-derived` there is consistent.
-const FORM: i64 = 7;
+///
+/// IDENTITY-21 is form 8: the members table (`members`, [`super::members`])
+/// and a comment's signer (`comments.principal`) — records again, nothing
+/// derived. A file in form 6 or 7 gains them in place, once, on its first
+/// open ([`upgrade`]); older forms are built again and gain them with the
+/// rest. An older build reads a form-8 file as its own (it never looks at
+/// either).
+const FORM: i64 = 8;
 
-/// COMMENT-2: the form [`upgrade`] takes to [`FORM`] in place.
-const COMMENTS_FROM: i64 = 6;
+/// COMMENT-2, IDENTITY-21: the forms [`upgrade`] takes to [`FORM`] in place.
+const UPGRADES_FROM: [i64; 2] = [6, 7];
+
+/// IDENTITY-21: what form 8 adds beside the tables — a comment's signer.
+fn add_comment_principal(conn: &Connection) -> rusqlite::Result<()> {
+    if !db::has_column(conn, "comments", "principal")? {
+        conn.execute("ALTER TABLE comments ADD COLUMN principal TEXT", [])?;
+    }
+    Ok(())
+}
 
 /// SDLC-11: the columns form 3 adds to the roll-up tables, `(table,
 /// column)` — what a build gives a file from an older form, as it gives one
@@ -769,6 +784,9 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     drop_ready_index(&tx)?;
     // COMMENT-2: form 7's comments table — empty for a file that had none.
     tx.execute_batch(super::comments::TABLE)?;
+    // IDENTITY-21: form 8's members table and comment signers.
+    tx.execute_batch(super::members::TABLE)?;
+    add_comment_principal(&tx)?;
     let cache = Cache::new(db::load_rows(&tx)?);
     let form = cache.form();
     write_all(&tx, &form)?;
@@ -817,19 +835,21 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
 /// for any other form, nothing is touched and the file is built again
 /// ([`build`]).
 pub(super) fn upgrade(conn: &mut Connection, form: i64) -> anyhow::Result<bool> {
-    if form != COMMENTS_FROM {
+    if !UPGRADES_FROM.contains(&form) {
         return Ok(false);
     }
     let started = std::time::Instant::now();
     let tx = conn.transaction()?;
     tx.execute_batch(super::comments::TABLE)?;
+    tx.execute_batch(super::members::TABLE)?;
+    add_comment_principal(&tx)?;
     let held = super::comments::count(&tx)?;
     mark_stale(&tx, false)?;
     tx.commit()?;
     tracing::warn!(
-        "COMMENT-2: the file gained stored form {FORM} — the comments table ({held} comments) — in {:.1} ms, \
-         durably; it was in form {form}, whose derived state is form {FORM}'s, so nothing was built again; \
-         every later open reads it",
+        "IDENTITY-21: the file gained stored form {FORM} — the comments table ({held} comments), the members \
+         table and comment signers — in {:.1} ms, durably; it was in form {form}, whose derived state is form \
+         {FORM}'s, so nothing was built again; every later open reads it",
         started.elapsed().as_secs_f64() * 1000.0
     );
     Ok(true)
@@ -1317,10 +1337,10 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
                     .into(),
             ))
         }
-        State::Older(form) if form == COMMENTS_FROM => {
+        State::Older(form) if UPGRADES_FROM.contains(&form) => {
             return Ok(Verdict::NotStored(format!(
                 "the derived state is stored in form {form}; this build reads {FORM} (the next open \
-                 adds the comments table, and builds nothing again)"
+                 adds the comments and members tables, and builds nothing again)"
             )))
         }
         State::Older(form) => {

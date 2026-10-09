@@ -1633,6 +1633,7 @@ dependencies = [
  "chrono",
  "futures",
  "jsonrpsee",
+ "plexus-auth-core",
  "plexus-client",
  "plexus-core",
  "plexus-macros",

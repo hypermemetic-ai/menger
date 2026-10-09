@@ -1180,6 +1180,49 @@ naming another `Host` are refused.
 so a restart signs everyone out (IDENTITY-18 G2). `tests/login_page.rs` runs
 each way in against fixture issuers.
 
+### Members and roles (IDENTITY-21)
+
+With login on, **menger's own members** decide what each person sees and
+changes. The IdP only proves who someone is. A grant gives a principal a
+role on a **scope**: a shortcode, which covers the shortcodes hosted under
+it (the filter language's `under`, so a grant on PLEXUS reaches IDENTITY),
+or `*`.
+
+| role | may |
+|---|---|
+| `viewer` | read under the scope, and comment |
+| `editor` | also create and change tickets, and answer inputs |
+| `admin` | also grant and revoke roles on the scope |
+
+Every read is answered under the caller's filter **and** their viewer
+scopes. `list --filter 'status Ready'` from someone with IDENTITY and OUGHT
+is `status Ready and under in (IDENTITY, OUGHT)`. A ticket out of reach is
+`not_found`. `groups`, `extents`, `waves`, `health` and `watch` hear only
+what is in reach. A write needs the role on every ticket it touches
+(`editor on OUGHT needed for OUGHT-2`). A comment is signed with the
+caller's principal (`principal` beside `author`), whatever `author` says.
+Someone signed in with no grant reaches nothing and waits in
+`members.requests` for an admin. With login off, nothing here applies.
+
+| method | yields |
+|---|---|
+| `members.mine {}` | `me { principal, name, admin_everywhere }`, then `grant { grant }` each |
+| `members.list { scope? }` | the grants on the scopes the caller administers |
+| `members.grant { principal, scope, role }` | the grant as kept; needs admin on the scope |
+| `members.revoke { principal, scope }` | `revoked { principal, scope, existed }` |
+| `members.requests {}` | `waiting { principal, name, provider, since }` per person without a grant |
+
+The first admin is the operator's: `--admin <principal>` (repeatable,
+`MENGER_ADMINS`) holds admin on `*`. Grants live in the `members` table,
+stored form 8: a file in form 6 or 7 gains it in place, and an older build
+reads a form-8 file as its own. `tests/members.rs` runs the roles over the
+real socket.
+
+```sh
+synapse -P 4450 -t "$ADA" menger members grant --principal idp:c952acd3-… --scope IDENTITY --role editor
+synapse -P 4450 -t "$ADA" menger members requests
+```
+
 ## Diagrams — the `diagrams` service (COMPILE-4)
 
 A second Plexus service beside menger, in `diagrams/` (`menger-diagrams`):

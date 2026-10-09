@@ -36,6 +36,9 @@ export interface Comment {
     body: string;
     /** Its id: 1, 2, … in the order comments were added, never reused. */
     id: number;
+    /** IDENTITY-21: the Plexus principal of who left it, when they were
+  signed in — `author` is only the name they go by. */
+    principal?: string | null;
     state: CommentState;
 }
 /** Where a comment stands: `open` until it is resolved; `resolve` and
@@ -51,6 +54,8 @@ export interface CommentsEventComment {
     author: string;
     body: string;
     id: number;
+    /** IDENTITY-21: the signer's principal, when signed in. */
+    principal: string | null;
     state: CommentState;
 }
 /** Where a `list` stands, once, after its rows: `next` is the cursor to

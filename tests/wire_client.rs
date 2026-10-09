@@ -736,6 +736,7 @@ async fn the_comments_through_the_generated_client() {
             at: added.at,
             anchor: Anchor { version: Some(version), ..anchor.clone() },
             body: "show the parent's title too".into(),
+            principal: None,
         }
     );
     let second = one(comments.add_all(Anchor { ticket: None, ..anchor.clone() }, "on no ticket".into(), Some("agent".into())).await.expect("add"))

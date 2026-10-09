@@ -1,5 +1,5 @@
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{Comments, ProviderOffer, Session, Tickets};
+use menger_tickets_api::{Comments, Members, ProviderOffer, Session, Tickets};
 use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError};
 use plexus_core::plexus::DynamicHub;
 use std::path::{Path, PathBuf};
@@ -113,10 +113,13 @@ pub async fn build_rpc_offering(
     // cache, one database handle. IDENTITY-14: `session`, holding nothing,
     // reports who each connection is.
     let store = Arc::new(store);
+    // IDENTITY-21: the members that decide, from the same store.
+    access.attach(Arc::clone(&store));
     Ok(Arc::new(
         DynamicHub::new("menger")
             .register(Tickets::with_access(Arc::clone(&store), access.clone()))
-            .register(Comments::with_access(store, access))
+            .register(Comments::with_access(Arc::clone(&store), access.clone()))
+            .register(Members::new(store, access))
             .register(Session::offering(offers)),
     ))
 }

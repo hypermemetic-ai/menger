@@ -151,11 +151,16 @@ async fn providers() -> Providers {
 /// menger as `main` wires it: the boundary from the providers, strict when
 /// `require_login`.
 async fn start(port: u16, providers: &[Provider], require_login: bool) {
+    start_with(port, providers, require_login, &[]).await
+}
+
+/// [`start`], with operator admins (`--admin`).
+async fn start_with(port: u16, providers: &[Provider], require_login: bool, admins: &[&str]) {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
     let offers = providers.iter().map(Provider::offer).collect();
     // As main wires it (IDENTITY-19): sessions, the per-call rule, the gate.
     let sessions = Arc::new(Sessions::new(3600));
-    let access = if providers.is_empty() { Access::open() } else { Access::with_login(sessions.clone(), require_login) };
+    let access = if providers.is_empty() { Access::open() } else { Access::with_login(sessions.clone(), require_login, admins.iter().map(|a| a.to_string()).collect()) };
     let hub = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers, access)
         .await
         .expect("open database");
@@ -303,13 +308,16 @@ async fn each_provider_becomes_the_same_kind_of_plexus_identity() {
 #[tokio::test]
 async fn a_signed_in_comment_carries_its_identity() {
     let p = providers().await;
-    start(p.port, &p.list, false).await;
+    let alice_principal = format!("idp:{ALICE}");
+    start_with(p.port, &p.list, false, &[&alice_principal]).await;
     let alice = connect(p.port, &[("cookie", format!("access_token={}", idp_token(&p.idp, now() + 600)))]).await.unwrap();
     let added = call(&alice, "comments.add", comment_by("mallory")).await;
     assert_eq!(added[0]["author"], "alice", "the identity, not the claim: {added:?}");
+    assert_eq!(added[0]["principal"], alice_principal, "IDENTITY-21: signed by the principal");
+    // IDENTITY-21: with login on, an anonymous caller reaches nothing.
     let anonymous = connect(p.port, &[]).await.unwrap();
     let added = call(&anonymous, "comments.add", comment_by("mallory")).await;
-    assert_eq!(added[0]["author"], "mallory", "anonymous keeps the given author: {added:?}");
+    assert_eq!(added[0]["type"], "error", "anonymous may not comment: {added:?}");
 }
 
 #[tokio::test]

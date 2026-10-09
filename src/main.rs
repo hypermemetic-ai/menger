@@ -151,6 +151,13 @@ struct Args {
     #[arg(long = "allowed-origin", env = "MENGER_ALLOWED_ORIGINS", value_name = "ORIGIN", value_delimiter = ';')]
     allowed_origin: Vec<String>,
 
+    /// IDENTITY-21: a principal who is admin on every shortcode from the
+    /// operator (repeatable; `idp:<uuid>`, `oidc:<provider>/<sub>`,
+    /// `nostr:<hex>`) — how the first admin exists. In the env var,
+    /// separated by `;`.
+    #[arg(long = "admin", env = "MENGER_ADMINS", value_name = "PRINCIPAL", value_delimiter = ';')]
+    admin: Vec<String>,
+
     /// IDENTITY-19: how long a sign-in lasts.
     #[arg(long, env = "MENGER_SESSION_HOURS", default_value = "12", value_name = "HOURS")]
     session_hours: i64,
@@ -198,7 +205,11 @@ async fn main() -> anyhow::Result<()> {
     // IDENTITY-19: sessions, the rule every method asks, and the page.
     let login_on = !args.auth_provider.is_empty();
     let sessions = Arc::new(Sessions::new(args.session_hours * 3600));
-    let access = if login_on { Access::with_login(sessions.clone(), args.require_login) } else { Access::open() };
+    let access = if login_on {
+        Access::with_login(sessions.clone(), args.require_login, args.admin.clone())
+    } else {
+        Access::open()
+    };
     let public_url = args.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", args.shell_port));
     let shell_origins = vec![
         format!("http://127.0.0.1:{}", args.shell_port),

@@ -46,7 +46,8 @@ pub(super) const TABLE: &str = "
             excerpt TEXT NOT NULL,
             ticket  TEXT,
             version INTEGER,
-            body    TEXT NOT NULL
+            body    TEXT NOT NULL,
+            principal TEXT
         );
     ";
 
@@ -201,8 +202,8 @@ pub(super) fn page(cache: &Cache, q: &CommentQuery, after: Option<u64>, limit: O
 /// caller's transaction.
 pub(super) fn store(conn: &Connection, c: &Comment) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO comments (id, state, author, at, route, path, label, excerpt, ticket, version, body)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        "INSERT INTO comments (id, state, author, at, route, path, label, excerpt, ticket, version, body, principal)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT (id) DO UPDATE SET state = excluded.state",
     )?
     .execute(params![
@@ -217,6 +218,7 @@ pub(super) fn store(conn: &Connection, c: &Comment) -> rusqlite::Result<()> {
         c.anchor.ticket,
         c.anchor.version,
         c.body,
+        c.principal,
     ])?;
     Ok(())
 }
@@ -224,7 +226,7 @@ pub(super) fn store(conn: &Connection, c: &Comment) -> rusqlite::Result<()> {
 /// Every comment as stored — what a start reads.
 pub(super) fn load(conn: &Connection) -> rusqlite::Result<Comments> {
     let mut stmt = conn.prepare(
-        "SELECT id, state, author, at, route, path, label, excerpt, ticket, version, body FROM comments ORDER BY id",
+        "SELECT id, state, author, at, route, path, label, excerpt, ticket, version, body, principal FROM comments ORDER BY id",
     )?;
     let mut rows = stmt.query([])?;
     let mut comments = Comments::default();
@@ -246,6 +248,7 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Comments> {
                 version: r.get(9)?,
             },
             body: r.get(10)?,
+            principal: r.get(11)?,
         });
     }
     Ok(comments)

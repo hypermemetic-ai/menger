@@ -21,7 +21,11 @@ use async_stream::stream;
 #[cfg(feature = "server")]
 use futures::Stream;
 #[cfg(feature = "server")]
-use crate::access::Access;
+use crate::access::{Access, Caller};
+#[cfg(feature = "server")]
+use crate::members::Role;
+#[cfg(feature = "server")]
+use crate::store::Lens;
 #[cfg(feature = "server")]
 use plexus_core::plexus::AuthContext;
 #[cfg(feature = "server")]
@@ -46,6 +50,28 @@ impl Comments {
     /// IDENTITY-19: behind [`Access`].
     pub fn with_access(store: Arc<Store>, access: Access) -> Self {
         Self { store, access }
+    }
+}
+
+/// IDENTITY-21: the role a comment needs on its ticket. IDENTITY-18's G1 asks
+/// whether a viewer may comment; this follows its recommendation (yes) until
+/// the owner answers.
+#[cfg(feature = "server")]
+const COMMENT_ROLE: Role = Role::Viewer;
+
+/// IDENTITY-21: the lens a caller sees comments through — `None`: all.
+#[cfg(feature = "server")]
+fn reach_lens(caller: &Caller) -> Result<Option<Lens>, String> {
+    caller.reach_filter(Role::Viewer)?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
+}
+
+/// IDENTITY-21: whether a comment is within reach: its ticket admitted, or,
+/// for a comment on the app, any reach at all.
+#[cfg(feature = "server")]
+fn sees(store: &Store, reach: Option<&Lens>, c: &crate::comments::Comment) -> bool {
+    match (reach, &c.anchor.ticket) {
+        (None, _) | (Some(_), None) => true,
+        (Some(lens), Some(t)) => store.member(&[t.clone()], lens).first().copied().unwrap_or(false),
     }
 }
 
@@ -91,13 +117,28 @@ impl Comments {
     pub async fn add(&self, auth: Option<&AuthContext>, anchor: Anchor, body: String, author: Option<String>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
-        let author = crate::session_activation::identity(auth).name().map(str::to_string).or(author);
         stream! {
-            if let Err(message) = admitted {
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
+            // IDENTITY-21: a comment on a ticket needs COMMENT_ROLE on it; one
+            // on the app, any grant at all.
+            let allowed = match anchor.ticket.as_deref() {
+                Some(t) => caller.require(COMMENT_ROLE, &[t], &store),
+                None => caller.reach_filter(COMMENT_ROLE).map(|_| ()),
+            };
+            if let Err(message) = allowed {
                 yield CommentsEvent::Error { message };
                 return;
             }
-            yield answer(store.add_comment(anchor, body, author).await);
+            // Signed by the caller's principal; the name is theirs, not
+            // what `author` says.
+            let author = caller.name.clone().or(author);
+            yield answer(store.add_comment_as(anchor, body, author, caller.principal.clone()).await);
         }
     }
 
@@ -144,10 +185,20 @@ impl Comments {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            if let Err(message) = admitted {
-                yield CommentsEvent::Error { message };
-                return;
-            }
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
+            let reach = match reach_lens(&caller) {
+                Ok(r) => r,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
             let state = match state.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::parse::<CommentState>) {
                 None => None,
                 Some(Ok(s)) => Some(s),
@@ -160,6 +211,9 @@ impl Comments {
             match store.comments(&q, after, limit) {
                 Ok(page) => {
                     for comment in page.comments {
+                        if !sees(&store, reach.as_ref(), &comment) {
+                            continue;
+                        }
                         yield comment.into();
                     }
                     yield CommentsEvent::Page { next: page.next };
@@ -181,7 +235,20 @@ impl Comments {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            if let Err(message) = admitted {
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
+            // IDENTITY-21: editor on the comment's ticket (any editor grant
+            // for a comment on the app).
+            let allowed = match store.comment(id).and_then(|c| c.anchor.ticket) {
+                Some(t) => caller.require(Role::Editor, &[t.as_str()], &store),
+                None => caller.reach_filter(Role::Editor).map(|_| ()),
+            };
+            if let Err(message) = allowed {
                 yield CommentsEvent::Error { message };
                 return;
             }
@@ -200,7 +267,20 @@ impl Comments {
         let store = self.store.clone();
         let admitted = self.access.admit(auth);
         stream! {
-            if let Err(message) = admitted {
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
+            // IDENTITY-21: editor on the comment's ticket (any editor grant
+            // for a comment on the app).
+            let allowed = match store.comment(id).and_then(|c| c.anchor.ticket) {
+                Some(t) => caller.require(Role::Editor, &[t.as_str()], &store),
+                None => caller.reach_filter(Role::Editor).map(|_| ()),
+            };
+            if let Err(message) = allowed {
                 yield CommentsEvent::Error { message };
                 return;
             }
@@ -222,11 +302,15 @@ impl Comments {
         // IDENTITY-19: admitted now and at every change, as tickets.watch.
         let access = self.access.clone();
         let who = auth.cloned();
+        let store = self.store.clone();
         stream! {
-            if let Err(message) = access.admit(who.as_ref()) {
-                yield CommentsEvent::Error { message };
-                return;
-            }
+            let reach = match access.admit(who.as_ref()).and_then(|c| reach_lens(&c)) {
+                Ok(r) => r,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
             loop {
                 let next = rx.recv().await;
                 if let Err(message) = access.admit(who.as_ref()) {
@@ -234,6 +318,9 @@ impl Comments {
                     return;
                 }
                 match next {
+                    // IDENTITY-21: only comments the watcher can see.
+                    Ok(CommentChange::Added(c) | CommentChange::Resolved(c) | CommentChange::Reopened(c))
+                        if !sees(&store, reach.as_ref(), &c) => {}
                     Ok(CommentChange::Added(comment)) => yield CommentsEvent::Added { comment },
                     Ok(CommentChange::Resolved(comment)) => yield CommentsEvent::Resolved { comment },
                     Ok(CommentChange::Reopened(comment)) => yield CommentsEvent::Reopened { comment },

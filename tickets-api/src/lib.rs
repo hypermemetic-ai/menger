@@ -83,6 +83,17 @@ pub use comments_activation::CommentsClient;
 #[cfg(feature = "server")]
 pub use comments_activation::Comments;
 
+/// IDENTITY-21: the members vocabulary — [`Role`], [`Grant`],
+/// [`MembersEvent`]. Wasm-safe, like [`comments`].
+pub mod members;
+pub use members::{Grant, MembersEvent, Role};
+/// IDENTITY-21: the `members` activation, declared once: the server's
+/// [`Members`] and the browser's [`MembersClient`].
+pub mod members_activation;
+pub use members_activation::MembersClient;
+#[cfg(feature = "server")]
+pub use members_activation::Members;
+
 /// IDENTITY-14: who a connection is — [`SessionEvent`], wasm-safe like
 /// [`comments`].
 pub mod session;
