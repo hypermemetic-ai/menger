@@ -197,7 +197,9 @@ cmd_smoke() {
   else
     say "FAIL --verify-derived"; fail=1
   fi
-  if curl -fsS -m 5 "http://127.0.0.1:$MENGER_SHELL_PORT/" | grep -q "name=\"menger-ws-port\" content=\"$MENGER_WS_PORT\""; then
+  # DEPLOY-6: grep reads the whole page (no -q): under pipefail, a grep that
+  # quits at its first match makes curl's next write fail (exit 23).
+  if curl -fsS -m 5 "http://127.0.0.1:$MENGER_SHELL_PORT/" | grep "name=\"menger-ws-port\" content=\"$MENGER_WS_PORT\"" >/dev/null; then
     say "ok   app on :$MENGER_SHELL_PORT, stamped with :$MENGER_WS_PORT"
   else
     say "FAIL app on :$MENGER_SHELL_PORT"; fail=1
