@@ -904,7 +904,7 @@ pub(crate) fn ensure_board_tab_stop() {
 /// Keep Tab inside the open dialog (both overlays are modal). Focus
 /// cycles through the dialog's own focusable elements and never reaches
 /// the page behind it.
-fn trap_tab(shift: bool) {
+pub(crate) fn trap_tab(shift: bool) {
     let Some(doc) = dom::window().document() else { return };
     let Ok(Some(dialog)) = doc.query_selector("[role=dialog]") else {
         return;
