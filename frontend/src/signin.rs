@@ -1,112 +1,89 @@
-//! IDENTITY-15: signing in — the app's side of IDENTITY-14's boundary.
+//! IDENTITY-22: the signed-in app — who this browser is, and what it may do.
 //!
-//! menger admits callers through the providers it was configured with
-//! (`session.providers`), and past the WebSocket upgrade it sees only a
-//! Plexus identity (`session.whoami`). A browser cannot set headers on a
-//! WebSocket, so the credential rides a cookie on this page's host, which
-//! the browser sends with the upgrade:
+//! The browser holds no credential. menger's shell signed the person in
+//! (`/login`, IDENTITY-19) and keeps the session; the browser carries an
+//! `HttpOnly` cookie that no script here can read. So the app only *asks*:
 //!
-//! | provider kind | how the app gets the credential | cookie |
-//! |---|---|---|
-//! | `oidc` | the provider's token endpoint, password grant (from its discovery) | `access_token`, for the token's lifetime |
-//! | `nostr` | a NIP-07 extension signs a NIP-98 event for the WebSocket URL, before every connect | `nostr`, for a minute |
+//! 1. Before every connect, `GET /login/me` ([`gate`]): 401 sends the
+//!    browser to `/login?next=…` and the app goes no further; 404 means this
+//!    menger has no login, and the app runs as it always did.
+//! 2. After every connect, `members.mine` ([`after_connect`]): the person's
+//!    grants. With none, the app shows [`NoAccess`] — their id, to send an
+//!    admin — instead of the views.
 //!
-//! The app talks to the provider directly; menger never sees a password.
-//! Signing in or out reloads the app, so a fresh session connects with the
-//! new credential, as Save in `#/settings` does for a new backend. The
-//! identity is the server's word: the header shows `whoami`'s answer.
+//! The header names the person and offers sign-out ([`Who`]); `#/settings`
+//! shows the account ([`AccountGroup`]); admins get `#/members`
+//! (`members_page`). Signing out is a form POST to `/logout`.
 //!
-//! What decides — the cookies, the form, the event, reading the token
-//! response, the header's words — is pure and pinned by native tests.
+//! What decides — the login redirect, the header's words, who is an admin,
+//! whether the views show — is pure and pinned by native tests.
 
 use std::rc::Rc;
 
 use leptos::prelude::*;
-use menger_tickets_api::{ProviderKind, SessionClient, SessionEvent};
+use menger_tickets_api::{Grant, MembersClient, MembersEvent, Role};
 use plexus_client::WsTransport;
-use serde_json::{json, Value};
-use wasm_bindgen::{JsCast, JsValue};
-use wasm_bindgen_futures::{spawn_local, JsFuture};
+use serde::Deserialize;
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
 
 use crate::dom;
 
-/// localStorage: `nostr` when this browser signs in with its nostr
-/// extension. A token sign-in needs no flag: its cookie is the state.
-const MODE_KEY: &str = "menger.signin";
-
-/// How long a NIP-98 event's cookie lives: the server's own window.
-const NOSTR_COOKIE_SECS: u64 = 60;
-
-/// A token's cookie lifetime when the provider does not say.
-const DEFAULT_TOKEN_SECS: u64 = 3600;
-
-// ── What decides (pure) ────────────────────────────────────────────────
-
-/// A cookie for this page's host, sent with the WebSocket upgrade.
-pub(crate) fn cookie(name: &str, value: &str, max_age_secs: u64) -> String {
-    format!("{name}={value}; Path=/; Max-Age={max_age_secs}; SameSite=Strict")
+/// Who `/login/me` says this browser is.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub(crate) struct Me {
+    pub(crate) principal: String,
+    pub(crate) name: String,
+    pub(crate) provider: Option<String>,
 }
 
-/// The same cookie, removed.
-pub(crate) fn cleared(name: &str) -> String {
-    format!("{name}=; Path=/; Max-Age=0; SameSite=Strict")
+/// What the app knows of its person.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Account {
+    /// Whether this menger has a login at all.
+    pub(crate) login: bool,
+    pub(crate) me: Option<Me>,
+    /// The person's grants, once `members.mine` has answered.
+    pub(crate) grants: Option<Vec<Grant>>,
+    pub(crate) admin_everywhere: bool,
 }
 
-/// `application/x-www-form-urlencoded`, as a form would send it.
-pub(crate) fn form(pairs: &[(&str, &str)]) -> String {
-    let enc = |s: &str| {
-        let mut out = String::new();
-        for b in s.bytes() {
-            match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
-                b' ' => out.push('+'),
-                _ => out.push_str(&format!("%{b:02X}")),
+impl Account {
+    /// Whether the views may show: no login, or a person holding a grant
+    /// (or not yet known — the views wait for the server's own refusals).
+    pub(crate) fn may_view(&self) -> bool {
+        !self.login || self.admin_everywhere || self.grants.as_ref().is_none_or(|g| !g.is_empty())
+    }
+
+    /// Whether the person administers anything (`#/members`).
+    pub(crate) fn is_admin(&self) -> bool {
+        self.admin_everywhere || self.grants.as_ref().is_some_and(|g| g.iter().any(|g| g.role == Role::Admin))
+    }
+
+    /// The header's words: the name, when signed in.
+    pub(crate) fn who(&self) -> Option<String> {
+        self.me.as_ref().map(|m| short(&m.name))
+    }
+}
+
+/// Where a signed-out browser goes: the login page, coming back here.
+pub(crate) fn login_url(path: &str, hash: &str) -> String {
+    let back = format!("{}{}", if path.is_empty() { "/" } else { path }, hash);
+    format!("/login?next={}", js_encode(&back))
+}
+
+/// `encodeURIComponent`, natively (the tests run without a browser).
+fn js_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')' => {
+                out.push(b as char)
             }
+            _ => out.push_str(&format!("%{b:02X}")),
         }
-        out
-    };
-    pairs.iter().map(|(k, v)| format!("{}={}", enc(k), enc(v))).collect::<Vec<_>>().join("&")
-}
-
-/// The password grant's body, as plexus-idp and Auth0 take it.
-pub(crate) fn password_grant(username: &str, password: &str, audience: Option<&str>) -> String {
-    let mut pairs = vec![("grant_type", "password"), ("username", username), ("password", password)];
-    if let Some(a) = audience {
-        pairs.push(("audience", a));
     }
-    form(&pairs)
-}
-
-/// The discovery document's URL under an issuer.
-pub(crate) fn discovery_url(issuer: &str) -> String {
-    format!("{}/.well-known/openid-configuration", issuer.trim_end_matches('/'))
-}
-
-/// A token endpoint's answer: the access token and its lifetime, or the
-/// provider's own words for why not.
-pub(crate) fn token_from(body: &str) -> Result<(String, u64), String> {
-    let v: Value = serde_json::from_str(body).map_err(|_| "the provider's answer was not JSON".to_string())?;
-    if let Some(t) = v.get("access_token").and_then(Value::as_str) {
-        let secs = v.get("expires_in").and_then(Value::as_u64).unwrap_or(DEFAULT_TOKEN_SECS);
-        return Ok((t.to_string(), secs));
-    }
-    let said = ["error_description", "error"].iter().find_map(|k| v.get(*k).and_then(Value::as_str));
-    Err(said.unwrap_or("the provider gave no token").to_string())
-}
-
-/// The unsigned NIP-98 event a connect to `url` carries (kind 27235).
-pub(crate) fn nip98_template(url: &str, now_secs: u64) -> Value {
-    json!({ "kind": 27235, "created_at": now_secs, "content": "", "tags": [["u", url], ["method", "GET"]] })
-}
-
-/// The header's words for who this connection is: the name, or nothing
-/// when anonymous (`sign in` when there is somewhere to sign in).
-pub(crate) fn who_words(who: Option<&SessionEvent>, offered: usize) -> Option<String> {
-    match who {
-        Some(SessionEvent::Identity { name, .. }) => Some(short(name)),
-        _ if offered > 0 => Some("sign in".to_string()),
-        _ => None,
-    }
+    out
 }
 
 /// A long name (an npub) shortened for the header.
@@ -123,291 +100,176 @@ fn short(name: &str) -> String {
 // ── The browser side ───────────────────────────────────────────────────
 
 thread_local! {
-    /// What `whoami` said on the current connection.
-    static WHO: ArcRwSignal<Option<SessionEvent>> = ArcRwSignal::new(None);
-    /// What `providers` said: the providers this menger offers.
-    static OFFERED: ArcRwSignal<Vec<SessionEvent>> = ArcRwSignal::new(Vec::new());
+    static ACCOUNT: ArcRwSignal<Account> = ArcRwSignal::new(Account::default());
 }
 
-fn who() -> ArcRwSignal<Option<SessionEvent>> {
-    WHO.with(Clone::clone)
+pub(crate) fn account() -> ArcRwSignal<Account> {
+    ACCOUNT.with(Clone::clone)
 }
 
-fn offered() -> ArcRwSignal<Vec<SessionEvent>> {
-    OFFERED.with(Clone::clone)
+/// What `/login/me` answered.
+enum Gate {
+    In(Me),
+    Out,
+    NoLogin,
 }
 
-fn document() -> Option<web_sys::HtmlDocument> {
-    dom::window().document()?.dyn_into::<web_sys::HtmlDocument>().ok()
-}
-
-fn set_cookie(value: &str) {
-    if let Some(d) = document() {
-        let _ = d.set_cookie(value);
+async fn login_me() -> Gate {
+    let promise = dom::window().fetch_with_str("/login/me");
+    let Ok(resp) = JsFuture::from(promise).await else { return Gate::NoLogin };
+    let Ok(resp) = resp.dyn_into::<web_sys::Response>() else { return Gate::NoLogin };
+    match resp.status() {
+        401 => Gate::Out,
+        200 => {
+            let Ok(text) = resp.text() else { return Gate::NoLogin };
+            match JsFuture::from(text).await.ok().and_then(|t| t.as_string()).and_then(|t| serde_json::from_str::<Me>(&t).ok()) {
+                Some(me) => Gate::In(me),
+                None => Gate::NoLogin,
+            }
+        }
+        _ => Gate::NoLogin,
     }
 }
 
-fn mode() -> Option<String> {
-    dom::window().local_storage().ok().flatten()?.get_item(MODE_KEY).ok().flatten()
-}
-
-fn set_mode(value: Option<&str>) {
-    if let Some(s) = dom::window().local_storage().ok().flatten() {
-        let _ = match value {
-            Some(v) => s.set_item(MODE_KEY, v),
-            None => s.remove_item(MODE_KEY),
-        };
+/// Before every connect: who this browser is. `false`: signed out — the
+/// browser is on its way to the login page, and the app goes no further.
+pub(crate) async fn gate() -> bool {
+    match login_me().await {
+        Gate::In(me) => {
+            account().update(|a| {
+                a.login = true;
+                a.me = Some(me);
+            });
+            true
+        }
+        Gate::Out => {
+            let loc = dom::window().location();
+            let to = login_url(&loc.pathname().unwrap_or_default(), &loc.hash().unwrap_or_default());
+            let _ = loc.replace(&to);
+            false
+        }
+        Gate::NoLogin => {
+            account().update(|a| a.login = false);
+            true
+        }
     }
 }
 
-/// The NIP-07 extension (`window.nostr`), when one is installed.
-fn extension() -> Option<JsValue> {
-    let n = js_sys::Reflect::get(&dom::window(), &JsValue::from_str("nostr")).ok()?;
-    (!n.is_undefined() && !n.is_null()).then_some(n)
-}
-
-/// Asks the extension to sign `event`; the signed event as JSON.
-async fn sign(event: &Value) -> Result<String, String> {
-    let ext = extension().ok_or("no nostr extension (NIP-07) in this browser")?;
-    let f: js_sys::Function = js_sys::Reflect::get(&ext, &JsValue::from_str("signEvent"))
-        .ok()
-        .and_then(|f| f.dyn_into().ok())
-        .ok_or("the nostr extension has no signEvent")?;
-    let template = js_sys::JSON::parse(&event.to_string()).map_err(|_| "event template".to_string())?;
-    let promise: js_sys::Promise = f
-        .call1(&ext, &template)
-        .map_err(|_| "the extension refused".to_string())?
-        .dyn_into()
-        .map_err(|_| "signEvent returned no promise".to_string())?;
-    let signed = JsFuture::from(promise).await.map_err(|_| "the extension did not sign".to_string())?;
-    js_sys::JSON::stringify(&signed).map(String::from).map_err(|_| "the signed event".to_string())
-}
-
-/// Before every connect: a browser signed in with nostr signs a fresh
-/// NIP-98 event for `url` and puts it in the `nostr` cookie (each event
-/// works once). Anything that fails leaves the connection anonymous.
-pub(crate) async fn before_connect(url: &str) {
-    if mode().as_deref() != Some("nostr") {
-        return;
+/// After every connect: the person's grants. `false`: they hold none, and
+/// the session asks nothing more of the server (the app shows
+/// [`NoAccess`]).
+pub(crate) async fn after_connect(transport: Rc<WsTransport>) -> bool {
+    if !account().with_untracked(|a| a.login) {
+        return true;
     }
-    let now = (js_sys::Date::now() / 1000.0) as u64;
-    match sign(&nip98_template(url, now)).await {
-        Ok(json) => match dom::window().btoa(&json) {
-            Ok(b64) => set_cookie(&cookie("nostr", &b64, NOSTR_COOKIE_SECS)),
-            Err(_) => leptos::logging::log!("sign-in: could not encode the nostr event"),
-        },
-        Err(e) => leptos::logging::log!("sign-in: {e}; connecting anonymous"),
+    let Ok(events) = MembersClient::new(transport).mine_all().await else { return true };
+    let mut grants = Vec::new();
+    let mut everywhere = false;
+    for ev in events {
+        match ev {
+            MembersEvent::Me { admin_everywhere, .. } => everywhere = admin_everywhere,
+            MembersEvent::Grant { grant } => grants.push(grant),
+            _ => {}
+        }
     }
-}
-
-/// After every connect: who the connection is, and what menger offers.
-pub(crate) fn after_connect(transport: Rc<WsTransport>) {
-    spawn_local(async move {
-        let client = SessionClient::new(transport);
-        let me = client.whoami_all().await.ok().and_then(|evs| evs.into_iter().next());
-        let offers = client.providers_all().await.unwrap_or_default();
-        who().set(me);
-        offered().set(offers);
+    account().update(|a| {
+        a.grants = Some(grants);
+        a.admin_everywhere = everywhere;
     });
+    account().with_untracked(|a| a.may_view())
 }
 
-/// The header's `who` — the identity's name, linking to the sign-in.
+/// Sign-out: the shell ends the session and shows the login page.
+#[component]
+pub(crate) fn SignOut() -> impl IntoView {
+    view! {
+        <form method="post" action="/logout" class="signout">
+            <button type="submit" class="hbtn" id="signout">"Sign out"</button>
+        </form>
+    }
+}
+
+/// The header's person: their name and sign-out, when this menger has a
+/// login.
 #[component]
 pub(crate) fn Who() -> impl IntoView {
-    let (who, offered) = (who(), offered());
+    let account = account();
     move || {
-        let words = who.with(|w| offered.with(|o| who_words(w.as_ref(), o.len())))?;
-        let title = who.with(|w| match w {
-            Some(SessionEvent::Identity { principal, provider, .. }) => {
-                format!("{principal} · via {} (#/settings)", provider.as_deref().unwrap_or("?"))
-            }
-            _ => "not signed in — sign in from #/settings".to_string(),
-        });
-        let signed_in = who.with(|w| matches!(w, Some(SessionEvent::Identity { .. })));
+        let a = account.get();
+        let name = a.who()?;
+        let title = a.me.as_ref().map(|m| format!("{} · via {}", m.principal, m.provider.as_deref().unwrap_or("?")));
         Some(view! {
-            <a class=if signed_in { "hlink signed-in" } else { "hlink" } id="who" href="#/settings" title=title>{words}</a>
+            <a class="hlink signed-in" id="who" href="#/settings" title=title>{name}</a>
+            <SignOut />
         })
     }
 }
 
-/// Fetches `url` (`POST` with `body` when given) and reads the answer as
-/// text, whatever its status: a provider's refusal is JSON naming why.
-async fn fetch(url: &str, body: Option<&str>) -> Result<String, String> {
-    let init = web_sys::RequestInit::new();
-    if let Some(b) = body {
-        init.set_method("POST");
-        init.set_body(&JsValue::from_str(b));
-        let headers = web_sys::Headers::new().map_err(|_| "headers".to_string())?;
-        let _ = headers.set("content-type", "application/x-www-form-urlencoded");
-        init.set_headers(&headers);
-    }
-    let resp: web_sys::Response = JsFuture::from(dom::window().fetch_with_str_and_init(url, &init))
-        .await
-        .map_err(|_| format!("cannot reach {url}"))?
-        .dyn_into()
-        .map_err(|_| "no response".to_string())?;
-    let text = JsFuture::from(resp.text().map_err(|_| "unreadable answer".to_string())?)
-        .await
-        .map_err(|_| "unreadable answer".to_string())?;
-    Ok(text.as_string().unwrap_or_default())
-}
-
-/// The password grant at an OIDC provider: discovery, then its token
-/// endpoint. The access token, or why not.
-async fn password_sign_in(issuer: &str, audience: Option<&str>, user: &str, pass: &str) -> Result<(String, u64), String> {
-    let doc = fetch(&discovery_url(issuer), None).await?;
-    let endpoint = serde_json::from_str::<Value>(&doc)
-        .ok()
-        .and_then(|d| d.get("token_endpoint").and_then(Value::as_str).map(str::to_string))
-        .ok_or("the provider's discovery names no token endpoint")?;
-    let answer = fetch(&endpoint, Some(&password_grant(user, pass, audience))).await?;
-    token_from(&answer)
-}
-
-/// Starts the app again, so a fresh session connects with the credential.
-fn reload() {
-    let _ = dom::window().location().reload();
-}
-
-fn sign_out() {
-    set_cookie(&cleared("access_token"));
-    set_cookie(&cleared("nostr"));
-    set_mode(None);
-    reload();
-}
-
-/// `#/settings`' sign-in group: who this connection is, and a way in
-/// through each provider menger offers.
+/// `#/settings`' account group.
 #[component]
-pub(crate) fn SignInGroup() -> impl IntoView {
-    let (who, offered) = (who(), offered());
-    let has_extension = extension().is_some();
-    let user = RwSignal::new(String::new());
-    let pass = RwSignal::new(String::new());
-    let problem = RwSignal::new(None::<String>);
-    let busy = RwSignal::new(false);
-
-    let now = {
-        let who = who.clone();
-        move || match who.get() {
-            Some(SessionEvent::Identity { name, principal, provider, roles, .. }) => view! {
-                <p class="now" id="signin-now">
-                    "Signed in as " <strong id="signin-name">{name}</strong> " — " <code>{principal}</code>
-                    {format!(" via {}", provider.unwrap_or_default())}
-                    {(!roles.is_empty()).then(|| format!(" · roles {}", roles.join(", ")))}
-                    " "
-                    <button id="signin-out" class="link" on:click=move |_| sign_out()>"sign out"</button>
-                </p>
-            }
-            .into_any(),
-            _ => view! { <p class="now" id="signin-now">"Not signed in: this connection is anonymous."</p> }.into_any(),
-        }
-    };
-
-    let offered_rows = offered.clone();
-    let rows = move || {
-        offered_rows
-            .get()
-            .into_iter()
-            .filter_map(|o| match o {
-                SessionEvent::Provider { name, kind, issuer, audience } => Some((name, kind, issuer, audience)),
-                _ => None,
-            })
-            .map(|(name, kind, issuer, audience)| match kind {
-                ProviderKind::Oidc => {
-                    let id = format!("signin-{name}");
-                    let go = move |_| {
-                        let (Some(issuer), u, p) = (issuer.clone(), user.get_untracked(), pass.get_untracked()) else {
-                            return;
-                        };
-                        let audience = audience.clone();
-                        busy.set(true);
-                        problem.set(None);
-                        spawn_local(async move {
-                            match password_sign_in(&issuer, audience.as_deref(), &u, &p).await {
-                                Ok((token, secs)) => {
-                                    set_mode(None);
-                                    set_cookie(&cleared("nostr"));
-                                    set_cookie(&cookie("access_token", &token, secs));
-                                    reload();
-                                }
-                                Err(e) => {
-                                    busy.set(false);
-                                    problem.set(Some(e));
-                                }
-                            }
-                        });
-                    };
-                    view! {
-                        <li>
-                            <button id=id class="primary" disabled=move || busy.get() on:click=go>
-                                {format!("Sign in with {name}")}
-                            </button>
-                            <span class="lbl">" the username and password above"</span>
-                        </li>
-                    }
-                    .into_any()
-                }
-                ProviderKind::Nostr => view! {
-                    <li>
-                        <button
-                            id="signin-nostr"
-                            class="primary"
-                            disabled=!has_extension
-                            title=if has_extension { "your nostr extension signs each connection" } else { "no nostr extension (NIP-07) in this browser" }
-                            on:click=move |_| {
-                                set_cookie(&cleared("access_token"));
-                                set_mode(Some("nostr"));
-                                reload();
-                            }
-                        >
-                            "Sign in with nostr"
-                        </button>
-                        <span class="lbl">
-                            {if has_extension { " your extension signs each connection" } else { " needs a NIP-07 extension" }}
-                        </span>
-                    </li>
-                }
-                .into_any(),
-            })
-            .collect_view()
-    };
-
-    let any_oidc = {
-        let offered = offered.clone();
-        move || offered.with(|o| o.iter().any(|e| matches!(e, SessionEvent::Provider { kind: ProviderKind::Oidc, .. })))
-    };
-
-    view! {
-        <fieldset class="group" id="settings-signin">
-            <legend>"Sign in"</legend>
-            {now}
-            {move || {
-                if offered.with(|o| o.is_empty()) {
-                    return view! { <p class="hint" id="signin-none">"This menger offers no sign-in: it was started without --auth-provider."</p> }.into_any();
-                }
-                let (any_oidc, rows) = (any_oidc.clone(), rows.clone());
-                view! {
-                    <div class="field">
-                        <label for="signin-user">"Sign in with"</label>
-                        <div class="control">
-                            {move || any_oidc().then(|| view! {
-                                <div class="line">
-                                    <input id="signin-user" type="text" autocomplete="username" placeholder="username"
-                                        prop:value=move || user.get() on:input=move |ev| user.set(event_target_value(&ev)) />
-                                    <input id="signin-pass" type="password" autocomplete="current-password" placeholder="password"
-                                        prop:value=move || pass.get() on:input=move |ev| pass.set(event_target_value(&ev)) />
-                                </div>
-                            })}
-                            <ul class="signin-providers">{rows}</ul>
-                            {move || problem.get().map(|p| view! { <p class="invalid" id="signin-problem" role="alert">{p}</p> })}
-                            <p class="status hint">"The app asks the provider itself; menger never sees a password. The credential is a cookie on this page's host."</p>
-                        </div>
-                    </div>
-                }
+pub(crate) fn AccountGroup() -> impl IntoView {
+    let account = account();
+    move || {
+        let a = account.get();
+        let me = a.me.clone()?;
+        let grants = a.grants.clone().unwrap_or_default();
+        let rows = if a.admin_everywhere {
+            view! { <li><code>"*"</code>" · admin (the operator's)"</li> }.into_any()
+        } else if grants.is_empty() {
+            view! { <li class="hint">"no grants yet: send an admin your id"</li> }.into_any()
+        } else {
+            grants
+                .into_iter()
+                .map(|g| view! { <li><code>{g.scope}</code>" · "{g.role.to_string()}</li> })
+                .collect_view()
                 .into_any()
-            }}
-        </fieldset>
+        };
+        Some(view! {
+            <fieldset class="group" id="settings-account">
+                <legend>"Account"</legend>
+                <p class="now" id="account-now">
+                    "Signed in as " <strong id="account-name">{me.name.clone()}</strong>
+                    {me.provider.clone().map(|p| format!(" via {p}"))}
+                </p>
+                <div class="field">
+                    <label>"Your id"</label>
+                    <div class="control"><code id="account-principal">{me.principal.clone()}</code></div>
+                </div>
+                <div class="field">
+                    <label>"Roles"</label>
+                    <div class="control"><ul class="grants">{rows}</ul></div>
+                </div>
+                <div class="line actions"><SignOut /></div>
+            </fieldset>
+        })
+    }
+}
+
+/// Instead of the views, for a person holding no grant: their id, and
+/// what to do with it.
+#[component]
+pub(crate) fn NoAccess() -> impl IntoView {
+    let account = account();
+    let copied = RwSignal::new(false);
+    move || {
+        let me = account.get().me?;
+        let principal = me.principal.clone();
+        let copy = move |_| {
+            let clip = dom::window().navigator().clipboard();
+            let _ = clip.write_text(&principal);
+            copied.set(true);
+        };
+        Some(view! {
+            <section id="no-access">
+                <h2>"No access yet"</h2>
+                <p>"You are signed in as " <strong>{me.name.clone()}</strong>", but you hold no role in this menger."</p>
+                <p>"Send an admin your id, and they can grant you one:"</p>
+                <p class="id"><code id="no-access-id">{me.principal.clone()}</code>" "
+                    <button class="hbtn" on:click=copy>{move || if copied.get() { "copied" } else { "copy" }}</button></p>
+                <p class="hint">"Once you have a role, reload this page."</p>
+                <SignOut />
+            </section>
+        })
     }
 }
 
@@ -415,64 +277,50 @@ pub(crate) fn SignInGroup() -> impl IntoView {
 mod tests {
     use super::*;
 
-    #[test]
-    fn cookies_ride_this_host_and_can_be_removed() {
-        assert_eq!(cookie("access_token", "eyJ.x.y", 3600), "access_token=eyJ.x.y; Path=/; Max-Age=3600; SameSite=Strict");
-        assert_eq!(cleared("nostr"), "nostr=; Path=/; Max-Age=0; SameSite=Strict");
+    fn me() -> Me {
+        Me { principal: "idp:c952acd3".into(), name: "alice".into(), provider: Some("plexus-idp".into()) }
+    }
+
+    fn grant(scope: &str, role: Role) -> Grant {
+        Grant { principal: "idp:c952acd3".into(), scope: scope.into(), role, granted_by: "ada".into(), at: 1 }
     }
 
     #[test]
-    fn the_password_grant_is_a_form() {
-        assert_eq!(
-            password_grant("ada", "correct horse&=", Some("https://menger.example")),
-            "grant_type=password&username=ada&password=correct+horse%26%3D&audience=https%3A%2F%2Fmenger.example"
-        );
-        assert_eq!(password_grant("a", "b", None), "grant_type=password&username=a&password=b");
+    fn a_signed_out_browser_goes_to_the_login_page_and_back() {
+        assert_eq!(login_url("/app/", "#/ticket/X-1"), "/login?next=%2Fapp%2F%23%2Fticket%2FX-1");
+        assert_eq!(login_url("", ""), "/login?next=%2F");
     }
 
     #[test]
-    fn discovery_is_under_the_issuer_with_or_without_its_slash() {
-        assert_eq!(discovery_url("https://acme.auth0.com/"), "https://acme.auth0.com/.well-known/openid-configuration");
-        assert_eq!(discovery_url("http://127.0.0.1:4481"), "http://127.0.0.1:4481/.well-known/openid-configuration");
+    fn the_views_show_without_login_or_with_a_grant() {
+        assert!(Account::default().may_view(), "no login: as always");
+        let waiting = Account { login: true, me: Some(me()), grants: Some(vec![]), admin_everywhere: false };
+        assert!(!waiting.may_view(), "signed in, no grant: no views");
+        let unknown = Account { grants: None, ..waiting.clone() };
+        assert!(unknown.may_view(), "until the grants are known, the server's refusals speak");
+        let member = Account { grants: Some(vec![grant("OUGHT", Role::Viewer)]), ..waiting.clone() };
+        assert!(member.may_view());
+        let operator = Account { admin_everywhere: true, ..waiting };
+        assert!(operator.may_view() && operator.is_admin());
     }
 
     #[test]
-    fn a_token_answer_gives_the_token_or_the_provider_s_words() {
-        assert_eq!(token_from(r#"{"access_token":"t","expires_in":900}"#), Ok(("t".into(), 900)));
-        assert_eq!(token_from(r#"{"access_token":"t"}"#), Ok(("t".into(), DEFAULT_TOKEN_SECS)));
-        assert_eq!(token_from(r#"{"error":"invalid_grant","error_description":"Wrong email or password."}"#), Err("Wrong email or password.".into()));
-        assert_eq!(token_from(r#"{"error":"invalid_grant"}"#), Err("invalid_grant".into()));
-        assert!(token_from("<html>").is_err());
+    fn an_admin_is_admin_somewhere() {
+        let a = Account { login: true, me: Some(me()), grants: Some(vec![grant("OUGHT", Role::Editor)]), admin_everywhere: false };
+        assert!(!a.is_admin());
+        let b = Account { grants: Some(vec![grant("IDENTITY", Role::Admin)]), ..a };
+        assert!(b.is_admin());
     }
 
     #[test]
-    fn the_nostr_event_names_the_websocket_and_get() {
-        let e = nip98_template("ws://127.0.0.1:4455", 1_791_529_096);
-        assert_eq!(e["kind"], 27235);
-        assert_eq!(e["tags"], json!([["u", "ws://127.0.0.1:4455"], ["method", "GET"]]));
-        assert_eq!(e["content"], "");
-    }
-
-    #[test]
-    fn the_header_names_the_identity_or_offers_a_sign_in() {
-        let alice = SessionEvent::Identity {
-            principal: "idp:c952acd3".into(),
-            name: "alice".into(),
-            roles: vec![],
-            tenant: None,
-            provider: Some("plexus-idp".into()),
+    fn the_header_names_the_person() {
+        let a = Account { login: true, me: Some(me()), ..Default::default() };
+        assert_eq!(a.who().as_deref(), Some("alice"));
+        let npub = Account {
+            me: Some(Me { name: "npub1luxqwxf06dxwt6y74d44pxfyxe2g87mr3lwcqucaudu2vder3evs326y9y".into(), ..me() }),
+            ..a
         };
-        assert_eq!(who_words(Some(&alice), 2), Some("alice".into()));
-        assert_eq!(who_words(Some(&SessionEvent::Anonymous), 2), Some("sign in".into()));
-        assert_eq!(who_words(Some(&SessionEvent::Anonymous), 0), None);
-        assert_eq!(who_words(None, 0), None);
-        let npub = SessionEvent::Identity {
-            principal: "nostr:ff".into(),
-            name: "npub1luxqwxf06dxwt6y74d44pxfyxe2g87mr3lwcqucaudu2vder3evs326y9y".into(),
-            roles: vec![],
-            tenant: None,
-            provider: Some("nostr".into()),
-        };
-        assert_eq!(who_words(Some(&npub), 1), Some("npub1luxqwxf…6y9y".into()));
+        assert_eq!(npub.who().as_deref(), Some("npub1luxqwxf…6y9y"));
+        assert_eq!(Account::default().who(), None);
     }
 }

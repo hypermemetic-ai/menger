@@ -218,6 +218,11 @@ impl Access {
         self.admins.as_ref().clone()
     }
 
+    /// A grant was made: its principal waits no longer.
+    pub fn granted(&self, principal: &str) {
+        self.waiting.lock().unwrap().remove(principal);
+    }
+
     /// Everyone signed in who holds no grant yet, by when they first came.
     pub fn waiting(&self) -> Vec<Waiting> {
         let mut w: Vec<Waiting> = self.waiting.lock().unwrap().values().cloned().collect();

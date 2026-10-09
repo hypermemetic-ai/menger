@@ -582,8 +582,8 @@ pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
     view! {
         <section id="settings">
             <h2>"Settings"</h2>
-            // IDENTITY-15: who this connection is, and a way in.
-            <crate::signin::SignInGroup />
+            // IDENTITY-22: who is signed in, their roles, sign-out.
+            <crate::signin::AccountGroup />
             <fieldset class="group" id="settings-backend">
                 <legend>"Backend"</legend>
                 {now}

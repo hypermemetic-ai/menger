@@ -679,6 +679,12 @@ pub(crate) fn comments_client() -> Option<CommentsClient<Rc<WsTransport>>> {
     TRANSPORT.with(|t| t.borrow().clone()).map(CommentsClient::new)
 }
 
+/// IDENTITY-22: the `members` activation's typed client, over the same
+/// connection.
+pub(crate) fn members_client() -> Option<menger_tickets_api::MembersClient<Rc<WsTransport>>> {
+    TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::MembersClient::new)
+}
+
 /// Renders a failed call for the banner. The two layers stay distinct:
 /// `transport` means the socket, `remote` means the server refused the
 /// call itself — neither is the activation's own in-band `Error` event,
@@ -726,9 +732,11 @@ async fn session(
     // MFE-21: the override from #/settings when one is set, else this
     // page's server (`dom::ws_url()`) as before — fixed for the page's life.
     let url = settings::effective_ws_url();
-    // IDENTITY-15: a browser signed in with nostr signs this connect's
-    // event into its cookie first; a token's cookie is already there.
-    signin::before_connect(&url).await;
+    // IDENTITY-22: who this browser is, first. Signed out, the browser is
+    // on its way to the login page; the session goes no further.
+    if !signin::gate().await {
+        return Err("signed out".into());
+    }
     let transport = Rc::new(
         WsTransport::connect(&url, HUB)
             .await
@@ -736,8 +744,16 @@ async fn session(
     );
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport.clone()));
     LINK.with(|l| l.set(true));
-    // IDENTITY-15: who this connection is, for the header.
-    signin::after_connect(transport.clone());
+    // IDENTITY-22: the person's grants, for the header and the views. With
+    // none, the session asks nothing more: the app shows their id, and the
+    // socket stays open until they reload or sign out.
+    if !signin::after_connect(transport.clone()).await {
+        LINK.with(|l| l.set(true));
+        conn.set(Conn::Live);
+        loop {
+            dom::sleep_ms(60_000).await;
+        }
+    }
     // A connection exists — announced here, before the board's window,
     // because an open ticket page needs only two point queries and must not
     // wait for the board.

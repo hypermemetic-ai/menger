@@ -189,8 +189,11 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
     let ready = ids(&call(&alice, "tickets.list", json!({ "filter": "kind build" })).await);
     assert_eq!(ready, set(&["IDENTITY-2", "OUGHT-2"]), "her filter, within her reach");
     assert_eq!(call(&alice, "tickets.get", json!({ "id": "PLEXUS-2" })).await[0]["type"], "not_found", "no leak of existence");
-    let groups: BTreeSet<String> = call(&alice, "tickets.groups", json!({})).await.iter().map(|g| g["group"]["epic"].as_str().unwrap().to_string()).collect();
-    assert_eq!(groups, set(&["IDENTITY", "OUGHT"]));
+    let groups = call(&alice, "tickets.groups", json!({})).await;
+    let epics: BTreeSet<String> = groups.iter().map(|g| g["group"]["epic"].as_str().unwrap().to_string()).collect();
+    assert_eq!(epics, set(&["IDENTITY", "OUGHT"]));
+    let identity = groups.iter().find(|g| g["group"]["epic"] == "IDENTITY").unwrap();
+    assert_eq!(identity["group"]["host"], Value::Null, "its host, PLEXUS-1, is out of reach: IDENTITY stands at the top");
 
     // Writes: editor on IDENTITY only.
     let ok = call(&alice, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "renamed" })).await;

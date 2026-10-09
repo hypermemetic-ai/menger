@@ -156,7 +156,7 @@ impl Members {
     )]
     pub async fn grant(&self, auth: Option<&AuthContext>, principal: String, scope: String, role: String) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let admitted = self.access.admit(auth);
-        let store = self.store.clone();
+        let (store, access) = (self.store.clone(), self.access.clone());
         stream! {
             let caller = match admitted {
                 Ok(c) => c,
@@ -189,7 +189,10 @@ impl Members {
                 at: chrono::Utc::now().timestamp(),
             };
             match store.grant(grant).await {
-                Ok(g) => yield grant_event(g),
+                Ok(g) => {
+                    access.granted(&g.principal);
+                    yield grant_event(g)
+                }
                 Err(e) => yield MembersEvent::Error { message: e.to_string() },
             }
         }

@@ -190,6 +190,31 @@
   header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
   header .tag { color: var(--muted); font-size: .8rem; }
   #conn { color: var(--muted); font-size: .8rem; margin-left: auto; }
+  /* IDENTITY-22: sign-out sits in the header as a button; the no-access
+     card and the members page. */
+  form.signout { display: inline; margin: 0; }
+  header form.signout { margin-left: .5rem; }
+  #no-access { max-width: 34rem; margin: 3rem auto; padding: 1.5rem 1.75rem; background: var(--card);
+    border: 1px solid var(--line); border-radius: 10px; }
+  #no-access h2 { margin: 0 0 .75rem; }
+  #no-access .id code { font-size: .9rem; overflow-wrap: anywhere; }
+  #no-access .hint, #members .hint, #members .lbl { color: var(--muted); }
+  #members { max-width: 60rem; }
+  #members h3 { font-size: .9rem; margin: 1.5rem 0 .5rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  #members .waiting { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; padding: .5rem 0; border-bottom: 1px solid var(--line); }
+  #members .waiting code, #members td code { font-size: .8rem; overflow-wrap: anywhere; }
+  #members input, #members select { font: inherit; padding: .2rem .45rem; background: var(--card); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px; }
+  #members input.scope, #members #grant-scope { width: 9rem; }
+  #members #grant-principal { flex: 1 1 18rem; }
+  #members table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+  #members th { text-align: left; color: var(--muted); font-weight: 500; padding: .3rem .5rem; border-bottom: 1px solid var(--line); }
+  #members td { padding: .35rem .5rem; border-bottom: 1px solid var(--line); }
+  #members td:nth-child(2) code, #members td:nth-child(3) { white-space: nowrap; }
+  #members button.primary { border: 1px solid var(--accent); color: var(--accent); background: var(--card); border-radius: 4px; padding: .2rem .6rem; }
+  #members button.link { background: none; border: 0; color: var(--accent); cursor: pointer; }
+  #members .line { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  #settings ul.grants { list-style: none; margin: 0; padding: 0; }
   /* IDENTITY-15: who this connection is, just before its state. */
   header #who { margin-left: auto; }
   header #who + #conn { margin-left: .6rem; }
@@ -230,11 +255,11 @@
   #settings label { font-size: .85rem; }
   #settings .control { min-width: 0; }
   #settings .line { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
-  #settings input#ws-url, #settings input#test-url, #settings input#signin-user, #settings input#signin-pass {
+  #settings input#ws-url, #settings input#test-url {
     flex: 1 1 16rem; min-width: 0; font: inherit; padding: .25rem .5rem;
     background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; outline: none;
   }
-  #settings input#ws-url:focus, #settings input#test-url:focus, #settings input#signin-user:focus, #settings input#signin-pass:focus { border-color: var(--accent); }
+  #settings input#ws-url:focus, #settings input#test-url:focus { border-color: var(--accent); }
   #settings input#ws-url[aria-invalid="true"], #settings input#test-url[aria-invalid="true"] { border-color: var(--err-fg); }
   #settings button {
     font: inherit; font-size: .8rem; padding: .1rem .65rem; cursor: pointer;
@@ -261,10 +286,6 @@
     background: none; border: 0; padding: 0; font-size: .8rem; color: var(--accent); overflow-wrap: anywhere;
   }
   #settings .recent button.fill:hover { text-decoration: underline; }
-  /* IDENTITY-15: the sign-in group — a provider a line, the credentials above. */
-  #settings .signin-providers { list-style: none; margin: .6rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .45rem; }
-  #settings .signin-providers .lbl { color: var(--muted); font-size: .8rem; }
-  #settings #signin-now strong { color: var(--ink); }
   @container (max-width: 36rem) {
     #settings .field { grid-template-columns: minmax(0, 1fr); }
   }

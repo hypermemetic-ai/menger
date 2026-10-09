@@ -1091,9 +1091,16 @@ impl Tickets {
                     return;
                 }
             };
-            for group in store.groups() {
-                if visible.as_ref().is_some_and(|v| !v.contains(&group.epic)) {
-                    continue;
+            for mut group in store.groups() {
+                if let Some(v) = &visible {
+                    if !v.contains(&group.epic) {
+                        continue;
+                    }
+                    // IDENTITY-21: hosted under a ticket out of reach, a
+                    // shortcode stands at the top for this caller.
+                    if group.host.as_deref().is_some_and(|h| !v.contains(shortcode_of(h))) {
+                        group.host = None;
+                    }
                 }
                 yield TicketsEvent::Group { group };
             }
@@ -1945,7 +1952,20 @@ fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> Option<Ticke
         | TicketsEvent::ChildRemoved { id, .. }
         | TicketsEvent::Entered { id, .. }
         | TicketsEvent::Left { id, .. } => Some(id.clone()),
-        TicketsEvent::Group { group } | TicketsEvent::GroupChanged { group } => Some(group.root.clone().unwrap_or_default()),
+        TicketsEvent::Group { group } | TicketsEvent::GroupChanged { group } => {
+            if !sees(group.root.as_deref().unwrap_or_default()) {
+                return None;
+            }
+            // As `groups` answers it: a host out of reach is no host.
+            let mut group = group.clone();
+            if group.host.as_deref().is_some_and(|h| !sees(h)) {
+                group.host = None;
+            }
+            return Some(match ev {
+                TicketsEvent::Group { .. } => TicketsEvent::Group { group },
+                _ => TicketsEvent::GroupChanged { group },
+            });
+        }
         TicketsEvent::InputChanged { input } | TicketsEvent::Input { input } => Some(input.ticket.clone()),
         TicketsEvent::PlacementsChanged { changes } => {
             let kept: Vec<_> = changes.iter().filter(|c| sees(&c.id)).cloned().collect();
@@ -1957,6 +1977,12 @@ fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> Option<Ticke
         Some(id) if !sees(&id) => None,
         _ => Some(ev),
     }
+}
+
+/// A ticket id's (or path address's) shortcode.
+#[cfg(feature = "server")]
+fn shortcode_of(id: &str) -> &str {
+    id.split(['-', '/']).next().unwrap_or(id)
 }
 
 /// IDENTITY-21: the shortcodes a caller can see — `None`: all of them. A
