@@ -2078,6 +2078,11 @@ fn App() -> impl IntoView {
         let account = signin::account();
         Memo::new(move |_| account.with(|a| a.may_view()))
     };
+    // IDENTITY-31: known to hold nothing — else, not yet known.
+    let no_access = {
+        let account = signin::account();
+        Memo::new(move |_| account.with(|a| a.no_access()))
+    };
 
     view! {
         <div id="app" class:nonav=move || nav_hidden.get() || !can_view.get() class:annotating=move || annot.on.get() data-rows-held=move || held.get()>
@@ -2233,9 +2238,14 @@ fn App() -> impl IntoView {
                     }}
                     // IDENTITY-22: a person holding no grant sees their id,
                     // not the views (settings stay, for signing out).
+                    // IDENTITY-31: until the server has said, neither.
                     {move || match route.get() {
                         r if !can_view.get() && !matches!(r, Route::Settings) => {
-                            view! { <signin::NoAccess /> }.into_any()
+                            if no_access.get() {
+                                view! { <signin::NoAccess /> }.into_any()
+                            } else {
+                                view! { <signin::Checking /> }.into_any()
+                            }
                         }
                         Route::Board => view! { <Board board last_error viewport /> }.into_any(),
                         Route::Ticket(id) => {

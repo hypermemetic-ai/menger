@@ -6,10 +6,16 @@
 //!
 //! 1. Before every connect, `GET /login/me` ([`gate`]): 401 sends the
 //!    browser to `/login?next=…` and the app goes no further; 404 means this
-//!    menger has no login, and the app runs as it always did.
+//!    menger has no login, and the app runs as it always did. Anything else
+//!    (unreachable, a 5xx) is asked again: never taken for "no login".
 //! 2. After every connect, `members.mine` ([`after_connect`]): the person's
-//!    grants. With none, the app shows [`NoAccess`] — their id, to send an
+//!    grants, and the socket's own principal, which must be the one `/login/me`
+//!    named. With no grant, the app shows [`NoAccess`] — their id, to send an
 //!    admin — instead of the views.
+//!
+//! IDENTITY-31: until both have answered, the app shows neither the views
+//! nor [`NoAccess`], only [`Checking`]: what it does not yet know, it does
+//! not show. A failed answer ends the session, which retries.
 //!
 //! The header names the person and offers sign-out ([`Who`]); `#/settings`
 //! shows the account ([`AccountGroup`]); admins get `#/members`
@@ -40,8 +46,9 @@ pub(crate) struct Me {
 /// What the app knows of its person.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Account {
-    /// Whether this menger has a login at all.
-    pub(crate) login: bool,
+    /// Whether this menger has a login at all; `None` until `/login/me`
+    /// has answered.
+    pub(crate) login: Option<bool>,
     pub(crate) me: Option<Me>,
     /// The person's grants, once `members.mine` has answered.
     pub(crate) grants: Option<Vec<Grant>>,
@@ -49,10 +56,29 @@ pub(crate) struct Account {
 }
 
 impl Account {
-    /// Whether the views may show: no login, or a person holding a grant
-    /// (or not yet known — the views wait for the server's own refusals).
+    /// Whether the server has said enough to decide what to show: no login,
+    /// or the person's grants.
+    pub(crate) fn known(&self) -> bool {
+        match self.login {
+            None => false,
+            Some(false) => true,
+            Some(true) => self.grants.is_some(),
+        }
+    }
+
+    /// Whether the views may show: no login, or a person holding a grant —
+    /// known, never assumed (IDENTITY-31).
     pub(crate) fn may_view(&self) -> bool {
-        !self.login || self.admin_everywhere || self.grants.as_ref().is_none_or(|g| !g.is_empty())
+        match self.login {
+            None => false,
+            Some(false) => true,
+            Some(true) => self.admin_everywhere || self.grants.as_ref().is_some_and(|g| !g.is_empty()),
+        }
+    }
+
+    /// Whether to show [`NoAccess`]: signed in, and known to hold nothing.
+    pub(crate) fn no_access(&self) -> bool {
+        self.known() && !self.may_view()
     }
 
     /// Whether the person administers anything (`#/members`).
@@ -112,71 +138,104 @@ enum Gate {
     In(Me),
     Out,
     NoLogin,
+    /// No answer to go by: asked again, never taken for "no login".
+    Unsure(String),
+}
+
+/// What a `/login/me` status means, the body aside.
+fn gate_of(status: u16) -> Option<bool> {
+    match status {
+        200 => Some(true),
+        401 => Some(false),
+        _ => None,
+    }
 }
 
 async fn login_me() -> Gate {
     let promise = dom::window().fetch_with_str("/login/me");
-    let Ok(resp) = JsFuture::from(promise).await else { return Gate::NoLogin };
-    let Ok(resp) = resp.dyn_into::<web_sys::Response>() else { return Gate::NoLogin };
-    match resp.status() {
-        401 => Gate::Out,
-        200 => {
-            let Ok(text) = resp.text() else { return Gate::NoLogin };
+    let Ok(resp) = JsFuture::from(promise).await else { return Gate::Unsure("/login/me unreachable".into()) };
+    let Ok(resp) = resp.dyn_into::<web_sys::Response>() else { return Gate::Unsure("/login/me answered oddly".into()) };
+    match (resp.status(), gate_of(resp.status())) {
+        // This menger has no login: the shell serves no /login/me.
+        (404, _) => Gate::NoLogin,
+        (_, Some(false)) => Gate::Out,
+        (_, Some(true)) => {
+            let Ok(text) = resp.text() else { return Gate::Unsure("/login/me unreadable".into()) };
             match JsFuture::from(text).await.ok().and_then(|t| t.as_string()).and_then(|t| serde_json::from_str::<Me>(&t).ok()) {
                 Some(me) => Gate::In(me),
-                None => Gate::NoLogin,
+                None => Gate::Unsure("/login/me unreadable".into()),
             }
         }
-        _ => Gate::NoLogin,
+        (status, None) => Gate::Unsure(format!("/login/me answered {status}")),
     }
 }
 
-/// Before every connect: who this browser is. `false`: signed out — the
-/// browser is on its way to the login page, and the app goes no further.
-pub(crate) async fn gate() -> bool {
+/// Before every connect: who this browser is. `Err`: signed out (the
+/// browser is on its way to the login page) or no answer yet; the session
+/// goes no further, and is tried again.
+pub(crate) async fn gate() -> Result<(), String> {
     match login_me().await {
         Gate::In(me) => {
             account().update(|a| {
-                a.login = true;
+                a.login = Some(true);
                 a.me = Some(me);
             });
-            true
+            Ok(())
         }
         Gate::Out => {
             let loc = dom::window().location();
             let to = login_url(&loc.pathname().unwrap_or_default(), &loc.hash().unwrap_or_default());
             let _ = loc.replace(&to);
-            false
+            Err("signed out".into())
         }
         Gate::NoLogin => {
-            account().update(|a| a.login = false);
-            true
+            account().update(|a| a.login = Some(false));
+            Ok(())
         }
+        Gate::Unsure(why) => Err(why),
     }
 }
 
-/// After every connect: the person's grants. `false`: they hold none, and
-/// the session asks nothing more of the server (the app shows
-/// [`NoAccess`]).
-pub(crate) async fn after_connect(transport: Rc<WsTransport>) -> bool {
-    if !account().with_untracked(|a| a.login) {
-        return true;
+/// After every connect: the person's grants, from the socket as the
+/// socket knows them. `Ok(false)`: they hold none, and the session asks
+/// nothing more of the server (the app shows [`NoAccess`]). `Err`: no
+/// answer, or the socket is not the person `/login/me` named; the session
+/// ends and is tried again.
+pub(crate) async fn after_connect(transport: Rc<WsTransport>) -> Result<bool, String> {
+    if account().with_untracked(|a| a.login) != Some(true) {
+        return Ok(true);
     }
-    let Ok(events) = MembersClient::new(transport).mine_all().await else { return true };
+    let events = MembersClient::new(transport).mine_all().await.map_err(|e| format!("members.mine: {e}"))?;
+    let expected = account().with_untracked(|a| a.me.as_ref().map(|m| m.principal.clone()));
     let mut grants = Vec::new();
     let mut everywhere = false;
+    let mut socket_is = None;
     for ev in events {
         match ev {
-            MembersEvent::Me { admin_everywhere, .. } => everywhere = admin_everywhere,
+            MembersEvent::Me { principal, admin_everywhere, .. } => {
+                socket_is = principal;
+                everywhere = admin_everywhere;
+            }
             MembersEvent::Grant { grant } => grants.push(grant),
+            MembersEvent::Error { message } => return Err(format!("members.mine: {message}")),
             _ => {}
         }
     }
+    same_person(expected.as_deref(), socket_is.as_deref())?;
     account().update(|a| {
         a.grants = Some(grants);
         a.admin_everywhere = everywhere;
     });
-    account().with_untracked(|a| a.may_view())
+    Ok(account().with_untracked(|a| a.may_view()))
+}
+
+/// The socket must be the person the page is signed in as: a socket that
+/// proved someone else (another credential the browser holds) is refused.
+fn same_person(page: Option<&str>, socket: Option<&str>) -> Result<(), String> {
+    match (page, socket) {
+        (Some(p), Some(s)) if p == s => Ok(()),
+        (p, s) => Err(format!("the socket is {} but this page is signed in as {}", s.unwrap_or("nobody"), p.unwrap_or("nobody"))),
+    }
 }
 
 /// Sign-out: the shell ends the session and shows the login page.
@@ -245,6 +304,17 @@ pub(crate) fn AccountGroup() -> impl IntoView {
     }
 }
 
+/// IDENTITY-31: instead of the views, until the server has said who this
+/// is and what they hold.
+#[component]
+pub(crate) fn Checking() -> impl IntoView {
+    view! {
+        <section id="checking">
+            <p class="hint">"Checking your access…"</p>
+        </section>
+    }
+}
+
 /// Instead of the views, for a person holding no grant: their id, and
 /// what to do with it.
 #[component]
@@ -293,20 +363,44 @@ mod tests {
 
     #[test]
     fn the_views_show_without_login_or_with_a_grant() {
-        assert!(Account::default().may_view(), "no login: as always");
-        let waiting = Account { login: true, me: Some(me()), grants: Some(vec![]), admin_everywhere: false };
-        assert!(!waiting.may_view(), "signed in, no grant: no views");
-        let unknown = Account { grants: None, ..waiting.clone() };
-        assert!(unknown.may_view(), "until the grants are known, the server's refusals speak");
+        let no_login = Account { login: Some(false), ..Default::default() };
+        assert!(no_login.may_view() && no_login.known(), "no login: as always");
+        let waiting = Account { login: Some(true), me: Some(me()), grants: Some(vec![]), admin_everywhere: false };
+        assert!(!waiting.may_view() && waiting.no_access(), "signed in, no grant: no views, the id instead");
         let member = Account { grants: Some(vec![grant("OUGHT", Role::Viewer)]), ..waiting.clone() };
-        assert!(member.may_view());
+        assert!(member.may_view() && !member.no_access());
         let operator = Account { admin_everywhere: true, ..waiting };
         assert!(operator.may_view() && operator.is_admin());
     }
 
     #[test]
+    fn what_is_not_known_is_not_shown() {
+        // IDENTITY-31: before /login/me answers, and before the grants do.
+        let before = Account::default();
+        assert!(!before.known() && !before.may_view() && !before.no_access(), "neither the views nor no-access");
+        let signed_in = Account { login: Some(true), me: Some(me()), ..Default::default() };
+        assert!(!signed_in.known() && !signed_in.may_view() && !signed_in.no_access(), "the grants not yet in");
+    }
+
+    #[test]
+    fn login_me_s_answers_mean_what_they_say() {
+        assert_eq!(gate_of(200), Some(true));
+        assert_eq!(gate_of(401), Some(false));
+        for odd in [0, 500, 502, 503] {
+            assert_eq!(gate_of(odd), None, "{odd}: asked again, never taken for no login");
+        }
+    }
+
+    #[test]
+    fn the_socket_must_be_the_page_s_person() {
+        assert!(same_person(Some("oidc:workos/user_1"), Some("oidc:workos/user_1")).is_ok());
+        assert!(same_person(Some("oidc:workos/user_1"), Some("idp:3fd4717e-a0cf-44fd-bf1d-a144d5b0829d")).is_err());
+        assert!(same_person(Some("oidc:workos/user_1"), None).is_err(), "an anonymous socket");
+    }
+
+    #[test]
     fn an_admin_is_admin_somewhere() {
-        let a = Account { login: true, me: Some(me()), grants: Some(vec![grant("OUGHT", Role::Editor)]), admin_everywhere: false };
+        let a = Account { login: Some(true), me: Some(me()), grants: Some(vec![grant("OUGHT", Role::Editor)]), admin_everywhere: false };
         assert!(!a.is_admin());
         let b = Account { grants: Some(vec![grant("IDENTITY", Role::Admin)]), ..a };
         assert!(b.is_admin());
@@ -314,7 +408,7 @@ mod tests {
 
     #[test]
     fn the_header_names_the_person() {
-        let a = Account { login: true, me: Some(me()), ..Default::default() };
+        let a = Account { login: Some(true), me: Some(me()), ..Default::default() };
         assert_eq!(a.who().as_deref(), Some("alice"));
         let npub = Account {
             me: Some(Me { name: "npub1luxqwxf06dxwt6y74d44pxfyxe2g87mr3lwcqucaudu2vder3evs326y9y".into(), ..me() }),

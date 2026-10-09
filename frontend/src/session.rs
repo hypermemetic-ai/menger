@@ -734,9 +734,7 @@ async fn session(
     let url = settings::effective_ws_url();
     // IDENTITY-22: who this browser is, first. Signed out, the browser is
     // on its way to the login page; the session goes no further.
-    if !signin::gate().await {
-        return Err("signed out".into());
-    }
+    signin::gate().await?;
     let transport = Rc::new(
         WsTransport::connect(&url, HUB)
             .await
@@ -747,7 +745,7 @@ async fn session(
     // IDENTITY-22: the person's grants, for the header and the views. With
     // none, the session asks nothing more: the app shows their id, and the
     // socket stays open until they reload or sign out.
-    if !signin::after_connect(transport.clone()).await {
+    if !signin::after_connect(transport.clone()).await? {
         LINK.with(|l| l.set(true));
         conn.set(Conn::Live);
         loop {
