@@ -261,8 +261,10 @@ nested parameter as one string (SYNAPSE-9).
   bridge (MFE-9): one `WsTransport` for the app's lifetime, the typed
   client from `tickets-api`'s `client` feature, `watch` opened before
   anything else the session asks (SCALE-26: `health`, `groups`,
-  `extents` and one board window — no walk). The REST bridge and the
-  `/rest` proxy stay for curl, scripts and non-Rust clients. `frontend/src`
+  `extents` and one board window — no walk). The REST bridge (its own
+  port) stays for curl, scripts and non-Rust clients; the shell has no
+  `/rest` proxy (ACCESS-33) and serves only menger's pages and the app's
+  build, read into a table — never a request path on disk. `frontend/src`
   must contain no `/rest/`, no hand-parsed SSE, and no `serde_json::Value`
   on a wire path. Both halves are on the plexus 0.6 line (MFE-10), and the
   client the app uses is emitted from the server's own activation (MFE-11).

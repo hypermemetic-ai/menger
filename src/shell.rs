@@ -1,8 +1,9 @@
 //! Day-one web shell, plus (MFE-2) the Leptos app and its data plane.
 //!
 //! menger's rule (since 0.04): frontend and backend are online from the
-//! first commit, so every noun is visible the day it is written. Four
-//! surfaces share this one listener:
+//! first commit, so every noun is visible the day it is written. Three
+//! surfaces share this one listener, and nothing else is served on it
+//! (ACCESS-33):
 //!
 //! - `/` — **the Leptos app** (MFE-4). It is the frontend; a browser
 //!   pointed at the server gets it without being told a path. When there
@@ -13,8 +14,9 @@
 //!   the Plexus wire protocol over WebSocket. Unchanged since day one
 //!   and fully functional; it moved off `/` with MFE-4 and stays until an
 //!   epic retires it.
-//! - `/app/` — the Leptos CSR app (MFE-2), served **from disk** out of
-//!   `frontend/dist`. Still the app's own root: it is where its assets
+//! - `/app/` — the Leptos CSR app (MFE-2), its build in `frontend/dist`
+//!   read into a table (ACCESS-33): a request path is a key into it, never
+//!   a path on disk. Still the app's own root: it is where its assets
 //!   live (`Trunk.toml`'s `public_url`, so a built `index.html` names
 //!   `/app/…` whichever URL served it) and it is the deep-link prefix
 //!   MFE-1 pinned (`/app/#/ticket/{id}`), which the vanilla page's rows
@@ -25,34 +27,21 @@
 //!   (HTTP 200 — a deliberate state with build instructions, not an
 //!   error), never a crash or a 500; the root is the one that degrades
 //!   to something usable instead.
-//! - `/rest/{*}` — a same-origin reverse proxy to the local REST port.
-//!   The REST transport emits no CORS headers (verified against
-//!   plexus-transport 0.2.3 src/http/), so a browser page from this
-//!   origin could not call :4457 directly; the proxy forwards verbatim —
-//!   bodies stream both ways, so `tickets.watch` SSE flows through live.
-//!   The REST surface stays the contract; this adds no data path of its
-//!   own.
 
-use axum::body::Body;
-use axum::extract::{Path as AxumPath, Request, State};
-use axum::http::{header, StatusCode, Uri};
+use axum::body::Bytes;
+use axum::extract::{Path as AxumPath, State};
+use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{any, get};
+use axum::routing::get;
 use axum::Router;
-use futures::StreamExt;
-use http_body_util::BodyExt;
-use std::path::PathBuf;
-use std::sync::Arc;
-
-type ProxyClient =
-    hyper_util::client::legacy::Client<hyper_util::client::legacy::connect::HttpConnector, Body>;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
+use std::time::SystemTime;
 
 pub struct ShellConfig {
     pub port: u16,
     pub ws_port: u16,
-    /// REST port that `/rest/{*}` proxies to; `None` (--no-rest) makes the
-    /// proxy answer 503 instead of dialing a dead upstream.
-    pub rest_port: Option<u16>,
     /// Directory holding the Leptos app's build output.
     pub app_dist: PathBuf,
     /// MFE-23: the environment's name (`MENGER_ENV`), which titles the
@@ -85,34 +74,160 @@ pub fn default_app_dist() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("frontend/dist")
 }
 
+/// One file of the app's build, as served.
+struct Asset {
+    bytes: Bytes,
+    mime: &'static str,
+}
+
+/// ACCESS-33: the app's build as a table — the only files `/app/…` can
+/// answer. A request path is a key into it, never a path on disk: what is
+/// not in the table is 404 whatever the filesystem holds, so there is no
+/// path to sanitise. Read whole from dist (regular files only — a symlink
+/// is not followed), with the entrypoint stamped (MFE-9, MFE-23).
+#[derive(Default)]
+struct AppFiles {
+    /// The entrypoint's modification time when this table was read —
+    /// `None` when there was no build.
+    built: Option<SystemTime>,
+    files: HashMap<String, Asset>,
+}
+
+/// A table bigger than this is not an app build (a mistaken `--app-dist`):
+/// refused whole rather than read into memory. The real build is ~25
+/// files, ~6 MB.
+const MAX_FILES: usize = 4096;
+const MAX_BYTES: u64 = 256 << 20;
+
+impl AppFiles {
+    /// Reads `dist` (blocking). A dist without an entrypoint is no build,
+    /// and is not walked; an oversized one is refused whole, logged. Both
+    /// are an empty table — "not built".
+    fn load(dist: &Path, ws_port: u16, title: &str) -> Self {
+        let built = std::fs::metadata(dist.join("index.html")).and_then(|m| m.modified()).ok();
+        if built.is_none() {
+            return Self::default();
+        }
+        let mut files = HashMap::new();
+        let mut bytes = 0u64;
+        let mut dirs = vec![(dist.to_path_buf(), String::new())];
+        while let Some((dir, prefix)) = dirs.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let (Ok(kind), Some(name)) = (entry.file_type(), entry.file_name().to_str().map(str::to_string)) else {
+                    continue;
+                };
+                let key = format!("{prefix}{name}");
+                if kind.is_dir() {
+                    dirs.push((entry.path(), format!("{key}/")));
+                } else if kind.is_file() {
+                    bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    if files.len() >= MAX_FILES || bytes > MAX_BYTES {
+                        tracing::error!("{dist:?} is not an app build (over {MAX_FILES} files or {MAX_BYTES} bytes): serving none of it");
+                        return Self::default();
+                    }
+                    let Ok(data) = std::fs::read(entry.path()) else { continue };
+                    let data = if key == "index.html" {
+                        match String::from_utf8(data) {
+                            Ok(text) => stamp(&text, ws_port, title).into_bytes(),
+                            Err(e) => e.into_bytes(),
+                        }
+                    } else {
+                        data
+                    };
+                    files.insert(key.clone(), Asset { bytes: Bytes::from(data), mime: mime_of(&key) });
+                }
+            }
+        }
+        Self { built, files }
+    }
+
+    fn get(&self, key: &str) -> Option<&Asset> {
+        self.files.get(key)
+    }
+}
+
+fn mime_of(key: &str) -> &'static str {
+    match key.rsplit('.').next() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript",
+        Some("wasm") => "application/wasm",
+        Some("css") => "text/css",
+        Some("json") | Some("map") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        // COMP-10: the SDK's TypeScript declarations (sdk/*.d.ts),
+        // shown as text.
+        Some("txt") | Some("ts") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// The app's table, and when to read it again. A release's dist never
+/// changes, so the table is read once; in a checkout `trunk watch` rewrites
+/// dist, and a new entrypoint (its modification time — one fixed file,
+/// never a request path) has the table read again, so a reload picks up a
+/// rebuild without a restart.
+struct App {
+    dist: PathBuf,
+    ws_port: u16,
+    title: &'static str,
+    files: RwLock<Arc<AppFiles>>,
+}
+
+impl App {
+    async fn new(dist: PathBuf, ws_port: u16, title: &'static str) -> Self {
+        let app = Self { dist, ws_port, title, files: RwLock::default() };
+        app.reload().await;
+        app
+    }
+
+    fn table(&self) -> Arc<AppFiles> {
+        self.files.read().expect("app table lock poisoned").clone()
+    }
+
+    async fn reload(&self) -> Arc<AppFiles> {
+        let (dist, ws_port, title) = (self.dist.clone(), self.ws_port, self.title);
+        let fresh = Arc::new(
+            tokio::task::spawn_blocking(move || AppFiles::load(&dist, ws_port, title)).await.unwrap_or_default(),
+        );
+        tracing::debug!("app build read from {:?}: {} files", self.dist, fresh.files.len());
+        *self.files.write().expect("app table lock poisoned") = fresh.clone();
+        fresh
+    }
+
+    /// The table, read again first if the build's entrypoint changed.
+    async fn current(&self) -> Arc<AppFiles> {
+        let table = self.table();
+        let built = tokio::fs::metadata(self.dist.join("index.html")).await.and_then(|m| m.modified()).ok();
+        if built == table.built {
+            table
+        } else {
+            self.reload().await
+        }
+    }
+}
+
 struct ShellState {
-    rest_port: Option<u16>,
     /// The day-one page, WS port already substituted. Served at
     /// `/vanilla`, and at `/` when there is no app build (MFE-4).
     vanilla: String,
-    /// MFE-9: the app talks to the Plexus WebSocket directly, and a page
-    /// served from disk cannot know which port that is. Substituted into
-    /// the app's `index.html` on the way out, exactly as the vanilla shell
-    /// has always had it substituted into `web/index.html` — one
-    /// convention, not two.
-    ws_port: u16,
-    /// MFE-23: the tab's title, stamped into both pages.
-    title: &'static str,
-    app_dist: PathBuf,
-    client: ProxyClient,
+    /// The app's build (ACCESS-33). MFE-9: the app talks to the Plexus
+    /// WebSocket directly, and its page cannot know which port that is, so
+    /// the entrypoint is stamped with it as it is read — exactly as the
+    /// vanilla page has always been stamped. One convention, not two.
+    app: App,
 }
 
 pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
     let title = tab_title(cfg.env.as_deref());
     let state = Arc::new(ShellState {
-        rest_port: cfg.rest_port,
         vanilla: stamp(include_str!("../web/index.html"), cfg.ws_port, title),
-        ws_port: cfg.ws_port,
-        title,
-        app_dist: cfg.app_dist,
-        client: hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-            .build_http(),
+        app: App::new(cfg.app_dist, cfg.ws_port, title).await,
     });
+    // ACCESS-33: menger's own pages and the app's build — nothing else. The
+    // `/rest/{*}` pass-through to the REST port went: the app has spoken
+    // the WebSocket since MFE-9, and nothing else called it.
     let app = Router::new()
         .route("/", get(root_index))
         .route("/vanilla", get(vanilla))
@@ -120,7 +235,6 @@ pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
         .route("/app", get(app_index))
         .route("/app/", get(app_index))
         .route("/app/{*path}", get(app_asset))
-        .route("/rest/{*path}", any(proxy_rest))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", cfg.port)).await?;
     tracing::info!("App:       http://127.0.0.1:{}/", cfg.port);
@@ -147,25 +261,17 @@ fn not_built() -> Response {
     .into_response()
 }
 
-/// The app's entrypoint with the WebSocket port substituted, or `None`
-/// when `frontend/dist` holds no build. Separate from [`serve_dist_file`]
-/// because the two callers differ on what "missing" means: `/app/` says
-/// so (MFE-2), `/` falls back to the vanilla page (MFE-4).
-async fn app_entrypoint(dist: &std::path::Path, ws_port: u16, title: &str) -> Option<String> {
-    let bytes = tokio::fs::read(dist.join("index.html")).await.ok()?;
-    // MFE-9: the entrypoint carries the WebSocket port. The app's
-    // index.html declares it as `{{WS_PORT}}` (see frontend/index.html);
-    // every other asset is served byte-exact.
-    Some(stamp(&String::from_utf8(bytes).ok()?, ws_port, title))
+fn asset_response(asset: &Asset) -> Response {
+    ([(header::CONTENT_TYPE, asset.mime)], asset.bytes.clone()).into_response()
 }
 
-/// MFE-4: the root is the app. No build output on disk is not an error
-/// here — it is the day-one page, which needs no build and works.
+/// MFE-4: the root is the app. No build is not an error here — it is the
+/// day-one page, which needs no build and works.
 async fn root_index(State(st): State<Arc<ShellState>>) -> Response {
-    match app_entrypoint(&st.app_dist, st.ws_port, st.title).await {
-        Some(html) => Html(html).into_response(),
+    match st.app.current().await.get("index.html") {
+        Some(index) => asset_response(index),
         None => {
-            tracing::debug!("no app build at {:?}: / degrades to the vanilla page", st.app_dist);
+            tracing::debug!("no app build at {:?}: / degrades to the vanilla page", st.app.dist);
             Html(st.vanilla.clone()).into_response()
         }
     }
@@ -186,132 +292,33 @@ async fn vanilla(State(st): State<Arc<ShellState>>) -> Response {
 }
 
 async fn app_index(State(st): State<Arc<ShellState>>) -> Response {
-    match app_entrypoint(&st.app_dist, st.ws_port, st.title).await {
-        Some(html) => Html(html).into_response(),
+    match st.app.current().await.get("index.html") {
+        Some(index) => asset_response(index),
         None => not_built(),
     }
 }
 
-async fn app_asset(
-    State(st): State<Arc<ShellState>>,
-    AxumPath(path): AxumPath<String>,
-) -> Response {
-    serve_dist_file(&st.app_dist, &path, st.ws_port, st.title).await
-}
-
-/// MNG-22: whether `rel` names a path inside dist — only plain components.
-/// axum hands the wildcard over percent-decoded, so `/app//etc/x` and
-/// `/app/%2Fetc%2Fx` both arrive as `/etc/x`, and `Path::join` with an
-/// absolute path discards the base: a root, a prefix, `.` and `..` are all
-/// refused, as are NUL and a backslash (no file in dist has one).
-fn inside_dist(rel: &str) -> bool {
-    use std::path::{Component, Path};
-    !rel.contains(['\0', '\\']) && Path::new(rel).components().all(|c| matches!(c, Component::Normal(_)))
-}
-
-async fn serve_dist_file(dist: &std::path::Path, rel: &str, ws_port: u16, title: &str) -> Response {
-    // No traversal: the wildcard must stay inside dist.
-    if !inside_dist(rel) {
-        return (StatusCode::BAD_REQUEST, "bad path").into_response();
+async fn app_asset(State(st): State<Arc<ShellState>>, AxumPath(path): AxumPath<String>) -> Response {
+    let key = if path.is_empty() || path.ends_with('/') { format!("{path}index.html") } else { path };
+    // A miss asks whether the build changed before it is a 404: a page
+    // loaded from a rebuilt entrypoint names assets the old table lacks.
+    let mut table = st.app.table();
+    if table.get(&key).is_none() {
+        table = st.app.current().await;
     }
-    let with_index;
-    let rel = if rel.is_empty() || rel.ends_with('/') {
-        with_index = format!("{rel}index.html");
-        with_index.as_str()
-    } else {
-        rel
-    };
-    match tokio::fs::read(dist.join(rel)).await {
-        Ok(bytes) => {
+    match table.get(&key) {
+        Some(asset) => {
             // An access line per served asset (RUST_LOG=menger=debug): the
             // one place to see which assets a page actually pulled — AGS-14
             // pins that the mermaid bundle is fetched only by pages that
             // hold a diagram.
-            tracing::debug!("app asset served: /app/{rel} ({} bytes)", bytes.len());
-            // MFE-9: the entrypoint carries the WebSocket port. The app's
-            // index.html declares it as `{{WS_PORT}}` (see
-            // frontend/index.html); every other asset is served byte-exact.
-            let bytes = if rel == "index.html" {
-                match String::from_utf8(bytes) {
-                    Ok(text) => stamp(&text, ws_port, title).into_bytes(),
-                    Err(e) => e.into_bytes(),
-                }
-            } else {
-                bytes
-            };
-            let mime = match rel.rsplit('.').next() {
-                Some("html") => "text/html; charset=utf-8",
-                Some("js") => "text/javascript",
-                Some("wasm") => "application/wasm",
-                Some("css") => "text/css",
-                Some("json") | Some("map") => "application/json",
-                Some("svg") => "image/svg+xml",
-                Some("ico") => "image/x-icon",
-                // COMP-10: the SDK's TypeScript declarations (sdk/*.d.ts),
-                // shown as text.
-                Some("txt") | Some("ts") => "text/plain; charset=utf-8",
-                _ => "application/octet-stream",
-            };
-            ([(header::CONTENT_TYPE, mime)], bytes).into_response()
+            tracing::debug!("app asset served: /app/{key} ({} bytes)", asset.bytes.len());
+            asset_response(asset)
         }
         // The entrypoint missing means "not built"; a missing asset next
         // to a present index.html is an ordinary 404 (stale link, typo).
-        Err(_) if rel == "index.html" => not_built(),
-        Err(_) => (StatusCode::NOT_FOUND, "no such asset").into_response(),
-    }
-}
-
-async fn proxy_rest(State(st): State<Arc<ShellState>>, mut req: Request) -> Response {
-    let Some(port) = st.rest_port else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "REST transport disabled (--no-rest): the /rest proxy has no upstream",
-        )
-            .into_response();
-    };
-    let path_q = req
-        .uri()
-        .path_and_query()
-        .map(|pq| pq.as_str().to_owned())
-        .unwrap_or_else(|| "/".into());
-    let uri: Uri = match format!("http://127.0.0.1:{port}{path_q}").parse() {
-        Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, "bad proxy path").into_response(),
-    };
-    *req.uri_mut() = uri;
-    // Let the client re-derive Host for the upstream authority.
-    req.headers_mut().remove(header::HOST);
-    match st.client.request(req).await {
-        // Unary JSON passes through untouched; SSE streams through
-        // unbuffered with one addition: a leading SSE *comment* frame.
-        // Firefox does not resolve a `fetch()` for a chunked response
-        // until the first body bytes arrive (verified live: the promise
-        // resolved only when the first watch event was pushed), and
-        // `tickets.watch` sends no preamble of its own — without this, a
-        // quiet stream leaves the app stuck at "connecting…". A `:` line
-        // is spec-defined as ignorable, so no event is added or altered;
-        // the REST surface stays the contract.
-        Ok(resp) => {
-            let is_sse = resp
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .is_some_and(|v| v.as_bytes().starts_with(b"text/event-stream"));
-            if is_sse {
-                let (parts, body) = resp.into_parts();
-                let preamble = futures::stream::once(async {
-                    Ok(hyper::body::Bytes::from_static(b":proxy stream open\n\n"))
-                });
-                let stream = preamble.chain(BodyExt::into_data_stream(body));
-                Response::from_parts(parts, Body::from_stream(stream)).into_response()
-            } else {
-                resp.map(Body::new).into_response()
-            }
-        }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            format!("REST upstream unreachable: {e}"),
-        )
-            .into_response(),
+        None if key == "index.html" => not_built(),
+        None => (StatusCode::NOT_FOUND, "no such asset").into_response(),
     }
 }
 
@@ -328,16 +335,50 @@ mod tests {
         assert_eq!(tab_title(None), "menger");
     }
 
-    /// MNG-22: an absolute path once escaped dist (`dist.join("/etc/x")` is
-    /// `/etc/x`); only plain components are inside it.
+    /// ACCESS-33: the table holds the build's regular files by their
+    /// '/'-joined paths, the entrypoint stamped — and nothing a request
+    /// path could reach beyond them.
     #[test]
-    fn only_plain_components_are_inside_dist() {
-        for ok in ["", "index.html", "app.js", "vendor/mermaid-1.2.3.min.js", "sdk/", "a//b", "a/./b", "..x/y.js"] {
-            assert!(inside_dist(ok), "{ok:?} is inside dist");
+    fn the_app_table_holds_the_build_and_nothing_else() {
+        let root = tempfile::tempdir().unwrap();
+        let dist = root.path().join("dist");
+        std::fs::create_dir_all(dist.join("vendor")).unwrap();
+        std::fs::write(dist.join("index.html"), "<title>{{TITLE}}</title>{{WS_PORT}}").unwrap();
+        std::fs::write(dist.join("app.js"), "js").unwrap();
+        std::fs::write(dist.join("vendor/mermaid.min.js"), "m").unwrap();
+        std::fs::write(root.path().join("secret.txt"), "s").unwrap();
+        std::os::unix::fs::symlink(root.path().join("secret.txt"), dist.join("link.txt")).unwrap();
+
+        let t = AppFiles::load(&dist, 4450, "menger.test");
+        let mut keys: Vec<_> = t.files.keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["app.js", "index.html", "vendor/mermaid.min.js"], "a symlink is not followed");
+        assert_eq!(&t.get("index.html").unwrap().bytes[..], b"<title>menger.test</title>4450");
+        assert_eq!(t.get("vendor/mermaid.min.js").unwrap().mime, "text/javascript");
+        assert!(t.built.is_some());
+        for miss in ["/etc/hostname", "../secret.txt", "secret.txt", "link.txt", "vendor", "./app.js", ""] {
+            assert!(t.get(miss).is_none(), "{miss:?}");
         }
-        for bad in ["/etc/hostname", "//etc/hostname", "../Cargo.toml", "a/../../b", "./index.html", "..", "x\0", "a\\b"] {
-            assert!(!inside_dist(bad), "{bad:?} must be refused");
-        }
+        let none = AppFiles::load(&root.path().join("missing"), 4450, "menger");
+        assert!(none.files.is_empty() && none.built.is_none());
+        std::fs::remove_file(dist.join("index.html")).unwrap();
+        let headless = AppFiles::load(&dist, 4450, "menger");
+        assert!(headless.files.is_empty(), "no entrypoint, no build: nothing under it is served");
+    }
+
+    /// ACCESS-33: a rebuilt entrypoint has the table read again; an asset
+    /// dropped into dist without a rebuild is not.
+    #[tokio::test]
+    async fn the_table_follows_a_rebuild_and_nothing_less() {
+        let dist = tempfile::tempdir().unwrap();
+        std::fs::write(dist.path().join("index.html"), "v1").unwrap();
+        let app = App::new(dist.path().to_path_buf(), 1, "menger").await;
+        std::fs::write(dist.path().join("late.js"), "x").unwrap();
+        assert!(app.current().await.get("late.js").is_none(), "no rebuild, no new file");
+        let index = std::fs::File::options().write(true).open(dist.path().join("index.html")).unwrap();
+        index.set_modified(SystemTime::now() + std::time::Duration::from_secs(60)).unwrap();
+        let t = app.current().await;
+        assert!(t.get("late.js").is_some(), "a rebuild is read whole");
     }
 
     #[test]

@@ -50,13 +50,10 @@ tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 
 # Day-one web shell (static page over the Plexus WebSocket). MFE-2 adds
-# the /app static serving and the same-origin /rest reverse proxy (the
-# REST port emits no CORS headers, so the browser app must stay
-# same-origin); hyper/hyper-util are the proxy's streaming HTTP client.
+# the /app serving; ACCESS-33 removed its /rest reverse proxy, and with it
+# the proxy's HTTP client (hyper, hyper-util, http-body-util — the tests'
+# own now, below).
 axum = "0.8"
-hyper = { version = "1", features = ["client", "http1"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
-http-body-util = "0.1"
 
 clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
@@ -80,8 +77,11 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # Hermetic tests: every server gets its own isolated database location.
 tempfile = "3"
 # REST-level tests (tests/rest.rs, tests/app.rs) speak plain HTTP/SSE to
-# the spawned binary via hyper/hyper-util/http-body-util — all moved to
-# [dependencies] with MFE-2 (the shell's /rest proxy client).
+# the spawned binary (ACCESS-33: back here from [dependencies], where the
+# shell's /rest proxy needed them).
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+http-body-util = "0.1"
 
 # MNG-8's `[patch.crates-io]` on the plexus-transport-v0.2.3 tag went with
 # MFE-10: the REST bridge fixes it carried are on plexus-transport `main`
