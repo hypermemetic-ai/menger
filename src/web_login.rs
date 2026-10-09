@@ -321,13 +321,13 @@ impl Login {
         let next_e = esc(next);
         let toggle = self.dev.as_ref().map(|d| {
             format!(
-                r#"<label class="dev-toggle"><input type="checkbox" id="dev-login"{}> Send all sign-in to {} <span>test only</span></label>"#,
+                r#"<label class="dev-toggle"><input type="checkbox" id="dev-login"{}> Send all sign-in to {}<small>Test only. Be any user, with any role.</small></label>"#,
                 if dev { " checked" } else { "" },
                 esc(&d.provider)
             )
         });
         if let (true, Some(d)) = (dev, &self.dev) {
-            return self.fill(error, toggle, Some(dev_panel(d, &next_e)), String::new(), None, false);
+            return self.fill(error, toggle, Some(dev_panel(d, &next_e)), String::new(), None, false, true);
         }
         let password = self.password.as_ref().filter(|_| self.email.is_none() || with_password).map(|_| {
             let forgot = self
@@ -409,12 +409,39 @@ impl Login {
             format!(r#"<button class="alt" type="button" id="nostr" data-next="{next_e}">{KEY_ICON}Continue with nostr</button>"#)
         });
         let alts = !buttons.is_empty() || nostr.is_some();
-        self.fill(error, toggle, password, buttons, nostr, alts)
+        self.fill(error, toggle, password, buttons, nostr, alts, false)
     }
 
-    fn fill(&self, error: Option<&str>, toggle: Option<String>, password: Option<String>, buttons: String, nostr: Option<String>, alts: bool) -> String {
+    /// The instance, as the page's side column lists it.
+    fn facts(&self, dev: bool) -> String {
+        let via = match (&self.dev, &self.email) {
+            (Some(d), _) if dev => d.provider.clone(),
+            (_, Some(e)) => e.provider.clone(),
+            _ => {
+                let mut names: Vec<&str> = self.providers.keys().map(String::as_str).collect();
+                names.sort_unstable();
+                names.join(", ")
+            }
+        };
+        [("instance", self.title.to_string()), ("version", env!("CARGO_PKG_VERSION").to_string()), ("sign-in", via)]
+            .iter()
+            .map(|(k, v)| format!("<dt>{k}</dt><dd>{}</dd>", esc(v)))
+            .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fill(&self, error: Option<&str>, toggle: Option<String>, password: Option<String>, buttons: String, nostr: Option<String>, alts: bool, dev: bool) -> String {
+        let heading = if dev {
+            r#"<h1>Sign in as anyone</h1>
+      <p class="sub">Through plexus-idp. Pick a seeded user, or name one.</p>"#.to_string()
+        } else {
+            format!(r#"<h1>Sign in</h1>
+      <p class="sub">to continue to {}</p>"#, esc(self.title))
+        };
         include_str!("../web/login.html")
             .replace("{{DEV}}", &toggle.unwrap_or_default())
+            .replace("{{HEADING}}", &heading)
+            .replace("{{FACTS}}", &self.facts(dev))
             .replace("{{TITLE}}", self.title)
             .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
             .replace(
@@ -747,6 +774,7 @@ pub async fn dev(State(login): State<Arc<Login>>, headers: HeaderMap, Form(f): F
         Ok(n) => n,
         Err(e) => return refuse(&e, StatusCode::BAD_REQUEST),
     };
+    let roster = d.user(&name).is_some();
     let grants: Vec<(Role, String)> = match d.user(&name) {
         Some(u) => u.grants.clone(),
         None => match f.role.as_deref().map(str::trim).filter(|r| !r.is_empty() && *r != "none") {
@@ -777,10 +805,15 @@ pub async fn dev(State(login): State<Arc<Login>>, headers: HeaderMap, Form(f): F
         },
     };
     let principal = ctx.principal().map(|p| p.to_string()).unwrap_or_else(|| ctx.user_id.clone());
-    for (role, scope) in &grants {
-        if let Err(e) = access.dev_grant(&principal, scope, *role).await {
-            return refuse(&format!("{name} signed in, but the grant {role}@{scope} failed: {e}"), StatusCode::INTERNAL_SERVER_ERROR);
-        }
+    // A roster user holds exactly its roster's grants; anyone else gains
+    // the one asked for.
+    let granted = if roster {
+        access.dev_set_grants(&principal, &grants).await
+    } else {
+        futures::future::try_join_all(grants.iter().map(|(r, sc)| access.dev_grant(&principal, sc, *r))).await.map(|_| ())
+    };
+    if let Err(e) = granted {
+        return refuse(&format!("{name} signed in, but its grants failed: {e}"), StatusCode::INTERNAL_SERVER_ERROR);
     }
     tracing::info!(user = %name, %principal, grants = %dev_login::describe(&grants), "dev sign-in");
     login.sign_in(ctx, &next)
@@ -788,53 +821,66 @@ pub async fn dev(State(login): State<Arc<Login>>, headers: HeaderMap, Form(f): F
 
 /// The dev sign-in's panel: the roster, anyone, an account's own password.
 fn dev_panel(d: &DevLogin, next_e: &str) -> String {
+    let chips = |grants: &[(Role, String)]| -> String {
+        if grants.is_empty() {
+            return r#"<span class="grant none">no access</span>"#.into();
+        }
+        grants
+            .iter()
+            .map(|(r, sc)| {
+                let on = if sc == "*" { "everywhere".to_string() } else { format!("<code>{}</code>", esc(sc)) };
+                format!(r#"<span class="grant {r}"><b>{r}</b>{on}</span>"#)
+            })
+            .collect()
+    };
     let roster: String = d
         .users
         .iter()
         .map(|u| {
             format!(
-                r#"<form method="post" action="/login/dev"><input type="hidden" name="next" value="{next_e}"><input type="hidden" name="user" value="{n}"><button class="alt who" type="submit"><b>{n}</b><span>{g}</span></button></form>"#,
+                r#"<form method="post" action="/login/dev"><input type="hidden" name="next" value="{next_e}"><input type="hidden" name="user" value="{n}"><button class="who" type="submit" title="Sign in as {n}: {t}"><span class="uname">{n}</span><span class="grants">{g}</span><span class="go" aria-hidden="true">→</span></button></form>"#,
                 n = esc(&u.name),
-                g = esc(&dev_login::describe(&u.grants))
+                t = esc(&dev_login::describe(&u.grants)),
+                g = chips(&u.grants)
             )
         })
         .collect::<Vec<_>>()
-        .join("\n      ");
+        .join("\n        ");
     let roster = if roster.is_empty() {
         String::new()
     } else {
         format!(
-            r#"<p class="caption">Sign in as</p>
-    <div class="alts roster">
-      {roster}
-    </div>
-    <div class="or">or anyone</div>"#
+            r#"<h2>Seeded users</h2>
+      <div class="roster">
+        {roster}
+      </div>"#
         )
     };
     format!(
         r#"{roster}
-    <form method="post" action="/login/dev" id="dev-any">
-      <input type="hidden" name="next" value="{next_e}">
-      <label for="dev-user">Username</label>
-      <input id="dev-user" name="user" type="text" required autocomplete="off" pattern="[A-Za-z0-9._\-]{{1,64}}" placeholder="new or existing">
-      <div class="pair">
+      <h2>Anyone</h2>
+      <form method="post" action="/login/dev" class="anyone" id="dev-any">
+        <input type="hidden" name="next" value="{next_e}">
+        <div><label for="dev-user">Username</label>
+        <input id="dev-user" name="user" type="text" required autocomplete="off" pattern="[A-Za-z0-9._\-]{{1,64}}" placeholder="e.g. reviewer-2"></div>
         <div><label for="dev-role">Role</label>
         <select id="dev-role" name="role"><option value="none">none</option><option value="viewer" selected>viewer</option><option value="editor">editor</option><option value="admin">admin</option></select></div>
         <div><label for="dev-scope">On</label>
-        <input id="dev-scope" name="scope" type="text" value="*" placeholder="* or SHORTCODE"></div>
-      </div>
-      <p class="caption">Registered at plexus-idp if new. A roster name keeps its own roles.</p>
-      <button class="primary" type="submit">Sign in as this user</button>
-    </form>
-    <div class="or">or a plexus-idp account</div>
-    <form method="post" action="/login/dev" autocomplete="on">
-      <input type="hidden" name="next" value="{next_e}">
-      <label for="dev-account">Username</label>
-      <input id="dev-account" name="user" type="text" autocomplete="username" required>
-      <label for="dev-password">Password</label>
-      <input id="dev-password" name="password" type="password" autocomplete="current-password" required>
-      <button class="alt" type="submit">Sign in</button>
-    </form>"#
+        <input id="dev-scope" name="scope" type="text" value="*" placeholder="* or SHORTCODE" title="* for everything, or a shortcode such as IDENTITY"></div>
+        <button class="primary" type="submit">Sign in</button>
+      </form>
+      <p class="caption">A new name is registered at plexus-idp. A seeded name keeps its own roles.</p>
+      <details>
+        <summary>Sign in with a plexus-idp password</summary>
+        <form method="post" action="/login/dev" autocomplete="on">
+          <input type="hidden" name="next" value="{next_e}">
+          <label for="dev-account">Username</label>
+          <input id="dev-account" name="user" type="text" autocomplete="username" required>
+          <label for="dev-password">Password</label>
+          <input id="dev-password" name="password" type="password" autocomplete="current-password" required>
+          <button class="alt" type="submit">Sign in</button>
+        </form>
+      </details>"#
     )
 }
 

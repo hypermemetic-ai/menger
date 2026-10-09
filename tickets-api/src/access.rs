@@ -232,6 +232,21 @@ impl Access {
         Ok(g)
     }
 
+    /// IDENTITY-35: a roster user's grants made exactly `grants`: each kept,
+    /// and every other stored grant of theirs revoked.
+    pub async fn dev_set_grants(&self, principal: &str, grants: &[(Role, String)]) -> Result<(), String> {
+        let store = self.store().ok_or("no store is attached")?;
+        for g in store.grants_of(principal) {
+            if !grants.iter().any(|(_, s)| *s == g.scope) {
+                store.revoke(principal.into(), g.scope).await.map_err(|e| e.to_string())?;
+            }
+        }
+        for (role, scope) in grants {
+            self.dev_grant(principal, scope, *role).await?;
+        }
+        Ok(())
+    }
+
     /// A grant was made: its principal waits no longer.
     pub fn granted(&self, principal: &str) {
         self.waiting.lock().unwrap().remove(principal);

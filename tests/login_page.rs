@@ -694,7 +694,7 @@ async fn the_checkbox_sends_this_browser_s_sign_in_to_plexus_idp() {
 
     let dev = m.http.get(m.url("/login")).header("cookie", "menger_dev_login=1").send().await.unwrap().text().await.unwrap();
     assert!(dev.contains(r#"id="dev-login" checked"#));
-    for want in ["<b>viewer</b>", "viewer everywhere", "<b>mixed</b>", "editor on OUGHT, viewer on PLEXUS", r#"name="role""#, r#"name="password""#] {
+    for want in [r#"<span class="uname">viewer</span>"#, "<b>viewer</b>everywhere", r#"<span class="uname">mixed</span>"#, "editor on OUGHT, viewer on PLEXUS", "<b>editor</b><code>OUGHT</code>", r#"name="role""#, r#"name="password""#] {
         assert!(dev.contains(want), "the dev panel shows {want}");
     }
     assert!(!dev.contains("Continue with Google") && !dev.contains("Continue with nostr"), "plexus-idp alone");

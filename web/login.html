@@ -12,116 +12,182 @@
      login page later. The shell fills the {{…}} placeholders, escaped. -->
 <script>try{var t=localStorage.getItem("menger.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <style>
-  /* menger's palette (frontend/index.html :root), the tokens this page uses. */
+  /* Layout: one sheet in two panes — the instance on a tinted column (as
+     the app's nav column), the way in beside it on the page; stacked on a
+     phone. menger's own palette (frontend/index.html :root), no web fonts:
+     this page must stand alone. */
   :root {
     color-scheme: light;
     --bg: #fbfbf9; --panel: #f4f3ee; --card: #fff; --ink: #1f2328; --muted: #8a8f98;
-    --line: #e3e1d8; --accent: #0066cc; --accent-ink: #fff; --hover: #ecebe4;
-    --err-bg: #fdecec; --err-fg: #a23; --err-line: #f3c5c5; --shadow: rgba(31, 35, 40, .08);
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --line: #e3e1d8; --accent: #0066cc; --accent-ink: #fff; --hover: #ecebe4; --row-sel: #cfe2f7;
+    --chip-bg: #eef2f6; --chip-fg: #5b6b7b; --chip-line: #dde3ea;
+    --role-editor: #0066cc; --role-admin: #7a5d00; --live: #256b1a;
+    --err-bg: #fdecec; --err-fg: #a23; --err-line: #f3c5c5; --shadow: rgba(31, 35, 40, .07);
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
       --bg: #101014; --panel: #17171d; --card: #1e1e26; --ink: #d8d8e0; --muted: #7a7a88;
-      --line: #26262e; --accent: #8ab4f8; --accent-ink: #101014; --hover: #1f1f28;
+      --line: #26262e; --accent: #8ab4f8; --accent-ink: #101014; --hover: #1f1f28; --row-sel: #1f2d44;
+      --chip-bg: #1e2430; --chip-fg: #aab7c8; --chip-line: #2c3442;
+      --role-editor: #8ab4f8; --role-admin: #e3c56a; --live: #5dbb63;
       --err-bg: #2b1517; --err-fg: #e89393; --err-line: #5a2626; --shadow: rgba(0, 0, 0, .4);
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
     --bg: #101014; --panel: #17171d; --card: #1e1e26; --ink: #d8d8e0; --muted: #7a7a88;
-    --line: #26262e; --accent: #8ab4f8; --accent-ink: #101014; --hover: #1f1f28;
+    --line: #26262e; --accent: #8ab4f8; --accent-ink: #101014; --hover: #1f1f28; --row-sel: #1f2d44;
+    --chip-bg: #1e2430; --chip-fg: #aab7c8; --chip-line: #2c3442;
+    --role-editor: #8ab4f8; --role-admin: #e3c56a; --live: #5dbb63;
     --err-bg: #2b1517; --err-fg: #e89393; --err-line: #5a2626; --shadow: rgba(0, 0, 0, .4);
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
+  html { height: 100%; }
   body {
-    background: var(--bg); color: var(--ink); font: 15px/1.45 var(--sans);
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    padding: 32px 16px;
+    margin: 0; min-height: 100%; display: flex; flex-direction: column;
+    background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans);
+    padding: 24px 16px;
   }
-  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; font: 600 20px var(--mono); letter-spacing: -.01em; }
+  /* Centred while it fits; a tall sheet scrolls from its top. */
+  .sheet {
+    margin: auto; width: 100%; max-width: 820px;
+    display: grid; grid-template-columns: 280px 1fr;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 1px 2px var(--shadow), 0 12px 32px var(--shadow); overflow: hidden;
+  }
+  .side {
+    background: var(--panel); border-right: 1px solid var(--line);
+    padding: 28px 24px; display: flex; flex-direction: column; gap: 22px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font: 600 17px var(--mono); }
   .brand .mark {
-    width: 30px; height: 30px; border-radius: 7px; background: var(--ink); color: var(--bg);
-    display: grid; place-items: center; font: 700 17px var(--mono);
+    width: 28px; height: 28px; border-radius: 6px; background: var(--ink); color: var(--bg);
+    display: grid; place-items: center; font: 700 16px var(--mono);
   }
-  .card {
-    width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--line);
-    border-radius: 12px; padding: 28px 28px 24px; box-shadow: 0 1px 2px var(--shadow), 0 8px 24px var(--shadow);
+  .motto { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; text-wrap: balance; }
+  .facts { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font: 12px var(--mono); }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; overflow-wrap: anywhere; }
+  .side .foot { margin-top: auto; color: var(--muted); font-size: 12px; }
+  .dev-toggle {
+    display: grid; grid-template-columns: auto 1fr; gap: 2px 9px; align-items: center; cursor: pointer;
+    padding: 10px 12px; border: 1px dashed var(--chip-line); border-radius: 8px; background: var(--bg);
+    font-size: 13px; font-weight: 600;
   }
-  h1 { font-size: 20px; margin: 0 0 4px; font-weight: 600; }
-  .sub { color: var(--muted); margin: 0 0 22px; font-size: 14px; }
+  .dev-toggle input { margin: 0; accent-color: var(--accent); }
+  .dev-toggle small { grid-column: 2; color: var(--muted); font-weight: 400; font-size: 12px; }
+  .dev-toggle:has(input:checked) { border-style: solid; border-color: var(--accent); }
+
+  .main { padding: 30px 32px 26px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: -12px 0 4px; font-size: 13px; }
+  h2 {
+    margin: 6px 0 -6px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  }
   .error {
     background: var(--err-bg); color: var(--err-fg); border: 1px solid var(--err-line);
-    border-radius: 8px; padding: 9px 12px; font-size: 13.5px; margin: 0 0 16px;
+    border-radius: 6px; padding: 9px 12px; font-size: 13px; margin: 0;
   }
-  label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+  form { margin: 0; display: grid; gap: 6px; }
+  label { font-size: 12.5px; font-weight: 600; }
   .row { display: flex; justify-content: space-between; align-items: baseline; }
-  .row a { font-size: 13px; }
-  input[type=text], input[type=password], input[type=email] {
-    width: 100%; font: inherit; padding: 9px 11px; margin: 0 0 14px; color: var(--ink);
-    background: var(--bg); border: 1px solid var(--line); border-radius: 8px; outline: none;
+  .row a { font-size: 12.5px; font-weight: 400; }
+  input[type=text], input[type=password], input[type=email], select {
+    width: 100%; height: 36px; font: inherit; padding: 0 10px; color: var(--ink); min-width: 0;
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px; outline: none;
   }
-  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+  input + label, input + .row { margin-top: 6px; }
+  input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   button {
-    width: 100%; font: inherit; font-weight: 600; padding: 10px 12px; border-radius: 8px; cursor: pointer;
-    display: flex; align-items: center; justify-content: center; gap: 10px;
+    font: inherit; font-weight: 600; padding: 9px 12px; border-radius: 6px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%;
   }
-  button.primary { background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); margin-top: 4px; }
-  button.primary:hover { filter: brightness(1.05); }
-  button.link { background: none; border: 0; color: var(--accent); font-size: 13px; padding: 10px 0 0; height: auto; width: 100%; cursor: pointer; }
+  button:focus-visible, summary:focus-visible, .dev-toggle:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); margin-top: 6px; }
+  button.primary:hover { filter: brightness(1.06); }
+  button.link { background: none; border: 0; color: var(--accent); font-size: 13px; font-weight: 500; padding: 4px 0 0; }
   button.link:hover { text-decoration: underline; }
   button.alt { background: var(--card); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
   button.alt:hover { background: var(--hover); }
   button:disabled { opacity: .55; cursor: default; }
-  .or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12.5px; margin: 20px 0 16px; }
-  .caption { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
+  .or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; }
   .or::before, .or::after { content: ""; height: 1px; background: var(--line); flex: 1; }
-  .alts { display: grid; gap: 10px; }
-  .alts svg { width: 18px; height: 18px; flex: none; }
-  .sso { display: none; margin-top: 2px; }
-  .sso.open { display: block; }
-  .sso input { margin-bottom: 10px; }
-  .foot { margin-top: 18px; color: var(--muted); font-size: 12.5px; text-align: center; }
-  .foot a { color: var(--muted); }
-  .note { color: var(--muted); font-size: 12.5px; margin: 14px 0 0; text-align: center; }
-  /* IDENTITY-35: the dev sign-in (test only). */
-  .dev-toggle {
-    display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 13px; margin: 0 0 18px;
-    padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; background: var(--panel); cursor: pointer;
+  .caption { color: var(--muted); font-size: 12.5px; margin: 0; }
+  .alts { display: grid; gap: 8px; }
+  .alts:empty { display: none; }
+  .alts svg { width: 17px; height: 17px; flex: none; }
+  .sso { display: none; }
+  .sso.open { display: grid; }
+  .note { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
+
+  /* IDENTITY-35: the roster, drawn as the app's nav rows. */
+  .roster { border: 1px solid var(--line); border-radius: 8px; background: var(--card); overflow: hidden; }
+  .roster form + form { border-top: 1px solid var(--line); }
+  button.who {
+    display: grid; grid-template-columns: minmax(0, 9.5rem) 1fr auto; gap: 12px; align-items: center;
+    background: none; border: 0; border-radius: 0; padding: 9px 12px; text-align: left; font-weight: 400; color: var(--ink);
+    box-shadow: inset 3px 0 0 transparent;
   }
-  .dev-toggle span { margin-left: auto; color: var(--muted); font-size: 11.5px; font-weight: 400; }
-  .dev-toggle input { margin: 0; }
-  button.who { justify-content: space-between; padding: 8px 12px; }
-  button.who span { color: var(--muted); font-size: 12.5px; font-weight: 400; text-align: right; }
-  .roster { gap: 6px; }
-  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  select {
-    width: 100%; font: inherit; padding: 9px 11px; margin: 0 0 14px; color: var(--ink);
-    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  button.who:hover { background: var(--hover); box-shadow: inset 3px 0 0 var(--accent); }
+  .who .uname { font: 600 13px var(--mono); overflow-wrap: anywhere; }
+  .who .grants { display: flex; flex-wrap: wrap; gap: 4px; }
+  .who .go { color: var(--muted); font-size: 13px; }
+  button.who:hover .go { color: var(--accent); }
+  .grant {
+    display: inline-flex; align-items: baseline; gap: 5px; padding: 1px 7px; border-radius: 4px;
+    background: var(--chip-bg); color: var(--chip-fg); border: 1px solid var(--chip-line); font-size: 11.5px; white-space: nowrap;
+  }
+  .grant b { font-weight: 600; }
+  .grant code { font: 11px var(--mono); }
+  .grant.editor b { color: var(--role-editor); }
+  .grant.admin b { color: var(--role-admin); }
+  .grant.none { background: none; border-style: dashed; }
+  .anyone { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 6px 8px; }
+  .anyone > div { display: grid; gap: 6px; }
+  .anyone button { width: auto; height: 36px; margin: 0; padding-inline: 16px; }
+  details { border-top: 1px solid var(--line); padding-top: 12px; }
+  summary { cursor: pointer; color: var(--accent); font-size: 13px; list-style-position: inside; }
+  details[open] summary { margin-bottom: 10px; }
+
+  @media (max-width: 720px) {
+    body { padding: 12px 16px; }
+    .sheet { grid-template-columns: 1fr; }
+    .side { border-right: 0; border-bottom: 1px solid var(--line); padding: 20px; gap: 14px; }
+    .side .foot { display: none; }
+    .main { padding: 22px 20px; }
+    .anyone { grid-template-columns: 1fr 1fr; }
+    .anyone > div:first-of-type, .anyone button { grid-column: 1 / -1; width: 100%; }
+    button.who { grid-template-columns: minmax(0, 1fr) auto; }
+    .who .grants { grid-column: 1; }
+    .who .go { grid-row: 1 / span 2; grid-column: 2; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    button.who, .grant, input { transition: background-color .12s, box-shadow .12s, border-color .12s; }
   }
 </style>
 </head>
 <body>
-  <div class="brand"><span class="mark">m</span>{{TITLE}}</div>
-  <main class="card">
-    <h1>Sign in</h1>
-    <p class="sub">to continue to {{TITLE}}</p>
-    {{DEV}}
-    {{ERROR}}
-    {{PASSWORD}}
-    {{OR}}
-    <div class="alts">
-      {{BUTTONS}}
-      {{NOSTR}}
-    </div>
-    <p class="note">Don't have access? Sign in, then send an admin the id you are shown.</p>
-  </main>
-  <p class="foot">{{TITLE}} v{{VERSION}}</p>
+  <div class="sheet">
+    <aside class="side">
+      <div class="brand"><span class="mark">m</span>{{TITLE}}</div>
+      <p class="motto">A plan is a program whose leaves are prose.</p>
+      <dl class="facts">{{FACTS}}</dl>
+      {{DEV}}
+      <p class="foot">Don't have access? Sign in, then send an admin the id you are shown.</p>
+    </aside>
+    <main class="main">
+      {{HEADING}}
+      {{ERROR}}
+      {{PASSWORD}}
+      {{OR}}
+      <div class="alts">{{BUTTONS}}{{NOSTR}}</div>
+    </main>
+  </div>
   <script>
     // IDENTITY-35: the dev sign-in's checkbox — this browser's sign-in to
     // plexus-idp, or back to the ordinary page.
