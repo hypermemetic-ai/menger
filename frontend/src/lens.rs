@@ -82,6 +82,11 @@ impl Level {
         }
     }
 
+    /// FILTER-22: the level a name says (`data-tag-level`) — `None` for none.
+    pub(crate) fn of_name(name: &str) -> Option<Level> {
+        Level::ALL.into_iter().find(|l| l.name() == name)
+    }
+
     /// The key its filter rides under in a route's query: `g`, `n`, or `f`
     /// for the route's own surface.
     pub(crate) fn key(self) -> &'static str {
@@ -1050,6 +1055,9 @@ mod tests {
     fn the_levels_and_their_keys() {
         assert_eq!(Level::ALL.map(Level::name), ["global", "nav", "board", "waves", "inputs"]);
         assert_eq!(Level::ALL.map(Level::key), ["g", "n", "f", "f", "f"]);
+        for l in Level::ALL {
+            assert_eq!(Level::of_name(l.name()), Some(l), "FILTER-22: a surface names its level");
+        }
         assert_eq!(surface_of(&Route::Board), Some((Level::Board, None)));
         assert_eq!(surface_of(&Route::Waves("plexus".into())), Some((Level::Waves, Some("PLEXUS".into()))));
         assert_eq!(surface_of(&Route::Waves(String::new())), None, "the boards' index has no filter");

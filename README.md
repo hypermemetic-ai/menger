@@ -322,6 +322,18 @@ and Title (the inputs page's State and Removed) are not in the language,
 so Save as… leaves them out and says so. The app reads `VIEW-1` when a
 menu opens — nothing at startup — and, once read, follows its `amended`.
 
+**A tag is a filter** (FILTER-22, `src/tags.rs`): a right-click on any tag
+the app draws — a shortcode, a ticket id, a status, a kind, a severity, on
+the ticket page, the board, the nav and the wave board — opens a menu at the
+pointer: **Filter …** makes the filter exactly that clause at once, **Add …
+to the filter** joins it to the filter as it stands, **Build a filter from
+…** makes it the clause and opens the filter menu on its category. A
+shortcode's clause is its tree (what checking it in the menu makes); a
+ticket id offers its shortcode first and `under` the ticket second. It
+builds the surface's own filter, or on the ticket page the global one; a
+tag inside a row is the tag's, the rest of the row keeps the ticket menu.
+The palette takes `filter <shortcode>`: the global filter becomes it.
+
 ```sh
 synapse -P 4455 menger tickets get --id VIEW-1                          # the list
 synapse -P 4455 menger tickets get --id VIEW/_MENGER/view/open-builds   # one filter

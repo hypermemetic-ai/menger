@@ -391,6 +391,8 @@
     font-size: 11.5px; padding: 0 .5rem;
   }
   dd.kind .glyph { margin-right: .4rem; }
+  /* FILTER-22: the kind is a tag — as wide as its words, as the status is. */
+  dd.kind { justify-self: start; }
   /* SDLC-9: the commits that finished the ticket — short, mono, in link order. */
   dd#t-commits { display: flex; flex-wrap: wrap; gap: 0 .6rem; }
   dd#t-commits .commit { font-family: var(--mono); font-size: 12px; }
@@ -550,7 +552,7 @@
   #nav .prefix { color: var(--tree-line); white-space: pre; user-select: none; }
   #nav .toggle { width: 1ch; color: var(--muted); }
   #nav .toggle.clickable { cursor: pointer; }
-  #nav .code, #tmenu .code, #toast .code, #ticket-page .code {
+  #nav .code, #tmenu .code, #tagmenu .code, #toast .code, #ticket-page .code {
     font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: var(--chip-fg);
     background: var(--chip-bg); border: 1px solid var(--chip-line); border-radius: 5px;
     padding: 0 5px; white-space: nowrap;
@@ -656,6 +658,10 @@
   #palette-list li.pal-wide { border-top: 1px solid var(--line); margin-top: .2rem; padding-top: .25rem; color: var(--accent); }
   #palette-list li.pal-wide .label { flex: none; }
   #palette-list li.pal-wide .pal-hint { color: var(--muted); font-size: 11px; }
+  /* FILTER-22: `filter <shortcode>` — a row per shortcode it offers, above
+     the tickets. */
+  #palette-list li.pal-cmd .pal-do { color: var(--accent); }
+  #palette-list li.pal-cmd .pal-hint { color: var(--muted); font-size: 11px; }
   #palette-list li.empty, #palette .hint { color: var(--muted); font-size: .75rem; }
   #palette-list li.empty { padding: .3rem .8rem; cursor: default; }
   #palette .hint { padding: .35rem .8rem; border-top: 1px solid var(--line); }
@@ -696,26 +702,29 @@
      tokens: a bordered, shadowed card at the cursor; items are real
      links/buttons whose hover and keyboard focus paint the same way. The
      status list opens inline under "Set status"; each row shows the
-     status as its chip, the current one marked. */
-  #tmenu {
+     status as its chip, the current one marked. FILTER-22: the tag menu
+     (Filter · Add · Build a filter from) wears the same face. */
+  #tmenu, #tagmenu {
     position: fixed; z-index: 1000; min-width: 230px; max-width: 360px;
     max-height: calc(100vh - 8px); overflow: auto; padding: 4px;
     background: var(--bg); color: var(--ink); border: 1px solid var(--line);
     border-radius: 8px; box-shadow: 0 10px 30px var(--shadow);
     font: 12.5px/1.5 var(--mono); user-select: none; outline: none;
   }
-  #tmenu .h {
+  #tmenu .h, #tagmenu .h {
     display: flex; align-items: baseline; gap: 6px; padding: 4px 10px 6px;
     border-bottom: 1px solid var(--line); margin-bottom: 4px; white-space: nowrap;
   }
-  #tmenu .h .title { overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
-  #tmenu .h .tag { flex: none; font-size: 10px; padding: 0 5px; border-radius: 6px; }
-  #tmenu .item {
+  #tmenu .h .title, #tagmenu .h .title { overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  #tmenu .h .tag, #tagmenu .h .tag { flex: none; font-size: 10px; padding: 0 5px; border-radius: 6px; }
+  #tmenu .item, #tagmenu .item {
     display: block; width: 100%; text-align: left; padding: 4px 10px;
     border: 0; border-radius: 5px; background: transparent; color: var(--ink);
     cursor: pointer; font: inherit; text-decoration: none; white-space: nowrap;
   }
-  #tmenu .item:hover, #tmenu .item:focus { background: var(--hover); color: var(--accent); outline: none; }
+  #tmenu .item:hover, #tmenu .item:focus, #tagmenu .item:hover, #tagmenu .item:focus {
+    background: var(--hover); color: var(--accent); outline: none;
+  }
   #tmenu .item .arrow { color: var(--muted); }
   #tmenu .sub { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
   #tmenu .sub .item { padding-left: 14px; }
