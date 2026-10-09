@@ -2129,6 +2129,92 @@ async fn counts_facets_and_filtered_pages_over_the_wire() {
     assert!(base.iter().filter(|f| f["field"] == "status").all(|f| f["value"] == "Ready"), "base is never set aside: {base:?}");
 }
 
+/// FILTER-21 over the real protocol: `menger doc` admits exactly the tickets
+/// whose path starts with `_MENGER/` — the ticket's own example, `list {
+/// filter: "menger doc" }` answering the board note — and `not menger doc`
+/// the rest, on every read that takes a filter: `list`, `counts`, `facets`
+/// (a flag's `yes` / `no`), `tree`, `find`, `member`, and `watch { filter }`,
+/// where a board note born is `entered`.
+#[tokio::test]
+async fn menger_doc_is_a_filter_on_every_read_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let ids = |rows: &[Value]| -> Vec<String> { rows.iter().map(|r| r["summary"]["id"].as_str().unwrap().to_string()).collect() };
+    answer(&client, "tickets.create", json!({"epic": "PLEXUS", "title": "the platform", "kind": "scope"})).await; // PLEXUS-1
+    let board = json!({"epic": "PLEXUS", "title": "board: PLEXUS", "kind": "doc", "path": "_MENGER/board", "body": "notes"});
+    answer(&client, "tickets.create", board).await; // PLEXUS-2
+    answer(&client, "tickets.create", json!({"epic": "PLEXUS", "title": "a board finding", "kind": "doc", "parent": "PLEXUS-1"})).await; // PLEXUS-3
+    answer(&client, "tickets.create", json!({"epic": "PLEXUS", "title": "build the board", "parent": "PLEXUS-1"})).await; // PLEXUS-4
+
+    // The ticket's example: the board note, and nothing else.
+    let (rows, page) = paged(call(&client, "tickets.list", json!({"filter": "menger doc", "summary": true})).await).await;
+    assert_eq!(ids(&rows), ["PLEXUS-2"]);
+    assert_eq!((rows[0]["summary"]["title"].as_str(), rows[0]["summary"]["path"].as_str()), (Some("board: PLEXUS"), Some("_MENGER/board")));
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0, "first": 0}));
+    let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": "not menger doc", "summary": true})).await).await;
+    assert_eq!(ids(&rows), ["PLEXUS-1", "PLEXUS-3", "PLEXUS-4"]);
+    let (rows, page) = paged(call(&client, "tickets.list", json!({"filter": "Not Menger Doc", "at": 1, "limit": 1, "summary": true})).await).await;
+    assert_eq!((ids(&rows), page["first"].as_u64()), (vec!["PLEXUS-3".to_string()], Some(1)), "read whatever its case, paged by position");
+
+    // counts, and facets: a flag category, yes / no.
+    let counts = collect(call(&client, "tickets.counts", json!({"filter": "menger doc"})).await).await;
+    assert_eq!(counts, [json!({"type": "count", "epic": "PLEXUS", "held": 1})]);
+    let counts = collect(call(&client, "tickets.counts", json!({"filter": "not menger doc and kind doc"})).await).await;
+    assert_eq!(counts, [json!({"type": "count", "epic": "PLEXUS", "held": 1})], "PLEXUS-3, the ordinary doc");
+    let menu = |facets: &[Value], field: &str| -> Vec<(String, u64)> {
+        facets
+            .iter()
+            .filter(|f| f["field"] == field)
+            .map(|f| (f["value"].as_str().unwrap().to_string(), f["held"].as_u64().unwrap()))
+            .collect()
+    };
+    let facets = collect(call(&client, "tickets.facets", json!({})).await).await;
+    assert_eq!(menu(&facets, "menger doc"), [("yes".to_string(), 1), ("no".to_string(), 3)]);
+    let fields: Vec<&str> = facets.iter().map(|f| f["field"].as_str().unwrap()).collect();
+    let at = |name: &str| fields.iter().position(|f| *f == name).unwrap();
+    assert!(at("has commits") < at("menger doc") && at("menger doc") < at("in"), "after the other flags, before `in`: {fields:?}");
+    let facets = collect(call(&client, "tickets.facets", json!({"filter": "not menger doc"})).await).await;
+    assert_eq!(menu(&facets, "menger doc"), [("yes".to_string(), 1), ("no".to_string(), 3)], "its own group set aside");
+    assert_eq!(menu(&facets, "kind"), [("scope".to_string(), 1), ("build".to_string(), 1), ("doc".to_string(), 1)], "the rest under it");
+    let facets = collect(call(&client, "tickets.facets", json!({"base": "kind doc"})).await).await;
+    assert_eq!(menu(&facets, "menger doc"), [("yes".to_string(), 1), ("no".to_string(), 1)]);
+
+    // tree: the nav's default — the root and its work, the board note gone.
+    let nodes = |evs: &[Value]| -> Vec<(String, bool, u64)> {
+        evs.iter()
+            .map(|e| (e["summary"]["id"].as_str().unwrap().to_string(), e["matched"].as_bool().unwrap(), e["below"].as_u64().unwrap()))
+            .collect()
+    };
+    let (rows, _) = paged(call(&client, "tickets.tree", json!({"epic": "plexus", "filter": "not menger doc"})).await).await;
+    assert_eq!(nodes(&rows), [("PLEXUS-1".to_string(), true, 2)]);
+    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "PLEXUS-1", "filter": "not menger doc"})).await).await;
+    assert_eq!(nodes(&rows), [("PLEXUS-3".to_string(), true, 0), ("PLEXUS-4".to_string(), true, 0)]);
+    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "PLEXUS-1", "filter": "menger doc"})).await).await;
+    assert_eq!(nodes(&rows), [("PLEXUS-2".to_string(), true, 0)]);
+
+    // find and member.
+    let (rows, _) = paged(call(&client, "tickets.find", json!({"query": "board"})).await).await;
+    assert_eq!(ids(&rows), ["PLEXUS-2", "PLEXUS-3", "PLEXUS-4"]);
+    let (rows, _) = paged(call(&client, "tickets.find", json!({"query": "board", "filter": "not menger doc"})).await).await;
+    assert_eq!(ids(&rows), ["PLEXUS-3", "PLEXUS-4"]);
+    let members = collect(call(&client, "tickets.member", json!({"ids": ["PLEXUS-2", "PLEXUS-3"], "filter": "menger doc"})).await).await;
+    assert_eq!(
+        members,
+        [json!({"type": "member", "id": "PLEXUS-2", "matched": true}), json!({"type": "member", "id": "PLEXUS-3", "matched": false})]
+    );
+
+    // watch { filter }: another shortcode's board note born enters; its root does not.
+    let mut watch = call(&client, "tickets.watch", json!({"filter": "menger doc"})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    answer(&client, "tickets.create", json!({"epic": "MNG", "title": "menger", "kind": "scope"})).await;
+    answer(&client, "tickets.create", json!({"epic": "MNG", "title": "board: MNG", "kind": "doc", "path": "_MENGER/board"})).await;
+    answer(&client, "tickets.amend", json!({"id": "PLEXUS-1", "body": "marker"})).await;
+    let evs = until_marker(&mut watch).await;
+    let entered: Vec<&str> = evs.iter().filter(|e| e["type"] == "entered").map(|e| e["id"].as_str().unwrap()).collect();
+    assert_eq!(entered, ["MNG-2"], "{evs:#?}");
+    assert!(!evs.iter().any(|e| e["type"] == "left"));
+}
+
 /// FILTER-15 over the real protocol: `find`, `ready_set` and `inputs` take a
 /// filter — the rows the filter admits, paged as without it, no `first`;
 /// without one, or with one that narrows nothing, today's answer — and

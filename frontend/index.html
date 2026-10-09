@@ -532,14 +532,6 @@
     border-radius: 4px; cursor: pointer;
   }
   #nav .nav-hide { margin-left: auto; }
-  /* WAVE-10: the "menger docs" toggle, and a _MENGER/ document while it is off. */
-  #nav .menger-docs {
-    margin-left: auto; background: var(--bg); border: 1px solid var(--line); color: var(--muted);
-    font: inherit; font-size: 11px; line-height: 1.3; padding: 0 6px; border-radius: 4px; cursor: pointer;
-  }
-  #nav .menger-docs + .nav-hide { margin-left: 0; }
-  #nav .menger-docs.on, #nav .menger-docs:hover { color: var(--accent); border-color: var(--accent); }
-  #nav .node.menger-off { display: none; }
   #nav .nav-hide:hover, header .nav-reveal:hover { color: var(--accent); border-color: var(--accent); }
   /* SCALE-24: no scroll anchoring — a windowed list keeps its spacers at
      the height of what they stand for, so content above the viewport never
@@ -604,8 +596,8 @@
   #nav .row:focus { border-radius: 2px; }
   /* FILTER-20: the nav's view — `Tree | Flat` in its header — and the flat
      list: the tree's leaf rows, one line each (the window's arithmetic needs
-     every row one pitch tall), spacers and pending stretches standing for the
-     rows not mounted, and a menger document hidden as the tree hides it. */
+     every row one pitch tall), and spacers and pending stretches standing for
+     the rows not mounted. */
   #nav .nview {
     margin-left: auto; display: inline-flex; flex: none;
     border: 1px solid var(--line); border-radius: 4px; overflow: hidden;
@@ -617,10 +609,9 @@
   #nav .nview-b + .nview-b { border-left: 1px solid var(--line); }
   #nav .nview-b:hover { color: var(--accent); }
   #nav .nview-b[aria-pressed="true"] { color: var(--accent); background: var(--chip-bg); font-weight: 600; }
-  #nav .nview + .menger-docs { margin-left: 0; }
+  #nav .nview + .nav-hide { margin-left: 0; }
   #nav .flat > .spacer { pointer-events: none; }
   #nav .flat > .pending { padding: 0 10px; color: var(--muted); overflow: hidden; box-sizing: border-box; }
-  #nav .flat > .row.menger-off { display: none; }
   /* The two overlays (jump palette, cheat sheet). */
   .overlay {
     position: fixed; inset: 0; z-index: 40; background: var(--scrim);

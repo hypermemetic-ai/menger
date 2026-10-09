@@ -33,6 +33,8 @@ enum Formula {
     Severity(Option<Severity>),
     Blocked,
     Commits,
+    /// FILTER-21: `menger doc`.
+    Menger,
     In(String),
     Not(Box<Formula>),
     And(Vec<Formula>),
@@ -47,6 +49,7 @@ impl Formula {
             Self::Severity(s) => k.severity() == *s,
             Self::Blocked => k.blocked(),
             Self::Commits => k.commits(),
+            Self::Menger => k.menger(),
             Self::In(e) => e == epic,
             Self::Not(f) => !f.holds(epic, k),
             Self::And(fs) => fs.iter().all(|f| f.holds(epic, k)),
@@ -66,12 +69,13 @@ impl Formula {
     fn random(rng: &mut Rng, epics: &[String], depth: usize) -> Self {
         let leaf = depth == 0 || rng.below(3) == 0;
         if leaf {
-            return match rng.below(7) {
+            return match rng.below(8) {
                 0 => Self::Status(Status::ALL[rng.below(Status::ALL.len())]),
                 1 => Self::Kind(Kind::ALL[rng.below(Kind::ALL.len())]),
                 2 => Self::Severity(super::cells::SEVERITIES[rng.below(5)]),
                 3 => Self::Blocked,
                 4 => Self::Commits,
+                5 => Self::Menger,
                 _ if !epics.is_empty() => Self::In(epics[rng.below(epics.len())].clone()),
                 _ => Self::Blocked,
             };
@@ -165,6 +169,7 @@ impl Plain {
             severity: t.severity,
             blocked: k.blocked(),
             has_commits: !t.commits.is_empty(),
+            menger_doc: t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/")),
             lineage: self.at.get(&t.id).map_or_else(|| vec![t.id.clone(), t.epic.clone()], |i| self.lineage[*i].clone()),
         }
     }
@@ -336,7 +341,8 @@ pub(super) fn assert_lens_is_a_scan(store: &Store, plain: &Plain, lens: &Lens, j
 /// held to the scan.
 async fn walk(store: Store, path: &Path, seed: u64, writes: usize, every: usize, epics: &[&str]) -> Store {
     let mut rng = Rng(seed);
-    let mut tally = Tally::default();
+    // FILTER-21: board notes among the docs.
+    let mut tally = Tally::filing_menger_docs();
     for step in 0..writes {
         let what = random_write(&store, &mut rng, epics, &mut tally).await;
         if step % every == every - 1 {
@@ -364,7 +370,9 @@ async fn filtered_answers_are_a_scan_on_a_store_built_by_create() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("created.db");
     let store = Store::open(&path).unwrap();
-    walk(store, &path, 0xF117_E4A2, 400, 10, &["AA", "MAP", "SUB", "ZED"]).await;
+    let store = walk(store, &path, 0xF117_E4A2, 400, 10, &["AA", "MAP", "SUB", "ZED"]).await;
+    // FILTER-21: the lenses above judged board notes too — the walk filed some.
+    assert!(Plain::of(&store).cells.iter().any(|k| k.menger()), "the walk files menger docs");
 }
 
 #[tokio::test]
@@ -408,7 +416,8 @@ async fn membership_is_the_scans_difference() {
     let mut watchers: Vec<Watcher> = lenses.iter().map(|(l, _)| store.watcher(l.clone())).collect();
     let mut rx = store.subscribe_filtered();
     let epic_refs: Vec<&str> = epics.iter().map(String::as_str).collect();
-    let mut tally = Tally::default();
+    // FILTER-21: board notes among the docs.
+    let mut tally = Tally::filing_menger_docs();
     let mut moved = 0;
     for step in 0..200 {
         let before = Plain::of(&store);

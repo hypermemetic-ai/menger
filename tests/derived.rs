@@ -60,10 +60,17 @@ impl Drop for Server {
 }
 
 async fn spawn_server(db: &Path, log_dir: &Path, tag: &str) -> Server {
+    spawn_with(db, log_dir, tag, &[]).await
+}
+
+/// A server on `db` with `extra` arguments before `--db-path` (a seed).
+async fn spawn_with(db: &Path, log_dir: &Path, tag: &str, extra: &[&str]) -> Server {
     let port = free_port().await;
     let stderr_path = log_dir.join(format!("stderr-{tag}.log"));
     let child = Command::new(env!("CARGO_BIN_EXE_menger"))
-        .args(["--no-shell", "--no-rest", "--port", &port.to_string(), "--db-path"])
+        .args(["--no-shell", "--no-rest", "--port", &port.to_string()])
+        .args(extra)
+        .arg("--db-path")
         .arg(db)
         .env_remove("MENGER_DB_PATH")
         .env_remove("RUST_LOG")
@@ -96,6 +103,21 @@ async fn call(client: &WsClient, method: &str, params: Value) -> Option<Subscrip
     p.insert("method", method).unwrap();
     p.insert("params", params).unwrap();
     client.subscribe("menger.call", p, "menger.call_unsub").await.ok()
+}
+
+/// One call, every event it answers before its stream is done.
+async fn all(client: &WsClient, method: &str, params: Value) -> Vec<Value> {
+    let mut sub = call(client, method, params).await.expect("subscribed");
+    let mut out = Vec::new();
+    while let Some(item) = sub.next().await {
+        let item = item.unwrap();
+        match item["type"].as_str() {
+            Some("done") => return out,
+            Some("data") => out.push(item["content"].clone()),
+            other => panic!("unexpected stream item type {other:?}: {item}"),
+        }
+    }
+    panic!("stream ended without a done item");
 }
 
 /// One call, its first event — or `None` once the server is gone.
@@ -505,12 +527,12 @@ async fn verify_derived_names_an_altered_tally_and_holder_and_a_form_4_file_is_b
     drop(conn);
     let (code, out, _) = verify(&db);
     assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("stored in form 4; this build reads 5"), "{out}");
+    assert!(out.contains("stored in form 4; this build reads 6"), "{out}");
     let s = spawn_server(&db, dir.path(), "form4").await;
     let c = connect(s.port).await;
     one(&c, "tickets.health", json!({})).await.unwrap();
     let log = s.log();
-    assert!(log.contains("it was stored in form 4, this build writes 5"), "{log}");
+    assert!(log.contains("it was stored in form 4, this build writes 6"), "{log}");
     assert!(log.contains("kept the tree over 6000 tickets"), "{log}");
     drop(c);
     s.kill9();
@@ -522,5 +544,140 @@ async fn verify_derived_names_an_altered_tally_and_holder_and_a_form_4_file_is_b
     assert!(s.log().contains("the kept tree's tallies of"), "read, not built: {}", s.log());
     assert!(!s.log().contains("SCALE-28: stored"), "built once");
     drop(c);
+    s.kill9();
+}
+
+/// FILTER-21, "a file in form 5 is opened", through the binary: a nested
+/// seed with menger's own documents beside ordinary docs (two shortcodes'
+/// board notes), its answers taken over the wire; then the file as a form-5
+/// build leaves it — the cell table without its `menger` column, a board
+/// note in the same cell as an ordinary doc, the derived state saying form
+/// 5. `--verify-derived` says it is not this build's form; the first open
+/// gains form 6 once — the column, the derived state built again, logged —
+/// and answers exactly what it answered before, `menger doc` and `not menger
+/// doc` included; it then verifies, and the next open reads it.
+#[tokio::test]
+async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("tickets.db");
+    let s = spawn_with(&db, dir.path(), "seed", &["--seed-synthetic", "3000", "--seed-shape", "nested"]).await;
+    let c = connect(s.port).await;
+    for (epic, title, kind, path, parent) in [
+        ("PLX", "the platform", "scope", None, None),
+        ("PLX", "board: PLX", "doc", Some("_MENGER/board"), None),
+        ("PLX", "a finding", "doc", None, Some("PLX-1")),
+        ("PLX", "build the board", "build", None, Some("PLX-1")),
+        ("PLX", "notes on notes", "doc", Some("_MENGER/notes"), None),
+        ("MNG", "menger", "scope", None, None),
+        ("MNG", "board: MNG", "doc", Some("_MENGER/board"), None),
+        ("MNG", "another finding", "doc", None, Some("MNG-1")),
+    ] {
+        let ev = one(&c, "tickets.create", json!({"epic": epic, "title": title, "kind": kind, "path": path, "parent": parent})).await.unwrap();
+        assert_eq!(ev["type"], "created", "{ev}");
+    }
+    let answers = |c: WsClient| async move {
+        let mut out = Vec::new();
+        for filter in [
+            "",
+            "menger doc",
+            "not menger doc",
+            "kind doc",
+            "not menger doc and kind doc",
+            "(menger doc or ready)",
+            "status Pending and not menger doc",
+            "not menger doc and under PLX-1",
+        ] {
+            out.push(all(&c, "tickets.counts", json!({"filter": filter})).await);
+            out.push(all(&c, "tickets.list", json!({"filter": filter, "summary": true, "limit": 40})).await);
+            out.push(all(&c, "tickets.list", json!({"filter": filter, "summary": true, "at": 7, "limit": 5})).await);
+            out.push(all(&c, "tickets.facets", json!({"filter": filter})).await);
+            out.push(all(&c, "tickets.tree", json!({"epic": "PLX", "filter": filter})).await);
+            out.push(all(&c, "tickets.tree", json!({"parent": "PLX-1", "filter": filter})).await);
+        }
+        out
+    };
+    let before = answers(c).await;
+    let mengers = all(&connect(s.port).await, "tickets.counts", json!({"filter": "menger doc"})).await;
+    assert_eq!(
+        mengers,
+        [json!({"type": "count", "epic": "MNG", "held": 1}), json!({"type": "count", "epic": "PLX", "held": 2})],
+        "the board notes, and only them"
+    );
+    s.kill9();
+
+    // The file as a form-5 build leaves it: its derived state built with no
+    // path in sight — no cell a menger doc — then the cell table as form 5
+    // declared it, the paths back, and the form 5.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let paths: Vec<(String, String)> = conn
+        .prepare("SELECT id, path FROM tickets WHERE path IS NOT NULL ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(paths.len(), 3);
+    conn.execute_batch("UPDATE tickets SET path = NULL WHERE path IS NOT NULL; UPDATE derived_state SET form = 5;").unwrap();
+    drop(conn);
+    let s = spawn_server(&db, dir.path(), "pathless").await;
+    one(&connect(s.port).await, "tickets.health", json!({})).await.unwrap();
+    s.kill9();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE cells_form5 (
+             id       INTEGER PRIMARY KEY,
+             state    TEXT NOT NULL,
+             kind     TEXT NOT NULL,
+             severity TEXT,
+             blocked  INTEGER NOT NULL,
+             commits  INTEGER NOT NULL
+         );
+         INSERT INTO cells_form5 SELECT id, state, kind, severity, blocked, commits FROM cells;
+         DROP TABLE cells;
+         ALTER TABLE cells_form5 RENAME TO cells;
+         UPDATE derived_state SET form = 5;",
+    )
+    .unwrap();
+    for (id, path) in &paths {
+        conn.execute("UPDATE tickets SET path = ?2 WHERE id = ?1", rusqlite::params![id, path]).unwrap();
+    }
+    let docs_cells = |conn: &rusqlite::Connection| -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM cells WHERE state = 'Doc' AND kind = 'doc' AND severity IS NULL AND blocked = 0 AND commits = 0",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(docs_cells(&conn), 1, "in form 5 a board note and an ordinary doc share one cell");
+    drop(conn);
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(1), "{out}");
+    assert!(out.contains("stored in form 5; this build reads 6"), "{out}");
+
+    // The first open gains form 6, once, and answers as before.
+    let s = spawn_server(&db, dir.path(), "form5").await;
+    let after = answers(connect(s.port).await).await;
+    let log = s.log();
+    let built = log.lines().find(|l| l.contains("it was stored in form 5, this build writes 6")).unwrap_or_else(|| panic!("{log}"));
+    eprintln!("form 5 → 6: {}", &built[built.find("built once").unwrap_or(0)..]);
+    assert_eq!(after.len(), before.len());
+    for (i, (a, b)) in after.iter().zip(&before).enumerate() {
+        assert_eq!(a, b, "answer {i} after the upgrade");
+    }
+    s.kill9();
+    let (code, out, err) = verify(&db);
+    assert_eq!(code, Some(0), "{out}\n{err}");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let form: i64 = conn.query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
+    assert_eq!(form, 6);
+    assert_eq!(docs_cells(&conn), 2, "the board notes' cell and the ordinary docs' apart");
+    let menger: i64 = conn.query_row("SELECT count(*) FROM cells WHERE menger = 1", [], |r| r.get(0)).unwrap();
+    assert!(menger >= 1);
+    drop(conn);
+    let s = spawn_server(&db, dir.path(), "form6").await;
+    let again = answers(connect(s.port).await).await;
+    assert_eq!(again, before, "the next open reads what the upgrade stored");
+    assert!(!s.log().contains("SCALE-28: stored"), "built once: {}", s.log());
     s.kill9();
 }

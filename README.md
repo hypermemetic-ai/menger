@@ -296,6 +296,14 @@ doc and spike is `not kind in (spike, doc)`. A flag (Ready, Blocked,
 Commits) has no switch; its `yes` / `no` is the negation. Tab from the
 search reaches the switch; Space or Enter flips it.
 
+Menger's own documents are a filter (FILTER-21): `menger doc` admits the
+tickets whose path starts with `_MENGER/` (each shortcode's board note) on
+every filtered read, and every menu offers it as the flag **Menger docs**.
+The nav's default is `not menger doc`, and `reset` returns to it; the
+header's "menger docs" toggle is gone. The flag is a cell coordinate, so
+stored form 6 gives `cells` a `menger` column: a form-5 file is built again
+once on first open, and an older build cannot open it after.
+
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service

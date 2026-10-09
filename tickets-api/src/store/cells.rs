@@ -2,7 +2,9 @@
 //!
 //! Every ticket has exactly one cell: its status, its kind, its severity,
 //! whether it is `blocked` (its kept count of unsatisfied blockers is above
-//! 0, SCALE-32) and whether it `has commits` (SDLC-9). A cell is interned
+//! 0, SCALE-32), whether it `has commits` (SDLC-9) and — FILTER-21 —
+//! whether it is a `menger doc` (its path starts with `_MENGER/`, WAVE-10;
+//! set at birth, so only a birth moves it). A cell is interned
 //! into the cell table on first use and named by its id from then on. Per
 //! shortcode and per cell it holds, the sequences of the shortcode's tickets
 //! in that cell are kept as a Roaring bitmap; its count is the bitmap's
@@ -20,7 +22,8 @@
 //! ([`Cells::build`]); `--verify-derived` compares the two
 //! ([`super::stored::cell_differences`]).
 //!
-//! Stored form 4: `cells (id, state, kind, severity, blocked, commits)`,
+//! Stored form 4: `cells (id, state, kind, severity, blocked, commits)` —
+//! form 6 (FILTER-21) adds `menger` —
 //! `cell_bits (epic, cell, hi, card, bits)` — one row per 2¹⁶-sequence
 //! container, `bits` the container serialized as Roaring serializes one: at
 //! most 4,096 members as their low 16 bits, little-endian, two bytes each;
@@ -48,10 +51,10 @@ pub(super) const SEVERITIES: [Option<Severity>; 5] = [
 /// (Roaring's own threshold).
 const ARRAY_MAX: usize = 4096;
 
-/// One cell: `(status, kind, severity, blocked, has commits)`, each as its
-/// place in [`Status::ALL`], [`Kind::ALL`] and [`SEVERITIES`] — so it is
-/// small, `Copy`, hashable and ordered without the wire enums being any of
-/// those.
+/// One cell: `(status, kind, severity, blocked, has commits, menger doc)`,
+/// each as its place in [`Status::ALL`], [`Kind::ALL`] and [`SEVERITIES`] —
+/// so it is small, `Copy`, hashable and ordered without the wire enums
+/// being any of those.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct Key {
     status: u8,
@@ -59,6 +62,8 @@ pub struct Key {
     severity: u8,
     blocked: bool,
     commits: bool,
+    /// FILTER-21: one of menger's own documents.
+    menger: bool,
 }
 
 fn place<T: PartialEq>(all: &[T], v: &T) -> u8 {
@@ -66,20 +71,29 @@ fn place<T: PartialEq>(all: &[T], v: &T) -> u8 {
 }
 
 impl Key {
-    pub(super) fn new(status: Status, kind: Kind, severity: Option<Severity>, blocked: bool, commits: bool) -> Self {
+    pub(super) fn new(status: Status, kind: Kind, severity: Option<Severity>, blocked: bool, commits: bool, menger: bool) -> Self {
         Self {
             status: place(&Status::ALL, &status),
             kind: place(&Kind::ALL, &kind),
             severity: place(&SEVERITIES, &severity),
             blocked,
             commits,
+            menger,
         }
     }
 
     /// A ticket's cell: its row as the write leaves it, and its count of
-    /// unsatisfied blockers as the write leaves it.
+    /// unsatisfied blockers as the write leaves it. FILTER-21: its path says
+    /// whether it is a menger doc ([`crate::is_menger_doc`]).
     pub(super) fn of(t: &Row, unsatisfied: u32) -> Self {
-        Self::new(t.status, t.kind, t.severity, unsatisfied > 0, !t.commits.is_empty())
+        Self::new(
+            t.status,
+            t.kind,
+            t.severity,
+            unsatisfied > 0,
+            !t.commits.is_empty(),
+            crate::is_menger_doc(t.path.as_deref()),
+        )
     }
 
     pub fn status(self) -> Status {
@@ -101,20 +115,26 @@ impl Key {
     pub fn commits(self) -> bool {
         self.commits
     }
+
+    /// FILTER-21: whether it is one of menger's own documents.
+    pub fn menger(self) -> bool {
+        self.menger
+    }
 }
 
 /// As `--verify-derived` names a cell: `(Ready, build, none, blocked, no
-/// commits)`.
+/// commits)` — FILTER-21: `, menger doc` last when it is one.
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "({}, {}, {}, {}, {})",
+            "({}, {}, {}, {}, {}{})",
             self.status(),
             self.kind(),
             self.severity().map_or("none".to_string(), |s| s.as_str().to_ascii_lowercase()),
             if self.blocked { "blocked" } else { "not blocked" },
             if self.commits { "has commits" } else { "no commits" },
+            if self.menger { ", menger doc" } else { "" },
         )
     }
 }

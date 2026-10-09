@@ -232,7 +232,7 @@ use crate::lens::{use_lens, Lens, Level};
 use crate::session::Member;
 use crate::{cache, dom, keys, session, st_class, Route};
 use menger_tickets_api::filter::Filter;
-use menger_tickets_api::{Group, Kind, Status, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX};
+use menger_tickets_api::{Group, Kind, Status, TicketSummary, TicketsEvent};
 
 /// Every treeitem in the nav, in document order (group rows and leaves).
 fn tree_items() -> Vec<web_sys::HtmlElement> {
@@ -270,8 +270,6 @@ pub(crate) fn ensure_tree_tab_stop() {
 
 const EXPANDED_KEY: &str = "menger.nav.expanded";
 const HIDDEN_KEY: &str = "menger.nav.hidden";
-/// WAVE-10: whether the nav shows menger's own documents (`_MENGER/`).
-const MENGER_DOCS_KEY: &str = "menger.nav.mengerDocs";
 
 /// localStorage, or None where it is unavailable (private mode, blocked
 /// site data). Every persistence call degrades to "not remembered".
@@ -309,31 +307,6 @@ pub(crate) fn save_hidden(hidden: bool) {
             s.remove_item(HIDDEN_KEY)
         };
     }
-}
-
-/// WAVE-10: whether the nav shows menger's own documents — off unless the
-/// "menger docs" toggle was left on in this browser.
-fn load_menger_docs() -> bool {
-    storage().and_then(|s| s.get_item(MENGER_DOCS_KEY).ok().flatten()).as_deref() == Some("1")
-}
-
-fn save_menger_docs(shown: bool) {
-    if let Some(s) = storage() {
-        let _ = if shown { s.set_item(MENGER_DOCS_KEY, "1") } else { s.remove_item(MENGER_DOCS_KEY) };
-    }
-}
-
-/// WAVE-10: whether `t` is one of menger's own documents — its path under
-/// `_MENGER/`, the prefix menger reserves (WAVE-1 decision 11). The nav
-/// hides these unless asked for.
-pub(crate) fn is_menger_doc(t: &TicketSummary) -> bool {
-    t.path.as_deref().is_some_and(|p| p.starts_with(MENGER_PATH_PREFIX))
-}
-
-/// WAVE-10: the nav's hide predicate — `t` is drawn unless it is one of
-/// menger's own documents and the "menger docs" toggle is off.
-pub(crate) fn nav_shows(t: &TicketSummary, menger_docs: bool) -> bool {
-    menger_docs || !is_menger_doc(t)
 }
 
 /// One glyph per kind (AGS-13), for the leaf's marker slot. Anything
@@ -1827,8 +1800,6 @@ struct Ctx {
     tree: Tree,
     route: RwSignal<Route>,
     expanded: RwSignal<BTreeSet<String>>,
-    /// WAVE-10: the "menger docs" toggle — `_MENGER/` documents drawn.
-    menger_docs: RwSignal<bool>,
     /// FILTER-14: the nav's lens.
     under: Under,
 }
@@ -2057,23 +2028,15 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
             expanded.set(next);
         }
     });
-    // WAVE-10: menger's own documents hidden unless asked for, the choice
-    // remembered in this browser.
-    let menger_docs = RwSignal::new(load_menger_docs());
-    Effect::new(move |prev: Option<bool>| {
-        let now = menger_docs.get();
-        if prev.is_some_and(|p| p != now) {
-            save_menger_docs(now);
-        }
-        now
-    });
     // FILTER-14: the nav's lens — its effective filter, the shortcodes'
     // matches, what `tree` says of each row; and the membership watch that
     // keeps the open lists live (shared with the counts' own: one stream).
     let lens = use_lens();
     let under = Under::new(lens);
     session::follow_membership(move || under.text.get(), move |ev| under.heard(ev));
-    let ctx = Ctx { tree, route, expanded, menger_docs, under };
+    // FILTER-21: menger's own documents are no toggle here — the nav's
+    // filter leaves them out by default (`not menger doc`, src/lens.rs).
+    let ctx = Ctx { tree, route, expanded, under };
     // FILTER-20: Tree or Flat, the choice kept with the nav's other state. A
     // switch starts the nav at its top (the open ticket is brought back into
     // view by the view it switched to).
@@ -2218,16 +2181,6 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                         })
                         .to_vec()}
                 </span>
-                // WAVE-10: show or hide the `_MENGER/` documents.
-                <button
-                    class="menger-docs"
-                    class:on=move || menger_docs.get()
-                    aria-pressed=move || menger_docs.get().to_string()
-                    title="show menger's own documents (_MENGER/…) in the nav"
-                    on:click=move |_| menger_docs.update(|m| *m = !*m)
-                >
-                    "menger docs"
-                </button>
                 <button
                     class="nav-hide"
                     title="hide the nav"
@@ -2261,7 +2214,7 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                         }
                         .into_any(),
                         // FILTER-20: every ticket the nav's filter admits, as one list.
-                        View::Flat => flat::flat_list(flat_filter, route, menger_docs, tree.viewport, flat_note),
+                        View::Flat => flat::flat_list(flat_filter, route, tree.viewport, flat_note),
                     }}
                 </div>
                 {move || match nav_view.get() {
@@ -2497,17 +2450,10 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
         ),
     };
 
-    // WAVE-10: one of menger's own documents is drawn only when the "menger
-    // docs" toggle is on — kept mounted, out of the layout and the keyboard's
-    // reach (`keys::is_visible`) while it is off.
-    let menger_docs = ctx.menger_docs;
-    let off = move || ticket.is_some_and(|t| t.with(|t| !nav_shows(t, menger_docs.get())));
-
     let kids_ref = NodeRef::<leptos::html::Div>::new();
     view! {
         <div
             class="node"
-            class:menger-off=off
             class:group=is_group
             class:shortcode=shortcode.is_some()
             role="none"
@@ -3168,9 +3114,9 @@ fn leaf_row(
 #[cfg(test)]
 mod tests {
     use super::{
-        art, chunks, climb, face, face_of, hidden_count, hidden_line, is_menger_doc, kind_glyph, migrate_expanded, nav_shows, offset_of,
-        on_chain, reveal_from, rollup_label, root_has_kids, shortcode_face, shortcode_node, shown, span, summed, under_text, Ask, Climb, Face,
-        Geom, List, Mark, Node, Source, CHUNK, MENGER_DOCS_KEY, PAGE, WHOLE,
+        art, chunks, climb, face, face_of, hidden_count, hidden_line, kind_glyph, migrate_expanded, offset_of, on_chain, reveal_from,
+        rollup_label, root_has_kids, shortcode_face, shortcode_node, shown, span, summed, under_text, Ask, Climb, Face, Geom, List, Mark,
+        Node, Source, CHUNK, PAGE, WHOLE,
     };
     use crate::board::Matches;
     use crate::filter::ScTree;
@@ -3228,25 +3174,26 @@ mod tests {
         }
     }
 
-    /// WAVE-10 acceptance 3: the nav's hide predicate — a ticket whose path
-    /// is under `_MENGER/` is drawn only with the "menger docs" toggle on;
-    /// every other ticket, path or none, always.
+    /// FILTER-21: the header's "menger docs" toggle (WAVE-10) is gone, and
+    /// nothing reads the setting it stored — menger's own documents are the
+    /// nav filter's, left out by its default (`lens::nav_default`). Neither
+    /// the toggle nor its key is named by the nav, its flat list, the lens or
+    /// the page's styles.
     #[test]
-    fn menger_docs_are_hidden_unless_the_toggle_is_on() {
-        let with_path = |p: Option<&str>| TicketSummary { path: p.map(Into::into), kind: Kind::Doc, ..row("PLX-35", Some("PLX-1")) };
-        let board = with_path(Some("_MENGER/board"));
-        let deep = with_path(Some("_MENGER/views/plexus"));
-        let plain = with_path(None);
-        let elsewhere = with_path(Some("notes/board"));
-        assert!(is_menger_doc(&board) && is_menger_doc(&deep));
-        assert!(!is_menger_doc(&plain) && !is_menger_doc(&elsewhere));
-        assert!(!nav_shows(&board, false), "hidden by default");
-        assert!(!nav_shows(&deep, false));
-        assert!(nav_shows(&board, true), "shown when asked for");
-        for t in [&plain, &elsewhere, &row("PLX-2", Some("PLX-1"))] {
-            assert!(nav_shows(t, false) && nav_shows(t, true), "{t:?}");
+    fn the_menger_docs_toggle_and_its_stored_setting_are_gone() {
+        let key = ["menger.nav.", "mengerDocs"].concat();
+        let toggle = ["menger", "-docs"].concat();
+        let off = ["menger", "-off"].concat();
+        for (name, src) in [
+            ("nav.rs", include_str!("nav.rs")),
+            ("flat.rs", include_str!("flat.rs")),
+            ("lens.rs", include_str!("lens.rs")),
+            ("index.html", include_str!("../index.html")),
+        ] {
+            for gone in [&key, &toggle, &off] {
+                assert!(!src.contains(gone.as_str()), "{name} still names {gone}");
+            }
         }
-        assert_eq!(MENGER_DOCS_KEY, "menger.nav.mengerDocs");
     }
 
     /// AGS-23, the indent: each level of the tree adds two monospace columns

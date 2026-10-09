@@ -33,12 +33,17 @@ fn random_field(rng: &mut Rng, field: usize, names: &[String]) -> Field {
         6 => Field::Ready,
         // FILTER-13: `under` a shortcode or a ticket.
         8 => Field::Under(names[rng.below(names.len())].to_ascii_uppercase()),
+        // FILTER-21: `menger doc`.
+        10 => Field::MengerDoc,
         _ => Field::HasCommits,
     }
 }
 
-fn random_pred(rng: &mut Rng, names: &[String]) -> Predicate {
-    let which = rng.below(10);
+/// FILTER-21: `menger` draws `menger doc` among the fields; without it the
+/// draws are the ones they were (`tests_tree` and `tests_lensed` replay
+/// them).
+fn random_pred(rng: &mut Rng, names: &[String], menger: bool) -> Predicate {
+    let which = rng.below(if menger { 11 } else { 10 });
     let field = random_field(rng, if which == 9 { 8 } else { which }, names);
     Predicate { field, not: rng.below(2) == 0 }
 }
@@ -57,9 +62,9 @@ pub(super) fn filter_names(store: &Store) -> Vec<String> {
 }
 
 /// A group of every shape the language has but `text` and `under`.
-fn random_group(rng: &mut Rng, epics: &[String]) -> Group {
+fn random_group(rng: &mut Rng, epics: &[String], menger: bool) -> Group {
     match rng.below(5) {
-        0 | 1 => Group::one(random_pred(rng, epics)),
+        0 | 1 => Group::one(random_pred(rng, epics, menger)),
         2 => {
             // `field in (a, b)`, or `not field in (a, b)` — FILTER-13: of
             // `under` too.
@@ -72,15 +77,25 @@ fn random_group(rng: &mut Rng, epics: &[String]) -> Group {
                 Group::all(preds)
             }
         }
-        3 => Group::any((0..2 + rng.below(2)).map(|_| random_pred(rng, epics)).collect()),
-        _ => Group::all((0..2 + rng.below(2)).map(|_| random_pred(rng, epics)).collect()),
+        3 => Group::any((0..2 + rng.below(2)).map(|_| random_pred(rng, epics, menger)).collect()),
+        _ => Group::all((0..2 + rng.below(2)).map(|_| random_pred(rng, epics, menger)).collect()),
     }
 }
 
 /// A random filter, as the wire carries it: its text, read back.
 pub(super) fn random_filter(rng: &mut Rng, epics: &[String]) -> Filter {
+    random_filter_of(rng, epics, false)
+}
+
+/// FILTER-21: the same, with `menger doc` among its fields — what this
+/// module's own walks draw.
+fn random_menger_filter(rng: &mut Rng, epics: &[String]) -> Filter {
+    random_filter_of(rng, epics, true)
+}
+
+fn random_filter_of(rng: &mut Rng, epics: &[String], menger: bool) -> Filter {
     let f = Filter {
-        groups: (0..rng.below(4)).map(|_| random_group(rng, epics)).collect(),
+        groups: (0..rng.below(4)).map(|_| random_group(rng, epics, menger)).collect(),
         display: match rng.below(4) {
             0 => Display { shape: Shape::Flat, ..Display::default() },
             1 => Display { columns: vec!["id".into(), "title".into()], ..Display::default() },
@@ -120,6 +135,7 @@ fn facets_by_rows(plain: &Plain, filter: &Filter, base: &Filter) -> Vec<(String,
                 "blocked" => yes(k.blocked()),
                 "ready" => yes(category_of(t.status) == Category::Ready && !k.blocked()),
                 "has commits" => yes(!t.commits.is_empty()),
+                "menger doc" => yes(t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/"))),
                 _ => t.epic.clone(),
             });
         }
@@ -149,11 +165,11 @@ fn facets_by_rows(plain: &Plain, filter: &Filter, base: &Filter) -> Vec<(String,
 /// random base.
 #[track_caller]
 fn assert_filter_is_a_scan(store: &Store, plain: &Plain, rng: &mut Rng, epics: &[String], what: &str) {
-    let filter = random_filter(rng, epics);
+    let filter = random_menger_filter(rng, epics);
     let lens = Lens::parse(&filter.format()).unwrap();
     let judge = |t: &Row, k: Key| filter.matches(&plain.facts(t, k));
     assert_lens_is_a_scan(store, plain, &lens, &judge, rng, what);
-    let base = if rng.below(2) == 0 { Filter::default() } else { random_filter(rng, epics) };
+    let base = if rng.below(2) == 0 { Filter::default() } else { random_menger_filter(rng, epics) };
     assert_eq!(
         store.facets(&filter, &base).unwrap(),
         facets_by_rows(plain, &filter, &base),
@@ -165,7 +181,8 @@ fn assert_filter_is_a_scan(store: &Store, plain: &Plain, rng: &mut Rng, epics: &
 
 async fn walk(store: Store, path: &Path, seed: u64, writes: usize, every: usize, epics: &[&str]) -> Store {
     let mut rng = Rng(seed);
-    let mut tally = Tally::default();
+    // FILTER-21: board notes among the docs.
+    let mut tally = Tally::filing_menger_docs();
     let names = filter_names;
     for step in 0..writes {
         let what = random_write(&store, &mut rng, epics, &mut tally).await;
@@ -191,7 +208,27 @@ async fn random_filters_equal_the_evaluator_on_a_store_built_by_create() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("created.db");
     let store = Store::open(&path).unwrap();
-    walk(store, &path, 0xF117_E410, 450, 9, &["AA", "MAP", "SUB", "ZED"]).await;
+    let store = walk(store, &path, 0xF117_E410, 450, 9, &["AA", "MAP", "SUB", "ZED"]).await;
+    // FILTER-21: the walk filed menger docs beside ordinary ones; the flag,
+    // its negation and the nav's default under another flag are answered as
+    // the evaluator answers them — counts, pages at cursors and positions,
+    // and facets, whose `menger doc` menu counts both values.
+    let plain = Plain::of(&store);
+    let menger = |t: &Row| t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/"));
+    let docs = plain.rows.iter().filter(|t| t.kind == Kind::Doc);
+    assert!(plain.rows.iter().any(menger) && docs.clone().any(|t| !menger(t)), "board notes and ordinary docs");
+    let mut rng = Rng(0xF117_E421);
+    for text in ["menger doc", "not menger doc", "not menger doc and kind doc", "(menger doc or has commits) and not blocked"] {
+        let filter = Filter::parse(text).unwrap();
+        let lens = Lens::parse(text).unwrap();
+        let judge = |t: &Row, k: Key| filter.matches(&plain.facts(t, k));
+        assert_lens_is_a_scan(&store, &plain, &lens, &judge, &mut rng, text);
+        let facets = store.facets(&filter, &Filter::default()).unwrap();
+        assert_eq!(facets, facets_by_rows(&plain, &filter, &Filter::default()), "facets of `{text}`");
+    }
+    let facets = store.facets(&Filter::default(), &Filter::default()).unwrap();
+    let menu: Vec<&str> = facets.iter().filter(|(f, _, _)| f == "menger doc").map(|(_, v, _)| v.as_str()).collect();
+    assert_eq!(menu, ["yes", "no"]);
 }
 
 #[tokio::test]

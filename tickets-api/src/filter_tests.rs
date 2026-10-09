@@ -109,6 +109,10 @@ fn canonical_texts_are_fixed_points() {
         "ready",
         "not blocked",
         "has commits",
+        "menger doc",
+        "not menger doc",
+        "not menger doc and kind build",
+        "(menger doc or has commits)",
         "status \"In Review\"",
         "status in (Ready, \"In Review\")",
         "not status in (Complete, Superseded, Doc)",
@@ -336,6 +340,11 @@ fn unreadable_chunks_are_errors() {
         "status",
         "blocked yes",
         "has commits 3",
+        "menger doc yes",
+        "menger doc board",
+        "menger doc in (a, b)",
+        "menger",
+        "menger docs",
         "in",
         "in SC-1",
         "in (SCALE, MNG-2)",
@@ -408,6 +417,7 @@ fn facts(id: &str, title: &str, status: Status, kind: Kind) -> Facts {
         severity: None,
         blocked: false,
         has_commits: false,
+        menger_doc: false,
     }
 }
 
@@ -436,6 +446,50 @@ fn the_evaluator_reads_every_predicate() {
     assert!(!m("not category static", &d));
     let empty = Group { conj: Conj::Any, preds: vec![] };
     assert!(empty.matches(&d), "an empty group passes, as manifest's");
+}
+
+/// FILTER-21: `menger doc` is a flag like `ready` and `has commits` — read
+/// whatever its case and however many `not`s, written back canonical, never
+/// with a value, in a list or alone as `menger` — and it admits exactly the
+/// tickets whose path starts with `_MENGER/`; `not menger doc` the rest.
+#[test]
+fn menger_doc_is_a_flag_that_round_trips_and_admits_menger_paths() {
+    let cases: Vec<(&str, Vec<Group>, &str)> = vec![
+        ("menger doc", vec![one(is(Field::MengerDoc))], "menger doc"),
+        ("not menger doc", vec![one(not(Field::MengerDoc))], "not menger doc"),
+        ("NOT Menger DOC", vec![one(not(Field::MengerDoc))], "not menger doc"),
+        ("not not menger doc", vec![one(is(Field::MengerDoc))], "menger doc"),
+        ("(menger doc or ready)", vec![Group::any(vec![is(Field::MengerDoc), is(Field::Ready)])], "(menger doc or ready)"),
+        ("menger doc or has commits", vec![Group::any(vec![is(Field::MengerDoc), is(Field::HasCommits)])], "(menger doc or has commits)"),
+        ("not menger doc and in PLEXUS", vec![one(not(Field::MengerDoc)), one(is(within("PLEXUS")))], "not menger doc and in PLEXUS"),
+    ];
+    for (text, want, canonical) in cases {
+        let f = parsed(text);
+        assert_eq!(f.groups, want, "{text}");
+        assert_eq!(f.format(), canonical, "{text}");
+        assert_eq!(parsed(canonical), f, "{canonical} is a fixed point");
+    }
+    assert_eq!(Field::MengerDoc.name(), "menger doc");
+    assert_eq!(Field::MengerDoc.value(), None, "a flag has no value, as `ready`'s");
+    assert_eq!(Field::Ready.value(), Field::MengerDoc.value());
+    for (text, why) in [("menger doc yes", "takes no value"), ("menger doc in (a, b)", "takes no value"), ("menger", "not understood")] {
+        let e = refused(text);
+        assert_eq!(e.chunks.len(), 1, "{text}: {e}");
+        assert!(e.chunks[0].why.contains(why), "{text}: {}", e.chunks[0].why);
+    }
+    assert!(refused("frobnicate").chunks[0].why.contains("`menger doc`"), "the predicates listed name it");
+
+    // The evaluator: a board note, an ordinary doc, a build.
+    let mut board = facts("PLEXUS-2", "board: PLEXUS", Status::Doc, Kind::Doc);
+    board.menger_doc = true;
+    let plain = facts("PLEXUS-3", "A finding", Status::Doc, Kind::Doc);
+    let work = facts("PLEXUS-4", "Build it", Status::Ready, Kind::Build);
+    let m = |text: &str, t: &Facts| parsed(text).matches(t);
+    assert!(m("menger doc", &board) && !m("menger doc", &plain) && !m("menger doc", &work));
+    assert!(!m("not menger doc", &board) && m("not menger doc", &plain) && m("not menger doc", &work));
+    assert!(m("menger doc and kind doc and category static and in PLEXUS", &board));
+    assert!(m("(menger doc or ready)", &board) && m("(menger doc or ready)", &work) && !m("(menger doc or ready)", &plain));
+    assert!(m("not menger doc and kind doc", &plain) && !m("not menger doc and kind doc", &board));
 }
 
 /// `palette_match` from `frontend/src/keys.rs` — find's rule, which the
@@ -498,6 +552,9 @@ fn merges() {
         ("(ready or status Blocked)", "status Blocked", "(ready or status Blocked) and status Blocked"),
         ("(status Ready and kind build)", "status Ready", "(status Ready and kind build) and status Ready"),
         ("text \"a\"", "text \"b\"", "text \"a\" and text \"b\""),
+        // FILTER-21: a flag, as `ready` — once when both say it, else kept
+        ("not menger doc", "not menger doc and kind build", "not menger doc and kind build"),
+        ("not menger doc", "menger doc", "not menger doc and menger doc"),
         // under: a lineage holds many names, so inclusions never intersect
         ("under SCALE", "under SCALE-13", "under SCALE and under SCALE-13"),
         ("under in (SCALE, MNG)", "not under MNG", "under in (SCALE, MNG) and not under MNG"),
@@ -558,6 +615,13 @@ fn admits_nothing_names_the_clashing_groups() {
         ("under SCALE and not under SCALE", Some(vec![0, 1])),
         ("severity none and not severity none", Some(vec![0, 1])),
         ("has commits and not has commits", Some(vec![0, 1])),
+        // FILTER-21: only a doc is a menger doc.
+        ("menger doc and kind doc and has commits and blocked", None),
+        ("not menger doc and kind build", None),
+        ("menger doc and not menger doc", Some(vec![0, 1])),
+        ("menger doc and kind build", Some(vec![0, 1])),
+        ("menger doc and ready", Some(vec![0, 1])),
+        ("has commits and menger doc and not category static", Some(vec![1, 2])),
         (&all_statuses, Some(vec![0])),
         ("ready and not severity in (critical, high, medium, low, none)", Some(vec![1])),
         ("(status Ready and status Pending)", Some(vec![0])),
@@ -659,13 +723,14 @@ fn random_value(rng: &mut Rng, field: usize, pools: &Pools) -> Field {
         6 => Field::Blocked,
         7 => Field::Ready,
         8 => Field::HasCommits,
+        9 => Field::MengerDoc,
         _ => text(rng.pick(pools.texts)),
     }
 }
 
 /// Any predicate but `text`.
 fn random_pred(rng: &mut Rng, pools: &Pools) -> Predicate {
-    let field = rng.below(9);
+    let field = rng.below(10);
     Predicate { field: random_value(rng, field, pools), not: rng.coin() }
 }
 
@@ -683,7 +748,7 @@ fn random_group(rng: &mut Rng, pools: &Pools) -> Group {
         }
         3 => Group::any((0..2 + rng.below(2)).map(|_| random_pred(rng, pools)).collect()),
         4 => Group::all((0..2 + rng.below(2)).map(|_| random_pred(rng, pools)).collect()),
-        _ => one(is(random_value(rng, 9, pools))),
+        _ => one(is(random_value(rng, 10, pools))),
     }
 }
 
@@ -703,8 +768,9 @@ fn random_filter(rng: &mut Rng, pools: &Pools, display: bool) -> Filter {
     }
 }
 
-/// A ticket as the store holds one: a doc in `Doc` and only a doc, its
-/// lineage its own id, its shortcode and some names above it.
+/// A ticket as the store holds one: a doc in `Doc` and only a doc, a menger
+/// doc only a doc (FILTER-21), its lineage its own id, its shortcode and
+/// some names above it.
 fn random_facts(rng: &mut Rng, pools: &Pools) -> Facts {
     let kind = rng.pick(&Kind::ALL);
     let status = match kind {
@@ -725,6 +791,7 @@ fn random_facts(rng: &mut Rng, pools: &Pools) -> Facts {
         severity: rng.pick(&SEVERITIES),
         blocked: kind != Kind::Doc && rng.coin(),
         has_commits: rng.coin(),
+        menger_doc: kind == Kind::Doc && rng.coin(),
         lineage,
     }
 }
@@ -786,19 +853,23 @@ fn some_world_matches(f: &Filter) -> bool {
     }
     epics.push("ELSEWHERE".into());
     // The domain, written out here rather than borrowed from the module: a
-    // doc is born in `Doc` and never leaves it, and no other kind holds it.
+    // doc is born in `Doc` and never leaves it, and no other kind holds it;
+    // only a doc carries a path, so only a doc is a menger doc (FILTER-21).
     let mut cells = Vec::new();
     for kind in Kind::ALL {
         let statuses: &[Status] = if kind == Kind::Doc { &[Status::Doc] } else { &Status::LIFECYCLE };
+        let mengers: &[bool] = if kind == Kind::Doc { &[false, true] } else { &[false] };
         for &status in statuses {
             for severity in [None, Some(Severity::Critical), Some(Severity::High), Some(Severity::Medium), Some(Severity::Low)] {
                 for (blocked, commits) in [(false, false), (false, true), (true, false), (true, true)] {
-                    cells.push(Cell { status, kind, severity, blocked, commits });
+                    for &menger in mengers {
+                        cells.push(Cell { status, kind, severity, blocked, commits, menger });
+                    }
                 }
             }
         }
     }
-    assert_eq!(cells.len(), 920);
+    assert_eq!(cells.len(), 940);
     for epic in &epics {
         for u in 0..1usize << unders.len() {
             for t in 0..1usize << texts.len() {
@@ -814,11 +885,12 @@ fn some_world_matches(f: &Filter) -> bool {
                     severity: None,
                     blocked: false,
                     has_commits: false,
+                    menger_doc: false,
                     lineage: chosen(&unders, u),
                 };
                 for c in &cells {
-                    (x.status, x.kind, x.severity, x.blocked, x.has_commits) =
-                        (c.status, c.kind, c.severity, c.blocked, c.commits);
+                    (x.status, x.kind, x.severity, x.blocked, x.has_commits, x.menger_doc) =
+                        (c.status, c.kind, c.severity, c.blocked, c.commits, c.menger);
                     if f.matches(&x) {
                         return true;
                     }
