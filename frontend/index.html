@@ -1211,6 +1211,83 @@
   #nav .nhidden { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
   #nav .nlens-note[data-nlens="refused"] { color: var(--err-fg); overflow-wrap: anywhere; }
   #nav .nhidden:hover, #nav .nhidden[aria-pressed="true"] { color: var(--accent); }
+  /* FILTER-6: saved filters — `Saved ▾` beside each level's Filter button
+     (the global one in the header), its menu hanging under it (the filter
+     menu's card: the names in the collection's order, rename and remove on
+     a row's hover or focus, Save as… last), a moment's note of what was
+     done, and the Save as… dialog in the overlays' idiom. */
+  .saved { position: relative; display: inline-flex; align-items: center; gap: .35rem; }
+  header .saved { align-self: center; }
+  button.fbtn.sbtn .caret { color: var(--muted); font-size: 10px; }
+  button.fbtn.sbtn:hover .caret, button.fbtn.sbtn[aria-expanded="true"] .caret { color: var(--accent); }
+  .saved .sflash { font-size: 11px; color: var(--live); white-space: nowrap; }
+  .fmenu.smenu {
+    top: calc(100% + 4px); left: 0; width: 17rem; max-width: calc(100vw - 16px); padding: 4px;
+  }
+  .fmenu.smenu:focus { outline: none; }
+  #nav .fmenu.smenu { width: 16rem; }
+  .fmenu.smenu .slist { display: flex; flex-direction: column; max-height: 50vh; overflow-y: auto; overscroll-behavior: contain; }
+  .fmenu.smenu[data-reading] .slist { opacity: .6; }
+  .fmenu.smenu .srow { gap: .3rem; cursor: default; }
+  .fmenu.smenu .srow:hover, .fmenu.smenu .srow:focus-within { background: var(--hover); }
+  .fmenu.smenu button.schoose {
+    flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 0; font: inherit; color: var(--ink);
+    cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .fmenu.smenu button.schoose:hover, .fmenu.smenu button.schoose:focus-visible { color: var(--accent); outline: none; }
+  .fmenu.smenu .sact {
+    display: none; flex: none; background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: 10.5px;
+    color: var(--muted); cursor: pointer;
+  }
+  .fmenu.smenu .srow:hover .sact, .fmenu.smenu .srow:focus-within .sact,
+  .fmenu.smenu .srow.renaming .sact, .fmenu.smenu .srow.removing .sact { display: inline; }
+  .fmenu.smenu .sact:hover, .fmenu.smenu .sact.on { color: var(--accent); }
+  .fmenu.smenu .sact:hover { text-decoration: underline; }
+  .fmenu.smenu .srow.removing .flabel { white-space: normal; }
+  .fmenu.smenu input.sname-in {
+    flex: 1; min-width: 0; font: inherit; padding: .05rem .35rem; background: var(--card); color: var(--ink);
+    border: 1px solid var(--accent); border-radius: 4px; outline: none;
+  }
+  .fmenu.smenu button.ssave { background: none; border: 0; font: inherit; color: var(--accent); text-align: left; width: 100%; }
+  .fmenu.smenu button.ssave:hover, .fmenu.smenu button.ssave:focus-visible { background: var(--hover); outline: none; }
+  .fmenu.smenu button.ssave:disabled { color: var(--muted); cursor: default; background: none; }
+  .fmenu.smenu .sproblem { color: var(--err-fg); white-space: normal; overflow-wrap: anywhere; }
+  #save-as { width: 32rem; padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .7rem; }
+  #save-as h2 { font-size: .95rem; margin: 0; }
+  #save-as p { margin: 0; }
+  #save-as .sname { display: flex; flex-direction: column; gap: .25rem; font-size: .8rem; color: var(--muted); }
+  #save-as .sname input {
+    font: inherit; font-size: .9rem; padding: .3rem .5rem; background: var(--card); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px; outline: none;
+  }
+  #save-as .sname input:focus { border-color: var(--accent); }
+  #save-as .stext { display: flex; gap: .5rem; align-items: baseline; font-size: .8rem; }
+  #save-as .stext .slab { color: var(--muted); flex: none; }
+  #save-as .stext code {
+    font-family: var(--mono); font-size: 12px; color: var(--chip-fg); background: var(--chip-bg);
+    border: 1px solid var(--chip-line); border-radius: 5px; padding: .1rem .4rem; overflow-wrap: anywhere;
+  }
+  #save-as .sleft {
+    font-size: .8rem; color: var(--muted); background: var(--panel); border: 1px dashed var(--line);
+    border-radius: 6px; padding: .4rem .6rem;
+  }
+  #save-as .sleft strong { color: var(--ink); font-weight: 600; }
+  #save-as .staken {
+    display: flex; flex-direction: column; gap: .5rem; font-size: .85rem;
+    background: var(--sel); border: 1px solid var(--accent); border-radius: 6px; padding: .5rem .65rem;
+  }
+  #save-as .sproblem {
+    font-size: .8rem; color: var(--err-fg); background: var(--err-bg); border: 1px solid var(--err-line);
+    border-radius: 6px; padding: .35rem .6rem; overflow-wrap: anywhere;
+  }
+  #save-as .sacts { display: flex; gap: .5rem; justify-content: flex-end; flex-wrap: wrap; }
+  #save-as .sacts button {
+    font: inherit; font-size: .8rem; cursor: pointer; background: var(--panel); border: 1px solid var(--line);
+    color: var(--ink); border-radius: 4px; padding: .15rem .65rem;
+  }
+  #save-as .sacts button:hover { border-color: var(--accent); color: var(--accent); }
+  #save-as .sacts button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  #save-as .sacts button:disabled { opacity: .5; cursor: default; }
 </style>
 </head>
 <body></body>

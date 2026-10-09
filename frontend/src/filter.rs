@@ -1390,7 +1390,8 @@ pub(crate) fn place(level: Level, sel: &str) {
 
 /// The generic filter bar — a level's `Filter` button, the global pills
 /// (on a surface: muted, marked `global`), the level's own pills, `reset`,
-/// the `text` toggle and the menu; under it, the contradiction notice.
+/// the `text` toggle, `Saved ▾` (FILTER-6) and the menu; under it, the
+/// contradiction notice.
 /// `cats`: the level's categories, server-backed and local, in its menu's
 /// order; `counts`: what the menu's values count.
 #[component]
@@ -1413,6 +1414,8 @@ pub(crate) fn FilterBar(
             {move || (!texting.get()).then(|| view! { <Pills bar=level /> })}
             <TextMode level texting />
             <Reset level />
+            // FILTER-6: the level's saved filters, and Save as….
+            <crate::saved::SavedButton level />
             <Popover level />
         </div>
         <Clash level />
@@ -1565,6 +1568,18 @@ pub(crate) fn Reset(level: Level) -> impl IntoView {
     }
 }
 
+/// Focus `field` each time it is drawn. FILTER-6: `NodeRef::on_load` runs
+/// its callback once and panics (`Option::unwrap` on `None`) when the same
+/// ref is drawn again — the text mode opened a second time on one bar, the
+/// search drawn again after Title's field.
+fn focus_each_load(field: NodeRef<leptos::html::Input>) {
+    Effect::new(move |_| {
+        if let Some(el) = field.get() {
+            let _ = el.focus();
+        }
+    });
+}
+
 /// The text mode: a toggle; on, the level's filter as canonical text,
 /// editable — Enter applies it; a parse error lists every bad chunk under
 /// the box and applies nothing; Escape (or the toggle) goes back to the
@@ -1575,9 +1590,7 @@ pub(crate) fn TextMode(level: Level, texting: RwSignal<bool>) -> impl IntoView {
     let draft = RwSignal::new(String::new());
     let errors = RwSignal::new(Vec::<(String, String)>::new());
     let field = NodeRef::<leptos::html::Input>::new();
-    field.on_load(|el: web_sys::HtmlInputElement| {
-        let _ = el.focus();
-    });
+    focus_each_load(field);
     let toggle = move |_| {
         if texting.get_untracked() {
             texting.set(false);
@@ -1706,9 +1719,7 @@ fn popover(lens: Lens, pop: Pop) -> impl IntoView {
     };
     // The search takes focus the moment it is drawn (as the palette's does).
     let search_ref = NodeRef::<leptos::html::Input>::new();
-    search_ref.on_load(|el: web_sys::HtmlInputElement| {
-        let _ = el.focus();
-    });
+    focus_each_load(search_ref);
     // Opened on Title's pill, the popover is Title's field alone.
     let no_search = Memo::new(move |_| direct() && pop.cat.get() == Some(Cat::Title));
     let label = if level == Level::Global { "Filter every view".to_string() } else { format!("Filter the {}", level.name()) };

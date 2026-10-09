@@ -296,6 +296,29 @@ doc and spike is `not kind in (spike, doc)`. A flag (Ready, Blocked,
 Commits) has no switch; its `yes` / `no` is the negation. Tab from the
 search reaches the switch; Space or Enter flips it.
 
+**Saved filters** (FILTER-6): `Saved ▾` beside each level's `Filter`
+button (the global one in the header) lists the saved filters by name; a
+name applies its filter to that level (a surface's own categories cleared),
+`rename` and `remove` act on it, and `Save as…` keeps the level's filter
+under a name. They live in the tracker, so every browser and agent reads
+the same ones: the collection is `VIEW-1`, a doc titled "Saved filters"
+under `FILTER-1` (the first save creates it), whose body lists them in
+order as `- <m-demand id="open-builds">open builds</m-demand>` (DEMAND-1's
+element); each is a doc under `VIEW-1` at `_MENGER/view/<slug>`, titled with
+its name, whose body is `filter: <canonical text>`. A name already saved
+(compared by slug) offers to replace that filter or to choose another
+name; a rename changes the doc's title and the line (the path stays);
+remove takes the line out and leaves the doc, unlisted — saving that name
+again takes it over. The wave board's Wave, Readiness, Off-board blockers
+and Title (the inputs page's State and Removed) are not in the language,
+so Save as… leaves them out and says so. The app reads `VIEW-1` when a
+menu opens — nothing at startup — and, once read, follows its `amended`.
+
+```sh
+synapse -P 4455 menger tickets get --id VIEW-1                          # the list
+synapse -P 4455 menger tickets get --id VIEW/_MENGER/view/open-builds   # one filter
+```
+
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service
@@ -1177,7 +1200,8 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        FILTER-11), src/lens.rs the levels — global, nav,
                        board, waves, inputs — their URL and storage, the
                        header's bar (FILTER-11), src/counts.rs menu counts and
-                       the header's n of N (FILTER-12),
+                       the header's n of N (FILTER-12), src/saved.rs saved
+                       filters — Saved ▾, Save as…, VIEW-1 (FILTER-6),
                        src/notes.rs its annotation and the body editor (WAVE-11),
                        src/frame.rs framed bodies and their messages (COMP-4,
                        COMP-5), sdk/menger-sdk.js the SDK every frame runs,

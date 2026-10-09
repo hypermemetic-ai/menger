@@ -243,6 +243,7 @@ mod notes;
 
 mod mermaid;
 mod registry;
+mod saved;
 mod session;
 mod settings;
 mod theme;
@@ -1875,6 +1876,8 @@ fn App() -> impl IntoView {
     // `F` and `f` open the menus.
     let lens = lens::Lens::new(tree);
     lens.install();
+    // FILTER-6: saved filters — each level's `Saved ▾` and Save as….
+    saved::Saved::new(lens);
     let route = use_route(lens);
     // FILTER-12: the board shows its effective filter (global ∧ board) —
     // set before the session asks for anything.
@@ -2031,6 +2034,8 @@ fn App() -> impl IntoView {
                     }}
                     // FILTER-11: the global filter — its groups as a badge.
                     <lens::GlobalButton />
+                    // FILTER-6: the global filter's saved filters.
+                    <saved::SavedButton level=lens::Level::Global />
                     // FILTER-12: while the global filter is non-empty, what
                     // it admits of every ticket — `n of N`, live.
                     <counts::GlobalCount board />
@@ -2087,6 +2092,8 @@ fn App() -> impl IntoView {
             // right-click inside the menu itself never re-targets it.
             <menu::TicketMenu last_error />
             <keys::Overlays overlay />
+            // FILTER-6: Save as…, mounted once.
+            <saved::SaveDialog />
         </div>
     }
 }
