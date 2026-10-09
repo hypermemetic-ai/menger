@@ -127,10 +127,23 @@ fn short(name: &str) -> String {
 
 thread_local! {
     static ACCOUNT: ArcRwSignal<Account> = ArcRwSignal::new(Account::default());
+    static PROBLEM: ArcRwSignal<Option<String>> = ArcRwSignal::new(None);
 }
 
 pub(crate) fn account() -> ArcRwSignal<Account> {
     ACCOUNT.with(Clone::clone)
+}
+
+/// IDENTITY-31: why the last try to learn who this is failed, while the
+/// app is still checking — what [`Checking`] says after a few seconds.
+pub(crate) fn problem() -> ArcRwSignal<Option<String>> {
+    PROBLEM.with(Clone::clone)
+}
+
+/// The words for a backend that is not this page's own server: a saved
+/// setting the person may not remember making.
+fn elsewhere(url: &str, page: &str) -> Option<String> {
+    (url != page).then(|| format!("This browser is set to connect to {url}, not this page's server ({page}): a saved setting."))
 }
 
 /// What `/login/me` answered.
@@ -305,12 +318,36 @@ pub(crate) fn AccountGroup() -> impl IntoView {
 }
 
 /// IDENTITY-31: instead of the views, until the server has said who this
-/// is and what they hold.
+/// is and what they hold. After a few seconds it says what it is waiting
+/// on — the socket, the last failure, and a saved backend that is not this
+/// page's server (with the one click that drops it) — never a silent hang.
 #[component]
 pub(crate) fn Checking() -> impl IntoView {
+    let late = RwSignal::new(false);
+    wasm_bindgen_futures::spawn_local(async move {
+        dom::sleep_ms(3000).await;
+        let _ = late.try_set(true);
+    });
+    let problem = problem();
+    let b = crate::settings::backend();
+    let moved = elsewhere(&b.url, &b.page);
     view! {
         <section id="checking">
             <p class="hint">"Checking your access…"</p>
+            {move || late.get().then(|| {
+                let moved = moved.clone();
+                view! {
+                    <div id="checking-detail">
+                        <p class="hint">"Still waiting on " <code>{b.url.clone()}</code></p>
+                        {problem.get().map(|p| view! { <p class="invalid" id="checking-problem">{p}</p> })}
+                        {moved.map(|m| view! {
+                            <p id="checking-elsewhere">{m}" "
+                                <button class="hbtn" id="checking-reset" on:click=|_| crate::settings::use_page_server()>"Use this page's server"</button></p>
+                        })}
+                        <p class="hint">"Signing out and in again starts afresh: "<SignOut /></p>
+                    </div>
+                }
+            })}
         </section>
     }
 }
@@ -389,6 +426,13 @@ mod tests {
         for odd in [0, 500, 502, 503] {
             assert_eq!(gate_of(odd), None, "{odd}: asked again, never taken for no login");
         }
+    }
+
+    #[test]
+    fn a_saved_backend_elsewhere_is_said() {
+        assert_eq!(elsewhere("ws://127.0.0.1:4450", "ws://127.0.0.1:4450"), None);
+        let said = elsewhere("ws://localhost:4450", "ws://127.0.0.1:4450").unwrap();
+        assert!(said.contains("ws://localhost:4450") && said.contains("this page's server (ws://127.0.0.1:4450)"), "{said}");
     }
 
     #[test]

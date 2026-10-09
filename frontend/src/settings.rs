@@ -420,6 +420,13 @@ pub(crate) fn effective_ws_url() -> String {
     backend().url
 }
 
+/// IDENTITY-31: drops the saved override and starts again on this page's
+/// server (the Checking screen's one click).
+pub(crate) fn use_page_server() {
+    let _ = store(&load().reset());
+    reload();
+}
+
 /// Starts the app again on whatever the record now says — a clean session.
 fn reload() {
     let _ = dom::window().location().reload();

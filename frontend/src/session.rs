@@ -714,6 +714,10 @@ pub(crate) fn drive(
             TRANSPORT.with(|t| *t.borrow_mut() = None);
             LINK.with(|l| l.set(false));
             leptos::logging::log!("session ended: {err}; reconnecting");
+            // IDENTITY-31: what the Checking screen says, while it checks.
+            if !signin::account().with_untracked(|a| a.known()) {
+                signin::problem().set(Some(err.clone()));
+            }
             conn.set(Conn::Reconnecting);
             dom::sleep_ms(RETRY_MS).await;
         }
@@ -745,7 +749,9 @@ async fn session(
     // IDENTITY-22: the person's grants, for the header and the views. With
     // none, the session asks nothing more: the app shows their id, and the
     // socket stays open until they reload or sign out.
-    if !signin::after_connect(transport.clone()).await? {
+    let allowed = signin::after_connect(transport.clone()).await?;
+    signin::problem().set(None);
+    if !allowed {
         LINK.with(|l| l.set(true));
         conn.set(Conn::Live);
         loop {
