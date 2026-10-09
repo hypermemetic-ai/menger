@@ -559,6 +559,7 @@ pub struct NextQuery {
 pub async fn nostr(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<NextQuery>) -> Response {
     let next = safe_next(q.next.as_deref());
     if login.foreign(&headers) {
+        tracing::warn!("nostr sign-in refused: a POST from another page's origin {:?}", headers.get(header::ORIGIN));
         return (StatusCode::FORBIDDEN, "Forbidden: sign in from menger's own page").into_response();
     }
     let Some(adapter) = &login.nostr else {
@@ -570,17 +571,52 @@ pub async fn nostr(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q)
         .and_then(|v| v.strip_prefix("Nostr "))
         .map(str::to_string);
     let Some(token) = event else {
+        tracing::warn!("nostr sign-in refused: no Authorization: Nostr header");
         return (StatusCode::BAD_REQUEST, "an Authorization: Nostr <event> header is required").into_response();
     };
+    // IDENTITY-32: every attempt in the log, so a failing signer can be
+    // diagnosed without the person's screen. The event is public; its
+    // signature proves nothing to anyone else (one use, one URL).
+    let detail = nip98_detail(&token);
     // The page's own script asks for JSON (IDENTITY-30): where to go, or
     // why not, in words it shows beside the button.
     let json = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|a| a.contains("application/json"));
-    match adapter.authenticate(&Presentation::Bearer { token }).await {
+    let outcome = adapter.authenticate(&Presentation::Bearer { token }).await;
+    match &outcome {
+        Ok(_) => tracing::info!("nostr sign-in: {detail}"),
+        Err(e) => tracing::warn!("nostr sign-in refused: {e} — {detail}"),
+    }
+    match outcome {
         Ok(a) if json => login.hand_over(a.into_auth_context(), axum::Json(json!({ "next": next })).into_response()),
         Ok(a) => login.sign_in(a.into_auth_context(), &next),
         Err(e) if json => (StatusCode::UNAUTHORIZED, axum::Json(json!({ "error": nostr_refusal(&e) }))).into_response(),
         Err(_) => (StatusCode::UNAUTHORIZED, "the nostr event was not accepted").into_response(),
     }
+}
+
+/// What a NIP-98 event says, for the log: its key, kind, age, URL and
+/// method — or that it could not be read.
+fn nip98_detail(token: &str) -> String {
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(token.trim())
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token.trim()));
+    let Some(ev) = decoded.ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else {
+        return format!("an unreadable event ({} chars)", token.len());
+    };
+    let tag = |name: &str| {
+        ev.get("tags").and_then(Value::as_array).and_then(|tags| {
+            tags.iter().find_map(|t| (t.get(0).and_then(Value::as_str) == Some(name)).then(|| t.get(1).and_then(Value::as_str)).flatten())
+        })
+    };
+    let age = ev.get("created_at").and_then(Value::as_i64).map(|at| sessions::now() - at);
+    format!(
+        "key {}…, kind {}, signed {} s ago, u {}, method {}",
+        ev.get("pubkey").and_then(Value::as_str).map(|p| &p[..p.len().min(12)]).unwrap_or("?"),
+        ev.get("kind").map(Value::to_string).unwrap_or_else(|| "?".into()),
+        age.map(|a| a.to_string()).unwrap_or_else(|| "?".into()),
+        tag("u").unwrap_or("?"),
+        tag("method").unwrap_or("?"),
+    )
 }
 
 /// Why a NIP-98 event was refused, for the person who signed it.
