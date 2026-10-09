@@ -126,13 +126,24 @@
         p.className = bad ? "error" : "note";
         p.textContent = text;
       };
+      // Each step to the server's log too: what the extension did never
+      // reaches /login/nostr otherwise.
+      const trace = (stage, detail) => {
+        try {
+          const ext = window.nostr ? Object.keys(window.nostr).sort().join(",") : "none";
+          fetch("/login/nostr/trace", { method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ stage, detail: (detail || "") + " · window.nostr: " + ext + " · " + navigator.userAgent.slice(-60) }) });
+        } catch (e) {}
+      };
       if (!window.nostr) n.title = "needs a nostr extension (NIP-07) in this browser";
       n.addEventListener("click", async () => {
-        if (!window.nostr) { say("No nostr extension (NIP-07) answers in this browser.", true); return; }
+        if (!window.nostr) { say("No nostr extension (NIP-07) answers in this browser.", true); trace("no extension"); return; }
         const url = location.origin + "/login/nostr";
         n.disabled = true;
         say("Waiting for your nostr extension to sign…");
-        const slow = setTimeout(() => say("Still waiting for your nostr extension. Approve the request there (and on your signing device, if it uses one); a signature has to arrive within a minute."), 15000);
+        trace("asked the extension to sign");
+        const t0 = Date.now();
+        const slow = setTimeout(() => { say("Still waiting for your nostr extension. Approve the request there (and on your signing device, if it uses one); a signature has to arrive within a minute."); trace("still waiting", "15 s"); }, 15000);
         let ev;
         try {
           ev = await window.nostr.signEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000),
@@ -140,10 +151,12 @@
         } catch (e) {
           clearTimeout(slow); n.disabled = false;
           say("Your nostr extension did not sign" + (e && e.message ? ": " + e.message : "."), true);
+          trace("the extension refused", (e && e.message) || String(e));
           return;
         }
         clearTimeout(slow);
-        if (!ev || !ev.sig) { n.disabled = false; say("Your nostr extension answered without a signature.", true); return; }
+        if (!ev || !ev.sig) { n.disabled = false; say("Your nostr extension answered without a signature.", true); trace("answered without a signature", typeof ev + " " + JSON.stringify(ev).slice(0, 120)); return; }
+        trace("the extension signed", Math.round((Date.now() - t0) / 1000) + " s");
         say("Signed. Signing in…");
         try {
           const r = await fetch(url + "?next=" + encodeURIComponent(n.dataset.next), {

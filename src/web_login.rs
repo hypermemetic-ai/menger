@@ -594,6 +594,26 @@ pub async fn nostr(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q)
     }
 }
 
+#[derive(Deserialize)]
+pub struct NostrTrace {
+    stage: String,
+    #[serde(default)]
+    detail: String,
+}
+
+/// IDENTITY-32: the page's nostr steps that never reach `/login/nostr` —
+/// waiting on the extension, the extension refusing — into the log, so a
+/// failing signer can be read without the person's screen. Only from the
+/// shell's own pages; short, printable, and logged, nothing more.
+pub async fn nostr_trace(State(login): State<Arc<Login>>, headers: HeaderMap, axum::Json(t): axum::Json<NostrTrace>) -> Response {
+    if login.foreign(&headers) || headers.get(header::ORIGIN).is_none() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let clean = |s: &str, n: usize| s.chars().filter(|c| !c.is_control()).take(n).collect::<String>();
+    tracing::info!("nostr sign-in (browser): {} — {}", clean(&t.stage, 32), clean(&t.detail, 300));
+    StatusCode::NO_CONTENT.into_response()
+}
+
 /// What a NIP-98 event says, for the log: its key, kind, age, URL and
 /// method — or that it could not be read.
 fn nip98_detail(token: &str) -> String {

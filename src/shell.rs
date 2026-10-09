@@ -138,6 +138,7 @@ pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
                 .route("/login/start", get(w::start))
                 .route("/login/callback", get(w::callback))
                 .route("/login/nostr", axum::routing::post(w::nostr))
+                .route("/login/nostr/trace", axum::routing::post(w::nostr_trace))
                 .route("/login/me", get(w::me))
                 .route("/logout", axum::routing::post(w::logout))
                 .with_state(login.clone()),
