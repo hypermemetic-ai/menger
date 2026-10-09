@@ -1,130 +1,157 @@
 {
-  "comment": "COMP-10: written by scripts/sdk-codegen.sh from the IR hub-codegen generated this client from — each method of the tickets activation and its parameter names. tickets-api/tests/sdk_manifest.rs holds the activation to it. Do not edit: run the script.",
-  "namespace": "tickets",
-  "methods": {
-    "amend": [
-      "body",
-      "id",
-      "title"
-    ],
-    "answer": [
-      "input",
-      "rationale",
-      "source",
-      "ticket",
-      "value"
-    ],
-    "blockers": [
-      "id"
-    ],
-    "clear_answer": [
-      "input",
-      "source",
-      "ticket"
-    ],
-    "close_input": [
-      "input",
-      "ticket"
-    ],
-    "components": [],
-    "counts": [
-      "filter"
-    ],
-    "create": [
-      "blocked_by",
-      "body",
-      "epic",
-      "kind",
-      "parent",
-      "path",
-      "severity",
-      "title"
-    ],
-    "extents": [],
-    "facets": [
-      "base",
-      "filter"
-    ],
-    "find": [
-      "after",
-      "filter",
-      "limit",
-      "query"
-    ],
-    "get": [
-      "id"
-    ],
-    "groups": [],
-    "health": [],
-    "inputs": [
-      "epic",
-      "filter",
-      "state",
-      "ticket"
-    ],
-    "link_commits": [
-      "commits",
-      "id"
-    ],
-    "list": [
-      "after",
-      "at",
-      "epic",
-      "filter",
-      "limit",
-      "parent",
-      "status",
-      "summary"
-    ],
-    "member": [
-      "filter",
-      "ids"
-    ],
-    "ready_set": [
-      "after",
-      "epic",
-      "filter",
-      "limit",
-      "summary"
-    ],
-    "reopen_input": [
-      "input",
-      "ticket"
-    ],
-    "schema": [],
-    "set_kind": [
-      "id",
-      "kind",
-      "status"
-    ],
-    "set_parent": [
-      "id",
-      "parent"
-    ],
-    "set_status": [
-      "id",
-      "status"
-    ],
-    "tree": [
-      "after",
-      "epic",
-      "filter",
-      "limit",
-      "matches_only",
-      "parent"
-    ],
-    "unlink_commits": [
-      "commits",
-      "id"
-    ],
-    "watch": [
-      "epic",
-      "filter",
-      "membership"
-    ],
-    "waves": [
-      "epics",
-      "kinds"
-    ]
+  "comment": "COMP-10: written by scripts/sdk-codegen.sh from the IR hub-codegen generated this client from — each activation on the hub (COMMENT-2: comments beside tickets), its methods and their parameter names. tickets-api/tests/sdk_manifest.rs holds the activations to it. Do not edit: run the script.",
+  "activations": {
+    "comments": {
+      "add": [
+        "anchor",
+        "author",
+        "body"
+      ],
+      "list": [
+        "after",
+        "author",
+        "limit",
+        "path",
+        "route",
+        "state",
+        "text",
+        "ticket",
+        "under"
+      ],
+      "reopen": [
+        "id"
+      ],
+      "resolve": [
+        "id"
+      ],
+      "schema": [],
+      "watch": []
+    },
+    "tickets": {
+      "amend": [
+        "body",
+        "id",
+        "title"
+      ],
+      "answer": [
+        "input",
+        "rationale",
+        "source",
+        "ticket",
+        "value"
+      ],
+      "blockers": [
+        "id"
+      ],
+      "clear_answer": [
+        "input",
+        "source",
+        "ticket"
+      ],
+      "close_input": [
+        "input",
+        "ticket"
+      ],
+      "components": [],
+      "counts": [
+        "filter"
+      ],
+      "create": [
+        "blocked_by",
+        "body",
+        "epic",
+        "kind",
+        "parent",
+        "path",
+        "severity",
+        "title"
+      ],
+      "extents": [],
+      "facets": [
+        "base",
+        "filter"
+      ],
+      "find": [
+        "after",
+        "filter",
+        "limit",
+        "query"
+      ],
+      "get": [
+        "id"
+      ],
+      "groups": [],
+      "health": [],
+      "inputs": [
+        "epic",
+        "filter",
+        "state",
+        "ticket"
+      ],
+      "link_commits": [
+        "commits",
+        "id"
+      ],
+      "list": [
+        "after",
+        "at",
+        "epic",
+        "filter",
+        "limit",
+        "parent",
+        "status",
+        "summary"
+      ],
+      "member": [
+        "filter",
+        "ids"
+      ],
+      "ready_set": [
+        "after",
+        "epic",
+        "filter",
+        "limit",
+        "summary"
+      ],
+      "reopen_input": [
+        "input",
+        "ticket"
+      ],
+      "schema": [],
+      "set_kind": [
+        "id",
+        "kind",
+        "status"
+      ],
+      "set_parent": [
+        "id",
+        "parent"
+      ],
+      "set_status": [
+        "id",
+        "status"
+      ],
+      "tree": [
+        "after",
+        "epic",
+        "filter",
+        "limit",
+        "matches_only",
+        "parent"
+      ],
+      "unlink_commits": [
+        "commits",
+        "id"
+      ],
+      "watch": [
+        "epic",
+        "filter",
+        "membership"
+      ],
+      "waves": [
+        "epics",
+        "kinds"
+      ]
+    }
   }
 }

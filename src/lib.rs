@@ -18,6 +18,6 @@ pub mod shell;
 /// The cache and its storage, re-exported from the activation crate so
 /// `menger::store::SeedSpec` and friends keep their paths.
 pub use menger_tickets_api::store;
-pub use menger_tickets_api::{Tickets, TicketsClient};
+pub use menger_tickets_api::{Comments, CommentsClient, Tickets, TicketsClient};
 
 pub use builder::{build_rpc, build_rpc_seeded, build_rpc_with, default_db_path};

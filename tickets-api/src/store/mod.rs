@@ -143,6 +143,15 @@
 //! never a body. Held in the cache, histories and all; stored in two tables
 //! of its own, which a database written before INPUT-3 gains — every body's
 //! inputs read in — durably, once, on first open.
+//! COMMENT-2 keeps the **comments** ([`comments`]): a reader's notes on the
+//! app and on ticket bodies, records of their own beside the tickets. Held in
+//! the cache whole, read from it for every `list`; three writes of their own
+//! — `add_comment`, `resolve_comment`, `reopen_comment` — take the write path
+//! every write takes and broadcast on a channel of their own
+//! ([`Store::subscribe_comments`]); no ticket's write touches one, so a
+//! comment keeps its anchor. Stored in one table, which is stored form 7: a
+//! file in form 6 gains it, empty, in place, once, on first open
+//! (`stored::upgrade`).
 
 use crate::types::{
     is_menger_path, path_address, AnswerSource, Component, Input, InputState, InputValue, Placement, PlacementChange,
@@ -257,6 +266,9 @@ fn broadcast_groups(tx: &Broadcast, groups: Vec<Group>) {
 pub(crate) struct Broadcast {
     plain: broadcast::Sender<Change>,
     filtered: broadcast::Sender<Change>,
+    /// COMMENT-2: `comments.watch`'s — the comments' own changes, which no
+    /// ticket's `watch` carries.
+    comments: broadcast::Sender<CommentChange>,
 }
 
 /// How many changes a subscriber may fall behind before it lags (SCALE-5).
@@ -267,7 +279,13 @@ impl Broadcast {
         Self {
             plain: broadcast::channel(BROADCAST_CAPACITY).0,
             filtered: broadcast::channel(BROADCAST_CAPACITY).0,
+            comments: broadcast::channel(BROADCAST_CAPACITY).0,
         }
+    }
+
+    /// COMMENT-2: a comment's change, to `comments.watch`.
+    fn comment(&self, change: CommentChange) {
+        let _ = self.comments.send(change);
     }
 
     /// Sends `change` to every subscriber it is for: a cell move to the
@@ -1059,6 +1077,18 @@ pub enum StoreError {
     /// FILTER-13: `tree` asked with both a `parent` and an `epic`, or with
     /// neither — it answers one address.
     TreeAddress,
+    /// COMMENT-2: `add` refused the comment — an empty body, a blank author,
+    /// a malformed anchor ([`crate::comments::Problem`], which names it).
+    /// Nothing was kept.
+    CommentRefused(crate::comments::Problem),
+    /// COMMENT-2: the anchor's `ticket` names no ticket. Nothing was kept.
+    CommentTicket { ticket: String },
+    /// COMMENT-2: `resolve` or `reopen` named no comment — `newest` the
+    /// newest id there is. Nothing changed.
+    CommentNotFound { id: u64, newest: Option<u64> },
+    /// COMMENT-2: `list`'s `after` names no comment, so there is no position
+    /// to resume from.
+    CommentCursor(u64),
 }
 
 impl StoreError {
@@ -1309,6 +1339,18 @@ impl std::fmt::Display for StoreError {
                 f,
                 "tree: give `parent` (a ticket's children) or `epic` (a shortcode's top level), exactly one of them"
             ),
+            Self::CommentRefused(problem) => write!(f, "{problem} (nothing was kept)"),
+            Self::CommentTicket { ticket } => write!(
+                f,
+                "malformed anchor: ticket {ticket} names no ticket — leave it out when the element belongs to none \
+                 (nothing was kept)"
+            ),
+            Self::CommentNotFound { id, newest: None } => write!(f, "no comment {id}: there are no comments yet (nothing changed)"),
+            Self::CommentNotFound { id, newest: Some(n) } => write!(
+                f,
+                "no comment {id}: comment ids run from 1 to {n} (nothing changed)"
+            ),
+            Self::CommentCursor(id) => write!(f, "after: no comment {id} to resume after"),
         }
     }
 }
@@ -1534,6 +1576,9 @@ struct Cache {
     /// holds ([`cells::Cells`]) — what a filter is compiled against and
     /// answered from. Moved and stored as SCALE-32's state is.
     cells: cells::Cells,
+    /// COMMENT-2: every comment ([`comments::Comments`]) — read from its
+    /// table at open, moved by a comment's own write and by nothing else.
+    comments: comments::Comments,
     written: u64,
 }
 
@@ -1856,6 +1901,8 @@ impl Cache {
             components: components::Registry::default(),
             // INPUT-3: so are the inputs.
             inputs: inputs::Inputs::default(),
+            // COMMENT-2: and the comments.
+            comments: comments::Comments::default(),
             written: 0,
         }
     }
@@ -1910,6 +1957,8 @@ impl Cache {
             components: components::Registry::default(),
             // INPUT-3: so are the inputs.
             inputs: inputs::Inputs::default(),
+            // COMMENT-2: and the comments.
+            comments: comments::Comments::default(),
             written: 0,
         }
     }
@@ -2614,7 +2663,15 @@ impl Store {
         // has it built here, once, from the tickets, durably and in one
         // transaction, before anything is handed out; the cache that build
         // made is the one the store starts with.
-        let cache = match stored::state(&conn)? {
+        // COMMENT-2: a file in form 6 gains form 7 — the comments table,
+        // empty — in place: nothing derived moved, so nothing is built again.
+        let mut found = stored::state(&conn)?;
+        if let stored::State::Older(form) = found {
+            if stored::upgrade(&mut conn, form)? {
+                found = stored::State::Current;
+            }
+        }
+        let cache = match found {
             stored::State::Current => {
                 let (rows, unsatisfied) = db::load_rows_counted(&conn)?;
                 stored::load(&conn, rows, unsatisfied)?
@@ -2629,6 +2686,8 @@ impl Store {
         cache.components = components::load(&conn)?;
         // INPUT-3: the inputs and their histories, as stored.
         cache.inputs = inputs::load(&conn)?;
+        // COMMENT-2: the comments, as stored.
+        cache.comments = comments::load(&conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
             Some(path) => Readers::open(path)?,
@@ -4231,6 +4290,108 @@ impl Store {
         .await
     }
 
+    /// COMMENT-2: keeps a comment — `anchor` and `body` checked
+    /// ([`crate::comments::check`]: an empty body, a blank author and a
+    /// malformed anchor are each refused, naming the problem), `author`
+    /// `owner` when none is given; then, under the write-serial lock, the
+    /// anchor's `ticket` must name a ticket ([`StoreError::CommentTicket`])
+    /// and is kept as its id, with its `updated_unix` as `version`; the
+    /// comment takes the next id, state `open` and the time. One row
+    /// committed, the cache moved, `Added` broadcast; the comment as kept is
+    /// the answer. A refusal keeps nothing.
+    pub async fn add_comment(&self, anchor: crate::comments::Anchor, body: String, author: Option<String>) -> Result<crate::comments::Comment, StoreError> {
+        let (mut anchor, author) = crate::comments::check(anchor, &body, author.as_deref()).map_err(StoreError::CommentRefused)?;
+        let serial = self.serial().await;
+        let comment = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            if let Some(id) = anchor.ticket.take() {
+                let row = cache.get(&id).ok_or_else(|| StoreError::CommentTicket { ticket: id.clone() })?;
+                anchor.ticket = Some(row.id.clone());
+                anchor.version = Some(row.updated_unix);
+            }
+            crate::comments::Comment {
+                id: cache.comments.next_id(),
+                state: crate::comments::CommentState::Open,
+                author,
+                at: chrono::Utc::now().timestamp(),
+                anchor,
+                body,
+            }
+        };
+        let (stored, kept) = (comment.clone(), comment.clone());
+        self.write(
+            serial,
+            move |tx| Ok(comments::store(tx, &stored)?),
+            move |cache, _| cache.comments.put(kept),
+            move |(), (), tx| {
+                tx.comment(CommentChange::Added(comment.clone()));
+                comment
+            },
+        )
+        .await
+    }
+
+    /// COMMENT-2: one page of the comments `q` admits, newest first — after
+    /// the comment `after` (exclusive), at most `limit` — with the cursor
+    /// for the next ([`comments::page`]). From the cache alone.
+    pub fn comments(&self, q: &CommentQuery, after: Option<u64>, limit: Option<u32>) -> Result<CommentPage, StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        comments::page(&cache, q, after, limit)
+    }
+
+    /// COMMENT-2: one comment as the cache holds it.
+    pub fn comment(&self, id: u64) -> Option<crate::comments::Comment> {
+        self.tickets.read().expect("store lock poisoned").comments.get(id).cloned()
+    }
+
+    /// COMMENT-2: resolves the comment `id` — `resolved`, the row's state
+    /// committed, the cache moved, `Resolved` broadcast. One already
+    /// resolved is the answer as it is: nothing written, nothing said. An
+    /// id that names no comment is [`StoreError::CommentNotFound`].
+    pub async fn resolve_comment(&self, id: u64) -> Result<crate::comments::Comment, StoreError> {
+        self.comment_state(id, crate::comments::CommentState::Resolved).await
+    }
+
+    /// COMMENT-2: reopens the comment `id` — `open` again; as
+    /// [`Store::resolve_comment`], the other way.
+    pub async fn reopen_comment(&self, id: u64) -> Result<crate::comments::Comment, StoreError> {
+        self.comment_state(id, crate::comments::CommentState::Open).await
+    }
+
+    /// COMMENT-2: the comment `id` moved to `to`, through the write path
+    /// every write takes; a move to where it is writes and says nothing.
+    async fn comment_state(&self, id: u64, to: crate::comments::CommentState) -> Result<crate::comments::Comment, StoreError> {
+        let serial = self.serial().await;
+        let current = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            cache.comments.get(id).cloned().ok_or(StoreError::CommentNotFound { id, newest: cache.comments.newest() })?
+        };
+        if current.state == to {
+            return Ok(current);
+        }
+        let next = crate::comments::Comment { state: to, ..current };
+        let (stored, kept) = (next.clone(), next.clone());
+        self.write(
+            serial,
+            move |tx| Ok(comments::store(tx, &stored)?),
+            move |cache, _| cache.comments.put(kept),
+            move |(), (), tx| {
+                tx.comment(match to {
+                    crate::comments::CommentState::Resolved => CommentChange::Resolved(next.clone()),
+                    crate::comments::CommentState::Open => CommentChange::Reopened(next.clone()),
+                });
+                next
+            },
+        )
+        .await
+    }
+
+    /// COMMENT-2: `comments.watch`'s channel — every comment added, resolved
+    /// or reopened, in the order the writes were acknowledged.
+    pub fn subscribe_comments(&self) -> broadcast::Receiver<CommentChange> {
+        self.tx.comments.subscribe()
+    }
+
     /// SDLC-9: links `entries` to the ticket `id` — the record of which
     /// commits finished it. Every entry must be a commit reference
     /// ([`commits::reference`]); any that is not refuses the whole call,
@@ -4819,6 +4980,10 @@ mod components;
 /// INPUT-3: the inputs store — each ticket's inputs as its body declares
 /// them, their answers and state changes, the tables and the migration.
 mod inputs;
+/// COMMENT-2: the comments store — a reader's comments on the app, kept
+/// beside the tickets, behind the cache.
+mod comments;
+pub use comments::{CommentChange, CommentPage, CommentQuery};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
 /// has commits)` interned as one cell; per shortcode and cell, a Roaring
@@ -5006,3 +5171,11 @@ mod tests_lensed;
 /// `set_kind` every random walk takes into its mix, held to the rules.
 #[cfg(test)]
 mod tests_kinds;
+
+/// COMMENT-2: the comments store — `add` (kept, returned, every refusal
+/// keeping nothing), `resolve` / `reopen`, `list` newest first and paged,
+/// every filter and conjunction held to a reference (`under` to the filter
+/// language's own answer) over random comments on a moving tree, a comment's
+/// anchor kept through its ticket's writes, and the form 6 → 7 upgrade.
+#[cfg(test)]
+mod tests_comments;

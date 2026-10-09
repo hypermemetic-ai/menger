@@ -20,7 +20,7 @@
 
 use futures::StreamExt;
 use menger::build_rpc;
-use menger_tickets_api::{Group, Kind, Status, Ticket, TicketsClient, TicketsEvent};
+use menger_tickets_api::{Anchor, Comment, CommentState, CommentsClient, CommentsEvent, Group, Kind, Status, Ticket, TicketsClient, TicketsEvent};
 use plexus_client::{ClientEvent, MethodRef, StreamItem, Transport, WsTransport};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::TransportServer;
@@ -135,7 +135,7 @@ fn apply(
 }
 
 /// The one event a single-event call answers with.
-fn one(events: Vec<TicketsEvent>) -> TicketsEvent {
+fn one<E: std::fmt::Debug>(events: Vec<E>) -> E {
     assert_eq!(events.len(), 1, "expected exactly one event, got {events:?}");
     events.into_iter().next().unwrap()
 }
@@ -692,4 +692,93 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
         .collect();
     assert_eq!(rows[2], ("PT-3".to_string(), Some(Placement::Wave { n: 1 })), "on the row");
     assert_eq!(rows[3], ("PT-4".to_string(), None), "a doc is placed nowhere");
+}
+
+/// COMMENT-2: the `comments` activation through its emitted client —
+/// `CommentsClient<&WsTransport>`, from the activation's own `impl` in
+/// `menger-tickets-api`, as the browser app takes it: `add` with a typed
+/// [`Anchor`], `list` with its filters and paging, `resolve`, `reopen`, and
+/// `watch`, every answer a [`CommentsEvent`] — the comment's fields beside
+/// its type ([`CommentsEvent::into_comment`]).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_comments_through_the_generated_client() {
+    let port = start_server().await;
+    let transport = connect(port).await;
+    let tickets = TicketsClient::new(&transport);
+    let comments = CommentsClient::new(&transport);
+    tickets.create_all("DEMAND".into(), "demands".into(), Some("scope".into()), None, None, None, None, None).await.expect("create");
+    tickets.create_all("DEMAND".into(), "the chip".into(), None, None, None, None, None, None).await.expect("create");
+    let version = match one(tickets.get_all("DEMAND-2".into()).await.expect("get")) {
+        TicketsEvent::Ticket { ticket } => ticket.updated_unix,
+        other => panic!("expected `ticket`, got {other:?}"),
+    };
+    let mut watch = comments.watch();
+    let _ = comments.list_all(None, None, None, None, None, None, None, None, Some(1)).await.expect("round trip");
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    let anchor = Anchor {
+        route: "#/ticket/DEMAND-2".into(),
+        path: "[data-tag=\"ticket DEMAND-1\"]".into(),
+        label: "Parent chip".into(),
+        excerpt: "DEMAND-1".into(),
+        ticket: Some("DEMAND-2".into()),
+        version: None,
+    };
+    let added = one(comments.add_all(anchor.clone(), "show the parent's title too".into(), None).await.expect("add"))
+        .into_comment()
+        .expect("a comment");
+    assert_eq!(
+        added,
+        Comment {
+            id: 1,
+            state: CommentState::Open,
+            author: "owner".into(),
+            at: added.at,
+            anchor: Anchor { version: Some(version), ..anchor.clone() },
+            body: "show the parent's title too".into(),
+        }
+    );
+    let second = one(comments.add_all(Anchor { ticket: None, ..anchor.clone() }, "on no ticket".into(), Some("agent".into())).await.expect("add"))
+        .into_comment()
+        .expect("a comment");
+
+    let listed = comments
+        .list_all(Some("DEMAND-2".into()), None, None, None, Some("open".into()), None, None, None, None)
+        .await
+        .expect("list");
+    assert_eq!(listed, [CommentsEvent::from(added.clone()), CommentsEvent::Page { next: None }]);
+    let page = comments.list_all(None, None, None, None, None, None, None, None, Some(1)).await.expect("list");
+    assert_eq!(page, [CommentsEvent::from(second.clone()), CommentsEvent::Page { next: Some(2) }]);
+    let rest = comments.list_all(None, Some("DEMAND".into()), None, None, None, None, None, Some(2), Some(1)).await.expect("list");
+    assert_eq!(rest, [CommentsEvent::from(added.clone()), CommentsEvent::Page { next: None }]);
+
+    let resolved = one(comments.resolve_all(1).await.expect("resolve")).into_comment().expect("a comment");
+    assert_eq!(resolved.state, CommentState::Resolved);
+    let reopened = one(comments.reopen_all(1).await.expect("reopen")).into_comment().expect("a comment");
+    assert_eq!(reopened, added);
+    match one(comments.resolve_all(9).await.expect("resolve")) {
+        CommentsEvent::Error { message } => assert!(message.starts_with("no comment 9"), "{message}"),
+        other => panic!("expected `error`, got {other:?}"),
+    }
+
+    let mut heard = Vec::new();
+    while heard.len() < 4 {
+        let ev = tokio::time::timeout(Duration::from_secs(20), watch.next())
+            .await
+            .expect("an event in time")
+            .expect("the watch goes on")
+            .expect("no transport error");
+        if let ClientEvent::Data(ev) = ev {
+            heard.push(ev);
+        }
+    }
+    assert_eq!(
+        heard,
+        [
+            CommentsEvent::Added { comment: added.clone() },
+            CommentsEvent::Added { comment: second },
+            CommentsEvent::Resolved { comment: resolved },
+            CommentsEvent::Reopened { comment: added },
+        ]
+    );
 }

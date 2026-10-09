@@ -1,4 +1,4 @@
-use menger_tickets_api::Tickets;
+use menger_tickets_api::{Comments, Tickets};
 use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError};
 use plexus_core::plexus::DynamicHub;
 use std::path::{Path, PathBuf};
@@ -14,7 +14,8 @@ pub fn default_db_path() -> PathBuf {
         .join("tickets.db")
 }
 
-/// Builds the `menger` hub with every activation registered.
+/// Builds the `menger` hub with every activation registered — `tickets` and
+/// (COMMENT-2) `comments`, over one store.
 ///
 /// Opens the database at `db_path` (the system of record — a fresh
 /// location is an empty store), loads every ticket into the service-wide
@@ -94,7 +95,12 @@ pub async fn build_rpc_seeded(
         }
     };
 
+    // COMMENT-2: `comments` beside `tickets`, over the same store — one
+    // cache, one database handle.
+    let store = Arc::new(store);
     Ok(Arc::new(
-        DynamicHub::new("menger").register(Tickets::new(Arc::new(store))),
+        DynamicHub::new("menger")
+            .register(Tickets::new(Arc::clone(&store)))
+            .register(Comments::new(store)),
     ))
 }

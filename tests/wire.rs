@@ -2399,3 +2399,289 @@ async fn reads_take_the_lens_over_the_wire() {
         assert_eq!(refused, listed, "{method} {params}: list's own refusal");
     }
 }
+
+// ---------------------------------------------------------------------------
+// COMMENT-2: the `comments` activation over the real protocol
+// ---------------------------------------------------------------------------
+
+/// COMMENT-2's anchor on the Parent chip of `ticket`'s page.
+fn chip(ticket: &str) -> Value {
+    json!({
+        "route": format!("#/ticket/{ticket}"),
+        "ticket": ticket,
+        "path": "[data-tag=\"ticket DEMAND-1\"]",
+        "label": "Parent chip",
+        "excerpt": "DEMAND-1"
+    })
+}
+
+/// The ids of a `comments.list` answer's rows, its `page` asserted last and
+/// alone.
+async fn comment_ids(client: &WsClient, params: Value) -> (Vec<u64>, Value) {
+    let (rows, page) = paged(call(client, "comments.list", params).await).await;
+    assert!(rows.iter().all(|r| r["type"] == "comment"), "{rows:?}");
+    (rows.iter().map(|r| r["id"].as_u64().unwrap()).collect(), page)
+}
+
+/// COMMENT-2's Example, exactly: `add` keeps the comment and answers it —
+/// its fields beside `type`: the id, `open`, `owner`, the time, the anchor
+/// (the ticket's `updated_unix` as `version`) and the body; `list { ticket,
+/// state }` answers it and one `page { next: null }`; `resolve` answers it
+/// resolved; and the last line's `list { under, state, text }`.
+#[tokio::test]
+async fn the_comments_example_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": "demands", "kind": "scope"})).await;
+    let parent = answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": "the parent chip"})).await;
+    let version = parent["ticket"]["updated_unix"].as_i64().unwrap();
+
+    let before = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let added = collect(
+        call(
+            &client,
+            "comments.add",
+            json!({"anchor": {"route":"#/ticket/DEMAND-2","ticket":"DEMAND-2","path":"[data-tag=\"ticket DEMAND-1\"]","label":"Parent chip","excerpt":"DEMAND-1"},"body":"show the parent's title too"}),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(added.len(), 1, "exactly one event: {added:?}");
+    let at = added[0]["at"].as_i64().unwrap();
+    assert!(at >= before, "the time it was added");
+    let comment = json!({
+        "type": "comment", "id": 1, "state": "open", "author": "owner", "at": at,
+        "anchor": {
+            "route": "#/ticket/DEMAND-2", "ticket": "DEMAND-2", "path": "[data-tag=\"ticket DEMAND-1\"]",
+            "label": "Parent chip", "excerpt": "DEMAND-1", "version": version
+        },
+        "body": "show the parent's title too"
+    });
+    assert_eq!(added[0], comment);
+
+    let listed = collect(call(&client, "comments.list", json!({"ticket": "DEMAND-2", "state": "open"})).await).await;
+    assert_eq!(listed, [comment.clone(), json!({"type": "page", "next": null})]);
+
+    let resolved = collect(call(&client, "comments.resolve", json!({"id": 1})).await).await;
+    let mut want = comment.clone();
+    want["state"] = json!("resolved");
+    assert_eq!(resolved, [want.clone()]);
+
+    // `synapse … comments list --under DEMAND --state open --text title`:
+    // the one comment is resolved now; one open that says "title" is found.
+    assert_eq!(comment_ids(&client, json!({"under": "DEMAND", "state": "open", "text": "title"})).await.0, Vec::<u64>::new());
+    assert_eq!(comment_ids(&client, json!({"under": "DEMAND", "state": "resolved", "text": "title"})).await.0, [1]);
+    answer(&client, "comments.add", json!({"anchor": chip("DEMAND-2"), "body": "and its TITLE in bold"})).await;
+    assert_eq!(comment_ids(&client, json!({"under": "DEMAND", "state": "open", "text": "title"})).await.0, [2]);
+}
+
+/// COMMENT-2, `list`'s filters and paging: `ticket`, `under` (a ticket's
+/// subtree, a shortcode and the shortcodes it hosts), `route`, `path` (a
+/// prefix), `state`, `author`, `text` (body, label, excerpt), every one at
+/// once, a blank one as none; newest first, paged with `after` + `limit`;
+/// an unknown state and an `after` naming no comment each one error alone.
+#[tokio::test]
+async fn comments_list_filters_and_pages_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    for (epic, title, kind, parent) in [
+        ("TOP", "the top", "scope", None),
+        ("TOP", "a build", "build", None),
+        ("TOP", "an execution", "execution", None),
+        ("TOP", "under the execution", "build", Some("TOP-3")),
+        ("SUB", "hosted under TOP-3", "scope", Some("TOP-3")),
+        ("SUB", "a sub build", "build", None),
+        ("APART", "apart", "scope", None),
+    ] {
+        let ev = answer(&client, "tickets.create", json!({"epic": epic, "title": title, "kind": kind, "parent": parent})).await;
+        assert_eq!(ev["type"], "created", "{ev}");
+    }
+    let add = |anchor: Value, body: &'static str, author: Option<&'static str>| {
+        let client = &client;
+        async move {
+            let ev = answer(client, "comments.add", json!({"anchor": anchor, "body": body, "author": author})).await;
+            assert_eq!(ev["type"], "comment", "{ev}");
+            ev["id"].as_u64().unwrap()
+        }
+    };
+    let on = |ticket: Option<&str>, route: &str, path: &str, label: &str, excerpt: &str| {
+        json!({"route": route, "path": path, "label": label, "excerpt": excerpt, "ticket": ticket})
+    };
+    let c1 = add(on(Some("TOP-4"), "#/ticket/TOP-4", "main > h1", "Title", "under the execution"), "rename it", None).await;
+    let c2 = add(on(Some("SUB-2"), "#/ticket/SUB-2", "main > h1 > span", "Status pill", "Pending"), "should be Ready", Some("agent-1")).await;
+    let c3 = add(on(Some("APART-1"), "#/ticket/APART-1", "[data-tag=\"m-wave\"]", "Wave summary", "WAVE 2"), "numbers look off", None).await;
+    let c4 = add(on(Some("TOP-2"), "#/waves/TOP", "main > h1", "Title", "a TITLE"), "fine", Some("agent-1")).await;
+    let c5 = add(on(None, "#/", "nav > ul", "Nav", ""), "the nav is slow", None).await;
+    assert_eq!(answer(&client, "comments.resolve", json!({"id": c2})).await["state"], "resolved");
+
+    let ids = |params: Value| {
+        let client = &client;
+        async move { comment_ids(client, params).await.0 }
+    };
+    assert_eq!(ids(json!({})).await, [c5, c4, c3, c2, c1], "newest first");
+    assert_eq!(ids(json!({"ticket": "sub-2"})).await, [c2]);
+    assert_eq!(ids(json!({"under": "TOP-3"})).await, [c2, c1], "TOP-3's subtree, SUB hosted in it");
+    assert_eq!(ids(json!({"under": "TOP"})).await, [c4, c2, c1], "the shortcode and the one it hosts");
+    assert_eq!(ids(json!({"under": "SUB"})).await, [c2]);
+    assert_eq!(ids(json!({"under": "APART-1"})).await, [c3]);
+    assert_eq!(ids(json!({"route": "#/waves/TOP"})).await, [c4]);
+    assert_eq!(ids(json!({"path": "main > h1"})).await, [c4, c2, c1], "a prefix");
+    assert_eq!(ids(json!({"path": "main > h1 > "})).await, [c2]);
+    assert_eq!(ids(json!({"state": "resolved"})).await, [c2]);
+    assert_eq!(ids(json!({"state": "Open"})).await, [c5, c4, c3, c1]);
+    assert_eq!(ids(json!({"author": "agent-1"})).await, [c4, c2]);
+    assert_eq!(ids(json!({"author": "owner"})).await, [c5, c3, c1]);
+    assert_eq!(ids(json!({"text": "TITLE"})).await, [c4, c1], "the label, the excerpt");
+    assert_eq!(ids(json!({"text": "slow"})).await, [c5], "the body");
+    assert_eq!(ids(json!({"text": "wave 2"})).await, [c3], "the excerpt");
+    assert_eq!(
+        ids(json!({"ticket": "TOP-4", "under": "TOP", "route": "#/ticket/TOP-4", "path": "main", "state": "open", "author": "owner", "text": "rename"})).await,
+        [c1],
+        "every filter at once"
+    );
+    assert_eq!(ids(json!({"ticket": "", "under": " ", "route": "", "path": "", "state": "", "author": " ", "text": ""})).await.len(), 5, "blank is none");
+
+    // Paging: newest first, `after` exclusive, `next` the page's last.
+    let (page_ids, page) = comment_ids(&client, json!({"limit": 2})).await;
+    assert_eq!((page_ids, page), (vec![c5, c4], json!({"type": "page", "next": c4})));
+    let (page_ids, page) = comment_ids(&client, json!({"limit": 2, "after": c4})).await;
+    assert_eq!((page_ids, page), (vec![c3, c2], json!({"type": "page", "next": c2})));
+    let (page_ids, page) = comment_ids(&client, json!({"limit": 2, "after": c2})).await;
+    assert_eq!((page_ids, page), (vec![c1], json!({"type": "page", "next": null})));
+    let (page_ids, page) = comment_ids(&client, json!({"limit": 1, "after": c5, "state": "open"})).await;
+    assert_eq!((page_ids, page), (vec![c4], json!({"type": "page", "next": c4})));
+
+    // Refusals: one error, nothing else.
+    for (params, says) in [
+        (json!({"state": "closed"}), "unknown comment state 'closed' (expected open or resolved)"),
+        (json!({"after": 99}), "after: no comment 99 to resume after"),
+    ] {
+        let evs = collect(call(&client, "comments.list", params.clone()).await).await;
+        assert_eq!(evs, [json!({"type": "error", "message": says})], "{params}");
+    }
+}
+
+/// COMMENT-2, row 6 over the wire: an unknown id, an empty body and a
+/// malformed anchor — a field left out, a blank one, a route that is no app
+/// page, a ticket that is none, a blank author — are each one in-band
+/// `error` naming the problem, and keep nothing: the next comment kept is
+/// still 1, and `watch` heard only it.
+#[tokio::test]
+async fn comment_refusals_are_in_band_and_keep_nothing_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": "demands", "kind": "scope"})).await;
+    let mut watch = call(&client, "comments.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let anchor_without = |field: &str| {
+        let mut a = chip("DEMAND-1");
+        a.as_object_mut().unwrap().remove(field);
+        a
+    };
+    let with = |field: &str, value: Value| {
+        let mut a = chip("DEMAND-1");
+        a[field] = value;
+        a
+    };
+    for (method, params, says) in [
+        ("comments.resolve", json!({"id": 1}), "no comment 1: there are no comments yet (nothing changed)"),
+        ("comments.reopen", json!({"id": 7}), "no comment 7: there are no comments yet (nothing changed)"),
+        ("comments.add", json!({"anchor": chip("DEMAND-1"), "body": ""}), "the comment's body is empty (nothing was kept)"),
+        ("comments.add", json!({"anchor": chip("DEMAND-1"), "body": " \n "}), "the comment's body is empty (nothing was kept)"),
+        ("comments.add", json!({"anchor": anchor_without("route"), "body": "x"}), "malformed anchor: route is missing or empty (nothing was kept)"),
+        ("comments.add", json!({"anchor": anchor_without("path"), "body": "x"}), "malformed anchor: path is missing or empty (nothing was kept)"),
+        ("comments.add", json!({"anchor": with("label", json!("  ")), "body": "x"}), "malformed anchor: label is missing or empty (nothing was kept)"),
+        (
+            "comments.add",
+            json!({"anchor": with("route", json!("/ticket/DEMAND-1")), "body": "x"}),
+            "malformed anchor: route '/ticket/DEMAND-1' is not an app page: a route begins #/ (e.g. #/ticket/DEMAND-2, or #/ for the board) (nothing was kept)",
+        ),
+        (
+            "comments.add",
+            json!({"anchor": with("ticket", json!("DEMAND-9")), "body": "x"}),
+            "malformed anchor: ticket DEMAND-9 names no ticket — leave it out when the element belongs to none (nothing was kept)",
+        ),
+        ("comments.add", json!({"anchor": chip("DEMAND-1"), "body": "x", "author": " "}), "author is blank (leave it out for `owner`) (nothing was kept)"),
+    ] {
+        let evs = collect(call(&client, method, params.clone()).await).await;
+        assert_eq!(evs, [json!({"type": "error", "message": says})], "{method} {params}");
+    }
+    assert_eq!(comment_ids(&client, json!({})).await.0, Vec::<u64>::new(), "nothing kept");
+    let kept = answer(&client, "comments.add", json!({"anchor": anchor_without("excerpt"), "body": "an excerpt may be left out"})).await;
+    assert_eq!((kept["id"].as_u64(), kept["anchor"]["excerpt"].as_str()), (Some(1), Some("")));
+    let heard = next_events(&mut watch, 1).await;
+    assert_eq!((heard[0]["type"].as_str(), heard[0]["comment"]["id"].as_u64()), (Some("added"), Some(1)), "only the one kept");
+    let evs = collect(call(&client, "comments.resolve", json!({"id": 2})).await).await;
+    assert_eq!(evs, [json!({"type": "error", "message": "no comment 2: comment ids run from 1 to 1 (nothing changed)"})]);
+}
+
+/// COMMENT-2, row 7 over the wire: `watch` is `added`, `resolved` and
+/// `reopened`, each with the comment, in the order the writes were
+/// acknowledged — a resolve of what is resolved says nothing; and the two
+/// watches keep apart: `tickets.watch` hears no comment, `comments.watch` no
+/// ticket.
+#[tokio::test]
+async fn comments_watch_carries_added_resolved_reopened_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": "demands", "kind": "scope"})).await;
+    answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": "the parent chip"})).await;
+    let mut comments = call(&client, "comments.watch", json!({})).await;
+    let mut tickets = call(&client, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let a = answer(&client, "comments.add", json!({"anchor": chip("DEMAND-2"), "body": "first"})).await;
+    let b = answer(&client, "comments.add", json!({"anchor": chip("DEMAND-1"), "body": "second", "author": "agent-1"})).await;
+    let a_resolved = answer(&client, "comments.resolve", json!({"id": 1})).await;
+    assert_eq!(answer(&client, "comments.resolve", json!({"id": 1})).await, a_resolved, "resolved already: the same answer");
+    let a_reopened = answer(&client, "comments.reopen", json!({"id": 1})).await;
+    assert_eq!(a_reopened, a, "open again, as it was");
+    answer(&client, "tickets.amend", json!({"id": "DEMAND-2", "body": "marker"})).await;
+    let marker = answer(&client, "comments.add", json!({"anchor": chip("DEMAND-2"), "body": "marker"})).await;
+
+    let strip = |ev: &Value| {
+        let mut ev = ev.clone();
+        ev.as_object_mut().unwrap().remove("type");
+        ev
+    };
+    let heard = next_events(&mut comments, 5).await;
+    assert_eq!(
+        heard,
+        [
+            json!({"type": "added", "comment": strip(&a)}),
+            json!({"type": "added", "comment": strip(&b)}),
+            json!({"type": "resolved", "comment": strip(&a_resolved)}),
+            json!({"type": "reopened", "comment": strip(&a_reopened)}),
+            json!({"type": "added", "comment": strip(&marker)}),
+        ],
+        "no second `resolved`, no ticket's change"
+    );
+    let evs = until_marker(&mut tickets).await;
+    assert_eq!(kinds(&evs), ["amended"], "no comment on tickets.watch: {evs:?}");
+}
+
+/// COMMENT-2, row 9 over the wire: the ticket a comment names is amended
+/// (title and body), moved and set to another status — the comment is
+/// answered exactly as it was left, `version` included; `under` follows the
+/// ticket to where it is now.
+#[tokio::test]
+async fn a_comment_keeps_its_anchor_when_its_ticket_changes_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    for (title, kind, parent) in [("demands", "scope", None), ("one", "execution", None), ("two", "execution", None), ("the chip", "build", Some("DEMAND-2"))] {
+        answer(&client, "tickets.create", json!({"epic": "DEMAND", "title": title, "kind": kind, "parent": parent})).await;
+    }
+    let kept = answer(&client, "comments.add", json!({"anchor": chip("DEMAND-4"), "body": "keep me"})).await;
+    assert_eq!(comment_ids(&client, json!({"under": "DEMAND-2"})).await.0, [1]);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    answer(&client, "tickets.amend", json!({"id": "DEMAND-4", "title": "renamed", "body": "the element is gone"})).await;
+    let moved = answer(&client, "tickets.set_parent", json!({"id": "DEMAND-4", "parent": "DEMAND-3"})).await;
+    assert_eq!(moved["type"], "parent_changed", "{moved}");
+    answer(&client, "tickets.set_status", json!({"id": "DEMAND-4", "status": "Ready"})).await;
+    let ticket = answer(&client, "tickets.get", json!({"id": "DEMAND-4"})).await;
+    assert!(ticket["ticket"]["updated_unix"].as_i64() > kept["anchor"]["version"].as_i64(), "the ticket moved on");
+    let listed = collect(call(&client, "comments.list", json!({"ticket": "DEMAND-4"})).await).await;
+    assert_eq!(listed, [kept, json!({"type": "page", "next": null})], "the comment did not");
+    assert_eq!(comment_ids(&client, json!({"under": "DEMAND-2"})).await.0, Vec::<u64>::new());
+    assert_eq!(comment_ids(&client, json!({"under": "DEMAND-3"})).await.0, [1], "under where its ticket is now");
+}

@@ -344,8 +344,8 @@ synapse -P 4455 menger tickets get --id VIEW/_MENGER/view/open-builds   # one fi
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service
-is CRUD over tickets plus a live subscription. One activation so far,
-`tickets`. Statuses use the house ticketing vocabulary; every ticket also
+is CRUD over tickets plus a live subscription. Two activations: `tickets`,
+and (COMMENT-2) `comments` — below, after `tickets`. Statuses use the house ticketing vocabulary; every ticket also
 carries a **kind** — `scope | execution | build | gap | spike` (AGS-13, the
 owner's closed set: a scope decomposes into children, a build produces
 capability, an execution carries out a procedure, a gap is a defect in
@@ -1025,6 +1025,45 @@ then the stream continues. A client that ignores event types it does not
 know is unaffected; one that keeps a copy should treat it as "fetch again
 what you show" — the Leptos app asks `extents` and its board's window again
 (SCALE-26), as after a reconnect.
+
+### Comments (COMMENT-2)
+
+A **comment** is a reader's note on the app — a page, an element on it, a
+ticket's body — kept by the server as a record of its own, beside the
+tickets (COMMENT-1: not a ticket, never in a body), and reached as the
+`comments` activation; its vocabulary (`Anchor`, `Comment`, `CommentState`,
+`CommentsEvent`) and its `CommentsClient<T>` come from `tickets-api/` as the
+tickets' do. An **anchor** is where it was left: `route` (the app page,
+beginning `#/`), `path` (where on the page), `label` and `excerpt` (what was
+there, in words; the excerpt may be empty), and `ticket` when the element
+belongs to one — kept as that ticket's id with its `updated_unix` as
+`version`, set by the server. A comment keeps its anchor whatever its ticket
+goes through (an amend, a move, a status or kind change): nothing a
+ticket's write does touches a comment.
+
+| method | yields |
+|---|---|
+| `comments.add { anchor, body, author? }` | `comment { id, state, author, at, anchor, body }` — the comment as kept: the next id, `open`, the time (unix seconds), `owner` unless `author` is given. An empty body, a blank author, a malformed anchor (a `route`, `path` or `label` left out or blank, a route not beginning `#/`, a `ticket` that is none, a field past its bound) is one in-band `error` naming it, and nothing is kept |
+| `comments.list { ticket?, under?, route?, path?, state?, author?, text?, after?, limit? }` | one `comment` per match, newest first, then one `page { next }` — `next` the id to pass as `after`, `null` when nothing more matches. Every filter given holds: `ticket`; `under` — a ticket or a shortcode in the comment's ticket's lineage (itself, its ancestors, its shortcode, the shortcodes hosting it: the filter language's `under`, as the tree stands); `route` exactly; `path` a prefix; `state` `open` / `resolved`; `author` exactly; `text` in the body, the label or the excerpt (any ASCII case). Blank is none. An unknown state, or an `after` naming no comment, is one in-band `error` |
+| `comments.resolve { id }` · `comments.reopen { id }` | `comment` — the state flipped; already there, the comment as it is (nothing written or broadcast); an id naming no comment is an in-band `error` |
+| `comments.watch {}` | open-ended stream of `added { comment }`, `resolved { comment }`, `reopened { comment }`; `lagged { missed }` as `tickets.watch` |
+
+Kept in the `comments` table behind the service-wide cache: read whole at
+open, every read from the cache, every write through it to the database
+first. The table is stored form 7: a file in form 6 gains it, empty, once,
+on its first open — in place, nothing derived built again (`COMMENT-2: the
+file gained stored form 7 …` in the log); an older form is built again and
+gains it with the rest. A form-6 build reads a form-7 file as its own.
+
+```sh
+synapse -P 4455 menger comments list --under FILTER --state open --text title
+synapse -P 4455 menger comments add --anchor.route '#/ticket/DEMAND-2' --anchor.ticket DEMAND-2 \
+  --anchor.path '[data-tag="ticket DEMAND-1"]' --anchor.label 'Parent chip' --anchor.excerpt DEMAND-1 \
+  --body "show the parent's title too"
+synapse -P 4455 menger comments resolve --id 1
+# synapse expands a parameter named `path` as a file path: list's `path` goes in -p
+synapse -P 4455 -p '{"path": "[data-tag=\"ticket", "state": "open"}' menger comments list
+```
 
 ## Diagrams — the `diagrams` service (COMPILE-4)
 

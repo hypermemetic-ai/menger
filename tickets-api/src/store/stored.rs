@@ -38,7 +38,19 @@ use std::path::Path;
 /// build reads the table without the column, so a board note's cell reads
 /// as an ordinary doc's — a file holding both is refused as interning one
 /// cell twice (`promote`'s rollback restores the backup it took first).
-const FORM: i64 = 6;
+///
+/// COMMENT-2 is form 7: the comments table (`comments`, [`super::comments`])
+/// — not derived state but a record of its own, kept beside the tickets; the
+/// form says the file holds it. A file in form 6 gains it, empty, once, on
+/// its first open ([`upgrade`]): one transaction, the table and the form,
+/// and nothing derived built again — nothing derived moved. A file in form 5
+/// or older is built again as before ([`build`]) and gains it with the rest.
+/// Both ways: an older build reads a form-7 file as its own form (it never
+/// looks at the table), and `--verify-derived` there is consistent.
+const FORM: i64 = 7;
+
+/// COMMENT-2: the form [`upgrade`] takes to [`FORM`] in place.
+const COMMENTS_FROM: i64 = 6;
 
 /// SDLC-11: the columns form 3 adds to the roll-up tables, `(table,
 /// column)` — what a build gives a file from an older form, as it gives one
@@ -755,6 +767,8 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     }
     create_children_index(&tx)?;
     drop_ready_index(&tx)?;
+    // COMMENT-2: form 7's comments table — empty for a file that had none.
+    tx.execute_batch(super::comments::TABLE)?;
     let cache = Cache::new(db::load_rows(&tx)?);
     let form = cache.form();
     write_all(&tx, &form)?;
@@ -792,6 +806,33 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
         _ => tracing::warn!("{message}"),
     }
     Ok(cache)
+}
+
+/// COMMENT-2: a file stored in `form` brought to [`FORM`] in place, if that
+/// is one step that moves nothing derived — form 6, which gains the comments
+/// table: in one transaction, the table (empty, unless a form-7 build made it
+/// before an older one stored form 6 again — then it is kept as it is) and
+/// the form, before anything loads; a SIGKILL before the commit leaves the
+/// file as it was, and the next open upgrades again. Returns whether it did;
+/// for any other form, nothing is touched and the file is built again
+/// ([`build`]).
+pub(super) fn upgrade(conn: &mut Connection, form: i64) -> anyhow::Result<bool> {
+    if form != COMMENTS_FROM {
+        return Ok(false);
+    }
+    let started = std::time::Instant::now();
+    let tx = conn.transaction()?;
+    tx.execute_batch(super::comments::TABLE)?;
+    let held = super::comments::count(&tx)?;
+    mark_stale(&tx, false)?;
+    tx.commit()?;
+    tracing::warn!(
+        "COMMENT-2: the file gained stored form {FORM} — the comments table ({held} comments) — in {:.1} ms, \
+         durably; it was in form {form}, whose derived state is form {FORM}'s, so nothing was built again; \
+         every later open reads it",
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    Ok(true)
 }
 
 /// Every table set to `form`, in the caller's transaction: what is there
@@ -1275,6 +1316,12 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
                  opened it since (the first open builds it)"
                     .into(),
             ))
+        }
+        State::Older(form) if form == COMMENTS_FROM => {
+            return Ok(Verdict::NotStored(format!(
+                "the derived state is stored in form {form}; this build reads {FORM} (the next open \
+                 adds the comments table, and builds nothing again)"
+            )))
         }
         State::Older(form) => {
             return Ok(Verdict::NotStored(format!(

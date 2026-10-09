@@ -17,11 +17,14 @@
 #     (frontend/sdk/menger.d.ts) against it; bun bundles the bridge
 #     transport with the client (IIFE).
 #  3. Writes the snapshot, frontend/sdk/generated/ — the client's sources
-#     and declarations as generated, `manifest.json` (each method of the
-#     activation and its parameter names, from the IR: what the drift
-#     guard, tickets-api/tests/sdk_manifest.rs, holds the activation to) and
-#     `sdk-bundle.js` — and splices the bundle into frontend/sdk/menger-sdk.js
-#     between its `@generated-begin` / `@generated-end` lines.
+#     and declarations as generated, a directory per activation on the hub
+#     (`tickets/`, and since COMMENT-2 `comments/`), `manifest.json` (each
+#     activation's methods and their parameter names, from the IR: what the
+#     drift guard, tickets-api/tests/sdk_manifest.rs, holds the activations
+#     to) and `sdk-bundle.js` — and splices the bundle into
+#     frontend/sdk/menger-sdk.js between its `@generated-begin` /
+#     `@generated-end` lines. The bundle is the bridge's: `menger.tickets.*`
+#     (a frame's SDK reaches tickets; comments are the app's own).
 #
 # All of it is committed, so `cargo build`, `trunk build` and the tests need
 # neither Docker nor Node. Run it whenever the activation's surface changes
@@ -151,18 +154,21 @@ cat >"$gen/finish.mjs" <<'EOF'
 // The manifest (from the IR the generator read) and the splice.
 import { readFileSync, writeFileSync } from 'node:fs';
 const ir = JSON.parse(readFileSync('generated/ir.json', 'utf8'));
-const methods = {};
+// Each activation's methods (the hub's own, namespace '', are not one).
+const activations = {};
 for (const m of Object.values(ir.irMethods)) {
-  if (m.mdNamespace === 'tickets') methods[m.mdName] = m.mdParams.map((p) => p.pdName).sort();
+  if (!m.mdNamespace) continue;
+  (activations[m.mdNamespace] ??= {})[m.mdName] = m.mdParams.map((p) => p.pdName).sort();
 }
+const sorted = (o) => Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]]));
 const manifest = {
   comment:
-    'COMP-10: written by scripts/sdk-codegen.sh from the IR hub-codegen generated this client from — each method of ' +
-    'the tickets activation and its parameter names. tickets-api/tests/sdk_manifest.rs holds the activation to it. ' +
-    'Do not edit: run the script.',
-  namespace: 'tickets',
-  methods: Object.fromEntries(Object.keys(methods).sort().map((k) => [k, methods[k]])),
+    'COMP-10: written by scripts/sdk-codegen.sh from the IR hub-codegen generated this client from — each ' +
+    'activation on the hub (COMMENT-2: comments beside tickets), its methods and their parameter names. ' +
+    'tickets-api/tests/sdk_manifest.rs holds the activations to it. Do not edit: run the script.',
+  activations: sorted(Object.fromEntries(Object.entries(activations).map(([ns, ms]) => [ns, sorted(ms)]))),
 };
+if (!manifest.activations.tickets) throw new Error('the IR holds no tickets activation');
 writeFileSync('manifest.json', JSON.stringify(manifest, null, 2) + '\n');
 
 const bundle = readFileSync('bundle.js', 'utf8');
@@ -200,9 +206,18 @@ say "generated in $(( $(date +%s) - started ))s"
 
 # --- the snapshot --------------------------------------------------------
 rm -rf "$out"
-mkdir -p "$out/tickets"
-for f in index.ts rpc.ts types.ts transport.ts package.json tickets/index.ts tickets/client.ts tickets/types.ts; do
+mkdir -p "$out"
+for f in index.ts rpc.ts types.ts transport.ts package.json; do
   cp "$gen/generated/$f" "$out/$f"
+done
+# COMMENT-2: every activation's module — a directory holding a client.
+for dir in "$gen"/generated/*/; do
+  ns="$(basename "$dir")"
+  [ -f "$dir/client.ts" ] || continue
+  mkdir -p "$out/$ns"
+  for f in index.ts client.ts types.ts; do
+    cp "$dir/$f" "$out/$ns/$f"
+  done
 done
 (cd "$gen/decl" && find . -name '*.d.ts' -print) | while read -r f; do
   mkdir -p "$out/$(dirname "$f")"
