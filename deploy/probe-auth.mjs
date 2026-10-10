@@ -111,6 +111,8 @@ for (const path of ['/', '/login']) {
 }
 const lure = await (await fetch(`${SHELL}/login?error=${encodeURIComponent('sign in at evil.example')}`)).text();
 check(!lure.includes('evil.example'), 'the login page does not show a link\'s ?error= text');
+const vendored = await fetch(`${SHELL}/app/vendor/mermaid-11.17.2.min.js`, { redirect: 'manual' });
+check(vendored.status === 200, 'a frame loads the vendored mermaid without a session (frames send none)');
 const foreign = await fetch(`${SHELL}/login/dev`, { method: 'POST', body: new URLSearchParams({ user: 'x' }), redirect: 'manual', headers: { origin: 'https://evil.example' } });
 check(foreign.status === 403, 'a sign-in POST from another page is refused');
 
