@@ -27,6 +27,28 @@
       "schema": [],
       "watch": []
     },
+    "members": {
+      "grant": [
+        "principal",
+        "role",
+        "scope"
+      ],
+      "list": [
+        "scope"
+      ],
+      "mine": [],
+      "requests": [],
+      "revoke": [
+        "principal",
+        "scope"
+      ],
+      "schema": []
+    },
+    "session": {
+      "providers": [],
+      "schema": [],
+      "whoami": []
+    },
     "tickets": {
       "amend": [
         "body",

@@ -127,6 +127,16 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger comments list --under FILTER --state open --text title
   ```
 
+  **Login** (IDENTITY-14) is off unless `--auth-provider` names a
+  provider: `idp=…`, `auth0=…`, `oidc:<name>=…` or `nostr=…`. Each
+  becomes an adapter that turns its credential into a Plexus identity at
+  the WebSocket upgrade, and nothing past the upgrade knows the provider.
+  `session.whoami` reports the identity. README "Login" has the rest:
+
+  ```sh
+  synapse -P 4460 -t "$TOKEN" menger session whoami
+  ```
+
   **Params are individual flags, not a JSON blob** — treat synapse as a
   normal CLI: `--kebab-case-flag value` after the method path, and
   `<method> --help` prints each parameter's name and type. **A list

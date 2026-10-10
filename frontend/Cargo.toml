@@ -112,6 +112,15 @@ web-sys = { version = "0.3", features = [
   # its SDK shell talks to the app over postMessage.
   "HtmlIFrameElement",
   "MessageEvent",
+  # IDENTITY-15: signing in — the credential's cookie (document.cookie) and
+  # the provider's discovery and token endpoint (fetch).
+  "HtmlDocument",
+  "Headers",
+  "Request",
+  "RequestInit",
+  "Response",
+  # IDENTITY-22: the no-access page copies the person's id.
+  "Clipboard",
 ] }
 
 console_error_panic_hook = "0.1"

@@ -3,7 +3,7 @@
 //!
 //! | Consumer | Features | Gets |
 //! |---|---|---|
-//! | `menger` (the server binary) | *(default: `server`)* | [`types`], [`store`], [`Tickets`] — the activation with its real bodies — and [`TicketsClient`]; COMMENT-2's [`comments`], [`Comments`] and [`CommentsClient`] beside them |
+//! | `menger` (the server binary) | *(default: `server`)* | [`types`], [`store`], [`Tickets`] — the activation with its real bodies — and [`TicketsClient`]; COMMENT-2's [`comments`], [`Comments`] and [`CommentsClient`] beside them; IDENTITY-14's [`session`], [`Session`] and [`SessionClient`] |
 //! | `menger-app` (wasm32) | `default-features = false` | [`types`] and [`TicketsClient`] over four wasm-safe crates: no plexus-core, tokio, jsonrpsee or rusqlite; [`comments`] and [`CommentsClient`] the same way |
 //!
 //! The client is emitted by `#[plexus_macros::activation(client, …)]` on
@@ -50,6 +50,11 @@ pub use types::{
     PlacementChange, RootRow, Severity, Status, Ticket, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
 };
 
+/// IDENTITY-19: the rule every method asks first — who a call acts as, or
+/// why it is refused. Server-only.
+#[cfg(feature = "server")]
+pub mod access;
+
 /// The cache and its storage — the server's system of record (MNG-2).
 #[cfg(feature = "server")]
 pub mod store;
@@ -77,3 +82,25 @@ pub mod comments_activation;
 pub use comments_activation::CommentsClient;
 #[cfg(feature = "server")]
 pub use comments_activation::Comments;
+
+/// IDENTITY-21: the members vocabulary — [`Role`], [`Grant`],
+/// [`MembersEvent`]. Wasm-safe, like [`comments`].
+pub mod members;
+pub use members::{Grant, MembersEvent, Role};
+/// IDENTITY-21: the `members` activation, declared once: the server's
+/// [`Members`] and the browser's [`MembersClient`].
+pub mod members_activation;
+pub use members_activation::MembersClient;
+#[cfg(feature = "server")]
+pub use members_activation::Members;
+
+/// IDENTITY-14: who a connection is — [`SessionEvent`], wasm-safe like
+/// [`comments`].
+pub mod session;
+pub use session::{ProviderKind, ProviderOffer, SessionEvent};
+/// IDENTITY-14: the `session` activation, declared once: the server's
+/// [`Session`] and the browser's [`SessionClient`].
+pub mod session_activation;
+pub use session_activation::SessionClient;
+#[cfg(feature = "server")]
+pub use session_activation::Session;

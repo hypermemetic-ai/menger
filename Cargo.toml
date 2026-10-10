@@ -45,6 +45,24 @@ plexus-core = { path = "../plexus-core" }
 # Slim: default features off keeps the rmcp/MCP stack out (default-off as
 # of 0.5.0 anyway); http-gateway enables the REST + SSE bridge (MNG-8).
 plexus-transport = { path = "../plexus-transport", default-features = false, features = ["http-gateway"] }
+# IDENTITY-14: login at the boundary — the provider adapters (IDENTITY-13)
+# turn each provider's credential into Plexus types at the WebSocket upgrade.
+# Used only when an --auth-provider is given.
+plexus-auth-core = { path = "../plexus-auth-core", features = ["adapters"] }
+# IDENTITY-19: the login page — the shell asks the provider itself (discovery,
+# token endpoint), keeps sessions keyed by a random id (hashed), and runs the
+# code flow with PKCE. All already in the lock through plexus-auth-core.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+url = "2"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+# IDENTITY-35: the dev sign-in registers accounts at plexus-idp over its
+# Plexus socket (identity.register); already in the lock (plexus-transport).
+jsonrpsee = { version = "0.26", features = ["ws-client"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
@@ -76,6 +94,11 @@ plexus-client = { path = "../plexus-macros/plexus-client", features = ["ws-nativ
 rusqlite = { version = "0.37", features = ["bundled"] }
 # Hermetic tests: every server gets its own isolated database location.
 tempfile = "3"
+# IDENTITY-14: tests/login.rs mints provider tokens and NIP-98 events the
+# way a provider and a nostr client would.
+jsonwebtoken = "9"
+nostr = { version = "0.45", default-features = false, features = ["std", "os-rng"] }
+base64 = "0.22"
 # REST-level tests (tests/rest.rs, tests/app.rs) speak plain HTTP/SSE to
 # the spawned binary (ACCESS-33: back here from [dependencies], where the
 # shell's /rest proxy needed them).

@@ -21,6 +21,14 @@ use async_stream::stream;
 #[cfg(feature = "server")]
 use futures::Stream;
 #[cfg(feature = "server")]
+use crate::access::{Access, Caller};
+#[cfg(feature = "server")]
+use crate::members::Role;
+#[cfg(feature = "server")]
+use crate::store::Lens;
+#[cfg(feature = "server")]
+use plexus_core::plexus::AuthContext;
+#[cfg(feature = "server")]
 use std::sync::Arc;
 
 /// The activation. Server-only: it holds the store.
@@ -28,12 +36,42 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct Comments {
     store: Arc<Store>,
+    /// IDENTITY-19: the rule every method asks first ([`crate::access`]).
+    access: Access,
 }
 
 #[cfg(feature = "server")]
 impl Comments {
+    /// No login: every call admitted, as always.
     pub fn new(store: Arc<Store>) -> Self {
-        Self { store }
+        Self::with_access(store, Access::open())
+    }
+
+    /// IDENTITY-19: behind [`Access`].
+    pub fn with_access(store: Arc<Store>, access: Access) -> Self {
+        Self { store, access }
+    }
+}
+
+/// IDENTITY-21: the role a comment needs on its ticket. IDENTITY-18's G1 asks
+/// whether a viewer may comment; this follows its recommendation (yes) until
+/// the owner answers.
+#[cfg(feature = "server")]
+const COMMENT_ROLE: Role = Role::Viewer;
+
+/// IDENTITY-21: the lens a caller sees comments through — `None`: all.
+#[cfg(feature = "server")]
+fn reach_lens(caller: &Caller) -> Result<Option<Lens>, String> {
+    caller.reach_filter(Role::Viewer)?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
+}
+
+/// IDENTITY-21: whether a comment is within reach: its ticket admitted, or,
+/// for a comment on the app, any reach at all.
+#[cfg(feature = "server")]
+fn sees(store: &Store, reach: Option<&Lens>, c: &crate::comments::Comment) -> bool {
+    match (reach, &c.anchor.ticket) {
+        (None, _) | (Some(_), None) => true,
+        (Some(lens), Some(t)) => store.member(&[t.clone()], lens).first().copied().unwrap_or(false),
     }
 }
 
@@ -60,8 +98,10 @@ impl Comments {
     /// `excerpt` (what was there, in words; the excerpt may be empty), and
     /// `ticket` when the element belongs to one, which must name a ticket
     /// and is kept with that ticket's `updated_unix` as `version` (set by
-    /// the server). `author` is `owner` unless given. Yields exactly one
-    /// event: `comment` — the comment as kept: its id, state `open`, the
+    /// the server). `author` is `owner` unless given; IDENTITY-14: a
+    /// signed-in caller's comment is its identity's name, whatever `author`
+    /// says (the description stays as it was, so the schema does). Yields
+    /// exactly one event: `comment` — the comment as kept: its id, state `open`, the
     /// time (`at`, unix seconds), the author, its anchor and body — or an
     /// in-band `error` naming the problem (an empty body, a blank author, a
     /// malformed anchor, a ticket that is none), with nothing kept. `watch`
@@ -74,10 +114,31 @@ impl Comments {
             author = "Who left it (optional; default owner)"
         )
     )]
-    pub async fn add(&self, anchor: Anchor, body: String, author: Option<String>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    pub async fn add(&self, auth: Option<&AuthContext>, anchor: Anchor, body: String, author: Option<String>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
+        let admitted = self.access.admit(auth);
         stream! {
-            yield answer(store.add_comment(anchor, body, author).await);
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
+            // IDENTITY-21: a comment on a ticket needs COMMENT_ROLE on it; one
+            // on the app, any grant at all.
+            let allowed = match anchor.ticket.as_deref() {
+                Some(t) => caller.require(COMMENT_ROLE, &[t], &store),
+                None => caller.reach_filter(COMMENT_ROLE).map(|_| ()),
+            };
+            if let Err(message) = allowed {
+                yield CommentsEvent::Error { message };
+                return;
+            }
+            // Signed by the caller's principal; the name is theirs, not
+            // what `author` says.
+            let author = caller.name.clone().or(author);
+            yield answer(store.add_comment_as(anchor, body, author, caller.principal.clone()).await);
         }
     }
 
@@ -110,7 +171,7 @@ impl Comments {
         )
     )]
     pub async fn list(
-        &self,
+        &self, auth: Option<&AuthContext>,
         ticket: Option<String>,
         under: Option<String>,
         route: Option<String>,
@@ -122,7 +183,22 @@ impl Comments {
         limit: Option<u32>,
     ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
+        let admitted = self.access.admit(auth);
         stream! {
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
+            let reach = match reach_lens(&caller) {
+                Ok(r) => r,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
             let state = match state.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::parse::<CommentState>) {
                 None => None,
                 Some(Ok(s)) => Some(s),
@@ -135,6 +211,9 @@ impl Comments {
             match store.comments(&q, after, limit) {
                 Ok(page) => {
                     for comment in page.comments {
+                        if !sees(&store, reach.as_ref(), &comment) {
+                            continue;
+                        }
                         yield comment.into();
                     }
                     yield CommentsEvent::Page { next: page.next };
@@ -152,9 +231,27 @@ impl Comments {
         description = "Resolve a comment; yields the comment, resolved",
         params(id = "The comment's id, e.g. 1")
     )]
-    pub async fn resolve(&self, id: u64) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    pub async fn resolve(&self, auth: Option<&AuthContext>, id: u64) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
+        let admitted = self.access.admit(auth);
         stream! {
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
+            // IDENTITY-21: editor on the comment's ticket (any editor grant
+            // for a comment on the app).
+            let allowed = match store.comment(id).and_then(|c| c.anchor.ticket) {
+                Some(t) => caller.require(Role::Editor, &[t.as_str()], &store),
+                None => caller.reach_filter(Role::Editor).map(|_| ()),
+            };
+            if let Err(message) = allowed {
+                yield CommentsEvent::Error { message };
+                return;
+            }
             yield answer(store.resolve_comment(id).await);
         }
     }
@@ -166,9 +263,27 @@ impl Comments {
         description = "Reopen a resolved comment; yields the comment, open",
         params(id = "The comment's id, e.g. 1")
     )]
-    pub async fn reopen(&self, id: u64) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    pub async fn reopen(&self, auth: Option<&AuthContext>, id: u64) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
+        let admitted = self.access.admit(auth);
         stream! {
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
+            // IDENTITY-21: editor on the comment's ticket (any editor grant
+            // for a comment on the app).
+            let allowed = match store.comment(id).and_then(|c| c.anchor.ticket) {
+                Some(t) => caller.require(Role::Editor, &[t.as_str()], &store),
+                None => caller.reach_filter(Role::Editor).map(|_| ()),
+            };
+            if let Err(message) = allowed {
+                yield CommentsEvent::Error { message };
+                return;
+            }
             yield answer(store.reopen_comment(id).await);
         }
     }
@@ -182,11 +297,30 @@ impl Comments {
         streaming,
         description = "Subscribe to comments: added / resolved / reopened, each with the comment, until disconnect; lagged { missed } where a slow subscriber lost changes"
     )]
-    pub async fn watch(&self) -> impl Stream<Item = CommentsEvent> + Send + 'static {
+    pub async fn watch(&self, auth: Option<&AuthContext>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let mut rx = self.store.subscribe_comments();
+        // IDENTITY-19: admitted now and at every change, as tickets.watch.
+        let access = self.access.clone();
+        let who = auth.cloned();
+        let store = self.store.clone();
         stream! {
+            let reach = match access.admit(who.as_ref()).and_then(|c| reach_lens(&c)) {
+                Ok(r) => r,
+                Err(message) => {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+            };
             loop {
-                match rx.recv().await {
+                let next = rx.recv().await;
+                if let Err(message) = access.admit(who.as_ref()) {
+                    yield CommentsEvent::Error { message };
+                    return;
+                }
+                match next {
+                    // IDENTITY-21: only comments the watcher can see.
+                    Ok(CommentChange::Added(c) | CommentChange::Resolved(c) | CommentChange::Reopened(c))
+                        if !sees(&store, reach.as_ref(), &c) => {}
                     Ok(CommentChange::Added(comment)) => yield CommentsEvent::Added { comment },
                     Ok(CommentChange::Resolved(comment)) => yield CommentsEvent::Resolved { comment },
                     Ok(CommentChange::Reopened(comment)) => yield CommentsEvent::Reopened { comment },

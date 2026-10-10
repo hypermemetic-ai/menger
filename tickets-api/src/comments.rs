@@ -116,6 +116,10 @@ pub struct Comment {
     pub anchor: Anchor,
     /// What it says (markdown, as written).
     pub body: String,
+    /// IDENTITY-21: the Plexus principal of who left it, when they were
+    /// signed in — `author` is only the name they go by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
 }
 
 /// What the `comments` activation's methods yield. In-band errors are
@@ -133,6 +137,9 @@ pub enum CommentsEvent {
         at: i64,
         anchor: Anchor,
         body: String,
+        /// IDENTITY-21: the signer's principal, when signed in.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        principal: Option<String>,
     },
     /// Where a `list` stands, once, after its rows: `next` is the cursor to
     /// pass as the next call's `after` (a comment id), `null` when nothing
@@ -153,8 +160,8 @@ pub enum CommentsEvent {
 
 impl From<Comment> for CommentsEvent {
     fn from(c: Comment) -> Self {
-        let Comment { id, state, author, at, anchor, body } = c;
-        CommentsEvent::Comment { id, state, author, at, anchor, body }
+        let Comment { id, state, author, at, anchor, body, principal } = c;
+        CommentsEvent::Comment { id, state, author, at, anchor, body, principal }
     }
 }
 
@@ -163,8 +170,8 @@ impl CommentsEvent {
     /// `added`, `resolved` and `reopened` carry — and `None` for the rest.
     pub fn into_comment(self) -> Option<Comment> {
         match self {
-            CommentsEvent::Comment { id, state, author, at, anchor, body } => {
-                Some(Comment { id, state, author, at, anchor, body })
+            CommentsEvent::Comment { id, state, author, at, anchor, body, principal } => {
+                Some(Comment { id, state, author, at, anchor, body, principal })
             }
             CommentsEvent::Added { comment } | CommentsEvent::Resolved { comment } | CommentsEvent::Reopened { comment } => {
                 Some(comment)
@@ -287,6 +294,7 @@ mod tests {
             at: 1_791_510_000,
             anchor: Anchor { version: Some(1_791_500_000), ..anchor() },
             body: "show the parent's title too".into(),
+            principal: None,
         };
         let ev = serde_json::to_value(CommentsEvent::from(c.clone())).unwrap();
         assert_eq!(

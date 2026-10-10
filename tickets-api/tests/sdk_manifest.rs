@@ -3,7 +3,8 @@
 //! committed in `frontend/sdk/generated/` by `scripts/sdk-codegen.sh`, which
 //! writes beside it `manifest.json`: each activation on the hub, its methods
 //! and their parameter names, as the generator read them. This test holds
-//! the activations — `tickets`, and (COMMENT-2) `comments` — to that
+//! the activations — `tickets`, (COMMENT-2) `comments` and (IDENTITY-14)
+//! `session`, and (IDENTITY-21) `members` — to that
 //! manifest, so a method or parameter added, removed or renamed, or an
 //! activation added, fails `cargo test --workspace` until the client is
 //! generated again — never silently shipping a generated client that calls
@@ -12,7 +13,8 @@
 //! them all at once.)
 #![cfg(feature = "server")]
 
-use menger_tickets_api::{Comments, Store, Tickets};
+use menger_tickets_api::access::Access;
+use menger_tickets_api::{Comments, Members, Session, Store, Tickets};
 use plexus_core::plexus::{Activation, PluginSchema};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -46,9 +48,16 @@ fn activation() -> Surface {
     let store = Arc::new(Store::new());
     let tickets = Tickets::new(Arc::clone(&store)).plugin_schema();
     let comments = Comments::new(store).plugin_schema();
-    assert_eq!((tickets.namespace.as_str(), comments.namespace.as_str()), ("tickets", "comments"));
+    let session = Session::new().plugin_schema();
+    let members = Members::new(Arc::new(Store::new()), Access::open()).plugin_schema();
+    assert_eq!(
+        (tickets.namespace.as_str(), comments.namespace.as_str(), session.namespace.as_str(), members.namespace.as_str()),
+        ("tickets", "comments", "session", "members")
+    );
     let mut out = surface(tickets);
     out.extend(surface(comments));
+    out.extend(surface(session));
+    out.extend(surface(members));
     out
 }
 

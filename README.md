@@ -1110,6 +1110,179 @@ comment, filtered by the route's query (`?ticket=&under=&state=&author=&text=`),
 each linking back to its page and element (`…?comment=<id>`); a ticket page's
 side panel counts its open ones. All of it is live through `comments.watch`.
 
+### Login (IDENTITY-14)
+
+menger does not know identity providers; it knows **Plexus identities**.
+Each `--auth-provider` names a provider, and becomes that provider's
+**adapter** (plexus-auth-core's `adapters`, IDENTITY-13). The adapters sit
+in one chain at the WebSocket upgrade. Whichever claims a caller's
+credential verifies it and turns it into the same Plexus types: a
+principal, a name, roles and a tenant. Past the upgrade there is only the
+connection's identity: `session.whoami` reports it, and `comments.add`
+signs with it. No `--auth-provider` means no chain, and menger serves
+exactly as before.
+
+| `--auth-provider` | the credential | principal |
+|---|---|---|
+| `idp=<issuer>,<audience>` | a plexus-idp token (its password grant, or its nostr grant) | `idp:<uuid>` |
+| `auth0=<domain>,<audience>[,<roles-claim>]` | an Auth0 access token; roles from the namespaced claim an Auth0 Action adds | `oidc:auth0/<sub>` |
+| `oidc:<name>=<issuer>,<audience>[,<roles-claim>]` | any OIDC provider's RS256 token (Logto, Keycloak, …) | `oidc:<name>/<sub>` |
+| `workos=<client-id>[,<api-base>]` | a WorkOS access token (AuthKit, social, SSO) for that client: issuer `…/user_management/<client-id>`, audience in `client_id` (IDENTITY-30) | `oidc:workos/<user id>` |
+| `nostr=<ws-url>[,<ws-url>…]` | a NIP-98 event (kind 27235) naming that URL, method GET, under a minute old, used once | `nostr:<hex>` |
+
+Several providers can be configured together. An OIDC adapter claims a
+token by its `iss`, and the nostr adapter claims an event, so each
+credential reaches its own adapter. The credential rides the upgrade in the `access_token`
+cookie (a token), the `nostr` cookie (an event: a browser can only send
+cookies), or `Authorization: Bearer`. A credential that fails, or no credential at all,
+leaves the connection anonymous. `--require-login` refuses such an upgrade
+(401) instead. It needs `--no-rest`, because the REST bridge cannot carry
+an identity yet. `MENGER_AUTH_PROVIDERS` takes the specs separated by `;`, and
+`MENGER_REQUIRE_LOGIN=1` sets the flag. A bad spec, or an issuer that is
+not `https://` off loopback, stops startup.
+
+| method | yields |
+|---|---|
+| `session.whoami {}` | `identity { principal, name, roles, tenant, provider }`, or `anonymous` |
+| `session.providers {}` | one `provider { name, kind, issuer, audience }` per `--auth-provider` (`kind` `oidc` or `nostr`), none when login is off: what a sign-in needs, nothing secret |
+
+`comments.add` by a signed-in connection is authored by its identity's
+name, whatever `author` says; anonymous, it keeps `author` as before. The
+schemas of `tickets` and `comments` are unchanged.
+
+```sh
+# a dev server admitting plexus-idp, an Auth0 tenant and nostr keys
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --rest-port 4462 --db-path /tmp/menger-dev.db \
+  --auth-provider idp=http://127.0.0.1:4481,plexus:menger \
+  --auth-provider auth0=https://acme.auth0.com/,https://menger.example,https://menger.example/roles \
+  --auth-provider nostr=ws://127.0.0.1:4460/
+synapse -P 4460 -t "$TOKEN" menger session whoami        # -t sends Cookie: access_token=<jwt>
+synapse -P 4460 --cookie nostr="$EVENT" menger session whoami
+```
+
+`tests/login.rs` runs each provider over the real wire against fixture
+issuers.
+
+**In the app** (IDENTITY-15): `#/settings` opens on a **Sign in** group
+with one button per provider that `session.providers` lists. For an OIDC
+provider, the app reads the provider's discovery and sends the username and
+password to its token endpoint (the password grant, which plexus-idp
+offers and Auth0 offers when enabled). It keeps the token in the
+`access_token` cookie for the token's lifetime. For nostr, a NIP-07
+extension signs a fresh NIP-98 event for the WebSocket URL before every
+connect, and the event goes in the `nostr` cookie for a minute. menger
+never sees a password. Signing in or out reloads the app, so a new session
+connects with the credential. The header shows `whoami`'s name, or
+`sign in`. The cookies are this page's host's, so sign-in reaches only a
+backend on the same host, not one set from `#/settings` elsewhere.
+
+### The login page (IDENTITY-19)
+
+With providers configured, the shell serves **`/login`**, a traditional
+sign-in page: a username and password (one provider's password grant),
+**Continue with …** buttons (`--login-button Google=auth0:google-oauth2`,
+`Apple=auth0:apple`, `SSO=auth0:samlp`) that run the provider's
+authorization code flow with PKCE and a connection hint, and **Continue with
+nostr** when a NIP-07 extension is present. Each way in ends the same way:
+the provider's token is verified by its adapter **in the shell**, a session
+starts, and the browser gets an `HttpOnly; SameSite=Lax` `menger_session`
+cookie. No script on any page can read a credential. The page is
+self-contained (`web/login.html`), so an IdP can host it later.
+
+`--require-login` puts the whole app behind it. `/`, `/app/…` and `/vanilla`
+redirect to `/login?next=…`, the socket refuses an upgrade without a session
+or a provider token, and **every method re-checks its caller on every call**
+(`tickets-api/src/access.rs`). Signing out (`POST /logout`) or a session
+expiring stops an open socket from answering, and ends its `watch`. The socket
+admits browser pages only from the shell's own origins (IDENTITY-29, with or
+without login; synapse sends no Origin). POSTs from another origin and requests
+naming another `Host` are refused.
+
+| flag | |
+|---|---|
+| `--login-button <Label>=<provider>[:<connection>]` | a button; the provider needs `client=<id>` in its `--auth-provider` |
+| `--login-email <provider>[:<connection>]` | an email field, handed to that IdP as `login_hint` (`workos:authkit`); beside it the password form shows only at `/login?password` |
+| `--login-password <provider>` | where the password form goes (default: the first OIDC provider that takes passwords, not WorkOS); `none`: no form |
+| `--login-forgot <url>` | a "Forgot password?" link |
+| `--public-url <url>` | where people reach the shell; the redirect URI's base (default `http://127.0.0.1:<shell-port>`) |
+| `--allowed-origin <origin>` | another origin whose pages may open the socket |
+| `--session-hours <n>` | how long a sign-in lasts (default 12) |
+
+`GET /login/me` answers who the session is, or 401. Sessions live in memory,
+so a restart signs everyone out (IDENTITY-18 G2). `tests/login_page.rs` runs
+each way in against fixture issuers.
+
+**WorkOS** (IDENTITY-30) is the IdP behind menger's own page: the page
+comes first, offers a curated list, and hands each choice to WorkOS. With
+`--login-email workos:authkit` the page has an email field: the address goes
+to AuthKit as `login_hint`, so an SSO domain goes straight to its company's
+IdP, and anyone else finishes on AuthKit's page (password, passkey, a code by
+email) with the address filled in. `--login-button Google=workos:GoogleOAuth`
+(also `AppleOAuth`, `MicrosoftOAuth`, `GitHubOAuth`, a `conn_…`, an `org_…`)
+goes through WorkOS straight to that provider, with no AuthKit page between.
+nostr sits on the same list. menger is a public client: the code flow runs
+with PKCE and no secret, and menger holds no API key. WorkOS's access token
+names nobody, so the person's name and email come from the authenticate
+response's `user`, which must be the token's own subject. Signing out ends
+the WorkOS session too, and comes back to `/login`. The environment lists
+`<public-url>/login/callback` as a redirect URI and `<public-url>/login` as a
+logout URI (`workos authkit redirect-uris set …`, `workos authkit logout-uris
+set …`).
+
+**Automation signs in with plexus-idp** at **`/login?password`**: beside an
+email field, the password form (`--auth-provider idp=…`, the default password
+provider) shows only there, so the smoke and the end-to-end scripts never
+depend on WorkOS.
+
+```sh
+menger --auth-provider 'workos=client_01…' --auth-provider idp=http://127.0.0.1:4481,plexus:menger \
+  --login-email workos:authkit \
+  --login-button Google=workos:GoogleOAuth --login-button Apple=workos:AppleOAuth
+```
+
+### Members and roles (IDENTITY-21)
+
+With login on, **menger's own members** decide what each person sees and
+changes. The IdP only proves who someone is. A grant gives a principal a
+role on a **scope**: a shortcode, which covers the shortcodes hosted under
+it (the filter language's `under`, so a grant on PLEXUS reaches IDENTITY),
+or `*`.
+
+| role | may |
+|---|---|
+| `viewer` | read under the scope, and comment |
+| `editor` | also create and change tickets, and answer inputs |
+| `admin` | also grant and revoke roles on the scope |
+
+Every read is answered under the caller's filter **and** their viewer
+scopes. `list --filter 'status Ready'` from someone with IDENTITY and OUGHT
+is `status Ready and under in (IDENTITY, OUGHT)`. A ticket out of reach is
+`not_found`. `groups`, `extents`, `waves`, `health` and `watch` hear only
+what is in reach. A write needs the role on every ticket it touches
+(`editor on OUGHT needed for OUGHT-2`). A comment is signed with the
+caller's principal (`principal` beside `author`), whatever `author` says.
+Someone signed in with no grant reaches nothing and waits in
+`members.requests` for an admin. With login off, nothing here applies.
+
+| method | yields |
+|---|---|
+| `members.mine {}` | `me { principal, name, admin_everywhere }`, then `grant { grant }` each |
+| `members.list { scope? }` | the grants on the scopes the caller administers |
+| `members.grant { principal, scope, role }` | the grant as kept; needs admin on the scope |
+| `members.revoke { principal, scope }` | `revoked { principal, scope, existed }` |
+| `members.requests {}` | `waiting { principal, name, provider, since }` per person without a grant |
+
+The first admin is the operator's: `--admin <principal>` (repeatable,
+`MENGER_ADMINS`) holds admin on `*`. Grants live in the `members` table,
+stored form 8: a file in form 6 or 7 gains it in place, and an older build
+reads a form-8 file as its own. `tests/members.rs` runs the roles over the
+real socket.
+
+```sh
+synapse -P 4450 -t "$ADA" menger members grant --principal idp:c952acd3-… --scope IDENTITY --role editor
+synapse -P 4450 -t "$ADA" menger members requests
+```
+
 ## Diagrams — the `diagrams` service (COMPILE-4)
 
 A second Plexus service beside menger, in `diagrams/` (`menger-diagrams`):

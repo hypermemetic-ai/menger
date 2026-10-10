@@ -420,6 +420,13 @@ pub(crate) fn effective_ws_url() -> String {
     backend().url
 }
 
+/// IDENTITY-31: drops the saved override and starts again on this page's
+/// server (the Checking screen's one click).
+pub(crate) fn use_page_server() {
+    let _ = store(&load().reset());
+    reload();
+}
+
 /// Starts the app again on whatever the record now says — a clean session.
 fn reload() {
     let _ = dom::window().location().reload();
@@ -582,6 +589,8 @@ pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
     view! {
         <section id="settings">
             <h2>"Settings"</h2>
+            // IDENTITY-22: who is signed in, their roles, sign-out.
+            <crate::signin::AccountGroup />
             <fieldset class="group" id="settings-backend">
                 <legend>"Backend"</legend>
                 {now}

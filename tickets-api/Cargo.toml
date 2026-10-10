@@ -30,6 +30,7 @@ default = ["server"]
 # enables it; the browser app turns it off.
 server = [
     "dep:plexus-core",
+    "dep:plexus-auth-core",
     "dep:async-trait",
     "dep:jsonrpsee",
     "dep:tokio",
@@ -75,6 +76,9 @@ pulldown-cmark = { version = "0.13", default-features = false }
 
 # Server-only. None of these builds for wasm32-unknown-unknown.
 plexus-core = { path = "../../plexus-core", optional = true }
+# IDENTITY-21: a grant names a Plexus principal, checked as the identity
+# layer parses one. Server-only, like plexus-core.
+plexus-auth-core = { path = "../../plexus-auth-core", optional = true }
 async-trait = { version = "0.1", optional = true }
 jsonrpsee = { version = "0.26", features = ["server", "macros"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }

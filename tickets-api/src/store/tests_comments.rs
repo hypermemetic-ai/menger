@@ -6,7 +6,8 @@
 //! held to a reference evaluator — `under` to the filter language's own
 //! answer — over random comments on a tree that moves, a comment keeps its
 //! anchor whatever its ticket goes through, writes are durable, and a file
-//! in form 6 gains form 7 once, in place, and answers as before.
+//! in form 6 gains form 7 once, in place, and answers as before
+//! (IDENTITY-21: form 8 now, the same way).
 
 use super::*;
 use crate::comments::{Anchor, Comment, CommentState};
@@ -103,6 +104,7 @@ async fn add_keeps_the_comment_and_returns_it() {
             at: c.at,
             anchor: Anchor { ticket: Some("ROOT-2".into()), version: Some(root2.updated_unix), ..anchor(Some("ROOT-2")) },
             body: "show the parent's title too".into(),
+            principal: None,
         }
     );
     assert!(c.at >= before && c.at <= chrono::Utc::now().timestamp());
@@ -530,12 +532,12 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     assert_eq!(read_state(&path), State::Older(6));
     assert!(!has_comments_table(&path));
     match Store::verify_derived(&path).unwrap() {
-        Verdict::NotStored(why) => assert!(why.contains("stored in form 6; this build reads 7") && why.contains("adds the comments table"), "{why}"),
+        Verdict::NotStored(why) => assert!(why.contains("stored in form 6; this build reads 8") && why.contains("adds the comments and members tables"), "{why}"),
         other => panic!("a form-6 file is not this build's: {other:?}"),
     }
 
     let store = Store::open(&path).unwrap();
-    assert_eq!(read_state(&path), State::Current, "form 7, committed by the first open");
+    assert_eq!(read_state(&path), State::Current, "form 8, committed by the first open");
     assert!(has_comments_table(&path));
     assert_eq!(all(&store, CommentQuery::default()), Vec::<u64>::new(), "the table starts empty");
     assert_eq!(answers(&store).await, before, "answers as before");
@@ -546,7 +548,7 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     // Nothing derived is built again by the upgrade: a number stored by
     // hand in a form-6 file is answered as stored.
     let conn = Connection::open(&path).unwrap();
-    assert!(!stored::upgrade(&mut Connection::open(&path).unwrap(), 7).unwrap(), "form 7: nothing to upgrade");
+    assert!(!stored::upgrade(&mut Connection::open(&path).unwrap(), 8).unwrap(), "form 8: nothing to upgrade");
     conn.execute_batch("UPDATE rollup_groups SET total = total + 100 WHERE epic = 'SOLO'; UPDATE derived_state SET form = 6;").unwrap();
     drop(conn);
     let store = Store::open(&path).unwrap();
@@ -558,7 +560,7 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     assert_eq!(read_state(&path), State::Current);
     let conn = Connection::open(&path).unwrap();
     conn.execute("UPDATE rollup_groups SET total = total - 100 WHERE epic = 'SOLO'", []).unwrap();
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 7);
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 8);
     drop(conn);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
 
@@ -571,4 +573,36 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     assert_eq!(all(&store, CommentQuery::default()), Vec::<u64>::new());
     drop(store);
     assert!(has_comments_table(&path) && read_state(&path) == State::Current);
+}
+
+/// IDENTITY-21: a form-7 file — comments, no members, no signers — gains
+/// form 8 in place on its first open, keeps its comments, and builds
+/// nothing again.
+#[tokio::test]
+async fn a_form_7_file_gains_form_8_in_place_and_keeps_its_comments() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("form7.db");
+    let c = {
+        let store = Store::open(&path).unwrap();
+        tree(&store).await;
+        store.add_comment(anchor(Some("ROOT-4")), "before".into(), None).await.unwrap()
+    };
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DROP TABLE members; ALTER TABLE comments DROP COLUMN principal; UPDATE derived_state SET form = 7;",
+    )
+    .unwrap();
+    drop(conn);
+    assert_eq!(read_state(&path), State::Older(7));
+    let store = Store::open(&path).unwrap();
+    assert_eq!(read_state(&path), State::Current);
+    assert_eq!(store.comment(c.id), Some(c), "the comment kept, unsigned");
+    let signed = store
+        .add_comment_as(anchor(Some("ROOT-4")), "after".into(), Some("alice".into()), Some("idp:alice".into()))
+        .await
+        .unwrap();
+    assert_eq!(signed.principal.as_deref(), Some("idp:alice"));
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.comment(signed.id).unwrap().principal.as_deref(), Some("idp:alice"), "the signer is stored");
 }

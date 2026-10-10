@@ -266,6 +266,8 @@ mod registry;
 mod saved;
 mod session;
 mod settings;
+mod signin;
+mod members_page;
 mod tags;
 mod theme;
 mod waves;
@@ -363,6 +365,8 @@ pub(crate) enum Route {
     /// COMMENT-3: `#/comments` — every comment. A query after it (`?ticket=…
     /// &under=…&state=…&author=…&text=…`) is the page's filter.
     Comments,
+    /// IDENTITY-22: `#/members` — who holds which role; an admin's page.
+    Members,
 }
 
 fn parse_route(hash: &str) -> Route {
@@ -383,6 +387,7 @@ fn parse_route(hash: &str) -> Route {
         _ if path.trim_end_matches('/') == "inputs" => Route::Inputs,
         _ if path.trim_end_matches('/') == "settings" => Route::Settings,
         _ if path.trim_end_matches('/') == "comments" => Route::Comments,
+        _ if path.trim_end_matches('/') == "members" => Route::Members,
         _ => Route::Board,
     }
 }
@@ -401,6 +406,7 @@ pub(crate) fn route_text(route: &Route) -> String {
         Route::Inputs => "#/inputs".to_string(),
         Route::Settings => "#/settings".to_string(),
         Route::Comments => "#/comments".to_string(),
+        Route::Members => "#/members".to_string(),
     }
 }
 
@@ -2066,9 +2072,23 @@ fn App() -> impl IntoView {
         Memo::new(move |_| held.with(comments_page::open_count))
     };
 
+    // IDENTITY-22: whether the views may show — a memo, so the nav is
+    // mounted again only when the answer changes, not on every connect.
+    let can_view = {
+        let account = signin::account();
+        Memo::new(move |_| account.with(|a| a.may_view()))
+    };
+    // IDENTITY-31: known to hold nothing — else, not yet known.
+    let no_access = {
+        let account = signin::account();
+        Memo::new(move |_| account.with(|a| a.no_access()))
+    };
+
     view! {
-        <div id="app" class:nonav=move || nav_hidden.get() class:annotating=move || annot.on.get() data-rows-held=move || held.get()>
-            <nav::Nav tree route hidden=nav_hidden />
+        <div id="app" class:nonav=move || nav_hidden.get() || !can_view.get() class:annotating=move || annot.on.get() data-rows-held=move || held.get()>
+            // IDENTITY-22: a person holding no grant sees no nav: there is
+            // nothing in it they may read.
+            {move || can_view.get().then(|| view! { <nav::Nav tree route hidden=nav_hidden /> })}
             <div class="content" on:scroll=move |_| viewport.notify()>
                 // FILTER-11: the header, the lens bar under it, and the
                 // global menu hanging from both.
@@ -2133,6 +2153,11 @@ fn App() -> impl IntoView {
                             })
                         }}
                     </a>
+                    // IDENTITY-22: an admin's members page.
+                    {move || signin::account().with(|a| a.is_admin()).then(|| view! {
+                        <a class="hlink" id="members-link" href="#/members"
+                            aria-current=move || matches!(route.get(), Route::Members).then_some("page")>"members"</a>
+                    })}
                     // MFE-21: the settings, beside them.
                     <a
                         class="hlink"
@@ -2170,8 +2195,11 @@ fn App() -> impl IntoView {
                             Route::Inputs => "inputs (INPUT-6)",
                             Route::Settings => "settings (MFE-21)",
                             Route::Comments => "comments (COMMENT-3)",
+                            Route::Members => "members (IDENTITY-22)",
                         }}
                     </span>
+                    // IDENTITY-15: who this connection is, or `sign in`.
+                    <signin::Who />
                     // MFE-21: `override` marks a backend other than this
                     // page's server (highlighted, its URL in the words).
                     <span
@@ -2208,7 +2236,17 @@ fn App() -> impl IntoView {
                             </div>
                         })
                     }}
+                    // IDENTITY-22: a person holding no grant sees their id,
+                    // not the views (settings stay, for signing out).
+                    // IDENTITY-31: until the server has said, neither.
                     {move || match route.get() {
+                        r if !can_view.get() && !matches!(r, Route::Settings) => {
+                            if no_access.get() {
+                                view! { <signin::NoAccess /> }.into_any()
+                            } else {
+                                view! { <signin::Checking /> }.into_any()
+                            }
+                        }
                         Route::Board => view! { <Board board last_error viewport /> }.into_any(),
                         Route::Ticket(id) => {
                             view! { <TicketPage id socket last_error /> }.into_any()
@@ -2220,6 +2258,7 @@ fn App() -> impl IntoView {
                         Route::Inputs => view! { <inputs_page::InputsPage /> }.into_any(),
                         Route::Settings => view! { <settings::SettingsPage test_link /> }.into_any(),
                         Route::Comments => view! { <comments_page::CommentsPage /> }.into_any(),
+                        Route::Members => view! { <members_page::MembersPage /> }.into_any(),
                     }}
                 </main>
             </div>

@@ -936,6 +936,7 @@ async fn shell_serves_the_page() {
             ws_port: 4455,
             app_dist,
             env: None,
+            login: None,
         })
         .await;
     });

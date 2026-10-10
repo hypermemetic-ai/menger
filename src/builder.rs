@@ -1,4 +1,5 @@
-use menger_tickets_api::{Comments, Tickets};
+use menger_tickets_api::access::Access;
+use menger_tickets_api::{Comments, Members, ProviderOffer, Session, Tickets};
 use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError};
 use plexus_core::plexus::DynamicHub;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,7 @@ pub fn default_db_path() -> PathBuf {
 }
 
 /// Builds the `menger` hub with every activation registered — `tickets` and
-/// (COMMENT-2) `comments`, over one store.
+/// (COMMENT-2) `comments`, over one store, and (IDENTITY-14) `session`.
 ///
 /// Opens the database at `db_path` (the system of record — a fresh
 /// location is an empty store), loads every ticket into the service-wide
@@ -46,6 +47,19 @@ pub async fn build_rpc_seeded(
     db_path: &Path,
     seed: Option<SeedSpec>,
     shape: SeedShape,
+) -> anyhow::Result<Arc<DynamicHub>> {
+    build_rpc_offering(db_path, seed, shape, Vec::new(), Access::open()).await
+}
+
+/// IDENTITY-15: [`build_rpc_seeded`], with `session.providers` offering
+/// these providers (main's `--auth-provider`s). IDENTITY-19: and every
+/// `tickets` and `comments` method behind `access`.
+pub async fn build_rpc_offering(
+    db_path: &Path,
+    seed: Option<SeedSpec>,
+    shape: SeedShape,
+    offers: Vec<ProviderOffer>,
+    access: Access,
 ) -> anyhow::Result<Arc<DynamicHub>> {
     let path = db_path.to_path_buf();
     let started = Instant::now();
@@ -96,11 +110,16 @@ pub async fn build_rpc_seeded(
     };
 
     // COMMENT-2: `comments` beside `tickets`, over the same store — one
-    // cache, one database handle.
+    // cache, one database handle. IDENTITY-14: `session`, holding nothing,
+    // reports who each connection is.
     let store = Arc::new(store);
+    // IDENTITY-21: the members that decide, from the same store.
+    access.attach(Arc::clone(&store));
     Ok(Arc::new(
         DynamicHub::new("menger")
-            .register(Tickets::new(Arc::clone(&store)))
-            .register(Comments::new(store)),
+            .register(Tickets::with_access(Arc::clone(&store), access.clone()))
+            .register(Comments::with_access(Arc::clone(&store), access.clone()))
+            .register(Members::new(store, access))
+            .register(Session::offering(offers)),
     ))
 }

@@ -153,7 +153,7 @@
 //! ask its counts.
 
 use crate::kids::Kids;
-use crate::{board, cache, comments, dom, frame, inputs, nav, registry, settings, Conn, Dock};
+use crate::{board, cache, comments, dom, frame, inputs, nav, registry, settings, signin, Conn, Dock};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::{CommentsClient, TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
@@ -679,6 +679,12 @@ pub(crate) fn comments_client() -> Option<CommentsClient<Rc<WsTransport>>> {
     TRANSPORT.with(|t| t.borrow().clone()).map(CommentsClient::new)
 }
 
+/// IDENTITY-22: the `members` activation's typed client, over the same
+/// connection.
+pub(crate) fn members_client() -> Option<menger_tickets_api::MembersClient<Rc<WsTransport>>> {
+    TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::MembersClient::new)
+}
+
 /// Renders a failed call for the banner. The two layers stay distinct:
 /// `transport` means the socket, `remote` means the server refused the
 /// call itself — neither is the activation's own in-band `Error` event,
@@ -708,6 +714,10 @@ pub(crate) fn drive(
             TRANSPORT.with(|t| *t.borrow_mut() = None);
             LINK.with(|l| l.set(false));
             leptos::logging::log!("session ended: {err}; reconnecting");
+            // IDENTITY-31: what the Checking screen says, while it checks.
+            if !signin::account().with_untracked(|a| a.known()) {
+                signin::problem().set(Some(err.clone()));
+            }
             conn.set(Conn::Reconnecting);
             dom::sleep_ms(RETRY_MS).await;
         }
@@ -726,6 +736,9 @@ async fn session(
     // MFE-21: the override from #/settings when one is set, else this
     // page's server (`dom::ws_url()`) as before — fixed for the page's life.
     let url = settings::effective_ws_url();
+    // IDENTITY-22: who this browser is, first. Signed out, the browser is
+    // on its way to the login page; the session goes no further.
+    signin::gate().await?;
     let transport = Rc::new(
         WsTransport::connect(&url, HUB)
             .await
@@ -733,6 +746,18 @@ async fn session(
     );
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport.clone()));
     LINK.with(|l| l.set(true));
+    // IDENTITY-22: the person's grants, for the header and the views. With
+    // none, the session asks nothing more: the app shows their id, and the
+    // socket stays open until they reload or sign out.
+    let allowed = signin::after_connect(transport.clone()).await?;
+    signin::problem().set(None);
+    if !allowed {
+        LINK.with(|l| l.set(true));
+        conn.set(Conn::Live);
+        loop {
+            dom::sleep_ms(60_000).await;
+        }
+    }
     // A connection exists — announced here, before the board's window,
     // because an open ticket page needs only two point queries and must not
     // wait for the board.

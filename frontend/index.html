@@ -190,6 +190,35 @@
   header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
   header .tag { color: var(--muted); font-size: .8rem; }
   #conn { color: var(--muted); font-size: .8rem; margin-left: auto; }
+  /* IDENTITY-22: sign-out sits in the header as a button; the no-access
+     card and the members page. */
+  form.signout { display: inline; margin: 0; }
+  header form.signout { margin-left: .5rem; }
+  #no-access { max-width: 34rem; margin: 3rem auto; padding: 1.5rem 1.75rem; background: var(--card);
+    border: 1px solid var(--line); border-radius: 10px; }
+  #no-access h2 { margin: 0 0 .75rem; }
+  #no-access .id code { font-size: .9rem; overflow-wrap: anywhere; }
+  #no-access .hint, #members .hint, #members .lbl { color: var(--muted); }
+  #members { max-width: 60rem; }
+  #members h3 { font-size: .9rem; margin: 1.5rem 0 .5rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  #members .waiting { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .75rem; padding: .5rem 0; border-bottom: 1px solid var(--line); }
+  #members .waiting code, #members td code { font-size: .8rem; overflow-wrap: anywhere; }
+  #members input, #members select { font: inherit; padding: .2rem .45rem; background: var(--card); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px; }
+  #members input.scope, #members #grant-scope { width: 9rem; }
+  #members #grant-principal { flex: 1 1 18rem; }
+  #members table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+  #members th { text-align: left; color: var(--muted); font-weight: 500; padding: .3rem .5rem; border-bottom: 1px solid var(--line); }
+  #members td { padding: .35rem .5rem; border-bottom: 1px solid var(--line); }
+  #members td:nth-child(2) code, #members td:nth-child(3) { white-space: nowrap; }
+  #members button.primary { border: 1px solid var(--accent); color: var(--accent); background: var(--card); border-radius: 4px; padding: .2rem .6rem; }
+  #members button.link { background: none; border: 0; color: var(--accent); cursor: pointer; }
+  #members .line { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  #settings ul.grants { list-style: none; margin: 0; padding: 0; }
+  /* IDENTITY-15: who this connection is, just before its state. */
+  header #who { margin-left: auto; }
+  header #who + #conn { margin-left: .6rem; }
+  header #who.signed-in { color: var(--ink); }
   #conn.live { color: var(--live); }
   #conn.reconnecting { color: var(--err-fg); }
   /* AGS-17: the theme toggle — a header control in the nav-reveal's

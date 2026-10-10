@@ -1,6 +1,10 @@
 use clap::Parser;
 use menger::store::{SeedShape, SeedSpec, Store, Verdict};
-use menger::{build_rpc_seeded, default_db_path, shell};
+use menger::login::{self, LoginButton, Provider};
+use menger::sessions::{Gate, Sessions};
+use menger::web_login::{Login, LoginConfig};
+use menger_tickets_api::access::Access;
+use menger::{build_rpc_offering, default_db_path, shell};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::{RestHttpConfig, RouteFn, TransportServer};
 use std::path::PathBuf;
@@ -23,8 +27,15 @@ struct Args {
     #[arg(long, default_value = "4457")]
     rest_port: u16,
 
-    /// Disable the REST HTTP listener
-    #[arg(long)]
+    /// Disable the REST HTTP listener. IDENTITY-23: also `MENGER_NO_REST`
+    /// (1/true/yes), so an environment that requires login can say it in
+    /// its env file.
+    #[arg(
+        long,
+        env = "MENGER_NO_REST",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
     no_rest: bool,
 
     /// Directory holding the built Leptos app (frontend/dist), served at
@@ -95,6 +106,103 @@ struct Args {
     /// nothing, migrates nothing, serves nothing.
     #[arg(long)]
     verify_derived: bool,
+
+    /// IDENTITY-14: admit callers through this identity provider
+    /// (repeatable): `idp=<issuer>,<audience>`,
+    /// `auth0=<domain>,<audience>[,<roles-claim>]`,
+    /// `oidc:<name>=<issuer>,<audience>[,<roles-claim>]`,
+    /// `workos=<client-id>[,<api-base>]` (IDENTITY-30) or
+    /// `nostr=<ws-url>[,<ws-url>…]`. A caller's credential rides the
+    /// `access_token` or `nostr` cookie, or `Authorization: Bearer`, and its
+    /// provider's adapter makes it a Plexus identity at the WebSocket
+    /// upgrade. In the env var, specs are separated by `;`. None: no login,
+    /// as before.
+    #[arg(long = "auth-provider", env = "MENGER_AUTH_PROVIDERS", value_name = "SPEC", value_delimiter = ';')]
+    auth_provider: Vec<Provider>,
+
+    /// IDENTITY-14: refuse a WebSocket upgrade that proves no one. Needs an
+    /// --auth-provider, and --no-rest: the REST bridge cannot carry an
+    /// identity yet. As an env var, 1/true/yes enable it.
+    #[arg(
+        long,
+        env = "MENGER_REQUIRE_LOGIN",
+        action = clap::ArgAction::SetTrue,
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
+    require_login: bool,
+
+    /// IDENTITY-19: a button on the login page (repeatable),
+    /// `<Label>=<provider>[:<connection>]`, e.g. `Google=auth0:google-oauth2`,
+    /// `Apple=auth0:apple`, `SSO=auth0:samlp` (asks for a work email); for
+    /// WorkOS `Google=workos:GoogleOAuth`, `Apple=workos:AppleOAuth`,
+    /// `Email=workos:authkit`, `SSO=workos:authkit`. The provider needs
+    /// `client=<id>` in its `--auth-provider` (WorkOS's is its spec). In the
+    /// env var, separated by `;`.
+    #[arg(long = "login-button", env = "MENGER_LOGIN_BUTTONS", value_name = "SPEC", value_delimiter = ';')]
+    login_button: Vec<LoginButton>,
+
+    /// IDENTITY-30: an email field on the login page, `<provider>[:<connection>]`,
+    /// e.g. `workos:authkit`: the address goes to that IdP as `login_hint`,
+    /// so an SSO domain goes straight to its company's IdP and anyone else
+    /// finishes on the IdP's page with the address filled in. Beside it, the
+    /// password form shows only at `/login?password` (automation's way in).
+    #[arg(long, env = "MENGER_LOGIN_EMAIL", value_name = "SPEC", value_parser = parse_email)]
+    login_email: Option<LoginButton>,
+
+    /// IDENTITY-19: the provider the login page's password form goes to;
+    /// default the first OIDC `--auth-provider` that takes passwords (not
+    /// WorkOS). `none`: no password form (IDENTITY-30).
+    #[arg(long, env = "MENGER_LOGIN_PASSWORD", value_name = "PROVIDER")]
+    login_password: Option<String>,
+
+    /// IDENTITY-19: a "Forgot password?" link on the login page.
+    #[arg(long, env = "MENGER_LOGIN_FORGOT", value_name = "URL")]
+    login_forgot: Option<String>,
+
+    /// IDENTITY-19: where people reach this shell (the login page's base for
+    /// the code flow's redirect URI and the nostr URL); default
+    /// http://127.0.0.1:<shell-port>.
+    #[arg(long, env = "MENGER_PUBLIC_URL", value_name = "URL")]
+    public_url: Option<String>,
+
+    /// IDENTITY-29: another origin whose pages may open the socket
+    /// (repeatable); the shell's own are always allowed.
+    #[arg(long = "allowed-origin", env = "MENGER_ALLOWED_ORIGINS", value_name = "ORIGIN", value_delimiter = ';')]
+    allowed_origin: Vec<String>,
+
+    /// IDENTITY-21: a principal who is admin on every shortcode from the
+    /// operator (repeatable; `idp:<uuid>`, `oidc:<provider>/<sub>`,
+    /// `nostr:<hex>`) — how the first admin exists. In the env var,
+    /// separated by `;`.
+    #[arg(long = "admin", env = "MENGER_ADMINS", value_name = "PRINCIPAL", value_delimiter = ';')]
+    admin: Vec<String>,
+
+    /// IDENTITY-35: the dev sign-in, test only (refused with `--env prod`):
+    /// the login page's checkbox sends this browser's sign-in to this
+    /// `--auth-provider` (plexus-idp's name, e.g. `plexus-idp`), where a
+    /// seeded user is one click and any username can be signed in as.
+    #[arg(long, env = "MENGER_DEV_LOGIN", value_name = "PROVIDER", requires_all = ["dev_password", "dev_idp_ws"])]
+    dev_login: Option<String>,
+
+    /// IDENTITY-35: the password every dev user has at plexus-idp.
+    #[arg(long, env = "MENGER_DEV_PASSWORD", value_name = "PASSWORD", hide_env_values = true)]
+    dev_password: Option<String>,
+
+    /// IDENTITY-35: plexus-idp's Plexus socket, where the dev sign-in
+    /// registers accounts, e.g. `ws://127.0.0.1:4480`.
+    #[arg(long, env = "MENGER_DEV_IDP_WS", value_name = "URL")]
+    dev_idp_ws: Option<String>,
+
+    /// IDENTITY-35: a seeded dev user (repeatable),
+    /// `name=role@SCOPE[,role@SCOPE…]`, e.g. `viewer=viewer@*`,
+    /// `mixed=editor@OUGHT,viewer@PLEXUS`, `nobody=`. In the env var,
+    /// separated by `;`.
+    #[arg(long = "dev-user", env = "MENGER_DEV_USERS", value_name = "SPEC", value_delimiter = ';')]
+    dev_user: Vec<menger::dev_login::DevUser>,
+
+    /// IDENTITY-19: how long a sign-in lasts.
+    #[arg(long, env = "MENGER_SESSION_HOURS", default_value = "12", value_name = "HOURS")]
+    session_hours: i64,
 }
 
 #[tokio::main]
@@ -121,7 +229,72 @@ async fn main() -> anyhow::Result<()> {
         seed: args.seed_value,
         into_existing: args.seed_into_existing,
     });
-    let hub = build_rpc_seeded(&db_path, seed, args.seed_shape).await?;
+    // IDENTITY-14: the login boundary is settled before anything opens, so
+    // a bad --auth-provider stops startup rather than serving without it.
+    if args.require_login {
+        if args.auth_provider.is_empty() {
+            anyhow::bail!("--require-login needs at least one --auth-provider to log in with");
+        }
+        if !args.no_rest && !args.stdio {
+            anyhow::bail!(
+                "--require-login closes the WebSocket, but the REST bridge cannot carry an \
+                 identity yet and would stay open: add --no-rest"
+            );
+        }
+    }
+    let boundary = login::boundary(&args.auth_provider)?;
+    let offers = args.auth_provider.iter().map(Provider::offer).collect();
+    // IDENTITY-19: sessions, the rule every method asks, and the page.
+    let login_on = !args.auth_provider.is_empty();
+    let sessions = Arc::new(Sessions::new(args.session_hours * 3600));
+    let access = if login_on {
+        Access::with_login(sessions.clone(), args.require_login, args.admin.clone())
+    } else {
+        Access::open()
+    };
+    let public_url = args.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", args.shell_port));
+    let shell_origins = vec![
+        format!("http://127.0.0.1:{}", args.shell_port),
+        format!("http://localhost:{}", args.shell_port),
+        menger::web_login::origin_of(&public_url),
+    ];
+    // IDENTITY-35: the dev sign-in is the test environment's, never prod's.
+    let dev = match &args.dev_login {
+        None => None,
+        Some(_) if args.env.as_deref() == Some("prod") => {
+            anyhow::bail!("--dev-login is refused with --env prod: it lets anyone be anyone")
+        }
+        Some(provider) => {
+            tracing::warn!("dev sign-in on through {provider}: anyone who reaches the login page can be anyone");
+            Some(menger::dev_login::DevLogin {
+                provider: provider.clone(),
+                password: args.dev_password.clone().expect("clap requires it"),
+                idp_ws: args.dev_idp_ws.clone().expect("clap requires it"),
+                users: args.dev_user.clone(),
+            })
+        }
+    };
+    let web_login = if login_on && !args.no_shell && !args.stdio {
+        Some(Arc::new(Login::new(
+            LoginConfig {
+                providers: args.auth_provider.clone(),
+                buttons: args.login_button.clone(),
+                email: args.login_email.clone(),
+                password: args.login_password.clone(),
+                forgot: args.login_forgot.clone(),
+                public_url: public_url.clone(),
+                also: shell_origins.clone(),
+                require: args.require_login,
+                title: shell::tab_title(args.env.as_deref()),
+                dev,
+                access: Some(access.clone()),
+            },
+            sessions.clone(),
+        )?))
+    } else {
+        None
+    };
+    let hub = build_rpc_offering(&db_path, seed, args.seed_shape, offers, access).await?;
 
     let activations = hub.list_activations_info();
     tracing::info!("Activations ({}):", activations.len());
@@ -141,9 +314,30 @@ async fn main() -> anyhow::Result<()> {
     if args.stdio {
         builder = builder.with_stdio();
         tracing::info!("Starting stdio transport");
+        if boundary.is_some() {
+            tracing::warn!("--auth-provider is ignored over stdio: there is no upgrade to carry a credential");
+        }
     } else {
         builder = builder.with_websocket(args.port);
         tracing::info!("WebSocket: ws://127.0.0.1:{}", args.port);
+        // IDENTITY-29: only menger's own pages may open the socket from a
+        // browser, login or not; synapse sends no Origin and is unaffected.
+        let mut origins = shell_origins.clone();
+        origins.extend(args.allowed_origin.iter().cloned());
+        builder = builder.with_allowed_origins(origins);
+        if let Some(carriers) = boundary {
+            let gate = Gate::new(sessions.clone(), Some(carriers));
+            builder = builder.with_session_validator(Arc::new(gate));
+            if args.require_login {
+                builder = builder.reject_upgrade_on_auth_failure();
+            }
+            let names: Vec<&str> = args.auth_provider.iter().map(|p| p.name()).collect();
+            tracing::info!(
+                "Login:     {} — anonymous callers {}",
+                names.join(", "),
+                if args.require_login { "refused" } else { "admitted" }
+            );
+        }
         if !args.no_rest {
             let route_hub = hub.clone();
             let route_fn: RouteFn = Arc::new(move |method, params| {
@@ -166,6 +360,7 @@ async fn main() -> anyhow::Result<()> {
                 ws_port: args.port,
                 app_dist: args.app_dist.unwrap_or_else(shell::default_app_dist),
                 env: args.env.clone(),
+                login: web_login,
             };
             tokio::spawn(async move {
                 if let Err(e) = shell::serve(cfg).await {
@@ -228,4 +423,10 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             2
         }
     }
+}
+
+/// IDENTITY-30: `--login-email <provider>[:<connection>]`, a button with no
+/// label of its own.
+fn parse_email(spec: &str) -> Result<LoginButton, String> {
+    format!("email={spec}").parse()
 }
