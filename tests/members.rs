@@ -95,8 +95,9 @@ async fn start() -> World {
     let sessions = Arc::new(Sessions::new(3600));
     let access = Access::with_login(sessions.clone(), true, vec![format!("idp:{ADA}")]);
     let offers = providers.iter().map(Provider::offer).collect();
-    let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access).await.unwrap();
-    let gate = Arc::new(Gate::new(sessions, login::boundary(&providers).unwrap()));
+    let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();
+    // AUTH-7: as main wires it, the upgrade notices who signs in holding nothing.
+    let gate = Arc::new(Gate::new(sessions, login::boundary(&providers).unwrap()).noticing(access));
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
     tokio::spawn(async move {
         let _keep = dir;
@@ -138,10 +139,22 @@ async fn call(c: &WsClient, method: &str, params: Value) -> Vec<Value> {
     while let Some(Ok(item)) = s.next().await {
         match item["type"].as_str() {
             Some("data") => out.push(item["content"].clone()),
+            // AUTH-7: the gate's refusal, typed, is the stream's error item.
+            Some("error") => {
+                out.push(item);
+                break;
+            }
             _ => break,
         }
     }
     out
+}
+
+/// AUTH-7: the gate's typed refusal: `(grant, scope)`.
+fn refused(evs: &[Value]) -> (String, String) {
+    let e = &evs[0];
+    assert_eq!(e["error_kind"], "forbidden", "{evs:?}");
+    (e["grant"].as_str().unwrap().to_string(), e["scope"].as_str().unwrap().to_string())
 }
 
 fn ids(evs: &[Value]) -> BTreeSet<String> {
@@ -174,11 +187,13 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
     tickets(&ada).await;
     let alice = as_(&w, ALICE, "alice").await;
 
-    // No grant yet: nothing to see, and Alice waits for an admin.
+    // No grant yet: nothing to see, and Alice waits for an admin. AUTH-7:
+    // the gate's typed refusal — tickets.list, held nowhere.
     let none = call(&alice, "tickets.list", json!({})).await;
     assert_eq!(none[0]["type"], "error");
     assert_eq!(call(&alice, "tickets.search", json!({ "query": "root" })).await[0]["type"], "error", "SEARCH-2: nor search");
-    assert!(none[0]["message"].as_str().unwrap().contains("ask an admin"), "{none:?}");
+    assert_eq!(refused(&none), ("tickets.list".to_string(), "*".to_string()));
+    assert_eq!((none[0]["roles"].clone(), none[0]["held_on"].clone()), (json!(["editor", "viewer", "admin"]), json!([])), "{none:?}");
     let waiting = call(&ada, "members.requests", json!({})).await;
     assert_eq!(waiting[0]["principal"], format!("idp:{ALICE}"));
 
@@ -203,8 +218,9 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
     // Writes: editor on IDENTITY only.
     let ok = call(&alice, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "renamed" })).await;
     assert_eq!(ok[0]["type"], "amended", "{ok:?}");
-    let refused = call(&alice, "tickets.amend", json!({ "id": "OUGHT-2", "title": "no" })).await;
-    assert!(refused[0]["message"].as_str().unwrap().contains("needs editor on OUGHT"), "{refused:?}");
+    let no = call(&alice, "tickets.amend", json!({ "id": "OUGHT-2", "title": "no" })).await;
+    assert_eq!(refused(&no), ("tickets.amend".to_string(), "OUGHT".to_string()), "AUTH-7: was \"needs editor on OUGHT\"");
+    assert_eq!(no[0]["held_on"], json!(["IDENTITY"]), "{no:?}");
     assert_eq!(call(&alice, "tickets.set_status", json!({ "id": "PLEXUS-2", "status": "Ready" })).await[0]["type"], "error");
     assert_eq!(call(&alice, "tickets.create", json!({ "epic": "IDENTITY", "title": "new", "parent": "IDENTITY-1" })).await[0]["type"], "created");
     assert_eq!(call(&alice, "tickets.create", json!({ "epic": "OUGHT", "title": "no" })).await[0]["type"], "error");
@@ -309,9 +325,9 @@ async fn blockers_answer_only_what_the_caller_can_view_and_blocked_by_names_only
         none[0]["message"].as_str().unwrap().replace("OUGHT-99", "#"),
         "an existing hidden ticket and a missing one are told apart by nothing"
     );
-    assert!(hidden[0]["message"].as_str().unwrap().contains("needs viewer on OUGHT"), "{hidden:?}");
+    assert!(hidden[0]["message"].as_str().unwrap().contains("needs tickets.get on OUGHT"), "{hidden:?}");
     let nowhere = call(&alice, "tickets.create", refused("NOWHERE-1")).await;
-    assert!(nowhere[0]["message"].as_str().unwrap().contains("needs viewer on NOWHERE"), "{nowhere:?}");
+    assert!(nowhere[0]["message"].as_str().unwrap().contains("needs tickets.get on NOWHERE"), "{nowhere:?}");
     // In her own shortcode, a forward reference stands as it always did.
     assert_eq!(call(&alice, "tickets.create", refused("IDENTITY-99")).await[0]["type"], "created");
 }

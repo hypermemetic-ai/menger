@@ -65,23 +65,25 @@ async fn free_port() -> u16 {
 }
 
 /// menger as `main` wires it with `--auth-provider key --require-login
-/// --admin key:<boss>`.
+/// --admin key:<boss>` (AUTH-7: the anonymous view, the gate).
 async fn start() -> u16 {
     let port = free_port().await;
     let providers: Vec<Provider> = vec!["key".parse().unwrap()];
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let sessions = Arc::new(Sessions::new(3600));
     let access = Access::with_login(sessions.clone(), true, vec![principal(&BOSS)]).minting(sessions.clone());
-    let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), Vec::new(), access).await.unwrap();
+    let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), Vec::new(), access.clone()).await.unwrap();
     let carriers = login::boundary_at(&providers, &login::socket_urls(port, None)).unwrap();
-    let gate = Arc::new(Gate::new(sessions, carriers));
+    let gate = Arc::new(Gate::new(sessions, carriers).noticing(access));
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
     tokio::spawn(async move {
         let _keep = dir;
         TransportServer::builder(hub, conv)
             .with_websocket(port)
             .with_session_validator(gate)
-            .reject_upgrade_on_auth_failure()
+            // AUTH-7: as main wires it (AUTH-6).
+            .anonymous_view()
+            .credential_cookies(["access_token"])
             .build()
             .await
             .unwrap()
@@ -119,6 +121,12 @@ async fn call(c: &WsClient, method: &str, params: Value) -> Vec<Value> {
     while let Some(Ok(item)) = s.next().await {
         match item["type"].as_str() {
             Some("data") => out.push(item["content"].clone()),
+            // AUTH-7: the gate's refusal is the stream's error item, typed
+            // (`error_kind`, `grant`, `scope`, `roles`, `held_on`).
+            Some("error") => {
+                out.push(item);
+                break;
+            }
             _ => break,
         }
     }
@@ -204,7 +212,14 @@ async fn a_scope_is_a_ceiling_on_every_check() {
     assert_eq!(amend(&s, "A-2").await["type"], "amended");
     assert_eq!(amend(&s, "C-2").await["type"], "amended", "C is hosted under A");
     let no = amend(&s, "B-2").await;
-    assert!(no["message"].as_str().unwrap().contains("needs editor on B"), "{no}");
+    // AUTH-7: the gate's typed refusal, where IDENTITY-42 said "needs editor on B".
+    assert_eq!(
+        (no["error_kind"].as_str(), no["grant"].as_str(), no["scope"].as_str()),
+        (Some("forbidden"), Some("tickets.amend"), Some("B")),
+        "{no}"
+    );
+    assert_eq!(no["message"], "needs tickets.amend on B", "{no}");
+    assert_eq!(no["held_on"], json!(["A"]), "held on A, within the session's editor@A: {no}");
     assert_eq!(one(&s, "tickets.get", json!({ "id": "B-2" })).await["type"], "not_found", "B is out of sight");
     let all = call(&s, "tickets.list", json!({})).await;
     let listed: Vec<String> = all.iter().filter_map(|e| e["ticket"]["id"].as_str().or(e["summary"]["id"].as_str()).map(str::to_string)).collect();

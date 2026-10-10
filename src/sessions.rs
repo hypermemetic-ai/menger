@@ -27,6 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use base64::Engine as _;
 use plexus_auth_core::adapters::Carriers;
+use menger_tickets_api::access::Access;
 use plexus_core::plexus::{AuthContext, SessionValidator};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -106,10 +107,36 @@ pub struct Pending {
     pub expires: i64,
 }
 
+/// AUTH-7: how long a loopback sign-in (`auth.login {browser}`) waits for
+/// the person, and how long the one-time code it ends with lasts.
+pub const CLI_STATE_SECS: i64 = 600;
+pub const CLI_CODE_SECS: i64 = 60;
+
+/// AUTH-7: a loopback sign-in on its way through the login page: where the
+/// browser goes back to when the person has signed in.
+#[derive(Clone, Debug)]
+struct CliPending {
+    redirect: String,
+    expires: i64,
+}
+
+/// AUTH-7: the one-time code a finished loopback sign-in hands the
+/// browser: who signed in, bound to the sign-in's state.
+#[derive(Clone)]
+struct CliCode {
+    state: String,
+    ctx: AuthContext,
+    expires: i64,
+}
+
 /// The session table. See the module docs.
 pub struct Sessions {
     live: Mutex<HashMap<String, Session>>,
     pending: Mutex<HashMap<String, Pending>>,
+    /// AUTH-7: loopback sign-ins, by state.
+    cli: Mutex<HashMap<String, CliPending>>,
+    /// AUTH-7: their codes, by the code's hash.
+    codes: Mutex<HashMap<String, CliCode>>,
     ttl_secs: i64,
     cookie: String,
 }
@@ -122,7 +149,14 @@ impl Sessions {
 
     /// Sessions in a cookie of this name ([`cookie_name_for`]).
     pub fn named(ttl_secs: i64, cookie: &str) -> Self {
-        Self { live: Mutex::new(HashMap::new()), pending: Mutex::new(HashMap::new()), ttl_secs, cookie: cookie.to_string() }
+        Self {
+            live: Mutex::new(HashMap::new()),
+            pending: Mutex::new(HashMap::new()),
+            cli: Mutex::new(HashMap::new()),
+            codes: Mutex::new(HashMap::new()),
+            ttl_secs,
+            cookie: cookie.to_string(),
+        }
     }
 
     /// The session cookie's name.
@@ -195,6 +229,64 @@ impl Sessions {
     pub fn finish(&self, state: &str) -> Option<Pending> {
         self.pending.lock().unwrap().remove(state).filter(|p| p.expires > now())
     }
+
+    /// AUTH-7: how long a browser's sign-in lasts.
+    pub fn ttl_secs(&self) -> i64 {
+        self.ttl_secs
+    }
+
+    /// AUTH-7, `auth.login {browser {redirect}}`: keeps a loopback sign-in
+    /// for ten minutes; its state.
+    pub fn begin_cli(&self, redirect: String) -> String {
+        let state = format!("s_{}", random_token());
+        let mut cli = self.cli.lock().unwrap();
+        cli.retain(|_, p| p.expires > now());
+        make_room(&mut cli, MAX_PENDING, |p| p.expires);
+        cli.insert(state.clone(), CliPending { redirect, expires: now() + CLI_STATE_SECS });
+        state
+    }
+
+    /// AUTH-7: whether `state` names a loopback sign-in still waiting.
+    pub fn cli_waiting(&self, state: &str) -> bool {
+        self.cli.lock().unwrap().get(state).is_some_and(|p| p.expires > now())
+    }
+
+    /// AUTH-7: the person signed in as `ctx`: the loopback sign-in `state`
+    /// is taken (once) and a one-time code bound to it issued, good for
+    /// [`CLI_CODE_SECS`] — the redirect to send the browser to, and the
+    /// code. `None`: no such sign-in waits.
+    pub fn finish_cli(&self, state: &str, ctx: AuthContext) -> Option<(String, String)> {
+        let pending = self.cli.lock().unwrap().remove(state).filter(|p| p.expires > now())?;
+        let code = format!("c_{}", random_token());
+        let mut codes = self.codes.lock().unwrap();
+        codes.retain(|_, c| c.expires > now());
+        make_room(&mut codes, MAX_PENDING, |c| c.expires);
+        codes.insert(hash(&code), CliCode { state: state.to_string(), ctx, expires: now() + CLI_CODE_SECS });
+        Some((pending.redirect, code))
+    }
+
+    /// AUTH-7, `auth.login {code {code, state}}`: who signed in, once — the
+    /// code must be the one issued for `state`, and fresh.
+    pub fn take_code(&self, code: &str, state: &str) -> Option<AuthContext> {
+        let c = self.codes.lock().unwrap().remove(&hash(code))?;
+        (c.expires > now() && c.state == state).then_some(c.ctx)
+    }
+}
+
+/// AUTH-7: a loopback sign-in's redirect, as `auth.login {browser}` takes it:
+/// `http://127.0.0.1:<port>/…`, `http://localhost:<port>/…` or
+/// `http://[::1]:<port>/…` — the client's own port on this machine, nothing
+/// else (no user, no fragment). The normalized URL, or why not.
+pub fn loopback_redirect(text: &str) -> Result<String, String> {
+    let refuse = || format!("`{}` is not a loopback redirect: http://127.0.0.1:<port>/… or http://localhost:<port>/…", text.trim());
+    let u = url::Url::parse(text.trim()).map_err(|_| refuse())?;
+    let host_ok = matches!(u.host(), Some(url::Host::Ipv4(ip)) if ip == std::net::Ipv4Addr::LOCALHOST)
+        || matches!(u.host(), Some(url::Host::Ipv6(ip)) if ip == std::net::Ipv6Addr::LOCALHOST)
+        || matches!(u.host(), Some(url::Host::Domain(d)) if d.eq_ignore_ascii_case("localhost"));
+    if u.scheme() != "http" || !host_ok || u.port().is_none() || !u.username().is_empty() || u.password().is_some() || u.fragment().is_some() {
+        return Err(refuse());
+    }
+    Ok(u.to_string())
 }
 
 /// Drops the entry nearest its end while `map` is at `cap`.
@@ -240,22 +332,31 @@ fn minted_token(value: &str) -> Option<&str> {
 pub struct Gate {
     sessions: Arc<Sessions>,
     carriers: Option<Arc<Carriers>>,
+    /// AUTH-7: who signs in holding nothing is put on the waiting list here,
+    /// as it opens the socket — the gate refuses its calls before any method
+    /// could notice it.
+    access: Option<Access>,
 }
 
 impl Gate {
     pub fn new(sessions: Arc<Sessions>, carriers: Option<Arc<Carriers>>) -> Self {
-        Self { sessions, carriers }
+        Self { sessions, carriers, access: None }
     }
-}
 
-#[async_trait]
-impl SessionValidator for Gate {
-    async fn validate(&self, value: &str) -> Option<AuthContext> {
+    /// AUTH-7: a sign-in holding no grant waits for an admin
+    /// ([`Access::notice`]).
+    pub fn noticing(mut self, access: Access) -> Self {
+        self.access = Some(access);
+        self
+    }
+
+    async fn identify(&self, value: &str) -> Option<AuthContext> {
         if let Some(ctx) = cookie(value, self.sessions.cookie_name()).and_then(|id| self.sessions.get(id)) {
             return Some(ctx);
         }
         // IDENTITY-42: a minted token is a session or nobody — an ended or
-        // expired one proves no one (refused 401 under --require-login).
+        // expired one proves no one (refused 401: AUTH-6, a credential
+        // presented and refused).
         if let Some(token) = minted_token(value) {
             return self.sessions.get(token);
         }
@@ -263,6 +364,17 @@ impl SessionValidator for Gate {
             Some(c) => c.validate(value).await,
             None => None,
         }
+    }
+}
+
+#[async_trait]
+impl SessionValidator for Gate {
+    async fn validate(&self, value: &str) -> Option<AuthContext> {
+        let ctx = self.identify(value).await?;
+        if let Some(a) = &self.access {
+            a.notice(&ctx);
+        }
+        Some(ctx)
     }
 }
 
@@ -351,6 +463,32 @@ mod tests {
         assert!(!s.end_key(&key), "once");
         let (old, _) = s.mint(alice(), -1);
         assert!(gate.validate(&old).await.is_none(), "expired");
+    }
+
+    #[test]
+    fn a_loopback_sign_in_ends_in_one_code_for_its_state() {
+        let s = Sessions::new(3600);
+        let state = s.begin_cli("http://127.0.0.1:53817/cb".into());
+        assert!(s.cli_waiting(&state));
+        let (redirect, code) = s.finish_cli(&state, alice()).expect("waiting");
+        assert_eq!(redirect, "http://127.0.0.1:53817/cb");
+        assert!(!s.cli_waiting(&state) && s.finish_cli(&state, alice()).is_none(), "the state is taken once");
+        assert!(s.take_code(&code, "s_other").is_none(), "bound to its state");
+        let s2 = Sessions::new(3600);
+        let st = s2.begin_cli("http://localhost:1/x".into());
+        let (_, c) = s2.finish_cli(&st, alice()).unwrap();
+        assert_eq!(s2.take_code(&c, &st).unwrap().user_id, "alice");
+        assert!(s2.take_code(&c, &st).is_none(), "once");
+    }
+
+    #[test]
+    fn only_a_loopback_port_is_a_redirect() {
+        for ok in ["http://127.0.0.1:53817/cb", "http://localhost:9/", "http://[::1]:8080/cb?x=1"] {
+            assert!(loopback_redirect(ok).is_ok(), "{ok}");
+        }
+        for bad in ["https://127.0.0.1:1/cb", "http://127.0.0.1/cb", "http://evil.example:1/", "http://127.0.0.2:1/", "http://u@127.0.0.1:1/", "http://127.0.0.1:1/#x", "nope"] {
+            assert!(loopback_redirect(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -255,6 +255,8 @@ pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
                 .route("/login/me", get(w::me))
                 .route("/login/dev", axum::routing::post(w::dev))
                 .route("/logout", axum::routing::post(w::logout))
+                // AUTH-7: a loopback sign-in's way back to its client.
+                .route("/auth/cli", get(w::cli).post(w::cli_confirm))
                 .with_state(login.clone()),
         );
         // DNS rebinding: a page on another name resolving here gets nothing.

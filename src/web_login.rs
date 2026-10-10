@@ -10,6 +10,8 @@
 //! | `POST /logout` | the session ended (and the provider's, where it keeps one: WorkOS) |
 //! | `GET /login/me` | who the session is, as JSON, or 401 |
 //! | `POST /login/dev` | IDENTITY-35, test only: be a seeded or any user, through plexus-idp ([`crate::dev_login`]) |
+//! | `GET /login?cli=1&state=…` | AUTH-7: the page for a loopback sign-in (`auth.login {browser}`): every way in carries on to `/auth/cli` |
+//! | `GET /auth/cli`, `POST /auth/cli` | AUTH-7: the person is signed in — the sign-in's state taken, a one-time code issued, and the browser sent back to the client's loopback `redirect?code=…&state=…`; a sign-in older than two minutes asks first (a button, POSTed from this page) |
 //!
 //! Every way in verifies the provider's token (or event) with that
 //! provider's adapter — the same check the socket makes — and then starts a
@@ -480,10 +482,22 @@ pub struct PageQuery {
     next: Option<String>,
     /// IDENTITY-30: the password form beside an email field (automation).
     password: Option<String>,
+    /// AUTH-7: a loopback sign-in's page (`auth.login {browser}`): with its
+    /// `state`, every way in carries on to `/auth/cli`.
+    cli: Option<String>,
+    state: Option<String>,
+}
+
+/// AUTH-7: where a loopback sign-in goes once the person is signed in.
+fn cli_next(state: &str) -> String {
+    format!("/auth/cli?state={}", url::form_urlencoded::byte_serialize(state.as_bytes()).collect::<String>())
 }
 
 pub async fn page(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<PageQuery>) -> Response {
-    let next = safe_next(q.next.as_deref());
+    let next = match (q.cli.as_deref(), q.state.as_deref()) {
+        (Some(_), Some(state)) if login.sessions.cli_waiting(state) => cli_next(state),
+        _ => safe_next(q.next.as_deref()),
+    };
     if login.session(&headers).is_some() {
         return see_other(&next);
     }
@@ -956,6 +970,76 @@ pub async fn me(State(login): State<Arc<Login>>, headers: HeaderMap) -> Response
             ([(header::CACHE_CONTROL, "no-store")], axum::Json(body)).into_response()
         }
         None => (StatusCode::UNAUTHORIZED, [(header::CACHE_CONTROL, "no-store")], axum::Json(json!({ "error": "signed out" }))).into_response(),
+    }
+}
+
+/// AUTH-7: how recent a sign-in carries a loopback sign-in straight on;
+/// an older one is asked first.
+const CLI_FRESH_SECS: i64 = 120;
+
+#[derive(Deserialize)]
+pub struct CliQuery {
+    state: Option<String>,
+}
+
+/// AUTH-7: the browser back to the client that asked (`auth.login
+/// {browser}`), with a one-time code for this state; or, signed out, to the
+/// page; or the words saying the sign-in is gone.
+fn cli_finish(login: &Login, ctx: AuthContext, state: &str) -> Response {
+    let Some((redirect, code)) = login.sessions.finish_cli(state, ctx) else {
+        return page_response(login, "/", Some("That sign-in has expired or was used: run it again."), StatusCode::BAD_REQUEST);
+    };
+    let Ok(mut to) = url::Url::parse(&redirect) else {
+        return page_response(login, "/", Some("That sign-in's return address is malformed."), StatusCode::BAD_REQUEST);
+    };
+    to.query_pairs_mut().append_pair("code", &code).append_pair("state", state);
+    (StatusCode::SEE_OTHER, [(header::LOCATION, to.to_string()), (header::CACHE_CONTROL, "no-store".to_string())]).into_response()
+}
+
+pub async fn cli(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<CliQuery>) -> Response {
+    let state = q.state.unwrap_or_default();
+    if !login.sessions.cli_waiting(&state) {
+        return page_response(&login, "/", Some("That sign-in has expired or was used: run it again."), StatusCode::BAD_REQUEST);
+    }
+    let Some(ctx) = login.session(&headers) else {
+        return see_other(&format!("/login?cli=1&state={}", url::form_urlencoded::byte_serialize(state.as_bytes()).collect::<String>()));
+    };
+    // Signed in just now, through this very flow: straight on. Signed in
+    // before: a button, so a link alone never hands this browser's sign-in
+    // to a program on this machine.
+    let started = ctx.metadata.get("expires_at").and_then(|v| v.as_i64()).map(|e| e - login.sessions.ttl_secs());
+    if started.is_some_and(|s| sessions::now() - s <= CLI_FRESH_SECS) {
+        return cli_finish(&login, ctx, &state);
+    }
+    let who = esc(&ctx.get_metadata_string("name").unwrap_or_else(|| ctx.principal().map(|p| p.to_string()).unwrap_or_default()));
+    let state_e = esc(&state);
+    let html = login.fill(
+        None,
+        None,
+        Some(format!(
+            r#"<p class="hint">A program on this computer asks to sign in to menger as <strong>{who}</strong>.</p>
+      <form method="post" action="/auth/cli"><input type="hidden" name="state" value="{state_e}"><button type="submit" id="cli-continue">Continue as {who}</button></form>"#
+        )),
+        String::new(),
+        None,
+        false,
+        false,
+    );
+    (StatusCode::OK, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(html)).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct CliForm {
+    state: String,
+}
+
+pub async fn cli_confirm(State(login): State<Arc<Login>>, headers: HeaderMap, Form(f): Form<CliForm>) -> Response {
+    if login.foreign(&headers) {
+        return (StatusCode::FORBIDDEN, "Forbidden: continue from menger's own page").into_response();
+    }
+    match login.session(&headers) {
+        Some(ctx) => cli_finish(&login, ctx, &f.state),
+        None => see_other(&format!("/login?cli=1&state={}", url::form_urlencoded::byte_serialize(f.state.as_bytes()).collect::<String>())),
     }
 }
 

@@ -54,10 +54,18 @@ use std::path::Path;
 /// open ([`upgrade`]); older forms are built again and gain them with the
 /// rest. An older build reads a form-8 file as its own (it never looks at
 /// either).
-const FORM: i64 = 8;
+///
+/// AUTH-7 is form 9: the roles table (`roles`, [`super::roles`]) — an
+/// admin's edits of a role's grants; a record again, nothing derived. A
+/// file in form 6, 7 or 8 gains it, empty, in place, once, on its first
+/// open ([`upgrade`]); older forms are built again and gain it with the
+/// rest. An older build reads a form-9 file as its own (it never looks at
+/// the table).
+const FORM: i64 = 9;
 
-/// COMMENT-2, IDENTITY-21: the forms [`upgrade`] takes to [`FORM`] in place.
-const UPGRADES_FROM: [i64; 2] = [6, 7];
+/// COMMENT-2, IDENTITY-21, AUTH-7: the forms [`upgrade`] takes to [`FORM`]
+/// in place.
+const UPGRADES_FROM: [i64; 3] = [6, 7, 8];
 
 /// IDENTITY-21: what form 8 adds beside the tables — a comment's signer.
 fn add_comment_principal(conn: &Connection) -> rusqlite::Result<()> {
@@ -787,6 +795,8 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     // IDENTITY-21: form 8's members table and comment signers.
     tx.execute_batch(super::members::TABLE)?;
     add_comment_principal(&tx)?;
+    // AUTH-7: form 9's roles table.
+    tx.execute_batch(super::roles::TABLE)?;
     let cache = Cache::new(db::load_rows(&tx)?);
     let form = cache.form();
     write_all(&tx, &form)?;
@@ -843,13 +853,14 @@ pub(super) fn upgrade(conn: &mut Connection, form: i64) -> anyhow::Result<bool> 
     tx.execute_batch(super::comments::TABLE)?;
     tx.execute_batch(super::members::TABLE)?;
     add_comment_principal(&tx)?;
+    tx.execute_batch(super::roles::TABLE)?;
     let held = super::comments::count(&tx)?;
     mark_stale(&tx, false)?;
     tx.commit()?;
     tracing::warn!(
-        "IDENTITY-21: the file gained stored form {FORM} — the comments table ({held} comments), the members \
-         table and comment signers — in {:.1} ms, durably; it was in form {form}, whose derived state is form \
-         {FORM}'s, so nothing was built again; every later open reads it",
+        "AUTH-7: the file gained stored form {FORM} — the comments table ({held} comments), the members \
+         table, comment signers and the roles table — in {:.1} ms, durably; it was in form {form}, whose derived \
+         state is form {FORM}'s, so nothing was built again; every later open reads it",
         started.elapsed().as_secs_f64() * 1000.0
     );
     Ok(true)
@@ -1343,7 +1354,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         State::Older(form) if UPGRADES_FROM.contains(&form) => {
             return Ok(Verdict::NotStored(format!(
                 "the derived state is stored in form {form}; this build reads {FORM} (the next open \
-                 adds the comments and members tables, and builds nothing again)"
+                 adds the comments, members and roles tables, and builds nothing again)"
             )))
         }
         State::Older(form) => {
