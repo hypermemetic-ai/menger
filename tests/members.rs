@@ -177,6 +177,7 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
     // No grant yet: nothing to see, and Alice waits for an admin.
     let none = call(&alice, "tickets.list", json!({})).await;
     assert_eq!(none[0]["type"], "error");
+    assert_eq!(call(&alice, "tickets.search", json!({ "query": "root" })).await[0]["type"], "error", "SEARCH-2: nor search");
     assert!(none[0]["message"].as_str().unwrap().contains("ask an admin"), "{none:?}");
     let waiting = call(&ada, "members.requests", json!({})).await;
     assert_eq!(waiting[0]["principal"], format!("idp:{ALICE}"));
@@ -188,6 +189,10 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
     assert_eq!(seen, set(&["IDENTITY-1", "IDENTITY-2", "OUGHT-1", "OUGHT-2"]));
     let ready = ids(&call(&alice, "tickets.list", json!({ "filter": "kind build" })).await);
     assert_eq!(ready, set(&["IDENTITY-2", "OUGHT-2"]), "her filter, within her reach");
+    // SEARCH-2: a search inside tickets sees her reach too — hits and count.
+    let found = call(&alice, "tickets.search", json!({ "query": "root" })).await;
+    assert_eq!(ids(&found), set(&["IDENTITY-1", "OUGHT-1"]), "{found:?}");
+    assert_eq!(found.last().unwrap()["matched"], 2, "PLEXUS-1 is not counted either");
     assert_eq!(call(&alice, "tickets.get", json!({ "id": "PLEXUS-2" })).await[0]["type"], "not_found", "no leak of existence");
     let groups = call(&alice, "tickets.groups", json!({})).await;
     let epics: BTreeSet<String> = groups.iter().map(|g| g["group"]["epic"].as_str().unwrap().to_string()).collect();

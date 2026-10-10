@@ -46,8 +46,8 @@ pub mod inputs;
 pub mod filter;
 pub use types::{
     is_menger_doc, is_menger_path, path_address, Answer, AnswerSource, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, Input,
-    InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, SlotDoc, Kind, Placement,
-    PlacementChange, RootRow, Severity, Status, Ticket, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
+    InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, SlotDoc, Kind, Marked, Placement,
+    PlacementChange, RootRow, SearchWord, Severity, Status, Ticket, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
 };
 
 /// IDENTITY-19: the rule every method asks first — who a call acts as, or

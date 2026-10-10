@@ -93,6 +93,16 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets member --ids FILTER-4,FILTER-5 --filter 'status Ready'
   ```
 
+  **Search inside tickets** (SEARCH-2) is `search` — titles and bodies,
+  every word required, prefixes and typos too, best first; each `hit`
+  carries the passage that matched (`find` stays the jump by id or title).
+  It takes the same `--filter`, and pages with `--offset` / `--limit`:
+
+  ```sh
+  synapse -P 4455 menger tickets search --query 'plcement wave'
+  synapse -P 4455 menger tickets search --query 'set_status' --filter 'not category done' --limit 5
+  ```
+
   **The nav under a filter** is `tree` (FILTER-13): a parent's children —
   or a shortcode's top row (its root; a rootless shortcode's tickets) —
   that match or hold a match, each a `node { summary, matched, below }`

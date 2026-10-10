@@ -395,16 +395,25 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             bitmaps,
             tallies,
             holders,
+            indexed,
         }) => {
+            // SEARCH-2: and the search index, when the file has one.
+            let search = match indexed {
+                Some(n) => format!(", and the search index's {n} tickets' titles and text"),
+                None => String::new(),
+            };
             println!(
                 "consistent: {} — {tickets} tickets; {runs} shortcode runs, {refs} dangling forward \
                  references, {groups} roll-up groups, the children and child_count of {parents} \
                  parents, the unsatisfied blockers of {blocked} tickets, a ready set of {ready}, \
                  every shortcode's status counts, {cells} cells' {bitmaps} bitmaps and counts, \
-                 and the kept tree's {tallies} tally entries and {holders} holder containers \
+                 and the kept tree's {tallies} tally entries and {holders} holder containers{search} \
                  are what a scan of the tickets gives",
                 db_path.display()
             );
+            if indexed.is_none() {
+                println!("{}: no search index yet (SEARCH-2) — the next open builds it", db_path.display());
+            }
             0
         }
         Ok(Verdict::Differs(differences)) => {

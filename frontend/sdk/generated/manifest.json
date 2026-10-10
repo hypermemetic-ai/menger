@@ -140,6 +140,12 @@
         "ticket"
       ],
       "schema": [],
+      "search": [
+        "filter",
+        "limit",
+        "offset",
+        "query"
+      ],
       "set_kind": [
         "id",
         "kind",

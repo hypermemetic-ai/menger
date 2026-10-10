@@ -81,7 +81,8 @@ menger --verify-derived --db-path /path/to/tickets.db
 ```
 
 opens the file read-only, rebuilds all of it by a scan of its tickets,
-compares them with what is stored, and prints each difference — the
+compares them with what is stored — and (SEARCH-2) the search index
+with the tickets' titles and text — and prints each difference — the
 structure and the key, what is stored and what a scan gives
 (`child_count of ALT-2: stored 5; a scan gives 1`) — or `consistent: …`.
 Exit 0 when consistent; 1 on any difference, or when the file holds no
@@ -999,6 +1000,7 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
 | `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children — the one way to read them (SCALE-4), from an index the store keeps, so a page of a root's 163,530 children costs the page (1.3 ms at 10⁶ over REST, first page or deep) and its `remaining` is arithmetic; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page — `after` naming no ticket is one in-band `error` |
 | `tickets.ready_set { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete or Superseded — never a doc), ordered (epic, seq), then one `page { next, remaining }` |
 | `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
+| `tickets.search { query, filter?, limit?, offset? }` | SEARCH-2: search inside tickets — one `hit { summary, title, snippet, corrected }` per ticket whose title or body's text holds every word of `query`, best first, then one `searched { matched, next, words }`. Each word also matches as a prefix; a misspelt one (unknown to the index, or rare in it) of four letters or more also matches the index's words one edit away (two from eight letters); `FILTER-23`, `set_status` and `"a phrase"` are phrases. Uncorrected matches first, then corrected; BM25 within, the title weighing 4 to the body's 1. `title` and `snippet` are `[{ text, hit }]` stretches, the matched words marked. `filter` as `find`'s; `limit` 20 by default, at most 100; `offset` skips matches — `next` is the next page's. A blank query is no hits and `matched: 0`. See "Search" below |
 | `tickets.set_status { id, status }` | `status_changed { ticket, previous }` — any of the nine, from any status (SDLC-7: the worker states `Coding` and `In Review` included); one outside them is an in-band `error` naming the nine; SDLC-11: on a doc, an in-band `error` (a doc has no lifecycle), and `Doc` on any other kind an in-band `error` too |
 | `tickets.set_kind { id, kind, status? }` | `kind_changed { ticket, previous }` (SDLC-13) — the one write that changes a kind; everything kept by kind moves in its write. To a `doc`: status `Doc` (a `status` other than `Doc` is an in-band `error`), refused while the ticket waits on a blocker or a ticket waits on it (each named); from a doc: `status` if given (never `Doc`), else `Epic` for a scope and `Pending` otherwise; between two kinds of work the status stays unless given (`Doc` an in-band `error`). A shortcode's root becoming a kind that roots nothing is an in-band `error` naming the shortcode (doc ↔ scope is allowed); so is a path holder (WAVE-10) becoming work, and an unknown kind or status; an id naming no ticket is `not_found`. A lower-seq ticket made a scope or a doc becomes its shortcode's root. The kind (and status) it has is no write and no broadcast, answering `previous` equal to its kind. `watch` carries `kind_changed` first, then the write's `group_changed` (a root's whenever its kind or status changed; every row a re-root moved), `placements_changed`, and — filtered — `entered` / `left` |
 | `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id. COMP-3: a new body moves the component registry (definitions, references, orphans); a malformed ` ```component ` block (COMP-8: or `<docs>`), or a name another ticket defines, is an in-band `error` and nothing is written, title included |
@@ -1055,6 +1057,47 @@ then the stream continues. A client that ignores event types it does not
 know is unaffected; one that keeps a copy should treat it as "fetch again
 what you show" — the Leptos app asks `extents` and its board's window again
 (SCALE-26), as after a reconnect.
+
+### Search (SEARCH-2)
+
+`find` jumps to a ticket by its id or title; **`search`** looks inside
+tickets. Its index is SQLite FTS5 in the same database file — no second
+store, nothing else to run: two tables (`search_rows`, each ticket's id and
+index row; `search`, FTS5 over `title` and `text`, `unicode61` with
+diacritics folded) and FTS5's vocabulary view over them (`search_terms`).
+A file gains them once, on its first open, every ticket indexed in one
+transaction (`SEARCH-2: the file gained the search index — N tickets' …`);
+from then on `create`, an `amend` that changes the title or the body, and a
+seed's chunks write a ticket's index row in the transaction that writes the
+ticket. `--verify-derived` holds the index to the tickets (one row each,
+each the title and text the ticket gives now, and FTS5's own integrity
+check).
+
+What is indexed is what a reader reads: the body's text without its tags,
+attributes, HTML comments, `<style>`/`<script>`, ` ```component ` blocks,
+frontmatter and a mermaid diagram's syntax — but with the text between the
+tags, a diagram's labels, the values of `ref`, `name`, `title`, `alt`, `label`, `labels`,
+`cost` and `benefit` (an `<m-ticket ref>`'s id, an option's name), and code
+as written.
+
+```sh
+synapse -P 4455 menger tickets search --query 'plcement wave'
+synapse -P 4455 menger tickets search --query 'set_status' --filter 'not category done' --limit 5
+synapse -P 4455 menger tickets search --query '"ready set"' --offset 20
+```
+
+How a query is read: every word is required, and matches itself and as a
+prefix (`plac` → placement). A word of four letters or more that the
+index does not know — or holds in at most 3 tickets, as a typo some
+ticket repeats does — also matches the index's words one edit away (two
+from eight letters; an insertion, a deletion, a substitution, a swap of
+neighbours), the first letter kept, at most 8, and a rare word only words
+five times as common; the last word's corrections may be prefixes
+(`plcem` → `placem…`). Words with a digit are never corrected. A word
+joined by `-` `_` `.` `/` is a phrase with its last part a prefix; a
+`"quoted"` one is an exact phrase. The tickets matched as typed come first,
+then those that needed a correction (`corrected: true`); `searched.words`
+says what each word was corrected to.
 
 ### Comments (COMMENT-2)
 
