@@ -119,7 +119,8 @@ pub async fn build_rpc_offering(
         DynamicHub::new("menger")
             .register(Tickets::with_access(Arc::clone(&store), access.clone()))
             .register(Comments::with_access(Arc::clone(&store), access.clone()))
-            .register(Members::new(store, access))
-            .register(Session::offering(offers)),
+            .register(Members::new(store, access.clone()))
+            // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
+            .register(Session::offering(offers).with_access(access)),
     ))
 }

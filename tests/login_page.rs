@@ -589,6 +589,8 @@ async fn sign_out_ends_the_session_and_its_open_socket_stops_answering() {
     let after = call(&ws, "tickets.health").await;
     assert_eq!(after[0]["type"], "error");
     assert!(after[0]["message"].as_str().unwrap().contains("signed out"), "{after:?}");
+    // IDENTITY-37: whoami too — the connection is no one now.
+    assert_eq!(call(&ws, "session.whoami").await[0]["type"], "anonymous");
     assert!(socket(&m, Some(&id), Some(&m.origin())).await.is_err(), "and no new socket");
     assert_eq!(m.http.get(m.url("/login/me")).header("cookie", m.jar(&id)).send().await.unwrap().status(), 401);
 }
