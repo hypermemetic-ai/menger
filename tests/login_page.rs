@@ -200,6 +200,14 @@ struct Menger {
 }
 
 impl Menger {
+    /// IDENTITY-38: this shell's session cookie's name, as main names it.
+    fn cookie(&self) -> String {
+        menger::sessions::cookie_name_for(&self.url(""))
+    }
+    /// A `Cookie` header carrying session `id`.
+    fn jar(&self, id: &str) -> String {
+        format!("{}={id}", self.cookie())
+    }
     fn url(&self, path: &str) -> String {
         format!("http://127.0.0.1:{}{path}", self.shell)
     }
@@ -333,7 +341,7 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
     let password = None;
 
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let sessions = Arc::new(Sessions::new(3600));
+    let sessions = Arc::new(Sessions::named(3600, &menger::sessions::cookie_name_for(&public_url)));
     let access = Access::with_login(sessions.clone(), true, Vec::new());
     let offers = providers.iter().map(Provider::offer).collect();
     let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();
@@ -386,10 +394,13 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
     (Menger { ws, shell: shell_port, http }, w)
 }
 
-/// The `menger_session` a response sets, with its attributes checked.
+/// The session cookie (`menger_session_<port>`, IDENTITY-38) a response
+/// sets, with its attributes checked.
 fn session_from(r: &reqwest::Response) -> Option<String> {
+    let port = r.url().port().expect("a test shell has a port");
+    let name = format!("menger_session_{port}=");
     r.headers().get_all("set-cookie").iter().filter_map(|v| v.to_str().ok()).find_map(|c| {
-        let value = c.strip_prefix("menger_session=")?.split(';').next()?.to_string();
+        let value = c.strip_prefix(name.as_str())?.split(';').next()?.to_string();
         assert!(c.contains("HttpOnly") && c.contains("SameSite=Lax"), "{c}");
         (!value.is_empty()).then_some(value)
     })
@@ -409,7 +420,7 @@ async fn sign_in(m: &Menger) -> String {
 async fn socket(m: &Menger, cookie: Option<&str>, origin: Option<&str>) -> Result<WsClient, String> {
     let mut h = HeaderMap::new();
     if let Some(c) = cookie {
-        h.insert("cookie", HeaderValue::from_str(&format!("menger_session={c}")).unwrap());
+        h.insert("cookie", HeaderValue::from_str(&m.jar(c)).unwrap());
     }
     if let Some(o) = origin {
         h.insert("origin", HeaderValue::from_str(o).unwrap());
@@ -457,9 +468,9 @@ async fn a_password_signs_in_and_the_session_opens_the_app_and_the_socket() {
     assert!(bad.text().await.unwrap().contains("Wrong username or password."));
 
     let id = sign_in(&m).await;
-    let app = m.http.get(m.url("/app/")).header("cookie", format!("menger_session={id}")).send().await.unwrap();
+    let app = m.http.get(m.url("/app/")).header("cookie", m.jar(&id)).send().await.unwrap();
     assert_eq!(app.status(), 200, "the app, for a session");
-    let me: Value = m.http.get(m.url("/login/me")).header("cookie", format!("menger_session={id}")).send().await.unwrap().json().await.unwrap();
+    let me: Value = m.http.get(m.url("/login/me")).header("cookie", m.jar(&id)).send().await.unwrap().json().await.unwrap();
     assert_eq!(me["principal"], format!("idp:{ALICE}"));
 
     let ws = socket(&m, Some(&id), Some(&m.origin())).await.expect("the socket admits the session");
@@ -487,7 +498,7 @@ async fn google_signs_in_through_the_code_flow_bound_to_this_browser() {
     assert_eq!(q["code_challenge_method"], "S256");
     assert_eq!(q["client_id"], "menger");
     let txn = out.headers().get_all("set-cookie").iter().filter_map(|v| v.to_str().ok())
-        .find_map(|c| c.strip_prefix("menger_login=").map(|v| v.split(';').next().unwrap().to_string())).unwrap();
+        .find_map(|c| c.strip_prefix(format!("menger_login_{}=", m.shell).as_str()).map(|v| v.split(';').next().unwrap().to_string())).unwrap();
 
     // The IdP sends the browser back with a code.
     let back = m.http.get(to.as_str()).send().await.unwrap();
@@ -502,10 +513,10 @@ async fn google_signs_in_through_the_code_flow_bound_to_this_browser() {
     let out = m.http.get(m.url("/login/start?button=Google&next=/app/")).send().await.unwrap();
     let to = location(&out);
     let txn2 = out.headers().get_all("set-cookie").iter().filter_map(|v| v.to_str().ok())
-        .find_map(|c| c.strip_prefix("menger_login=").map(|v| v.split(';').next().unwrap().to_string())).unwrap();
+        .find_map(|c| c.strip_prefix(format!("menger_login_{}=", m.shell).as_str()).map(|v| v.split(';').next().unwrap().to_string())).unwrap();
     assert_ne!(txn, txn2);
     let callback = location(&m.http.get(&to).send().await.unwrap());
-    let done = m.http.get(&callback).header("cookie", format!("menger_login={txn2}")).send().await.unwrap();
+    let done = m.http.get(&callback).header("cookie", format!("menger_login_{}={txn2}", m.shell)).send().await.unwrap();
     assert_eq!(done.status(), 303);
     assert_eq!(location(&done), "/app/");
     let id = session_from(&done).expect("a session");
@@ -563,13 +574,13 @@ async fn sign_out_ends_the_session_and_its_open_socket_stops_answering() {
     let id = sign_in(&m).await;
     let ws = socket(&m, Some(&id), Some(&m.origin())).await.unwrap();
     assert_eq!(call(&ws, "tickets.health").await[0]["type"], "health");
-    let out = m.http.post(m.url("/logout")).header("cookie", format!("menger_session={id}")).header("origin", m.origin()).send().await.unwrap();
+    let out = m.http.post(m.url("/logout")).header("cookie", m.jar(&id)).header("origin", m.origin()).send().await.unwrap();
     assert_eq!(out.status(), 303);
     let after = call(&ws, "tickets.health").await;
     assert_eq!(after[0]["type"], "error");
     assert!(after[0]["message"].as_str().unwrap().contains("signed out"), "{after:?}");
     assert!(socket(&m, Some(&id), Some(&m.origin())).await.is_err(), "and no new socket");
-    assert_eq!(m.http.get(m.url("/login/me")).header("cookie", format!("menger_session={id}")).send().await.unwrap().status(), 401);
+    assert_eq!(m.http.get(m.url("/login/me")).header("cookie", m.jar(&id)).send().await.unwrap().status(), 401);
 }
 
 #[tokio::test]
@@ -593,9 +604,9 @@ async fn through_workos(m: &Menger, query: &str) -> (HashMap<String, String>, re
     let to = url::Url::parse(&location(&out)).unwrap();
     let q: HashMap<_, _> = to.query_pairs().into_owned().collect();
     let txn = out.headers().get_all("set-cookie").iter().filter_map(|v| v.to_str().ok())
-        .find_map(|c| c.strip_prefix("menger_login=").map(|v| v.split(';').next().unwrap().to_string())).unwrap();
+        .find_map(|c| c.strip_prefix(format!("menger_login_{}=", m.shell).as_str()).map(|v| v.split(';').next().unwrap().to_string())).unwrap();
     let callback = location(&m.http.get(to.as_str()).send().await.unwrap());
-    let done = m.http.get(&callback).header("cookie", format!("menger_login={txn}")).send().await.unwrap();
+    let done = m.http.get(&callback).header("cookie", format!("menger_login_{}={txn}", m.shell)).send().await.unwrap();
     (q, done)
 }
 
@@ -628,7 +639,7 @@ async fn our_page_first_and_the_email_goes_to_workos_which_names_the_person() {
     assert_eq!(location(&done), "/app/");
     let id = session_from(&done).expect("a session");
 
-    let me: Value = m.http.get(m.url("/login/me")).header("cookie", format!("menger_session={id}")).send().await.unwrap().json().await.unwrap();
+    let me: Value = m.http.get(m.url("/login/me")).header("cookie", m.jar(&id)).send().await.unwrap().json().await.unwrap();
     assert_eq!(me["principal"], "oidc:workos/user_01ADA");
     assert_eq!(me["name"], "Ada Lovelace", "named by the response's user, not the token");
     assert_eq!(me["provider"], "workos");
@@ -636,14 +647,14 @@ async fn our_page_first_and_the_email_goes_to_workos_which_names_the_person() {
     assert_eq!(call(&ws, "session.whoami").await[0]["principal"], "oidc:workos/user_01ADA");
 
     // Signing out ends menger's session, then WorkOS's.
-    let out = m.http.post(m.url("/logout")).header("cookie", format!("menger_session={id}")).header("origin", m.origin()).send().await.unwrap();
+    let out = m.http.post(m.url("/logout")).header("cookie", m.jar(&id)).header("origin", m.origin()).send().await.unwrap();
     assert_eq!(out.status(), 303);
     let to = url::Url::parse(&location(&out)).unwrap();
     assert_eq!(to.as_str().split('?').next().unwrap(), format!("{}/user_management/sessions/logout", w.base));
     let q: HashMap<_, _> = to.query_pairs().into_owned().collect();
     assert_eq!(q["session_id"], "session_01ADA");
     assert_eq!(q["return_to"], m.url("/login"));
-    assert_eq!(m.http.get(m.url("/login/me")).header("cookie", format!("menger_session={id}")).send().await.unwrap().status(), 401);
+    assert_eq!(m.http.get(m.url("/login/me")).header("cookie", m.jar(&id)).send().await.unwrap().status(), 401);
 }
 
 #[tokio::test]
@@ -752,4 +763,72 @@ async fn the_dev_sign_in_is_not_offered_unless_configured() {
     let m = start().await;
     assert!(!m.http.get(m.url("/login")).header("cookie", "menger_dev_login=1").send().await.unwrap().text().await.unwrap().contains(r#"id="dev-login""#));
     assert_eq!(dev_post(&m, &[("user", "viewer")]).await.status(), 404);
+}
+
+// ── IDENTITY-38: ready for prod behind the login ───────────────────────────
+
+#[tokio::test]
+async fn each_shell_s_session_is_its_own_cookie() {
+    let m = start().await;
+    let id = sign_in(&m).await;
+    assert_eq!(m.cookie(), format!("menger_session_{}", m.shell));
+    // Another server's cookie of the same value, or the old shared name,
+    // opens nothing here: on one host, prod and test keep apart.
+    for other in [format!("menger_session={id}"), format!("menger_session_1={id}")] {
+        let r = m.http.get(m.url("/login/me")).header("cookie", other.as_str()).send().await.unwrap();
+        assert_eq!(r.status(), 401, "{other}");
+        let mut h = HeaderMap::new();
+        h.insert("cookie", HeaderValue::from_str(&other).unwrap());
+        h.insert("origin", HeaderValue::from_str(&m.origin()).unwrap());
+        let ws = WsClientBuilder::default().set_headers(h).build(format!("ws://127.0.0.1:{}", m.ws)).await;
+        assert!(ws.is_err(), "{other}: the socket refuses another server's cookie");
+    }
+    assert!(socket(&m, Some(&id), Some(&m.origin())).await.is_ok());
+    // Sign-out clears this shell's cookie by name.
+    let out = m.http.post(m.url("/logout")).header("cookie", m.jar(&id)).header("origin", m.origin()).send().await.unwrap();
+    let cleared = out.headers().get_all("set-cookie").iter().filter_map(|v| v.to_str().ok()).any(|c| c.starts_with(&format!("{}=;", m.cookie())) && c.contains("Max-Age=0"));
+    assert!(cleared, "sign-out clears {}", m.cookie());
+}
+
+#[tokio::test]
+async fn every_page_refuses_to_be_framed() {
+    let m = start().await;
+    let id = sign_in(&m).await;
+    for path in ["/", "/app/", "/vanilla", "/login", "/favicon.svg", "/login/me"] {
+        let r = m.http.get(m.url(path)).header("cookie", m.jar(&id)).send().await.unwrap();
+        let h = r.headers();
+        assert_eq!(h.get("x-frame-options").and_then(|v| v.to_str().ok()), Some("DENY"), "{path}");
+        assert_eq!(h.get("x-content-type-options").and_then(|v| v.to_str().ok()), Some("nosniff"), "{path}");
+        assert_eq!(h.get("referrer-policy").and_then(|v| v.to_str().ok()), Some("same-origin"), "{path}");
+        let csp = h.get("content-security-policy").and_then(|v| v.to_str().ok()).unwrap_or_default();
+        assert!(csp.contains("frame-ancestors 'none'"), "{path}: {csp}");
+    }
+}
+
+#[tokio::test]
+async fn the_login_page_says_only_its_own_words() {
+    let m = start().await;
+    let lure = "Accounts moved: sign in at evil.example";
+    let q = url::form_urlencoded::byte_serialize(lure.as_bytes()).collect::<String>();
+    let page = m.http.get(m.url(&format!("/login?error={q}"))).send().await.unwrap().text().await.unwrap();
+    assert!(!page.contains("evil.example"), "a link's error text is not shown");
+    let back = m.http.get(m.url(&format!("/login/callback?error=server_error&error_description={q}"))).send().await.unwrap();
+    assert_eq!(back.status(), 401);
+    let text = back.text().await.unwrap();
+    assert!(!text.contains("evil.example"), "a provider's description is logged, not shown");
+    assert!(text.contains("did not sign you in"));
+    let cancelled = m.http.get(m.url("/login/callback?error=access_denied&error_description=x")).send().await.unwrap().text().await.unwrap();
+    assert!(cancelled.contains("The sign-in was cancelled."));
+}
+
+#[tokio::test]
+async fn a_storm_of_anonymous_starts_is_bounded() {
+    // Each anonymous GET /login/start keeps a transaction; they are capped
+    // (sessions.rs, MAX_PENDING) — here, only that a burst is all answered
+    // and the latest still completes its round trip.
+    let m = start().await;
+    for _ in 0..200 {
+        let r = m.http.get(m.url("/login/start?button=Google&next=/app/")).send().await.unwrap();
+        assert_eq!(r.status(), 302);
+    }
 }

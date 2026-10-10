@@ -29,8 +29,32 @@ use plexus_core::plexus::{AuthContext, SessionValidator};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
-/// The session cookie's name.
+/// The session cookie's name when none is chosen ([`Sessions::new`]).
+/// A server names its own with [`cookie_name_for`] (IDENTITY-38).
 pub const COOKIE: &str = "menger_session";
+
+/// IDENTITY-38: the session cookie's name for a shell reached at
+/// `public_url`. Cookies ignore ports, so two menger on one host (prod on
+/// 127.0.0.1:4456, test on :4451) sharing one name would sign each other
+/// out and hand each other their ids: over http the name carries the
+/// port; over https it is `__Host-` (Secure, host-only, `Path=/`), which no
+/// other origin can set or shadow.
+pub fn cookie_name_for(public_url: &str) -> String {
+    match url::Url::parse(public_url) {
+        Ok(u) if u.scheme() == "https" => format!("__Host-{COOKIE}"),
+        Ok(u) => match u.port_or_known_default() {
+            Some(p) => format!("{COOKIE}_{p}"),
+            None => COOKIE.to_string(),
+        },
+        Err(_) => COOKIE.to_string(),
+    }
+}
+
+/// IDENTITY-38: at most this many login transactions wait at once — each
+/// is one anonymous `GET /login/start` — and at most this many sessions
+/// live; past either, the one nearest its end makes room.
+const MAX_PENDING: usize = 10_000;
+const MAX_LIVE: usize = 100_000;
 
 /// The marker a session-backed identity carries in its metadata, beside
 /// `expires_at`: the hash [`Sessions::alive`] is asked about.
@@ -82,12 +106,23 @@ pub struct Sessions {
     live: Mutex<HashMap<String, Session>>,
     pending: Mutex<HashMap<String, Pending>>,
     ttl_secs: i64,
+    cookie: String,
 }
 
 impl Sessions {
-    /// Sessions that last `ttl_secs` from sign-in.
+    /// Sessions that last `ttl_secs` from sign-in, in the cookie [`COOKIE`].
     pub fn new(ttl_secs: i64) -> Self {
-        Self { live: Mutex::new(HashMap::new()), pending: Mutex::new(HashMap::new()), ttl_secs }
+        Self::named(ttl_secs, COOKIE)
+    }
+
+    /// Sessions in a cookie of this name ([`cookie_name_for`]).
+    pub fn named(ttl_secs: i64, cookie: &str) -> Self {
+        Self { live: Mutex::new(HashMap::new()), pending: Mutex::new(HashMap::new()), ttl_secs, cookie: cookie.to_string() }
+    }
+
+    /// The session cookie's name.
+    pub fn cookie_name(&self) -> &str {
+        &self.cookie
     }
 
     /// Starts a session for an identity a provider proved: the cookie value
@@ -103,6 +138,7 @@ impl Sessions {
         }
         let mut live = self.live.lock().unwrap();
         live.retain(|_, s| s.expires > now());
+        make_room(&mut live, MAX_LIVE, |s| s.expires);
         live.insert(key, Session { ctx, expires });
         (id, expires)
     }
@@ -129,6 +165,7 @@ impl Sessions {
         let state = random_token();
         let mut pending = self.pending.lock().unwrap();
         pending.retain(|_, p| p.expires > now());
+        make_room(&mut pending, MAX_PENDING, |p| p.expires);
         pending.insert(state.clone(), Pending { provider: provider.into(), verifier, next, expires: now() + 600 });
         state
     }
@@ -136,6 +173,14 @@ impl Sessions {
     /// Takes a login transaction back, once.
     pub fn finish(&self, state: &str) -> Option<Pending> {
         self.pending.lock().unwrap().remove(state).filter(|p| p.expires > now())
+    }
+}
+
+/// Drops the entry nearest its end while `map` is at `cap`.
+fn make_room<V>(map: &mut HashMap<String, V>, cap: usize, expires: impl Fn(&V) -> i64) {
+    while map.len() >= cap {
+        let Some(k) = map.iter().min_by_key(|(_, v)| expires(v)).map(|(k, _)| k.clone()) else { return };
+        map.remove(&k);
     }
 }
 
@@ -163,7 +208,7 @@ impl Gate {
 #[async_trait]
 impl SessionValidator for Gate {
     async fn validate(&self, value: &str) -> Option<AuthContext> {
-        if let Some(ctx) = cookie(value, COOKIE).and_then(|id| self.sessions.get(id)) {
+        if let Some(ctx) = cookie(value, self.sessions.cookie_name()).and_then(|id| self.sessions.get(id)) {
             return Some(ctx);
         }
         match &self.carriers {
@@ -211,6 +256,34 @@ mod tests {
         assert_eq!(s.finish(&state).unwrap().verifier, "verifier");
         assert!(s.finish(&state).is_none());
         assert!(s.finish("forged").is_none());
+    }
+
+    #[test]
+    fn each_shell_names_its_own_cookie() {
+        assert_eq!(cookie_name_for("http://127.0.0.1:4456"), "menger_session_4456");
+        assert_eq!(cookie_name_for("http://127.0.0.1:4451/"), "menger_session_4451");
+        assert_eq!(cookie_name_for("http://menger.localhost"), "menger_session_80");
+        assert_eq!(cookie_name_for("https://menger.example"), "__Host-menger_session");
+    }
+
+    #[test]
+    fn waiting_logins_are_capped() {
+        let s = Sessions::new(3600);
+        let first = s.begin("auth0", "v".into(), "/".into());
+        for _ in 0..MAX_PENDING + 50 {
+            s.begin("auth0", "v".into(), "/".into());
+        }
+        assert_eq!(s.pending.lock().unwrap().len(), MAX_PENDING);
+        let _ = first;
+    }
+
+    #[tokio::test]
+    async fn the_gate_reads_only_its_own_cookie() {
+        let s = Arc::new(Sessions::named(3600, "menger_session_4456"));
+        let (id, _) = s.create(alice());
+        let gate = Gate::new(s.clone(), None);
+        assert!(gate.validate(&format!("menger_session_4451=x; menger_session_4456={id}")).await.is_some());
+        assert!(gate.validate(&format!("menger_session={id}")).await.is_none(), "another server's name is not ours");
     }
 
     #[test]
