@@ -42,7 +42,8 @@
 //! holds it, again in answer to `menger:ready` (`menger:components` — what
 //! moved while the frame loaded), and to every open frame when a fetch
 //! lands ([`broadcast_registry`]). Every `watch` event the session hears
-//! reaches every frame as `menger:change { event }` ([`broadcast_change`]):
+//! reaches every frame whose reach admits it (IDENTITY-36, below) as
+//! `menger:change { event }` ([`broadcast_change`]):
 //! the SDK applies `component_changed` / `component_removed` to its
 //! definitions, then hands the event to `menger.on('change')`. And the
 //! frame's `menger:call { id, method, params }` is answered here —
@@ -82,6 +83,16 @@
 //! ticket — and the host answers `menger:cleared { id, input }` (the input
 //! as the clear left it, the wire's spelling) or `{ id, error }` after the
 //! bridge's checks and `tickets.clear_answer` with source `app`.
+//!
+//! IDENTITY-36: **a frame reads its own subtree.** The host stamps every
+//! frame with its scope (`<iframe data-scope>`): the shortcode of the ticket
+//! whose stored body it renders — or, for an editor's draft, of the ticket
+//! being edited; for a component's help card, of its owner — where nothing
+//! in the frame can change it. Every `menger.call` is answered held to that
+//! shortcode and the shortcodes hosted under it (FILTER-13's `under`,
+//! src/bridge.rs: [`bridge::run_scoped`]), and every `watch` event reaches a
+//! frame only if its reach admits it ([`broadcast_change`]). A frame with no
+//! scope reads and hears components alone.
 //!
 //! COMMENT-3: **annotation mode reaches into the body.** The host tells every
 //! frame when the mode turns (`menger:annotate { on }`, and a frame that
@@ -465,31 +476,63 @@ pub(crate) fn broadcast_registry() {
 /// COMP-5: a `watch` event, to every open frame as a change notice — the
 /// SDK applies a component event to its definitions, then hands every
 /// event to `menger.on('change')`. Called by the session for each event.
+/// IDENTITY-36: each frame hears only what its reach admits
+/// ([`bridge::admit_event`] — its scope's shortcodes, as last asked; a
+/// frame with no scope hears components alone), and a `group_changed`
+/// that may move a shortcode into or out of a reach asks that reach again.
 pub(crate) fn broadcast_change(ev: &TicketsEvent) {
+    if let TicketsEvent::GroupChanged { group } = ev {
+        for scope in bridge::note_group(group) {
+            refresh_reach(scope);
+        }
+    }
     let all = frames();
     if all.is_empty() {
         return;
     }
-    let event = to_js(ev);
     for f in all {
-        if let Some(channel) = f.get_attribute("data-channel") {
+        let Some(channel) = f.get_attribute("data-channel") else { continue };
+        let reach = match f.get_attribute("data-scope") {
+            Some(scope) => bridge::known_reach(&scope),
+            None => bridge::Reach::none(),
+        };
+        if let Some(heard) = bridge::admit_event(ev.clone(), &reach) {
             let msg = message("menger:change", &channel);
-            set(&msg, "event", &event);
+            set(&msg, "event", &to_js(&heard));
             post(&f, &msg.into());
         }
     }
 }
 
+/// IDENTITY-36: ask the server again how far `scope` reaches (remembered by
+/// the bridge for [`broadcast_change`]).
+fn refresh_reach(scope: String) {
+    spawn_local(async move {
+        if let Some(client) = session::client() {
+            let _ = bridge::reach_of(&client, &scope).await;
+        }
+    });
+}
+
 /// COMP-5: answer a frame's `menger.call` — the bridge parses it (a read,
 /// or refused), makes it over the app's connection, and the frame gets
 /// `menger:result { id, items }` or `{ id, error }`. A frame replaced
-/// meanwhile has no window to answer, and is not answered.
-fn answer_call(frame: web_sys::HtmlIFrameElement, channel: String, id: JsValue, method: String, params: Result<String, String>) {
+/// meanwhile has no window to answer, and is not answered. IDENTITY-36:
+/// held to the frame's reach — `scope`, the shortcode the host stamped on
+/// it (`data-scope`), which nothing in the frame can move.
+fn answer_call(
+    frame: web_sys::HtmlIFrameElement,
+    channel: String,
+    id: JsValue,
+    method: String,
+    params: Result<String, String>,
+    scope: Option<String>,
+) {
     spawn_local(async move {
         let reply = match params.and_then(|p| bridge::parse_call(&method, &p)) {
             Err(e) => Err(e),
             Ok(call) => match session::client() {
-                Some(client) => bridge::run(&client, call).await,
+                Some(client) => bridge::run_scoped(&client, call, scope.as_deref()).await,
                 None => Err(format!("{method}: not connected")),
             },
         };
@@ -653,7 +696,9 @@ fn on_message(ev: web_sys::MessageEvent) {
                     .and_then(|s| s.as_string())
                     .ok_or_else(|| format!("{method}: params are not plain data")),
             };
-            answer_call(frame, channel, id, method, params);
+            // IDENTITY-36: the host's own stamp — the frame cannot name one.
+            let scope = frame.get_attribute("data-scope");
+            answer_call(frame, channel, id, method, params, scope);
         }
         Some(write @ (Msg::Submit | Msg::Clear)) => {
             // Now, while the gesture that sent it is still the app's too.
@@ -899,8 +944,10 @@ fn install_listener() {
 
 /// Load `body_html` into a new frame in `container`, beside the one on
 /// screen (if any), invisible until [`promote`]d — INPUT-4: stamped with
-/// `ticket`, the ticket whose stored body it is (none: no input to answer).
-fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>) {
+/// `ticket`, the ticket whose stored body it is (none: no input to answer);
+/// IDENTITY-36: and with `scope`, the shortcode its reads are held to
+/// (none: it reads nothing but components).
+fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, scope: Option<&str>) {
     let w = dom::window();
     let Some(doc) = w.document() else { return };
     let channel = next_channel();
@@ -929,6 +976,13 @@ fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>) {
     if let Some(ticket) = ticket {
         let _ = el.set_attribute("data-ticket", ticket);
     }
+    if let Some(scope) = scope {
+        let _ = el.set_attribute("data-scope", scope);
+        // What it hears before it asks anything: its reach, once known.
+        if !bridge::reach_known(scope) {
+            refresh_reach(scope.to_string());
+        }
+    }
     let _ = el.set_attribute("title", "ticket body");
     let Ok(frame) = el.dyn_into::<web_sys::HtmlIFrameElement>() else { return };
     frame.set_srcdoc(&html);
@@ -946,9 +1000,17 @@ fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>) {
 /// changes. The frontmatter is the caller's: it stays outside. INPUT-4:
 /// `ticket` is the ticket whose stored body `html` is — the one a click in
 /// the frame may answer an input of; `None` where the markup is no
-/// ticket's stored body (an editor's draft, a help card).
+/// ticket's stored body (an editor's draft, a help card). IDENTITY-36: its
+/// reads are held to `ticket`'s shortcode — or, with no ticket, to `scope`
+/// (an editor's draft: the shortcode of the ticket it edits; a help card:
+/// its component's owner's), and with neither it reads only components.
 #[component]
-pub(crate) fn Frame(#[prop(into)] html: Signal<String>, ticket: Option<String>) -> impl IntoView {
+pub(crate) fn Frame(
+    #[prop(into)] html: Signal<String>,
+    ticket: Option<String>,
+    #[prop(optional)] scope: Option<String>,
+) -> impl IntoView {
+    let scope = bridge::scope_of(ticket.as_deref()).or_else(|| bridge::scope_of(scope.as_deref()));
     install_listener();
     // COMP-5: a frame defines the components — the app keeps the registry.
     registry::want();
@@ -962,14 +1024,15 @@ pub(crate) fn Frame(#[prop(into)] html: Signal<String>, ticket: Option<String>) 
         let n = asked.with_value(|n| n.wrapping_add(1));
         asked.set_value(n);
         if el.query_selector(":scope > iframe").ok().flatten().is_none() {
-            load(&el, &body, ticket.as_deref());
+            load(&el, &body, ticket.as_deref(), scope.as_deref());
             return;
         }
         let ticket = ticket.clone();
+        let scope = scope.clone();
         spawn_local(async move {
             dom::sleep_ms(RERENDER_AFTER_MS).await;
             if asked.try_with_value(|v| *v == n) == Some(true) {
-                load(&el, &body, ticket.as_deref());
+                load(&el, &body, ticket.as_deref(), scope.as_deref());
             }
         });
     });

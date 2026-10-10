@@ -28,7 +28,9 @@
  *     `inputs` (INPUT-4), with the activation's parameter names; anything
  *     else rejects with an Error whose message starts "read-only" (and
  *     names the two writes, below), and unknown or missing params reject
- *     naming them; `on('change', cb)` → `cb(event)` for every `watch`
+ *     naming them (IDENTITY-36: every read, and every change event, held
+ *     to the frame's ticket's shortcode and those hosted under it);
+ *     `on('change', cb)` → `cb(event)` for every `watch`
  *     event the app hears (`amended`, `status_changed`,
  *     `component_changed`, `input_changed`, …), returning a function that
  *     stops it;

@@ -718,7 +718,18 @@ activation's parameter names (`menger.call('waves', { epics: ['PLEXUS']
 names the two writes and how they are made (below), and a parameter the
 method does not take rejects naming it; **`on('change', cb)`** →
 `cb(event)` for every `watch` event the app hears (`input_changed` too),
-and returns the function that stops it; **`navigate(route)`** (COMP-9,
+and returns the function that stops it. IDENTITY-36: **a frame reads its
+own subtree** — every read and every change event is held to the shortcode
+of the ticket whose body the frame renders and the shortcodes hosted under
+it (`under SHORTCODE`, what an editor of that shortcode reads), whatever
+the viewer could read: `list`, `find` and `inputs` (each also taking
+`filter`) answer under `(<filter>) and under SHORTCODE`; `get` and
+`blockers` of a ticket outside are `not_found`, and a blocker outside is
+left out; `waves` of a shortcode outside rejects; `groups`, `extents` and
+`health`'s count are the subtree's; `components` is the whole registry.
+The host stamps the scope on the frame (`data-scope`); an editor's preview
+reads as the ticket it edits, a component's help card as its owner, and a
+frame with neither reads only `components`; **`navigate(route)`** (COMP-9,
 below); **`input`** (INPUT-4, frozen) — `ticket`, `submit` and (INPUT-9,
 1.4) `clear`, the two writes (below). Its types are
 `frontend/sdk/menger.d.ts`, published at `/app/sdk/menger.d.ts`.
