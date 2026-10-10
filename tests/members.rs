@@ -260,3 +260,211 @@ async fn comments_are_signed_and_scoped() {
     assert_eq!(call(&bob, "comments.resolve", json!({ "id": id })).await[0]["type"], "error");
     assert_eq!(call(&alice, "comments.resolve", json!({ "id": id })).await[0]["state"], "resolved");
 }
+
+// ── IDENTITY-37: every read and every stream within the grants as they stand ──
+
+/// A watch's data items until `quiet` passes with nothing; whether it ended.
+async fn drain(watch: &mut Subscription<Value>, quiet: Duration) -> (Vec<Value>, bool) {
+    let mut heard = Vec::new();
+    loop {
+        match tokio::time::timeout(quiet, watch.next()).await {
+            Ok(Some(Ok(item))) if item["type"] == "data" => heard.push(item["content"].clone()),
+            Ok(Some(Ok(_))) | Ok(None) | Ok(Some(Err(_))) => return (heard, true),
+            Err(_) => return (heard, false),
+        }
+    }
+}
+
+fn amended(heard: &[Value]) -> Vec<String> {
+    heard.iter().filter(|e| e["type"] == "amended").map(|e| e["ticket"]["id"].as_str().unwrap().to_string()).collect()
+}
+
+#[tokio::test]
+async fn blockers_answer_only_what_the_caller_can_view_and_blocked_by_names_only_that() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    let made = call(&ada, "tickets.create", json!({ "epic": "IDENTITY", "title": "waits", "parent": "IDENTITY-1", "blocked_by": ["OUGHT-2", "IDENTITY-2"] })).await;
+    assert_eq!(made[0]["ticket"]["id"], "IDENTITY-3", "{made:?}");
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "editor")).await;
+    let alice = as_(&w, ALICE, "alice").await;
+
+    let b = call(&alice, "tickets.blockers", json!({ "id": "IDENTITY-3" })).await;
+    assert_eq!(b.len(), 2, "{b:?}");
+    assert_eq!((b[0]["type"].as_str(), b[0]["id"].as_str()), (Some("dangling_blocker"), Some("OUGHT-2")), "nothing of OUGHT-2 but its id: {b:?}");
+    assert!(b[0].get("ticket").is_none());
+    assert_eq!((b[1]["type"].as_str(), b[1]["ticket"]["id"].as_str()), (Some("blocker"), Some("IDENTITY-2")));
+    // Ada sees both.
+    let b = call(&ada, "tickets.blockers", json!({ "id": "IDENTITY-3" })).await;
+    assert_eq!(b.iter().filter(|e| e["type"] == "blocker").count(), 2, "{b:?}");
+
+    // blocked_by: a hidden ticket, one naming none in a hidden shortcode, and
+    // a shortcode that does not exist get the same answer, by shortcode.
+    let refused = |id: &str| json!({ "epic": "IDENTITY", "title": "x", "parent": "IDENTITY-1", "blocked_by": [id] });
+    let hidden = call(&alice, "tickets.create", refused("OUGHT-2")).await;
+    let none = call(&alice, "tickets.create", refused("OUGHT-99")).await;
+    assert_eq!(hidden[0]["type"], "error", "{hidden:?}");
+    assert_eq!(
+        hidden[0]["message"].as_str().unwrap().replace("OUGHT-2", "#"),
+        none[0]["message"].as_str().unwrap().replace("OUGHT-99", "#"),
+        "an existing hidden ticket and a missing one are told apart by nothing"
+    );
+    assert!(hidden[0]["message"].as_str().unwrap().contains("needs viewer on OUGHT"), "{hidden:?}");
+    let nowhere = call(&alice, "tickets.create", refused("NOWHERE-1")).await;
+    assert!(nowhere[0]["message"].as_str().unwrap().contains("needs viewer on NOWHERE"), "{nowhere:?}");
+    // In her own shortcode, a forward reference stands as it always did.
+    assert_eq!(call(&alice, "tickets.create", refused("IDENTITY-99")).await[0]["type"], "created");
+}
+
+#[tokio::test]
+async fn a_watch_follows_the_grants_as_they_stand_and_ends_when_nothing_is_left() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.grant", grant(BOB, "OUGHT", "viewer")).await;
+    let bob = as_(&w, BOB, "bob").await;
+    let mut watch = sub(&bob, "tickets.watch", json!({})).await;
+    let mut comments = sub(&bob, "comments.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    call(&ada, "tickets.amend", json!({ "id": "OUGHT-2", "title": "seen" })).await;
+    let (heard, ended) = drain(&mut watch, Duration::from_millis(500)).await;
+    assert_eq!((amended(&heard), ended), (vec!["OUGHT-2".to_string()], false));
+
+    // OUGHT revoked, IDENTITY granted: the open watch follows.
+    call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "OUGHT" })).await;
+    call(&ada, "members.grant", grant(BOB, "IDENTITY", "viewer")).await;
+    call(&ada, "tickets.amend", json!({ "id": "OUGHT-2", "title": "no longer Bob's", "body": "secret" })).await;
+    call(&ada, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "now Bob's" })).await;
+    let (heard, ended) = drain(&mut watch, Duration::from_millis(500)).await;
+    assert_eq!((amended(&heard), ended), (vec!["IDENTITY-2".to_string()], false), "{heard:?}");
+    assert!(!heard.iter().any(|e| e.to_string().contains("secret")), "{heard:?}");
+
+    // Comments follow too.
+    let on = |t: &str| json!({ "anchor": { "route": format!("#/ticket/{t}"), "path": "main", "label": "body", "excerpt": "", "ticket": t }, "body": format!("on {t}") });
+    call(&ada, "comments.add", on("OUGHT-2")).await;
+    call(&ada, "comments.add", on("IDENTITY-2")).await;
+    let (heard, _) = drain(&mut comments, Duration::from_millis(500)).await;
+    let bodies: Vec<&str> = heard.iter().filter_map(|e| e["comment"]["body"].as_str()).collect();
+    assert_eq!(bodies, vec!["on IDENTITY-2"], "{heard:?}");
+
+    // Nothing left: both end, in band.
+    call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "IDENTITY" })).await;
+    call(&ada, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "gone" })).await;
+    call(&ada, "comments.add", on("IDENTITY-2")).await;
+    let (heard, ended) = drain(&mut watch, Duration::from_millis(800)).await;
+    assert!(ended, "the watch ends: {heard:?}");
+    assert!(amended(&heard).is_empty(), "{heard:?}");
+    assert!(heard.last().unwrap()["message"].as_str().unwrap().contains("your access changed"), "{heard:?}");
+    let (heard, ended) = drain(&mut comments, Duration::from_millis(800)).await;
+    assert!(ended && heard.last().unwrap()["type"] == "error", "{heard:?}");
+}
+
+#[tokio::test]
+async fn a_filtered_watch_is_refiltered_when_the_grants_move() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.grant", grant(BOB, "OUGHT", "viewer")).await;
+    let bob = as_(&w, BOB, "bob").await;
+    let mut watch = sub(&bob, "tickets.watch", json!({ "filter": "kind build" })).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "OUGHT" })).await;
+    call(&ada, "members.grant", grant(BOB, "IDENTITY", "viewer")).await;
+    // The first change after the grants moved re-filters the watch.
+    call(&ada, "tickets.create", json!({ "epic": "OUGHT", "title": "hidden", "parent": "OUGHT-1" })).await;
+    call(&ada, "tickets.create", json!({ "epic": "IDENTITY", "title": "seen", "parent": "IDENTITY-1" })).await;
+    let (heard, ended) = drain(&mut watch, Duration::from_millis(600)).await;
+    assert!(!ended);
+    let named: Vec<String> = heard
+        .iter()
+        .filter_map(|e| e["ticket"]["id"].as_str().or(e["id"].as_str()).map(str::to_string))
+        .collect();
+    assert!(!named.iter().any(|i| i.starts_with("OUGHT")), "{heard:?}");
+    assert!(heard.iter().any(|e| e["type"] == "entered" && e["id"] == "IDENTITY-3"), "{heard:?}");
+}
+
+#[tokio::test]
+async fn components_reach_only_those_who_can_view_their_owner() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "viewer")).await;
+    call(&ada, "members.grant", grant(BOB, "OUGHT", "viewer")).await;
+    let (alice, bob) = (as_(&w, ALICE, "alice").await, as_(&w, BOB, "bob").await);
+    let mut watch = sub(&alice, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let a = call(&ada, "tickets.amend", json!({ "id": "OUGHT-2", "body": "```component m-secret\n<b>secret source</b>\n```\n" })).await;
+    assert_eq!(a[0]["type"], "amended", "{a:?}");
+    call(&ada, "tickets.amend", json!({ "id": "IDENTITY-2", "body": "```component m-mine\n<p>mine</p>\n```\n\n<m-secret></m-secret>\n" })).await;
+
+    let names = |evs: &[Value]| -> Vec<String> { evs.iter().filter_map(|e| e["component"]["name"].as_str().map(str::to_string)).collect() };
+    let hers = call(&alice, "tickets.components", json!({})).await;
+    assert_eq!(names(&hers), vec!["m-mine".to_string()], "{hers:?}");
+    let his = call(&bob, "tickets.components", json!({})).await;
+    assert_eq!(names(&his), vec!["m-secret".to_string()], "{his:?}");
+    assert_eq!(his[0]["component"]["references"], json!([]), "IDENTITY-2's use of it is not Bob's to see: {his:?}");
+    let all = call(&ada, "tickets.components", json!({})).await;
+    assert_eq!(names(&all).len(), 2);
+
+    let (heard, _) = drain(&mut watch, Duration::from_millis(500)).await;
+    let changed: Vec<&str> = heard.iter().filter(|e| e["type"] == "component_changed").filter_map(|e| e["component"]["name"].as_str()).collect();
+    assert_eq!(changed, vec!["m-mine"], "{heard:?}");
+    assert!(!heard.iter().any(|e| e.to_string().contains("secret source")), "{heard:?}");
+}
+
+#[tokio::test]
+async fn moving_a_shortcode_s_root_takes_admin_on_both_sides() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    // Editor on OUGHT, admin on PLEXUS: hosting OUGHT under PLEXUS would
+    // make her its admin.
+    call(&ada, "members.grant", grant(ALICE, "OUGHT", "editor")).await;
+    call(&ada, "members.grant", grant(ALICE, "PLEXUS", "admin")).await;
+    let alice = as_(&w, ALICE, "alice").await;
+    let r = call(&alice, "tickets.set_parent", json!({ "id": "OUGHT-1", "parent": "PLEXUS-2" })).await;
+    assert_eq!(r[0]["type"], "error", "{r:?}");
+    assert!(r[0]["message"].as_str().unwrap().contains("takes admin"), "{r:?}");
+    assert_eq!(call(&alice, "members.grant", grant(BOB, "OUGHT", "viewer")).await[0]["type"], "error", "still not OUGHT's admin");
+    // A ticket inside its shortcode moves with editor, as before.
+    call(&ada, "tickets.create", json!({ "epic": "OUGHT", "title": "three", "parent": "OUGHT-1" })).await;
+    assert_eq!(call(&alice, "tickets.set_parent", json!({ "id": "OUGHT-3", "parent": "OUGHT-2" })).await[0]["type"], "parent_changed");
+    // Admin on both sides: it moves.
+    call(&ada, "members.grant", grant(ALICE, "OUGHT", "admin")).await;
+    let r = call(&alice, "tickets.set_parent", json!({ "id": "OUGHT-1", "parent": "PLEXUS-2" })).await;
+    assert_eq!(r[0]["type"], "parent_changed", "{r:?}");
+}
+
+#[tokio::test]
+async fn the_waiting_list_takes_admin_on_everything() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    let bob = as_(&w, BOB, "bob").await;
+    assert_eq!(call(&bob, "tickets.list", json!({})).await[0]["type"], "error");
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "admin")).await;
+    let alice = as_(&w, ALICE, "alice").await;
+    let r = call(&alice, "members.requests", json!({})).await;
+    assert!(r[0]["message"].as_str().unwrap().contains("admin on *"), "{r:?}");
+    let r = call(&ada, "members.requests", json!({})).await;
+    assert_eq!(r[0]["principal"], format!("idp:{BOB}"), "{r:?}");
+}
+
+#[tokio::test]
+async fn a_comment_on_a_ticket_s_page_is_that_ticket_s() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.grant", grant(BOB, "OUGHT", "viewer")).await;
+    let bob = as_(&w, BOB, "bob").await;
+    let app = |route: &str| json!({ "anchor": { "route": route, "path": "header", "label": "title", "excerpt": "" }, "body": "on the page" });
+    let r = call(&bob, "comments.add", app("#/ticket/IDENTITY-2")).await;
+    assert_eq!(r[0]["type"], "error", "Bob cannot see IDENTITY-2's page: {r:?}");
+    let r = call(&ada, "comments.add", app("#/ticket/IDENTITY-2")).await;
+    assert_eq!(r[0]["anchor"]["ticket"], Value::Null, "the anchor as given: {r:?}");
+    let id = r[0]["id"].as_u64().unwrap();
+    assert_eq!(call(&bob, "comments.resolve", json!({ "id": id })).await[0]["type"], "error");
+    assert_eq!(call(&bob, "comments.add", app("#/")).await[0]["type"], "comment", "a comment on the board is the app's");
+    let his: Vec<Value> = call(&bob, "comments.list", json!({})).await.into_iter().filter(|e| e["type"] == "comment").collect();
+    assert_eq!(his.len(), 1, "{his:?}");
+}

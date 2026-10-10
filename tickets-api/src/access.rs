@@ -36,6 +36,11 @@ pub const OPERATOR: &str = "--admin";
 /// IDENTITY-35: `granted_by` of the grants the dev sign-in makes.
 pub const DEV_LOGIN: &str = "dev-login";
 
+/// IDENTITY-37: the most principals [`Access::waiting`] keeps — past it,
+/// the one waiting longest is forgotten (it is listed again when it comes
+/// back), so sign-ins without a grant cannot grow it without bound.
+pub const WAITING_MAX: usize = 1000;
+
 /// Whether a session the server issued still stands.
 pub trait SessionCheck: Send + Sync {
     fn alive(&self, key: &str) -> bool;
@@ -144,7 +149,10 @@ impl Caller {
         }
     }
 
-    fn lacks(&self, role: Role, id: Option<&str>) -> String {
+    /// Why this caller may not `role` the ticket `id` (or anything here).
+    /// IDENTITY-37: it names only the id's own shortcode, read from the id,
+    /// so it is the same whether the ticket exists or not.
+    pub fn lacks(&self, role: Role, id: Option<&str>) -> String {
         match id {
             Some(id) => {
                 let shortcode = id.split(['-', '/']).next().unwrap_or(id);
@@ -288,12 +296,20 @@ impl Access {
         {
             let mut waiting = self.waiting.lock().unwrap();
             if grants.is_empty() {
-                waiting.entry(principal.clone()).or_insert_with(|| Waiting {
-                    principal: principal.clone(),
-                    name: name.clone(),
-                    provider: ctx.get_metadata_string("provider"),
-                    since: now(),
-                });
+                if !waiting.contains_key(&principal) {
+                    // IDENTITY-37: bounded — the one waiting longest goes.
+                    while waiting.len() >= WAITING_MAX {
+                        let oldest = waiting.values().min_by_key(|w| w.since).map(|w| w.principal.clone());
+                        match oldest {
+                            Some(p) => waiting.remove(&p),
+                            None => break,
+                        };
+                    }
+                    waiting.insert(
+                        principal.clone(),
+                        Waiting { principal: principal.clone(), name: name.clone(), provider: ctx.get_metadata_string("provider"), since: now() },
+                    );
+                }
             } else {
                 waiting.remove(&principal);
             }
@@ -419,6 +435,22 @@ mod tests {
         s.grant(grant(ALICE, "PLEXUS", Role::Viewer)).await.unwrap();
         let c = a.admit(Some(&ctx(json!({})))).unwrap();
         assert!(c.require(Role::Viewer, &["IDENTITY-1", "PLEXUS-2"], &s).is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_waiting_list_is_capped_and_forgets_the_longest_waiting() {
+        let a = login();
+        a.attach(store().await);
+        let as_ = |p: String| AuthContext::new(p, "s".into(), vec![], json!({}));
+        for i in 0..WAITING_MAX + 5 {
+            a.admit(Some(&as_(format!("user-{i}")))).unwrap();
+        }
+        let w = a.waiting();
+        assert_eq!(w.len(), WAITING_MAX);
+        assert!(w.iter().any(|w| w.principal == format!("user-{}", WAITING_MAX + 4)), "the newest waits");
+        // One already waiting is not added twice, and evicts no one.
+        a.admit(Some(&as_(format!("user-{}", WAITING_MAX + 4)))).unwrap();
+        assert_eq!(a.waiting().len(), WAITING_MAX);
     }
 
     #[tokio::test]

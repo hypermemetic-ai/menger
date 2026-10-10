@@ -65,14 +65,31 @@ fn reach_lens(caller: &Caller) -> Result<Option<Lens>, String> {
     caller.reach_filter(Role::Viewer)?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
 }
 
+/// IDENTITY-37: the ticket an app route is the page of — `#/ticket/X`'s
+/// `X`, upper-cased — or `None`.
+#[cfg(feature = "server")]
+fn route_ticket(route: &str) -> Option<String> {
+    let rest = route.trim().strip_prefix("#/ticket/")?;
+    let id = rest.split(['?', '#']).next().unwrap_or(rest).trim();
+    (!id.is_empty()).then(|| id.to_ascii_uppercase())
+}
+
+/// IDENTITY-37: the tickets a comment is on — its anchor's, and the one
+/// whose page it was left on.
+#[cfg(feature = "server")]
+fn named(c: &crate::comments::Comment) -> Vec<String> {
+    c.anchor.ticket.iter().cloned().chain(route_ticket(&c.anchor.route)).collect()
+}
+
 /// IDENTITY-21: whether a comment is within reach: its ticket admitted, or,
-/// for a comment on the app, any reach at all.
+/// for a comment on the app, any reach at all. IDENTITY-37: and the ticket
+/// its route is the page of, when it is one — a comment left on a ticket's
+/// page is that ticket's to see, whatever its anchor names.
 #[cfg(feature = "server")]
 fn sees(store: &Store, reach: Option<&Lens>, c: &crate::comments::Comment) -> bool {
-    match (reach, &c.anchor.ticket) {
-        (None, _) | (Some(_), None) => true,
-        (Some(lens), Some(t)) => store.member(&[t.clone()], lens).first().copied().unwrap_or(false),
-    }
+    let Some(lens) = reach else { return true };
+    let ids = named(c);
+    ids.is_empty() || store.member(&ids, lens).into_iter().all(|ok| ok)
 }
 
 /// A write's answer: the comment as it is now, or the refusal in band.
@@ -105,7 +122,11 @@ impl Comments {
     /// time (`at`, unix seconds), the author, its anchor and body — or an
     /// in-band `error` naming the problem (an empty body, a blank author, a
     /// malformed anchor, a ticket that is none), with nothing kept. `watch`
-    /// carries `added`.
+    /// carries `added`. IDENTITY-37: a comment left on a ticket's page
+    /// (`route` `#/ticket/X`) is `X`'s to see whatever its anchor names — the
+    /// caller needs the role on `X` as well as on the anchor's ticket, and it
+    /// is listed and watched only by those who can view both. The anchor is
+    /// kept as given (`ticket` stays what the element belonged to).
     #[plexus_macros::method(
         description = "Leave a comment at an anchor (route, path, label, excerpt, and ticket when the element belongs to one); yields the comment",
         params(
@@ -125,11 +146,15 @@ impl Comments {
                     return;
                 }
             };
+            let paged = route_ticket(&anchor.route);
             // IDENTITY-21: a comment on a ticket needs COMMENT_ROLE on it; one
-            // on the app, any grant at all.
-            let allowed = match anchor.ticket.as_deref() {
-                Some(t) => caller.require(COMMENT_ROLE, &[t], &store),
-                None => caller.reach_filter(COMMENT_ROLE).map(|_| ()),
+            // on the app, any grant at all. IDENTITY-37: and on the ticket
+            // whose page it was left on.
+            let named: Vec<&str> = anchor.ticket.as_deref().map(str::trim).into_iter().chain(paged.as_deref()).collect();
+            let allowed = if named.is_empty() {
+                caller.reach_filter(COMMENT_ROLE).map(|_| ())
+            } else {
+                caller.require(COMMENT_ROLE, &named, &store)
             };
             if let Err(message) = allowed {
                 yield CommentsEvent::Error { message };
@@ -244,8 +269,8 @@ impl Comments {
             };
             // IDENTITY-21: editor on the comment's ticket (any editor grant
             // for a comment on the app).
-            let allowed = match store.comment(id).and_then(|c| c.anchor.ticket) {
-                Some(t) => caller.require(Role::Editor, &[t.as_str()], &store),
+            let allowed = match store.comment(id).map(|c| named(&c)).filter(|n| !n.is_empty()) {
+                Some(ids) => caller.require(Role::Editor, &ids.iter().map(String::as_str).collect::<Vec<_>>(), &store),
                 None => caller.reach_filter(Role::Editor).map(|_| ()),
             };
             if let Err(message) = allowed {
@@ -276,8 +301,8 @@ impl Comments {
             };
             // IDENTITY-21: editor on the comment's ticket (any editor grant
             // for a comment on the app).
-            let allowed = match store.comment(id).and_then(|c| c.anchor.ticket) {
-                Some(t) => caller.require(Role::Editor, &[t.as_str()], &store),
+            let allowed = match store.comment(id).map(|c| named(&c)).filter(|n| !n.is_empty()) {
+                Some(ids) => caller.require(Role::Editor, &ids.iter().map(String::as_str).collect::<Vec<_>>(), &store),
                 None => caller.reach_filter(Role::Editor).map(|_| ()),
             };
             if let Err(message) = allowed {
@@ -292,7 +317,10 @@ impl Comments {
     /// with the comment as the change left it, in the order the writes were
     /// acknowledged, until the client goes; `lagged { missed }` where a slow
     /// subscriber lost changes (`list` again to catch up). Nothing a
-    /// ticket's write does is here — that is `tickets.watch`.
+    /// ticket's write does is here — that is `tickets.watch`. IDENTITY-37:
+    /// what it relays follows the caller's grants as they stand at each
+    /// change, and a caller who can see nothing any more is told so in band
+    /// and the stream ends.
     #[plexus_macros::method(
         streaming,
         description = "Subscribe to comments: added / resolved / reopened, each with the comment, until disconnect; lagged { missed } where a slow subscriber lost changes"
@@ -304,7 +332,7 @@ impl Comments {
         let who = auth.cloned();
         let store = self.store.clone();
         stream! {
-            let reach = match access.admit(who.as_ref()).and_then(|c| reach_lens(&c)) {
+            let (mut held, mut reach) = match access.admit(who.as_ref()).and_then(|c| Ok((c.reach.clone(), reach_lens(&c)?))) {
                 Ok(r) => r,
                 Err(message) => {
                     yield CommentsEvent::Error { message };
@@ -313,9 +341,23 @@ impl Comments {
             };
             loop {
                 let next = rx.recv().await;
-                if let Err(message) = access.admit(who.as_ref()) {
-                    yield CommentsEvent::Error { message };
-                    return;
+                let caller = match access.admit(who.as_ref()) {
+                    Ok(c) => c,
+                    Err(message) => {
+                        yield CommentsEvent::Error { message };
+                        return;
+                    }
+                };
+                // IDENTITY-37: the reach as the grants stand now.
+                if caller.reach != held {
+                    match reach_lens(&caller) {
+                        Ok(r) => reach = r,
+                        Err(why) => {
+                            yield CommentsEvent::Error { message: format!("your access changed: {why}") };
+                            return;
+                        }
+                    }
+                    held = caller.reach;
                 }
                 match next {
                     // IDENTITY-21: only comments the watcher can see.
