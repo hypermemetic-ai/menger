@@ -670,7 +670,11 @@ the server's readers of a body (fields, inputs, component references) and
 renders as before.
 
 **In the app** (COMP-4, COMP-5) a body holding HTML or a component tag
-renders in a sandboxed frame (no `allow-same-origin`) under menger's SDK
+renders in a sandboxed frame (no `allow-same-origin`, no `allow-forms`;
+IDENTITY-28: under a CSP, `connect-src 'none'; form-action 'none'`, so a
+body opens no connection of its own and submits no form — scripts, styles,
+images and fonts load from anywhere, and links still open the real page in
+a new tab) under menger's SDK
 (`frontend/sdk/menger-sdk.js`, whose header is the protocol's reference),
 and every component in the registry is a custom element there. A custom
 element cannot be redefined, so each name's class delegates to its current
@@ -1000,10 +1004,14 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
   rejects — `only inside a viewer's click … nothing was sent` — so a
   component that calls it on load or from a timer learns so at once.
 - **The host checks, in order** (`frontend/src/bridge.rs`), and refuses with
-  the reason, sending nothing: **a gesture is under way** — the app window's
-  own transient activation, which a click or key in a frame grants its
-  ancestors too, read the moment the message arrives (a browser without the
-  API cannot say, and the SDK's check stands alone); **the frame renders a
+  the reason, sending nothing: **a gesture on that very frame is under way**
+  (IDENTITY-36, `frontend/src/gesture.rs`), read the moment the message
+  arrives — the app window's own transient activation is on (a browser
+  without the API is refused); the app's focused element is that `<iframe>`;
+  since the app's own last click or key, the pointer came onto that frame
+  or a Tab carried focus into it; and, while that click or key of the app's
+  is younger than 5 s, focus entered the frame after it. Any click or key
+  elsewhere in the app is no gesture on the frame; **the frame renders a
   ticket** (its `data-ticket`); the params are exactly `{ input, value,
   rationale? }` (a `ticket` among them is refused); then, against that
   ticket's inputs as the store holds them (`inputs { ticket }`), **the input

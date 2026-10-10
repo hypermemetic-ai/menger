@@ -250,6 +250,7 @@ mod dom;
 mod filter;
 mod flat;
 mod frame;
+mod gesture;
 mod inputs;
 mod inputs_page;
 mod inspect;

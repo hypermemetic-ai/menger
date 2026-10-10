@@ -23,9 +23,9 @@
 //! `menger:submit { id, params: { input, value, rationale? } }` — and never
 //! through `menger.call`. The host makes `tickets.answer` for it, with
 //! source `app`, only when every check here passes ([`admit`],
-//! [`parse_submit`], [`check_submit`]): a viewer's gesture is under way (the
-//! app's own transient activation, which a click or a key in a frame grants
-//! its ancestors); the frame renders a ticket's stored body (the host
+//! [`parse_submit`], [`check_submit`]): a viewer's gesture on that very frame
+//! is under way (IDENTITY-36, src/gesture.rs — not merely the app's own
+//! transient activation, which any click anywhere in the app turns on); the frame renders a ticket's stored body (the host
 //! stamped which on the frame — the frame cannot name one); the input is
 //! declared there, and neither closed nor removed; the value answers it
 //! (`inputs::check`, what the server runs). A refusal is the frame's
@@ -573,14 +573,15 @@ pub(crate) struct Submit {
 
 /// Whether a write — `sdk`, [`SUBMIT`] or (INPUT-9) [`CLEAR`], which every
 /// refusal names — may go on at all, before its params are read: a viewer's
-/// gesture is under way — `activated`, the app window's transient user
-/// activation (`None`: this browser cannot say, and the SDK's own check
-/// stands alone) — and the frame renders a ticket's stored body (`ticket`,
-/// the one the host stamped on the frame; none for an editor's preview or a
-/// help card). The ticket, or why not.
-pub(crate) fn admit(sdk: &str, ticket: Option<&str>, activated: Option<bool>) -> Result<String, String> {
-    if activated == Some(false) {
-        return Err(format!("{sdk}: only inside a viewer's click — the app saw no click or key just now (nothing sent)"));
+/// gesture on THIS frame is under way — `gesture`, the host's own reading
+/// (IDENTITY-36, src/gesture.rs: a click or key in this very frame, not
+/// anywhere in the app; a browser that cannot say is no gesture) — and the
+/// frame renders a ticket's stored body (`ticket`, the one the host stamped
+/// on the frame; none for an editor's preview or a help card). The ticket,
+/// or why not.
+pub(crate) fn admit(sdk: &str, ticket: Option<&str>, gesture: bool) -> Result<String, String> {
+    if !gesture {
+        return Err(format!("{sdk}: only inside a viewer's click — the app saw no click or key in this frame just now (nothing sent)"));
     }
     match ticket.map(str::trim).filter(|t| !t.is_empty()) {
         Some(t) => Ok(t.to_string()),
@@ -885,14 +886,14 @@ mod tests {
         ]
     }
 
-    /// Accepted with a click: the app's activation on (or a browser that
-    /// cannot say), a frame that renders a ticket, params the SDK sends, an
+    /// Accepted with a click on this frame (IDENTITY-36: src/gesture.rs; a
+    /// browser that cannot say is refused there), a frame that renders a ticket, params the SDK sends, an
     /// input its ticket declares, a value that answers it — the value to
     /// send.
     #[test]
     fn a_submit_inside_a_click_for_this_tickets_input_is_sent() {
-        assert_eq!(admit(SUBMIT, Some("DEMO-1"), Some(true)), Ok("DEMO-1".into()));
-        assert_eq!(admit(SUBMIT, Some(" DEMO-1 "), None), Ok("DEMO-1".into()), "no userActivation API: the SDK's own check stands");
+        assert_eq!(admit(SUBMIT, Some("DEMO-1"), true), Ok("DEMO-1".into()));
+        assert_eq!(admit(SUBMIT, Some(" DEMO-1 "), true), Ok("DEMO-1".into()));
         let s = parse_submit(r#"{"input":"d1","value":{"type":"choice","option":"b"},"rationale":"holds are real"}"#).unwrap();
         assert_eq!(s, Submit { input: "d1".into(), value: choice("b"), rationale: Some("holds are real".into()) });
         assert_eq!(check_submit("DEMO-1", &s, &held()), Ok(choice("b")));
@@ -910,15 +911,15 @@ mod tests {
     /// stored body — before the params are read.
     #[test]
     fn a_submit_with_no_click_or_no_ticket_is_refused() {
-        let err = admit(SUBMIT, Some("DEMO-1"), Some(false)).unwrap_err();
+        let err = admit(SUBMIT, Some("DEMO-1"), false).unwrap_err();
         assert!(err.starts_with("menger.input.submit: only inside a viewer's click"), "{err}");
         assert!(err.ends_with("(nothing sent)"), "{err}");
         for none in [None, Some(""), Some("  ")] {
-            let err = admit(SUBMIT, none, Some(true)).unwrap_err();
+            let err = admit(SUBMIT, none, true).unwrap_err();
             assert!(err.contains("this frame shows no ticket's stored body"), "{none:?}: {err}");
         }
         // No gesture outranks no ticket: the first thing said is the click.
-        assert!(admit(SUBMIT, None, Some(false)).unwrap_err().contains("only inside a viewer's click"));
+        assert!(admit(SUBMIT, None, false).unwrap_err().contains("only inside a viewer's click"));
     }
 
     /// A frame cannot name a ticket — the field is refused — so another
@@ -1006,8 +1007,7 @@ mod tests {
     /// the params the SDK sends.
     #[test]
     fn a_clear_inside_a_click_for_this_tickets_open_input_is_sent() {
-        assert_eq!(admit(CLEAR, Some("DEMO-1"), Some(true)), Ok("DEMO-1".into()));
-        assert_eq!(admit(CLEAR, Some("DEMO-1"), None), Ok("DEMO-1".into()), "no userActivation API: the SDK's own check stands");
+        assert_eq!(admit(CLEAR, Some("DEMO-1"), true), Ok("DEMO-1".into()));
         assert_eq!(parse_clear(r#"{"input":"checks"}"#), Ok(clearing("checks")));
         for id in ["d1", "checks", "notes"] {
             assert_eq!(check_clear("DEMO-1", &clearing(id), &held()), Ok(()), "{id}");
@@ -1020,9 +1020,12 @@ mod tests {
     /// or removed input — each naming `menger.input.clear`.
     #[test]
     fn a_clear_with_no_click_for_another_ticket_or_a_closed_input_is_refused() {
-        let err = admit(CLEAR, Some("DEMO-1"), Some(false)).unwrap_err();
-        assert_eq!(err, "menger.input.clear: only inside a viewer's click — the app saw no click or key just now (nothing sent)");
-        let err = admit(CLEAR, None, Some(true)).unwrap_err();
+        let err = admit(CLEAR, Some("DEMO-1"), false).unwrap_err();
+        assert_eq!(
+            err,
+            "menger.input.clear: only inside a viewer's click — the app saw no click or key in this frame just now (nothing sent)"
+        );
+        let err = admit(CLEAR, None, true).unwrap_err();
         assert!(err.starts_with("menger.input.clear: this frame shows no ticket's stored body"), "{err}");
         let err = parse_clear(r#"{"ticket":"DEMO-2","input":"other"}"#).unwrap_err();
         assert!(err.starts_with("menger.input.clear: ") && err.contains("unknown field `ticket`"), "{err}");

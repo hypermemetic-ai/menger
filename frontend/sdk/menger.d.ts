@@ -62,7 +62,7 @@ export interface MengerInput {
    * (`navigator.userActivation.isActive`), or, in a browser without it, a
    * trusted click or key in the last 5 s. Otherwise it rejects and sends
    * nothing. The host then rejects it, with the reason and nothing
-   * recorded, unless its own window is activated too, the input is declared
+   * recorded, unless it sees the gesture on this very frame too (IDENTITY-36: not just any click in the app; a browser without `navigator.userActivation` is refused), the input is declared
    * in the ticket's body and neither closed nor removed, and `value`
    * answers it — `{ type: 'choice', option }` one of its options,
    * `{ type: 'multi', options }` any of them, `{ type: 'text', text }` not
@@ -87,7 +87,7 @@ export interface MengerInput {
    *
    * Sent only inside a viewer's gesture, as `submit` is; otherwise it
    * rejects and sends nothing. The host then rejects it, with the reason
-   * and nothing cleared, unless its own window is activated too and the
+   * and nothing cleared, unless it sees the gesture on this very frame too and the
    * input is declared in the ticket's body and neither closed nor removed.
    * An app before 1.4 has no `clear`: test for it
    * (`typeof menger.input.clear === 'function'`).
