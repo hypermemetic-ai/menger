@@ -1230,6 +1230,7 @@ exactly as before.
 | `oidc:<name>=<issuer>,<audience>[,<roles-claim>]` | any OIDC provider's RS256 token (Logto, Keycloak, …) | `oidc:<name>/<sub>` |
 | `workos=<client-id>[,<api-base>]` | a WorkOS access token (AuthKit, social, SSO) for that client: issuer `…/user_management/<client-id>`, audience in `client_id` (IDENTITY-30) | `oidc:workos/<user id>` |
 | `nostr=<ws-url>[,<ws-url>…]` | a NIP-98 event (kind 27235) naming that URL, method GET, under a minute old, used once | `nostr:<hex>` |
+| `key` or `key=<ws-url>[,<ws-url>…]` | an agent's Ed25519 key proof naming this socket (IDENTITY-42; "Agents" below) | `key:<hex>` |
 
 Several providers can be configured together. An OIDC adapter claims a
 token by its `iss`, and the nostr adapter claims an event, so each
@@ -1388,6 +1389,49 @@ real socket.
 ```sh
 synapse -P 4450 -t "$ADA" menger members grant --principal idp:c952acd3-… --scope IDENTITY --role editor
 synapse -P 4450 -t "$ADA" menger members requests
+```
+
+### Agents (IDENTITY-40, IDENTITY-42)
+
+An agent logs in with an **Ed25519 key** it holds, then talks as itself
+for the session without handling a token. `--auth-provider key` (in
+`MENGER_AUTH_PROVIDERS`, `key`) admits key proofs at the upgrade; it is
+not offered on the login page or by `session.providers`.
+
+1. **The proof opens a connection.** The bearer value (or
+   `access_token` cookie) `plexus-key.<base64url JSON>` —
+   `{"v":1,"key":"<64 hex>","aud":"<ws url dialed>","agent":"<id>","nonce":"<32 bytes>","ts":<unix s>,"sig":"<Ed25519>"}`,
+   signed over `plexus-key-login/v1\n<aud>\n<agent>\n<nonce>\n<ts>`
+   (plexus-auth-core's `KeyProofAdapter`, IDENTITY-41). It is accepted
+   within −60 s / +30 s, once per `(key, nonce)`, when `aud` is this
+   socket: `ws://127.0.0.1:<port>`, `ws://localhost:<port>`, the ws form
+   of `--public-url`, and any URL given as `key=<ws-url>,…`. The
+   connection is `key:<hex>`, named by its agent id, for five minutes.
+2. **`session.login` mints a session.** On any signed-in connection,
+   `session.login { ttl_secs?, scope? }` → `login { token, principal,
+   agent, expires_at, scope }`. The token (`mgs_…`, kept hashed like a
+   browser's session) opens later connections as the same principal,
+   agent and name — `Authorization: Bearer mgs_…` or `Cookie:
+   access_token=mgs_…` — for `ttl_secs` (default 12 h, at most 24 h).
+3. **`scope` is a ceiling.** `role@SCOPE` each — a shortcode (covering
+   those hosted under it), one ticket (it and what is under it), or `*`.
+   Every check, reads and writes and members' alike, passes only if the
+   key's grants **and** the scope allow it: `editor@MENGER-12` cannot
+   write elsewhere though the key is admin on `*`, and `admin@*` on a key
+   granted editor on A is editor on A. A session minted from a scoped
+   session keeps that scope as well (`scope` in the answer says the one
+   asked, or inherited; empty is no ceiling beyond the grants).
+4. **`session.logout {}`** → `logged_out` ends the connection's session:
+   its token opens nothing (401 under `--require-login`, anonymous
+   otherwise), and connections on it answer "you have signed out".
+
+A key is granted like anyone: `members grant --principal key:<hex>`.
+`tests/agent_login.rs` runs it over the real socket.
+
+```sh
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --no-rest --db-path /tmp/menger-dev.db \
+  --auth-provider key --require-login --admin key:<hex>
+synapse -P 4460 _login menger --key agent-7 --as worker-3 --scope editor@MENGER-12   # synapse's side: IDENTITY-43
 ```
 
 ## Diagrams — the `diagrams` service (COMPILE-4)

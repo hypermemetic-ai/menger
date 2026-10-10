@@ -15,15 +15,23 @@
 //! | `oidc:<name>=<issuer>,<audience>[,<roles-claim>]` | any OIDC provider | `oidc:<name>/<sub>` |
 //! | `workos=<client-id>[,<api-base>]` | WorkOS (AuthKit, SSO) | `oidc:workos/<user id>` |
 //! | `nostr=<service-url>[,<service-url>…]` | NIP-98 | `nostr:<hex>` |
+//! | `key` or `key=<ws-url>[,<ws-url>…]` | an agent's Ed25519 key proof | `key:<hex>` |
 //!
 //! No provider, no chain: menger serves as it did before.
+//!
+//! IDENTITY-42: `key` admits agents by a key proof (IDENTITY-40's wire)
+//! whose `aud` is one of the socket's own URLs — `ws://127.0.0.1:<port>`,
+//! `ws://localhost:<port>`, the ws form of `--public-url` when given — and
+//! any URLs named after `key=`. It is not offered on the login page or by
+//! `session.providers`: it is for agents, which mint a session with
+//! `session.login` on the connection a proof opened.
 
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use menger_tickets_api::{ProviderKind, ProviderOffer};
-use plexus_auth_core::adapters::{Carriers, ClaimMap, Nip98Adapter, OidcAdapter};
+use plexus_auth_core::adapters::{Carriers, ClaimMap, KeyProofAdapter, Nip98Adapter, OidcAdapter};
 use plexus_auth_core::identity::{Authenticator, AuthenticatorChain};
 
 /// One provider menger admits callers through, as `--auth-provider` names
@@ -49,6 +57,9 @@ pub enum Provider {
     /// <client-id>` (`https://api.workos.com` unless given), and the client
     /// id is the audience and the code flow's client: no secret.
     WorkOs { client: String, base: Option<String>, issuer: String },
+    /// IDENTITY-42: `key` or `key=<ws-url>[,<ws-url>…]`: agents' Ed25519
+    /// key proofs naming one of the socket's own URLs, or one of these.
+    Key { extra: Vec<String> },
 }
 
 impl Provider {
@@ -60,7 +71,14 @@ impl Provider {
             Self::Oidc { name, .. } => name,
             Self::Nostr { .. } => "nostr",
             Self::WorkOs { .. } => "workos",
+            Self::Key { .. } => "key",
         }
+    }
+
+    /// IDENTITY-42: whether it is the agents' key proof — not a way in a
+    /// person is offered (the login page, `session.providers`).
+    pub fn is_key(&self) -> bool {
+        matches!(self, Self::Key { .. })
     }
 
     /// An OIDC provider's issuer, audience and client: what a login asks
@@ -71,7 +89,7 @@ impl Provider {
             Self::Auth0 { domain, audience, client, .. } => Some((domain, audience, client.as_deref())),
             Self::Oidc { issuer, audience, client, .. } => Some((issuer, audience, client.as_deref())),
             Self::WorkOs { client, issuer, .. } => Some((issuer, client, Some(client))),
-            Self::Nostr { .. } => None,
+            Self::Nostr { .. } | Self::Key { .. } => None,
         }
     }
 
@@ -79,7 +97,7 @@ impl Provider {
     /// passwords on its own page, never from menger (a password grant
     /// there needs the API key, which menger does not hold).
     pub fn takes_passwords(&self) -> bool {
-        !matches!(self, Self::WorkOs { .. } | Self::Nostr { .. })
+        !matches!(self, Self::WorkOs { .. } | Self::Nostr { .. } | Self::Key { .. })
     }
 
     /// The authorization request's parameters that say which way in a
@@ -143,7 +161,14 @@ impl Provider {
 
     /// The provider's adapter.
     pub fn adapter(&self) -> anyhow::Result<Arc<dyn Authenticator>> {
+        self.adapter_at(&[])
+    }
+
+    /// The provider's adapter for a server whose socket is reached at
+    /// `sockets` (IDENTITY-42: a key proof's audiences, beside `key=`'s).
+    pub fn adapter_at(&self, sockets: &[String]) -> anyhow::Result<Arc<dyn Authenticator>> {
         Ok(match self {
+            Self::Key { extra } => Arc::new(KeyProofAdapter::new(sockets.iter().chain(extra))?),
             Self::PlexusIdp { issuer, audience, .. } => Arc::new(OidcAdapter::plexus_idp(issuer, audience)?),
             Self::Auth0 { domain, audience, roles_claim, .. } => {
                 Arc::new(OidcAdapter::auth0(domain, audience, roles_claim.as_deref())?)
@@ -169,7 +194,11 @@ impl FromStr for Provider {
                      auth0=<domain>,<audience>[,<roles-claim>][,client=<id>] · \
                      oidc:<name>=<issuer>,<audience>[,<roles-claim>][,client=<id>] · \
                      workos=<client-id>[,<api-base>] · \
-                     nostr=<service-url>[,<service-url>…]";
+                     nostr=<service-url>[,<service-url>…] · \
+                     key[=<ws-url>,…]";
+        if spec.trim() == "key" {
+            return Ok(Self::Key { extra: Vec::new() });
+        }
         let (kind, rest) = spec.trim().split_once('=').ok_or_else(|| format!("`{spec}`: {usage}"))?;
         let parts: Vec<String> = rest.split(',').map(|p| p.trim().to_string()).collect();
         if parts.iter().any(String::is_empty) {
@@ -200,6 +229,15 @@ impl FromStr for Provider {
                 Ok(Self::Auth0 { domain, audience, roles_claim, client })
             }
             "nostr" => Ok(Self::Nostr { urls: parts }),
+            "key" => {
+                for p in &parts {
+                    match url::Url::parse(p) {
+                        Ok(u) if matches!(u.scheme(), "ws" | "wss") => {}
+                        _ => return Err(format!("`{spec}`: `{p}` is not a ws:// or wss:// URL; {usage}")),
+                    }
+                }
+                Ok(Self::Key { extra: parts })
+            }
             "workos" => match parts.as_slice() {
                 [client] | [client, _] if client.starts_with("client_") && !client.contains(['/', '?', '#']) => {
                     let base = parts.get(1).cloned();
@@ -237,6 +275,8 @@ impl fmt::Display for Provider {
             }
             Self::Nostr { urls } => write!(f, "nostr={}", urls.join(",")),
             Self::WorkOs { client, base, .. } => write!(f, "workos={client}{}", opt(base, "")),
+            Self::Key { extra } if extra.is_empty() => f.write_str("key"),
+            Self::Key { extra } => write!(f, "key={}", extra.join(",")),
         }
     }
 }
@@ -285,6 +325,33 @@ impl FromStr for LoginButton {
 /// `nostr` cookies, then the bearer value). `None` when no provider is
 /// configured, so nothing is installed and nothing changes.
 pub fn boundary(providers: &[Provider]) -> anyhow::Result<Option<Arc<Carriers>>> {
+    boundary_at(providers, &[])
+}
+
+/// IDENTITY-42: the WebSocket URLs a server on `port` is dialed at — a key
+/// proof's audiences: `ws://127.0.0.1:<port>`, `ws://localhost:<port>`, and
+/// the ws form of `public_url` (http → ws, https → wss) when one is given.
+pub fn socket_urls(port: u16, public_url: Option<&str>) -> Vec<String> {
+    let mut out = vec![format!("ws://127.0.0.1:{port}"), format!("ws://localhost:{port}")];
+    if let Some(mut u) = public_url.and_then(|p| url::Url::parse(p).ok()) {
+        let scheme = match u.scheme() {
+            "http" | "ws" => Some("ws"),
+            "https" | "wss" => Some("wss"),
+            _ => None,
+        };
+        if scheme.is_some_and(|s| u.set_scheme(s).is_ok()) {
+            let text = u.to_string().trim_end_matches('/').to_string();
+            if !out.contains(&text) {
+                out.push(text);
+            }
+        }
+    }
+    out
+}
+
+/// [`boundary`] for a server whose socket is reached at `sockets`
+/// ([`socket_urls`]): a `key` provider accepts proofs naming them.
+pub fn boundary_at(providers: &[Provider], sockets: &[String]) -> anyhow::Result<Option<Arc<Carriers>>> {
     if providers.is_empty() {
         return Ok(None);
     }
@@ -297,7 +364,7 @@ pub fn boundary(providers: &[Provider]) -> anyhow::Result<Option<Arc<Carriers>>>
     }
     let mut chain = AuthenticatorChain::new();
     for p in providers {
-        chain = chain.with(p.adapter().map_err(|e| anyhow::anyhow!("--auth-provider {p}: {e}"))?);
+        chain = chain.with(p.adapter_at(sockets).map_err(|e| anyhow::anyhow!("--auth-provider {p}: {e}"))?);
     }
     Ok(Some(Arc::new(Carriers::cookie_and_bearer(chain))))
 }
@@ -351,6 +418,27 @@ mod tests {
         let a: Provider = "auth0=http://127.0.0.1:1/,aud".parse().unwrap();
         let b: Provider = "oidc:auth0=http://127.0.0.1:2/,aud".parse().unwrap();
         assert!(boundary(&[a, b]).is_err());
+    }
+
+    #[test]
+    fn key_takes_no_value_or_more_socket_urls() {
+        let k: Provider = "key".parse().unwrap();
+        assert_eq!(k, Provider::Key { extra: vec![] });
+        assert_eq!((k.name(), k.to_string().as_str(), k.is_key(), k.oidc(), k.takes_passwords()), ("key", "key", true, None, false));
+        let k: Provider = "key=wss://menger.example,ws://10.0.0.2:4455".parse().unwrap();
+        assert_eq!(k.to_string(), "key=wss://menger.example,ws://10.0.0.2:4455");
+        assert_eq!(k.to_string().parse::<Provider>().unwrap(), k);
+        for bad in ["key=", "key=http://x", "key=a,,b", "keys"] {
+            assert!(bad.parse::<Provider>().is_err(), "{bad}");
+        }
+        assert!(boundary_at(&[k], &socket_urls(4460, None)).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_socket_is_dialed_at_its_ports_and_the_public_url() {
+        assert_eq!(socket_urls(4460, None), ["ws://127.0.0.1:4460", "ws://localhost:4460"]);
+        assert_eq!(socket_urls(4455, Some("https://menger.example/")), ["ws://127.0.0.1:4455", "ws://localhost:4455", "wss://menger.example"]);
+        assert_eq!(socket_urls(4455, Some("http://box:8080")), ["ws://127.0.0.1:4455", "ws://localhost:4455", "ws://box:8080"]);
     }
 
     #[test]

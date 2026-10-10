@@ -39,9 +39,41 @@ export interface SessionEventProvider {
   name: string;
 }
 
+/** IDENTITY-42, `login`: a session minted for the caller. `token`
+(`mgs_…`) opens later connections as this identity, presented as
+`Authorization: Bearer mgs_…` or `Cookie: access_token=mgs_…`, until
+`expires_at` (unix seconds) or `logout`. */
+export interface SessionEventLogin {
+  type: 'login';
+  /** The agent id a key proof named, when one did. */
+  agent: string | null;
+  expiresAt: number;
+  /** The caller's principal, which the session acts as. */
+  principal: string;
+  /** The session's ceiling, `role@SCOPE` each: every check passes only
+if the principal's grants AND this allow it. Empty: no ceiling
+beyond the principal's grants. */
+  scope: string[];
+  token: string;
+}
+
+/** IDENTITY-42, `logout`: the caller's session has ended. */
+export interface SessionEventLoggedOut {
+  type: 'logged_out';
+}
+
+/** A refusal, naming the problem; nothing was changed. */
+export interface SessionEventError {
+  type: 'error';
+  message: string;
+}
+
 /** What the `session` activation's methods yield. */
-export type SessionEvent = SessionEventIdentity | SessionEventAnonymous | SessionEventProvider;
+export type SessionEvent = SessionEventIdentity | SessionEventAnonymous | SessionEventProvider | SessionEventLogin | SessionEventLoggedOut | SessionEventError;
 
 export function isSessionEventIdentity(e: SessionEvent): e is SessionEventIdentity { return e.type === 'identity'; }
 export function isSessionEventAnonymous(e: SessionEvent): e is SessionEventAnonymous { return e.type === 'anonymous'; }
 export function isSessionEventProvider(e: SessionEvent): e is SessionEventProvider { return e.type === 'provider'; }
+export function isSessionEventLogin(e: SessionEvent): e is SessionEventLogin { return e.type === 'login'; }
+export function isSessionEventLoggedOut(e: SessionEvent): e is SessionEventLoggedOut { return e.type === 'logged_out'; }
+export function isSessionEventError(e: SessionEvent): e is SessionEventError { return e.type === 'error'; }

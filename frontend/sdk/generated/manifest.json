@@ -45,6 +45,11 @@
       "schema": []
     },
     "session": {
+      "login": [
+        "scope",
+        "ttl_secs"
+      ],
+      "logout": [],
       "providers": [],
       "schema": [],
       "whoami": []

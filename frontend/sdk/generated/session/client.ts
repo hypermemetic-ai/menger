@@ -7,6 +7,10 @@ import type { SessionEvent } from './types';
 
 /** Typed client interface for session plugin */
 export interface SessionClient {
+  /** Mint a session for this identity: login { token, principal, agent, expires_at, scope } */
+  login(scope?: string[] | null, ttlSecs?: number | null): AsyncGenerator<SessionEvent>;
+  /** End this connection's session: logged_out */
+  logout(): AsyncGenerator<SessionEvent>;
   /** The providers this menger admits callers through: provider { name, kind, issuer, audience } */
   providers(): AsyncGenerator<SessionEvent>;
   /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
@@ -19,6 +23,16 @@ export interface SessionClient {
 class SessionClientImpl implements SessionClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
+
+  async *login(scope?: string[] | null, ttlSecs?: number | null): AsyncGenerator<SessionEvent> {
+    const stream = this.rpc.call('session.login', { scope, ttl_secs: ttlSecs });
+    yield* extractData<SessionEvent>(stream);
+  }
+
+  async *logout(): AsyncGenerator<SessionEvent> {
+    const stream = this.rpc.call('session.logout', {});
+    yield* extractData<SessionEvent>(stream);
+  }
 
   async *providers(): AsyncGenerator<SessionEvent> {
     const stream = this.rpc.call('session.providers', {});

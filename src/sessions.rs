@@ -12,8 +12,10 @@
 //! session is gone (sign-out stops its sockets answering).
 //!
 //! [`Gate`] is the WebSocket upgrade's validator: the session cookie first,
-//! then a provider's own credential (synapse's `-t` token, a NIP-98 event)
-//! through the adapters' [`Carriers`], as IDENTITY-14 left them.
+//! then (IDENTITY-42) a minted session token (`mgs_…`, from
+//! `session.login`) as the bearer value or the `access_token` cookie, then a
+//! provider's own credential (synapse's `-t` token, a NIP-98 event, an
+//! agent's key proof) through the adapters' [`Carriers`].
 //!
 //! In memory for now: a restart signs everyone out. IDENTITY-18's G2 asks
 //! whether sessions should live in the database instead.
@@ -55,6 +57,9 @@ pub fn cookie_name_for(public_url: &str) -> String {
 /// live; past either, the one nearest its end makes room.
 const MAX_PENDING: usize = 10_000;
 const MAX_LIVE: usize = 100_000;
+
+/// IDENTITY-42: what a session token `session.login` mints starts with.
+pub const TOKEN_PREFIX: &str = "mgs_";
 
 /// The marker a session-backed identity carries in its metadata, beside
 /// `expires_at`: the hash [`Sessions::alive`] is asked about.
@@ -128,10 +133,20 @@ impl Sessions {
     /// Starts a session for an identity a provider proved: the cookie value
     /// to set and when it ends. The identity is stamped with the session's
     /// key and expiry, so a call can ask whether it still stands.
-    pub fn create(&self, mut ctx: AuthContext) -> (String, i64) {
-        let id = random_token();
+    pub fn create(&self, ctx: AuthContext) -> (String, i64) {
+        self.start(random_token(), ctx, self.ttl_secs)
+    }
+
+    /// IDENTITY-42: mints a session token (`mgs_…`) for an identity, lasting
+    /// `ttl_secs`: the token and when it ends. Kept hashed, as a cookie's
+    /// session is; it ends at its expiry or [`Sessions::end_key`].
+    pub fn mint(&self, ctx: AuthContext, ttl_secs: i64) -> (String, i64) {
+        self.start(format!("{TOKEN_PREFIX}{}", random_token()), ctx, ttl_secs)
+    }
+
+    fn start(&self, id: String, mut ctx: AuthContext, ttl_secs: i64) -> (String, i64) {
         let key = hash(&id);
-        let expires = now() + self.ttl_secs;
+        let expires = now() + ttl_secs;
         if let Some(meta) = ctx.metadata.as_object_mut() {
             meta.insert(SESSION_KEY.into(), key.clone().into());
             meta.insert("expires_at".into(), expires.into());
@@ -153,6 +168,12 @@ impl Sessions {
     /// call ([`Sessions::alive`]).
     pub fn end(&self, id: &str) {
         self.live.lock().unwrap().remove(&hash(id));
+    }
+
+    /// IDENTITY-42: ends the session whose key (the hash its identity
+    /// carries as [`SESSION_KEY`]) this is; whether it stood.
+    pub fn end_key(&self, key: &str) -> bool {
+        self.live.lock().unwrap().remove(key).is_some_and(|s| s.expires > now())
     }
 
     /// Whether the session a connection's identity names still stands.
@@ -192,8 +213,30 @@ impl menger_tickets_api::access::SessionCheck for Sessions {
     }
 }
 
-/// The WebSocket upgrade's validator: a session cookie, else a provider's
-/// own credential through the carriers.
+/// IDENTITY-42: `session.login` and `session.logout` mint and end sessions
+/// here (tickets-api's `SessionMint`).
+impl menger_tickets_api::access::SessionMint for Sessions {
+    fn mint(&self, ctx: AuthContext, ttl_secs: i64) -> (String, i64) {
+        Sessions::mint(self, ctx, ttl_secs)
+    }
+
+    fn end_key(&self, key: &str) -> bool {
+        Sessions::end_key(self, key)
+    }
+}
+
+/// A minted session token a value the transport offers carries: the bearer
+/// value itself, or the `access_token` cookie of a `Cookie` header.
+fn minted_token(value: &str) -> Option<&str> {
+    let v = value.trim();
+    if v.starts_with(TOKEN_PREFIX) && !v.contains([';', '=', ' ']) {
+        return Some(v);
+    }
+    cookie(v, "access_token").filter(|t| t.starts_with(TOKEN_PREFIX))
+}
+
+/// The WebSocket upgrade's validator: a session cookie, else a minted
+/// session token, else a provider's own credential through the carriers.
 pub struct Gate {
     sessions: Arc<Sessions>,
     carriers: Option<Arc<Carriers>>,
@@ -210,6 +253,11 @@ impl SessionValidator for Gate {
     async fn validate(&self, value: &str) -> Option<AuthContext> {
         if let Some(ctx) = cookie(value, self.sessions.cookie_name()).and_then(|id| self.sessions.get(id)) {
             return Some(ctx);
+        }
+        // IDENTITY-42: a minted token is a session or nobody — an ended or
+        // expired one proves no one (refused 401 under --require-login).
+        if let Some(token) = minted_token(value) {
+            return self.sessions.get(token);
         }
         match &self.carriers {
             Some(c) => c.validate(value).await,
@@ -284,6 +332,25 @@ mod tests {
         let gate = Gate::new(s.clone(), None);
         assert!(gate.validate(&format!("menger_session_4451=x; menger_session_4456={id}")).await.is_some());
         assert!(gate.validate(&format!("menger_session={id}")).await.is_none(), "another server's name is not ours");
+    }
+
+    #[tokio::test]
+    async fn a_minted_token_opens_as_a_bearer_or_the_access_token_cookie_until_it_ends() {
+        let s = Arc::new(Sessions::new(3600));
+        let (token, expires) = s.mint(alice(), 60);
+        assert!(token.starts_with("mgs_") && token.len() >= 47, "{token}");
+        assert!(expires <= now() + 60);
+        let gate = Gate::new(s.clone(), None);
+        let ctx = gate.validate(&token).await.expect("bearer");
+        assert_eq!(ctx.user_id, "alice");
+        assert!(gate.validate(&format!("theme=dark; access_token={token}")).await.is_some(), "cookie");
+        assert!(gate.validate("mgs_forged").await.is_none());
+        let key = ctx.metadata[SESSION_KEY].as_str().unwrap().to_string();
+        assert!(s.end_key(&key));
+        assert!(gate.validate(&token).await.is_none(), "ended");
+        assert!(!s.end_key(&key), "once");
+        let (old, _) = s.mint(alice(), -1);
+        assert!(gate.validate(&old).await.is_none(), "expired");
     }
 
     #[test]
