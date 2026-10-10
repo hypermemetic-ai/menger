@@ -34,6 +34,10 @@ pub mod component_docs;
 /// body's `##` headings read through ought's field set — the piece COMPILE
 /// checks. Wasm-safe, like `component_docs`.
 pub mod fields;
+/// COMP-11: a blank line inside a body's HTML does not end it — an element
+/// opened in an HTML block runs to its close — read for the app's parser.
+/// Wasm-safe, like `component_docs`: the frame renders with it.
+pub mod html_runs;
 /// INPUT-3: a body's inputs — `<m-decision id>` and `<m-input id kind>` with
 /// their options, question and recommendation — read as the app renders the
 /// body, and an answer's value checked against them. Wasm-safe, like

@@ -46,8 +46,24 @@
 //! code block: it renders as the component's docs card (src/card.rs), built
 //! from the block itself — its docs parsed with the server's own parser
 //! (`menger_tickets_api::component_docs`), its help through this module.
+//!
+//! COMP-11: in a framed body, **an element opened in an HTML block runs to
+//! its close, blank lines included** — CommonMark would end the block at the
+//! first blank line and read the rest as markdown (indented lines as code,
+//! inline tags wrapped in `<p>`). The rule is tickets-api's
+//! (`menger_tickets_api::html_runs`, which the server's readers of a body and
+//! `diagrams` use too): a blank line inside an element keeps the block going,
+//! except where markdown is meant — right after an element's opening (its
+//! open tag, or that and a `<summary>` or heading line: CommonMark's and
+//! GitHub's idiom for markdown inside HTML, the house components' too), and
+//! before a fence. A block that starts as `<pre>`, `<script>`, `<style>`,
+//! `<textarea>` or a comment already ran to its end, and is untouched. The
+//! rule is the frame's alone: an unframed body holds no element (that is
+//! what frames one), and is painted into the page as escaped text, where an
+//! HTML block's extent changes nothing anyone means — so [`render_body`] and
+//! [`render_body_with`] parse the body as written, byte for byte as before.
 
-use menger_tickets_api::component_docs;
+use menger_tickets_api::{component_docs, html_runs};
 use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
 use pulldown_cmark_escape::{escape_href, escape_html};
 
@@ -479,21 +495,6 @@ pub fn is_framed(src: &str) -> bool {
     })
 }
 
-/// The HTML elements (WHATWG's list, obsolete ones a page still renders
-/// included) and the two foreign roots a body may embed.
-const HTML_ELEMENTS: &[&str] = &[
-    "a", "abbr", "acronym", "address", "area", "article", "aside", "audio", "b", "base", "bdi", "bdo", "big",
-    "blockquote", "body", "br", "button", "canvas", "caption", "center", "cite", "code", "col", "colgroup",
-    "data", "datalist", "dd", "del", "details", "dfn", "dialog", "dir", "div", "dl", "dt", "em", "embed",
-    "fieldset", "figcaption", "figure", "font", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "head",
-    "header", "hgroup", "hr", "html", "i", "iframe", "img", "input", "ins", "kbd", "label", "legend", "li",
-    "link", "main", "map", "mark", "marquee", "math", "menu", "meta", "meter", "nav", "noscript", "object",
-    "ol", "optgroup", "option", "output", "p", "param", "picture", "pre", "progress", "q", "rp", "rt", "ruby",
-    "s", "samp", "script", "search", "section", "select", "slot", "small", "source", "span", "strike",
-    "strong", "style", "sub", "summary", "sup", "svg", "table", "tbody", "td", "template", "textarea",
-    "tfoot", "th", "thead", "time", "title", "tr", "track", "tt", "u", "ul", "var", "video", "wbr",
-];
-
 /// Does this stretch of raw HTML (one inline tag, or an HTML block's lines)
 /// hold real markup: a comment, or an open or close tag whose name is an
 /// HTML element or a custom element?
@@ -512,7 +513,7 @@ fn holds_markup(raw: &str) -> bool {
             continue;
         }
         let name = name.to_ascii_lowercase();
-        if name.contains('-') || HTML_ELEMENTS.contains(&name.as_str()) {
+        if html_runs::is_element(&name) {
             return true;
         }
     }
@@ -550,6 +551,13 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
     // written as HTML spans them — and emitted whole at its end, each
     // diagram in it a placeholder (`with_diagrams`).
     let mut html_block: Option<String> = None;
+    // COMP-11 (framed only): an element opened in an HTML block runs to its
+    // close, blank lines included — the parser reads the body with those
+    // blank lines marked ([`html_runs`]), and each block's lines lose the
+    // marks as they are gathered, so the markup passes through as written.
+    // An unframed body holds no element: it parses as written.
+    let read = framed.then(|| html_runs::read(src, opts));
+    let src = read.as_ref().map_or(src, |read| read.source());
     let events = Parser::new_ext(src, opts).filter_map(|ev| {
         if definition.is_some() {
             return match ev {
@@ -587,7 +595,7 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
                     return None;
                 }
                 Event::Html(s) if html_block.is_some() => {
-                    html_block.as_mut().expect("checked").push_str(s);
+                    html_block.as_mut().expect("checked").push_str(&read.as_ref().expect("framed").restore(s));
                     return None;
                 }
                 Event::End(TagEnd::HtmlBlock) => {
@@ -1143,6 +1151,143 @@ mod tests {
         assert!(unnamed.contains("is not a component name") && !unnamed.contains("<Chart"), "{unnamed}");
     }
 
+    // -- blank lines inside HTML (COMP-11) ---------------------------------
+
+    /// An element opened in an HTML block runs to its close, blank lines
+    /// included: the markup inside passes through as written — no indented
+    /// line made code, no inline tag wrapped in a `<p>` — and markdown after
+    /// it is markdown again.
+    #[test]
+    fn html_with_blank_lines_runs_to_its_close() {
+        let html = "<div class=\"board\">\n<h2>Board</h2>\n<ul>\n  <li>a</li>\n\n    <li><span>b</span> *as written*</li>\n</ul>\n\n<span class=\"note\">c</span>\n</div>\n";
+        let src = format!("{html}\nAfter, **markdown**.\n");
+        assert_eq!(render_body_framed(&src, &|_| None).html, format!("{html}<p>After, <strong>markdown</strong>.</p>\n"));
+        // CommonMark alone (the unframed parse) ends the div at the first
+        // blank line: what the frame used to draw.
+        let unframed = render_body(&src).html;
+        assert!(unframed.contains("<pre><code>") && unframed.contains("<p>&lt;span class=\"note\"&gt;"), "{unframed}");
+    }
+
+    /// Nested elements with blank lines, and an indented `<pre>` with blank
+    /// lines of its own, pass through byte for byte.
+    #[test]
+    fn nested_elements_with_blank_lines_and_an_indented_pre_pass_through() {
+        let src = "<section class=\"s\">\n  <div class=\"a\">\n    <p>one</p>\n\n    <div class=\"b\">\n      <span>two</span>\n\n      <pre>\nline 1\n\n    line 2, indented\n\n      </pre>\n    </div>\n  </div>\n\n  <m-x data-field=\"note\">\n\n    <b>three</b>\n  </m-x>\n</section>\n";
+        let r = render_body_framed(src, &|_| None);
+        assert_eq!(r.html, src);
+        assert_eq!(r.diagrams, 0);
+        // A `<pre class="mermaid">` there is the diagram, its blank line kept.
+        let src = "<section data-field=\"shape\">\n  <h2>Shape</h2>\n  <p>The flow.</p>\n\n    <pre class=\"mermaid\">\ngraph LR\n\n  A --> B\n    </pre>\n</section>\n";
+        let r = render_body_framed(src, &|_| None);
+        assert_eq!(r.diagrams, 1);
+        assert!(r.html.contains(&mermaid_placeholder("graph LR\n\n  A --> B\n    ")), "{}", r.html);
+        // A top-level `<pre>` (CommonMark's type 1) was already whole: as it was.
+        assert_eq!(render_body_framed("<pre>\na\n\n    b\n</pre>\n\nc\n", &|_| None).html, "<pre>\na\n\n    b\n</pre>\n<p>c</p>\n");
+    }
+
+    /// Markdown inside HTML is still where the house writes it: after a blank
+    /// line right after an element's opening — its open tag, or that and a
+    /// `<summary>` or a heading — and in a fence with blank lines around it.
+    /// Data-field components, definitions, mermaid fences and `{wave: ID}`s
+    /// there render as they did.
+    #[test]
+    fn markdown_inside_html_keeps_its_idioms() {
+        let src = "<m-summary ticket=\"X-1\">\n\n<m-field data-field=\"standing\">**Standing**, {wave: RETURNS-6}.</m-field>\n\n</m-summary>\n\n<section data-field=\"shape\">\n<h2>Shape</h2>\n\n```mermaid\ngraph LR\n  A --> B\n```\n\n<p>Under it.</p>\n</section>\n\n<div>\n\n*Emphasized* text.\n\n</div>\n";
+        let r = render_body_framed(src, &placed);
+        assert_eq!(r.diagrams, 1);
+        assert_eq!(
+            r.html,
+            format!(
+                "<m-summary ticket=\"X-1\">\n<p><m-field data-field=\"standing\"><strong>Standing</strong>, {}.</m-field></p>\n</m-summary>\n<section data-field=\"shape\">\n<h2>Shape</h2>\n{}<p>Under it.</p>\n</section>\n<div>\n<p><em>Emphasized</em> text.</p>\n</div>\n",
+                wave_markup("RETURNS-6", WaveRef::Wave(2)),
+                mermaid_placeholder("graph LR\n  A --> B\n")
+            )
+        );
+        // A definition inside an element, with blank lines around it, is its card.
+        let html = render_body_framed("<div class=\"defs\">\n<p>Defines:</p>\n\n```component m-x\n<template>x</template>\n```\n\n</div>\n", &|_| None).html;
+        assert!(html.contains("data-menger-card=\"m-x\"") && !html.contains("language-component"), "{html}");
+        // Right after an open tag, a line indented as code is HTML going on —
+        // never the code block no element means.
+        let src = "<div>\n\n    <p>indented</p>\n</div>\n";
+        assert_eq!(render_body_framed(src, &|_| None).html, src);
+    }
+
+    /// The DESIGN-3…9 bodies' shape — a stylesheet, then a page of nested
+    /// HTML, indented, with comments — written with blank lines between its
+    /// sections renders as it does without them, but for the blank lines.
+    #[test]
+    fn a_page_of_html_with_blank_lines_renders_as_without_them() {
+        let page = "\
+A candidate language, drawn below.
+
+<style>
+.x-grid{display:grid;grid-template-columns:repeat(12,1fr)}
+
+.x-row{display:flex}
+</style>
+<div class=\"x\">
+<!-- header -->
+<header class=\"x-grid x-head\">
+  <div class=\"x-word\">menger</div>
+  <div class=\"x-who\"><span>signed in as</span> <b>someone</b></div>
+</header>
+<!-- nav -->
+<div class=\"x-grid x-shell\">
+<nav class=\"x-nav\" aria-label=\"Shortcodes\">
+  <div class=\"x-filter\"><span class=\"x-label\">Filter</span><code>not category done</code></div>
+  <ul class=\"x-tree\">
+    <li class=\"x-root\">
+      <div class=\"x-n\"><span class=\"x-m\" data-s=\"epic\"></span><span class=\"x-t\">ROOT</span></div>
+      <ul>
+        <li><a class=\"x-row\" href=\"#\">AREA <em>one</em></a></li>
+        <li><a class=\"x-row\" href=\"#\">AREA <em>two</em></a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+<main class=\"x-main\">
+  <section class=\"x-board\">
+    <h2 class=\"x-label\">Wave 1</h2>
+    <span class=\"x-count\">3 tickets</span>
+    <div class=\"x-cards\">
+      <article class=\"x-card\"><span class=\"x-id\">T-1</span> a_title_with_underscores *and stars*</article>
+      <article class=\"x-card\"><span class=\"x-id\">T-2</span></article>
+    </div>
+  </section>
+  <section class=\"x-ticket\">
+    <pre class=\"x-code\">fn main() {
+    println!(\"kept\");
+}</pre>
+  </section>
+</main>
+</div>
+</div>
+";
+        // Blank lines put back between its sections — before each tag line
+        // that does not directly follow an open tag (where a blank line asks
+        // for markdown).
+        let mut spaced = String::new();
+        let mut prev = "";
+        let mut html = false;
+        for line in page.lines() {
+            html |= line.starts_with("<div");
+            let opener = prev.trim_end().ends_with('>') && !prev.contains("</") && prev.trim_start().starts_with('<');
+            if html && line.trim_start().starts_with('<') && !opener {
+                spaced.push('\n');
+            }
+            spaced.push_str(line);
+            spaced.push('\n');
+            prev = line;
+        }
+        assert!(spaced.matches("\n\n").count() > 20, "{spaced}");
+        let bare = |s: String| s.lines().filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().join("\n");
+        let without = render_body_framed(page, &|_| None).html;
+        let with = render_body_framed(&spaced, &|_| None).html;
+        assert_eq!(bare(with.clone()), bare(without.clone()));
+        assert!(!with.contains("<pre><code>") && !with.contains("<p><"), "{with}");
+        assert!(without.contains("<p>A candidate language, drawn below.</p>"));
+    }
+
     // -- diagrams written as HTML (ART-5) ---------------------------------
 
     /// ought's form — mermaid source in a `<pre class="mermaid">` — is drawn
@@ -1186,16 +1331,19 @@ mod tests {
         assert_eq!(render_body_framed("<m-dag data-field=\"dag\">\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n</m-dag>\n", &|_| None).diagrams, 1);
         // In a block quote and a list item.
         assert_eq!(render_body_framed("> <pre class=\"mermaid\">\n> pie\n> </pre>\n\n- item\n\n  <pre class=\"mermaid\">\n  pie\n  </pre>\n", &|_| None).diagrams, 2);
+        // COMP-11: a blank line inside a `<pre>` nested in a section no
+        // longer ends the section's block — it is the diagram's.
+        assert_eq!(render_body_framed("<section data-field=\"dag\">\n<pre class=\"mermaid\">\ngraph TD\n\n  A --> B\n</pre>\n</section>\n", &|_| None).diagrams, 1);
         // Not a diagram: a plain `<pre>`, another class, a comment, a
-        // script's text, code, inline HTML in a paragraph, and a `<pre>` its
-        // HTML block does not close (a blank line ends the section's block).
+        // script's text, code, inline HTML in a paragraph, and a `<pre>`
+        // nothing closes (its section's close ends it; no `</pre>`).
         assert_eq!(render_body_framed("<pre>graph LR</pre>\n", &|_| None).diagrams, 0);
         assert_eq!(render_body_framed("<pre class=\"mermaid-src\">graph LR</pre>\n<pre data-class=\"mermaid\">graph LR</pre>\n", &|_| None).diagrams, 0);
         assert_eq!(render_body_framed("<!-- <pre class=\"mermaid\">graph LR</pre> -->\n", &|_| None).diagrams, 0);
         assert_eq!(render_body_framed("<script>x = '<pre class=\"mermaid\">graph LR</pre>'</script>\n", &|_| None).diagrams, 0);
         assert_eq!(render_body_framed("```html\n<pre class=\"mermaid\">graph LR</pre>\n```\n\nWrite `<pre class=\"mermaid\">` and <b>bold</b>.\n", &|_| None).diagrams, 0);
         assert_eq!(render_body_framed("text <pre class=\"mermaid\">graph LR</pre> inline\n", &|_| None).diagrams, 0);
-        assert_eq!(render_body_framed("<section data-field=\"dag\">\n<pre class=\"mermaid\">\ngraph TD\n\n  A --> B\n</pre>\n</section>\n", &|_| None).diagrams, 0);
+        assert_eq!(render_body_framed("<section data-field=\"dag\">\n<pre class=\"mermaid\">\ngraph TD\n\n  A --> B\n</section>\n", &|_| None).diagrams, 0);
     }
 
     /// A framed body with no diagram written as HTML renders byte for byte

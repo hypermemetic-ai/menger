@@ -437,6 +437,30 @@ fn comments_and_raw_text_across_lines_hold_no_fields() {
     assert_eq!(tree(&fields(body)), "real");
 }
 
+/// COMP-11: an element runs to its close across blank lines, as the frame
+/// renders it — a field written after one, indented, is a field (CommonMark
+/// alone reads it as code), on the line it is written on.
+#[test]
+fn a_blank_line_inside_an_element_does_not_end_it() {
+    let body = "\
+<section class=\"page\">
+  <h2>Decide</h2>
+  <p>The choice.</p>
+
+    <section data-field=\"decision\">
+      <p data-field=\"question\">Archive or delete?</p>
+
+      <p data-field=\"recommendation\">Archive.</p>
+    </section>
+</section>
+";
+    let fs = fields(body);
+    assert_eq!(tree(&fs), "decision(question recommendation)", "{fs:?}");
+    assert_eq!(fs[0].line, line(body, "<section data-field"));
+    assert_eq!(fs[0].parts[1].line, line(body, "<p data-field=\"recommendation"));
+    assert!(fs[0].content.contains("Archive or delete?</p>\n\n      <p"), "as written: {:?}", fs[0].content);
+}
+
 // -- parts nest ---------------------------------------------------------------------
 
 #[test]

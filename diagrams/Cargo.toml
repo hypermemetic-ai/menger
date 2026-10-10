@@ -48,6 +48,7 @@ server = [
     "dep:serde_json",
     "dep:async-stream",
     "dep:pulldown-cmark",
+    "dep:menger-tickets-api",
     "dep:clap",
     "dep:anyhow",
     "dep:tracing",
@@ -80,6 +81,10 @@ async-stream = { version = "0.3", optional = true }
 # the same crate, the same minor line as frontend/Cargo.toml, the same
 # options; src/blocks.rs's tests hold the two lockfiles to one version.
 pulldown-cmark = { version = "0.13", default-features = false, optional = true }
+# COMP-11: the frame reads a body's HTML blocks by `html_runs` (an element
+# runs to its close, blank lines included) — the one copy of that rule, in
+# tickets-api's wasm-safe half (no server features: nothing of the store).
+menger-tickets-api = { path = "../tickets-api", default-features = false, optional = true }
 clap = { version = "4", features = ["derive", "env"], optional = true }
 anyhow = { version = "1", optional = true }
 tracing = { version = "0.1", optional = true }

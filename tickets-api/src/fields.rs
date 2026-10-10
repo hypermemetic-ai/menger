@@ -41,6 +41,7 @@
 //! the app may read fields too.
 
 use crate::component_docs::{attributes, comment_end, open_end, raw_close, tag_name, VOID};
+use crate::html_runs;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::ops::Range;
 
@@ -305,7 +306,13 @@ impl Scan {
         // the body (a line in a list item or a block quote has its prefix
         // dropped, so the two drift).
         let mut block: Option<(String, Vec<(usize, usize)>)> = None;
-        for (event, range) in Parser::new_ext(rest, options()).into_offset_iter() {
+        // COMP-11: an element opened in an HTML block runs to its close,
+        // blank lines included, as the frame renders it — the parser reads
+        // the body with those blank lines marked; offsets and lines map
+        // back (a mark ends its line, so a line's offsets still run on).
+        let read = html_runs::read(rest, options());
+        for (event, range) in Parser::new_ext(read.source(), options()).into_offset_iter() {
+            let range = read.original(range.start)..read.original(range.end);
             match event {
                 Event::Start(Tag::HtmlBlock) => block = Some((String::new(), Vec::new())),
                 Event::End(TagEnd::HtmlBlock) => {
@@ -316,7 +323,7 @@ impl Scan {
                 Event::Html(text) => match &mut block {
                     Some((html, lines)) => {
                         lines.push((html.len(), at + range.start));
-                        html.push_str(&text);
+                        html.push_str(&read.restore(&text));
                     }
                     None => scan.html(&text, &[(0, at + range.start)]),
                 },

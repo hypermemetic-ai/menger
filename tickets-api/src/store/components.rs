@@ -73,6 +73,7 @@
 //! ([`migrate_preview`]).
 
 use crate::component_docs;
+use crate::html_runs;
 use crate::types::{Component, ComponentDocs};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use rusqlite::{params, Connection};
@@ -170,7 +171,10 @@ pub(crate) fn read(body: &str) -> (Uses, Vec<Problem>) {
     let mut block: Option<(String, Vec<(String, String)>, String)> = None;
     // An HTML block's lines, gathered so a comment across them is one.
     let mut html: Option<String> = None;
-    for event in Parser::new_ext(rendered(body), opts) {
+    // COMP-11: an element opened in an HTML block runs to its close, blank
+    // lines included, as the frame renders it (`html_runs`).
+    let read = html_runs::read(rendered(body), opts);
+    for event in Parser::new_ext(read.source(), opts) {
         match event {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
                 if let Some((name, preview)) = component_docs::definition(&info) {
@@ -204,7 +208,7 @@ pub(crate) fn read(body: &str) -> (Uses, Vec<Problem>) {
                 }
             }
             Event::Html(text) => match &mut html {
-                Some(lines) => lines.push_str(&text),
+                Some(lines) => lines.push_str(&read.restore(&text)),
                 None => tags(&text, &mut uses.references),
             },
             Event::InlineHtml(text) => tags(&text, &mut uses.references),
@@ -793,6 +797,9 @@ mod tests {
         assert!(refs("`<m-x>` in a code span").is_empty());
         assert!(refs("```html\n<m-x></m-x>\n```\n").is_empty(), "a fence");
         assert!(refs("para\n\n    <m-x></m-x>\n").is_empty(), "an indented code block");
+        // COMP-11: an element runs to its close across a blank line — what
+        // is indented in it is HTML, as the frame renders it.
+        assert_eq!(refs("<section>\n<p>a</p>\n\n    <m-x></m-x>\n</section>\n"), vec!["m-x"]);
         assert!(refs("<!-- <m-x></m-x> -->\n").is_empty(), "a comment");
         assert!(refs("<!--\n<m-x>\n-->\n").is_empty(), "a comment across an HTML block's lines");
         assert!(refs("i<n-1 in prose is no tag").is_empty());
