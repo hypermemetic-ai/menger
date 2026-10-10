@@ -390,6 +390,30 @@ check(n.readyState !== WebSocket.OPEN, 'the server closes the signed-out session
   o.ws?.close();
 }
 
+// AUTH-12 (AUTH-10 #2): anonymous sockets are held to a quota well below the
+// server's ceiling — 100 of them once took jsonrpsee's default 100, and the
+// admin's 101st was refused. Open them until one is refused; a signed-in
+// person must still get in, and the places come back when they close.
+{
+  const flood = [];
+  let refusedAt = 0;
+  for (let i = 0; i < 120; i++) {
+    const s = await open({ origin: null });
+    if (s.refused) { refusedAt = i + 1; break; }
+    flood.push(s.ws);
+  }
+  check(refusedAt > 0 && refusedAt <= 64, `anonymous sockets from one address meet a quota well below the ceiling (AUTH-12: refused socket #${refusedAt || '— none of 120'})`);
+  const late = (await open({ session: await signIn('admin') })).ws;
+  const health = late && (await call(late, 'tickets.health'));
+  check(late && !errorOf(health), 'a signed-in admin still opens a socket and is answered while they are held (AUTH-12)');
+  late?.close();
+  for (const s of flood) s.close();
+  await sleep(500);
+  const again = await open({ origin: null });
+  check(again.ws, 'closed anonymous sockets give their places back (AUTH-12)');
+  again.ws?.close();
+}
+
 for (const s of [a, n, v, e, w]) s?.close();
 console.log(failed ? `${failed} check(s) FAILED` : 'every attack was refused');
 process.exit(failed ? 1 : 0);
