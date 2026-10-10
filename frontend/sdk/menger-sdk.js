@@ -5,10 +5,13 @@
  * beside it at /app/sdk/menger.d.ts.
  *
  * A framed body (frontend/src/frame.rs) is one sandboxed iframe —
- * `sandbox="allow-scripts allow-forms allow-popups
- * allow-popups-to-escape-sandbox"`, no `allow-same-origin`, so its origin is
- * opaque — whose `srcdoc` is the body's HTML with this script inlined at the
- * top of <head>. It runs before anything the body holds, and it is the
+ * `sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"`, no
+ * `allow-same-origin`, so its origin is opaque, and no `allow-forms`
+ * (IDENTITY-28) — whose `srcdoc` is the body's HTML with this script inlined
+ * at the top of <head>, under a CSP that is the head's first element:
+ * `connect-src 'none'; form-action 'none'` — no fetch, socket or beacon of
+ * the frame's own, no form submission; the bridge below is its only way
+ * out. It runs before anything the body holds, and it is the
  * frame's whole contract with the app (lavish-axi's injected SDK, in
  * menger's idiom):
  *
@@ -28,7 +31,9 @@
  *     `inputs` (INPUT-4), with the activation's parameter names; anything
  *     else rejects with an Error whose message starts "read-only" (and
  *     names the two writes, below), and unknown or missing params reject
- *     naming them; `on('change', cb)` → `cb(event)` for every `watch`
+ *     naming them (IDENTITY-36: every read, and every change event, held
+ *     to the frame's ticket's shortcode and those hosted under it);
+ *     `on('change', cb)` → `cb(event)` for every `watch`
  *     event the app hears (`amended`, `status_changed`,
  *     `component_changed`, `input_changed`, …), returning a function that
  *     stops it;
@@ -47,7 +52,7 @@
  *     browser without `navigator.userActivation`, a trusted click or key
  *     in the last 5 s — and otherwise rejects, sending nothing; the host
  *     then refuses it (the promise rejects with the reason) unless its own
- *     window is activated too, the input is declared in that ticket's body
+ *     sees the gesture on this very frame too (IDENTITY-36), the input is declared in that ticket's body
  *     and neither closed nor removed, and the value answers it;
  *     and (INPUT-9, 1.4) `clear(id)` → a Promise of the input as the clear
  *     left it (`open`, the clear in its history; the typed client's

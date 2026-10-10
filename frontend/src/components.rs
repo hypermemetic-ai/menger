@@ -163,6 +163,7 @@ pub(crate) fn ComponentsPage(only: Option<String>) -> impl IntoView {
     let reg = registry::signal();
     let one = only.clone();
     let reg_card = reg.clone();
+    let reg_owner = reg.clone();
     let rows = Memo::new(move |_| reg.with(|r| r.as_ref().map(|r| rows(&r.list(), one.as_deref()))));
     let title = match &only {
         Some(name) => format!("<{name}>"),
@@ -186,10 +187,19 @@ pub(crate) fn ComponentsPage(only: Option<String>) -> impl IntoView {
         let name = card_name.clone()?;
         reg_card.with(|r| r.as_ref().and_then(|r| r.list().into_iter().find(|c| c.name == name)).map(|c| help_card(&c)))
     });
+    // IDENTITY-36: the card's frame reads as its owner's body would — the
+    // owner's shortcode and what it hosts; an orphan's, nothing but
+    // components.
+    let owner_name = only.clone();
+    let owner = Memo::new(move |_| {
+        let name = owner_name.clone()?;
+        reg_owner.with(|r| r.as_ref().and_then(|r| r.list().into_iter().find(|c| c.name == name)).and_then(|c| c.owner))
+    });
     let card_view = move || {
         card.get().map(|_| {
             let html = Signal::derive(move || card.get().unwrap_or_default());
-            view! { <div class="help-card"><Frame html ticket=None /></div> }
+            let scope = owner.get().map(|t| crate::bridge::shortcode_of(&t)).unwrap_or_default();
+            view! { <div class="help-card"><Frame html ticket=None scope /></div> }
         })
     };
     view! {

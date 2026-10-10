@@ -201,13 +201,20 @@ pub(crate) fn body_view(raw: &str, refs: Option<Refs>) -> AnyView {
 /// was, rebuilt on each change as it always was. INPUT-4: `ticket` is the
 /// ticket whose stored body `body` is — a click in its frame may answer that
 /// ticket's inputs; `None` for a draft (the editor's preview), which answers
-/// nothing.
+/// nothing. IDENTITY-36: a frame reads only its ticket's shortcode and what
+/// it hosts — or, for a draft, `scope`'s (the ticket being edited, or the
+/// shortcode a first save creates in).
 #[component]
-pub(crate) fn BodyView(#[prop(into)] body: Signal<String>, refs: Option<Refs>, ticket: Option<String>) -> impl IntoView {
+pub(crate) fn BodyView(
+    #[prop(into)] body: Signal<String>,
+    refs: Option<Refs>,
+    ticket: Option<String>,
+    #[prop(optional)] scope: Option<String>,
+) -> impl IntoView {
     let framed = Memo::new(move |_| body.with(|b| md::is_framed(md::split_frontmatter(b).1)));
     move || {
         if framed.get() {
-            framed_view(body, refs, ticket.clone())
+            framed_view(body, refs, ticket.clone(), scope.clone())
         } else {
             body.with(|b| body_view(b, refs))
         }
@@ -217,7 +224,7 @@ pub(crate) fn BodyView(#[prop(into)] body: Signal<String>, refs: Option<Refs>, t
 /// A framed body: the frontmatter fold, then the frame. Reads `body` only
 /// inside its own reactive children, so the caller's closure re-runs only
 /// when the body stops being framed.
-fn framed_view(body: Signal<String>, refs: Option<Refs>, ticket: Option<String>) -> AnyView {
+fn framed_view(body: Signal<String>, refs: Option<Refs>, ticket: Option<String>, scope: Option<String>) -> AnyView {
     let fm = Memo::new(move |_| body.with(|b| md::split_frontmatter(b).0.map(str::to_string)));
     let html = Memo::new(move |_| {
         body.with(|b| {
@@ -235,7 +242,7 @@ fn framed_view(body: Signal<String>, refs: Option<Refs>, ticket: Option<String>)
                 <pre>{f}</pre>
             </details>
         })}
-        <Frame html ticket />
+        <Frame html ticket scope=scope.unwrap_or_default() />
     }
     .into_any()
 }
@@ -279,6 +286,13 @@ pub(crate) fn BodyEditor(
     let base = RwSignal::new(body.get_untracked());
     let saving = RwSignal::new(false);
     let problem = RwSignal::new(None::<String>);
+    // IDENTITY-36: the preview's frame reads as the edited ticket's would —
+    // its shortcode (or, before a first save, the one it creates in).
+    let draft_scope = id
+        .get_untracked()
+        .map(|t| crate::bridge::shortcode_of(&t))
+        .or_else(|| create.as_ref().map(|c| c.epic.clone()))
+        .unwrap_or_default();
     let elsewhere = Memo::new(move |_| {
         editing.get() && !saving.get() && body.with(|b| *b != base.get() && b.as_deref() != Some(draft.get().as_str()))
     });
@@ -340,7 +354,7 @@ pub(crate) fn BodyEditor(
                     prop:value=move || seed.get()
                     on:input=move |ev| draft.set(event_target_value(&ev))
                 ></textarea>
-                <div class="preview"><BodyView body=Signal::derive(move || draft.get()) refs=Some(refs) ticket=None /></div>
+                <div class="preview"><BodyView body=Signal::derive(move || draft.get()) refs=Some(refs) ticket=None scope=draft_scope.clone() /></div>
             </div>
             <div class="actions">
                 <button class="save" on:click=save disabled=move || saving.get()>

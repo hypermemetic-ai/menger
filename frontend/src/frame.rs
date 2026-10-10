@@ -9,6 +9,10 @@
 //! ([`crate::md::render_body_framed`]: raw HTML passed through, `{wave: ID}`
 //! already placed by the host) under a head that carries:
 //!
+//! - first, IDENTITY-28's CSP ([`CSP`]): `connect-src 'none'; form-action
+//!   'none'` — the frame opens no connection of its own and submits no form
+//!   (nor does the sandbox allow forms); its scripts, styles, images and
+//!   fonts load as before;
 //! - `<base target="_blank">` — a link opens a new top-level tab (the
 //!   sandbox's popups escape it);
 //! - `<style id="menger-theme">` — the app's theme tokens ([`THEME_TOKENS`],
@@ -42,7 +46,8 @@
 //! holds it, again in answer to `menger:ready` (`menger:components` — what
 //! moved while the frame loaded), and to every open frame when a fetch
 //! lands ([`broadcast_registry`]). Every `watch` event the session hears
-//! reaches every frame as `menger:change { event }` ([`broadcast_change`]):
+//! reaches every frame whose reach admits it (IDENTITY-36, below) as
+//! `menger:change { event }` ([`broadcast_change`]):
 //! the SDK applies `component_changed` / `component_removed` to its
 //! definitions, then hands the event to `menger.on('change')`. And the
 //! frame's `menger:call { id, method, params }` is answered here —
@@ -69,8 +74,10 @@
 //! the host stamps it on the `<iframe data-ticket>`, where nothing in the
 //! frame can change it. `menger.input.submit` sends `menger:submit { id,
 //! params }` — only inside a viewer's gesture, by the SDK's own check — and
-//! the host reads its own window's transient user activation at once (a
-//! click or a key in a frame activates its ancestors too), then answers
+//! the host reads at once whether a gesture on THAT frame is under way
+//! (IDENTITY-36, src/gesture.rs: the app's activation, focus in this very
+//! frame, the pointer or a Tab brought there since the app's own last
+//! gesture — never just any click in the app), then answers
 //! `menger:submitted { id, answer }` or `{ id, error }` after the bridge's
 //! checks and `tickets.answer` with source `app` (src/bridge.rs). Every
 //! `watch` event, `input_changed` among them, reaches the frames as
@@ -78,10 +85,20 @@
 //!
 //! INPUT-9: **the second write.** `menger.input.clear` sends `menger:clear
 //! { id, params: { input } }` under the same rule — the SDK's gesture
-//! check, the host's own activation read at once, the frame's stamped
+//! check, the host's own reading of a gesture on that frame, the frame's stamped
 //! ticket — and the host answers `menger:cleared { id, input }` (the input
 //! as the clear left it, the wire's spelling) or `{ id, error }` after the
 //! bridge's checks and `tickets.clear_answer` with source `app`.
+//!
+//! IDENTITY-36: **a frame reads its own subtree.** The host stamps every
+//! frame with its scope (`<iframe data-scope>`): the shortcode of the ticket
+//! whose stored body it renders — or, for an editor's draft, of the ticket
+//! being edited; for a component's help card, of its owner — where nothing
+//! in the frame can change it. Every `menger.call` is answered held to that
+//! shortcode and the shortcodes hosted under it (FILTER-13's `under`,
+//! src/bridge.rs: [`bridge::run_scoped`]), and every `watch` event reaches a
+//! frame only if its reach admits it ([`broadcast_change`]). A frame with no
+//! scope reads and hears components alone.
 //!
 //! COMMENT-3: **annotation mode reaches into the body.** The host tells every
 //! frame when the mode turns (`menger:annotate { on }`, and a frame that
@@ -111,7 +128,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{anchor, annotate, board, bridge, dom, inspect, mermaid, notes, registry, session};
+use crate::{anchor, annotate, board, bridge, dom, gesture, inspect, mermaid, notes, registry, session};
 
 /// The SDK's version — `window.menger.version` inside every frame (pinned
 /// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
@@ -135,9 +152,20 @@ pub(crate) const SDK_URL: &str = "/app/sdk/menger-sdk.js";
 const SDK_JS: &str = include_str!("../sdk/menger-sdk.js");
 
 /// The frame's sandbox (COMP-1 decision 1, after lavish-axi's): scripts,
-/// forms, and popups that escape the sandbox — never `allow-same-origin`,
-/// which would hand the body the app's origin.
-pub(crate) const SANDBOX: &str = "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox";
+/// and popups that escape the sandbox — never `allow-same-origin`, which
+/// would hand the body the app's origin. IDENTITY-28: and no longer
+/// `allow-forms` — a body's form submits nowhere. Popups stay, and stay
+/// escaping (owner, 2026-10-10): a link in a body opens the real page in a
+/// new tab (`<base target="_blank">`), unsandboxed.
+pub(crate) const SANDBOX: &str = "allow-scripts allow-popups allow-popups-to-escape-sandbox";
+
+/// IDENTITY-28: the frame's Content-Security-Policy, the first element of
+/// its head — in force before any of the body's markup is parsed. No
+/// connection of the frame's own (`fetch`, a WebSocket, an EventSource, a
+/// beacon): its only way out is the host's bridge. No form submission
+/// anywhere. Scripts, styles, images and fonts are left alone — bodies
+/// import modules from esm.sh and show images from anywhere.
+pub(crate) const CSP: &str = "connect-src 'none'; form-action 'none'";
 
 /// The class every frame's `<iframe>` wears — what the listener and
 /// [`retheme_all`] look frames up by.
@@ -263,7 +291,9 @@ pub(crate) fn srcdoc(body_html: &str, shell: &Shell) -> String {
     let mut doc = String::with_capacity(body_html.len() + SDK_JS.len() + 2048);
     doc.push_str("<!doctype html><html lang=\"en\" data-theme=\"");
     doc.push_str(shell.scheme.as_str());
-    doc.push_str("\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
+    doc.push_str("\"><head><meta http-equiv=\"Content-Security-Policy\" content=\"");
+    doc.push_str(CSP);
+    doc.push_str("\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
     doc.push_str("<base target=\"_blank\">");
     doc.push_str("<style id=\"menger-theme\">");
     doc.push_str(&theme_css(shell.scheme, shell.tokens));
@@ -465,31 +495,63 @@ pub(crate) fn broadcast_registry() {
 /// COMP-5: a `watch` event, to every open frame as a change notice — the
 /// SDK applies a component event to its definitions, then hands every
 /// event to `menger.on('change')`. Called by the session for each event.
+/// IDENTITY-36: each frame hears only what its reach admits
+/// ([`bridge::admit_event`] — its scope's shortcodes, as last asked; a
+/// frame with no scope hears components alone), and a `group_changed`
+/// that may move a shortcode into or out of a reach asks that reach again.
 pub(crate) fn broadcast_change(ev: &TicketsEvent) {
+    if let TicketsEvent::GroupChanged { group } = ev {
+        for scope in bridge::note_group(group) {
+            refresh_reach(scope);
+        }
+    }
     let all = frames();
     if all.is_empty() {
         return;
     }
-    let event = to_js(ev);
     for f in all {
-        if let Some(channel) = f.get_attribute("data-channel") {
+        let Some(channel) = f.get_attribute("data-channel") else { continue };
+        let reach = match f.get_attribute("data-scope") {
+            Some(scope) => bridge::known_reach(&scope),
+            None => bridge::Reach::none(),
+        };
+        if let Some(heard) = bridge::admit_event(ev.clone(), &reach) {
             let msg = message("menger:change", &channel);
-            set(&msg, "event", &event);
+            set(&msg, "event", &to_js(&heard));
             post(&f, &msg.into());
         }
     }
 }
 
+/// IDENTITY-36: ask the server again how far `scope` reaches (remembered by
+/// the bridge for [`broadcast_change`]).
+fn refresh_reach(scope: String) {
+    spawn_local(async move {
+        if let Some(client) = session::client() {
+            let _ = bridge::reach_of(&client, &scope).await;
+        }
+    });
+}
+
 /// COMP-5: answer a frame's `menger.call` — the bridge parses it (a read,
 /// or refused), makes it over the app's connection, and the frame gets
 /// `menger:result { id, items }` or `{ id, error }`. A frame replaced
-/// meanwhile has no window to answer, and is not answered.
-fn answer_call(frame: web_sys::HtmlIFrameElement, channel: String, id: JsValue, method: String, params: Result<String, String>) {
+/// meanwhile has no window to answer, and is not answered. IDENTITY-36:
+/// held to the frame's reach — `scope`, the shortcode the host stamped on
+/// it (`data-scope`), which nothing in the frame can move.
+fn answer_call(
+    frame: web_sys::HtmlIFrameElement,
+    channel: String,
+    id: JsValue,
+    method: String,
+    params: Result<String, String>,
+    scope: Option<String>,
+) {
     spawn_local(async move {
         let reply = match params.and_then(|p| bridge::parse_call(&method, &p)) {
             Err(e) => Err(e),
             Ok(call) => match session::client() {
-                Some(client) => bridge::run(&client, call).await,
+                Some(client) => bridge::run_scoped(&client, call, scope.as_deref()).await,
                 None => Err(format!("{method}: not connected")),
             },
         };
@@ -503,21 +565,10 @@ fn answer_call(frame: web_sys::HtmlIFrameElement, channel: String, id: JsValue, 
     });
 }
 
-/// INPUT-4: whether a viewer's gesture is under way — the app window's
-/// transient user activation, which a click or a key in a frame grants its
-/// ancestors too (HTML's activation notification), so a message posted
-/// from a click handler finds it on. `None`: this browser has no
-/// `navigator.userActivation` and cannot say. Read through `Reflect`, as
-/// the clipboard is: web-sys gates the binding.
-fn host_activated() -> Option<bool> {
-    let navigator = dom::window().navigator();
-    let ua = Reflect::get(&navigator, &JsValue::from_str("userActivation")).ok().filter(JsValue::is_object)?;
-    Reflect::get(&ua, &JsValue::from_str("isActive")).ok()?.as_bool()
-}
-
 /// INPUT-4: answer a frame's `menger.input.submit` — `menger:submitted {
 /// id, answer }` (the recorded answer, the wire's spelling) or `{ id, error
-/// }`: refused unless a gesture is under way (`activated`) and the frame
+/// }`: refused unless a gesture on this frame is under way (`gesture`,
+/// IDENTITY-36: [`gesture::on_frame`]) and the frame
 /// renders a ticket (`ticket`, from its `data-ticket`), then the bridge's
 /// checks against that ticket's inputs, then `tickets.answer` with source
 /// `app`. INPUT-9: and (`write` [`Msg::Clear`]) its `menger.input.clear` —
@@ -530,7 +581,7 @@ fn answer_write(
     channel: String,
     id: JsValue,
     ticket: Option<String>,
-    activated: Option<bool>,
+    gesture: bool,
     params: Result<String, String>,
 ) {
     let (sdk, reply_kind, field) = if write == Msg::Clear {
@@ -540,7 +591,7 @@ fn answer_write(
     };
     spawn_local(async move {
         let reply = async {
-            let ticket = bridge::admit(sdk, ticket.as_deref(), activated)?;
+            let ticket = bridge::admit(sdk, ticket.as_deref(), gesture)?;
             let params = params?;
             let client = || session::client().ok_or_else(|| format!("{sdk}: not connected (nothing sent)"));
             if write == Msg::Clear {
@@ -653,11 +704,14 @@ fn on_message(ev: web_sys::MessageEvent) {
                     .and_then(|s| s.as_string())
                     .ok_or_else(|| format!("{method}: params are not plain data")),
             };
-            answer_call(frame, channel, id, method, params);
+            // IDENTITY-36: the host's own stamp — the frame cannot name one.
+            let scope = frame.get_attribute("data-scope");
+            answer_call(frame, channel, id, method, params, scope);
         }
         Some(write @ (Msg::Submit | Msg::Clear)) => {
-            // Now, while the gesture that sent it is still the app's too.
-            let activated = host_activated();
+            // Now, while the gesture that sent it is under way — and on
+            // this very frame (IDENTITY-36), not anywhere in the app.
+            let gesture = gesture::on_frame(&frame);
             let sdk = if write == Msg::Clear { bridge::CLEAR } else { bridge::SUBMIT };
             let id = field("id").filter(|v| v.as_f64().is_some()).unwrap_or(JsValue::NULL);
             let params = field("params")
@@ -667,7 +721,7 @@ fn on_message(ev: web_sys::MessageEvent) {
                 .ok_or_else(|| format!("{sdk}: its params are missing or not plain data (nothing sent)"));
             // The host's own stamp — nothing in the frame can move it.
             let ticket = frame.get_attribute("data-ticket");
-            answer_write(write, frame, channel, id, ticket, activated, params);
+            answer_write(write, frame, channel, id, ticket, gesture, params);
         }
         Some(Msg::Size { height, settled }) => {
             let _ = web_sys::HtmlElement::style(&frame).set_property("height", &format!("{height}px"));
@@ -891,6 +945,8 @@ fn install_listener() {
     let cb = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(on_message);
     let _ = w.add_event_listener_with_callback("message", cb.as_ref().unchecked_ref());
     cb.forget();
+    // IDENTITY-36: what a write's gesture is read from.
+    gesture::install(FRAME_CLASS);
     let hash = Closure::<dyn FnMut()>::new(|| anchor_changed(&dom::window().location().hash().unwrap_or_default()));
     let _ = w.add_event_listener_with_callback("hashchange", hash.as_ref().unchecked_ref());
     hash.forget();
@@ -899,8 +955,10 @@ fn install_listener() {
 
 /// Load `body_html` into a new frame in `container`, beside the one on
 /// screen (if any), invisible until [`promote`]d — INPUT-4: stamped with
-/// `ticket`, the ticket whose stored body it is (none: no input to answer).
-fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>) {
+/// `ticket`, the ticket whose stored body it is (none: no input to answer);
+/// IDENTITY-36: and with `scope`, the shortcode its reads are held to
+/// (none: it reads nothing but components).
+fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, scope: Option<&str>) {
     let w = dom::window();
     let Some(doc) = w.document() else { return };
     let channel = next_channel();
@@ -929,6 +987,13 @@ fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>) {
     if let Some(ticket) = ticket {
         let _ = el.set_attribute("data-ticket", ticket);
     }
+    if let Some(scope) = scope {
+        let _ = el.set_attribute("data-scope", scope);
+        // What it hears before it asks anything: its reach, once known.
+        if !bridge::reach_known(scope) {
+            refresh_reach(scope.to_string());
+        }
+    }
     let _ = el.set_attribute("title", "ticket body");
     let Ok(frame) = el.dyn_into::<web_sys::HtmlIFrameElement>() else { return };
     frame.set_srcdoc(&html);
@@ -946,9 +1011,17 @@ fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>) {
 /// changes. The frontmatter is the caller's: it stays outside. INPUT-4:
 /// `ticket` is the ticket whose stored body `html` is — the one a click in
 /// the frame may answer an input of; `None` where the markup is no
-/// ticket's stored body (an editor's draft, a help card).
+/// ticket's stored body (an editor's draft, a help card). IDENTITY-36: its
+/// reads are held to `ticket`'s shortcode — or, with no ticket, to `scope`
+/// (an editor's draft: the shortcode of the ticket it edits; a help card:
+/// its component's owner's), and with neither it reads only components.
 #[component]
-pub(crate) fn Frame(#[prop(into)] html: Signal<String>, ticket: Option<String>) -> impl IntoView {
+pub(crate) fn Frame(
+    #[prop(into)] html: Signal<String>,
+    ticket: Option<String>,
+    #[prop(optional)] scope: Option<String>,
+) -> impl IntoView {
+    let scope = bridge::scope_of(ticket.as_deref()).or_else(|| bridge::scope_of(scope.as_deref()));
     install_listener();
     // COMP-5: a frame defines the components — the app keeps the registry.
     registry::want();
@@ -962,14 +1035,15 @@ pub(crate) fn Frame(#[prop(into)] html: Signal<String>, ticket: Option<String>) 
         let n = asked.with_value(|n| n.wrapping_add(1));
         asked.set_value(n);
         if el.query_selector(":scope > iframe").ok().flatten().is_none() {
-            load(&el, &body, ticket.as_deref());
+            load(&el, &body, ticket.as_deref(), scope.as_deref());
             return;
         }
         let ticket = ticket.clone();
+        let scope = scope.clone();
         spawn_local(async move {
             dom::sleep_ms(RERENDER_AFTER_MS).await;
             if asked.try_with_value(|v| *v == n) == Some(true) {
-                load(&el, &body, ticket.as_deref());
+                load(&el, &body, ticket.as_deref(), scope.as_deref());
             }
         });
     });
@@ -990,12 +1064,41 @@ mod tests {
     }
 
     /// COMP-1 decision 1: lavish-axi's sandbox, minus downloads — and never
-    /// the same origin.
+    /// the same origin. IDENTITY-28: minus forms too; popups (a body's
+    /// links) still open the real page.
     #[test]
     fn the_sandbox_runs_scripts_but_never_shares_the_apps_origin() {
         let flags: Vec<&str> = SANDBOX.split_whitespace().collect();
-        assert_eq!(flags, ["allow-scripts", "allow-forms", "allow-popups", "allow-popups-to-escape-sandbox"]);
+        assert_eq!(flags, ["allow-scripts", "allow-popups", "allow-popups-to-escape-sandbox"]);
         assert!(!SANDBOX.contains("same-origin") && !SANDBOX.contains("top-navigation"));
+        assert!(!SANDBOX.contains("allow-forms"), "IDENTITY-28: no forms");
+    }
+
+    /// IDENTITY-28: the CSP is the head's first element — before the theme,
+    /// the init block, the SDK and the body — and says exactly: no
+    /// connections of the frame's own, no form submission; scripts, styles,
+    /// images and fonts left alone (bodies import from esm.sh).
+    #[test]
+    fn the_csp_comes_first_and_closes_connections_and_forms() {
+        assert_eq!(CSP, "connect-src 'none'; form-action 'none'");
+        let tokens = shell_tokens();
+        let shell = Shell { channel: "f9", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: None, ticket: Some("A-1") };
+        let doc = srcdoc("<script>fetch('https://x')</script><form action=\"https://x\"></form>", &shell);
+        let head = "<!doctype html><html lang=\"en\" data-theme=\"light\"><head>";
+        assert!(
+            doc.starts_with(&format!("{head}<meta http-equiv=\"Content-Security-Policy\" content=\"connect-src 'none'; form-action 'none'\"><meta charset=\"utf-8\">")),
+            "{}",
+            &doc[..200]
+        );
+        assert_eq!(doc.matches("Content-Security-Policy").count(), 1);
+        for directive in ["script-src", "default-src", "img-src", "style-src", "font-src", "frame-src"] {
+            assert!(!CSP.contains(directive), "{directive} is left alone");
+        }
+        let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
+        let csp = at("Content-Security-Policy");
+        for later in ["<base target", "<style id=\"menger-theme\">", "id=\"menger-init\"", "id=\"menger-sdk\"", "<body>"] {
+            assert!(csp < at(later), "the CSP precedes {later}");
+        }
     }
 
     /// The srcdoc: the theme first (no flash of the wrong one), links to a
@@ -1006,7 +1109,7 @@ mod tests {
         let tokens = shell_tokens();
         let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", components: None, ticket: None };
         let doc = srcdoc("<details><summary>s</summary><p>x</p></details>", &shell);
-        assert!(doc.starts_with("<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta charset=\"utf-8\">"), "{doc}");
+        assert!(doc.starts_with("<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta http-equiv=\"Content-Security-Policy\""), "{doc}");
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
         assert!(at("<base target=\"_blank\">") < at("<style id=\"menger-theme\">"));
         assert!(doc.contains("<style id=\"menger-theme\">:root{color-scheme:dark;--bg:#fbfbf9;--ink:#1f2328;--sans:-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif}</style>"), "{doc}");
