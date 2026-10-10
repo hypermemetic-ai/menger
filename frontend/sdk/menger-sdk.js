@@ -174,7 +174,8 @@
  *   host → frame  menger:locate { id, paths }             where these are
  *   frame → host  menger:located { id, found: [{ rect, text } | null, …] }
  *   frame → host  menger:key { key }                      `a`, `A`, or Esc in
- *                 the mode — the app's keys
+ *                 the mode — the app's keys; `palette` for ⌘K (Ctrl+K off a
+ *                 Mac), from anywhere in the body (1.6.1, MENGER-6)
  *   frame → host  menger:size   { height, settled }       whenever the
  *                 height changes; `settled` turns true once the first
  *                 paint is complete (diagrams drawn, the registry in hand,
@@ -192,7 +193,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.6.0";
+  var VERSION = "1.6.1";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -1723,6 +1724,18 @@
     });
     post("menger:located", { id: m.id, found: found });
   }
+
+  // MENGER-6: ⌘K (Ctrl+K off a Mac) is the app's palette, from anywhere in
+  // the body, a field included — taken before the body's own handlers, so
+  // the browser's search box never gets it.
+  var MAC = /Mac|iPhone|iPad/.test(navigator.platform || "");
+  doc.addEventListener("keydown", function (ev) {
+    if (ev.isComposing || ev.altKey || ev.shiftKey) return;
+    if (!(MAC ? ev.metaKey : ev.ctrlKey || ev.metaKey)) return;
+    if (ev.key !== "k" && ev.key !== "K") return;
+    ev.preventDefault();
+    post("menger:key", { key: "palette" });
+  }, true);
 
   // `a`/`A` turn the host's mode, and Esc leaves it — the app's keys, from
   // a body that has focus; never from a field.

@@ -141,7 +141,7 @@ use crate::{anchor, annotate, board, bridge, dom, gesture, inspect, mermaid, not
 /// COMP-12's 1.6 puts the base typography in a cascade layer, and a body
 /// holding `<meta name="menger-base" content="markdown">` confines it to
 /// what markdown produced (`data-md`, md::MD_MARK).
-pub(crate) const SDK_VERSION: &str = "1.6.0";
+pub(crate) const SDK_VERSION: &str = "1.6.1";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -802,7 +802,12 @@ fn on_message(ev: web_sys::MessageEvent) {
         }
         Some(Msg::Key) => {
             if let Some(key) = field("key").and_then(|v| v.as_string()) {
-                annotate::frame_key(&key);
+                // MENGER-6: the palette's chord, pressed inside the body.
+                if key == "palette" {
+                    crate::keys::palette_from_frame();
+                } else {
+                    annotate::frame_key(&key);
+                }
             }
         }
         Some(Msg::Revealed) => {

@@ -527,6 +527,8 @@ pub(crate) fn ensure_tab_stop(item_selector: &str, preferred: Option<&str>) {
 // Overlay state: opening remembers where focus was, closing hands it back
 
 thread_local! {
+    /// MENGER-6: the overlay signal, for the chord a frame forwards.
+    static PALETTE_OVERLAY: Cell<Option<RwSignal<Overlay>>> = const { Cell::new(None) };
     /// When the `g` of a `g …` sequence was pressed (ms since epoch).
     static GO_ARMED_AT: Cell<f64> = const { Cell::new(f64::NEG_INFINITY) };
     /// Where focus was when the overlay opened.
@@ -719,6 +721,22 @@ pub(crate) fn consume_go_prefix(key: &str) -> bool {
 /// which is what the board's j/k walk now. SCALE-26: the board's model —
 /// positions by `extents`, not a list of rows.
 pub(crate) fn install(overlay: RwSignal<Overlay>, board: board::Board) {
+    // MENGER-6: ⌘K (Ctrl+K off a Mac) is the palette's from anywhere — a
+    // text field, an open dialog — so it is taken in the capture phase,
+    // before any field or dialog sees it, and the browser's own chord (its
+    // search box) never runs. A framed body forwards it ([`palette_from_frame`]).
+    PALETTE_OVERLAY.with(|o| o.set(Some(overlay)));
+    let chord = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+        if is_palette_chord(&ev) {
+            ev.prevent_default();
+            toggle_palette(overlay);
+        }
+    });
+    dom::window()
+        .add_event_listener_with_callback_and_bool("keydown", chord.as_ref().unchecked_ref(), true)
+        .expect("keydown chord listener");
+    chord.forget(); // lives as long as the app
+
     let cb = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
         global_keydown(&ev, overlay, board);
     });
@@ -749,6 +767,41 @@ pub(crate) fn install(overlay: RwSignal<Overlay>, board: board::Board) {
 
 /// COMMENT-3: no overlay (the palette, the cheat sheet) is up — a key a
 /// frame posts is the app's then.
+/// MENGER-6: whether a key is the palette's chord — ⌘K on a Mac (where
+/// Ctrl+K is a text field's delete-to-end-of-line), Ctrl+K or ⌘K elsewhere;
+/// no Shift or Alt, and not mid-composition.
+pub(crate) fn palette_chord(key: &str, ctrl: bool, meta: bool, alt: bool, shift: bool, composing: bool, mac: bool) -> bool {
+    let cmd = if mac { meta } else { ctrl || meta };
+    cmd && !alt && !shift && !composing && key.eq_ignore_ascii_case("k")
+}
+
+fn is_palette_chord(ev: &web_sys::KeyboardEvent) -> bool {
+    palette_chord(&ev.key(), ev.ctrl_key(), ev.meta_key(), ev.alt_key(), ev.shift_key(), ev.is_composing(), is_mac())
+}
+
+fn is_mac() -> bool {
+    let nav = dom::window().navigator();
+    let p = nav.platform().unwrap_or_default();
+    p.contains("Mac") || p.contains("iPhone") || p.contains("iPad")
+}
+
+/// The palette, opened — or closed, when it is what is open.
+fn toggle_palette(overlay: RwSignal<Overlay>) {
+    if overlay.get_untracked() == Overlay::Palette {
+        close_overlay(overlay);
+    } else {
+        open_overlay(overlay, Overlay::Palette);
+    }
+}
+
+/// MENGER-6: the chord pressed inside a ticket body's frame, which the
+/// frame's SDK posts as `menger:key { key: "palette" }`.
+pub(crate) fn palette_from_frame() {
+    if let Some(overlay) = PALETTE_OVERLAY.with(|o| o.get()) {
+        toggle_palette(overlay);
+    }
+}
+
 pub(crate) fn no_overlay() -> bool {
     dom::window().document().and_then(|d| d.query_selector(".overlay").ok().flatten()).is_none()
 }
@@ -797,12 +850,8 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         return;
     }
     if cmd {
-        // ⌘K / Ctrl+K is the palette; every other chord stays the
-        // browser's (Ctrl+R, ⌘L, …).
-        if key.eq_ignore_ascii_case("k") {
-            ev.prevent_default();
-            open_overlay(overlay, Overlay::Palette);
-        }
+        // ⌘K / Ctrl+K was taken in the capture phase (MENGER-6); every
+        // other chord stays the browser's (Ctrl+R, ⌘L, …).
         return;
     }
     if ev.alt_key() {
@@ -1589,7 +1638,22 @@ fn Cheats(overlay: RwSignal<Overlay>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_words, filter_command, filter_offers, narrows, palette_match, pass, Found, Pass, FILTER_OFFERS, SHORTCUTS};
+    use super::{count_words, filter_command, filter_offers, narrows, palette_chord, palette_match, pass, Found, Pass, FILTER_OFFERS, SHORTCUTS};
+
+    #[test]
+    fn the_palette_chord_is_cmd_k_on_a_mac_and_ctrl_k_elsewhere() {
+        //                         key  ctrl   meta   alt    shift  compose mac
+        assert!(palette_chord("k", false, true, false, false, false, true), "⌘K on a Mac");
+        assert!(palette_chord("K", false, true, false, false, false, true), "caps lock");
+        assert!(!palette_chord("k", true, false, false, false, false, true), "Ctrl+K on a Mac is a field's kill-line");
+        assert!(palette_chord("k", true, false, false, false, false, false), "Ctrl+K elsewhere");
+        assert!(palette_chord("k", false, true, false, false, false, false), "⌘K elsewhere too");
+        assert!(!palette_chord("k", true, false, false, true, false, false), "Shift keeps it the browser's");
+        assert!(!palette_chord("k", true, false, true, false, false, false), "Alt too");
+        assert!(!palette_chord("k", true, false, false, false, true, false), "not mid-composition");
+        assert!(!palette_chord("j", true, false, false, false, false, false));
+        assert!(!palette_chord("k", false, false, false, false, false, false), "a bare k is the board's");
+    }
     use crate::filter::tests::{platform, strs};
     use crate::lens::Kept;
     use crate::tags::{self, Act, Tag};
