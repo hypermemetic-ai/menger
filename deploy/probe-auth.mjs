@@ -166,6 +166,48 @@ await call(a, 'tickets.amend', { id: homeId, body: `${tag} secret body of ${HOME
 await sleep(1200);
 check(!JSON.stringify(heard).includes('after the revoke'), 'a watch hears nothing once its grant is revoked (IDENTITY-37)');
 
+// IDENTITY-42: an agent attests with an Ed25519 key (where test takes key
+// proofs); its session holds at most the key's grants, narrower if asked.
+{
+  const { generateKeyPairSync, sign, randomBytes } = await import('node:crypto');
+  const b64u = (b) => Buffer.from(b).toString('base64url');
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const hex = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url').toString('hex');
+  const proof = (aud, agent = `${tag}-agent`) => {
+    const nonce = b64u(randomBytes(32)), ts = Math.floor(Date.now() / 1000);
+    const msg = `plexus-key-login/v1\n${aud}\n${agent}\n${nonce}\n${ts}`;
+    const sig = b64u(sign(null, Buffer.from(msg), privateKey));
+    return 'plexus-key.' + b64u(JSON.stringify({ v: 1, key: hex, aud, agent, nonce, ts, sig }));
+  };
+  const bearer = (token) => new Promise((resolve) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`, { headers: { authorization: `Bearer ${token}` } });
+    ws.onopen = () => resolve({ ws });
+    ws.onerror = () => resolve({ refused: true });
+  });
+  const aud = `ws://127.0.0.1:${wsPort}`;
+  const first = await bearer(proof(aud));
+  if (first.refused) {
+    console.log(`skip agent checks: :${wsPort} takes no key proofs (--auth-provider key)`);
+  } else {
+    // The key holds editor on both shortcodes; a session asks for HOME only.
+    await call(a, 'members.grant', { principal: `key:${hex}`, scope: HOME, role: 'editor' });
+    await call(a, 'members.grant', { principal: `key:${hex}`, scope: AWAY, role: 'editor' });
+    const who = (await call(first.ws, 'session.whoami')).find((i) => i.principal);
+    check(who?.principal === `key:${hex}` && who?.name === `${tag}-agent`, 'a key proof opens the socket as key:<hex>, named by its agent');
+    const login = (await call(first.ws, 'session.login', { scope: [`editor@${HOME}`] })).find((i) => i.token);
+    check(login?.token?.startsWith('mgs_'), 'session.login mints a session token');
+    const s = login && (await bearer(login.token)).ws;
+    check(s && !errorOf(await call(s, 'tickets.set_status', { id: homeId, status: 'Pending' })), `the scoped session writes in ${HOME}`);
+    check(s && errorOf(await call(s, 'tickets.set_status', { id: awayId, status: 'Pending' })), `the scoped session cannot write in ${AWAY}, though the key can`);
+    check(s && errorOf(await call(s, 'members.grant', { principal: `key:${hex}`, scope: '*', role: 'admin' })), 'the session cannot grant its key more');
+    const replayed = proof(aud);
+    await bearer(replayed);
+    check((await bearer(replayed)).refused, 'a key proof works once');
+    check((await bearer(proof('ws://127.0.0.1:4455'))).refused, 'a key proof for another server is refused');
+    for (const x of [first.ws, s]) x?.close();
+  }
+}
+
 // Sign-out ends the session's sockets.
 await fetch(`${SHELL}/logout`, { method: 'POST', redirect: 'manual', headers: { origin: SHELL, cookie: `${COOKIE}=${nobody}` } });
 check(errorOf(await call(n, 'tickets.health')).includes('signed out'), 'a socket stops answering when its session signs out');
