@@ -62,6 +62,11 @@
 //! what frames one), and is painted into the page as escaped text, where an
 //! HTML block's extent changes nothing anyone means — so [`render_body`] and
 //! [`render_body_with`] parse the body as written, byte for byte as before.
+//!
+//! COMP-12: in a frame, the elements markdown produced carry [`MD_MARK`]
+//! ([`push_marked`]) — in a body that opts out of the SDK's base typography
+//! on its own HTML (`<meta name="menger-base" content="markdown">`), the
+//! base styles those and nothing the body wrote as HTML.
 
 use menger_tickets_api::{component_docs, html_runs};
 use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
@@ -535,6 +540,15 @@ fn options() -> Options {
 /// (framed only, COMP-9): a definition block renders as its docs card.
 fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: bool, cards: bool) -> Rendered {
     let opts = options();
+    // COMP-12: a NUL is [`push_marked`]'s sentinel — CommonMark's U+FFFD
+    // stands for a source's own.
+    let cleaned;
+    let src = if framed && src.contains('\0') {
+        cleaned = src.replace('\0', "\u{FFFD}");
+        cleaned.as_str()
+    } else {
+        src
+    };
 
     // Depth counters for dropped tags, so each End pairs with its Start.
     let mut dropped_links = 0u32;
@@ -673,7 +687,7 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
 
     let mut html = String::new();
     match resolve {
-        None => html::push_html(&mut html, events),
+        None => push_marked(&mut html, events, framed),
         Some(resolve) => {
             // WAVE-11: the prose, each run of text taken whole (the parser
             // may split one), its references swapped — never inside code,
@@ -705,10 +719,79 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
             if let Some(t) = text.take() {
                 substitute(t, resolve, &mut out);
             }
-            html::push_html(&mut html, out.into_iter());
+            push_marked(&mut html, out.into_iter(), framed);
         }
     }
     Rendered { html, diagrams }
+}
+
+/// COMP-12: the attribute that marks, in a frame, an element markdown
+/// produced — what the SDK's base typography (`frontend/sdk/menger-sdk.js`)
+/// still styles in a body that opts out (`<meta name="menger-base"
+/// content="markdown">`): there an element the body writes as HTML gets no
+/// base style unless it carries the mark itself.
+pub const MD_MARK: &str = "data-md";
+
+/// COMP-12: the elements markdown produces that carry [`MD_MARK`] — the
+/// ones the SDK's base typography has a rule for (frame.rs's tests hold the
+/// two lists together).
+pub const MD_MARKED: &[&str] = &["h1", "h2", "h3", "h4", "code", "pre", "a", "blockquote", "table", "th", "td", "img"];
+
+/// `push_html`; framed (COMP-12), every [`MD_MARKED`] element the markdown
+/// produced marked with [`MD_MARK`], and no other. HTML events — the body's
+/// own, block and inline, and the ones this module writes (placeholders,
+/// cards, wave references) — are set aside as a NUL each (a source's NULs are
+/// gone before parsing), the rest is rendered, its start tags marked (its
+/// text is escaped, so every `<` in it opens a tag the renderer wrote), and
+/// the HTML put back as it was. A sentinel keeps its HTML's trailing newline,
+/// so the renderer spaces blocks as it did; inside an image's text the HTML
+/// stays where it is (the renderer writes it there as escaped text).
+fn push_marked<'a>(out: &mut String, events: impl Iterator<Item = Event<'a>>, framed: bool) {
+    if !framed {
+        html::push_html(out, events);
+        return;
+    }
+    let mut set_aside: Vec<CowStr<'a>> = Vec::new();
+    let mut image = 0u32;
+    let mut written = String::new();
+    html::push_html(
+        &mut written,
+        events.map(|ev| match ev {
+            Event::Start(Tag::Image { .. }) => {
+                image += 1;
+                ev
+            }
+            Event::End(TagEnd::Image) => {
+                image = image.saturating_sub(1);
+                ev
+            }
+            Event::Html(s) | Event::InlineHtml(s) if image == 0 && !s.is_empty() => {
+                let newline = s.ends_with('\n');
+                set_aside.push(if newline { CowStr::from(s[..s.len() - 1].to_string()) } else { s });
+                Event::Html(CowStr::Borrowed(if newline { "\0\n" } else { "\0" }))
+            }
+            other => other,
+        }),
+    );
+    let mut set_aside = set_aside.into_iter();
+    for (i, part) in written.split('\0').enumerate() {
+        if i > 0 {
+            out.push_str(set_aside.next().as_deref().unwrap_or(""));
+        }
+        let mut rest = part;
+        while let Some(lt) = rest.find('<') {
+            let after = &rest[lt + 1..];
+            let name_len = after.find(|c: char| !c.is_ascii_alphanumeric()).unwrap_or(after.len());
+            let name = &after[..name_len];
+            out.push_str(&rest[..lt + 1 + name_len]);
+            if MD_MARKED.contains(&name) {
+                out.push(' ');
+                out.push_str(MD_MARK);
+            }
+            rest = &after[name_len..];
+        }
+        out.push_str(rest);
+    }
 }
 
 #[cfg(test)]
@@ -1055,7 +1138,7 @@ mod tests {
         let r = render_body_framed(src, &|_| None);
         assert_eq!(
             r.html,
-            "<h1>Title</h1>\n<details>\n<summary>more</summary>\n<p>hidden <em>markdown</em></p>\n</details>\n<style>p { color: red }</style>\n<script>document.body.append('ran')</script>\n<p>A <b>bold</b> word and <m-x a=\"1\"></m-x>.</p>\n"
+            "<h1 data-md>Title</h1>\n<details>\n<summary>more</summary>\n<p>hidden <em>markdown</em></p>\n</details>\n<style>p { color: red }</style>\n<script>document.body.append('ran')</script>\n<p>A <b>bold</b> word and <m-x a=\"1\"></m-x>.</p>\n"
         );
         assert_eq!(r.diagrams, 0);
         // The same body unframed is MFE-7's: every tag is text.
@@ -1074,7 +1157,7 @@ mod tests {
         assert!(r.html.starts_with("<div class=\"x\">box</div>\n"), "{}", r.html);
         assert!(r.html.contains("<div class=\"mermaid\" data-state=\"pending\"><pre class=\"mermaid-src\"><code>graph LR\n  A --&gt; B\n</code></pre></div>"), "{}", r.html);
         assert!(r.html.contains(">wave 2</a> and {wave: NOPE-1}</p>"), "{}", r.html);
-        assert!(!r.html.contains("javascript:") && r.html.contains("bad <a href=\"https://e.com\">good</a>"), "{}", r.html);
+        assert!(!r.html.contains("javascript:") && r.html.contains("bad <a data-md href=\"https://e.com\">good</a>"), "{}", r.html);
         // Without a reference, the resolver is never asked.
         let never = |_: &str| -> Option<WaveRef> { panic!("nothing to resolve") };
         assert_eq!(render_body_framed("<b>x</b>", &never).html, "<p><b>x</b></p>\n");
@@ -1134,10 +1217,10 @@ mod tests {
         assert!(html.contains("<m-x board=\"RETURNS\"></m-x>"), "the live preview: {html}");
         assert!(html.contains("<td><code>board</code></td><td><code>shortcode</code></td>"), "{html}");
         assert!(html.contains("<strong>bold</strong>"), "the help as markdown: {html}");
-        assert!(html.contains("<pre><code class=\"language-component\">y\n</code></pre>"), "a definition in the help is a code block: {html}");
+        assert!(html.contains("<pre data-md><code data-md class=\"language-component\">y\n</code></pre>"), "a definition in the help is a code block: {html}");
         assert_eq!(html.matches("class=\"menger-card\"").count(), 1, "no card in a card");
         assert!(html.contains("<details class=\"mc-source\">"), "{html}");
-        assert!(!html.contains("<pre><code class=\"language-component\">&lt;template"), "the block is not a code block: {html}");
+        assert!(!html.contains("class=\"language-component\">&lt;template"), "the block is not a code block: {html}");
         // Unframed, the block is the code block it was.
         assert!(render_body(body).html.contains("<pre><code class=\"language-component\">"));
         // A definition shown as an example, or indented, frames nothing.
@@ -1353,8 +1436,31 @@ A candidate language, drawn below.
         let src = "<table>\n<tr><td>1</td></tr>\n</table>\n\n> <div>\n> quoted\n> </div>\n\n<pre>\nplain\n\nkept\n</pre>\n";
         assert_eq!(
             render_body_framed(src, &|_| None).html,
-            "<table>\n<tr><td>1</td></tr>\n</table>\n<blockquote>\n<div>\nquoted\n</div>\n</blockquote>\n<pre>\nplain\n\nkept\n</pre>\n"
+            "<table>\n<tr><td>1</td></tr>\n</table>\n<blockquote data-md>\n<div>\nquoted\n</div>\n</blockquote>\n<pre>\nplain\n\nkept\n</pre>\n"
         );
+    }
+
+    /// COMP-12: in a frame, what markdown produced carries the mark the
+    /// SDK's base typography styles, and the body's own HTML does not —
+    /// block or inline, beside markdown or inside it; outside a frame
+    /// nothing is marked (the golden fixtures above).
+    #[test]
+    fn a_framed_body_marks_what_markdown_produced_and_nothing_else() {
+        let src = "## H\n\nA `code` and <code class=\"x\">own</code>, [l](https://e.com) and <a href=\"https://e.com\">own</a>.\n\n<pre><code>own block</code></pre>\n\n```rust\nfn x() {}\n```\n\n> q\n\n| a |\n|---|\n| 1 |\n\n![<b>i</b>](https://e.com/i.png)\n\n<div>\n\n`inside`\n\n</div>\n";
+        let html = render_body_framed(src, &|_| None).html;
+        assert_eq!(
+            html,
+            "<h2 data-md>H</h2>\n<p>A <code data-md>code</code> and <code class=\"x\">own</code>, <a data-md href=\"https://e.com\">l</a> and <a href=\"https://e.com\">own</a>.</p>\n<pre><code>own block</code></pre>\n<pre data-md><code data-md class=\"language-rust\">fn x() {}\n</code></pre>\n<blockquote data-md>\n<p>q</p>\n</blockquote>\n<table data-md><thead><tr><th data-md>a</th></tr></thead><tbody>\n<tr><td data-md>1</td></tr>\n</tbody></table>\n<p><img data-md src=\"https://e.com/i.png\" alt=\"&lt;b&gt;i&lt;/b&gt;\" /></p>\n<div>\n<p><code data-md>inside</code></p>\n</div>\n"
+        );
+        // Unmarked, it is the renderer's own output: the mark is all that moved.
+        assert_eq!(html.replace(" data-md", ""), { let mut plain = String::new(); html::push_html(&mut plain, Parser::new_ext(src, options())); plain });
+        // COMP-11's run — an element's HTML across a blank line — is the
+        // body's own HTML, whole and unmarked.
+        let run = "<section>\n<p>own</p>\n\n<code>x</code> <table><tr><td>1</td></tr></table>\n</section>\n";
+        assert_eq!(render_body_framed(run, &|_| None).html, run);
+        // A source's NUL is not the sentinel: the HTML around it comes back whole.
+        let html = render_body_framed("a\0b <i>x</i> `c\0`\n", &|_| None).html;
+        assert_eq!(html, "<p>a\u{FFFD}b <i>x</i> <code data-md>c\u{FFFD}</code></p>\n");
     }
 
     #[test]

@@ -120,8 +120,11 @@ use crate::{anchor, annotate, board, bridge, dom, inspect, mermaid, notes, regis
 /// adds `navigate`, and the badges, tooltips and docs cards; INPUT-4's 1.3
 /// adds `input` — `submit`, the one write, and `ticket` — and `inputs`
 /// among the reads; INPUT-9's 1.4 adds `input.clear`, the second write;
-/// COMMENT-3's 1.5 adds annotation mode (the info card only in it).
-pub(crate) const SDK_VERSION: &str = "1.5.0";
+/// COMMENT-3's 1.5 adds annotation mode (the info card only in it);
+/// COMP-12's 1.6 puts the base typography in a cascade layer, and a body
+/// holding `<meta name="menger-base" content="markdown">` confines it to
+/// what markdown produced (`data-md`, md::MD_MARK).
+pub(crate) const SDK_VERSION: &str = "1.6.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -1163,6 +1166,102 @@ mod tests {
             assert!(SDK_JS.contains(token), "{token}");
         }
         assert!(!SDK_JS.contains("#fff") && !SDK_JS.contains("rgb("), "no color literal in the shell");
+    }
+
+    /// COMP-12: the base typography's selectors, as the script builds them —
+    /// each `"…"` literal of `BASE_CSS` one rule, with `EVERY` and the
+    /// card's `CARD_*` parts put in — split into single selectors (`:where`'s list opened,
+    /// a comma inside `:is(…)` kept).
+    fn base_selectors() -> Vec<String> {
+        let at = SDK_JS.find("var BASE_CSS = [").expect("BASE_CSS");
+        let end = at + SDK_JS[at..].find("].join(").expect("BASE_CSS's end");
+        let mut region = SDK_JS[at..end].to_string();
+        for line in SDK_JS[..at].lines().map(str::trim).filter(|l| l.starts_with("var CARD_") || l.starts_with("var EVERY ")) {
+            let (name, value) = line["var ".len()..].split_once(" = ").expect("var CARD_X = \"…\";");
+            region = region.replace(&format!("\" + {name} + \""), value.trim_end_matches(';').trim_matches('"'));
+        }
+        // A literal continued on the next line (`"…" +` / `"…"`) is one.
+        let region = region.split("\" +\n").map(|l| l.trim_start().trim_start_matches('"')).collect::<Vec<_>>().join("");
+        let mut out = Vec::new();
+        for rule in region.split('"').skip(1).step_by(2) {
+            let Some(selectors) = rule.split_once('{').map(|(s, _)| s.trim()) else { continue };
+            if selectors.starts_with('@') || selectors.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let inner = selectors.strip_prefix(":where(").and_then(|s| s.strip_suffix(')')).unwrap_or(selectors);
+            let (mut depth, mut from) = (0, 0);
+            for (i, c) in inner.char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    ',' if depth == 0 => {
+                        out.push(inner[from..i].trim().to_string());
+                        from = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+            out.push(inner[from..].trim().to_string());
+        }
+        out
+    }
+
+    /// COMP-12: the base typography, in its layer, reaches every element by
+    /// default, and only what markdown produced in a body that opts out
+    /// (`<meta name="menger-base" content="markdown">`). Every selector is
+    /// the box-sizing reset, the document (html, body), a block the SDK owns
+    /// (a mermaid placeholder, a docs card, a wave reference), an element
+    /// md.rs marked `data-md` — or the default reach, behind `EVERY`, which
+    /// the opt-out's meta turns off. So in an opted-out body its own `<code
+    /// class="x">` matches no rule and gets no border, and a markdown ``
+    /// `code` `` (`<code data-md>`) does. The tags the SDK styles under
+    /// `data-md` are the ones md.rs marks, and each has its default reach.
+    #[test]
+    fn the_base_typography_reaches_markdown_only_in_a_body_that_opts_out() {
+        let selectors = base_selectors();
+        assert!(selectors.len() > 30, "{selectors:?}");
+        assert!(SDK_JS.contains("base.textContent = \"@layer menger-base{\\n\" + BASE_CSS + \"\\n}"), "the base is a layer");
+        let every = SDK_JS.split("var EVERY = \"").nth(1).and_then(|r| r.split('"').next()).expect("EVERY");
+        assert_eq!(every, ":root:not(:has(meta[name=menger-base][content=markdown i])) ");
+        let owned = [".mermaid", ".menger-card", ".wave-ref", "a.wave-ref"];
+        let tags_of = |compound: &str| -> Vec<String> {
+            let named = compound.trim_end_matches("[data-md]");
+            let named = named.strip_prefix(":is(").and_then(|n| n.strip_suffix(')')).unwrap_or(named);
+            named.split(',').filter(|t| !t.is_empty()).map(String::from).collect()
+        };
+        let (mut marked_tags, mut default_tags): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+        for sel in &selectors {
+            if ["*", "*::before", "*::after", "html", "body"].contains(&sel.as_str()) || owned.iter().any(|o| sel.starts_with(o)) {
+                continue;
+            }
+            if let Some(rest) = sel.strip_prefix(every) {
+                default_tags.extend(rest.split([' ', '>']).flat_map(tags_of));
+                continue;
+            }
+            // Under the opt-out, every compound that names a tag is marked.
+            for compound in sel.split([' ', '>']).filter(|c| !c.is_empty()) {
+                assert!(compound.contains("[data-md]"), "a base rule reaches an opted-out body's own HTML: {sel}");
+                marked_tags.extend(tags_of(compound));
+            }
+        }
+        marked_tags.sort();
+        marked_tags.dedup();
+        let mut md: Vec<String> = crate::md::MD_MARKED.iter().map(|t| t.to_string()).collect();
+        md.sort();
+        assert_eq!(marked_tags, md, "the SDK's [data-md] tags are md.rs's");
+        assert!(md.iter().all(|t| default_tags.contains(t)), "each has its default reach: {default_tags:?}");
+        // The two `code`s of the done-when: the markdown's carries the border,
+        // in either mode; the body's own only by default.
+        let at = SDK_JS.find(":where(\" + EVERY + \"code,code[data-md],").expect("the code rule");
+        let rule = &SDK_JS[at..at + SDK_JS[at..].find("}\"").unwrap()];
+        assert!(rule.contains("border:1px solid var(--line)"), "{rule}");
+        let html = crate::md::render_body_framed("<meta name=\"menger-base\" content=\"markdown\">\n\nA `code` and <code class=\"x\">own</code>.\n", &|_| None).html;
+        assert!(html.contains("<code data-md>code</code>") && html.contains("<code class=\"x\">own</code>"), "{html}");
+        // The opt-out is documented where the protocol is.
+        let readme = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../README.md")).unwrap();
+        for doc in [SDK_JS, readme.as_str()] {
+            assert!(doc.contains("<meta name=\"menger-base\" content=\"markdown\">"), "the opt-out documented");
+        }
     }
 
     /// COMP-10: the shell's GENERATED region is the bundle the script wrote
