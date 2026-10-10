@@ -102,7 +102,7 @@ export interface MengerInput {
 
 /** `window.menger` — frozen; also `this.menger` in a component script. */
 export interface Menger {
-  /** "1.6.0". */
+  /** "1.6.1". */
   readonly version: string;
 
   /**
