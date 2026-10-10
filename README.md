@@ -688,6 +688,24 @@ as one function with the element as `this`:
 | `this.menger` | `window.menger` itself |
 | `return () => …` | runs before the next render and when the element leaves the document; so does the end of every `menger.on` made while the script ran |
 
+**The frame's base typography** (COMP-12) is the app's ticket-text rules
+(headings, `code`, `pre`, links, block quotes, tables, images), in the
+cascade layer `menger-base` at zero specificity: any rule the body writes
+wins, whatever its specificity. By default it reaches every element — the
+body's markdown and its own HTML alike. A body that styles itself opts out
+with
+
+```html
+<meta name="menger-base" content="markdown">
+```
+
+anywhere in it: the base then styles only what markdown produced (md.rs
+marks those elements `data-md`; an element of the body's own may carry
+`data-md` to take it), so the body's own `code` gets no border it did not
+ask for. Either way the frame keeps its ground (the theme's ink and font,
+no margin), `box-sizing: border-box` on every element, the mermaid
+placeholders and the docs cards; nothing reaches a component's shadow root.
+
 `window.menger` (1.4, frozen): `version`; **`tickets`** (COMP-10) — the
 `tickets` activation's typed client (below); **`call(method, params)`** → a
 Promise of the call's items (the stream's data events as the wire spells
