@@ -343,6 +343,34 @@ synapse -P 4455 menger tickets get --id VIEW-1                          # the li
 synapse -P 4455 menger tickets get --id VIEW/_MENGER/view/open-builds   # one filter
 ```
 
+### Screenshots (DEPLOY-7)
+
+`scripts/shot.mjs` is the one way to look at the app from a script — use it
+rather than a throwaway Playwright file. It waits on the app's own signals,
+never a timer: `#conn` reading `live`, the nav and the route drawn (no
+`loading…` left in `<main>`), every framed body's `menger:size { settled:
+true }` (diagrams drawn, calls answered), fonts and images loaded in the
+page and every frame, and the layout still for 600 ms. A page that never
+gets there fails with what was still pending. It never clicks, types or
+writes, so it is safe on prod; where the environment redirects to `/login`
+(test) it signs in once — the smoke account from `~/.config/menger/test.env`,
+or `--as USER` through the dev sign-in (IDENTITY-35).
+
+```sh
+scripts/shot.mjs '#/ticket/DESIGN-3' --env prod --theme both --width 1440,400
+scripts/shot.mjs '#/board' --env test --as viewer --screen --out /tmp/look
+scripts/shot.mjs '#/ticket/FILTER-13' --port 4550 --selector '#ticket-page'
+scripts/shot.mjs mock.html --wait-for '#drawn'      # a local file: no app checks
+scripts/shot.mjs --help
+```
+
+Files land in `$TMPDIR/menger-shots/` unless `--out` says otherwise, named
+`ENV.ROUTE.THEME.WIDTH.png` (`prod.ticket-DESIGN-3.dark.400.png`); the
+paths are printed on stdout. The whole page is the default: the app scrolls
+inside its content column, so the window grows to the tallest scroller
+(up to 16,000 px). Playwright comes from `perf/node_modules`
+(`cd perf && npm ci`).
+
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service
@@ -1271,6 +1299,8 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
   tests/sdk_manifest.rs  COMP-10's drift guard: the activation's methods and
                        parameters against frontend/sdk/generated/manifest.json
 scripts/sdk-codegen.sh the frames' typed SDK, generated (COMP-10; Docker)
+scripts/shot.mjs       screenshots of the app once it is ready, signed in where
+                       it must be; only looks (DEPLOY-7)
 web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
                        src/waves.rs the wave board (WAVE-5, WAVE-6),
