@@ -113,6 +113,16 @@ async fn free_port() -> u16 {
     }
 }
 
+/// A fixture's listener on a port [`free_port`] handed out, so no other
+/// test's server is handed the same one between its pick and its bind.
+async fn listen() -> tokio::net::TcpListener {
+    loop {
+        if let Ok(l) = tokio::net::TcpListener::bind(("127.0.0.1", free_port().await)).await {
+            return l;
+        }
+    }
+}
+
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
 }
@@ -174,7 +184,7 @@ async fn token(State(i): State<Issuer>, Form(f): Form<HashMap<String, String>>) 
 }
 
 async fn issuer(slash: bool, kid: &'static str, pem: &'static str, jwk: &'static str) -> Issuer {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = listen().await;
     let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let iss = if slash { format!("{base}/") } else { base.clone() };
     let i = Issuer { iss: iss.clone(), kid, pem, codes: Arc::default() };
@@ -262,7 +272,7 @@ async fn workos_authenticate(State(w): State<WorkOs>, Form(f): Form<HashMap<Stri
 }
 
 async fn workos() -> WorkOs {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = listen().await;
     let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let w = WorkOs { base: base.clone(), codes: Arc::default() };
     let issuer = format!("{base}/user_management/{WORKOS_CLIENT}");
