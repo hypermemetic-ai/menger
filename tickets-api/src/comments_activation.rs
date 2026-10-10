@@ -129,12 +129,14 @@ impl Comments {
     /// is listed and watched only by those who can view both. The anchor is
     /// kept as given (`ticket` stays what the element belonged to).
     #[plexus_macros::method(
+        group = "write",
         description = "Leave a comment at an anchor (route, path, label, excerpt, and ticket when the element belongs to one); yields the comment",
         params(
             anchor = "Where: {route: '#/ticket/DEMAND-2', path: '[data-tag=\"ticket DEMAND-1\"]', label: 'Parent chip', excerpt: 'DEMAND-1', ticket: 'DEMAND-2' (optional)}; version is set by the server",
             body = "What it says (markdown; not empty, at most 64 KiB)",
             author = "Who left it (optional; default owner)"
-        )
+        ),
+        example(note = "a note on a ticket's parent chip", params = r##"{"anchor": {"route": "#/ticket/DEMAND-2", "path": "[data-tag=\"ticket DEMAND-1\"]", "label": "Parent chip", "excerpt": "DEMAND-1", "ticket": "DEMAND-2"}, "body": "Show the parent's title here"}"##)
     )]
     pub async fn add(&self, auth: Option<&AuthContext>, reach: Reach, anchor: Anchor, body: String, author: Option<String>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
@@ -183,6 +185,7 @@ impl Comments {
     /// `after` that names no comment, is one in-band `error` and nothing
     /// else. From the cache.
     #[plexus_macros::method(
+        group = "read",
         description = "List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit",
         params(
             ticket = "Only comments on this ticket, e.g. DEMAND-2 (optional)",
@@ -194,7 +197,9 @@ impl Comments {
             text = "Only comments with this text in the body, the label or the excerpt, any ASCII case (optional)",
             after = "Cursor: start strictly after (older than) this comment id (optional)",
             limit = "At most this many comments; the page event carries the next cursor (optional)"
-        )
+        ),
+        values(state = ["open", "resolved"]),
+        example(note = "open comments under FILTER that mention a title", params = r#"{"under": "FILTER", "state": "open", "text": "title"}"#)
     )]
     pub async fn list(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -254,6 +259,7 @@ impl Comments {
     /// written or broadcast — or an in-band `error` for an id that names no
     /// comment. `watch` carries `resolved`.
     #[plexus_macros::method(
+        group = "write",
         description = "Resolve a comment; yields the comment, resolved",
         params(id = "The comment's id, e.g. 1")
     )]
@@ -286,6 +292,7 @@ impl Comments {
     /// state `open` — as it was, if it already was — or an in-band `error`
     /// for an id that names no comment. `watch` carries `reopened`.
     #[plexus_macros::method(
+        group = "write",
         description = "Reopen a resolved comment; yields the comment, open",
         params(id = "The comment's id, e.g. 1")
     )]
@@ -323,6 +330,7 @@ impl Comments {
     /// change, and a caller who can see nothing any more is told so in band
     /// and the stream ends.
     #[plexus_macros::method(
+        group = "read",
         streaming,
         description = "Subscribe to comments: added / resolved / reopened, each with the comment, until disconnect; lagged { missed } where a slow subscriber lost changes"
     )]

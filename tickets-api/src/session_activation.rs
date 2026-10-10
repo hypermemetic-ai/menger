@@ -94,6 +94,7 @@ impl Session {
     /// `anonymous` when the upgrade proved no one. The identity is settled
     /// when the connection opens; reconnect to change it.
     #[plexus_macros::method(
+        group = "you",
         description = "Who this connection is: identity { principal, name, roles, tenant, provider }, or anonymous"
     )]
     pub async fn whoami(&self, auth: Option<&AuthContext>) -> impl Stream<Item = SessionEvent> + Send + 'static {
@@ -115,6 +116,7 @@ impl Session {
     /// every check then passes only if the principal's grants AND the scope
     /// allow it. A session minted from a scoped session keeps that scope too.
     #[plexus_macros::method(
+        group = "sign in",
         description = "Mint a session for this identity: login { token, principal, agent, expires_at, scope }",
         params(
             ttl_secs = "How long it lasts, seconds (default 43200, at most 86400)",
@@ -143,7 +145,7 @@ impl Session {
     /// opening connections, and its open connections stop answering).
     /// Yields `logged_out`, or an in-band `error` when the connection holds
     /// no session.
-    #[plexus_macros::method(description = "End this connection's session: logged_out")]
+    #[plexus_macros::method(group = "you", description = "End this connection's session: logged_out")]
     pub async fn logout(&self, auth: Option<&AuthContext>) -> impl Stream<Item = SessionEvent> + Send + 'static {
         let event = match &self.access {
             None => SessionEvent::Error { message: "login is off on this menger: there is no session to log out".into() },
@@ -162,6 +164,7 @@ impl Session {
     /// were configured; none when login is off. Nothing here is secret: it
     /// is what a sign-in needs to find the provider.
     #[plexus_macros::method(
+        group = "sign in",
         description = "The providers this menger admits callers through: provider { name, kind, issuer, audience }"
     )]
     pub async fn providers(&self) -> impl Stream<Item = SessionEvent> + Send + 'static {

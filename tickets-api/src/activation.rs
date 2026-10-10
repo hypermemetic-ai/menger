@@ -284,7 +284,7 @@ fn input_event(written: Result<InputWrite, StoreError>, ticket: String) -> Ticke
 impl Tickets {
     /// Heartbeat. Returns the binary version, the server's unix time, and
     /// how many tickets the store holds.
-    #[plexus_macros::method(description = "Heartbeat — version, unix time, ticket count")]
+    #[plexus_macros::method(group = "read", description = "Heartbeat — version, unix time, ticket count")]
     pub async fn health(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -334,6 +334,7 @@ impl Tickets {
     /// with nothing stored or allocated.
     /// Yields exactly one event: `Created` or `Error`.
     #[plexus_macros::method(
+        group = "write",
         description = "Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc",
         params(
             epic = "Epic prefix, e.g. MNG (case-insensitive, stored uppercase)",
@@ -344,7 +345,10 @@ impl Tickets {
             body = "Markdown body (optional)",
             parent = "Id of the ticket this one is an output of; must exist and be in the same shortcode (default: the shortcode's scope root). The shortcode's own scope root may name a ticket in another shortcode: the one it hangs under",
             path = "Path address inside the shortcode, e.g. _MENGER/board — then `get` finds it as SHORTCODE/_MENGER/board (optional; only _MENGER/… on a doc directly under the shortcode's scope root, unique in the shortcode)"
-        )
+        ),
+        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], severity = ["Critical", "High", "Medium", "Low"]),
+        example(note = "a build ticket under MENGER-2", params = r#"{"epic": "MENGER", "title": "Wrap long titles on the board", "kind": "build", "parent": "MENGER-2"}"#),
+        example(note = "a gap, blocked on another ticket", params = r#"{"epic": "MENGER", "title": "Board loses focus on reload", "kind": "gap", "severity": "High", "blocked_by": ["MENGER-40"]}"#)
     )]
     pub async fn create(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -447,8 +451,11 @@ impl Tickets {
     /// shortcode case-insensitive, the path exact — naming the one ticket of
     /// that shortcode that holds the path; `NotFound` carries the address.
     #[plexus_macros::method(
+        group = "read",
         description = "Get one ticket by id, or by path address SHORTCODE/path (e.g. PLEXUS/_MENGER/board)",
-        params(id = "Ticket id, e.g. MNG-2 — or a path address, e.g. PLEXUS/_MENGER/board")
+        params(id = "Ticket id, e.g. MNG-2 — or a path address, e.g. PLEXUS/_MENGER/board"),
+        example(note = "one ticket", params = r#"{"id": "MENGER-40"}"#),
+        example(note = "a doc by its path address", params = r#"{"id": "PLEXUS/_MENGER/board"}"#)
     )]
     pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
@@ -502,6 +509,7 @@ impl Tickets {
     /// asks `under` or `text` (each named, with where it lives). Given
     /// neither, every event is what it was.
     #[plexus_macros::method(
+        group = "read",
         description = "List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at",
         params(
             epic = "Epic prefix filter (optional)",
@@ -512,7 +520,10 @@ impl Tickets {
             summary = "Yield summary rows (every field but the body) instead of full tickets (optional)",
             filter = "A filter, e.g. 'ready and kind build and in SCALE' (FILTER-3's language; optional): ANDed with epic, status and parent; the page event then carries first",
             at = "Start at this position among the matches, 0-based, instead of after a cursor (optional; not with after); the page event carries first"
-        )
+        ),
+        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Doc"]),
+        example(note = "a shortcode's tickets, summary rows, 20 at a time", params = r#"{"epic": "MENGER", "summary": true, "limit": 20}"#),
+        example(note = "the ready build work in SCALE", params = r#"{"filter": "ready and kind build and in SCALE", "summary": true}"#)
     )]
     pub async fn list(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -606,12 +617,16 @@ impl Tickets {
     /// status — and `Doc` is a doc's own: setting it on any other kind is an
     /// in-band `Error` too. Neither writes anything.
     #[plexus_macros::method(
+        group = "write",
         target = "id",
         description = "Set a ticket's status (not a doc's: a doc has no lifecycle)",
         params(
             id = "Ticket id, e.g. MNG-2",
             status = "New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded (case-insensitive; `active` is Coding; never Doc, a doc's own)"
-        )
+        ),
+        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded"]),
+        example(note = "start work on MENGER-40", params = r#"{"id": "MENGER-40", "status": "Coding"}"#),
+        example(note = "hand it to review", params = r#"{"id": "MENGER-40", "status": "In Review"}"#)
     )]
     pub async fn set_status(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -661,13 +676,17 @@ impl Tickets {
     /// first, then the `GroupChanged`, `PlacementsChanged` and (filtered)
     /// `Entered` / `Left` it caused, as for a status change.
     #[plexus_macros::method(
+        group = "write",
         target = "id",
         description = "Set a ticket's kind; everything kept by kind moves with it (to a doc: status Doc; from a doc: the status given, else Epic for a scope and Pending otherwise)",
         params(
             id = "Ticket id, e.g. IDENTITY-1",
             kind = "New kind: scope | execution | build | gap | spike | doc (case-insensitive)",
             status = "Its status with the new kind (optional): Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded — or Doc, the only one a doc takes; omitted, a doc becomes Doc, a doc becoming work becomes Epic (a scope) or Pending, and work keeps its own"
-        )
+        ),
+        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Doc"]),
+        example(note = "make a ticket a scope", params = r#"{"id": "IDENTITY-1", "kind": "scope"}"#),
+        example(note = "make it a gap, ready to start", params = r#"{"id": "MENGER-40", "kind": "gap", "status": "Ready"}"#)
     )]
     pub async fn set_kind(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -716,6 +735,7 @@ impl Tickets {
     /// side: `ChildrenChanged` for the new parent and `ChildRemoved` for
     /// the old one — each the parent's id and new `child_count` (SCALE-4).
     #[plexus_macros::method(
+        group = "write",
         target = "id",
         description = "Set a ticket's parent — the ticket it is an output of; adopts a parentless ticket or moves one",
         params(
@@ -775,13 +795,15 @@ impl Tickets {
     /// block, or a name another ticket defines, is an in-band `Error` (the
     /// latter naming that ticket) and nothing is written, title included.
     #[plexus_macros::method(
+        group = "write",
         target = "id",
         description = "Replace a ticket's title and/or body (whole values); yields amended { ticket, changed }",
         params(
             id = "Ticket id, e.g. MNG-2",
             title = "New title (optional; must not be blank)",
             body = "New markdown body, the whole of it (optional)"
-        )
+        ),
+        example(note = "retitle a ticket", params = r#"{"id": "MENGER-40", "title": "Wrap long titles on the board and in the nav"}"#)
     )]
     pub async fn amend(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -821,12 +843,15 @@ impl Tickets {
     /// nothing else — not the status. `watch` carries every
     /// `CommitsLinked` that added something.
     #[plexus_macros::method(
+        group = "write",
         target = "id",
         description = "Link commits to a ticket (the commits that finished it); yields commits_linked { ticket, added }",
         params(
             id = "Ticket id, e.g. MNG-10",
             commits = "Commit references, in link order: a hex object name of 7-64 characters, optionally repo@ before it — e.g. [\"77df9a0\", \"plexus-macros@4f7114a\"]"
-        )
+        ),
+        example(note = "link the commit that finished it", params = r#"{"id": "MENGER-40", "commits": ["77df9a0"]}"#),
+        example(note = "and one in another repository", params = r#"{"id": "MENGER-40", "commits": ["77df9a0", "plexus-macros@4f7114a"]}"#)
     )]
     pub async fn link_commits(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -858,6 +883,7 @@ impl Tickets {
     /// naming every entry that is not a reference. `watch` carries every
     /// `CommitsUnlinked` that removed something.
     #[plexus_macros::method(
+        group = "write",
         target = "id",
         description = "Unlink commits from a ticket; yields commits_unlinked { ticket, removed }",
         params(
@@ -903,6 +929,7 @@ impl Tickets {
     /// or one that asks `under` or `text`, is one in-band `error`; one that
     /// narrows nothing (empty, a display part alone) is no filter.
     #[plexus_macros::method(
+        group = "read",
         description = "Tickets that can start now: Ready, with every blocker Complete or Superseded; optionally under a filter",
         params(
             epic = "Only tickets in this epic (optional; blockers still resolve globally)",
@@ -910,7 +937,8 @@ impl Tickets {
             limit = "At most this many tickets; the page event carries the next cursor (optional)",
             summary = "Yield summary rows (every field but the body) instead of full tickets (optional)",
             filter = "A filter, e.g. 'kind build and in SCALE' (FILTER-3's language; optional): the ready set and the filter"
-        )
+        ),
+        example(note = "what can start now in SCALE", params = r#"{"filter": "kind build and in SCALE", "summary": true}"#)
     )]
     pub async fn ready_set(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -993,13 +1021,15 @@ impl Tickets {
     /// one that asks `under` or `text`, is one in-band `error`; one that
     /// narrows nothing (empty, a display part alone) is no filter.
     #[plexus_macros::method(
+        group = "read",
         description = "Find tickets whose id or title contains the query (case-insensitive), optionally under a filter; summary rows, paged with after + limit",
         params(
             query = "Substring of the ticket id or title, case-insensitive (ASCII), trimmed; empty matches every ticket",
             after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
             limit = "At most this many tickets (default 50); the page event carries the next cursor (optional)",
             filter = "A filter, e.g. 'not category done' (FILTER-3's language; optional): only the matches it admits"
-        )
+        ),
+        example(note = "jump to a ticket by part of its title", params = r#"{"query": "watch", "filter": "not category done"}"#)
     )]
     pub async fn find(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -1054,13 +1084,16 @@ impl Tickets {
     /// and nothing else. `limit` is [`SEARCH_LIMIT`] unless given, at most
     /// [`SEARCH_MAX`]; `offset` skips that many matches.
     #[plexus_macros::method(
+        group = "read",
         description = "Search inside tickets: the tickets whose title or body holds every word of the query (prefixes and typos too), best first, each with the passage that matched; optionally under a filter, paged with offset + limit",
         params(
             query = "Words to find, e.g. 'plcement wave' — each also as a prefix; a misspelt one also as the words a typo away; FILTER-23 or \"a phrase\" as a phrase",
             filter = "A filter, e.g. 'not category done' (FILTER-3's language; optional): only the matches it admits",
             limit = "At most this many hits (default 20, at most 100) (optional)",
             offset = "Skip this many matches — the searched event's next (optional)"
-        )
+        ),
+        example(note = "tickets that mention placement waves (typos too)", params = r#"{"query": "plcement wave"}"#),
+        example(note = "the five best open matches", params = r#"{"query": "set_status", "filter": "not category done", "limit": 5}"#)
     )]
     pub async fn search(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -1124,6 +1157,7 @@ impl Tickets {
     /// 1,000 ids: more, a filter not taken, or one that asks `under` or
     /// `text`, is one in-band `error` and nothing else.
     #[plexus_macros::method(
+        group = "read",
         description = "Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids",
         params(
             ids = "Ticket ids (or SHORTCODE/path addresses), e.g. [\"FILTER-4\", \"FILTER-5\"]; at most 1000",
@@ -1181,6 +1215,7 @@ impl Tickets {
     /// `done` is the whole answer, as for `blockers`. `watch` keeps a
     /// client's copy current with `GroupChanged`.
     #[plexus_macros::method(
+        group = "overview",
         description = "One roll-up per shortcode: done/total over its subtree's work, its docs, its root (with the root's title, status and kind), and the host it nests under"
     )]
     pub async fn groups(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
@@ -1233,6 +1268,7 @@ impl Tickets {
     /// components whose owner it can view — no orphan — each with only the
     /// references it can view.
     #[plexus_macros::method(
+        group = "overview",
         description = "Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes"
     )]
     pub async fn components(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
@@ -1279,13 +1315,17 @@ impl Tickets {
     /// `error`; one that narrows nothing (empty, a display part alone) is no
     /// filter.
     #[plexus_macros::method(
+        group = "inputs",
         description = "Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket",
         params(
             ticket = "Only this ticket's inputs, e.g. INPUT-9 (optional)",
             epic = "Only inputs of tickets in this shortcode (optional)",
             state = "Only inputs in this state: open | answered | closed | removed (optional)",
             filter = "A filter on the input's ticket, e.g. 'kind build' (FILTER-3's language; optional): only inputs of tickets it admits"
-        )
+        ),
+        values(state = ["open", "answered", "closed", "removed"]),
+        example(note = "everything waiting on the owner", params = r#"{"state": "open"}"#),
+        example(note = "one ticket's inputs, answers and history", params = r#"{"ticket": "RETURNS-13"}"#)
     )]
     pub async fn inputs(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -1358,6 +1398,7 @@ impl Tickets {
     /// removed from its body — and nothing is written. Never touches the
     /// body. `watch` carries the `InputChanged`.
     #[plexus_macros::method(
+        group = "inputs",
         target = "ticket",
         description = "Answer an input: record a value (checked against its kind and options) with a rationale, a source and the time; yields input_changed",
         params(
@@ -1366,7 +1407,11 @@ impl Tickets {
             value = "Typed by the input's kind: {\"type\": \"choice\", \"option\": \"archive\"} | {\"type\": \"multi\", \"options\": [\"a\", \"b\"]} | {\"type\": \"text\", \"text\": \"a reply\"}; through synapse, --value.type choice --value.option archive",
             rationale = "Why (optional)",
             source = "app (a viewer's click, said by the host) | api (default)"
-        )
+        ),
+        values(source = ["api", "app"]),
+        example(note = "pick an option, saying why", params = r#"{"ticket": "RETURNS-13", "input": "landing", "value": {"type": "choice", "option": "archive"}, "rationale": "holds are real"}"#),
+        example(note = "reply in text", params = r#"{"ticket": "RETURNS-13", "input": "notes", "value": {"type": "text", "text": "ship it"}}"#),
+        example(note = "tick several (a list inside --value goes whole, with -p)", params = r#"{"ticket": "RETURNS-13", "input": "checks", "value": {"type": "multi", "options": ["unit", "wire"]}}"#)
     )]
     pub async fn answer(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -1404,13 +1449,15 @@ impl Tickets {
     /// when it held no answer (nothing written); `NotFound`; or an in-band
     /// `Error` — no such input, closed, removed, an unknown source.
     #[plexus_macros::method(
+        group = "inputs",
         target = "ticket",
         description = "Clear an input's answer (open again; kept in its history, with a source); yields input_changed",
         params(
             ticket = "Ticket id, e.g. INPUT-9",
             input = "The input's id in that ticket's body",
             source = "app (a viewer's click, said by the host) | api (default)"
-        )
+        ),
+        values(source = ["api", "app"])
     )]
     pub async fn clear_answer(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -1445,6 +1492,7 @@ impl Tickets {
     /// was closed already; `NotFound`; or an in-band `Error` — no such
     /// input, removed.
     #[plexus_macros::method(
+        group = "inputs",
         target = "ticket",
         description = "Close an input: freeze its answer (or its lack of one); yields input_changed",
         params(ticket = "Ticket id, e.g. INPUT-9", input = "The input's id in that ticket's body")
@@ -1468,6 +1516,7 @@ impl Tickets {
     /// `Input` when it was not closed; `NotFound`; or an in-band `Error` —
     /// no such input, removed.
     #[plexus_macros::method(
+        group = "inputs",
         target = "ticket",
         description = "Reopen a closed input; yields input_changed",
         params(ticket = "Ticket id, e.g. INPUT-9", input = "The input's id in that ticket's body")
@@ -1498,6 +1547,7 @@ impl Tickets {
     /// answer, as for `groups` and `blockers`. No watch event keeps them:
     /// `created` already carries the newborn's `epic` and `seq`.
     #[plexus_macros::method(
+        group = "overview",
         description = "Each shortcode's last sequence, in shortcode order — where each shortcode ends in the store's order"
     )]
     pub async fn extents(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
@@ -1538,6 +1588,7 @@ impl Tickets {
     /// filter not taken, or one that asks `under` or `text`, is one in-band
     /// `error` and nothing else.
     #[plexus_macros::method(
+        group = "overview",
         description = "Each shortcode's number of tickets matching a filter, in shortcode order — the filtered extents (every ticket without one)",
         params(filter = "A filter, e.g. 'ready and kind build' (FILTER-3's language; optional: every ticket)")
     )]
@@ -1584,6 +1635,7 @@ impl Tickets {
     /// counts, never a ticket. A filter not taken, or one that asks `under`
     /// or `text`, is one in-band `error` and nothing else.
     #[plexus_macros::method(
+        group = "overview",
         description = "Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, menger doc, in), the matches of base and filter without filter's own groups for that field, by value",
         params(
             filter = "The filter whose menus are counted (optional): its own groups for a field are set aside for that field's counts",
@@ -1659,6 +1711,7 @@ impl Tickets {
     /// tickets that match). Paged the same way. Off, `tree` is FILTER-13's,
     /// byte for byte.
     #[plexus_macros::method(
+        group = "read",
         description = "The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page; matches_only: the matches nearest below instead, then the hosted shortcodes drawn there",
         params(
             parent = "Whose children, e.g. FILTER-9 (or give epic)",
@@ -1667,7 +1720,8 @@ impl Tickets {
             after = "Cursor: start strictly after this ticket id (optional)",
             limit = "At most this many rows; the page event carries the next cursor (optional)",
             matches_only = "Only matches (optional, default false): a ticket that does not match is not a row, and the matches below it are answered in its place, at the nearest ancestor that matches or at the top of the shortcode; then the hosted shortcodes drawn there"
-        )
+        ),
+        example(note = "FILTER's top level, under a filter", params = r#"{"epic": "FILTER", "filter": "status Ready"}"#)
     )]
     pub async fn tree(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -1728,11 +1782,13 @@ impl Tickets {
     /// row (the same rule, kept current by every write that moves one); rows
     /// only.
     #[plexus_macros::method(
+        group = "read",
         description = "The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts",
         params(
             epics = "Shortcodes whose tickets are placed, e.g. [\"PLEXUS\", \"MACRO\"] (case-insensitive; at least one); blockers are followed into every shortcode",
             kinds = "Kinds to place: scope | execution | build | gap | spike (optional; default build, spike, gap — a doc is never placed)"
-        )
+        ),
+        values(kinds = ["scope", "execution", "build", "gap", "spike"])
     )]
     pub async fn waves(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -1803,6 +1859,7 @@ impl Tickets {
     /// too — its id, which the ticket's own `blocked_by` already shows, and
     /// nothing of it: exactly what an id naming no ticket gets.
     #[plexus_macros::method(
+        group = "read",
         description = "One ticket's blockers resolved to current statuses; dangling ids marked",
         params(id = "Ticket id whose blockers to resolve, e.g. MNG-2")
     )]
@@ -1918,13 +1975,15 @@ impl Tickets {
     /// exactly what it was. A filter not taken, or one that asks `under` or
     /// `text`, is one in-band `error` and the stream ends.
     #[plexus_macros::method(
+        group = "read",
         streaming,
         description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
         params(
             epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)",
             filter = "A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256",
             membership = "Send only Entered, Left, Recount and Lagged (optional; default false)"
-        )
+        ),
+        example(note = "follow active and in-review work", params = r#"{"filter": "category in (active, review)"}"#)
     )]
     pub async fn watch(
         &self, auth: Option<&AuthContext>, reach: Reach,

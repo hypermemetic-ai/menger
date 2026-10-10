@@ -63,7 +63,7 @@ impl Members {
     /// Who the caller is: one `me { principal, name, admin_everywhere }`,
     /// then one `grant` per grant they hold. Someone signed in without a
     /// grant gets `me` and nothing else.
-    #[plexus_macros::method(description = "Who you are, then each grant you hold")]
+    #[plexus_macros::method(group = "read", description = "Who you are, then each grant you hold")]
     pub async fn mine(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let admitted = self.access.admit(auth, &reach);
         let access = self.access.clone();
@@ -92,6 +92,7 @@ impl Members {
     /// scope (`--admin` ones included); `scope` narrows to one. Needs admin
     /// somewhere.
     #[plexus_macros::method(
+        group = "read",
         description = "The grants on the scopes you administer, by principal then scope",
         params(scope = "Only this shortcode, or * (optional)")
     )]
@@ -131,13 +132,16 @@ impl Members {
     /// any role they held there. Needs admin on the scope. Yields the grant
     /// as kept, or an in-band `error`.
     #[plexus_macros::method(
+        group = "admin",
         target = "scope",
         description = "Give a principal a role (viewer, editor, admin) on a shortcode or *",
         params(
             principal = "The Plexus principal, e.g. idp:c952acd3-…, oidc:auth0/google-oauth2|…, nostr:<hex>",
             scope = "A shortcode, e.g. IDENTITY (covers the shortcodes hosted under it), or *",
             role = "viewer | editor | admin"
-        )
+        ),
+        values(role = ["viewer", "editor", "admin"]),
+        example(note = "make a person an editor on IDENTITY", params = r#"{"principal": "oidc:workos/user_01M4", "scope": "IDENTITY", "role": "editor"}"#)
     )]
     pub async fn grant(&self, auth: Option<&AuthContext>, reach: Reach, principal: String, scope: String, role: String) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let admitted = self.access.admit(auth, &reach);
@@ -182,6 +186,7 @@ impl Members {
     /// Takes `principal`'s role on `scope` away. Needs admin on the scope.
     /// Yields `revoked { principal, scope, existed }`.
     #[plexus_macros::method(
+        group = "admin",
         target = "scope",
         description = "Take a principal's role on a shortcode or * away",
         params(principal = "The Plexus principal", scope = "A shortcode, or *")
@@ -214,7 +219,7 @@ impl Members {
     /// needs admin on `*` — the list is every sign-in, whatever shortcode it
     /// came for. Kept in memory, at most [`crate::access::WAITING_MAX`]: a
     /// restart forgets them until they come back.
-    #[plexus_macros::method(description = "Who signed in without a grant, waiting for an admin")]
+    #[plexus_macros::method(group = "admin", description = "Who signed in without a grant, waiting for an admin")]
     pub async fn requests(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let admitted = self.access.admit(auth, &reach);
         let access = self.access.clone();
