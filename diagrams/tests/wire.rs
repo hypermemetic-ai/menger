@@ -695,3 +695,39 @@ async fn a_bundle_that_is_not_mermaid_is_named() {
         other => panic!("expected a missing piece, got {other:?}"),
     }
 }
+
+/// The upgrade's status line for a hand-written WebSocket handshake, with
+/// `origin` sent when given.
+async fn upgrade_status(port: u16, origin: Option<&str>) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut tcp = None;
+    for _ in 0..100 {
+        if let Ok(t) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+            tcp = Some(t);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let mut tcp = tcp.expect("the service listens");
+    let origin = origin.map(|o| format!("Origin: {o}\r\n")).unwrap_or_default();
+    let req = format!(
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{origin}\r\n"
+    );
+    tcp.write_all(req.as_bytes()).await.unwrap();
+    let mut buf = [0u8; 256];
+    let n = tokio::time::timeout(Duration::from_secs(5), tcp.read(&mut buf)).await.unwrap().unwrap();
+    String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or_default().to_string()
+}
+
+/// IDENTITY-38: no web page drives the service; synapse (no Origin) does.
+#[tokio::test]
+async fn a_browser_page_cannot_open_the_socket() {
+    let (port, _) = shared_service();
+    for origin in ["https://evil.example", "http://127.0.0.1:4456", "null"] {
+        let status = upgrade_status(port, Some(origin)).await;
+        assert!(status.contains(" 403"), "{origin}: {status}");
+    }
+    let status = upgrade_status(port, None).await;
+    assert!(status.contains(" 101"), "no Origin: {status}");
+}

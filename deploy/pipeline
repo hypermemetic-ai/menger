@@ -240,6 +240,12 @@ cmd_smoke() {
   [[ -n $d ]] && say "ok   diagrams on :$MENGER_DIAGRAMS_PORT parses" || { say "FAIL diagrams on :$MENGER_DIAGRAMS_PORT"; fail=1; }
   [[ -d $REPO/perf/node_modules/playwright ]] || (cd "$REPO/perf" && npm ci --silent >/dev/null)
   if node "$REPO/deploy/smoke-browser.mjs" "http://127.0.0.1:$MENGER_SHELL_PORT/" >&2; then :; else fail=1; fi
+  # IDENTITY-38: where the dev sign-in lets the smoke be anyone (test), it
+  # plays the login's known attacks against the live server; any that
+  # works fails the smoke, so no release reaches prod with one open.
+  if [[ $env == test && -n ${MENGER_DEV_LOGIN:-} && -n $login ]]; then
+    if timeout 120 node "$REPO/deploy/probe-auth.mjs" "$MENGER_WS_PORT" "$MENGER_SHELL_PORT" >&2; then :; else fail=1; fi
+  fi
   return $fail
 }
 

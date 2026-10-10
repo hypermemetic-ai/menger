@@ -38,11 +38,18 @@ use menger_tickets_api::members::Role;
 
 use crate::dev_login::{self, DevLogin};
 use crate::login::{LoginButton, Provider};
-use crate::sessions::{self, Sessions, COOKIE};
+use crate::sessions::{self, Sessions};
 
-/// The login transaction's cookie: binds a callback to the browser that
-/// started it.
-const TXN_COOKIE: &str = "menger_login";
+/// The login transaction's cookie for a session cookie of that name: binds
+/// a callback to the browser that started it. Named per shell as the
+/// session's is (IDENTITY-38); `__Secure-` where the session is `__Host-`
+/// (this one lives at `Path=/login`, which `__Host-` forbids).
+fn txn_cookie(session: &str) -> String {
+    match session.strip_prefix("__Host-") {
+        Some(rest) => format!("__Secure-{}", rest.replace("menger_session", "menger_login")),
+        None => session.replace("menger_session", "menger_login"),
+    }
+}
 
 /// What the shell's login is configured with (main's flags).
 pub struct LoginConfig {
@@ -198,7 +205,7 @@ impl Login {
     /// The session a request's cookie names, while it lasts.
     pub fn session(&self, headers: &HeaderMap) -> Option<AuthContext> {
         let cookies = headers.get(header::COOKIE)?.to_str().ok()?;
-        self.sessions.get(sessions::cookie(cookies, COOKIE)?)
+        self.sessions.get(sessions::cookie(cookies, self.sessions.cookie_name())?)
     }
 
     /// A POST from a page not ours is refused (login CSRF, logout CSRF):
@@ -299,14 +306,22 @@ impl Login {
     fn hand_over(&self, ctx: AuthContext, mut r: Response) -> Response {
         let (id, expires) = self.sessions.create(ctx);
         let max_age = (expires - sessions::now()).max(0);
-        let secure = if self.public_url.starts_with("https://") { "; Secure" } else { "" };
+        let (name, secure) = (self.sessions.cookie_name(), self.secure());
         let h = r.headers_mut();
         h.append(
             header::SET_COOKIE,
-            HeaderValue::from_str(&format!("{COOKIE}={id}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")).unwrap(),
+            HeaderValue::from_str(&format!("{name}={id}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")).unwrap(),
         );
-        h.append(header::SET_COOKIE, HeaderValue::from_static("menger_login=; Path=/login; HttpOnly; SameSite=Lax; Max-Age=0"));
+        h.append(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&format!("{}=; Path=/login; HttpOnly; SameSite=Lax; Max-Age=0{secure}", txn_cookie(name))).unwrap(),
+        );
         r
+    }
+
+    /// `; Secure` when the shell is reached over https.
+    fn secure(&self) -> &'static str {
+        if self.public_url.starts_with("https://") { "; Secure" } else { "" }
     }
 
     /// The page, with `error` shown and `next` carried. `with_password`:
@@ -457,10 +472,11 @@ impl Login {
 
 // ── Handlers ───────────────────────────────────────────────────────────
 
+/// The page's query. IDENTITY-38: there is no `error`: the page shows only
+/// words the shell wrote, never text a link carries ("sign in at evil…").
 #[derive(Deserialize)]
 pub struct PageQuery {
     next: Option<String>,
-    error: Option<String>,
     /// IDENTITY-30: the password form beside an email field (automation).
     password: Option<String>,
 }
@@ -470,7 +486,7 @@ pub async fn page(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q):
     if login.session(&headers).is_some() {
         return see_other(&next);
     }
-    let html = login.page_for(&next, q.error.as_deref(), q.password.is_some(), login.dev_on(&headers));
+    let html = login.page_for(&next, None, q.password.is_some(), login.dev_on(&headers));
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(html)).into_response()
 }
 
@@ -559,7 +575,12 @@ async fn begin(login: &Login, b: &LoginButton, login_hint: Option<&str>, sign_up
     let mut r = (StatusCode::FOUND, [(header::LOCATION, url.to_string())]).into_response();
     r.headers_mut().append(
         header::SET_COOKIE,
-        HeaderValue::from_str(&format!("{TXN_COOKIE}={state}; Path=/login; HttpOnly; SameSite=Lax; Max-Age=600")).unwrap(),
+        HeaderValue::from_str(&format!(
+            "{}={state}; Path=/login; HttpOnly; SameSite=Lax; Max-Age=600{}",
+            txn_cookie(login.sessions.cookie_name()),
+            login.secure()
+        ))
+        .unwrap(),
     );
     r
 }
@@ -574,8 +595,20 @@ pub struct CallbackQuery {
 
 pub async fn callback(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<CallbackQuery>) -> Response {
     let fail = |why: &str| page_response(&login, "/", Some(why), StatusCode::UNAUTHORIZED);
-    if q.error.is_some() {
-        return fail(q.error_description.as_deref().unwrap_or("The sign-in was cancelled."));
+    // IDENTITY-38: the provider's words go to the log, not the page — a
+    // link can carry any `error_description` to this URL.
+    if let Some(error) = q.error.as_deref() {
+        let clean = |s: &str| s.chars().filter(|c| !c.is_control()).take(300).collect::<String>();
+        tracing::info!(
+            "sign-in came back with an error: {} — {}",
+            clean(error),
+            clean(q.error_description.as_deref().unwrap_or(""))
+        );
+        return fail(if error == "access_denied" {
+            "The sign-in was cancelled."
+        } else {
+            "The sign-in service did not sign you in. Start again."
+        });
     }
     let (Some(code), Some(state)) = (q.code, q.state) else {
         return fail("The sign-in service sent back nothing to sign in with.");
@@ -584,7 +617,7 @@ pub async fn callback(State(login): State<Arc<Login>>, headers: HeaderMap, Query
     let ours = headers
         .get(header::COOKIE)
         .and_then(|c| c.to_str().ok())
-        .and_then(|c| sessions::cookie(c, TXN_COOKIE).map(str::to_string));
+        .and_then(|c| sessions::cookie(c, &txn_cookie(login.sessions.cookie_name())).map(str::to_string));
     if ours.as_deref() != Some(state.as_str()) {
         return fail("That sign-in was not started in this browser. Start again.");
     }
@@ -894,14 +927,18 @@ pub async fn logout(State(login): State<Arc<Login>>, headers: HeaderMap) -> Resp
         let (p, _) = login.providers.get(&ctx.get_metadata_string("provider")?)?;
         p.sign_out_url(&ctx.session_id, &format!("{}/login", login.public_url))
     });
-    if let Some(id) = headers.get(header::COOKIE).and_then(|c| c.to_str().ok()).and_then(|c| sessions::cookie(c, COOKIE)) {
+    let name = login.sessions.cookie_name();
+    if let Some(id) = headers.get(header::COOKIE).and_then(|c| c.to_str().ok()).and_then(|c| sessions::cookie(c, name)) {
         login.sessions.end(id);
     }
     let mut r = match onward {
         Some(url) => (StatusCode::SEE_OTHER, [(header::LOCATION, url), (header::CACHE_CONTROL, "no-store".to_string())]).into_response(),
         None => see_other("/login"),
     };
-    r.headers_mut().append(header::SET_COOKIE, HeaderValue::from_static("menger_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"));
+    r.headers_mut().append(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&format!("{name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}", login.secure())).unwrap(),
+    );
     r
 }
 

@@ -112,7 +112,7 @@ async fn free_port() -> u16 {
 /// A fixture OIDC issuer: discovery and one key, as a provider publishes
 /// them. Auth0's issuer ends in a slash; plexus-idp's does not.
 async fn issuer(trailing_slash: bool, jwk: &'static str) -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = listen().await;
     let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let iss = if trailing_slash { format!("{base}/") } else { base.clone() };
     let discovery = json!({ "issuer": iss, "jwks_uri": format!("{base}/jwks.json") });
@@ -220,6 +220,16 @@ async fn whoami(client: &WsClient) -> Value {
     let mut evs = call(client, "session.whoami", json!({})).await;
     assert_eq!(evs.len(), 1, "exactly one event: {evs:?}");
     evs.remove(0)
+}
+
+/// A fixture's listener on a port [`free_port`] handed out, so no other
+/// test's server is handed the same one between its pick and its bind.
+async fn listen() -> tokio::net::TcpListener {
+    loop {
+        if let Ok(l) = tokio::net::TcpListener::bind(("127.0.0.1", free_port().await)).await {
+            return l;
+        }
+    }
 }
 
 fn now() -> i64 {

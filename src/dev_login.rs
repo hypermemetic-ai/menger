@@ -5,7 +5,7 @@
 //! what they can see … click on a checkbox to redirect all auth to the
 //! plexus-idp".
 //!
-//! Configured (never on prod: `main` refuses it when `--env prod`), the
+//! Configured (test only: `main` starts it only with `--env test`), the
 //! login page carries a checkbox, *Send all sign-in to plexus-idp*. Checked
 //! (a cookie on this browser), the page offers plexus-idp alone: one click
 //! per seeded user, and a form to be any username with any role on any

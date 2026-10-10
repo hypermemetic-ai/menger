@@ -177,7 +177,7 @@ struct Args {
     #[arg(long = "admin", env = "MENGER_ADMINS", value_name = "PRINCIPAL", value_delimiter = ';')]
     admin: Vec<String>,
 
-    /// IDENTITY-35: the dev sign-in, test only (refused with `--env prod`):
+    /// IDENTITY-35: the dev sign-in, test only (only with `--env test`, IDENTITY-38):
     /// the login page's checkbox sends this browser's sign-in to this
     /// `--auth-provider` (plexus-idp's name, e.g. `plexus-idp`), where a
     /// seeded user is one click and any username can be signed in as.
@@ -246,23 +246,27 @@ async fn main() -> anyhow::Result<()> {
     let offers = args.auth_provider.iter().map(Provider::offer).collect();
     // IDENTITY-19: sessions, the rule every method asks, and the page.
     let login_on = !args.auth_provider.is_empty();
-    let sessions = Arc::new(Sessions::new(args.session_hours * 3600));
+    let public_url = args.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", args.shell_port));
+    // IDENTITY-38: the session cookie named for this shell, so prod and test
+    // on one host keep apart.
+    let sessions = Arc::new(Sessions::named(args.session_hours * 3600, &menger::sessions::cookie_name_for(&public_url)));
     let access = if login_on {
         Access::with_login(sessions.clone(), args.require_login, args.admin.clone())
     } else {
         Access::open()
     };
-    let public_url = args.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", args.shell_port));
     let shell_origins = vec![
         format!("http://127.0.0.1:{}", args.shell_port),
         format!("http://localhost:{}", args.shell_port),
         menger::web_login::origin_of(&public_url),
     ];
     // IDENTITY-35: the dev sign-in is the test environment's, never prod's.
+    // IDENTITY-38: allowed only where named for it, `--env test` — not
+    // refused only where named prod, so an unnamed server is not open.
     let dev = match &args.dev_login {
         None => None,
-        Some(_) if args.env.as_deref() == Some("prod") => {
-            anyhow::bail!("--dev-login is refused with --env prod: it lets anyone be anyone")
+        Some(_) if !dev_login_allowed(args.env.as_deref()) => {
+            anyhow::bail!("--dev-login needs --env test: it lets anyone be anyone, and is the test environment's alone")
         }
         Some(provider) => {
             tracing::warn!("dev sign-in on through {provider}: anyone who reaches the login page can be anyone");
@@ -438,4 +442,20 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
 /// label of its own.
 fn parse_email(spec: &str) -> Result<LoginButton, String> {
     format!("email={spec}").parse()
+}
+
+/// IDENTITY-38: the dev sign-in runs only on the environment named test.
+fn dev_login_allowed(env: Option<&str>) -> bool {
+    env == Some("test")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_dev_sign_in_is_test_s_alone() {
+        assert!(super::dev_login_allowed(Some("test")));
+        for env in [None, Some("prod"), Some("Test"), Some("dev"), Some("")] {
+            assert!(!super::dev_login_allowed(env), "{env:?}");
+        }
+    }
 }

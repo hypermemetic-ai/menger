@@ -1,6 +1,6 @@
 use clap::Parser;
 use menger_diagrams::node::{Config, Driver};
-use menger_diagrams::{build_hub, DEFAULT_PORT};
+use menger_diagrams::{build_hub, no_browser_origins, DEFAULT_PORT};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::TransportServer;
 use std::path::PathBuf;
@@ -97,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
         builder = builder.with_stdio();
         tracing::info!("Starting stdio transport");
     } else {
-        builder = builder.with_websocket(args.port);
+        builder = builder.with_websocket(args.port).with_allowed_origins(no_browser_origins());
         tracing::info!("WebSocket: ws://127.0.0.1:{}", args.port);
     }
     let served = builder.build().await?.serve().await;

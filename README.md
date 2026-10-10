@@ -1267,8 +1267,14 @@ sign-in page: a username and password (one provider's password grant),
 authorization code flow with PKCE and a connection hint, and **Continue with
 nostr** when a NIP-07 extension is present. Each way in ends the same way:
 the provider's token is verified by its adapter **in the shell**, a session
-starts, and the browser gets an `HttpOnly; SameSite=Lax` `menger_session`
-cookie. No script on any page can read a credential. The page is
+starts, and the browser gets an `HttpOnly; SameSite=Lax` session cookie.
+No script on any page can read a credential. The cookie is named for the
+shell (IDENTITY-38): `menger_session_<port>` over http — cookies ignore
+ports, so prod (`_4456`) and test (`_4451`) on 127.0.0.1 keep apart — and
+`__Host-menger_session` over https. Only it is read from a browser's
+cookies; a provider's token reaches the socket as `Authorization: Bearer`.
+Every shell response refuses framing (`frame-ancestors 'none'`), and the
+page shows only its own words (no `?error=` text). The page is
 self-contained (`web/login.html`), so an IdP can host it later.
 
 `--require-login` puts the whole app behind it. `/`, `/app/…` and `/vanilla`

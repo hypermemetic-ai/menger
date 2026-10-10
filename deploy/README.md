@@ -69,7 +69,14 @@ the release it already runs and must pass the smoke checks. One way only:
 **Smoke checks** (`smoke ENV`): both units active; `tickets.health` answers on
 the env's port; `--verify-derived` is consistent; the app is served stamped
 with the env's WebSocket port; `diagrams` parses a diagram; a headless browser
-loads the app to `live · WS` with the nav drawn and no page errors.
+loads the app to `live · WS` with the nav drawn and no page errors. On test,
+behind the login with the dev sign-in, `deploy/probe-auth.mjs` then plays the
+login's known attacks against the live server (IDENTITY-38): foreign and
+anonymous sockets, framing, reads and writes across shortcodes, a blocker in a
+shortcode the caller cannot see, a watch after its grant is revoked, sign-out —
+any that works fails the smoke. It writes probe tickets and a grant to test's
+database, which the next `deploy test` or `sync test` replaces. Run it alone:
+`node deploy/probe-auth.mjs 4450 4451`.
 
 **Drills.** `DEPLOY_SMOKE_FAIL=test deploy/pipeline promote --to test` fails
 the first smoke on purpose, so the automatic rollback can be watched on test.

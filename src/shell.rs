@@ -262,6 +262,7 @@ pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
         app = app.layer(axum::middleware::from_fn_with_state(hosts, host_is_ours));
         tracing::info!("Login:     http://127.0.0.1:{}/login", cfg.port);
     }
+    let app = app.layer(axum::middleware::from_fn(harden));
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", cfg.port)).await?;
     tracing::info!("App:       http://127.0.0.1:{}/", cfg.port);
     tracing::info!("Vanilla:   http://127.0.0.1:{}/vanilla", cfg.port);
@@ -285,6 +286,26 @@ async fn require_session(
     }
     let to = format!("/login?next={}", url::form_urlencoded::byte_serialize(path.as_bytes()).collect::<String>());
     (StatusCode::SEE_OTHER, [(header::LOCATION, to)]).into_response()
+}
+
+/// IDENTITY-38: every answer the shell gives refuses to be framed (the app
+/// holds Grant buttons, and another port on this host is same-site), is
+/// read as the type it says, and sends no path to another origin. A
+/// response that set its own keeps it.
+async fn harden(req: Request, next: axum::middleware::Next) -> Response {
+    let mut r = next.run(req).await;
+    let h = r.headers_mut();
+    for (name, value) in [
+        (header::X_FRAME_OPTIONS, "DENY"),
+        (header::CONTENT_SECURITY_POLICY, "frame-ancestors 'none'"),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::REFERRER_POLICY, "same-origin"),
+    ] {
+        if !h.contains_key(&name) {
+            h.insert(name, header::HeaderValue::from_static(value));
+        }
+    }
+    r
 }
 
 /// The `Host` values this shell answers to: its port on 127.0.0.1 and

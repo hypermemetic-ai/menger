@@ -54,6 +54,16 @@ pub const HUB: &str = "diagrams";
 /// beside menger's 4455–4457).
 pub const DEFAULT_PORT: u16 = 4458;
 
+/// IDENTITY-38: the WebSocket's Origin allow-list — one origin no browser
+/// page can have, so every upgrade a page makes (it always sends `Origin`)
+/// is refused, while synapse and menger's scripts, which send none, are
+/// served. No page reaches this service: the app draws diagrams itself
+/// and checks nothing here. Without it, any web page could drive the
+/// service's Node program.
+pub fn no_browser_origins() -> Vec<String> {
+    vec!["urn:menger-diagrams:no-browser-page".to_string()]
+}
+
 /// Builds the `diagrams` hub around one Node driver. Nothing starts here:
 /// the program is started by the first call.
 #[cfg(feature = "server")]
