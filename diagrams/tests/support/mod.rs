@@ -3,7 +3,7 @@
 #![allow(dead_code)] // each test binary uses its own part of this
 
 use menger_diagrams::node::{Config, Driver};
-use menger_diagrams::{build_hub, HUB};
+use menger_diagrams::{build_hub, no_browser_origins, HUB};
 use plexus_client::WsTransport;
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::TransportServer;
@@ -39,6 +39,7 @@ pub async fn start_server(driver: Driver) -> u16 {
     tokio::spawn(async move {
         TransportServer::builder(hub, conv)
             .with_websocket(port)
+            .with_allowed_origins(no_browser_origins())
             .without_registry()
             .build()
             .await
