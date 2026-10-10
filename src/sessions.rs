@@ -376,6 +376,18 @@ impl SessionValidator for Gate {
         }
         Some(ctx)
     }
+
+    /// AUTH-11: the transport asks while the socket is open, and closes it
+    /// once its session is signed out or expired.
+    fn alive(&self, ctx: &AuthContext) -> Result<(), String> {
+        if ctx.expired() {
+            return Err("your sign-in has expired: sign in again".into());
+        }
+        match ctx.get_metadata_string(SESSION_KEY) {
+            Some(key) if !self.sessions.alive(&key) => Err("you have signed out: sign in again".into()),
+            _ => Ok(()),
+        }
+    }
 }
 
 #[cfg(test)]

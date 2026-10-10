@@ -627,8 +627,10 @@ async fn sign_out_ends_the_session_and_its_open_socket_stops_answering() {
     let after = call(&ws, "members.mine").await;
     assert_eq!(after[0]["type"], "error");
     assert!(after[0]["message"].as_str().unwrap().contains("signed out"), "{after:?}");
-    // IDENTITY-37: whoami too — the connection is no one now.
-    assert_eq!(call(&ws, "session.whoami").await[0]["type"], "anonymous");
+    // IDENTITY-37: whoami too — the connection is no one now (AUTH-11: and
+    // is refused as anyone anonymous is).
+    let who = call(&ws, "session.whoami").await;
+    assert_eq!(who[0]["error_kind"], "unauthenticated", "{who:?}");
     // AUTH-7: a new socket on the ended session's cookie is the anonymous
     // view (it was refused 401): the browser's cookie is no credential.
     assert!(anonymous(&socket(&m, Some(&id), Some(&m.origin())).await.unwrap()).await, "and no new socket as Alice");

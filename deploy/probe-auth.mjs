@@ -319,10 +319,46 @@ check(!JSON.stringify(heard).includes('after the revoke'), 'a watch hears nothin
   }
 }
 
+// AUTH-11 (AUTH-10 #1): a session that signed out holds nothing — the gate
+// asks whether the sign-in stands on every method, auth.* included. The
+// review's attack: an admin's session logs out, then the same socket
+// grants a stranger admin on *. Then the server closes that socket.
+{
+  const { randomBytes } = await import('node:crypto');
+  const stranger = `key:${randomBytes(32).toString('hex')}`;
+  const doomed = (await open({ session: await signIn('admin') })).ws;
+  const before = (await call(doomed, 'auth.whoami'))[0] || {};
+  check(before.type === 'whoami' && (before.memberships || []).some((m) => m.role === 'admin'), 'a second admin session signs in (AUTH-11)');
+  await call(doomed, 'auth.logout');
+  const granted = await call(doomed, 'auth.grant', { principal: stranger, role: 'admin', scope: '*' });
+  const r = refusalOf(granted);
+  check(doomed.readyState !== WebSocket.OPEN || (r.error_kind === 'unauthenticated' && r.message?.includes('signed out')),
+    `after auth.logout the same socket cannot auth.grant admin on * (AUTH-11: ${JSON.stringify(r)})`);
+  // Nothing landed: the admin finds no role of the stranger's on * to
+  // revoke (asked before the calls below, which could revoke it themselves).
+  const landed = (await call(a, 'auth.revoke', { principal: stranger, scope: '*' }))[0] || {};
+  check(!(landed.roles || []).length, `the stranger holds nothing (AUTH-11: ${JSON.stringify(landed)})`);
+  const after = [];
+  // Harmless if they ran: viewer re-set to the grants it has, the stranger's
+  // (absent) roles revoked.
+  const viewerNow = (await call(a, 'auth.roles')).find((x) => x.role === 'viewer')?.grants || [];
+  for (const m of ['auth.role_set', 'auth.revoke', 'auth.waiting', 'tickets.list']) {
+    if (doomed.readyState !== WebSocket.OPEN) break;
+    const params = m === 'auth.role_set' ? { role: 'viewer', grants: viewerNow } : m === 'auth.revoke' ? { principal: stranger, scope: '*' } : {};
+    if (refusalOf(await call(doomed, m, params)).error_kind !== 'unauthenticated') after.push(m);
+  }
+  check(!after.length, `a signed-out socket reaches no auth.* or service method (AUTH-11${after.length ? `: reached ${after.join(', ')}` : ''})`);
+  for (let i = 0; i < 30 && doomed.readyState === WebSocket.OPEN; i++) await sleep(100);
+  check(doomed.readyState !== WebSocket.OPEN, 'the server closes a socket whose session signed out (AUTH-11)');
+}
+
 // Sign-out ends the session's sockets. (AUTH-7: members.mine, which any
 // signed-in caller reaches — `nobody` holds nothing the gate would let by.)
+// AUTH-11: the server closes them, too — a call may find the socket gone.
 await fetch(`${SHELL}/logout`, { method: 'POST', redirect: 'manual', headers: { origin: SHELL, cookie: `${COOKIE}=${nobody}` } });
-check(errorOf(await call(n, 'members.mine')).includes('signed out'), 'a socket stops answering when its session signs out');
+check(n.readyState !== WebSocket.OPEN || errorOf(await call(n, 'members.mine')).includes('signed out'), 'a socket stops answering when its session signs out');
+for (let i = 0; i < 30 && n.readyState === WebSocket.OPEN; i++) await sleep(100);
+check(n.readyState !== WebSocket.OPEN, 'the server closes the signed-out session\'s socket (AUTH-11)');
 {
   // AUTH-7: the ended session's cookie is no credential: the anonymous view.
   const o = await open({ session: nobody });

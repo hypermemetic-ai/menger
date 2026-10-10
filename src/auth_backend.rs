@@ -131,4 +131,10 @@ impl AuthBackend for MengerAuth {
         }
         self.access.logout(Some(caller)).map_err(AuthFailure::new)
     }
+
+    /// AUTH-11: the gate asks before every call — a signed-out or expired
+    /// session holds nothing, `auth.*` included.
+    fn alive(&self, caller: &AuthContext) -> Result<(), String> {
+        self.access.alive(caller)
+    }
 }
