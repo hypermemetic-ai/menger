@@ -277,7 +277,11 @@ async fn require_session(
     req: Request,
     next: axum::middleware::Next,
 ) -> Response {
-    if login.session(req.headers()).is_some() {
+    // IDENTITY-38: the vendored libraries (`/app/vendor/…`: mermaid) are
+    // public code, no data — and a ticket body's frame loads them from an
+    // opaque origin, which sends no SameSite cookie, so behind the session
+    // they were a redirect to the login page and no diagram drew.
+    if login.session(req.headers()).is_some() || req.uri().path().starts_with("/app/vendor/") {
         return next.run(req).await;
     }
     let path = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/");

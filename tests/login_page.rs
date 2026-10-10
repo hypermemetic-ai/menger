@@ -802,6 +802,20 @@ async fn each_shell_s_session_is_its_own_cookie() {
     assert!(cleared, "sign-out clears {}", m.cookie());
 }
 
+/// IDENTITY-38: a frame's opaque origin sends no session cookie; the
+/// vendored libraries it loads (mermaid) answer without one. Nothing else
+/// under /app does.
+#[tokio::test]
+async fn a_frame_loads_the_vendored_libraries_without_a_session() {
+    let m = start().await;
+    let lib = m.http.get(m.url("/app/vendor/mermaid/mermaid.min.js")).header("origin", "null").send().await.unwrap();
+    assert_ne!(lib.status(), 303, "no detour to the login page");
+    for path in ["/app/", "/app/index.html", "/app/vendorx/a.js", "/app/sdk/menger-sdk.js"] {
+        let r = m.http.get(m.url(path)).send().await.unwrap();
+        assert_eq!(r.status(), 303, "{path} still needs a session");
+    }
+}
+
 #[tokio::test]
 async fn every_page_refuses_to_be_framed() {
     let m = start().await;
