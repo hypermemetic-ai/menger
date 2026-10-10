@@ -232,6 +232,30 @@ check(errorOf(await call(e, 'members.grant', { principal: me, scope: '*', role: 
 check(errorOf(await call(e, 'members.grant', { principal: me, scope: AWAY, role: 'admin' })), `an editor cannot grant itself admin on ${AWAY}`);
 check(errorOf(await call(e, 'members.requests')), 'only an admin of * sees who has signed in (IDENTITY-37)');
 
+// AUTH-13 (AUTH-10 #3): params that are not an object name no target, so the
+// gate would decide them as "held anywhere" while a method of one param
+// took the value as its target. menger's targeted methods all take two or
+// more (plexus-core's auth_view test plays the one-param shape); here the
+// gate must refuse the shape itself, typed, before any method sees it —
+// from an editor of AWAY, who holds set_status somewhere, aimed at HOME.
+{
+  const shapes = [
+    ['tickets.set_status', homeId],
+    ['tickets.set_status', [homeId, 'Ready']],
+    ['tickets.close_input', homeId],
+    ['members.revoke', HOME],
+    ['tickets.set_status', { id: { id: homeId }, status: 'Ready' }],
+  ];
+  const through = [];
+  for (const [m, params] of shapes) {
+    const r = refusalOf(await call(e, m, params));
+    if (r.error_kind !== 'invalid_params') through.push(`${m} ${JSON.stringify(params)} → ${JSON.stringify(r)}`);
+  }
+  check(!through.length, `a bare value or an unreadable target is refused by shape, typed invalid_params (AUTH-13${through.length ? `: ${through.join('; ')}` : ''})`);
+  const still = (await call(a, 'tickets.get', { id: homeId })).find((i) => i.ticket)?.ticket?.status;
+  check(still && still !== 'Ready', `and ${HOME}'s probe ticket is untouched (AUTH-13: ${still})`);
+}
+
 // AUTH-4/AUTH-7: each caller's view is what it holds.
 {
   const nv = await viewOf(n);
