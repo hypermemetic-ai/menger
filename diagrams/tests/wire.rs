@@ -697,27 +697,33 @@ async fn a_bundle_that_is_not_mermaid_is_named() {
 }
 
 /// The upgrade's status line for a hand-written WebSocket handshake, with
-/// `origin` sent when given.
+/// `origin` sent when given. A refusal closes the connection, and the close
+/// can arrive as a reset before the reply is read: such an attempt is made
+/// again (a fresh connection), up to five times.
 async fn upgrade_status(port: u16, origin: Option<&str>) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut tcp = None;
-    for _ in 0..100 {
-        if let Ok(t) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-            tcp = Some(t);
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let mut tcp = tcp.expect("the service listens");
     let origin = origin.map(|o| format!("Origin: {o}\r\n")).unwrap_or_default();
     let req = format!(
         "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{origin}\r\n"
     );
-    tcp.write_all(req.as_bytes()).await.unwrap();
-    let mut buf = [0u8; 256];
-    let n = tokio::time::timeout(Duration::from_secs(5), tcp.read(&mut buf)).await.unwrap().unwrap();
-    String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or_default().to_string()
+    let mut last = String::new();
+    for _ in 0..5 {
+        let Ok(mut tcp) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            continue;
+        };
+        if tcp.write_all(req.as_bytes()).await.is_err() {
+            continue;
+        }
+        let mut buf = [0u8; 256];
+        match tokio::time::timeout(Duration::from_secs(5), tcp.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => return String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or_default().to_string(),
+            other => last = format!("{other:?}"),
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("no answer to the upgrade after five attempts: {last}")
 }
 
 /// IDENTITY-38: no web page drives the service; synapse (no Origin) does.
