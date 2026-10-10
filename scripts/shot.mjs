@@ -397,7 +397,17 @@ async function shoot(context, { t, theme, width }) {
     }
     for (const e of state.errors) console.error(`shot: ${t.name}: the app shows an error: ${e}`);
     for (const e of errors) console.error(`shot: ${t.name}: page error: ${e}`);
-    const file = single ?? join(outDir, `${t.name}.${theme}.${width}.png`);
+    // DEPLOY-8: named for the theme the page painted — its own
+    // `<html data-theme>` wins over the emulated colour scheme.
+    const painted = await page.evaluate(() => {
+      const d = document.documentElement.getAttribute('data-theme');
+      return d === 'light' || d === 'dark' ? d : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    });
+    if (painted !== theme) {
+      console.error(`shot: ${t.name}: asked for ${theme}, the page paints ${painted} (its own data-theme) — named ${painted}`);
+      if (themes.length > 1) console.error(`shot: ${t.name}: --theme both gives the same theme twice here`);
+    }
+    const file = single ?? join(outDir, `${t.name}.${painted}.${width}.png`);
     if (opt.selector) {
       const el = page.locator(opt.selector).first();
       await el.waitFor({ state: 'visible', timeout: Math.max(1, deadline - Date.now()) }).catch(() => {
