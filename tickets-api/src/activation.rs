@@ -370,6 +370,30 @@ impl Tickets {
                 yield TicketsEvent::Error { message };
                 return;
             }
+            // IDENTITY-37: a blocker the caller cannot view is refused —
+            // by its shortcode, read from the id, so a hidden ticket and an
+            // id naming none get the same answer.
+            let reach = match view_lens(&caller) {
+                Ok(r) => r,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            let visible = match visible_epics(&store, &caller) {
+                Ok(v) => v,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            if let Some(v) = &visible {
+                let hidden = blocked_by.iter().flatten().find(|b| !v.contains(&shortcode_of(b.trim()).to_ascii_uppercase()));
+                if let Some(b) = hidden {
+                    yield TicketsEvent::Error { message: format!("blocked_by: {}", caller.lacks(Role::Viewer, Some(b.trim()))) };
+                    return;
+                }
+            }
             let kind = match kind.as_deref().map(str::parse::<Kind>) {
                 None => Kind::Build,
                 Some(Ok(k)) => k,
@@ -397,7 +421,7 @@ impl Tickets {
                 body: body.unwrap_or_default(),
             }).await {
                 Ok(ticket) => yield TicketsEvent::Created { ticket },
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+                Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, reach.as_ref(), id)) },
             }
         }
     }
@@ -705,7 +729,14 @@ impl Tickets {
                     return;
                 }
             };
-            if let Err(message) = caller.require(Role::Editor, &[id.as_str(), parent.as_str()], &store) {
+            // IDENTITY-37: a shortcode's root moves the shortcode — and
+            // whoever administers its new host administers it — so it takes
+            // admin on the shortcode and on where it goes; any other ticket
+            // moves inside its shortcode, and takes editor.
+            let root = store.groups().into_iter().any(|g| g.root.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(id.trim())));
+            let role = if root { Role::Admin } else { Role::Editor };
+            if let Err(message) = caller.require(role, &[id.as_str(), parent.as_str()], &store) {
+                let message = if root { format!("moving a shortcode's root takes admin on it and on its new host: {message}") } else { message };
                 yield TicketsEvent::Error { message };
                 return;
             }
@@ -1197,6 +1228,9 @@ impl Tickets {
     /// line. Nothing trails them — the stream's own `done` is the whole
     /// answer, as for `groups`. From the cache alone; `watch` keeps a
     /// client's copy current with `ComponentChanged` and `ComponentRemoved`.
+    /// IDENTITY-37: a caller who cannot view every shortcode gets the
+    /// components whose owner it can view — no orphan — each with only the
+    /// references it can view.
     #[plexus_macros::method(
         description = "Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes"
     )]
@@ -1211,11 +1245,14 @@ impl Tickets {
                     return;
                 }
             };
-            if let Err(message) = caller.reach_filter(Role::Viewer) {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-            for component in store.components() {
+            let reach = match view_lens(&caller) {
+                Ok(r) => r,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            for component in visible_components(&store, reach.as_ref(), store.components()) {
                 yield TicketsEvent::Component { component };
             }
         }
@@ -1777,6 +1814,9 @@ impl Tickets {
     /// ticket, at its current status) and one `DanglingBlocker` event per
     /// id that names no ticket yet; `NotFound` if the queried ticket
     /// itself doesn't exist. An empty `blocked_by` yields nothing.
+    /// IDENTITY-37: a blocker the caller cannot view is a `DanglingBlocker`
+    /// too — its id, which the ticket's own `blocked_by` already shows, and
+    /// nothing of it: exactly what an id naming no ticket gets.
     #[plexus_macros::method(
         description = "One ticket's blockers resolved to current statuses; dangling ids marked",
         params(id = "Ticket id whose blockers to resolve, e.g. MNG-2")
@@ -1799,11 +1839,19 @@ impl Tickets {
                 yield TicketsEvent::NotFound { id: id };
                 return;
             }
+            let reach = match view_lens(&caller) {
+                Ok(r) => r,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
             match store.blockers(&id).await {
                 Ok(refs) => {
                     for r in refs {
                         yield match r {
-                            BlockerRef::Resolved(ticket) => TicketsEvent::Blocker { ticket },
+                            BlockerRef::Resolved(ticket) if sees_id(&store, reach.as_ref(), &ticket.id) => TicketsEvent::Blocker { ticket },
+                            BlockerRef::Resolved(ticket) => TicketsEvent::DanglingBlocker { id: ticket.id },
                             BlockerRef::Dangling(id) => TicketsEvent::DanglingBlocker { id },
                         };
                     }
@@ -1904,48 +1952,67 @@ impl Tickets {
         // IDENTITY-19, IDENTITY-21: who is watching, and through what reach.
         let access = self.access.clone();
         let who = auth.cloned();
-        let admitted = access.admit(who.as_ref());
-        let (filter, refused) = match &admitted {
-            Ok(caller) => match caller.scoped(filter.as_deref()) {
-                Ok(f) => (f, None),
-                Err(e) => (None, Some(e)),
-            },
-            Err(e) => (None, Some(e.clone())),
+        let asked = filter;
+        let opened = access.admit(who.as_ref()).and_then(|caller| {
+            let filter = caller.scoped(asked.as_deref())?;
+            Ok((filter, Sight::of(&self.store, &caller)?))
+        });
+        let (filter, sight, refused) = match opened {
+            Ok((filter, sight)) => (filter, Some(sight), None),
+            Err(e) => (None, None, Some(e)),
         };
-        let reach: Option<Lens> = admitted
-            .as_ref()
-            .ok()
-            .and_then(|c| c.reach_filter(Role::Viewer).ok().flatten())
-            .and_then(|f| Lens::of(&f).ok());
         // FILTER-4: a filtered watch reads the filtered channel, which
         // carries every change and each write's cell moves after them.
         let filtered = (filter.is_some() || membership).then(|| {
-            let lens = filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all()));
-            (self.store.subscribe_filtered(), lens.map(|lens| self.store.watcher_in(lens, epic.as_deref())))
+            (self.store.subscribe_filtered(), watcher_for(&self.store, filter.as_deref(), epic.as_deref()))
         });
         let store = Arc::clone(&self.store);
         let plain = filtered.is_none().then(|| self.store.subscribe());
         // IDENTITY-19: admitted now, and asked again at every change it
         // relays, so a watch ends when its session does. IDENTITY-21: and a
         // restricted caller hears only of the tickets it can see.
+        // IDENTITY-37: as its grants stand at that change — a grant made
+        // or revoked moves what the watch relays (and a filtered watch's
+        // filter) from the next change on, and a watch whose caller can
+        // see nothing any more ends with an in-band `error`.
         stream! {
             if let Some(message) = refused {
                 yield TicketsEvent::Error { message };
                 return;
             }
+            let Some(mut sight) = sight else { return };
             if let Some((mut rx, watcher)) = filtered {
                 let mut watcher = match watcher {
                     Ok(w) => w,
-                    Err(e) => {
-                        yield TicketsEvent::Error { message: e.to_string() };
+                    Err(message) => {
+                        yield TicketsEvent::Error { message };
                         return;
                     }
                 };
                 loop {
                     let next = rx.recv().await;
-                    if let Err(message) = access.admit(who.as_ref()) {
-                        yield TicketsEvent::Error { message };
-                        return;
+                    match sight.again(&access, who.as_ref(), &store) {
+                        Err(message) => {
+                            yield TicketsEvent::Error { message };
+                            return;
+                        }
+                        Ok(None) => {}
+                        Ok(Some((caller, gone))) => {
+                            // The filter again, under the reach as it stands.
+                            let rebuilt = caller.scoped(asked.as_deref()).and_then(|f| watcher_for(&store, f.as_deref(), epic.as_deref()));
+                            match rebuilt {
+                                Ok(w) => watcher = w,
+                                Err(message) => {
+                                    yield TicketsEvent::Error { message };
+                                    return;
+                                }
+                            }
+                            if !membership {
+                                for name in gone {
+                                    yield TicketsEvent::ComponentRemoved { name };
+                                }
+                            }
+                        }
                     }
                     match next {
                         Ok(Change::CellsMoved { moves }) => {
@@ -1965,7 +2032,7 @@ impl Tickets {
                                 continue;
                             }
                             if let Some(ev) = change.in_epic(epic.as_deref()).and_then(wire_event) {
-                                if let Some(ev) = within(&store, reach.as_ref(), ev) {
+                                if let Some(ev) = sight.relay(&store, ev) {
                                     yield ev;
                                 }
                             }
@@ -1981,16 +2048,24 @@ impl Tickets {
             let Some(mut rx) = plain else { return };
             loop {
                 let next = rx.recv().await;
-                if let Err(message) = access.admit(who.as_ref()) {
-                    yield TicketsEvent::Error { message };
-                    return;
+                match sight.again(&access, who.as_ref(), &store) {
+                    Err(message) => {
+                        yield TicketsEvent::Error { message };
+                        return;
+                    }
+                    Ok(None) => {}
+                    Ok(Some((_, gone))) => {
+                        for name in gone {
+                            yield TicketsEvent::ComponentRemoved { name };
+                        }
+                    }
                 }
                 match next {
                     Ok(change) => {
                         // WAVE-6: of a `placements_changed`, the changes in
                         // the epic.
                         if let Some(ev) = change.in_epic(epic.as_deref()).and_then(wire_event) {
-                            if let Some(ev) = within(&store, reach.as_ref(), ev) {
+                            if let Some(ev) = sight.relay(&store, ev) {
                                 yield ev;
                             }
                         }
@@ -2005,9 +2080,91 @@ impl Tickets {
     }
 }
 
+/// FILTER-4: a filtered watch's watcher — `text` (already ANDed with the
+/// caller's reach) compiled, in `epic` alone when one is asked.
+#[cfg(feature = "server")]
+fn watcher_for(store: &Store, text: Option<&str>, epic: Option<&str>) -> Result<crate::store::Watcher, String> {
+    let lens = text.map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())).map_err(|e| e.to_string())?;
+    Ok(store.watcher_in(lens, epic))
+}
+
+/// IDENTITY-37: what an open `watch` relays, as the caller's grants stand
+/// now — its reach, the lens of it, and the components it has been shown.
+/// Asked again at every change ([`Sight::again`]): rebuilt only when the
+/// grants moved, which is a comparison of the caller's few grants.
+#[cfg(feature = "server")]
+struct Sight {
+    reach: crate::access::Reach,
+    /// `None`: everything.
+    lens: Option<Lens>,
+    /// The components this caller can see now (by name) — with a lens only.
+    shown: std::collections::HashSet<String>,
+}
+
+#[cfg(feature = "server")]
+impl Sight {
+    /// `caller`'s sight; `Err` when it sees nothing.
+    fn of(store: &Store, caller: &Caller) -> Result<Self, String> {
+        let lens = view_lens(caller)?;
+        let shown = match &lens {
+            None => Default::default(),
+            Some(l) => visible_components(store, Some(l), store.components()).into_iter().map(|c| c.name).collect(),
+        };
+        Ok(Self { reach: caller.reach.clone(), lens, shown })
+    }
+
+    /// The caller admitted again: `Ok(None)` when its reach is as it was;
+    /// `Ok(Some((caller, gone)))` when it moved — the sight rebuilt, and the
+    /// components it no longer sees; `Err` when it is refused, or now sees
+    /// nothing (the watch ends).
+    fn again(&mut self, access: &Access, who: Option<&AuthContext>, store: &Store) -> Result<Option<(Caller, Vec<String>)>, String> {
+        let caller = access.admit(who)?;
+        if caller.reach == self.reach {
+            return Ok(None);
+        }
+        let now = Self::of(store, &caller).map_err(|why| format!("your access changed: {why}"))?;
+        let gone: Vec<String> = match (&self.lens, &now.lens) {
+            (_, None) => Vec::new(),
+            (None, Some(_)) => store.components().into_iter().map(|c| c.name).filter(|n| !now.shown.contains(n)).collect(),
+            (Some(_), Some(_)) => {
+                let mut g: Vec<String> = self.shown.difference(&now.shown).cloned().collect();
+                g.sort();
+                g
+            }
+        };
+        *self = now;
+        Ok(Some((caller, gone)))
+    }
+
+    /// A change as this caller may hear it, or nothing. A component's change
+    /// reaches it when it can view the component's owner (its references cut
+    /// to what it can view); one it could see and no longer can is said as
+    /// its removal.
+    fn relay(&mut self, store: &Store, ev: TicketsEvent) -> Option<TicketsEvent> {
+        let Some(lens) = &self.lens else { return Some(ev) };
+        match ev {
+            TicketsEvent::ComponentChanged { component } => {
+                let name = component.name.clone();
+                match visible_components(store, Some(lens), vec![component]).pop() {
+                    Some(component) => {
+                        self.shown.insert(name);
+                        Some(TicketsEvent::ComponentChanged { component })
+                    }
+                    None => self.shown.remove(&name).then_some(TicketsEvent::ComponentRemoved { name }),
+                }
+            }
+            TicketsEvent::ComponentRemoved { name } => self.shown.remove(&name).then_some(TicketsEvent::ComponentRemoved { name }),
+            ev => within(store, Some(lens), ev),
+        }
+    }
+}
+
 /// IDENTITY-21: a watched event as a restricted caller may hear it: itself
 /// when every ticket it names is within `reach`, the part of it that is
-/// (a placements change), or nothing. Events naming no ticket pass.
+/// (a placements change), or nothing. IDENTITY-37: every variant is named —
+/// a new one does not compile until it is placed — and those that name no
+/// ticket and no shortcode pass; a component's are [`Sight::relay`]'s, and
+/// here nothing.
 #[cfg(feature = "server")]
 fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> Option<TicketsEvent> {
     let Some(reach) = reach else { return Some(ev) };
@@ -2049,7 +2206,22 @@ fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> Option<Ticke
             let kept: Vec<_> = changes.iter().filter(|c| sees(&c.id)).cloned().collect();
             return (!kept.is_empty()).then_some(TicketsEvent::PlacementsChanged { changes: kept });
         }
-        _ => None,
+        TicketsEvent::Hit { summary, .. } => Some(summary.id.clone()),
+        TicketsEvent::DanglingBlocker { id } | TicketsEvent::Member { id, .. } | TicketsEvent::NotFound { id } => Some(id.clone()),
+        TicketsEvent::Extent { epic, .. } | TicketsEvent::Count { epic, .. } | TicketsEvent::Recount { epic, .. } => {
+            let seen = store.counts(reach).into_iter().any(|(e, n)| e == *epic && n > 0);
+            return seen.then_some(ev);
+        }
+        // Without the owner in hand, nothing (Sight::relay places them).
+        TicketsEvent::Component { .. } | TicketsEvent::ComponentChanged { .. } | TicketsEvent::ComponentRemoved { .. } => return None,
+        // Name no ticket and no shortcode: answers worked out under the reach.
+        TicketsEvent::Health { .. }
+        | TicketsEvent::Page { .. }
+        | TicketsEvent::Lagged { .. }
+        | TicketsEvent::Facet { .. }
+        | TicketsEvent::WaveCounts { .. }
+        | TicketsEvent::Error { .. }
+        | TicketsEvent::Searched { .. } => None,
     };
     match id {
         Some(id) if !sees(&id) => None,
@@ -2061,6 +2233,67 @@ fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> Option<Ticke
 #[cfg(feature = "server")]
 fn shortcode_of(id: &str) -> &str {
     id.split(['-', '/']).next().unwrap_or(id)
+}
+
+/// IDENTITY-21: the lens a caller sees tickets through — `None`: all;
+/// `Err`: nothing. IDENTITY-37: a reach that does not compile is refused,
+/// never read as "all".
+#[cfg(feature = "server")]
+fn view_lens(caller: &Caller) -> Result<Option<Lens>, String> {
+    caller.reach_filter(Role::Viewer)?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
+}
+
+/// Whether `reach` admits the ticket `id` (`None`: everything does).
+#[cfg(feature = "server")]
+fn sees_id(store: &Store, reach: Option<&Lens>, id: &str) -> bool {
+    match reach {
+        None => true,
+        Some(lens) => store.member(&[id.to_string()], lens).first().copied().unwrap_or(false),
+    }
+}
+
+/// IDENTITY-37: of `components`, those `reach` may see — each whose owner
+/// it admits (an orphan has none: it is no one's to show) — with only the
+/// references it may see: the tickets it admits, and the components it may
+/// see. Owners and references are asked of the cells in one batch.
+#[cfg(feature = "server")]
+fn visible_components(store: &Store, reach: Option<&Lens>, components: Vec<crate::types::Component>) -> Vec<crate::types::Component> {
+    let Some(lens) = reach else { return components };
+    // Every component's owner, to place a reference to one by its owner.
+    let owners: std::collections::HashMap<String, Option<String>> = store.components().into_iter().map(|c| (c.name, c.owner)).collect();
+    let mut ids: Vec<String> = owners.values().flatten().cloned().collect();
+    ids.extend(components.iter().filter_map(|c| c.owner.clone()));
+    ids.extend(components.iter().flat_map(|c| c.references.iter()).filter(|r| !owners.contains_key(*r)).cloned());
+    ids.sort();
+    ids.dedup();
+    let admitted: std::collections::HashSet<String> =
+        ids.iter().zip(store.member(&ids, lens)).filter(|(_, ok)| *ok).map(|(id, _)| id.clone()).collect();
+    let owned_in_reach = |o: &Option<String>| o.as_ref().is_some_and(|o| admitted.contains(o));
+    components
+        .into_iter()
+        .filter(|c| owned_in_reach(&c.owner))
+        .map(|mut c| {
+            c.references.retain(|r| match owners.get(r) {
+                Some(owner) => owned_in_reach(owner),
+                None => admitted.contains(r),
+            });
+            c
+        })
+        .collect()
+}
+
+/// IDENTITY-37: a refused `create`'s reason, naming only what the caller
+/// may see — a ticket out of its reach that a cycle passes through, or that
+/// already waits on a doc's id, is said as such, not by its id.
+#[cfg(feature = "server")]
+fn redacted(e: StoreError, sees: impl Fn(&str) -> bool) -> String {
+    const HIDDEN: &str = "(a ticket out of your reach)";
+    let veil = |ids: Vec<String>| -> Vec<String> { ids.into_iter().map(|i| if sees(&i) { i } else { HIDDEN.to_string() }).collect() };
+    match e {
+        StoreError::Cycle { id, path } => StoreError::Cycle { id, path: veil(path) }.to_string(),
+        StoreError::DocAwaited { id, by } => StoreError::DocAwaited { id, by: veil(by) }.to_string(),
+        e => e.to_string(),
+    }
 }
 
 /// IDENTITY-21: the shortcodes a caller can see — `None`: all of them. A
@@ -2094,6 +2327,16 @@ mod tests {
 
     async fn one(s: impl Stream<Item = TicketsEvent> + Send + 'static) -> TicketsEvent {
         Box::pin(s).next().await.expect("event")
+    }
+
+    #[test]
+    fn a_refusal_names_only_the_tickets_the_caller_can_see() {
+        let cycle = StoreError::Cycle { id: "A-3".into(), path: vec!["A-2".into(), "B-7".into(), "A-3".into()] };
+        let said = redacted(cycle, |id| id.starts_with("A-"));
+        assert!(said.contains("A-2 -> (a ticket out of your reach) -> A-3"), "{said}");
+        assert!(!said.contains("B-7"));
+        let awaited = StoreError::DocAwaited { id: "A-4".into(), by: vec!["B-1".into()] };
+        assert!(!redacted(awaited, |id| id.starts_with("A-")).contains("B-1"));
     }
 
     #[tokio::test]

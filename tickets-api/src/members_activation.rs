@@ -235,9 +235,10 @@ impl Members {
     }
 
     /// Everyone who signed in and holds no grant yet, oldest first: one
-    /// `waiting { principal, name, provider, since }` each. Needs admin
-    /// somewhere. Kept in memory: a restart forgets them until they come
-    /// back.
+    /// `waiting { principal, name, provider, since }` each. IDENTITY-37:
+    /// needs admin on `*` — the list is every sign-in, whatever shortcode it
+    /// came for. Kept in memory, at most [`crate::access::WAITING_MAX`]: a
+    /// restart forgets them until they come back.
     #[plexus_macros::method(description = "Who signed in without a grant, waiting for an admin")]
     pub async fn requests(&self, auth: Option<&AuthContext>) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let admitted = self.access.admit(auth);
@@ -250,8 +251,8 @@ impl Members {
                     return;
                 }
             };
-            if caller.scopes(Role::Admin).is_some_and(|s| s.is_empty()) {
-                yield MembersEvent::Error { message: "the waiting list needs admin on a shortcode".into() };
+            if !caller.everywhere(Role::Admin) {
+                yield MembersEvent::Error { message: "the waiting list needs admin on *".into() };
                 return;
             }
             for w in access.waiting() {

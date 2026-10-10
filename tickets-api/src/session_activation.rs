@@ -19,6 +19,8 @@ use async_stream::stream;
 use futures::Stream;
 #[cfg(feature = "server")]
 use plexus_core::plexus::AuthContext;
+#[cfg(feature = "server")]
+use crate::access::Access;
 
 /// The activation. Server-only, like the others; it holds only the
 /// providers it offers.
@@ -26,6 +28,9 @@ use plexus_core::plexus::AuthContext;
 #[derive(Clone, Default)]
 pub struct Session {
     offers: Arc<Vec<ProviderOffer>>,
+    /// IDENTITY-37: when given, `whoami` asks it whether the connection's
+    /// sign-in still stands — signed out or expired, it proves no one.
+    access: Option<Access>,
 }
 
 #[cfg(feature = "server")]
@@ -37,7 +42,15 @@ impl Session {
 
     /// A session offering these providers.
     pub fn offering(offers: Vec<ProviderOffer>) -> Self {
-        Self { offers: Arc::new(offers) }
+        Self { offers: Arc::new(offers), access: None }
+    }
+
+    /// IDENTITY-37: `whoami` behind the same rule as every other method: a
+    /// connection whose session was signed out, or whose credential expired,
+    /// is `anonymous`.
+    pub fn with_access(mut self, access: Access) -> Self {
+        self.access = Some(access);
+        self
     }
 }
 
@@ -76,7 +89,9 @@ impl Session {
         description = "Who this connection is: identity { principal, name, roles, tenant, provider }, or anonymous"
     )]
     pub async fn whoami(&self, auth: Option<&AuthContext>) -> impl Stream<Item = SessionEvent> + Send + 'static {
-        let event = identity(auth);
+        // IDENTITY-37: a sign-in that no longer stands proves no one.
+        let ended = self.access.as_ref().is_some_and(|a| auth.is_some_and(|c| c.is_authenticated()) && a.admit(auth).is_err());
+        let event = if ended { SessionEvent::Anonymous } else { identity(auth) };
         stream! {
             yield event;
         }
@@ -96,5 +111,37 @@ impl Session {
                 yield SessionEvent::from(offer.clone());
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+    use crate::access::{SessionCheck, SESSION_KEY};
+    use futures::StreamExt;
+    use std::sync::Mutex;
+
+    struct Live(Mutex<bool>);
+    impl SessionCheck for Live {
+        fn alive(&self, _: &str) -> bool {
+            *self.0.lock().unwrap()
+        }
+    }
+
+    async fn whoami(s: &Session, ctx: &AuthContext) -> SessionEvent {
+        Box::pin(s.whoami(Some(ctx)).await).next().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn whoami_after_sign_out_is_anonymous() {
+        let live = Arc::new(Live(Mutex::new(true)));
+        let access = Access::with_login(live.clone(), true, vec![]);
+        let s = Session::new().with_access(access);
+        let ctx = AuthContext::new("u1".into(), "s".into(), vec![], serde_json::json!({ SESSION_KEY: "k", "name": "alice" }));
+        assert_eq!(whoami(&s, &ctx).await.name(), Some("alice"));
+        *live.0.lock().unwrap() = false;
+        assert_eq!(whoami(&s, &ctx).await, SessionEvent::Anonymous, "signed out: it proves no one");
+        // Without the rule, as before.
+        assert_eq!(whoami(&Session::new(), &ctx).await.name(), Some("alice"));
     }
 }
