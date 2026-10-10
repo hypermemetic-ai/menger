@@ -652,6 +652,23 @@ stored source.
 synapse -P 4455 menger tickets components
 ```
 
+**HTML with blank lines** (COMP-11). In a framed body, an element opened in
+an HTML block runs to its close, blank lines included: the markup inside is
+passed through as written (CommonMark alone ends the block at the first
+blank line, and the rest becomes markdown: indented lines code blocks,
+inline tags wrapped in `<p>`). Markdown inside HTML is still written
+CommonMark's way: a blank line **right after an element's opening** — its
+open tag, or that and a `<summary>` or heading line — starts markdown (the
+house components' `<m-summary>`, `<m-field>`, `<details><summary>`), unless
+the next line is indented as code; and a fence with blank lines around it
+is a fence. A block that starts as `<pre>`, `<script>`, `<style>`,
+`<textarea>` or a comment already ran to its end and is untouched; an
+element nothing closes ends at the blank line, as before. The rule is
+`tickets-api/src/html_runs.rs`; the frame's renderer (`frontend/src/md.rs`),
+the server's readers of a body (fields, inputs, component references) and
+`diagrams` all read through it. An unframed body holds no element, and
+renders as before.
+
 **In the app** (COMP-4, COMP-5) a body holding HTML or a component tag
 renders in a sandboxed frame (no `allow-same-origin`) under menger's SDK
 (`frontend/sdk/menger-sdk.js`, whose header is the protocol's reference),
@@ -1368,10 +1385,11 @@ copied verbatim): its source is the element's content, the newline after
 the open tag dropped, character references decoded (`--&gt;` is `-->`), a
 `<br/>` in a label kept; its `line` is the line that source starts on. A
 fence inside a field element or a component is a fence when blank lines
-stand around it. Not a diagram, drawn by neither: a `<pre class="mermaid">`
-in code, a comment or a script, inline in a paragraph, or one its HTML
-block does not close (a blank line inside one nested in a `<section>` ends
-that block — write the `<pre>` without blank lines, or as a fence).
+stand around it. A blank line inside an element does not end its HTML block
+(COMP-11, "HTML with blank lines" above), so a `<pre class="mermaid">` with
+blank lines, nested in a `<section>`, is a diagram. Not a diagram, drawn by
+neither: a `<pre class="mermaid">` in code, a comment or a script, inline in
+a paragraph, or one with no `</pre>`.
 
 `line` within `source` can differ from the number in mermaid's message:
 mermaid numbers the text it parsed, after dropping frontmatter, directives,

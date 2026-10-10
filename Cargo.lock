@@ -1608,6 +1608,7 @@ dependencies = [
  "futures",
  "jsonrpsee",
  "libc",
+ "menger-tickets-api",
  "plexus-client",
  "plexus-core",
  "plexus-macros",

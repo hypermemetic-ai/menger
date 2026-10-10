@@ -27,6 +27,11 @@
 //!   block is HTML, and HTML frames a body.) A fence inside a field element
 //!   or a component, with blank lines around it, is markdown: a fence like
 //!   any other.
+//! - COMP-11: the frame reads a body's HTML blocks by tickets-api's
+//!   `html_runs` — an element opened in an HTML block runs to its close,
+//!   blank lines included — and so does this: the same function, not a
+//!   copy (so a `<pre class="mermaid">` with a blank line in it, inside a
+//!   `<section>`, is a diagram in both).
 //!
 //! The app is its own cargo unit (wasm32), so its functions cannot be
 //! called from here; they are copied, and the tests below read
@@ -36,6 +41,7 @@
 //! palette's rule). A change to the app's rule fails this crate's tests
 //! until it is copied here too.
 
+use menger_tickets_api::html_runs;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 /// One mermaid block: its position in the body and its source.
@@ -68,7 +74,12 @@ pub fn mermaid_blocks(markdown: &str) -> Vec<Block> {
     // markdown (a line in a block quote or a list item has its prefix
     // dropped, so the two drift).
     let mut html: Option<(String, Vec<(usize, usize)>)> = None;
-    for (event, range) in Parser::new_ext(body, options()).into_offset_iter() {
+    // COMP-11: read as md.rs reads a framed body — blank lines inside an
+    // element marked for the parser, offsets mapped back, the marks taken
+    // out of the lines gathered.
+    let read = html_runs::read(body, options());
+    for (event, range) in Parser::new_ext(read.source(), options()).into_offset_iter() {
+        let range = read.original(range.start)..read.original(range.end);
         if let Some((_, source)) = open.as_mut() {
             match event {
                 Event::Text(text) => source.push_str(&text),
@@ -96,7 +107,7 @@ pub fn mermaid_blocks(markdown: &str) -> Vec<Block> {
             Event::Html(text) => {
                 if let Some((block, starts)) = html.as_mut() {
                     starts.push((block.len(), skipped + range.start));
-                    block.push_str(&text);
+                    block.push_str(&read.restore(&text));
                 }
             }
             Event::End(TagEnd::HtmlBlock) => {
@@ -500,6 +511,9 @@ fn is_mermaid_fence(info: &str) -> bool {
         assert!(MD_RS.contains("        if framed {\n            match &ev {\n                Event::Start(Tag::HtmlBlock) => {"));
         assert!(MD_RS.contains("return Some(Event::Html(with_diagrams(&block, &mut diagrams).into()));"));
         assert!(MD_RS.contains("let found = html_diagrams(block);"));
+        // COMP-11: the blocks gathered are html_runs's, as here.
+        assert!(MD_RS.contains("let read = framed.then(|| html_runs::read(src, opts));"));
+        assert!(MD_RS.contains("push_str(&read.as_ref().expect(\"framed\").restore(s));"));
         assert!(MD_RS.contains("out.push_str(&mermaid_placeholder(&source));"));
         assert!(SDK_JS.contains("doc.querySelectorAll('.mermaid[data-state=\"pending\"]')"));
         assert_eq!(SDK_JS.matches("querySelectorAll('.mermaid").count(), 2, "pending, and done (a redraw)");
@@ -781,11 +795,22 @@ sequenceDiagram
             "<script>\nconst d = '<pre class=\"mermaid\">graph LR</pre>';\n</script>\n",
             "<pre class=\"not-mermaid\">graph LR</pre>\n<pre>graph LR</pre>\n",
             "text <pre class=\"mermaid\">graph LR</pre> inline\n",
-            "<section>\n<pre class=\"mermaid\">\ngraph LR\n\n  A --> B\n</pre>\n</section>\n",
+            "<section>\n<pre class=\"mermaid\">\ngraph LR\n\n  A --> B\n</section>\n",
             "---\nnote: <pre class=\"mermaid\">graph LR</pre>\n---\nbody\n",
         ] {
             assert!(mermaid_blocks(body).is_empty(), "{body:?}");
         }
+    }
+
+    /// COMP-11: a blank line inside an element does not end its HTML block —
+    /// a `<pre class="mermaid">` with one, inside a section, is a diagram, as
+    /// the frame draws it; its source keeps the blank line, and every `line`
+    /// after it is still the markdown's.
+    #[test]
+    fn a_blank_line_inside_an_element_keeps_its_diagram() {
+        let body = "<section>\n<p>a</p>\n\n<pre class=\"mermaid\">\nx\n\ny\n</pre>\n</section>\n\n```mermaid\npie\n```\n";
+        assert_eq!(sources(body), ["x\n\ny\n", "pie\n"]);
+        assert_eq!(lines(body), [5, 12]);
     }
 
     /// The indices count mermaid blocks only, from 1, in order.
