@@ -91,6 +91,17 @@
 //! clause, the one a right-click on its tag's Filter makes (src/tags.rs),
 //! and the palette closes where it was.
 //!
+//! SEARCH-3: **the palette searches inside tickets.** Every question is
+//! asked of `search` too (SEARCH-2), under the same number and the same pass:
+//! below the jump rows, an "In bodies" section holds its best hits — the
+//! ones no jump row already shows — each with its title and a passage of
+//! its body, the matched words marked ([`Found::shown_hits`]). When the
+//! server corrected a word, the heading says what it searched for
+//! (`In bodies · placement`, [`Found::hits_heading`]); the count line adds
+//! how many tickets match inside. Hits are rows like the others — ↑↓, Enter,
+//! a click — and "Search everything" asks both without the filter and marks
+//! the hits outside it as it marks the jump rows.
+//!
 //! COMMENT-3: **`a` (or `A`) is annotation mode** (src/annotate.rs) — on, and
 //! off again; Esc closes what the mode has open (a pin's list, a comment
 //! box) and then leaves it. A body's frame that has focus posts the same
@@ -105,7 +116,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::filter::Cat;
 use crate::{annotate, board, counts, dom, lens, navigate_to_ticket, session, st_class, tags};
-use menger_tickets_api::TicketSummary;
+use menger_tickets_api::{Marked, SearchWord, TicketSummary};
 use std::collections::{BTreeSet, HashSet};
 
 /// How long a `g` stays armed as the first key of a `g …` sequence.
@@ -116,6 +127,10 @@ const GO_WINDOW_MS: f64 = 1500.0;
 /// limit anyone can observe on a store of menger's size. SCALE-25: and the
 /// `limit` it asks `find` for.
 const PALETTE_MAX: usize = 50;
+
+/// SEARCH-3: how many hits in bodies the palette asks `search` for — below
+/// the jump rows, a handful: the best of them.
+const PALETTE_HITS: u32 = 8;
 
 /// SCALE-25: how long the typing must pause before the palette asks `find`
 /// — short enough to feel immediate, long enough that a word typed at speed
@@ -255,10 +270,16 @@ pub(crate) fn count_words(f: &Found, under: bool) -> String {
     }
     let (shown, all) = (f.rows.len() as u64, f.total);
     let words = if all > shown { format!("{shown} of {all} matches") } else { format!("{all} matches") };
-    match (under, f.everything) {
+    let words = match (under, f.everything) {
         (false, _) => words,
         (true, false) => format!("{words} inside the global filter"),
         (true, true) => format!("{words} in everything · {} outside the filter", f.outside.len()),
+    };
+    // SEARCH-3: and how many match inside tickets, once that is the answer
+    // to what is typed.
+    match (f.hits_matched, f.hits_took == f.asked) {
+        (0, _) | (_, false) => words,
+        (n, true) => format!("{words} · {n} in bodies"),
     }
 }
 
@@ -287,6 +308,17 @@ pub(crate) struct Found {
     pub(crate) outside: HashSet<String>,
     /// FILTER-16: the server did not take the newest question's filter.
     pub(crate) refused: Option<String>,
+    /// SEARCH-3: the newest `search` answer taken — its hits, as the server
+    /// ranked them; how many tickets match; the words as it read them; the
+    /// question and query it answers, and its pass; the hits outside the
+    /// global filter ("Search everything").
+    pub(crate) hits: Vec<session::Hit>,
+    pub(crate) hits_matched: u64,
+    pub(crate) words: Vec<SearchWord>,
+    pub(crate) hits_took: u32,
+    pub(crate) hits_query: Option<String>,
+    pub(crate) hits_everything: bool,
+    pub(crate) hits_outside: HashSet<String>,
 }
 
 impl Found {
@@ -343,6 +375,59 @@ impl Found {
         if n == self.asked {
             self.offline = true;
         }
+    }
+
+    /// SEARCH-3: the `search` answer to question `n` — taken if `n` is still
+    /// the newest, as [`Found::take`] takes `find`'s.
+    pub(crate) fn take_hits(
+        &mut self,
+        n: u32,
+        query: String,
+        hits: Vec<session::Hit>,
+        matched: u64,
+        words: Vec<SearchWord>,
+        outside: HashSet<String>,
+    ) -> bool {
+        if n != self.asked {
+            return false;
+        }
+        self.hits = hits;
+        self.hits_matched = matched;
+        self.words = words;
+        self.hits_took = n;
+        self.hits_query = Some(query);
+        self.hits_everything = self.wants_everything;
+        self.hits_outside = outside;
+        true
+    }
+
+    /// SEARCH-3: the hits to show for what is typed now, below `rows` (the
+    /// jump rows shown): the answer's, once it is the newest question's;
+    /// while one is out, the last answer's if the query only grew from its
+    /// query, in the same pass (fuzzy hits cannot be narrowed here, so they
+    /// stand until the answer comes); none for a blank query or offline —
+    /// and never a ticket a jump row shows already.
+    pub(crate) fn shown_hits(&self, typed: &str, rows: &[TicketSummary]) -> Vec<session::Hit> {
+        if self.offline || typed.trim().is_empty() {
+            return Vec::new();
+        }
+        let current = self.hits_took == self.asked;
+        let grew = self.hits_query.as_deref().is_some_and(|q| narrows(q, typed)) && self.hits_everything == self.wants_everything;
+        if !current && !grew {
+            return Vec::new();
+        }
+        let jump: HashSet<&str> = rows.iter().map(|t| t.id.as_str()).collect();
+        self.hits.iter().filter(|h| !jump.contains(h.summary.id.as_str())).cloned().collect()
+    }
+
+    /// SEARCH-3: the section's heading — and, when the server corrected a
+    /// word, what it searched for: each word as its nearest correction.
+    pub(crate) fn hits_heading(&self) -> String {
+        if self.words.iter().all(|w| w.also.is_empty()) {
+            return "In bodies".to_string();
+        }
+        let read: Vec<&str> = self.words.iter().map(|w| w.also.first().unwrap_or(&w.word).as_str()).collect();
+        format!("In bodies · {}", read.join(" "))
     }
 
     /// The rows to show for what is typed now: the answer, once it is the
@@ -1041,6 +1126,49 @@ fn ask_find(found: RwSignal<Found>, n: u32, query: String, pass: Pass, then: imp
     });
 }
 
+/// SEARCH-3: question `n` asked of both — `find`, the jump rows, and
+/// `search`, the hits in bodies — in the same pass.
+fn ask(found: RwSignal<Found>, n: u32, query: String, pass: Pass, then: impl FnOnce() + 'static) {
+    ask_search(found, n, query.clone(), pass.clone());
+    ask_find(found, n, query, pass, then);
+}
+
+/// SEARCH-3: ask `search` question `n` (`query`), and take the answer if it
+/// is still the newest. A blank query asks nothing: it has no hits. A filter
+/// the server did not take, or a call that failed, is no hits — `find`'s
+/// answer says why. "Search everything" marks the hits outside the filter
+/// (`member`), as [`ask_find`] marks its rows.
+fn ask_search(found: RwSignal<Found>, n: u32, query: String, pass: Pass) {
+    if query.trim().is_empty() {
+        found.try_update(|f| f.take_hits(n, query, Vec::new(), 0, Vec::new(), HashSet::new()));
+        return;
+    }
+    spawn_local(async move {
+        if session::client().is_none() {
+            return;
+        }
+        let (hits, matched, words) = match session::search_under(query.clone(), PALETTE_HITS, pass.filter).await {
+            Ok(Ok(answer)) => answer,
+            Ok(Err(_)) | Err(_) => (Vec::new(), 0, Vec::new()),
+        };
+        let mut outside = HashSet::new();
+        if let (Some(mark), false) = (pass.mark, hits.is_empty()) {
+            match session::member(hits.iter().map(|h| h.summary.id.clone()).collect(), mark).await {
+                Ok(answer) => outside.extend(answer.into_iter().filter(|(_, m)| !m).map(|(id, _)| id)),
+                Err(why) => leptos::logging::log!("palette: member: {why}"),
+            }
+        }
+        found.try_update(|f| f.take_hits(n, query, hits, matched, words, outside));
+    });
+}
+
+/// SEARCH-3: marked stretches as text, the matched words in `<mark>`.
+fn marked(runs: Vec<Marked>) -> impl IntoView {
+    runs.into_iter()
+        .map(|r| if r.hit { view! { <mark>{r.text}</mark> }.into_any() } else { view! { {r.text} }.into_any() })
+        .collect_view()
+}
+
 /// The jump palette: an input over a listbox of matches. The input keeps
 /// focus (ARIA combobox pattern — the highlighted row is named by
 /// `aria-activedescendant`, never focused), so typing and moving are the
@@ -1064,6 +1192,12 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
         let q = query.get();
         found.with(|f| f.shown(&q))
     });
+    // SEARCH-3: the hits in bodies, below the jump rows — none a jump row
+    // already shows.
+    let hits = Memo::new(move |_| {
+        let q = query.get();
+        results.with(|rows| found.with(|f| f.shown_hits(&q, rows)))
+    });
     // FILTER-22: `filter <shortcode>` — the shortcodes it offers, above the
     // tickets.
     let sctree = lens.sctree();
@@ -1080,7 +1214,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
         everything.set(e);
         hi.set(0);
         let n = found.try_update(|f| f.ask_pass(e)).unwrap_or(0);
-        ask_find(found, n, query.get_untracked(), pass_now(), || {});
+        ask(found, n, query.get_untracked(), pass_now(), || {});
     };
     // Row `i` of every row: the shortcodes offered, the tickets, then —
     // under a global filter — the other pass.
@@ -1092,11 +1226,16 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
             return;
         }
         let i = i - cmds;
-        let hit = results.with_untracked(|r| r.get(i).map(|t| t.id.clone()));
-        if let Some(id) = hit {
+        let len = results.with_untracked(Vec::len);
+        // SEARCH-3: the jump rows, then the hits in bodies.
+        let row = results.with_untracked(|r| r.get(i).map(|t| t.id.clone())).or_else(|| {
+            let j = i.checked_sub(len)?;
+            hits.with_untracked(|h| h.get(j).map(|h| h.summary.id.clone()))
+        });
+        if let Some(id) = row {
             close_overlay(overlay);
             navigate_to_ticket(&id);
-        } else if under && i == results.with_untracked(Vec::len) {
+        } else if under && i == len + hits.with_untracked(Vec::len) {
             widen();
         }
     };
@@ -1113,7 +1252,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     };
     // Opening is the head of the store, asked at once.
     let first = found.try_update(Found::ask).unwrap_or(0);
-    ask_find(found, first, String::new(), pass_now(), answered);
+    ask(found, first, String::new(), pass_now(), answered);
     // The connection: lost, the palette says so and shows nothing as
     // current; back, it asks the newest question again.
     let link = session::link();
@@ -1126,7 +1265,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
             });
         } else if was == Some(false) {
             let n = found.try_update(Found::ask).unwrap_or(0);
-            ask_find(found, n, query.get_untracked(), pass_now(), answered);
+            ask(found, n, query.get_untracked(), pass_now(), answered);
         }
         up
     });
@@ -1138,7 +1277,8 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
 
     let on_key = move |ev: web_sys::KeyboardEvent| {
         let key = ev.key();
-        let len = results.with_untracked(Vec::len);
+        // SEARCH-3: the jump rows and the hits in bodies, as one list.
+        let len = results.with_untracked(Vec::len) + hits.with_untracked(Vec::len);
         // FILTER-22: the shortcodes offered come first.
         let cmds = offers.with_untracked(Vec::len);
         // FILTER-16: under a global filter the last row ("Search everything")
@@ -1211,7 +1351,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                     aria-activedescendant=move || format!("pal-{}", hi.get())
                     autocomplete="off"
                     spellcheck="false"
-                    placeholder="jump to a ticket — code or title"
+                    placeholder="jump to a ticket — code, title, or words inside"
                     prop:value=move || query.get()
                     on:input=move |ev| {
                         query.set(event_target_value(&ev));
@@ -1223,7 +1363,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                             dom::sleep_ms(DEBOUNCE_MS).await;
                             if found.try_with_untracked(|f| f.asked) == Some(n) {
                                 if let Some(q) = query.try_get_untracked() {
-                                    ask_find(found, n, q, pass_now(), answered);
+                                    ask(found, n, q, pass_now(), answered);
                                 }
                             }
                         });
@@ -1238,10 +1378,13 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                     {move || {
                         let shown = results.get();
                         let len = shown.len();
+                        // SEARCH-3: the hits in bodies, after the jump rows.
+                        let inside = hits.get();
+                        let n_hits = inside.len();
                         // FILTER-22: the shortcodes `filter …` offers, first.
                         let cmds = offers.get();
                         let base = cmds.len();
-                        let cur = hi.get().min((base + len + usize::from(under)).saturating_sub(1));
+                        let cur = hi.get().min((base + len + n_hits + usize::from(under)).saturating_sub(1));
                         let cmd_rows = cmds
                             .into_iter()
                             .enumerate()
@@ -1269,7 +1412,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                         // other pass.
                         let wide = under.then(|| {
                             let e = everything.get();
-                            let at = base + len;
+                            let at = base + len + n_hits;
                             view! {
                                 <li
                                     id=format!("pal-{at}")
@@ -1285,6 +1428,48 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                                 </li>
                             }
                         });
+                        // SEARCH-3: a heading, then a row per hit — its code,
+                        // its title and status, and its passage beneath, the
+                        // matched words marked.
+                        let section = (n_hits > 0).then(|| {
+                            let head = found.with(Found::hits_heading);
+                            let outside = found.with(|f| f.hits_outside.clone());
+                            let rows = inside
+                                .into_iter()
+                                .enumerate()
+                                .map(|(k, h)| {
+                                    let i = base + len + k;
+                                    let id = h.summary.id.clone();
+                                    let status = h.summary.status;
+                                    let out = outside.contains(&id);
+                                    view! {
+                                        <li
+                                            id=format!("pal-{i}")
+                                            role="option"
+                                            class="pal-hit"
+                                            aria-selected=if i == cur { "true" } else { "false" }
+                                            class:hi=i == cur
+                                            class:outside=out
+                                            data-pal-hit=id.clone()
+                                            on:click=move |_| open_at(i)
+                                        >
+                                            <span class="pal-line">
+                                                <span class="code">{id.clone()}</span>
+                                                <span class="label">{marked(h.title)}</span>
+                                                {out.then(|| view! { <span class="pal-out">"outside the filter"</span> })}
+                                                <span class=format!("tag {}", st_class(status.as_str()))>{status.to_string()}</span>
+                                            </span>
+                                            <span class="pal-snip">{marked(h.snippet)}</span>
+                                        </li>
+                                    }
+                                })
+                                .collect_view();
+                            view! { <li class="pal-head" role="presentation">{head}</li> {rows} }
+                        });
+                        if shown.is_empty() && section.is_some() {
+                            let word = if under && !found.with(|f| f.everything) { "no code or title inside the global filter matches" } else { "no code or title matches" };
+                            return view! { {cmd_rows} <li class="empty">{word}</li> {section} {wide} }.into_any();
+                        }
                         if shown.is_empty() {
                             let word = found.with(|f| {
                                 if f.offline {
@@ -1328,7 +1513,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                                 }
                             })
                             .collect_view();
-                        view! { {cmd_rows} {rows} {wide} }.into_any()
+                        view! { {cmd_rows} {rows} {section} {wide} }.into_any()
                     }}
                 </ul>
                 <div class="hint">
@@ -1478,6 +1663,73 @@ mod tests {
 
     fn ids(rows: Vec<TicketSummary>) -> Vec<String> {
         rows.into_iter().map(|t| t.id).collect()
+    }
+
+    /// SEARCH-3: a hit in bodies — its passage one marked word.
+    fn inside(id: &str, word: &str) -> crate::session::Hit {
+        crate::session::Hit {
+            summary: hit(id, "a title"),
+            title: vec![menger_tickets_api::Marked { text: "a title".into(), hit: false }],
+            snippet: vec![menger_tickets_api::Marked { text: word.into(), hit: true }],
+            corrected: false,
+        }
+    }
+
+    fn hit_ids(hits: Vec<crate::session::Hit>) -> Vec<String> {
+        hits.into_iter().map(|h| h.summary.id).collect()
+    }
+
+    /// SEARCH-3: the hits in bodies are numbered as `find`'s answers are —
+    /// one to an older question is dropped — and shown below the jump rows
+    /// without the tickets those already show; while a question is out, the
+    /// last hits stand if the query only grew, in the same pass; a blank
+    /// query and no connection show none.
+    #[test]
+    fn the_newest_hits_show_below_the_jump_rows() {
+        use std::collections::HashSet;
+        let words = |w: &str, also: &[&str]| menger_tickets_api::SearchWord { word: w.into(), also: also.iter().map(|a| a.to_string()).collect() };
+        let mut f = Found::default();
+        let old = f.ask();
+        let new = f.ask();
+        assert!(!f.take_hits(old, "plc".into(), vec![inside("AGS-9", "plc")], 1, Vec::new(), HashSet::new()), "an older answer");
+        let all = vec![inside("AGS-1", "placement"), inside("AGS-2", "placement"), inside("AGS-3", "placement")];
+        assert!(f.take_hits(new, "plcement wav".into(), all, 3, vec![words("plcement", &["placement", "placements"]), words("wav", &[])], HashSet::new()));
+        assert_eq!(hit_ids(f.shown_hits("plcement wav", &[])), ["AGS-1", "AGS-2", "AGS-3"]);
+        assert_eq!(hit_ids(f.shown_hits("plcement wav", &[hit("AGS-2", "a jump row")])), ["AGS-1", "AGS-3"], "a jump row shows AGS-2");
+        assert!(f.shown_hits("   ", &[]).is_empty(), "a blank query has no hits");
+        assert_eq!(f.hits_heading(), "In bodies · placement wav", "each word as its nearest correction");
+
+        let typed = f.ask();
+        assert_eq!(hit_ids(f.shown_hits("plcement wave", &[])).len(), 3, "the query grew: the hits stand");
+        assert!(f.shown_hits("other", &[]).is_empty(), "the query changed");
+        let wide = f.ask_pass(true);
+        assert!(f.shown_hits("plcement wave", &[]).is_empty(), "the other pass's hits are not these");
+        assert!(f.take_hits(wide, "plcement wave".into(), vec![inside("AGS-4", "wave")], 1, vec![words("plcement", &[]), words("wave", &[])], ["AGS-4".to_string()].into()));
+        assert!(f.hits_everything && f.hits_outside.contains("AGS-4"));
+        assert_eq!(f.hits_heading(), "In bodies", "nothing corrected");
+        assert!(!f.take_hits(typed, "late".into(), Vec::new(), 0, Vec::new(), HashSet::new()));
+        let gone = f.ask();
+        f.lost(gone);
+        assert!(f.shown_hits("plcement wave", &[]).is_empty(), "offline: none");
+    }
+
+    /// SEARCH-3: the count line adds how many tickets match inside, once
+    /// that answers what is typed — and says nothing of it otherwise.
+    #[test]
+    fn the_count_line_says_how_many_match_inside() {
+        use std::collections::HashSet;
+        let mut f = Found::default();
+        let n = f.ask();
+        assert!(f.take(n, "cache".into(), vec![hit("AGS-1", "the cache")], 0));
+        assert_eq!(count_words(&f, false), "1 matches", "no answer from search yet");
+        assert!(f.take_hits(n, "cache".into(), Vec::new(), 12, Vec::new(), HashSet::new()));
+        assert_eq!(count_words(&f, false), "1 matches · 12 in bodies");
+        assert_eq!(count_words(&f, true), "1 matches inside the global filter · 12 in bodies");
+        let m = f.ask();
+        assert!(f.take(m, "cachez".into(), Vec::new(), 0));
+        assert_eq!(count_words(&f, false), "0 matches", "the hits answer an older question");
+        assert!(f.take_hits(m, "cachez".into(), Vec::new(), 0, Vec::new(), HashSet::new()));
+        assert_eq!(count_words(&f, false), "0 matches");
     }
 
     /// SCALE-25: only the newest question's answer is shown — one that comes
