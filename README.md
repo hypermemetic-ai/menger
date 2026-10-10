@@ -1236,16 +1236,20 @@ Several providers can be configured together. An OIDC adapter claims a
 token by its `iss`, and the nostr adapter claims an event, so each
 credential reaches its own adapter. The credential rides the upgrade in the `access_token`
 cookie (a token), the `nostr` cookie (an event: a browser can only send
-cookies), or `Authorization: Bearer`. A credential that fails, or no credential at all,
-leaves the connection anonymous. `--require-login` refuses such an upgrade
-(401) instead. It needs `--no-rest`, because the REST bridge cannot carry
-an identity yet. `MENGER_AUTH_PROVIDERS` takes the specs separated by `;`, and
+cookies), or `Authorization: Bearer`. AUTH-7: no credential at all is the
+**anonymous view** — the connection is admitted and can reach only the auth
+door (`auth.providers`, `auth.login`, `auth.signup`; "The AUTH protocol"
+below); a credential presented as a bearer or the `access_token` cookie and
+refused is a 401 at the upgrade, with RFC 6750's challenge. (A bad `nostr`
+cookie, or a stale browser session cookie, presents nothing: the anonymous
+view.) `--require-login` puts the shell's pages behind the login page; it
+needs `--no-rest`, because the REST bridge cannot carry an identity yet. `MENGER_AUTH_PROVIDERS` takes the specs separated by `;`, and
 `MENGER_REQUIRE_LOGIN=1` sets the flag. A bad spec, or an issuer that is
 not `https://` off loopback, stops startup.
 
 | method | yields |
 |---|---|
-| `session.whoami {}` | `identity { principal, name, roles, tenant, provider }`, or `anonymous` |
+| `session.whoami {}` | `identity { principal, name, roles, tenant, provider }`, or `anonymous` (login off; under login, a signed-out session — AUTH-7: an anonymous connection asks `auth.*`) |
 | `session.providers {}` | one `provider { name, kind, issuer, audience }` per `--auth-provider` (`kind` `oidc` or `nostr`), none when login is off: what a sign-in needs, nothing secret |
 
 `comments.add` by a signed-in connection is authored by its identity's
@@ -1298,8 +1302,10 @@ page shows only its own words (no `?error=` text). The page is
 self-contained (`web/login.html`), so an IdP can host it later.
 
 `--require-login` puts the whole app behind it. `/`, `/app/…` and `/vanilla`
-redirect to `/login?next=…`, the socket refuses an upgrade without a session
-or a provider token, and **every method re-checks its caller on every call**
+redirect to `/login?next=…`. AUTH-7: with any provider, the socket admits an
+upgrade without a session or a provider token into the anonymous view (the
+auth door, nothing else), the protocol's gate decides **every call**, and
+**every method re-checks its caller's sign-in on every call**
 (`tickets-api/src/access.rs`). Signing out (`POST /logout`) or a session
 expiring stops an open socket from answering, and ends its `watch`. The socket
 admits browser pages only from the shell's own origins (IDENTITY-29, with or
@@ -1366,8 +1372,9 @@ Every read is answered under the caller's filter **and** their viewer
 scopes. `list --filter 'status Ready'` from someone with IDENTITY and OUGHT
 is `status Ready and under in (IDENTITY, OUGHT)`. A ticket out of reach is
 `not_found`. `groups`, `extents`, `waves`, `health` and `watch` hear only
-what is in reach. A write needs the role on every ticket it touches
-(`editor on OUGHT needed for OUGHT-2`). A comment is signed with the
+what is in reach. A write needs the role on every ticket it touches — AUTH-7:
+refused by the gate, typed (`forbidden { grant: tickets.amend, scope: OUGHT,
+roles, held_on }`). A comment is signed with the
 caller's principal (`principal` beside `author`), whatever `author` says.
 Someone signed in with no grant reaches nothing and waits in
 `members.requests` for an admin. With login off, nothing here applies.
@@ -1383,7 +1390,8 @@ Someone signed in with no grant reaches nothing and waits in
 The first admin is the operator's: `--admin <principal>` (repeatable,
 `MENGER_ADMINS`) holds admin on `*`. Grants live in the `members` table,
 stored form 8: a file in form 6 or 7 gains it in place, and an older build
-reads a form-8 file as its own. `tests/members.rs` runs the roles over the
+reads a form-8 file as its own. (AUTH-7: form 9 adds the `roles` table, the
+same way.) `tests/members.rs` runs the roles over the
 real socket.
 
 ```sh
@@ -1422,8 +1430,10 @@ not offered on the login page or by `session.providers`.
    session keeps that scope as well (`scope` in the answer says the one
    asked, or inherited; empty is no ceiling beyond the grants).
 4. **`session.logout {}`** → `logged_out` ends the connection's session:
-   its token opens nothing (401 under `--require-login`, anonymous
-   otherwise), and connections on it answer "you have signed out".
+   its token opens nothing (a 401 at the upgrade: it is presented and
+   refused), and connections on it answer "you have signed out".
+   AUTH-7: `auth.login {session {ttl_secs, ceiling}}` and `auth.logout` are
+   the same, in the protocol's words (`ceiling` takes `grant@SCOPE` too).
 
 A key is granted like anyone: `members grant --principal key:<hex>`.
 `tests/agent_login.rs` runs it over the real socket.
@@ -1433,6 +1443,72 @@ PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --no-rest --db-p
   --auth-provider key --require-login --admin key:<hex>
 synapse -P 4460 _login menger --key agent-7 --as worker-3 --scope editor@MENGER-12   # synapse's side: IDENTITY-43
 ```
+
+### The AUTH protocol (AUTH-7)
+
+With login on, menger speaks Plexus's own auth (AUTH-1): **every method is
+its own grant** (`tickets.set_status`), a **role is an explicit list of
+grants**, and plexus-core's **gate** decides every call before it runs — the
+grant, held through a role on the scope the call's **target** lives in,
+within the session's ceiling. Default deny. menger supplies the gate its
+roles, memberships and scopes (`tickets-api/src/access.rs`, `Book`) and an
+`AuthBackend` (`src/auth_backend.rs`). Login off: no gate, no `auth`
+activation — every method answers everyone, as before; schemas only gain
+`grant` and `target` on each method.
+
+| role | its grants (declared with `roles(...)` on each activation) |
+|---|---|
+| `viewer` | the reads: `tickets.{health, get, list, ready_set, find, search, member, groups, components, inputs, extents, counts, facets, tree, waves, blockers, watch}`, `comments.{add, list, watch}` |
+| `editor` | viewer's, and the writes: `tickets.{create, set_status, set_kind, set_parent, amend, link_commits, unlink_commits, answer, clear_answer, close_input, reopen_input}`, `comments.{resolve, reopen}` |
+| `admin` | every grant (built in): `members.{list, grant, revoke, requests}`, `auth.{roles, role_set, grant, revoke, waiting}` |
+| any signed-in caller | `session.*`, `members.mine`, `auth.{whoami, logout, requires}` |
+
+A **write's target** is the ticket it acts on (`id`, or `ticket` for an
+input), and resolves to the scopes the filter language's `under` covers:
+its shortcode, itself, its ancestors, and the shortcodes hosting its
+shortcode — a membership on PLEXUS reaches IDENTITY-12, a ceiling on
+MENGER-12 reaches what is under it. `members.grant` / `revoke` target their
+`scope`. A **read** has no target: the gate lets it by where its grant is
+held anywhere, and it answers only from there (the caller's filter AND
+`under` those scopes, and each ceiling layer's) — a ticket out of reach is
+still `not_found`. Moving a shortcode's root, creating a ticket and
+commenting check the rest themselves, as before.
+
+- **The anonymous view**: an anonymous socket's `_info` says `view:
+  anonymous`, names `auth.providers`, `auth.login`, `auth.signup` and the
+  RFC 9728 metadata (`GET /.well-known/oauth-protected-resource` on the
+  socket's port); every schema shows only those; every other call is
+  refused `unauthenticated`.
+- **A caller's view**: `_info` and every `schema` list only the methods
+  the caller holds, each with `grant`, `target` and `held_on`; `view_hash`
+  differs by holdings.
+- **A refusal** is the stream's error item: `{type: error, error_kind:
+  forbidden, grant, scope, roles, held_on, message: "needs tickets.amend on
+  OUGHT"}`.
+- **`auth.*`**: `providers`; `login {browser {redirect}}` → `login_url`
+  (`<public-url>/login?cli=1&state=…`; the person signs in on the page as
+  anyone does, and the shell's `/auth/cli` sends the browser to the
+  client's loopback `redirect?code=…&state=…` — only `http://127.0.0.1:<port>`
+  or `localhost`; a sign-in older than two minutes asks first), `login {code
+  {code, state}}` → `session` (an `mgs_` token; the code works once, for a
+  minute, for its state), `login {session {ttl_secs, ceiling}}` (agents);
+  `signup` (someone signed in holding nothing waits for an admin); `whoami`,
+  `logout`, `requires {method}`; `roles`, `role_set {role, grants}` (admin on
+  `*`; kept in the store's `roles` table, stored form 9, and it wins over the
+  declared list), `grant`, `revoke`, `waiting`.
+- `session.*` and `members.*` stay, unchanged on the wire, over the same
+  tables (the browser app speaks them).
+
+```sh
+synapse -P 4460 menger                                   # anonymous: the door
+synapse -P 4460 -t "$MGS" menger auth whoami
+synapse -P 4460 -t "$MGS" menger auth requires --method tickets.set_status
+synapse -P 4460 -t "$ADMIN" menger auth role_set --role viewer --grants tickets.get,tickets.list
+```
+
+`tests/auth_protocol.rs` runs it over the built binary (and pins the method →
+role table against IDENTITY-21's); `tests/login_page.rs` runs the loopback
+sign-in end to end.
 
 ## Diagrams — the `diagrams` service (COMPILE-4)
 

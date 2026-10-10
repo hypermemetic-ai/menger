@@ -1,7 +1,16 @@
 use menger_tickets_api::access::Access;
 use menger_tickets_api::{Comments, Members, ProviderOffer, Session, Tickets};
 use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError};
-use plexus_core::plexus::DynamicHub;
+use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
+
+use crate::auth_backend::MengerAuth;
+
+/// AUTH-7: the methods any signed-in caller reaches under login, whatever
+/// it holds or its ceiling — beside the protocol's own (`auth.whoami`,
+/// `auth.logout`, `auth.requires`): who it is, its own grants (the app asks
+/// before anything, and shows "no access yet" from it), and IDENTITY-42's
+/// sessions (an agent's key holds nothing until an admin grants it).
+pub const SIGNED_IN_GRANTS: [&str; 5] = ["session.whoami", "session.login", "session.logout", "session.providers", "members.mine"];
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -54,12 +63,39 @@ pub async fn build_rpc_seeded(
 /// IDENTITY-15: [`build_rpc_seeded`], with `session.providers` offering
 /// these providers (main's `--auth-provider`s). IDENTITY-19: and every
 /// `tickets` and `comments` method behind `access`.
+///
+/// AUTH-7: with login on (`Access::with_login`), the hub carries the
+/// protocol's gate and `auth` activation ([`build_rpc_login`]) over a
+/// backend that mints sessions on a signed-in connection but has no login
+/// page to send a person to (`auth.login {browser}` is refused) — what the
+/// tests that wire their own transport need.
 pub async fn build_rpc_offering(
     db_path: &Path,
     seed: Option<SeedSpec>,
     shape: SeedShape,
     offers: Vec<ProviderOffer>,
     access: Access,
+) -> anyhow::Result<Arc<DynamicHub>> {
+    let providers: Vec<AuthProvider> =
+        offers.iter().map(|o| AuthProvider { name: o.name.clone(), kind: AuthKind::Browser, label: None }).collect();
+    let backend = Arc::new(MengerAuth::new(access.clone(), providers, None));
+    build_rpc_login(db_path, seed, shape, offers, access, backend, None).await
+}
+
+/// AUTH-7: the hub, and — when `access` has login on — the protocol's gate
+/// in front of every call and its `auth` activation, over `backend` and the
+/// store's roles, members and scopes ([`Access::book`]): `with_auth`, the
+/// declared roles seeded, menger's own signed-in methods
+/// ([`SIGNED_IN_GRANTS`]), and `resource_metadata` (RFC 9728's URL) named to
+/// an anonymous `_info`. Without login: the hub as it always was, no gate.
+pub async fn build_rpc_login(
+    db_path: &Path,
+    seed: Option<SeedSpec>,
+    shape: SeedShape,
+    offers: Vec<ProviderOffer>,
+    access: Access,
+    backend: Arc<dyn AuthBackend>,
+    resource_metadata: Option<String>,
 ) -> anyhow::Result<Arc<DynamicHub>> {
     let path = db_path.to_path_buf();
     let started = Instant::now();
@@ -115,12 +151,24 @@ pub async fn build_rpc_offering(
     let store = Arc::new(store);
     // IDENTITY-21: the members that decide, from the same store.
     access.attach(Arc::clone(&store));
-    Ok(Arc::new(
-        DynamicHub::new("menger")
-            .register(Tickets::with_access(Arc::clone(&store), access.clone()))
-            .register(Comments::with_access(Arc::clone(&store), access.clone()))
-            .register(Members::new(store, access.clone()))
-            // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
-            .register(Session::offering(offers).with_access(access)),
-    ))
+    let mut hub = DynamicHub::new("menger")
+        .register(Tickets::with_access(Arc::clone(&store), access.clone()))
+        .register(Comments::with_access(Arc::clone(&store), access.clone()))
+        .register(Members::new(store, access.clone()))
+        // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
+        .register(Session::offering(offers).with_access(access.clone()));
+    if access.login() {
+        // AUTH-7: the gate reads the same book the methods ask; the roles
+        // the activations declare are what a role holds until an admin
+        // edits it.
+        let book = access.book();
+        hub = hub
+            .with_auth(AuthSetup::new(backend, book.clone(), book.clone(), book.clone()))
+            .with_signed_in_grants(SIGNED_IN_GRANTS);
+        if let Some(url) = resource_metadata {
+            hub = hub.with_resource_metadata(url);
+        }
+        book.seed(hub.declared_roles());
+    }
+    Ok(Arc::new(hub))
 }

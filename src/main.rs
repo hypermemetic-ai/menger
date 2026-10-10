@@ -4,9 +4,10 @@ use menger::login::{self, LoginButton, Provider};
 use menger::sessions::{Gate, Sessions};
 use menger::web_login::{Login, LoginConfig};
 use menger_tickets_api::access::Access;
-use menger::{build_rpc_offering, default_db_path, shell};
+use menger::auth_backend::{BrowserLogin, MengerAuth};
+use menger::{build_rpc_login, default_db_path, shell};
 use plexus_core::plexus::DynamicHub;
-use plexus_transport::{RestHttpConfig, RouteFn, TransportServer};
+use plexus_transport::{ProtectedResource, RestHttpConfig, RouteFn, TransportServer};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -123,9 +124,13 @@ struct Args {
     #[arg(long = "auth-provider", env = "MENGER_AUTH_PROVIDERS", value_name = "SPEC", value_delimiter = ';')]
     auth_provider: Vec<Provider>,
 
-    /// IDENTITY-14: refuse a WebSocket upgrade that proves no one. Needs an
-    /// --auth-provider, and --no-rest: the REST bridge cannot carry an
-    /// identity yet. As an env var, 1/true/yes enable it.
+    /// IDENTITY-14: the shell's pages need a session (the app's routes go
+    /// to the login page). Needs an --auth-provider, and --no-rest: the REST
+    /// bridge cannot carry an identity yet. As an env var, 1/true/yes enable
+    /// it. AUTH-7: the socket no longer refuses an upgrade that proves no
+    /// one — with any --auth-provider it admits it into the anonymous view
+    /// (auth.providers, auth.login, auth.signup, and nothing else), and the
+    /// gate decides every call.
     #[arg(
         long,
         env = "MENGER_REQUIRE_LOGIN",
@@ -305,7 +310,20 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
-    let hub = build_rpc_offering(&db_path, seed, args.seed_shape, offers, access).await?;
+    // AUTH-7: the protocol's auth — the gate and the `auth` activation —
+    // over menger's sessions, login page and members. RFC 9728's metadata
+    // names the OIDC issuers a client can sign in at.
+    let resource = format!("http://127.0.0.1:{}", args.port);
+    let issuers: Vec<String> = args.auth_provider.iter().filter_map(|p| p.oidc().map(|(issuer, _, _)| issuer.to_string())).collect();
+    let protected = ProtectedResource::new(resource, issuers);
+    let backend = Arc::new(MengerAuth::new(
+        access.clone(),
+        MengerAuth::offered(&args.auth_provider),
+        web_login.as_ref().map(|_| BrowserLogin { sessions: sessions.clone(), public_url: public_url.clone() }),
+    ));
+    let metadata = (login_on && !args.stdio).then(|| protected.metadata_url());
+    let access_for_gate = access.clone();
+    let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, backend, metadata).await?;
 
     let activations = hub.list_activations_info();
     tracing::info!("Activations ({}):", activations.len());
@@ -337,17 +355,20 @@ async fn main() -> anyhow::Result<()> {
         origins.extend(args.allowed_origin.iter().cloned());
         builder = builder.with_allowed_origins(origins);
         if let Some(carriers) = boundary {
-            let gate = Gate::new(sessions.clone(), Some(carriers));
-            builder = builder.with_session_validator(Arc::new(gate));
-            if args.require_login {
-                builder = builder.reject_upgrade_on_auth_failure();
-            }
+            let gate = Gate::new(sessions.clone(), Some(carriers)).noticing(access_for_gate.clone());
+            // AUTH-6/AUTH-7: no credential → admitted into the anonymous
+            // view (only the auth door); a credential presented and refused
+            // → 401 with RFC 6750's challenge. Presented means a bearer, or
+            // the `access_token` cookie — not the browser's session cookie,
+            // so a stale one falls into the anonymous view, which the app
+            // reads (it signs in again), never a 401 it cannot.
+            builder = builder
+                .with_session_validator(Arc::new(gate))
+                .anonymous_view()
+                .credential_cookies(["access_token"])
+                .with_protected_resource(protected.clone());
             let names: Vec<&str> = args.auth_provider.iter().map(|p| p.name()).collect();
-            tracing::info!(
-                "Login:     {} — anonymous callers {}",
-                names.join(", "),
-                if args.require_login { "refused" } else { "admitted" }
-            );
+            tracing::info!("Login:     {} — anonymous callers see only the auth door", names.join(", "));
         }
         if !args.no_rest {
             let route_hub = hub.clone();

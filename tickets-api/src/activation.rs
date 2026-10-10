@@ -42,11 +42,9 @@ use futures::{Stream, StreamExt};
 #[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
-use crate::access::{Access, Caller};
+use crate::access::{Access, Caller, ADMINISTER};
 #[cfg(feature = "server")]
-use crate::members::Role;
-#[cfg(feature = "server")]
-use plexus_core::plexus::AuthContext;
+use plexus_core::plexus::{AuthContext, Grant, Reach};
 
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]
@@ -262,20 +260,34 @@ fn input_event(written: Result<InputWrite, StoreError>, ticket: String) -> Ticke
 // The attribute is NOT `#[cfg]`-gated: it has to run in the client-only
 // build too, or there would be no client. `server_cfg` tells it to put the
 // server half — this impl block included — behind the feature.
+// AUTH-7: the default roles, explicit lists of grants (AUTH-1) — what
+// IDENTITY-21's three roles meant, method by method: `viewer` reads,
+// `editor` reads and writes; `admin`, built in, holds every grant. An
+// admin's `auth.role_set` edit wins over these (kept in the store).
 #[plexus_macros::activation(
     namespace = "tickets",
     description = "Plans as data — create, query, and watch the work DAG",
     client,
     server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core"
+    crate_path = "plexus_core",
+    roles(
+        viewer = [
+            "health", "get", "list", "ready_set", "find", "search", "member", "groups", "components",
+            "inputs", "extents", "counts", "facets", "tree", "waves", "blockers", "watch"
+        ],
+        editor = [
+            viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
+            "unlink_commits", "answer", "clear_answer", "close_input", "reopen_input"
+        ],
+    )
 )]
 impl Tickets {
     /// Heartbeat. Returns the binary version, the server's unix time, and
     /// how many tickets the store holds.
     #[plexus_macros::method(description = "Heartbeat — version, unix time, ticket count")]
-    pub async fn health(&self, auth: Option<&AuthContext>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn health(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -335,7 +347,7 @@ impl Tickets {
         )
     )]
     pub async fn create(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         epic: String,
         title: String,
         kind: Option<String>,
@@ -346,7 +358,7 @@ impl Tickets {
         path: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -355,16 +367,20 @@ impl Tickets {
                     return;
                 }
             };
-            // IDENTITY-21: editor on the parent, or on the shortcode's root;
-            // a shortcode with neither needs editor everywhere.
+            // IDENTITY-21: `tickets.create` held on the parent, or on the
+            // shortcode's root; a shortcode with neither needs it on `*`.
+            // AUTH-7: the gate's own question, as it stands now (create
+            // names no single target the gate could resolve beforehand).
             let anchor = match parent.as_deref() {
                 Some(p) => Some(p.to_string()),
                 None => store.groups().into_iter().find(|g| g.epic.eq_ignore_ascii_case(&epic)).and_then(|g| g.root),
             };
-            let allowed = match &anchor {
-                Some(a) => caller.require(Role::Editor, &[a.as_str()], &store),
-                None if caller.everywhere(Role::Editor) => Ok(()),
-                None => Err(format!("a new shortcode {} needs editor on *", epic.to_ascii_uppercase())),
+            let allowed = match (&anchor, caller.grant.clone()) {
+                (_, None) => Ok(()),
+                (Some(a), Some(g)) => caller.check(&g, a),
+                (None, Some(g)) => caller
+                    .check(&g, "*")
+                    .map_err(|_| format!("a new shortcode {} needs {g} on *", epic.to_ascii_uppercase())),
             };
             if let Err(message) = allowed {
                 yield TicketsEvent::Error { message };
@@ -373,14 +389,14 @@ impl Tickets {
             // IDENTITY-37: a blocker the caller cannot view is refused —
             // by its shortcode, read from the id, so a hidden ticket and an
             // id naming none get the same answer.
-            let reach = match view_lens(&caller) {
+            let reach = match sight_lens(&caller) {
                 Ok(r) => r,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
-            let visible = match visible_epics(&store, &caller) {
+            let visible = match sight_epics(&store, &caller) {
                 Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
@@ -390,7 +406,7 @@ impl Tickets {
             if let Some(v) = &visible {
                 let hidden = blocked_by.iter().flatten().find(|b| !v.contains(&shortcode_of(b.trim()).to_ascii_uppercase()));
                 if let Some(b) = hidden {
-                    yield TicketsEvent::Error { message: format!("blocked_by: {}", caller.lacks(Role::Viewer, Some(b.trim()))) };
+                    yield TicketsEvent::Error { message: format!("blocked_by: {}", caller.lacks(&Grant::new(crate::access::SEES), Some(b.trim()))) };
                     return;
                 }
             }
@@ -434,9 +450,9 @@ impl Tickets {
         description = "Get one ticket by id, or by path address SHORTCODE/path (e.g. PLEXUS/_MENGER/board)",
         params(id = "Ticket id, e.g. MNG-2 — or a path address, e.g. PLEXUS/_MENGER/board")
     )]
-    pub async fn get(&self, auth: Option<&AuthContext>, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -445,7 +461,7 @@ impl Tickets {
                     return;
                 }
             };
-            if caller.require(Role::Viewer, &[id.as_str()], &store).is_err() {
+            if caller.require(&[id.as_str()], &store).is_err() {
                 yield TicketsEvent::NotFound { id: id };
                 return;
             }
@@ -499,7 +515,7 @@ impl Tickets {
         )
     )]
     pub async fn list(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         epic: Option<String>,
         status: Option<String>,
         parent: Option<String>,
@@ -510,7 +526,7 @@ impl Tickets {
         at: Option<u64>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -590,6 +606,7 @@ impl Tickets {
     /// status — and `Doc` is a doc's own: setting it on any other kind is an
     /// in-band `Error` too. Neither writes anything.
     #[plexus_macros::method(
+        target = "id",
         description = "Set a ticket's status (not a doc's: a doc has no lifecycle)",
         params(
             id = "Ticket id, e.g. MNG-2",
@@ -597,21 +614,16 @@ impl Tickets {
         )
     )]
     pub async fn set_status(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         id: String,
         status: String,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if let Err(message) = caller.require(Role::Editor, &[id.as_str()], &store) {
+            // AUTH-7: the gate held the grant on the target; the sign-in
+            // must still stand.
+            if let Err(message) = admitted {
                 yield TicketsEvent::Error { message };
                 return;
             }
@@ -649,6 +661,7 @@ impl Tickets {
     /// first, then the `GroupChanged`, `PlacementsChanged` and (filtered)
     /// `Entered` / `Left` it caused, as for a status change.
     #[plexus_macros::method(
+        target = "id",
         description = "Set a ticket's kind; everything kept by kind moves with it (to a doc: status Doc; from a doc: the status given, else Epic for a scope and Pending otherwise)",
         params(
             id = "Ticket id, e.g. IDENTITY-1",
@@ -657,22 +670,17 @@ impl Tickets {
         )
     )]
     pub async fn set_kind(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         id: String,
         kind: String,
         status: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if let Err(message) = caller.require(Role::Editor, &[id.as_str()], &store) {
+            // AUTH-7: the gate held the grant on the target; the sign-in
+            // must still stand.
+            if let Err(message) = admitted {
                 yield TicketsEvent::Error { message };
                 return;
             }
@@ -708,6 +716,7 @@ impl Tickets {
     /// side: `ChildrenChanged` for the new parent and `ChildRemoved` for
     /// the old one — each the parent's id and new `child_count` (SCALE-4).
     #[plexus_macros::method(
+        target = "id",
         description = "Set a ticket's parent — the ticket it is an output of; adopts a parentless ticket or moves one",
         params(
             id = "Ticket id to file, e.g. AGS-2",
@@ -715,12 +724,12 @@ impl Tickets {
         )
     )]
     pub async fn set_parent(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         id: String,
         parent: String,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -732,13 +741,17 @@ impl Tickets {
             // IDENTITY-37: a shortcode's root moves the shortcode — and
             // whoever administers its new host administers it — so it takes
             // admin on the shortcode and on where it goes; any other ticket
-            // moves inside its shortcode, and takes editor.
+            // moves inside its shortcode, and takes `tickets.set_parent` on
+            // both sides. AUTH-7: the gate held the grant on `id` (the
+            // target); the rest is its own question, as it stands now.
             let root = store.groups().into_iter().any(|g| g.root.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(id.trim())));
-            let role = if root { Role::Admin } else { Role::Editor };
-            if let Err(message) = caller.require(role, &[id.as_str(), parent.as_str()], &store) {
-                let message = if root { format!("moving a shortcode's root takes admin on it and on its new host: {message}") } else { message };
-                yield TicketsEvent::Error { message };
-                return;
+            let wanted = if root { Some(Grant::new(ADMINISTER)) } else { caller.grant.clone() };
+            if let Some(g) = wanted {
+                if let Err(message) = caller.check(&g, &id).and_then(|()| caller.check(&g, &parent)) {
+                    let message = if root { format!("moving a shortcode's root takes admin on it and on its new host: {message}") } else { message };
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
             }
             match store.set_parent(&id, &parent).await {
                 Ok(change) => yield change_event(change),
@@ -762,6 +775,7 @@ impl Tickets {
     /// block, or a name another ticket defines, is an in-band `Error` (the
     /// latter naming that ticket) and nothing is written, title included.
     #[plexus_macros::method(
+        target = "id",
         description = "Replace a ticket's title and/or body (whole values); yields amended { ticket, changed }",
         params(
             id = "Ticket id, e.g. MNG-2",
@@ -770,22 +784,17 @@ impl Tickets {
         )
     )]
     pub async fn amend(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         id: String,
         title: Option<String>,
         body: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if let Err(message) = caller.require(Role::Editor, &[id.as_str()], &store) {
+            // AUTH-7: the gate held the grant on the target; the sign-in
+            // must still stand.
+            if let Err(message) = admitted {
                 yield TicketsEvent::Error { message };
                 return;
             }
@@ -812,6 +821,7 @@ impl Tickets {
     /// nothing else — not the status. `watch` carries every
     /// `CommitsLinked` that added something.
     #[plexus_macros::method(
+        target = "id",
         description = "Link commits to a ticket (the commits that finished it); yields commits_linked { ticket, added }",
         params(
             id = "Ticket id, e.g. MNG-10",
@@ -819,21 +829,16 @@ impl Tickets {
         )
     )]
     pub async fn link_commits(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         id: String,
         commits: Vec<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if let Err(message) = caller.require(Role::Editor, &[id.as_str()], &store) {
+            // AUTH-7: the gate held the grant on the target; the sign-in
+            // must still stand.
+            if let Err(message) = admitted {
                 yield TicketsEvent::Error { message };
                 return;
             }
@@ -853,6 +858,7 @@ impl Tickets {
     /// naming every entry that is not a reference. `watch` carries every
     /// `CommitsUnlinked` that removed something.
     #[plexus_macros::method(
+        target = "id",
         description = "Unlink commits from a ticket; yields commits_unlinked { ticket, removed }",
         params(
             id = "Ticket id, e.g. MNG-10",
@@ -860,21 +866,16 @@ impl Tickets {
         )
     )]
     pub async fn unlink_commits(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         id: String,
         commits: Vec<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if let Err(message) = caller.require(Role::Editor, &[id.as_str()], &store) {
+            // AUTH-7: the gate held the grant on the target; the sign-in
+            // must still stand.
+            if let Err(message) = admitted {
                 yield TicketsEvent::Error { message };
                 return;
             }
@@ -912,7 +913,7 @@ impl Tickets {
         )
     )]
     pub async fn ready_set(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         epic: Option<String>,
         after: Option<String>,
         limit: Option<u32>,
@@ -920,7 +921,7 @@ impl Tickets {
         filter: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1001,14 +1002,14 @@ impl Tickets {
         )
     )]
     pub async fn find(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         query: String,
         after: Option<String>,
         limit: Option<u32>,
         filter: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1062,14 +1063,14 @@ impl Tickets {
         )
     )]
     pub async fn search(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         query: String,
         filter: Option<String>,
         limit: Option<u32>,
         offset: Option<u32>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             // IDENTITY-21: only what this caller can see — its filter ANDed
             // with the shortcodes it holds a role on, as `find`'s is.
@@ -1129,9 +1130,9 @@ impl Tickets {
             filter = "A filter, e.g. 'status Ready' (FILTER-3's language; empty: every ticket)"
         )
     )]
-    pub async fn member(&self, auth: Option<&AuthContext>, ids: Vec<String>, filter: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn member(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<String>, filter: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1182,9 +1183,9 @@ impl Tickets {
     #[plexus_macros::method(
         description = "One roll-up per shortcode: done/total over its subtree's work, its docs, its root (with the root's title, status and kind), and the host it nests under"
     )]
-    pub async fn groups(&self, auth: Option<&AuthContext>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn groups(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1234,9 +1235,9 @@ impl Tickets {
     #[plexus_macros::method(
         description = "Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes"
     )]
-    pub async fn components(&self, auth: Option<&AuthContext>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn components(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1287,14 +1288,14 @@ impl Tickets {
         )
     )]
     pub async fn inputs(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         ticket: Option<String>,
         epic: Option<String>,
         state: Option<String>,
         filter: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1311,7 +1312,7 @@ impl Tickets {
                 }
             };
             if let Some(t) = ticket.as_deref() {
-                if caller.require(Role::Viewer, &[t], &store).is_err() {
+                if caller.require(&[t], &store).is_err() {
                     yield TicketsEvent::NotFound { id: t.to_string() };
                     return;
                 }
@@ -1357,6 +1358,7 @@ impl Tickets {
     /// removed from its body — and nothing is written. Never touches the
     /// body. `watch` carries the `InputChanged`.
     #[plexus_macros::method(
+        target = "ticket",
         description = "Answer an input: record a value (checked against its kind and options) with a rationale, a source and the time; yields input_changed",
         params(
             ticket = "Ticket id, e.g. INPUT-9",
@@ -1367,7 +1369,7 @@ impl Tickets {
         )
     )]
     pub async fn answer(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         ticket: String,
         input: String,
         value: InputValue,
@@ -1375,16 +1377,11 @@ impl Tickets {
         source: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if let Err(message) = caller.require(Role::Editor, &[ticket.as_str()], &store) {
+            // AUTH-7: the gate held the grant on the target; the sign-in
+            // must still stand.
+            if let Err(message) = admitted {
                 yield TicketsEvent::Error { message };
                 return;
             }
@@ -1407,6 +1404,7 @@ impl Tickets {
     /// when it held no answer (nothing written); `NotFound`; or an in-band
     /// `Error` — no such input, closed, removed, an unknown source.
     #[plexus_macros::method(
+        target = "ticket",
         description = "Clear an input's answer (open again; kept in its history, with a source); yields input_changed",
         params(
             ticket = "Ticket id, e.g. INPUT-9",
@@ -1415,22 +1413,17 @@ impl Tickets {
         )
     )]
     pub async fn clear_answer(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         ticket: String,
         input: String,
         source: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if let Err(message) = caller.require(Role::Editor, &[ticket.as_str()], &store) {
+            // AUTH-7: the gate held the grant on the target; the sign-in
+            // must still stand.
+            if let Err(message) = admitted {
                 yield TicketsEvent::Error { message };
                 return;
             }
@@ -1452,21 +1445,17 @@ impl Tickets {
     /// was closed already; `NotFound`; or an in-band `Error` — no such
     /// input, removed.
     #[plexus_macros::method(
+        target = "ticket",
         description = "Close an input: freeze its answer (or its lack of one); yields input_changed",
         params(ticket = "Ticket id, e.g. INPUT-9", input = "The input's id in that ticket's body")
     )]
-    pub async fn close_input(&self, auth: Option<&AuthContext>, ticket: String, input: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn close_input(&self, auth: Option<&AuthContext>, reach: Reach, ticket: String, input: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if let Err(message) = caller.require(Role::Editor, &[ticket.as_str()], &store) {
+            // AUTH-7: the gate held the grant on the target; the sign-in
+            // must still stand.
+            if let Err(message) = admitted {
                 yield TicketsEvent::Error { message };
                 return;
             }
@@ -1479,21 +1468,17 @@ impl Tickets {
     /// `Input` when it was not closed; `NotFound`; or an in-band `Error` —
     /// no such input, removed.
     #[plexus_macros::method(
+        target = "ticket",
         description = "Reopen a closed input; yields input_changed",
         params(ticket = "Ticket id, e.g. INPUT-9", input = "The input's id in that ticket's body")
     )]
-    pub async fn reopen_input(&self, auth: Option<&AuthContext>, ticket: String, input: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn reopen_input(&self, auth: Option<&AuthContext>, reach: Reach, ticket: String, input: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if let Err(message) = caller.require(Role::Editor, &[ticket.as_str()], &store) {
+            // AUTH-7: the gate held the grant on the target; the sign-in
+            // must still stand.
+            if let Err(message) = admitted {
                 yield TicketsEvent::Error { message };
                 return;
             }
@@ -1515,9 +1500,9 @@ impl Tickets {
     #[plexus_macros::method(
         description = "Each shortcode's last sequence, in shortcode order — where each shortcode ends in the store's order"
     )]
-    pub async fn extents(&self, auth: Option<&AuthContext>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn extents(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1556,9 +1541,9 @@ impl Tickets {
         description = "Each shortcode's number of tickets matching a filter, in shortcode order — the filtered extents (every ticket without one)",
         params(filter = "A filter, e.g. 'ready and kind build' (FILTER-3's language; optional: every ticket)")
     )]
-    pub async fn counts(&self, auth: Option<&AuthContext>, filter: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn counts(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1605,9 +1590,9 @@ impl Tickets {
             base = "A filter that always applies, e.g. the global one (optional): never set aside"
         )
     )]
-    pub async fn facets(&self, auth: Option<&AuthContext>, filter: Option<String>, base: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn facets(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<String>, base: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1685,7 +1670,7 @@ impl Tickets {
         )
     )]
     pub async fn tree(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         parent: Option<String>,
         epic: Option<String>,
         filter: String,
@@ -1694,7 +1679,7 @@ impl Tickets {
         matches_only: Option<bool>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1750,12 +1735,12 @@ impl Tickets {
         )
     )]
     pub async fn waves(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         epics: Vec<String>,
         kinds: Option<Vec<String>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1822,11 +1807,11 @@ impl Tickets {
         params(id = "Ticket id whose blockers to resolve, e.g. MNG-2")
     )]
     pub async fn blockers(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         id: String,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth);
+        let admitted = self.access.admit(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -1835,7 +1820,7 @@ impl Tickets {
                     return;
                 }
             };
-            if caller.require(Role::Viewer, &[id.as_str()], &store).is_err() {
+            if caller.require(&[id.as_str()], &store).is_err() {
                 yield TicketsEvent::NotFound { id: id };
                 return;
             }
@@ -1942,7 +1927,7 @@ impl Tickets {
         )
     )]
     pub async fn watch(
-        &self, auth: Option<&AuthContext>,
+        &self, auth: Option<&AuthContext>, reach: Reach,
         epic: Option<String>,
         filter: Option<String>,
         membership: Option<bool>,
@@ -1953,7 +1938,7 @@ impl Tickets {
         let access = self.access.clone();
         let who = auth.cloned();
         let asked = filter;
-        let opened = access.admit(who.as_ref()).and_then(|caller| {
+        let opened = access.admit(who.as_ref(), &reach).and_then(|caller| {
             let filter = caller.scoped(asked.as_deref())?;
             Ok((filter, Sight::of(&self.store, &caller)?))
         });
@@ -1991,7 +1976,7 @@ impl Tickets {
                 };
                 loop {
                     let next = rx.recv().await;
-                    match sight.again(&access, who.as_ref(), &store) {
+                    match sight.again(&access, who.as_ref(), &reach, &store) {
                         Err(message) => {
                             yield TicketsEvent::Error { message };
                             return;
@@ -2048,7 +2033,7 @@ impl Tickets {
             let Some(mut rx) = plain else { return };
             loop {
                 let next = rx.recv().await;
-                match sight.again(&access, who.as_ref(), &store) {
+                match sight.again(&access, who.as_ref(), &reach, &store) {
                     Err(message) => {
                         yield TicketsEvent::Error { message };
                         return;
@@ -2094,7 +2079,8 @@ fn watcher_for(store: &Store, text: Option<&str>, epic: Option<&str>) -> Result<
 /// grants moved, which is a comparison of the caller's few grants.
 #[cfg(feature = "server")]
 struct Sight {
-    reach: crate::access::Reach,
+    /// AUTH-7: the reach's filter, as text — what moves when the grants do.
+    reach: Option<String>,
     /// `None`: everything.
     lens: Option<Lens>,
     /// The components this caller can see now (by name) — with a lens only.
@@ -2110,16 +2096,20 @@ impl Sight {
             None => Default::default(),
             Some(l) => visible_components(store, Some(l), store.components()).into_iter().map(|c| c.name).collect(),
         };
-        Ok(Self { reach: caller.reach.clone(), lens, shown })
+        Ok(Self { reach: caller.reach_key()?, lens, shown })
     }
 
     /// The caller admitted again: `Ok(None)` when its reach is as it was;
     /// `Ok(Some((caller, gone)))` when it moved — the sight rebuilt, and the
     /// components it no longer sees; `Err` when it is refused, or now sees
     /// nothing (the watch ends).
-    fn again(&mut self, access: &Access, who: Option<&AuthContext>, store: &Store) -> Result<Option<(Caller, Vec<String>)>, String> {
-        let caller = access.admit(who)?;
-        if caller.reach == self.reach {
+    fn again(&mut self, access: &Access, who: Option<&AuthContext>, reach: &Reach, store: &Store) -> Result<Option<(Caller, Vec<String>)>, String> {
+        // AUTH-7: the gate's live reach first — held nowhere any more, the
+        // watch ends.
+        let reach = reach.current().ok_or_else(|| "your access changed: you hold this nowhere any more".to_string())?;
+        let caller = access.admit(who, &reach)?;
+        let key = caller.reach_key().map_err(|why| format!("your access changed: {why}"))?;
+        if key == self.reach {
             return Ok(None);
         }
         let now = Self::of(store, &caller).map_err(|why| format!("your access changed: {why}"))?;
@@ -2235,12 +2225,20 @@ fn shortcode_of(id: &str) -> &str {
     id.split(['-', '/']).next().unwrap_or(id)
 }
 
-/// IDENTITY-21: the lens a caller sees tickets through — `None`: all;
-/// `Err`: nothing. IDENTITY-37: a reach that does not compile is refused,
-/// never read as "all".
+/// IDENTITY-21: the lens a caller sees tickets through in this call —
+/// `under` where it holds the call's grant (AUTH-7) — `None`: all; `Err`:
+/// nothing. IDENTITY-37: a reach that does not compile is refused, never
+/// read as "all".
 #[cfg(feature = "server")]
 fn view_lens(caller: &Caller) -> Result<Option<Lens>, String> {
-    caller.reach_filter(Role::Viewer)?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
+    caller.reach_filter()?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
+}
+
+/// AUTH-7: the lens a write sees the tickets it names through — where the
+/// caller holds `tickets.get` ([`crate::access::SEES`]).
+#[cfg(feature = "server")]
+fn sight_lens(caller: &Caller) -> Result<Option<Lens>, String> {
+    caller.sight_filter()?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
 }
 
 /// Whether `reach` admits the ticket `id` (`None`: everything does).
@@ -2301,7 +2299,19 @@ fn redacted(e: StoreError, sees: impl Fn(&str) -> bool) -> String {
 /// exactly when the caller's reach admits any of its tickets.
 #[cfg(feature = "server")]
 fn visible_epics(store: &Store, caller: &Caller) -> Result<Option<std::collections::HashSet<String>>, String> {
-    let Some(reach) = caller.reach_filter(Role::Viewer)? else { return Ok(None) };
+    epics_under(store, caller.reach_filter()?)
+}
+
+/// AUTH-7: [`visible_epics`] by where `tickets.get` is held — what a write
+/// may name.
+#[cfg(feature = "server")]
+fn sight_epics(store: &Store, caller: &Caller) -> Result<Option<std::collections::HashSet<String>>, String> {
+    epics_under(store, caller.sight_filter()?)
+}
+
+#[cfg(feature = "server")]
+fn epics_under(store: &Store, reach: Option<crate::filter::Filter>) -> Result<Option<std::collections::HashSet<String>>, String> {
+    let Some(reach) = reach else { return Ok(None) };
     let lens = Lens::of(&reach).map_err(|e| e.to_string())?;
     Ok(Some(store.counts(&lens).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect()))
 }
@@ -2309,7 +2319,7 @@ fn visible_epics(store: &Store, caller: &Caller) -> Result<Option<std::collectio
 /// IDENTITY-21: how many tickets a caller can see.
 #[cfg(feature = "server")]
 fn visible_count(store: &Store, caller: &Caller) -> u64 {
-    match caller.reach_filter(Role::Viewer) {
+    match caller.reach_filter() {
         Ok(None) => store.count() as u64,
         Ok(Some(reach)) => Lens::of(&reach).map(|lens| store.counts(&lens).into_iter().map(|(_, n)| n).sum()).unwrap_or(0),
         Err(_) => 0,
@@ -2342,7 +2352,7 @@ mod tests {
     #[tokio::test]
     async fn health_reports_count() {
         let hub = hub();
-        match one(hub.health(None).await).await {
+        match one(hub.health(None, Reach::everywhere()).await).await {
             TicketsEvent::Health { ticket_count, .. } => assert_eq!(ticket_count, 0),
             other => panic!("expected Health, got {other:?}"),
         }
@@ -2351,7 +2361,7 @@ mod tests {
     #[tokio::test]
     async fn create_allocates_sequential_ids() {
         let hub = hub();
-        let ev = one(hub.create(None, "mng".into(), "first".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        let ev = one(hub.create(None, Reach::everywhere(), "mng".into(), "first".into(), Some("scope".into()), None, None, None, None, None).await).await;
         match ev {
             TicketsEvent::Created { ticket } => {
                 assert_eq!(ticket.id, "MNG-1");
@@ -2359,7 +2369,7 @@ mod tests {
             }
             other => panic!("expected Created, got {other:?}"),
         }
-        let ev = one(hub.create(None, "MNG".into(), "second".into(), None, None, None, None, None, None).await).await;
+        let ev = one(hub.create(None, Reach::everywhere(), "MNG".into(), "second".into(), None, None, None, None, None, None).await).await;
         match ev {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "MNG-2"),
             other => panic!("expected Created, got {other:?}"),
@@ -2374,19 +2384,19 @@ mod tests {
         let hub = hub();
         // MNG-12: the prefix's scope root first; the default is measured
         // on the ticket after it.
-        one(hub.create(None, "MNG".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        match one(hub.create(None, "MNG".into(), "no kind".into(), None, None, None, None, None, None).await).await {
+        one(hub.create(None, Reach::everywhere(), "MNG".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        match one(hub.create(None, Reach::everywhere(), "MNG".into(), "no kind".into(), None, None, None, None, None, None).await).await {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.kind, Kind::Build),
             other => panic!("expected Created, got {other:?}"),
         }
-        match one(hub.create(None, "MNG".into(), "a gap".into(), Some("gap".into()), None, None, None, None, None).await)
+        match one(hub.create(None, Reach::everywhere(), "MNG".into(), "a gap".into(), Some("gap".into()), None, None, None, None, None).await)
             .await
         {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.kind, Kind::Gap),
             other => panic!("expected Created, got {other:?}"),
         }
         let ev = one(
-            hub.create(None, "MNG".into(), "x".into(), Some("bug".into()), None, None, None, None, None)
+            hub.create(None, Reach::everywhere(), "MNG".into(), "x".into(), Some("bug".into()), None, None, None, None, None)
                 .await,
         )
         .await;
@@ -2400,7 +2410,7 @@ mod tests {
             other => panic!("expected Error, got {other:?}"),
         }
         assert!(matches!(
-            one(hub.get(None, "MNG-4".into()).await).await,
+            one(hub.get(None, Reach::everywhere(), "MNG-4".into()).await).await,
             TicketsEvent::NotFound { .. }
         ));
     }
@@ -2413,38 +2423,38 @@ mod tests {
     #[tokio::test]
     async fn a_doc_over_the_activation_refuses_every_lifecycle_write_in_band() {
         let hub = hub();
-        match one(hub.create(None, "DOCS".into(), "the manifest".into(), Some("doc".into()), None, None, None, None, None).await).await {
+        match one(hub.create(None, Reach::everywhere(), "DOCS".into(), "the manifest".into(), Some("doc".into()), None, None, None, None, None).await).await {
             TicketsEvent::Created { ticket } => {
                 assert_eq!((ticket.id.as_str(), ticket.kind, ticket.status), ("DOCS-1", Kind::Doc, Status::Doc));
             }
             other => panic!("expected Created, got {other:?}"),
         }
-        one(hub.create(None, "DOCS".into(), "work".into(), None, None, None, None, None, None).await).await; // DOCS-2
+        one(hub.create(None, Reach::everywhere(), "DOCS".into(), "work".into(), None, None, None, None, None, None).await).await; // DOCS-2
         for status in ["Ready", "Complete", "Doc", "active"] {
-            match one(hub.set_status(None, "DOCS-1".into(), status.into()).await).await {
+            match one(hub.set_status(None, Reach::everywhere(), "DOCS-1".into(), status.into()).await).await {
                 TicketsEvent::Error { message } => assert!(message.contains("a doc has no lifecycle"), "{message}"),
                 other => panic!("{status}: expected Error, got {other:?}"),
             }
         }
-        match one(hub.set_status(None, "DOCS-2".into(), "doc".into()).await).await {
+        match one(hub.set_status(None, Reach::everywhere(), "DOCS-2".into(), "doc".into()).await).await {
             TicketsEvent::Error { message } => assert!(message.contains("Doc is a doc's own status"), "{message}"),
             other => panic!("expected Error, got {other:?}"),
         }
         let blocked = Some(vec!["DOCS-2".to_string()]);
-        match one(hub.create(None, "DOCS".into(), "x".into(), Some("doc".into()), None, blocked, None, None, None).await).await {
+        match one(hub.create(None, Reach::everywhere(), "DOCS".into(), "x".into(), Some("doc".into()), None, blocked, None, None, None).await).await {
             TicketsEvent::Error { message } => assert!(message.contains("a doc is never blocked"), "{message}"),
             other => panic!("expected Error, got {other:?}"),
         }
         let on_doc = Some(vec!["DOCS-1".to_string()]);
-        match one(hub.create(None, "DOCS".into(), "x".into(), None, None, on_doc, None, None, None).await).await {
+        match one(hub.create(None, Reach::everywhere(), "DOCS".into(), "x".into(), None, None, on_doc, None, None, None).await).await {
             TicketsEvent::Error { message } => assert!(message.contains("'DOCS-1' is a doc"), "{message}"),
             other => panic!("expected Error, got {other:?}"),
         }
-        match one(hub.list(None, None, Some("Doc".into()), None, None, None, Some(true), None, None).await).await {
+        match one(hub.list(None, Reach::everywhere(), None, Some("Doc".into()), None, None, None, Some(true), None, None).await).await {
             TicketsEvent::Summary { summary } => assert_eq!((summary.id.as_str(), summary.status), ("DOCS-1", Status::Doc)),
             other => panic!("expected Summary, got {other:?}"),
         }
-        match one(hub.get(None, "DOCS-1".into()).await).await {
+        match one(hub.get(None, Reach::everywhere(), "DOCS-1".into()).await).await {
             TicketsEvent::Ticket { ticket } => assert_eq!(ticket.status, Status::Doc, "nothing moved it"),
             other => panic!("expected Ticket, got {other:?}"),
         }
@@ -2453,13 +2463,13 @@ mod tests {
     #[tokio::test]
     async fn get_distinguishes_found_from_missing() {
         let hub = hub();
-        one(hub.create(None, "MNG".into(), "x".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "MNG".into(), "x".into(), Some("scope".into()), None, None, None, None, None).await).await;
         assert!(matches!(
-            one(hub.get(None, "MNG-1".into()).await).await,
+            one(hub.get(None, Reach::everywhere(), "MNG-1".into()).await).await,
             TicketsEvent::Ticket { .. }
         ));
         assert!(matches!(
-            one(hub.get(None, "MNG-99".into()).await).await,
+            one(hub.get(None, Reach::everywhere(), "MNG-99".into()).await).await,
             TicketsEvent::NotFound { .. }
         ));
     }
@@ -2467,12 +2477,12 @@ mod tests {
     #[tokio::test]
     async fn list_filters_by_status() {
         let hub = hub();
-        one(hub.create(None, "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        one(hub.create(None, "MNG".into(), "b".into(), None, None, None, None, None, None).await).await;
-        one(hub.set_status(None, "MNG-1".into(), "Ready".into()).await).await;
+        one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "MNG".into(), "b".into(), None, None, None, None, None, None).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "MNG-1".into(), "Ready".into()).await).await;
 
         let (ids, page) =
-            ids_and_page(hub.list(None, None, Some("Ready".into()), None, None, None, None, None, None).await).await;
+            ids_and_page(hub.list(None, Reach::everywhere(), None, Some("Ready".into()), None, None, None, None, None, None).await).await;
         assert_eq!(ids, vec!["MNG-1"]);
         assert_eq!(page, Some((None, 0)), "one match, nothing beyond it");
     }
@@ -2480,8 +2490,8 @@ mod tests {
     #[tokio::test]
     async fn set_status_reports_previous() {
         let hub = hub();
-        one(hub.create(None, "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        match one(hub.set_status(None, "MNG-1".into(), "ready".into()).await).await {
+        one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        match one(hub.set_status(None, Reach::everywhere(), "MNG-1".into(), "ready".into()).await).await {
             TicketsEvent::StatusChanged { ticket, previous } => {
                 assert_eq!(ticket.status, Status::Ready);
                 assert_eq!(previous, Status::Pending);
@@ -2498,22 +2508,22 @@ mod tests {
     #[tokio::test]
     async fn set_kind_reports_previous_and_refuses_in_band() {
         let hub = hub();
-        one(hub.create(None, "IDN".into(), "identity".into(), Some("doc".into()), None, None, None, None, None).await).await;
-        one(hub.create(None, "IDN".into(), "a".into(), None, None, None, None, None, None).await).await;
-        match one(hub.set_kind(None, "IDN-1".into(), "Scope".into(), None).await).await {
+        one(hub.create(None, Reach::everywhere(), "IDN".into(), "identity".into(), Some("doc".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "IDN".into(), "a".into(), None, None, None, None, None, None).await).await;
+        match one(hub.set_kind(None, Reach::everywhere(), "IDN-1".into(), "Scope".into(), None).await).await {
             TicketsEvent::KindChanged { ticket, previous } => {
                 assert_eq!((ticket.kind, ticket.status, previous), (Kind::Scope, Status::Epic, Kind::Doc));
             }
             other => panic!("expected KindChanged, got {other:?}"),
         }
-        match one(hub.set_kind(None, "IDN-2".into(), "gap".into(), Some("active".into())).await).await {
+        match one(hub.set_kind(None, Reach::everywhere(), "IDN-2".into(), "gap".into(), Some("active".into())).await).await {
             TicketsEvent::KindChanged { ticket, previous } => {
                 assert_eq!((ticket.kind, ticket.status, previous), (Kind::Gap, Status::Coding, Kind::Build));
             }
             other => panic!("expected KindChanged, got {other:?}"),
         }
         assert!(matches!(
-            one(hub.set_kind(None, "IDN-9".into(), "gap".into(), None).await).await,
+            one(hub.set_kind(None, Reach::everywhere(), "IDN-9".into(), "gap".into(), None).await).await,
             TicketsEvent::NotFound { id } if id == "IDN-9"
         ));
         for (id, kind, status, says) in [
@@ -2523,7 +2533,7 @@ mod tests {
             ("IDN-2", "doc", Some("Ready"), "a doc's status is Doc"),
             ("IDN-2", "spike", Some("Doc"), "Doc is a doc's own status"),
         ] {
-            match one(hub.set_kind(None, id.into(), kind.into(), status.map(Into::into)).await).await {
+            match one(hub.set_kind(None, Reach::everywhere(), id.into(), kind.into(), status.map(Into::into)).await).await {
                 TicketsEvent::Error { message } => assert!(message.contains(says), "{kind} {status:?}: {message}"),
                 other => panic!("{kind} {status:?}: expected Error, got {other:?}"),
             }
@@ -2537,28 +2547,28 @@ mod tests {
     #[tokio::test]
     async fn set_status_takes_the_worker_states_and_list_filters_on_them() {
         let hub = hub();
-        one(hub.create(None, "WK".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        one(hub.create(None, "WK".into(), "a".into(), None, None, None, None, None, None).await).await;
-        one(hub.create(None, "WK".into(), "b".into(), None, None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "WK".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "WK".into(), "a".into(), None, None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "WK".into(), "b".into(), None, None, None, None, None, None).await).await;
 
         for (id, spelling, want, previous) in [
             ("WK-2", "Coding", Status::Coding, Status::Pending),
             ("WK-3", "active", Status::Coding, Status::Pending),
             ("WK-3", "In Review", Status::InReview, Status::Coding),
         ] {
-            match one(hub.set_status(None, id.into(), spelling.into()).await).await {
+            match one(hub.set_status(None, Reach::everywhere(), id.into(), spelling.into()).await).await {
                 TicketsEvent::StatusChanged { ticket, previous: was } => {
                     assert_eq!((ticket.id.as_str(), ticket.status, was), (id, want, previous), "{spelling}");
                 }
                 other => panic!("{spelling}: expected StatusChanged, got {other:?}"),
             }
         }
-        let wire = serde_json::to_value(one(hub.get(None, "WK-3".into()).await).await).unwrap();
+        let wire = serde_json::to_value(one(hub.get(None, Reach::everywhere(), "WK-3".into()).await).await).unwrap();
         assert_eq!(wire["ticket"]["status"], "In Review");
 
-        let (ids, _) = ids_and_page(hub.list(None, None, Some("coding".into()), None, None, None, None, None, None).await).await;
+        let (ids, _) = ids_and_page(hub.list(None, Reach::everywhere(), None, Some("coding".into()), None, None, None, None, None, None).await).await;
         assert_eq!(ids, ["WK-2"]);
-        let (ids, _) = ids_and_page(hub.list(None, None, Some("In Review".into()), None, None, None, None, None, None).await).await;
+        let (ids, _) = ids_and_page(hub.list(None, Reach::everywhere(), None, Some("In Review".into()), None, None, None, None, None, None).await).await;
         assert_eq!(ids, ["WK-3"]);
     }
 
@@ -2571,10 +2581,10 @@ mod tests {
     #[tokio::test]
     async fn amend_yields_amended_and_watch_carries_only_what_changed() {
         let hub = hub();
-        one(hub.create(None, "AM".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, None, None, None).await);
+        one(hub.create(None, Reach::everywhere(), "AM".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
 
-        let ev = one(hub.amend(None, "am-1".into(), None, Some("the body, now".into())).await).await;
+        let ev = one(hub.amend(None, Reach::everywhere(), "am-1".into(), None, Some("the body, now".into())).await).await;
         let wire = serde_json::to_value(&ev).unwrap();
         assert_eq!(wire["type"], "amended");
         assert_eq!(wire["changed"], serde_json::json!(["body"]));
@@ -2588,20 +2598,20 @@ mod tests {
             other => panic!("expected Amended, got {other:?}"),
         }
 
-        match one(hub.amend(None, "AM-1".into(), None, Some("the body, now".into())).await).await {
+        match one(hub.amend(None, Reach::everywhere(), "AM-1".into(), None, Some("the body, now".into())).await).await {
             TicketsEvent::Amended { changed, .. } => assert!(changed.is_empty(), "{changed:?}"),
             other => panic!("expected Amended, got {other:?}"),
         }
         assert!(matches!(
-            one(hub.amend(None, "AM-7".into(), Some("t".into()), None).await).await,
+            one(hub.amend(None, Reach::everywhere(), "AM-7".into(), Some("t".into()), None).await).await,
             TicketsEvent::NotFound { id } if id == "AM-7"
         ));
-        match one(hub.amend(None, "AM-1".into(), Some("  ".into()), None).await).await {
+        match one(hub.amend(None, Reach::everywhere(), "AM-1".into(), Some("  ".into()), None).await).await {
             TicketsEvent::Error { message } => assert!(message.contains("empty"), "{message}"),
             other => panic!("expected Error, got {other:?}"),
         }
 
-        one(hub.amend(None, "AM-1".into(), Some("a better title".into()), None).await).await;
+        one(hub.amend(None, Reach::everywhere(), "AM-1".into(), Some("a better title".into()), None).await).await;
         match watch.next().await.expect("change") {
             TicketsEvent::Amended { ticket, changed } => {
                 assert_eq!(ticket.title, "a better title");
@@ -2621,26 +2631,26 @@ mod tests {
     #[tokio::test]
     async fn link_commits_yields_commits_linked_and_watch_carries_only_what_changed() {
         let hub = hub();
-        one(hub.create(None, "LC".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, None, None, None).await);
+        one(hub.create(None, Reach::everywhere(), "LC".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
         let commits = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
 
-        let ev = one(hub.link_commits(None, "lc-1".into(), commits(&["77df9a0", "plexus-macros@4F7114A"])).await).await;
+        let ev = one(hub.link_commits(None, Reach::everywhere(), "lc-1".into(), commits(&["77df9a0", "plexus-macros@4F7114A"])).await).await;
         let wire = serde_json::to_value(&ev).unwrap();
         assert_eq!(wire["type"], "commits_linked");
         assert_eq!(wire["added"], serde_json::json!(["77df9a0", "plexus-macros@4f7114a"]));
         assert_eq!(wire["ticket"]["id"], "LC-1");
         assert_eq!(wire["ticket"]["commits"], wire["added"]);
-        let ev = one(hub.link_commits(None, "LC-1".into(), commits(&["77df9a0", "0bb28b2"])).await).await;
+        let ev = one(hub.link_commits(None, Reach::everywhere(), "LC-1".into(), commits(&["77df9a0", "0bb28b2"])).await).await;
         let wire = serde_json::to_value(&ev).unwrap();
         assert_eq!(wire["added"], serde_json::json!(["0bb28b2"]), "the third alone");
         let three = serde_json::json!(["77df9a0", "plexus-macros@4f7114a", "0bb28b2"]);
         assert_eq!(wire["ticket"]["commits"], three);
-        let got = serde_json::to_value(one(hub.get(None, "LC-1".into()).await).await).unwrap();
+        let got = serde_json::to_value(one(hub.get(None, Reach::everywhere(), "LC-1".into()).await).await).unwrap();
         assert_eq!(got["ticket"]["commits"], three, "get shows them, in link order");
-        let (rows, _) = ids_and_page(hub.list(None, None, None, None, None, None, Some(true), None, None).await).await;
+        let (rows, _) = ids_and_page(hub.list(None, Reach::everywhere(), None, None, None, None, None, Some(true), None, None).await).await;
         assert_eq!(rows, ["LC-1"]);
-        let evs: Vec<TicketsEvent> = Box::pin(hub.list(None, None, None, None, None, None, Some(true), None, None).await).collect().await;
+        let evs: Vec<TicketsEvent> = Box::pin(hub.list(None, Reach::everywhere(), None, None, None, None, None, Some(true), None, None).await).collect().await;
         assert_eq!(serde_json::to_value(&evs[0]).unwrap()["summary"]["commits"], three, "and the summary row");
 
         for (i, added) in [&["77df9a0"], &["0bb28b2"]].into_iter().enumerate() {
@@ -2654,30 +2664,30 @@ mod tests {
         }
 
         // The no-op, the refusal, the miss: nothing on `watch`.
-        match one(hub.link_commits(None, "LC-1".into(), commits(&["0BB28B2"])).await).await {
+        match one(hub.link_commits(None, Reach::everywhere(), "LC-1".into(), commits(&["0BB28B2"])).await).await {
             TicketsEvent::CommitsLinked { added, ticket } => {
                 assert!(added.is_empty(), "{added:?}");
                 assert_eq!(ticket.commits.len(), 3);
             }
             other => panic!("expected CommitsLinked, got {other:?}"),
         }
-        match one(hub.link_commits(None, "LC-1".into(), commits(&["c8c5678", "77df9a0;rm", "090cdec"])).await).await {
+        match one(hub.link_commits(None, Reach::everywhere(), "LC-1".into(), commits(&["c8c5678", "77df9a0;rm", "090cdec"])).await).await {
             TicketsEvent::Error { message } => assert!(message.contains("'77df9a0;rm'"), "names the entry: {message}"),
             other => panic!("expected Error, got {other:?}"),
         }
         assert!(matches!(
-            one(hub.link_commits(None, "LC-9".into(), commits(&["c8c5678"])).await).await,
+            one(hub.link_commits(None, Reach::everywhere(), "LC-9".into(), commits(&["c8c5678"])).await).await,
             TicketsEvent::NotFound { id } if id == "LC-9"
         ));
-        let got = serde_json::to_value(one(hub.get(None, "LC-1".into()).await).await).unwrap();
+        let got = serde_json::to_value(one(hub.get(None, Reach::everywhere(), "LC-1".into()).await).await).unwrap();
         assert_eq!(got["ticket"]["commits"], three, "the refused call wrote nothing");
 
-        let ev = one(hub.unlink_commits(None, "LC-1".into(), commits(&["plexus-macros@4f7114a", "c8c5678"])).await).await;
+        let ev = one(hub.unlink_commits(None, Reach::everywhere(), "LC-1".into(), commits(&["plexus-macros@4f7114a", "c8c5678"])).await).await;
         let wire = serde_json::to_value(&ev).unwrap();
         assert_eq!(wire["type"], "commits_unlinked");
         assert_eq!(wire["removed"], serde_json::json!(["plexus-macros@4f7114a"]));
         assert_eq!(wire["ticket"]["commits"], serde_json::json!(["77df9a0", "0bb28b2"]), "exactly what it named");
-        match one(hub.unlink_commits(None, "LC-1".into(), commits(&["c8c5678"])).await).await {
+        match one(hub.unlink_commits(None, Reach::everywhere(), "LC-1".into(), commits(&["c8c5678"])).await).await {
             TicketsEvent::CommitsUnlinked { removed, .. } => assert!(removed.is_empty()),
             other => panic!("expected CommitsUnlinked, got {other:?}"),
         }
@@ -2694,9 +2704,9 @@ mod tests {
     #[tokio::test]
     async fn watch_sees_creations_and_status_changes() {
         let hub = hub();
-        let mut watch = Box::pin(hub.watch(None, None, None, None).await);
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
 
-        one(hub.create(None, "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
         match watch.next().await.expect("change") {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "MNG-1"),
             other => panic!("expected Created, got {other:?}"),
@@ -2707,7 +2717,7 @@ mod tests {
             other => panic!("expected GroupChanged, got {other:?}"),
         }
 
-        one(hub.set_status(None, "MNG-1".into(), "Ready".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "MNG-1".into(), "Ready".into()).await).await;
         match watch.next().await.expect("change") {
             TicketsEvent::StatusChanged { previous, .. } => assert_eq!(previous, Status::Pending),
             other => panic!("expected StatusChanged, got {other:?}"),
@@ -2722,11 +2732,11 @@ mod tests {
     #[tokio::test]
     async fn groups_yields_the_rows_and_watch_filters_group_changes_by_their_shortcode() {
         let hub = hub();
-        one(hub.create(None, "PLX".into(), "host".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        one(hub.create(None, "SUB".into(), "hosted".into(), Some("scope".into()), None, None, None, Some("PLX-1".into()), None).await).await;
-        one(hub.create(None, "SUB".into(), "work".into(), None, None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "PLX".into(), "host".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "SUB".into(), "hosted".into(), Some("scope".into()), None, None, None, Some("PLX-1".into()), None).await).await;
+        one(hub.create(None, Reach::everywhere(), "SUB".into(), "work".into(), None, None, None, None, None, None).await).await;
 
-        let evs: Vec<TicketsEvent> = Box::pin(hub.groups(None).await).collect().await;
+        let evs: Vec<TicketsEvent> = Box::pin(hub.groups(None, Reach::everywhere()).await).collect().await;
         let groups: Vec<crate::types::Group> = evs
             .into_iter()
             .map(|ev| match ev {
@@ -2740,8 +2750,8 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(&groups[0]).unwrap()["host"], serde_json::Value::Null, "null, not missing");
 
-        let mut plx = Box::pin(hub.watch(None, Some("plx".into()), None, None).await);
-        one(hub.set_status(None, "SUB-2".into(), "Complete".into()).await).await;
+        let mut plx = Box::pin(hub.watch(None, Reach::everywhere(), Some("plx".into()), None, None).await);
+        one(hub.set_status(None, Reach::everywhere(), "SUB-2".into(), "Complete".into()).await).await;
         match plx.next().await.expect("change") {
             TicketsEvent::GroupChanged { group } => {
                 assert_eq!((group.epic.as_str(), group.total, group.done), ("PLX", 3, 1))
@@ -2758,13 +2768,13 @@ mod tests {
     async fn extents_yields_each_shortcodes_last_seq_in_shortcode_order() {
         let hub = hub();
         for (epic, kind) in [("ZED", "scope"), ("AB", "scope"), ("ZED", "build"), ("B", "scope"), ("ZED", "gap")] {
-            one(hub.create(None, epic.into(), "t".into(), Some(kind.into()), None, None, None, None, None).await).await;
+            one(hub.create(None, Reach::everywhere(), epic.into(), "t".into(), Some(kind.into()), None, None, None, None, None).await).await;
         }
         // Refused: AB-2 would be its own blocker. Nothing is allocated.
-        let refused = one(hub.create(None, "AB".into(), "t".into(), None, None, Some(vec!["AB-2".into()]), None, None, None).await).await;
+        let refused = one(hub.create(None, Reach::everywhere(), "AB".into(), "t".into(), None, None, Some(vec!["AB-2".into()]), None, None, None).await).await;
         assert!(matches!(refused, TicketsEvent::Error { .. }), "{refused:?}");
 
-        let evs: Vec<TicketsEvent> = Box::pin(hub.extents(None).await).collect().await;
+        let evs: Vec<TicketsEvent> = Box::pin(hub.extents(None, Reach::everywhere()).await).collect().await;
         let extents: Vec<(String, u32)> = evs
             .into_iter()
             .map(|ev| match ev {
@@ -2778,7 +2788,7 @@ mod tests {
             "byte order on the epic: AB before B"
         );
         let total: u64 = extents.iter().map(|(_, n)| u64::from(*n)).sum();
-        match one(hub.health(None).await).await {
+        match one(hub.health(None, Reach::everywhere()).await).await {
             TicketsEvent::Health { ticket_count, .. } => assert_eq!(ticket_count, total),
             other => panic!("expected Health, got {other:?}"),
         }
@@ -2818,39 +2828,39 @@ mod tests {
     #[tokio::test]
     async fn ready_set_gates_on_blockers() {
         let hub = hub();
-        one(hub.create(None, "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
         one(hub
-            .create(None, "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
+            .create(None, Reach::everywhere(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
             .await)
         .await;
-        one(hub.set_status(None, "DAG-1".into(), "Ready".into()).await).await;
-        one(hub.set_status(None, "DAG-2".into(), "Ready".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Ready".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "DAG-2".into(), "Ready".into()).await).await;
 
-        assert_eq!(ticket_ids(hub.ready_set(None, None, None, None, None, None).await).await, vec!["DAG-1"]);
+        assert_eq!(ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None).await).await, vec!["DAG-1"]);
 
-        one(hub.set_status(None, "DAG-1".into(), "Complete".into()).await).await;
-        assert_eq!(ticket_ids(hub.ready_set(None, None, None, None, None, None).await).await, vec!["DAG-2"]);
+        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Complete".into()).await).await;
+        assert_eq!(ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None).await).await, vec!["DAG-2"]);
     }
 
     #[tokio::test]
     async fn ready_set_accepts_superseded_blockers_and_filters_by_epic() {
         let hub = hub();
-        one(hub.create(None, "ONE".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "ONE".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
         one(hub
-            .create(None, "ONE".into(), "b".into(), None, None, Some(vec!["ONE-1".into()]), None, None, None)
+            .create(None, Reach::everywhere(), "ONE".into(), "b".into(), None, None, Some(vec!["ONE-1".into()]), None, None, None)
             .await)
         .await;
-        one(hub.create(None, "TWO".into(), "c".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        one(hub.set_status(None, "ONE-1".into(), "Superseded".into()).await).await;
-        one(hub.set_status(None, "ONE-2".into(), "Ready".into()).await).await;
-        one(hub.set_status(None, "TWO-1".into(), "Ready".into()).await).await;
+        one(hub.create(None, Reach::everywhere(), "TWO".into(), "c".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "ONE-1".into(), "Superseded".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "ONE-2".into(), "Ready".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "TWO-1".into(), "Ready".into()).await).await;
 
         assert_eq!(
-            ticket_ids(hub.ready_set(None, None, None, None, None, None).await).await,
+            ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None).await).await,
             vec!["ONE-2", "TWO-1"]
         );
         assert_eq!(
-            ticket_ids(hub.ready_set(None, Some("one".into()), None, None, None, None).await).await,
+            ticket_ids(hub.ready_set(None, Reach::everywhere(), Some("one".into()), None, None, None, None).await).await,
             vec!["ONE-2"]
         );
     }
@@ -2859,14 +2869,14 @@ mod tests {
     async fn dangling_blocker_excludes_from_ready_set_and_is_marked() {
         let hub = hub();
         one(hub
-            .create(None, "DAG".into(), "c".into(), Some("scope".into()), None, Some(vec!["DAG-99".into()]), None, None, None)
+            .create(None, Reach::everywhere(), "DAG".into(), "c".into(), Some("scope".into()), None, Some(vec!["DAG-99".into()]), None, None, None)
             .await)
         .await;
-        one(hub.set_status(None, "DAG-1".into(), "Ready".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Ready".into()).await).await;
 
-        assert!(ticket_ids(hub.ready_set(None, None, None, None, None, None).await).await.is_empty());
+        assert!(ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None).await).await.is_empty());
 
-        let evs: Vec<_> = Box::pin(hub.blockers(None, "DAG-1".into()).await).collect().await;
+        let evs: Vec<_> = Box::pin(hub.blockers(None, Reach::everywhere(), "DAG-1".into()).await).collect().await;
         assert_eq!(evs.len(), 1);
         match &evs[0] {
             TicketsEvent::DanglingBlocker { id } => assert_eq!(id, "DAG-99"),
@@ -2877,10 +2887,10 @@ mod tests {
     #[tokio::test]
     async fn blockers_resolve_to_current_statuses_in_order() {
         let hub = hub();
-        one(hub.create(None, "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        one(hub.create(None, "DAG".into(), "b".into(), None, None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "DAG".into(), "b".into(), None, None, None, None, None, None).await).await;
         one(hub
-            .create(None, 
+            .create(None, Reach::everywhere(), 
                 "DAG".into(),
                 "c".into(),
                 None,
@@ -2890,9 +2900,9 @@ mod tests {
             )
             .await)
         .await;
-        one(hub.set_status(None, "DAG-1".into(), "Complete".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Complete".into()).await).await;
 
-        let evs: Vec<_> = Box::pin(hub.blockers(None, "DAG-3".into()).await).collect().await;
+        let evs: Vec<_> = Box::pin(hub.blockers(None, Reach::everywhere(), "DAG-3".into()).await).collect().await;
         assert_eq!(evs.len(), 3);
         match &evs[0] {
             TicketsEvent::Blocker { ticket } => {
@@ -2914,7 +2924,7 @@ mod tests {
         }
 
         assert!(matches!(
-            one(hub.blockers(None, "DAG-42".into()).await).await,
+            one(hub.blockers(None, Reach::everywhere(), "DAG-42".into()).await).await,
             TicketsEvent::NotFound { .. }
         ));
     }
@@ -2922,11 +2932,11 @@ mod tests {
     #[tokio::test]
     async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
         let hub = hub();
-        one(hub.create(None, "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, None, None, None).await);
+        one(hub.create(None, Reach::everywhere(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
 
         one(hub
-            .create(None, "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
+            .create(None, Reach::everywhere(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
             .await)
         .await;
 
@@ -2956,7 +2966,7 @@ mod tests {
             other => panic!("expected UnlocksChanged, got {other:?}"),
         }
 
-        match one(hub.get(None, "DAG-1".into()).await).await {
+        match one(hub.get(None, Reach::everywhere(), "DAG-1".into()).await).await {
             TicketsEvent::Ticket { ticket } => assert_eq!(ticket.unlocks, vec!["DAG-2"]),
             other => panic!("expected Ticket, got {other:?}"),
         }
@@ -2969,11 +2979,11 @@ mod tests {
     #[tokio::test]
     async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
         let hub = hub();
-        one(hub.create(None, "FAM".into(), "P".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, None, None, None).await);
+        one(hub.create(None, Reach::everywhere(), "FAM".into(), "P".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
 
         match one(
-            hub.create(None, 
+            hub.create(None, Reach::everywhere(), 
                 "FAM".into(),
                 "C".into(),
                 Some("execution".into()),
@@ -3017,7 +3027,7 @@ mod tests {
             serde_json::json!({"type": "children_changed", "id": "FAM-1", "added": "FAM-2", "child_count": 1})
         );
 
-        match one(hub.get(None, "FAM-1".into()).await).await {
+        match one(hub.get(None, Reach::everywhere(), "FAM-1".into()).await).await {
             TicketsEvent::Ticket { ticket } => {
                 assert_eq!(ticket.child_count, 1);
                 assert_eq!(ticket.parent, None);
@@ -3025,10 +3035,10 @@ mod tests {
             other => panic!("expected Ticket, got {other:?}"),
         }
         assert_eq!(
-            ticket_ids(hub.list(None, None, None, Some("FAM-1".into()), None, None, None, None, None).await).await,
+            ticket_ids(hub.list(None, Reach::everywhere(), None, None, Some("FAM-1".into()), None, None, None, None, None).await).await,
             vec!["FAM-2"]
         );
-        match one(hub.get(None, "FAM-2".into()).await).await {
+        match one(hub.get(None, Reach::everywhere(), "FAM-2".into()).await).await {
             TicketsEvent::Ticket { ticket } => assert_eq!(ticket.parent.as_deref(), Some("FAM-1")),
             other => panic!("expected Ticket, got {other:?}"),
         }
@@ -3040,7 +3050,7 @@ mod tests {
     async fn create_rejects_a_nonexistent_parent_in_band() {
         let hub = hub();
         let ev = one(
-            hub.create(None, 
+            hub.create(None, Reach::everywhere(), 
                 "ORPH".into(),
                 "no such parent".into(),
                 Some("scope".into()),
@@ -3060,7 +3070,7 @@ mod tests {
             other => panic!("expected Error, got {other:?}"),
         }
         assert!(matches!(
-            one(hub.get(None, "ORPH-1".into()).await).await,
+            one(hub.get(None, Reach::everywhere(), "ORPH-1".into()).await).await,
             TicketsEvent::NotFound { .. }
         ));
     }
@@ -3070,12 +3080,12 @@ mod tests {
     #[tokio::test]
     async fn list_filters_by_parent() {
         let hub = hub();
-        one(hub.create(None, "LP".into(), "P".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        one(hub.create(None, "LP".into(), "unrelated".into(), None, None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "LP".into(), "P".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "LP".into(), "unrelated".into(), None, None, None, None, None, None).await).await;
         // ZZ's first ticket is its scope root (MNG-12), filed under LP-1.
         for (epic, title, kind) in [("LP", "child a", None), ("ZZ", "child b", Some("scope"))] {
             one(hub
-                .create(None, 
+                .create(None, Reach::everywhere(), 
                     epic.into(),
                     title.into(),
                     kind.map(String::from),
@@ -3090,14 +3100,14 @@ mod tests {
 
         // MNG-14: "unrelated" (LP-2) named no parent and hangs under the root.
         assert_eq!(
-            ticket_ids(hub.list(None, None, None, Some("LP-1".into()), None, None, None, None, None).await).await,
+            ticket_ids(hub.list(None, Reach::everywhere(), None, None, Some("LP-1".into()), None, None, None, None, None).await).await,
             vec!["LP-2", "LP-3", "ZZ-1"]
         );
-        assert!(ticket_ids(hub.list(None, None, None, Some("LP-2".into()), None, None, None, None, None).await)
+        assert!(ticket_ids(hub.list(None, Reach::everywhere(), None, None, Some("LP-2".into()), None, None, None, None, None).await)
             .await
             .is_empty());
         assert_eq!(
-            ticket_ids(hub.list(None, None, None, None, None, None, None, None, None).await).await.len(),
+            ticket_ids(hub.list(None, Reach::everywhere(), None, None, None, None, None, None, None, None).await).await.len(),
             4,
             "unfiltered list is unchanged"
         );
@@ -3110,7 +3120,7 @@ mod tests {
     async fn summary_rows_carry_every_field_but_the_body() {
         let hub = hub();
         one(hub
-            .create(None, 
+            .create(None, Reach::everywhere(), 
                 "SUM".into(),
                 "with a body".into(),
                 Some("scope".into()), // MNG-12: a prefix's first ticket is its scope
@@ -3122,7 +3132,7 @@ mod tests {
             .await)
         .await;
 
-        let evs: Vec<_> = Box::pin(hub.list(None, None, None, None, None, None, Some(true), None, None).await)
+        let evs: Vec<_> = Box::pin(hub.list(None, Reach::everywhere(), None, None, None, None, None, Some(true), None, None).await)
             .collect()
             .await;
         assert_eq!(evs.len(), 2, "one row, one page: {evs:?}");
@@ -3138,7 +3148,7 @@ mod tests {
         assert!(summary.get("children").is_none(), "SCALE-4: no list of children: {summary}");
 
         // The full ticket still carries it, unchanged.
-        let evs: Vec<_> = Box::pin(hub.list(None, None, None, None, None, None, None, None, None).await)
+        let evs: Vec<_> = Box::pin(hub.list(None, Reach::everywhere(), None, None, None, None, None, None, None, None).await)
             .collect()
             .await;
         let row = serde_json::to_value(&evs[0]).unwrap();
@@ -3151,13 +3161,13 @@ mod tests {
     #[tokio::test]
     async fn an_after_that_names_no_ticket_is_one_in_band_error() {
         let hub = hub();
-        one(hub.create(None, "CUR".into(), "a".into(), None, None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "CUR".into(), "a".into(), None, None, None, None, None, None).await).await;
 
         for evs in [
-            Box::pin(hub.list(None, None, None, None, Some("ZZZ-9".into()), None, None, None, None).await)
+            Box::pin(hub.list(None, Reach::everywhere(), None, None, None, Some("ZZZ-9".into()), None, None, None, None).await)
                 .collect::<Vec<_>>()
                 .await,
-            Box::pin(hub.ready_set(None, None, Some("ZZZ-9".into()), None, None, None).await)
+            Box::pin(hub.ready_set(None, Reach::everywhere(), None, Some("ZZZ-9".into()), None, None, None).await)
                 .collect::<Vec<_>>()
                 .await,
         ] {
@@ -3178,14 +3188,14 @@ mod tests {
         let hub = hub();
         for i in 0..3 {
             let kind = (i == 0).then(|| "scope".to_string()); // MNG-12: the root first
-            one(hub.create(None, "RS".into(), "r".into(), kind, None, None, None, None, None).await).await;
+            one(hub.create(None, Reach::everywhere(), "RS".into(), "r".into(), kind, None, None, None, None, None).await).await;
         }
-        one(hub.create(None, "RS".into(), "still pending".into(), None, None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "RS".into(), "still pending".into(), None, None, None, None, None, None).await).await;
         for id in ["RS-1", "RS-2", "RS-3"] {
-            one(hub.set_status(None, id.into(), "Ready".into()).await).await;
+            one(hub.set_status(None, Reach::everywhere(), id.into(), "Ready".into()).await).await;
         }
 
-        let (ids, page) = ids_and_page(hub.ready_set(None, None, None, Some(2), Some(true), None).await).await;
+        let (ids, page) = ids_and_page(hub.ready_set(None, Reach::everywhere(), None, None, Some(2), Some(true), None).await).await;
         assert_eq!(ids, vec!["RS-1", "RS-2"]);
         assert_eq!(
             page,
@@ -3194,7 +3204,7 @@ mod tests {
         );
 
         let (ids, page) =
-            ids_and_page(hub.ready_set(None, None, Some("RS-2".into()), Some(2), Some(true), None).await).await;
+            ids_and_page(hub.ready_set(None, Reach::everywhere(), None, Some("RS-2".into()), Some(2), Some(true), None).await).await;
         assert_eq!(ids, vec!["RS-3"]);
         assert_eq!(page, Some((None, 0)));
     }
@@ -3210,30 +3220,30 @@ mod tests {
         let hub = hub();
         for i in 1..=60 {
             let kind = (i == 1).then(|| "scope".to_string()); // MNG-12: the root first
-            one(hub.create(None, "FND".into(), format!("row {i}"), kind, None, None, Some("a body".into()), None, None).await).await;
+            one(hub.create(None, Reach::everywhere(), "FND".into(), format!("row {i}"), kind, None, None, Some("a body".into()), None, None).await).await;
         }
-        one(hub.create(None, "OTH".into(), "The Ticket Page".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "OTH".into(), "The Ticket Page".into(), Some("scope".into()), None, None, None, None, None).await).await;
 
-        let evs: Vec<TicketsEvent> = Box::pin(hub.find(None, "".into(), None, None, None).await).collect().await;
+        let evs: Vec<TicketsEvent> = Box::pin(hub.find(None, Reach::everywhere(), "".into(), None, None, None).await).collect().await;
         assert_eq!(evs.len(), 51, "50 rows and the page");
         let row = serde_json::to_value(&evs[0]).unwrap();
         assert_eq!((row["type"].as_str(), row["summary"]["id"].as_str()), (Some("summary"), Some("FND-1")));
         assert!(row["summary"].get("body").is_none(), "a summary carries no body: {row}");
-        let (ids, page) = ids_and_page(hub.find(None, "".into(), None, None, None).await).await;
+        let (ids, page) = ids_and_page(hub.find(None, Reach::everywhere(), "".into(), None, None, None).await).await;
         assert_eq!(ids.len(), 50, "the palette's 50 when no limit is asked");
         assert_eq!(page, Some((Some("FND-50".into()), 11)));
 
-        let (ids, page) = ids_and_page(hub.find(None, "  fnd-5 ".into(), None, None, None).await).await;
+        let (ids, page) = ids_and_page(hub.find(None, Reach::everywhere(), "  fnd-5 ".into(), None, None, None).await).await;
         let expected: Vec<String> =
             std::iter::once(5).chain(50..=59).map(|n| format!("FND-{n}")).collect();
         assert_eq!(ids, expected, "trimmed, case-folded, in (epic, seq) order");
         assert_eq!(page, Some((None, 0)));
 
         let (ids, page) =
-            ids_and_page(hub.find(None, "ticket page".into(), Some("fnd-3".into()), Some(1), None).await).await;
+            ids_and_page(hub.find(None, Reach::everywhere(), "ticket page".into(), Some("fnd-3".into()), Some(1), None).await).await;
         assert_eq!((ids, page), (vec!["OTH-1".to_string()], Some((None, 0))));
 
-        let evs: Vec<TicketsEvent> = Box::pin(hub.find(None, "row".into(), Some("ZZZ-9".into()), None, None).await)
+        let evs: Vec<TicketsEvent> = Box::pin(hub.find(None, Reach::everywhere(), "row".into(), Some("ZZZ-9".into()), None, None).await)
             .collect()
             .await;
         match evs.as_slice() {
@@ -3246,18 +3256,18 @@ mod tests {
     async fn dangling_forward_reference_resolves_at_birth() {
         let hub = hub();
         one(hub
-            .create(None, "DAG".into(), "d1".into(), Some("scope".into()), None, Some(vec!["DAG-2".into()]), None, None, None)
+            .create(None, Reach::everywhere(), "DAG".into(), "d1".into(), Some("scope".into()), None, Some(vec!["DAG-2".into()]), None, None, None)
             .await)
         .await;
         // The ticket that becomes DAG-2 has DAG-1 in unlocks from birth.
-        match one(hub.create(None, "DAG".into(), "d2".into(), None, None, None, None, None, None).await).await {
+        match one(hub.create(None, Reach::everywhere(), "DAG".into(), "d2".into(), None, None, None, None, None, None).await).await {
             TicketsEvent::Created { ticket } => {
                 assert_eq!(ticket.id, "DAG-2");
                 assert_eq!(ticket.unlocks, vec!["DAG-1"]);
             }
             other => panic!("expected Created, got {other:?}"),
         }
-        match one(hub.get(None, "DAG-2".into()).await).await {
+        match one(hub.get(None, Reach::everywhere(), "DAG-2".into()).await).await {
             TicketsEvent::Ticket { ticket } => assert_eq!(ticket.unlocks, vec!["DAG-1"]),
             other => panic!("expected Ticket, got {other:?}"),
         }
@@ -3268,7 +3278,7 @@ mod tests {
         let hub = hub();
         // First create in the epic allocates DAG-1; naming it is a self-cycle.
         let ev = one(hub
-            .create(None, "DAG".into(), "me".into(), Some("scope".into()), None, Some(vec!["DAG-1".into()]), None, None, None)
+            .create(None, Reach::everywhere(), "DAG".into(), "me".into(), Some("scope".into()), None, Some(vec!["DAG-1".into()]), None, None, None)
             .await)
         .await;
         match ev {
@@ -3276,7 +3286,7 @@ mod tests {
             other => panic!("expected Error, got {other:?}"),
         }
         assert!(matches!(
-            one(hub.get(None, "DAG-1".into()).await).await,
+            one(hub.get(None, Reach::everywhere(), "DAG-1".into()).await).await,
             TicketsEvent::NotFound { .. }
         ));
     }
@@ -3286,12 +3296,12 @@ mod tests {
         let hub = hub();
         // DAG-1 blocked_by the not-yet-existing DAG-2.
         one(hub
-            .create(None, "DAG".into(), "d1".into(), Some("scope".into()), None, Some(vec!["DAG-2".into()]), None, None, None)
+            .create(None, Reach::everywhere(), "DAG".into(), "d1".into(), Some("scope".into()), None, Some(vec!["DAG-2".into()]), None, None, None)
             .await)
         .await;
         // The create that would become DAG-2, blocked_by DAG-1, closes the loop.
         let ev = one(hub
-            .create(None, "DAG".into(), "d2".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
+            .create(None, Reach::everywhere(), "DAG".into(), "d2".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
             .await)
         .await;
         match ev {
@@ -3300,7 +3310,7 @@ mod tests {
         }
         // Nothing was stored.
         assert!(matches!(
-            one(hub.get(None, "DAG-2".into()).await).await,
+            one(hub.get(None, Reach::everywhere(), "DAG-2".into()).await).await,
             TicketsEvent::NotFound { .. }
         ));
     }
@@ -3309,21 +3319,21 @@ mod tests {
     async fn create_rejects_longer_cycles() {
         let hub = hub();
         one(hub
-            .create(None, "DAG".into(), "p1".into(), Some("scope".into()), None, Some(vec!["DAG-3".into()]), None, None, None)
+            .create(None, Reach::everywhere(), "DAG".into(), "p1".into(), Some("scope".into()), None, Some(vec!["DAG-3".into()]), None, None, None)
             .await)
         .await;
         one(hub
-            .create(None, "DAG".into(), "p2".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
+            .create(None, Reach::everywhere(), "DAG".into(), "p2".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
             .await)
         .await;
         // Would become DAG-3: DAG-3 -> DAG-2 -> DAG-1 -> DAG-3.
         let ev = one(hub
-            .create(None, "DAG".into(), "p3".into(), None, None, Some(vec!["DAG-2".into()]), None, None, None)
+            .create(None, Reach::everywhere(), "DAG".into(), "p3".into(), None, None, Some(vec!["DAG-2".into()]), None, None, None)
             .await)
         .await;
         assert!(matches!(ev, TicketsEvent::Error { .. }), "got {ev:?}");
         assert!(matches!(
-            one(hub.get(None, "DAG-3".into()).await).await,
+            one(hub.get(None, Reach::everywhere(), "DAG-3".into()).await).await,
             TicketsEvent::NotFound { .. }
         ));
     }
@@ -3331,10 +3341,10 @@ mod tests {
     #[tokio::test]
     async fn watch_epic_filter_drops_other_epics() {
         let hub = hub();
-        let mut watch = Box::pin(hub.watch(None, Some("mng".into()), None, None).await);
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), Some("mng".into()), None, None).await);
 
-        one(hub.create(None, "OTHER".into(), "x".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        one(hub.create(None, "MNG".into(), "y".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "OTHER".into(), "x".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "MNG".into(), "y".into(), Some("scope".into()), None, None, None, None, None).await).await;
 
         match watch.next().await.expect("change") {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.epic, "MNG"),
@@ -3367,13 +3377,13 @@ mod tests {
         const CREATES: u64 = 200;
         const HELD: u64 = 256; // Store::with_connection's broadcast capacity
         let hub = hub();
-        one(hub.create(None, "LAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, None, None, None).await);
-        let mut other = Box::pin(hub.watch(None, Some("other".into()), None, None).await);
+        one(hub.create(None, Reach::everywhere(), "LAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
+        let mut other = Box::pin(hub.watch(None, Reach::everywhere(), Some("other".into()), None, None).await);
 
         let mut broadcast: Vec<String> = Vec::new();
         for k in 2..=CREATES + 1 {
-            match one(hub.create(None, "LAG".into(), format!("t{k}"), None, None, None, None, None, None).await).await {
+            match one(hub.create(None, Reach::everywhere(), "LAG".into(), format!("t{k}"), None, None, None, None, None, None).await).await {
                 TicketsEvent::Created { ticket } => assert_eq!(ticket.id, format!("LAG-{k}")),
                 ev => panic!("expected Created, got {ev:?}"),
             }
@@ -3398,10 +3408,10 @@ mod tests {
         assert_eq!(read.iter().filter(|l| l.starts_with("lagged")).count(), 1);
         assert!(futures::FutureExt::now_or_never(watch.next()).is_none(), "and nothing more");
 
-        one(hub.create(None, "LAG".into(), "after".into(), None, None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "LAG".into(), "after".into(), None, None, None, None, None, None).await).await;
         assert_eq!(label(&watch.next().await.expect("an event")), format!("created LAG-{}", CREATES + 2), "and on, as usual");
 
-        one(hub.create(None, "OTHER".into(), "its own".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "OTHER".into(), "its own".into(), Some("scope".into()), None, None, None, None, None).await).await;
         assert_eq!(label(&other.next().await.expect("an event")), "created OTHER-1", "then only its own epic");
 
         let wire = serde_json::to_value(TicketsEvent::Lagged { missed: 3 }).unwrap();
@@ -3414,13 +3424,13 @@ mod tests {
     #[tokio::test]
     async fn set_parent_yields_parent_changed_and_maps_errors_in_band() {
         let hub = hub();
-        one(hub.create(None, "SP".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        one(hub.create(None, "SP".into(), "a".into(), None, None, None, None, None, None).await).await; // SP-2 → SP-1
-        one(hub.create(None, "SP".into(), "b".into(), None, None, None, None, None, None).await).await; // SP-3 → SP-1
-        one(hub.create(None, "OT".into(), "other".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, None, None, None).await);
+        one(hub.create(None, Reach::everywhere(), "SP".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "SP".into(), "a".into(), None, None, None, None, None, None).await).await; // SP-2 → SP-1
+        one(hub.create(None, Reach::everywhere(), "SP".into(), "b".into(), None, None, None, None, None, None).await).await; // SP-3 → SP-1
+        one(hub.create(None, Reach::everywhere(), "OT".into(), "other".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
 
-        match one(hub.set_parent(None, "sp-3".into(), "sp-2".into()).await).await {
+        match one(hub.set_parent(None, Reach::everywhere(), "sp-3".into(), "sp-2".into()).await).await {
             TicketsEvent::ParentChanged { ticket, previous } => {
                 assert_eq!(ticket.id, "SP-3");
                 assert_eq!(ticket.parent.as_deref(), Some("SP-2"));
@@ -3447,27 +3457,27 @@ mod tests {
         }
 
         assert!(matches!(
-            one(hub.set_parent(None, "SP-9".into(), "SP-1".into()).await).await,
+            one(hub.set_parent(None, Reach::everywhere(), "SP-9".into(), "SP-1".into()).await).await,
             TicketsEvent::NotFound { .. }
         ));
-        match one(hub.set_parent(None, "SP-2".into(), "SP-9".into()).await).await {
+        match one(hub.set_parent(None, Reach::everywhere(), "SP-2".into(), "SP-9".into()).await).await {
             TicketsEvent::Error { message } => {
                 assert!(message.contains("SP-9") && message.contains("must exist"), "{message}")
             }
             other => panic!("expected Error, got {other:?}"),
         }
-        match one(hub.set_parent(None, "SP-2".into(), "OT-1".into()).await).await {
+        match one(hub.set_parent(None, Reach::everywhere(), "SP-2".into(), "OT-1".into()).await).await {
             TicketsEvent::Error { message } => {
                 assert!(message.contains("OT-1") && message.contains("outside"), "{message}")
             }
             other => panic!("expected Error, got {other:?}"),
         }
-        match one(hub.set_parent(None, "SP-1".into(), "SP-3".into()).await).await {
+        match one(hub.set_parent(None, Reach::everywhere(), "SP-1".into(), "SP-3".into()).await).await {
             TicketsEvent::Error { message } => assert!(message.contains("own ancestor"), "{message}"),
             other => panic!("expected Error, got {other:?}"),
         }
         // The root may be hosted by another shortcode.
-        match one(hub.set_parent(None, "SP-1".into(), "OT-1".into()).await).await {
+        match one(hub.set_parent(None, Reach::everywhere(), "SP-1".into(), "OT-1".into()).await).await {
             TicketsEvent::ParentChanged { ticket, .. } => assert_eq!(ticket.parent.as_deref(), Some("OT-1")),
             other => panic!("expected ParentChanged, got {other:?}"),
         }
@@ -3478,14 +3488,14 @@ mod tests {
     #[tokio::test]
     async fn first_ticket_of_a_prefix_must_be_a_scope_in_band() {
         let hub = hub();
-        match one(hub.create(None, "FRESH".into(), "a build".into(), None, None, None, None, None, None).await).await {
+        match one(hub.create(None, Reach::everywhere(), "FRESH".into(), "a build".into(), None, None, None, None, None, None).await).await {
             TicketsEvent::Error { message } => {
                 assert!(message.contains("FRESH") && message.contains("scope"), "{message}");
             }
             other => panic!("expected Error, got {other:?}"),
         }
         assert!(matches!(
-            one(hub.get(None, "FRESH-1".into()).await).await,
+            one(hub.get(None, Reach::everywhere(), "FRESH-1".into()).await).await,
             TicketsEvent::NotFound { .. }
         ));
     }
@@ -3527,11 +3537,11 @@ mod tests {
             let blocked_by = (!blocked_by.is_empty()).then(|| blocked_by.iter().map(|b| b.to_string()).collect());
             let (epic, kind) = (epic.to_string(), kind.map(String::from));
             let hub = hub.clone();
-            async move { one(hub.create(None, epic, "t".into(), kind, None, blocked_by, None, None, None).await).await }
+            async move { one(hub.create(None, Reach::everywhere(), epic, "t".into(), kind, None, blocked_by, None, None, None).await).await }
         };
         let status = |id: &str, s: &str| {
             let (id, s, hub) = (id.to_string(), s.to_string(), hub.clone());
-            async move { one(hub.set_status(None, id, s).await).await }
+            async move { one(hub.set_status(None, Reach::everywhere(), id, s).await).await }
         };
         for epic in ["WA", "WB", "ELSE"] {
             create(epic, Some("scope"), &[]).await; // X-1, each shortcode's root
@@ -3553,7 +3563,7 @@ mod tests {
         create("WB", None, &[]).await; // WB-5: wave 1, Blocked (a marker, not an edge)
         status("WB-5", "Blocked").await;
 
-        let (placed, counts) = placed_and_counts(hub.waves(None, vec!["wa".into(), "WB".into()], None).await).await;
+        let (placed, counts) = placed_and_counts(hub.waves(None, Reach::everywhere(), vec!["wa".into(), "WB".into()], None).await).await;
         let want: Vec<(&str, crate::types::Placement, Vec<&str>)> = vec![
             ("WB-3", Wave { n: 1 }, vec![]),
             ("WA-3", Wave { n: 1 }, vec![]),
@@ -3574,7 +3584,7 @@ mod tests {
 
         // `kinds` names what is yielded: the scopes and the execution too.
         let (placed, counts) = placed_and_counts(
-            hub.waves(None, vec!["WA".into()], Some(vec!["scope".into(), "Execution".into()])).await,
+            hub.waves(None, Reach::everywhere(), vec!["WA".into()], Some(vec!["scope".into(), "Execution".into()])).await,
         )
         .await;
         let ids: Vec<&str> = placed.iter().map(|(id, _, _)| id.as_str()).collect();
@@ -3582,7 +3592,7 @@ mod tests {
         assert_eq!(counts, (vec![2], 0, 0));
 
         // A shortcode with no tickets: nothing placed, the tally all zero.
-        let (placed, counts) = placed_and_counts(hub.waves(None, vec!["NONE".into()], None).await).await;
+        let (placed, counts) = placed_and_counts(hub.waves(None, Reach::everywhere(), vec!["NONE".into()], None).await).await;
         assert!(placed.is_empty());
         assert_eq!(counts, (vec![], 0, 0));
     }
@@ -3593,9 +3603,9 @@ mod tests {
     #[tokio::test]
     async fn waves_errors_are_in_band_and_alone() {
         let hub = hub();
-        one(hub.create(None, "ER".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "ER".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
 
-        let evs: Vec<TicketsEvent> = Box::pin(hub.waves(None, vec![], None).await).collect().await;
+        let evs: Vec<TicketsEvent> = Box::pin(hub.waves(None, Reach::everywhere(), vec![], None).await).collect().await;
         assert_eq!(evs.len(), 1, "{evs:?}");
         match &evs[0] {
             TicketsEvent::Error { message } => assert!(message.contains("epics"), "{message}"),
@@ -3603,7 +3613,7 @@ mod tests {
         }
 
         let evs: Vec<TicketsEvent> =
-            Box::pin(hub.waves(None, vec!["ER".into()], Some(vec!["build".into(), "bug".into()])).await).collect().await;
+            Box::pin(hub.waves(None, Reach::everywhere(), vec!["ER".into()], Some(vec!["build".into(), "bug".into()])).await).collect().await;
         assert_eq!(evs.len(), 1, "{evs:?}");
         match &evs[0] {
             TicketsEvent::Error { message } => {

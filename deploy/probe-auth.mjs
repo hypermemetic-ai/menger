@@ -3,6 +3,12 @@
 // found (IDENTITY-24's successors: IDENTITY-36, 37, 38) against the live
 // server, and fails if any of them works.
 //
+// AUTH-7: menger speaks the AUTH protocol — an anonymous socket is admitted
+// into the anonymous view (only auth.providers, auth.login, auth.signup),
+// every call passes the gate, a refusal is typed (error_kind, grant, scope,
+// roles, held_on), each caller's schema lists only what it holds. The probe
+// checks those too; its role_set check edits `viewer` and puts it back.
+//
 //   node deploy/probe-auth.mjs [ws port] [shell port]      (default 4450 4451)
 //
 // It signs in through the dev sign-in (/login/dev, test only), so it never
@@ -26,10 +32,11 @@ const check = (cond, what) => (cond ? ok(what) : fail(what));
 // ── the wire ─────────────────────────────────────────────────────────────
 
 /** Opens a socket; resolves to it, or to the upgrade's refusal. */
-function open({ origin = SHELL, session } = {}) {
+function open({ origin = SHELL, session, bearer } = {}) {
   const headers = {};
   if (origin) headers.origin = origin;
   if (session) headers.cookie = `${COOKIE}=${session}`;
+  if (bearer) headers.authorization = `Bearer ${bearer}`;
   return new Promise((resolve) => {
     const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`, { headers });
     ws.onopen = () => resolve({ ws });
@@ -56,13 +63,52 @@ function call(ws, method, params = {}, { ms = 4000 } = {}) {
       const r = d.params?.result;
       if (!r || d.params.subscription !== sub) return;
       if (r.type === 'data') items.push(r.content);
-      else if (r.type === 'error') items.push({ type: 'error', message: r.message });
-      else if (r.type === 'done') done(items);
+      else if (r.type === 'error') {
+        // AUTH-7: the gate's refusal is the stream's error item, typed.
+        const { message, error_kind, grant, scope, roles, held_on } = r;
+        items.push({ type: 'error', message, error_kind, grant, scope, roles, held_on });
+        done(items);
+      } else if (r.type === 'done') done(items);
     };
     ws.addEventListener('message', on);
     ws.send(JSON.stringify({ jsonrpc: '2.0', id, method: 'menger.call', params: { method, params } }));
   });
 }
+
+/** AUTH-4: the connection's `_info`. */
+function info(ws) {
+  const id = nextId++;
+  return new Promise((resolve) => {
+    const t = setTimeout(() => { ws.removeEventListener('message', on); resolve({}); }, 4000);
+    let sub;
+    const on = (m) => {
+      const d = JSON.parse(m.data);
+      if (d.id === id) { sub = d.result; return; }
+      const r = d.params?.result;
+      if (r && d.params.subscription === sub && r.type === 'data') {
+        clearTimeout(t);
+        ws.removeEventListener('message', on);
+        resolve(r.content);
+      }
+    };
+    ws.addEventListener('message', on);
+    ws.send(JSON.stringify({ jsonrpc: '2.0', id, method: '_info', params: {} }));
+  });
+}
+
+/** AUTH-4: the activations a connection's view shows, each with its methods. */
+async function viewOf(ws) {
+  const hub = (await call(ws, 'menger.schema'))[0] || {};
+  const out = {};
+  for (const c of hub.children || []) {
+    const s = (await call(ws, `${c.namespace}.schema`))[0] || {};
+    out[c.namespace] = (s.methods || []).map((m) => m.name).filter((n) => n !== 'schema').sort();
+  }
+  return out;
+}
+
+/** The refusal an answer carries, when the gate typed it. */
+const refusalOf = (items) => (Array.isArray(items) ? items.find((i) => i.type === 'error' && i.error_kind) : null) || {};
 
 /** A watch: collects what it hears until stopped. */
 function watch(ws) {
@@ -97,11 +143,33 @@ async function signIn(user, role, scope) {
 
 const tag = `probe-${Date.now().toString(36)}`;
 
-// The door.
-check((await open({ origin: null })).refused, 'an anonymous upgrade is refused');
+// The door. AUTH-7: an anonymous upgrade is admitted — into the anonymous
+// view, which shows only how to sign in and reaches nothing else.
+const DOOR = ['auth.providers', 'auth.login', 'auth.signup'];
+const anon = (await open({ origin: null })).ws;
+check(anon, 'an anonymous upgrade is admitted into the anonymous view (AUTH-6)');
+if (anon) {
+  const i = await info(anon);
+  check(i.view === 'anonymous' && JSON.stringify(i.auth?.methods) === JSON.stringify(DOOR), `an anonymous _info names only the door: ${DOOR.join(', ')}`);
+  const v = await viewOf(anon);
+  check(JSON.stringify(v) === JSON.stringify({ auth: ['login', 'providers', 'signup'] }), `an anonymous schema shows only the auth door (${JSON.stringify(v)})`);
+  let reached = [];
+  for (const m of ['tickets.health', 'tickets.list', 'comments.list', 'members.mine', 'session.whoami', 'auth.whoami', 'auth.roles']) {
+    if (refusalOf(await call(anon, m)).error_kind !== 'unauthenticated') reached.push(m);
+  }
+  check(!reached.length, `an anonymous connection can call nothing but the door${reached.length ? ` (reached ${reached.join(', ')})` : ''}`);
+  check((await call(anon, 'auth.providers')).some((p) => p.type === 'provider'), 'auth.providers answers it');
+  anon.close();
+}
 check((await open({ origin: 'https://evil.example' })).refused, 'a foreign page\'s upgrade is refused');
 check((await open({ origin: 'null' })).refused, 'a sandboxed frame\'s upgrade (Origin null) is refused');
-check((await open({ origin: null, session: 'forged' })).refused, 'a forged session is refused');
+check((await open({ origin: null, bearer: 'mgs_forged' })).refused, 'a forged session token is refused at the upgrade');
+{
+  // A forged browser cookie is no credential: the anonymous view, never anyone.
+  const f = (await open({ origin: null, session: 'forged' })).ws;
+  check(f && refusalOf(await call(f, 'session.whoami')).error_kind === 'unauthenticated', 'a forged session cookie proves no one');
+  f?.close();
+}
 
 // The pages.
 for (const path of ['/', '/login']) {
@@ -135,8 +203,12 @@ const homeId = await made(HOME);
 const awayId = await made(AWAY, { blocked_by: homeId ? [homeId] : [] });
 check(homeId && awayId, `the admin makes a probe ticket in ${HOME} and ${AWAY}`);
 
-// Reads.
-check(errorOf(await call(n, 'tickets.list', {})).includes('no access'), 'a person with no grant reads nothing');
+// Reads. AUTH-7: a person with no grant is refused by the gate, typed.
+{
+  const r = refusalOf(await call(n, 'tickets.list', {}));
+  check(r.error_kind === 'forbidden' && r.grant === 'tickets.list' && r.scope === '*' && (r.held_on || []).length === 0,
+    `a person with no grant reads nothing: a typed refusal (${JSON.stringify(r)})`);
+}
 const vGet = await call(v, 'tickets.get', { id: awayId });
 check(!JSON.stringify(vGet).includes(`secret body of ${AWAY}`), `a viewer of ${HOME} cannot get a ${AWAY} ticket`);
 const vSearch = await call(v, 'tickets.search', { query: tag });
@@ -147,13 +219,52 @@ const sneak = await call(e, 'tickets.create', { epic: AWAY, title: `${tag} sneak
 check(errorOf(sneak), `an editor of ${AWAY} cannot name a ${HOME} ticket it cannot view as a blocker (IDENTITY-37)`);
 
 // Writes.
-check(errorOf(await call(v, 'tickets.set_status', { id: homeId, status: 'Ready' })), 'a viewer cannot set a status');
+{
+  const r = refusalOf(await call(v, 'tickets.set_status', { id: homeId, status: 'Ready' }));
+  check(r.error_kind === 'forbidden' && r.grant === 'tickets.set_status' && r.scope === HOME
+    && (r.roles || []).includes('editor') && (r.roles || []).includes('admin') && Array.isArray(r.held_on),
+    `a viewer cannot set a status: refused, typed — grant, scope, roles, held_on (${JSON.stringify(r)})`);
+}
 check(errorOf(await call(e, 'tickets.set_status', { id: homeId, status: 'Ready' })), `an editor of ${AWAY} cannot write in ${HOME}`);
 check(errorOf(await call(e, 'tickets.create', { epic: HOME, title: `${tag} x` })), `an editor of ${AWAY} cannot create in ${HOME}`);
 const me = (await call(e, 'session.whoami')).find((i) => i.principal)?.principal;
 check(errorOf(await call(e, 'members.grant', { principal: me, scope: '*', role: 'admin' })), 'an editor cannot grant itself admin on *');
 check(errorOf(await call(e, 'members.grant', { principal: me, scope: AWAY, role: 'admin' })), `an editor cannot grant itself admin on ${AWAY}`);
 check(errorOf(await call(e, 'members.requests')), 'only an admin of * sees who has signed in (IDENTITY-37)');
+
+// AUTH-4/AUTH-7: each caller's view is what it holds.
+{
+  const nv = await viewOf(n);
+  check(!nv.tickets && !nv.comments && JSON.stringify(nv.members) === '["mine"]', `a person holding nothing sees no tickets or comments method (${JSON.stringify(nv)})`);
+  const vv = await viewOf(v);
+  check(vv.tickets?.includes('list') && !vv.tickets?.includes('set_status') && !vv.members?.includes('grant'),
+    'a viewer\'s schema lists the reads, not the writes or the admin\'s methods');
+  const ev = await viewOf(e);
+  check(ev.tickets?.includes('set_status') && !ev.members?.includes('grant'), 'an editor\'s schema lists the writes, not the admin\'s methods');
+  const vs = (await call(v, 'tickets.schema'))[0];
+  const list = (vs?.methods || []).find((m) => m.name === 'list');
+  check(list?.grant === 'tickets.list' && JSON.stringify(list?.held_on) === JSON.stringify([HOME]), `a method in a view says its grant and where it is held (${JSON.stringify(list?.held_on)})`);
+  const hashes = await Promise.all([a, n, v, e].map(async (s) => (await info(s)).view_hash));
+  check(hashes.every(Boolean) && new Set(hashes).size === 4, `view hashes differ by holdings (${hashes.join(', ')})`);
+  // who am I, what does this need.
+  const me = (await call(v, 'auth.whoami'))[0] || {};
+  check(me.type === 'whoami' && (me.memberships || []).some((m) => m.role === 'viewer' && m.scope === HOME), `auth.whoami says the viewer's membership (${JSON.stringify(me.memberships)})`);
+  const req = (await call(v, 'auth.requires', { method: 'tickets.set_status' }))[0] || {};
+  check(req.grant === 'tickets.set_status' && req.target === 'id' && (req.roles || []).includes('editor'), `auth.requires says what set_status needs (${JSON.stringify(req)})`);
+  check(refusalOf(await call(v, 'auth.role_set', { role: 'viewer', grants: ['tickets.get'] })).grant === 'auth.role_set', 'a viewer cannot edit a role');
+  // An admin's role_set moves a caller's view — then viewer is put back.
+  const before = (await call(a, 'auth.roles')).find((r) => r.role === 'viewer');
+  if (!before?.grants?.length) {
+    fail('auth.roles lists viewer\'s grants');
+  } else {
+    const set = (await call(a, 'auth.role_set', { role: 'viewer', grants: ['tickets.get'] }))[0];
+    const narrowed = await viewOf(v);
+    const listRefused = refusalOf(await call(v, 'tickets.list')).grant === 'tickets.list';
+    const back = (await call(a, 'auth.role_set', { role: 'viewer', grants: before.grants }))[0];
+    check(set?.type === 'role' && JSON.stringify(narrowed.tickets) === '["get"]' && listRefused, `an admin's auth.role_set narrows a viewer's view and calls (${JSON.stringify(narrowed.tickets)})`);
+    check(JSON.stringify(back?.grants) === JSON.stringify(before.grants), 'viewer is put back as it was');
+  }
+}
 
 // A watch follows the grants as they stand (IDENTITY-37).
 const vWho = (await call(v, 'session.whoami')).find((i) => i.principal)?.principal;
@@ -208,10 +319,16 @@ check(!JSON.stringify(heard).includes('after the revoke'), 'a watch hears nothin
   }
 }
 
-// Sign-out ends the session's sockets.
+// Sign-out ends the session's sockets. (AUTH-7: members.mine, which any
+// signed-in caller reaches — `nobody` holds nothing the gate would let by.)
 await fetch(`${SHELL}/logout`, { method: 'POST', redirect: 'manual', headers: { origin: SHELL, cookie: `${COOKIE}=${nobody}` } });
-check(errorOf(await call(n, 'tickets.health')).includes('signed out'), 'a socket stops answering when its session signs out');
-check((await open({ session: nobody })).refused, 'a signed-out session opens no socket');
+check(errorOf(await call(n, 'members.mine')).includes('signed out'), 'a socket stops answering when its session signs out');
+{
+  // AUTH-7: the ended session's cookie is no credential: the anonymous view.
+  const o = await open({ session: nobody });
+  check(o.refused || refusalOf(await call(o.ws, 'session.whoami')).error_kind === 'unauthenticated', 'a signed-out session opens no socket as anyone');
+  o.ws?.close();
+}
 
 for (const s of [a, n, v, e, w]) s?.close();
 console.log(failed ? `${failed} check(s) FAILED` : 'every attack was refused');

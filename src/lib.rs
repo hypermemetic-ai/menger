@@ -13,6 +13,9 @@
 
 mod builder;
 
+/// AUTH-7: menger's half of the protocol's `auth` activation.
+pub mod auth_backend;
+
 pub mod dev_login;
 pub mod login;
 pub mod sessions;
@@ -25,4 +28,4 @@ pub mod shell;
 pub use menger_tickets_api::store;
 pub use menger_tickets_api::{Comments, CommentsClient, Members, MembersClient, Session, SessionClient, Tickets, TicketsClient};
 
-pub use builder::{build_rpc, build_rpc_offering, build_rpc_seeded, build_rpc_with, default_db_path};
+pub use builder::{build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_with, default_db_path, SIGNED_IN_GRANTS};

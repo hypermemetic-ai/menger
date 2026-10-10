@@ -147,6 +147,19 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4460 -t "$TOKEN" menger session whoami
   ```
 
+  **Under login, menger speaks the AUTH protocol** (AUTH-7): every method
+  is its own grant, `viewer` / `editor` are explicit grant lists declared
+  with `roles(...)` on each activation (`admin` holds all), and plexus-core's
+  gate decides every call — a write by its target (`target = "id"`), a read
+  wherever its grant is held, answering only from there. An anonymous
+  connection is admitted into the anonymous view (`auth.providers`,
+  `auth.login`, `auth.signup`, nothing else); a refusal is typed
+  (`error_kind: forbidden`, `grant`, `scope`, `roles`, `held_on`). `auth.*`
+  (`whoami`, `requires`, `roles`, `role_set`, `grant`, `revoke`, `waiting`)
+  sits beside `session.*` and `members.*`, which stay for the app. A new
+  method gets a role by being listed in its activation's `roles(...)` —
+  unlisted, only admin holds it. README "The AUTH protocol" has the rest.
+
   **Params are individual flags, not a JSON blob** — treat synapse as a
   normal CLI: `--kebab-case-flag value` after the method path, and
   `<method> --help` prints each parameter's name and type. **A list

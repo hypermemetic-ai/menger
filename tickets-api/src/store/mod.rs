@@ -1582,6 +1582,9 @@ struct Cache {
     /// IDENTITY-21: every grant ([`members::Members`]) — read at open, moved
     /// by `grant` and `revoke` alone.
     members: members::Members,
+    /// AUTH-7: an admin's edits of a role's grants ([`roles::RoleEdits`]) —
+    /// read at open, moved by `set_role` alone.
+    roles: roles::RoleEdits,
     written: u64,
 }
 
@@ -1908,6 +1911,8 @@ impl Cache {
             comments: comments::Comments::default(),
             // IDENTITY-21: and the members.
             members: members::Members::default(),
+            // AUTH-7: and the edited roles.
+            roles: roles::RoleEdits::new(),
             written: 0,
         }
     }
@@ -1966,6 +1971,8 @@ impl Cache {
             comments: comments::Comments::default(),
             // IDENTITY-21: and the members.
             members: members::Members::default(),
+            // AUTH-7: and the edited roles.
+            roles: roles::RoleEdits::new(),
             written: 0,
         }
     }
@@ -2701,6 +2708,8 @@ impl Store {
         cache.comments = comments::load(&conn)?;
         // IDENTITY-21: the members, as stored.
         cache.members = members::load(&conn)?;
+        // AUTH-7: the edited roles, as stored.
+        cache.roles = roles::load(&conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
             Some(path) => Readers::open(path)?,
@@ -4398,6 +4407,84 @@ impl Store {
         .await
     }
 
+    /// AUTH-7: the roles an admin edited (`auth.role_set`), each with its
+    /// grants as set — from the cache.
+    pub fn role_edits(&self) -> RoleEdits {
+        self.tickets.read().expect("store lock poisoned").roles.clone()
+    }
+
+    /// AUTH-7: keeps an admin's edit of `role` — its grants, replacing any
+    /// edit before: one row committed, then the cache moved.
+    pub async fn set_role(&self, role: String, grants: Vec<String>) -> Result<(), StoreError> {
+        let serial = self.serial().await;
+        let at = chrono::Utc::now().timestamp();
+        let (r, g) = (role.clone(), grants.clone());
+        self.write(
+            serial,
+            move |tx| Ok(roles::store(tx, &role, &grants, at)?),
+            move |cache, _| {
+                cache.roles.insert(r, g);
+            },
+            move |(), (), _| (),
+        )
+        .await
+    }
+
+    /// AUTH-7: the scopes `target` lives in, innermost first, as the gate
+    /// asks them (`Resolve::chain`) — the filter language's `under` read
+    /// backwards: for a ticket id, its shortcode, itself, its ancestors and
+    /// the shortcodes hosting its shortcode; for a path address
+    /// (`SHORTCODE/path`) or a shortcode name, the shortcode and the
+    /// shortcodes hosting it. Upper case. A ticket the store does not hold
+    /// is placed by the shortcode its id names, so a hidden ticket and a
+    /// missing one resolve alike (IDENTITY-37). `None`: `target` names
+    /// nothing a scope could hold (blank, or not a shortcode's spelling).
+    /// `*` is the caller's to add.
+    pub fn scope_chain(&self, target: &str) -> Option<Vec<String>> {
+        let t = target.trim();
+        let code_ok = |c: &str| !c.is_empty() && c.len() <= 32 && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let hosts = |epic: &str| lineage::host_chain(&cache, epic);
+        if let Some((code, _path)) = t.split_once('/') {
+            if !code_ok(code) {
+                return None;
+            }
+            let code = code.to_ascii_uppercase();
+            let mut out = vec![code.clone()];
+            out.extend(hosts(&code));
+            return Some(out);
+        }
+        let ticket = t.rsplit_once('-').filter(|(c, n)| code_ok(c) && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        match ticket {
+            Some((code, n)) => {
+                let code = code.to_ascii_uppercase();
+                let id = format!("{code}-{n}");
+                let mut out = vec![code.clone()];
+                if let Some(row) = cache.get(&id) {
+                    out.push(row.id.clone());
+                    for a in tree::ancestors(cache.rows(), &row.id, row.parent.as_deref()) {
+                        if !out.iter().any(|o| o == a) {
+                            out.push(a.to_string());
+                        }
+                    }
+                }
+                for h in hosts(&code) {
+                    if !out.contains(&h) {
+                        out.push(h);
+                    }
+                }
+                Some(out)
+            }
+            None if code_ok(t) => {
+                let code = t.to_ascii_uppercase();
+                let mut out = vec![code.clone()];
+                out.extend(hosts(&code));
+                Some(out)
+            }
+            None => None,
+        }
+    }
+
     /// COMMENT-2: one page of the comments `q` admits, newest first — after
     /// the comment `after` (exclusive), at most `limit` — with the cursor
     /// for the next ([`comments::page`]). From the cache alone.
@@ -5057,6 +5144,9 @@ pub use comments::{CommentChange, CommentPage, CommentQuery};
 /// beside the tickets, behind the cache.
 mod members;
 pub use members::Members;
+// AUTH-7: an admin's edits of a role's grants.
+mod roles;
+pub use roles::RoleEdits;
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
 /// has commits)` interned as one cell; per shortcode and cell, a Roaring

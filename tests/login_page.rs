@@ -19,7 +19,8 @@ use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{HeaderMap, HeaderValue, WsClient, WsClientBuilder};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use menger::build_rpc_offering;
+use menger::auth_backend::{BrowserLogin, MengerAuth};
+use menger::build_rpc_login;
 use menger::login::{self, LoginButton, Provider};
 use menger::sessions::{Gate, Sessions};
 use menger::shell::{self, ShellConfig};
@@ -352,12 +353,20 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
 
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let sessions = Arc::new(Sessions::named(3600, &menger::sessions::cookie_name_for(&public_url)));
-    let access = Access::with_login(sessions.clone(), true, Vec::new());
+    let access = Access::with_login(sessions.clone(), true, Vec::new()).minting(sessions.clone());
     let offers = providers.iter().map(Provider::offer).collect();
-    let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();
+    // AUTH-7: as main wires it — the protocol's auth over menger's backend,
+    // whose loopback sign-in goes through this shell's login page.
+    let backend = Arc::new(MengerAuth::new(
+        access.clone(),
+        MengerAuth::offered(&providers),
+        Some(BrowserLogin { sessions: sessions.clone(), public_url: public_url.clone() }),
+    ));
+    let hub = build_rpc_login(&dir.path().join("t.db"), None, Default::default(), offers, access.clone(), backend, None).await.unwrap();
     let carriers = login::boundary(&providers).unwrap();
     let origins = vec![public_url.clone(), format!("http://localhost:{shell_port}")];
-    let gate = Arc::new(Gate::new(sessions.clone(), carriers));
+    // AUTH-7: as main wires it, the upgrade notices who signs in holding nothing.
+    let gate = Arc::new(Gate::new(sessions.clone(), carriers).noticing(access.clone()));
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
     let ws_origins = origins.clone();
     tokio::spawn(async move {
@@ -365,7 +374,11 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
             .with_websocket(ws)
             .with_allowed_origins(ws_origins)
             .with_session_validator(gate)
-            .reject_upgrade_on_auth_failure()
+            // AUTH-6/AUTH-7: as main wires it — no credential is the
+            // anonymous view; only a bearer or the access_token cookie is a
+            // credential, so a stale session cookie is no one, never a 401.
+            .anonymous_view()
+            .credential_cookies(["access_token"])
             .build().await.unwrap().serve().await.unwrap();
     });
     let login = Login::new(
@@ -439,18 +452,33 @@ async fn socket(m: &Menger, cookie: Option<&str>, origin: Option<&str>) -> Resul
 }
 
 async fn call(c: &WsClient, method: &str) -> Vec<Value> {
+    call_with(c, method, json!({})).await
+}
+
+async fn call_with(c: &WsClient, method: &str, params: Value) -> Vec<Value> {
     let mut p = ObjectParams::new();
     p.insert("method", method).unwrap();
-    p.insert("params", json!({})).unwrap();
+    p.insert("params", params).unwrap();
     let mut sub: Subscription<Value> = c.subscribe("menger.call", p, "menger.call_unsub").await.unwrap();
     let mut out = Vec::new();
     while let Some(Ok(item)) = sub.next().await {
         match item["type"].as_str() {
             Some("data") => out.push(item["content"].clone()),
+            // AUTH-7: the gate's refusal, typed, is the stream's error item.
+            Some("error") => {
+                out.push(item);
+                break;
+            }
             _ => break,
         }
     }
     out
+}
+
+/// AUTH-7: whether a connection is no one — the anonymous view, which
+/// reaches only the auth door.
+async fn anonymous(c: &WsClient) -> bool {
+    call(c, "session.whoami").await[0]["error_kind"] == "unauthenticated"
 }
 
 // ── The tests ─────────────────────────────────────────────────────────────
@@ -463,7 +491,11 @@ async fn nobody_gets_in_anonymously() {
         assert_eq!(r.status(), 303, "{path}");
         assert!(location(&r).starts_with("/login?next="), "{path}: {}", location(&r));
     }
-    assert!(socket(&m, None, Some(&m.origin())).await.unwrap_err().contains("401"));
+    // AUTH-7: the socket admits an upgrade that proves no one into the
+    // anonymous view (it was refused 401): it can call nothing but the door.
+    let ws = socket(&m, None, Some(&m.origin())).await.expect("the anonymous view");
+    assert!(anonymous(&ws).await);
+    assert_eq!(call(&ws, "tickets.health").await[0]["error_kind"], "unauthenticated");
     let page = m.http.get(m.url("/login")).send().await.unwrap().text().await.unwrap();
     for want in ["Sign in", "name=\"password\"", "Continue with Google", "Continue with SSO", "Continue with nostr", "Forgot password?"] {
         assert!(page.contains(want), "the page shows {want}");
@@ -485,7 +517,11 @@ async fn a_password_signs_in_and_the_session_opens_the_app_and_the_socket() {
 
     let ws = socket(&m, Some(&id), Some(&m.origin())).await.expect("the socket admits the session");
     assert_eq!(call(&ws, "session.whoami").await[0]["principal"], format!("idp:{ALICE}"));
-    assert_eq!(call(&ws, "tickets.health").await[0]["type"], "health");
+    // AUTH-7: Alice holds nothing yet — a typed refusal (health answered
+    // her a count of 0 before), and she waits for an admin.
+    let health = call(&ws, "tickets.health").await;
+    assert_eq!((health[0]["error_kind"].as_str(), health[0]["grant"].as_str()), (Some("forbidden"), Some("tickets.health")), "{health:?}");
+    assert_eq!(call(&ws, "members.mine").await[0]["principal"], format!("idp:{ALICE}"));
 }
 
 #[tokio::test]
@@ -583,15 +619,19 @@ async fn sign_out_ends_the_session_and_its_open_socket_stops_answering() {
     let m = start().await;
     let id = sign_in(&m).await;
     let ws = socket(&m, Some(&id), Some(&m.origin())).await.unwrap();
-    assert_eq!(call(&ws, "tickets.health").await[0]["type"], "health");
+    // AUTH-7: members.mine, which any signed-in caller reaches (Alice holds
+    // nothing, so tickets.health is refused her by the gate).
+    assert_eq!(call(&ws, "members.mine").await[0]["type"], "me");
     let out = m.http.post(m.url("/logout")).header("cookie", m.jar(&id)).header("origin", m.origin()).send().await.unwrap();
     assert_eq!(out.status(), 303);
-    let after = call(&ws, "tickets.health").await;
+    let after = call(&ws, "members.mine").await;
     assert_eq!(after[0]["type"], "error");
     assert!(after[0]["message"].as_str().unwrap().contains("signed out"), "{after:?}");
     // IDENTITY-37: whoami too — the connection is no one now.
     assert_eq!(call(&ws, "session.whoami").await[0]["type"], "anonymous");
-    assert!(socket(&m, Some(&id), Some(&m.origin())).await.is_err(), "and no new socket");
+    // AUTH-7: a new socket on the ended session's cookie is the anonymous
+    // view (it was refused 401): the browser's cookie is no credential.
+    assert!(anonymous(&socket(&m, Some(&id), Some(&m.origin())).await.unwrap()).await, "and no new socket as Alice");
     assert_eq!(m.http.get(m.url("/login/me")).header("cookie", m.jar(&id)).send().await.unwrap().status(), 401);
 }
 
@@ -793,7 +833,9 @@ async fn each_shell_s_session_is_its_own_cookie() {
         h.insert("cookie", HeaderValue::from_str(&other).unwrap());
         h.insert("origin", HeaderValue::from_str(&m.origin()).unwrap());
         let ws = WsClientBuilder::default().set_headers(h).build(format!("ws://127.0.0.1:{}", m.ws)).await;
-        assert!(ws.is_err(), "{other}: the socket refuses another server's cookie");
+        // AUTH-7: another server's cookie proves no one here — the anonymous
+        // view (it was a 401).
+        assert!(anonymous(&ws.unwrap()).await, "{other}: the socket takes no other server's cookie");
     }
     assert!(socket(&m, Some(&id), Some(&m.origin())).await.is_ok());
     // Sign-out clears this shell's cookie by name.
@@ -857,4 +899,100 @@ async fn a_storm_of_anonymous_starts_is_bounded() {
         let r = m.http.get(m.url("/login/start?button=Google&next=/app/")).send().await.unwrap();
         assert_eq!(r.status(), 302);
     }
+}
+
+
+// ── AUTH-7: a person signs in from a client, through the browser ─────────
+
+/// AUTH-7 (AUTH-5's loopback flow), end to end: a client with no
+/// credential asks `auth.login {browser {redirect}}` on the anonymous view;
+/// the person signs in on menger's page as anyone does (here plexus-idp's
+/// password form, the fixture issuer); the shell sends the browser on to the
+/// client's loopback with a one-time code for its state; the client trades
+/// it for an `mgs_` session, which opens later connections as the person.
+#[tokio::test]
+async fn a_client_signs_a_person_in_through_the_browser_and_a_loopback_code() {
+    let m = start().await;
+    let client = socket(&m, None, None).await.expect("the anonymous view");
+    let redirect = "http://127.0.0.1:53817/cb";
+    let url = call_with(&client, "auth.login", json!({ "flow": { "browser": { "redirect": redirect } } })).await;
+    assert_eq!(url[0]["type"], "login_url", "{url:?}");
+    let state = url[0]["state"].as_str().unwrap().to_string();
+    let page_url = url[0]["url"].as_str().unwrap().to_string();
+    assert_eq!(page_url, format!("{}/login?cli=1&state={state}", m.origin()));
+
+    // Anything but a loopback port is refused, in band.
+    for bad in ["https://evil.example/cb", "http://127.0.0.1/cb", "http://10.0.0.1:53817/cb"] {
+        let r = call_with(&client, "auth.login", json!({ "flow": { "browser": { "redirect": bad } } })).await;
+        assert_eq!(r[0]["type"], "error", "{bad}: {r:?}");
+    }
+
+    // The page carries the sign-in on: every way in goes to /auth/cli.
+    let page = m.http.get(&page_url).send().await.unwrap().text().await.unwrap();
+    let next = format!("/auth/cli?state={state}");
+    assert!(page.contains(&format!(r#"name="next" value="{next}""#)), "{page}");
+    let signed = m.http.post(m.url("/login")).form(&[("username", "alice"), ("password", "s3cret"), ("next", next.as_str())]).send().await.unwrap();
+    assert_eq!((signed.status().as_u16(), location(&signed)), (303, next.clone()));
+    let id = session_from(&signed).expect("the browser is signed in too");
+
+    // Just signed in: straight back to the client, with a code for its state.
+    let back = m.http.get(m.url(&next)).header("cookie", m.jar(&id)).send().await.unwrap();
+    assert_eq!(back.status(), 303);
+    let to = url::Url::parse(&location(&back)).unwrap();
+    assert_eq!(format!("{}://{}:{}{}", to.scheme(), to.host_str().unwrap(), to.port().unwrap(), to.path()), redirect);
+    let q: HashMap<_, _> = to.query_pairs().into_owned().collect();
+    assert_eq!(q["state"], state);
+    let code = q["code"].clone();
+    // The state is spent: the link does nothing twice.
+    assert_eq!(m.http.get(m.url(&next)).header("cookie", m.jar(&id)).send().await.unwrap().status(), 400);
+
+    // The code, for another state: refused — and spent.
+    let wrong = call_with(&client, "auth.login", json!({ "flow": { "code": { "code": code, "state": "s_other" } } })).await;
+    assert_eq!(wrong[0]["type"], "error", "{wrong:?}");
+    // A fresh sign-in, traded properly.
+    let url = call_with(&client, "auth.login", json!({ "flow": { "browser": { "redirect": redirect } } })).await;
+    let state = url[0]["state"].as_str().unwrap().to_string();
+    let next = format!("/auth/cli?state={state}");
+    let signed = m.http.post(m.url("/login")).form(&[("username", "alice"), ("password", "s3cret"), ("next", next.as_str())]).send().await.unwrap();
+    let id = session_from(&signed).unwrap();
+    let back = m.http.get(m.url(&next)).header("cookie", m.jar(&id)).send().await.unwrap();
+    let to = url::Url::parse(&location(&back)).unwrap();
+    let code = to.query_pairs().find(|(k, _)| k == "code").unwrap().1.to_string();
+    let session = call_with(&client, "auth.login", json!({ "flow": { "code": { "code": code, "state": state } } })).await;
+    assert_eq!(session[0]["type"], "session", "{session:?}");
+    assert_eq!((session[0]["principal"].as_str(), session[0]["name"].as_str()), (Some(format!("idp:{ALICE}").as_str()), Some("alice")));
+    let token = session[0]["token"].as_str().unwrap().to_string();
+    assert!(token.starts_with("mgs_"), "{token}");
+    let again = call_with(&client, "auth.login", json!({ "flow": { "code": { "code": code, "state": state } } })).await;
+    assert_eq!(again[0]["type"], "error", "a code works once: {again:?}");
+
+    // The session opens a later connection as the person.
+    let mut h = HeaderMap::new();
+    h.insert("authorization", HeaderValue::from_str(&format!("Bearer {token}")).unwrap());
+    let ws = WsClientBuilder::default().set_headers(h).build(format!("ws://127.0.0.1:{}", m.ws)).await.unwrap();
+    assert_eq!(call(&ws, "session.whoami").await[0]["principal"], format!("idp:{ALICE}"));
+    assert_eq!(call(&ws, "auth.whoami").await[0]["principal"], format!("idp:{ALICE}"));
+}
+
+/// AUTH-7: a loopback sign-in whose browser signed in earlier is asked
+/// first — a button POSTed from menger's own page — so a link alone never
+/// hands a sign-in to a program on the machine; a POST from another page is
+/// refused.
+#[tokio::test]
+async fn a_loopback_sign_in_on_an_older_session_asks_first() {
+    let m = start().await;
+    let id = sign_in(&m).await;
+    let client = socket(&m, None, None).await.unwrap();
+    let url = call_with(&client, "auth.login", json!({ "flow": { "browser": { "redirect": "http://localhost:4999/cb" } } })).await;
+    let state = url[0]["state"].as_str().unwrap().to_string();
+    // Signed in already: the page goes straight to /auth/cli.
+    let page = m.http.get(url[0]["url"].as_str().unwrap()).header("cookie", m.jar(&id)).send().await.unwrap();
+    assert_eq!(location(&page), format!("/auth/cli?state={state}"));
+    let foreign = m.http.post(m.url("/auth/cli")).header("cookie", m.jar(&id)).header("origin", "http://127.0.0.1:3000")
+        .form(&[("state", state.as_str())]).send().await.unwrap();
+    assert_eq!(foreign.status(), 403);
+    let ok = m.http.post(m.url("/auth/cli")).header("cookie", m.jar(&id)).header("origin", m.origin())
+        .form(&[("state", state.as_str())]).send().await.unwrap();
+    assert_eq!(ok.status(), 303);
+    assert!(location(&ok).starts_with("http://localhost:4999/cb?code=c_"), "{}", location(&ok));
 }

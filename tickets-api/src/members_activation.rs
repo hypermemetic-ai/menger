@@ -7,12 +7,19 @@
 //! shortcode hosted under it; `*` takes an admin of `*`. Grants are kept by
 //! the store; `--admin` principals hold admin on `*` from the operator and
 //! cannot be revoked here.
+//!
+//! AUTH-7: the protocol's `auth.grant`, `auth.revoke` and `auth.waiting`
+//! say the same over the same table; this activation stays, unchanged on
+//! the wire, for the browser app (its `MembersClient`). Its methods declare
+//! no role: `list`, `grant`, `revoke` and `requests` are admin's (admin
+//! holds every grant), `grant` and `revoke` held on their `scope` (the
+//! target); `mine` is any signed-in caller's (the hub's signed-in grants).
 
 use crate::members::MembersEvent;
 #[cfg(feature = "server")]
-use crate::access::{Access, Caller, OPERATOR};
+use crate::access::{Access, OPERATOR};
 #[cfg(feature = "server")]
-use crate::members::{scope_of, Grant, Role, EVERYWHERE};
+use crate::members::{scope_of, Grant, Role};
 #[cfg(feature = "server")]
 use crate::store::Store;
 #[cfg(feature = "server")]
@@ -20,7 +27,7 @@ use async_stream::stream;
 #[cfg(feature = "server")]
 use futures::Stream;
 #[cfg(feature = "server")]
-use plexus_core::plexus::AuthContext;
+use plexus_core::plexus::{AuthContext, Reach};
 #[cfg(feature = "server")]
 use std::sync::Arc;
 
@@ -36,25 +43,6 @@ pub struct Members {
 impl Members {
     pub fn new(store: Arc<Store>, access: Access) -> Self {
         Self { store, access }
-    }
-}
-
-/// Whether `caller` administers `scope`: admin everywhere, admin on the
-/// scope itself, or on a shortcode the scope's root is hosted under.
-#[cfg(feature = "server")]
-fn administers(caller: &Caller, scope: &str, store: &Store) -> Result<(), String> {
-    if caller.everywhere(Role::Admin) {
-        return Ok(());
-    }
-    if scope == EVERYWHERE {
-        return Err("only an admin of * can grant on *".into());
-    }
-    if caller.scopes(Role::Admin).unwrap_or_default().iter().any(|s| s == scope) {
-        return Ok(());
-    }
-    match store.groups().into_iter().find(|g| g.epic == scope).and_then(|g| g.root) {
-        Some(root) => caller.require(Role::Admin, &[root.as_str()], store),
-        None => Err(format!("{scope} is not a shortcode you administer")),
     }
 }
 
@@ -76,8 +64,8 @@ impl Members {
     /// then one `grant` per grant they hold. Someone signed in without a
     /// grant gets `me` and nothing else.
     #[plexus_macros::method(description = "Who you are, then each grant you hold")]
-    pub async fn mine(&self, auth: Option<&AuthContext>) -> impl Stream<Item = MembersEvent> + Send + 'static {
-        let admitted = self.access.admit(auth);
+    pub async fn mine(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = MembersEvent> + Send + 'static {
+        let admitted = self.access.admit(auth, &reach);
         let access = self.access.clone();
         stream! {
             let caller = match admitted {
@@ -90,7 +78,7 @@ impl Members {
             yield MembersEvent::Me {
                 principal: caller.principal.clone(),
                 name: caller.name.clone(),
-                admin_everywhere: caller.everywhere(Role::Admin),
+                admin_everywhere: caller.administers("*"),
             };
             if let Some(p) = &caller.principal {
                 for g in access.grants_of(p) {
@@ -107,19 +95,15 @@ impl Members {
         description = "The grants on the scopes you administer, by principal then scope",
         params(scope = "Only this shortcode, or * (optional)")
     )]
-    pub async fn list(&self, auth: Option<&AuthContext>, scope: Option<String>) -> impl Stream<Item = MembersEvent> + Send + 'static {
-        let admitted = self.access.admit(auth);
+    pub async fn list(&self, auth: Option<&AuthContext>, reach: Reach, scope: Option<String>) -> impl Stream<Item = MembersEvent> + Send + 'static {
+        let admitted = self.access.admit(auth, &reach);
         let (store, access) = (self.store.clone(), self.access.clone());
         stream! {
-            let caller = match admitted {
-                Ok(c) => c,
-                Err(message) => {
-                    yield MembersEvent::Error { message };
-                    return;
-                }
-            };
-            if caller.scopes(Role::Admin).is_some_and(|s| s.is_empty()) {
-                yield MembersEvent::Error { message: "listing members needs admin on a shortcode".into() };
+            // AUTH-7: the gate admitted `members.list` held somewhere (admin
+            // on a shortcode); the grants listed are those on scopes where it
+            // is held, as it stands.
+            if let Err(message) = admitted {
+                yield MembersEvent::Error { message };
                 return;
             }
             let only = match scope.as_deref().map(scope_of).transpose() {
@@ -135,7 +119,7 @@ impl Members {
             }
             grants.sort_by(|a, b| (&a.principal, &a.scope).cmp(&(&b.principal, &b.scope)));
             for g in grants {
-                if only.as_ref().is_some_and(|o| *o != g.scope) || administers(&caller, &g.scope, &store).is_err() {
+                if only.as_ref().is_some_and(|o| *o != g.scope) || !reach.allows(&g.scope) {
                     continue;
                 }
                 yield grant_event(g);
@@ -147,6 +131,7 @@ impl Members {
     /// any role they held there. Needs admin on the scope. Yields the grant
     /// as kept, or an in-band `error`.
     #[plexus_macros::method(
+        target = "scope",
         description = "Give a principal a role (viewer, editor, admin) on a shortcode or *",
         params(
             principal = "The Plexus principal, e.g. idp:c952acd3-…, oidc:auth0/google-oauth2|…, nostr:<hex>",
@@ -154,8 +139,8 @@ impl Members {
             role = "viewer | editor | admin"
         )
     )]
-    pub async fn grant(&self, auth: Option<&AuthContext>, principal: String, scope: String, role: String) -> impl Stream<Item = MembersEvent> + Send + 'static {
-        let admitted = self.access.admit(auth);
+    pub async fn grant(&self, auth: Option<&AuthContext>, reach: Reach, principal: String, scope: String, role: String) -> impl Stream<Item = MembersEvent> + Send + 'static {
+        let admitted = self.access.admit(auth, &reach);
         let (store, access) = (self.store.clone(), self.access.clone());
         stream! {
             let caller = match admitted {
@@ -175,10 +160,6 @@ impl Members {
             let principal = principal.trim().to_string();
             if principal.is_empty() || principal.parse::<plexus_auth_core::identity::Principal>().is_err() {
                 yield MembersEvent::Error { message: format!("`{principal}` is not a Plexus principal") };
-                return;
-            }
-            if let Err(message) = administers(&caller, &scope, &store) {
-                yield MembersEvent::Error { message };
                 return;
             }
             let grant = Grant {
@@ -201,20 +182,18 @@ impl Members {
     /// Takes `principal`'s role on `scope` away. Needs admin on the scope.
     /// Yields `revoked { principal, scope, existed }`.
     #[plexus_macros::method(
+        target = "scope",
         description = "Take a principal's role on a shortcode or * away",
         params(principal = "The Plexus principal", scope = "A shortcode, or *")
     )]
-    pub async fn revoke(&self, auth: Option<&AuthContext>, principal: String, scope: String) -> impl Stream<Item = MembersEvent> + Send + 'static {
-        let admitted = self.access.admit(auth);
+    pub async fn revoke(&self, auth: Option<&AuthContext>, reach: Reach, principal: String, scope: String) -> impl Stream<Item = MembersEvent> + Send + 'static {
+        let admitted = self.access.admit(auth, &reach);
         let store = self.store.clone();
         stream! {
-            let caller = match admitted {
-                Ok(c) => c,
-                Err(message) => {
-                    yield MembersEvent::Error { message };
-                    return;
-                }
-            };
+            if let Err(message) = admitted {
+                yield MembersEvent::Error { message };
+                return;
+            }
             let scope = match scope_of(&scope) {
                 Ok(s) => s,
                 Err(message) => {
@@ -222,10 +201,6 @@ impl Members {
                     return;
                 }
             };
-            if let Err(message) = administers(&caller, &scope, &store) {
-                yield MembersEvent::Error { message };
-                return;
-            }
             let principal = principal.trim().to_string();
             match store.revoke(principal.clone(), scope.clone()).await {
                 Ok(existed) => yield MembersEvent::Revoked { principal, scope, existed },
@@ -240,18 +215,16 @@ impl Members {
     /// came for. Kept in memory, at most [`crate::access::WAITING_MAX`]: a
     /// restart forgets them until they come back.
     #[plexus_macros::method(description = "Who signed in without a grant, waiting for an admin")]
-    pub async fn requests(&self, auth: Option<&AuthContext>) -> impl Stream<Item = MembersEvent> + Send + 'static {
-        let admitted = self.access.admit(auth);
+    pub async fn requests(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = MembersEvent> + Send + 'static {
+        let admitted = self.access.admit(auth, &reach);
         let access = self.access.clone();
         stream! {
-            let caller = match admitted {
-                Ok(c) => c,
-                Err(message) => {
-                    yield MembersEvent::Error { message };
-                    return;
-                }
-            };
-            if !caller.everywhere(Role::Admin) {
+            if let Err(message) = admitted {
+                yield MembersEvent::Error { message };
+                return;
+            }
+            // AUTH-7: held on `*` — the gate admitted it held somewhere.
+            if !reach.is_everywhere() {
                 yield MembersEvent::Error { message: "the waiting list needs admin on *".into() };
                 return;
             }

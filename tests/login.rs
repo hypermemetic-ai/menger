@@ -148,8 +148,10 @@ async fn providers() -> Providers {
     Providers { port, auth0, idp, list }
 }
 
-/// menger as `main` wires it: the boundary from the providers, strict when
-/// `require_login`.
+/// menger as `main` wires it: the boundary from the providers. AUTH-7: with
+/// any provider, an upgrade that presents no credential enters the
+/// anonymous view and one presenting a bad one is refused (AUTH-6), whether
+/// or not `require_login`; the gate decides every call.
 async fn start(port: u16, providers: &[Provider], require_login: bool) {
     start_with(port, providers, require_login, &[]).await
 }
@@ -161,7 +163,7 @@ async fn start_with(port: u16, providers: &[Provider], require_login: bool, admi
     // As main wires it (IDENTITY-19): sessions, the per-call rule, the gate.
     let sessions = Arc::new(Sessions::new(3600));
     let access = if providers.is_empty() { Access::open() } else { Access::with_login(sessions.clone(), require_login, admins.iter().map(|a| a.to_string()).collect()) };
-    let hub = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers, access)
+    let hub = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers, access.clone())
         .await
         .expect("open database");
     let boundary = login::boundary(providers).expect("providers");
@@ -170,10 +172,10 @@ async fn start_with(port: u16, providers: &[Provider], require_login: bool, admi
         let _keep = dir;
         let mut builder = TransportServer::builder(hub, conv).with_websocket(port);
         if let Some(carriers) = boundary {
-            builder = builder.with_session_validator(Arc::new(Gate::new(sessions, Some(carriers))));
-            if require_login {
-                builder = builder.reject_upgrade_on_auth_failure();
-            }
+            builder = builder
+                .with_session_validator(Arc::new(Gate::new(sessions, Some(carriers)).noticing(access)))
+                .anonymous_view()
+                .credential_cookies(["access_token"]);
         }
         builder.build().await.expect("build server").serve().await.expect("serve");
     });
@@ -210,6 +212,11 @@ async fn call(client: &WsClient, method: &str, params: Value) -> Vec<Value> {
         match item["type"].as_str() {
             Some("done") => return out,
             Some("data") => out.push(item["content"].clone()),
+            // AUTH-7: the gate's refusal, typed, is the stream's error item.
+            Some("error") => {
+                out.push(item);
+                return out;
+            }
             other => panic!("unexpected stream item type {other:?}: {item}"),
         }
     }
@@ -311,8 +318,11 @@ async fn each_provider_becomes_the_same_kind_of_plexus_identity() {
         "name": keys.public_key().to_bech32().unwrap(), "roles": [], "tenant": null, "provider": "nostr",
     }));
 
+    // AUTH-7: an anonymous connection reaches only the auth door; whoami is
+    // a signed-in caller's (it was `anonymous` before).
     let anonymous = connect(p.port, &[]).await.unwrap();
-    assert_eq!(whoami(&anonymous).await, json!({ "type": "anonymous" }));
+    let me = whoami(&anonymous).await;
+    assert_eq!((me["type"].as_str(), me["error_kind"].as_str()), (Some("error"), Some("unauthenticated")), "{me}");
 }
 
 #[tokio::test]
@@ -330,8 +340,12 @@ async fn a_signed_in_comment_carries_its_identity() {
     assert_eq!(added[0]["type"], "error", "anonymous may not comment: {added:?}");
 }
 
+/// AUTH-6/AUTH-7: a credential presented (a bearer, the `access_token`
+/// cookie) and refused is a 401 at the upgrade; one that is no credential
+/// (a `nostr` cookie the adapter rejects) is the anonymous view. Before
+/// AUTH-7 every bad credential here was `anonymous`.
 #[tokio::test]
-async fn a_bad_credential_is_anonymous() {
+async fn a_bad_credential_is_refused_and_no_credential_is_the_anonymous_view() {
     let p = providers().await;
     start(p.port, &p.list, false).await;
     let expired = idp_token(&p.idp, now() - 60);
@@ -340,23 +354,28 @@ async fn a_bad_credential_is_anonymous() {
     let keys = Keys::generate();
     let replayed = nip98(&keys, p.port);
     connect(p.port, &[("cookie", format!("nostr={replayed}"))]).await.unwrap();
-    for headers in [
-        vec![("cookie", format!("access_token={expired}"))],
-        vec![("authorization", format!("Bearer {tampered}"))],
-        vec![("cookie", format!("nostr={replayed}"))],
-        vec![("cookie", format!("nostr={}", nip98(&keys, 1)))],
-    ] {
+    for headers in [vec![("cookie", format!("access_token={expired}"))], vec![("authorization", format!("Bearer {tampered}"))]] {
+        let refused = connect(p.port, &headers).await.unwrap_err();
+        assert!(refused.contains("401"), "{headers:?}: {refused}");
+    }
+    for headers in [vec![("cookie", format!("nostr={replayed}"))], vec![("cookie", format!("nostr={}", nip98(&keys, 1)))]] {
         let client = connect(p.port, &headers).await.unwrap();
-        assert_eq!(whoami(&client).await, json!({ "type": "anonymous" }), "{headers:?}");
+        assert_eq!(whoami(&client).await["error_kind"], "unauthenticated", "{headers:?}");
     }
 }
 
+/// AUTH-7: under --require-login too, an upgrade that proves no one is
+/// admitted — into the anonymous view, which can call only the auth door
+/// (it was refused 401 before); a bad credential is still 401.
 #[tokio::test]
-async fn require_login_refuses_an_upgrade_that_proves_no_one() {
+async fn require_login_admits_an_upgrade_that_proves_no_one_into_the_anonymous_view() {
     let p = providers().await;
     start(p.port, &p.list, true).await;
-    let refused = connect(p.port, &[]).await.unwrap_err();
-    assert!(refused.contains("401"), "{refused}");
+    let anonymous = connect(p.port, &[]).await.unwrap();
+    assert_eq!(call(&anonymous, "tickets.health", json!({})).await[0]["error_kind"], "unauthenticated");
+    let door = call(&anonymous, "auth.providers", json!({})).await;
+    let names: Vec<&str> = door.iter().filter_map(|p| p["name"].as_str()).collect();
+    assert_eq!(names, ["plexus-idp", "auth0", "nostr"], "{door:?}");
     let refused = connect(p.port, &[("cookie", format!("access_token={}", idp_token(&p.idp, now() - 60)))]).await.unwrap_err();
     assert!(refused.contains("401"), "{refused}");
     let alice = connect(p.port, &[("cookie", format!("access_token={}", idp_token(&p.idp, now() + 600)))]).await.unwrap();
@@ -367,12 +386,24 @@ async fn require_login_refuses_an_upgrade_that_proves_no_one() {
 async fn providers_says_what_a_sign_in_needs_and_nothing_more() {
     let p = providers().await;
     start(p.port, &p.list, false).await;
-    let client = connect(p.port, &[]).await.unwrap();
+    // AUTH-7: session.providers is a signed-in caller's; an anonymous one
+    // asks auth.providers (below).
+    let client = connect(p.port, &[("cookie", format!("access_token={}", idp_token(&p.idp, now() + 600)))]).await.unwrap();
     assert_eq!(call(&client, "session.providers", json!({})).await, vec![
         json!({ "type": "provider", "name": "plexus-idp", "kind": "oidc", "issuer": p.idp, "audience": IDP_AUD }),
         json!({ "type": "provider", "name": "auth0", "kind": "oidc", "issuer": p.auth0, "audience": AUTH0_AUD }),
         json!({ "type": "provider", "name": "nostr", "kind": "nostr", "issuer": null, "audience": null }),
     ]);
+
+    let anonymous = connect(p.port, &[]).await.unwrap();
+    assert_eq!(
+        call(&anonymous, "auth.providers", json!({})).await,
+        vec![
+            json!({ "type": "provider", "name": "plexus-idp", "kind": "browser" }),
+            json!({ "type": "provider", "name": "auth0", "kind": "browser" }),
+            json!({ "type": "provider", "name": "nostr", "kind": "browser" }),
+        ]
+    );
 
     let port = free_port().await;
     start(port, &[], false).await;

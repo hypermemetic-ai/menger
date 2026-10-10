@@ -9,6 +9,12 @@
 //! where to go. IDENTITY-42: `login` mints a session token for the caller
 //! (an agent that opened the socket with a key proof, or anyone signed in),
 //! held to a scope when asked; `logout` ends the caller's own session.
+//!
+//! AUTH-7: the protocol's `auth` activation answers the same — `auth.whoami`,
+//! `auth.login {session}`, `auth.logout`, `auth.providers` — over the same
+//! session table; this one stays, unchanged on the wire, for the browser app
+//! and IDENTITY-42's agents. Under login every method here is one any
+//! signed-in caller reaches (the hub's signed-in grants), whatever it holds.
 
 use crate::session::SessionEvent;
 #[cfg(feature = "server")]
@@ -92,7 +98,7 @@ impl Session {
     )]
     pub async fn whoami(&self, auth: Option<&AuthContext>) -> impl Stream<Item = SessionEvent> + Send + 'static {
         // IDENTITY-37: a sign-in that no longer stands proves no one.
-        let ended = self.access.as_ref().is_some_and(|a| auth.is_some_and(|c| c.is_authenticated()) && a.admit(auth).is_err());
+        let ended = self.access.as_ref().is_some_and(|a| a.login() && auth.filter(|c| c.is_authenticated()).is_some_and(|c| a.alive(c).is_err()));
         let event = if ended { SessionEvent::Anonymous } else { identity(auth) };
         stream! {
             yield event;
