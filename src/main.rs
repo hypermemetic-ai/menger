@@ -111,8 +111,11 @@ struct Args {
     /// (repeatable): `idp=<issuer>,<audience>`,
     /// `auth0=<domain>,<audience>[,<roles-claim>]`,
     /// `oidc:<name>=<issuer>,<audience>[,<roles-claim>]`,
-    /// `workos=<client-id>[,<api-base>]` (IDENTITY-30) or
-    /// `nostr=<ws-url>[,<ws-url>…]`. A caller's credential rides the
+    /// `workos=<client-id>[,<api-base>]` (IDENTITY-30),
+    /// `nostr=<ws-url>[,<ws-url>…]`, or (IDENTITY-42) `key` /
+    /// `key=<ws-url>[,<ws-url>…]` — agents' Ed25519 key proofs naming this
+    /// socket (ws://127.0.0.1:<port>, ws://localhost:<port>, the ws form of
+    /// --public-url) or a URL given; not offered on the login page. A caller's credential rides the
     /// `access_token` or `nostr` cookie, or `Authorization: Bearer`, and its
     /// provider's adapter makes it a Plexus identity at the WebSocket
     /// upgrade. In the env var, specs are separated by `;`. None: no login,
@@ -242,8 +245,11 @@ async fn main() -> anyhow::Result<()> {
             );
         }
     }
-    let boundary = login::boundary(&args.auth_provider)?;
-    let offers = args.auth_provider.iter().map(Provider::offer).collect();
+    // IDENTITY-42: a key proof names the socket it was made for.
+    let sockets = login::socket_urls(args.port, args.public_url.as_deref());
+    let boundary = login::boundary_at(&args.auth_provider, &sockets)?;
+    // The agents' key proof is not a way in a person is offered.
+    let offers = args.auth_provider.iter().filter(|p| !p.is_key()).map(Provider::offer).collect();
     // IDENTITY-19: sessions, the rule every method asks, and the page.
     let login_on = !args.auth_provider.is_empty();
     let public_url = args.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", args.shell_port));
@@ -251,7 +257,8 @@ async fn main() -> anyhow::Result<()> {
     // on one host keep apart.
     let sessions = Arc::new(Sessions::named(args.session_hours * 3600, &menger::sessions::cookie_name_for(&public_url)));
     let access = if login_on {
-        Access::with_login(sessions.clone(), args.require_login, args.admin.clone())
+        // IDENTITY-42: session.login mints its tokens in the same table.
+        Access::with_login(sessions.clone(), args.require_login, args.admin.clone()).minting(sessions.clone())
     } else {
         Access::open()
     };
@@ -281,7 +288,7 @@ async fn main() -> anyhow::Result<()> {
     let web_login = if login_on && !args.no_shell && !args.stdio {
         Some(Arc::new(Login::new(
             LoginConfig {
-                providers: args.auth_provider.clone(),
+                providers: args.auth_provider.iter().filter(|p| !p.is_key()).cloned().collect(),
                 buttons: args.login_button.clone(),
                 email: args.login_email.clone(),
                 password: args.login_password.clone(),

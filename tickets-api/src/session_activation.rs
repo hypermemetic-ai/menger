@@ -6,7 +6,9 @@
 //! [`AuthContext`](plexus_core::plexus::AuthContext), which the transport
 //! attached at the upgrade, and reports it as Plexus types. IDENTITY-15:
 //! `providers` lists what menger was configured to admit, so a sign-in knows
-//! where to go.
+//! where to go. IDENTITY-42: `login` mints a session token for the caller
+//! (an agent that opened the socket with a key proof, or anyone signed in),
+//! held to a scope when asked; `logout` ends the caller's own session.
 
 use crate::session::SessionEvent;
 #[cfg(feature = "server")]
@@ -92,6 +94,58 @@ impl Session {
         // IDENTITY-37: a sign-in that no longer stands proves no one.
         let ended = self.access.as_ref().is_some_and(|a| auth.is_some_and(|c| c.is_authenticated()) && a.admit(auth).is_err());
         let event = if ended { SessionEvent::Anonymous } else { identity(auth) };
+        stream! {
+            yield event;
+        }
+    }
+
+    /// IDENTITY-42: a session for this connection's identity. Yields
+    /// `login { token, principal, agent, expires_at, scope }`, or an in-band
+    /// `error`. The token (`mgs_…`) opens later connections as this
+    /// identity — `Authorization: Bearer mgs_…` or `Cookie:
+    /// access_token=mgs_…` — until `expires_at` or `logout`. `ttl_secs`:
+    /// default 43200 (12 h), at most 86400. `scope`: the session's ceiling,
+    /// `role@SCOPE` each (`editor@IDENTITY`, `viewer@*`, `editor@MENGER-12`):
+    /// every check then passes only if the principal's grants AND the scope
+    /// allow it. A session minted from a scoped session keeps that scope too.
+    #[plexus_macros::method(
+        description = "Mint a session for this identity: login { token, principal, agent, expires_at, scope }",
+        params(
+            ttl_secs = "How long it lasts, seconds (default 43200, at most 86400)",
+            scope = "Its ceiling, role@SCOPE each (e.g. editor@IDENTITY); default none beyond your grants"
+        )
+    )]
+    pub async fn login(
+        &self,
+        auth: Option<&AuthContext>,
+        ttl_secs: Option<u64>,
+        scope: Option<Vec<String>>,
+    ) -> impl Stream<Item = SessionEvent> + Send + 'static {
+        let event = match &self.access {
+            None => SessionEvent::Error { message: "login is off on this menger: there is no session to log in".into() },
+            Some(a) => match a.mint(auth, ttl_secs, scope) {
+                Ok(m) => SessionEvent::Login { token: m.token, principal: m.principal, agent: m.agent, expires_at: m.expires_at, scope: m.scope },
+                Err(message) => SessionEvent::Error { message },
+            },
+        };
+        stream! {
+            yield event;
+        }
+    }
+
+    /// IDENTITY-42: ends the session this connection is on (its token stops
+    /// opening connections, and its open connections stop answering).
+    /// Yields `logged_out`, or an in-band `error` when the connection holds
+    /// no session.
+    #[plexus_macros::method(description = "End this connection's session: logged_out")]
+    pub async fn logout(&self, auth: Option<&AuthContext>) -> impl Stream<Item = SessionEvent> + Send + 'static {
+        let event = match &self.access {
+            None => SessionEvent::Error { message: "login is off on this menger: there is no session to log out".into() },
+            Some(a) => match a.logout(auth) {
+                Ok(()) => SessionEvent::LoggedOut,
+                Err(message) => SessionEvent::Error { message },
+            },
+        };
         stream! {
             yield event;
         }

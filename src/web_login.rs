@@ -120,7 +120,8 @@ impl Login {
             .chain(cfg.also.iter().map(|o| origin_of(o)))
             .map(|o| format!("{o}/login/nostr"))
             .collect();
-        for p in &cfg.providers {
+        // IDENTITY-42: the agents' key proof is no way in a person is offered.
+        for p in cfg.providers.iter().filter(|p| !p.is_key()) {
             if matches!(p, Provider::Nostr { .. }) {
                 nostr = Some(Nip98Adapter::new(nostr_urls.clone())?.for_method("POST"));
             }

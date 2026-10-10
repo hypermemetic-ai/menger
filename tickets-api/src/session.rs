@@ -41,6 +41,26 @@ pub enum SessionEvent {
         /// The audience its tokens must be minted for.
         audience: Option<String>,
     },
+    /// IDENTITY-42, `login`: a session minted for the caller. `token`
+    /// (`mgs_…`) opens later connections as this identity, presented as
+    /// `Authorization: Bearer mgs_…` or `Cookie: access_token=mgs_…`, until
+    /// `expires_at` (unix seconds) or `logout`.
+    Login {
+        token: String,
+        /// The caller's principal, which the session acts as.
+        principal: String,
+        /// The agent id a key proof named, when one did.
+        agent: Option<String>,
+        expires_at: i64,
+        /// The session's ceiling, `role@SCOPE` each: every check passes only
+        /// if the principal's grants AND this allow it. Empty: no ceiling
+        /// beyond the principal's grants.
+        scope: Vec<String>,
+    },
+    /// IDENTITY-42, `logout`: the caller's session has ended.
+    LoggedOut,
+    /// A refusal, naming the problem; nothing was changed.
+    Error { message: String },
 }
 
 /// How a provider proves a caller.
@@ -73,7 +93,7 @@ impl SessionEvent {
     pub fn name(&self) -> Option<&str> {
         match self {
             Self::Identity { name, .. } => Some(name),
-            Self::Anonymous | Self::Provider { .. } => None,
+            _ => None,
         }
     }
 }

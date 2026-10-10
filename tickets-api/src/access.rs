@@ -16,6 +16,17 @@
 //! ([`Caller::scoped`]); a write needs the role on the tickets it touches
 //! ([`Caller::require`]). Someone signed in with no grant reaches nothing,
 //! and waits in [`Access::waiting`] for an admin.
+//!
+//! IDENTITY-42: a session minted by `session.login` may carry a **ceiling**
+//! ([`CEILING_KEY`]) — `role@SCOPE` entries, the same roles and the same
+//! `under` coverage as grants (a SCOPE may also be one ticket, covering it
+//! and its descendants). Every check then passes only if the principal's
+//! grants AND the ceiling allow it: [`Caller::reach_filter`] is the grants'
+//! filter ANDed with each ceiling's, so `scoped`, `require`, the comment
+//! roles and every lens built from it inherit it; [`Caller::scopes`] and
+//! [`Caller::everywhere`] (the members checks) meet the two the same way.
+//! A session minted from a session keeps its ceiling and adds the new one,
+//! so it is never wider.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -41,9 +52,102 @@ pub const DEV_LOGIN: &str = "dev-login";
 /// back), so sign-ins without a grant cannot grow it without bound.
 pub const WAITING_MAX: usize = 1000;
 
+/// IDENTITY-42: the metadata key a minted session's ceiling rides under:
+/// a list of layers, each a list of `role@SCOPE`; every layer must allow a
+/// check.
+pub const CEILING_KEY: &str = "ceiling";
+
+/// IDENTITY-42: the metadata key a key proof's agent id rides under.
+pub const AGENT_KEY: &str = "agent";
+
+/// IDENTITY-42: how long a minted session lasts unless asked, and at most.
+pub const MINT_TTL_DEFAULT_SECS: u64 = 12 * 60 * 60;
+pub const MINT_TTL_MAX_SECS: u64 = 24 * 60 * 60;
+
+/// The metadata a minted session keeps from the identity that asked for it.
+const KEPT_ON_MINT: &[&str] = &["principal", AGENT_KEY, "name", "username", "provider", "auth_method", "org_id", "tenant_id"];
+
 /// Whether a session the server issued still stands.
 pub trait SessionCheck: Send + Sync {
     fn alive(&self, key: &str) -> bool;
+}
+
+/// IDENTITY-42: the session table, as `session.login` and `session.logout`
+/// reach it (menger's `sessions`).
+pub trait SessionMint: Send + Sync {
+    /// Starts a session for `ctx`, lasting `ttl_secs`: the token that opens
+    /// it and when it ends. The token is kept only hashed; `ctx` is stamped
+    /// with [`SESSION_KEY`] and `expires_at`.
+    fn mint(&self, ctx: AuthContext, ttl_secs: i64) -> (String, i64);
+    /// Ends the session whose [`SESSION_KEY`] is `key`; whether it stood.
+    fn end_key(&self, key: &str) -> bool;
+}
+
+/// One ceiling: `(scope, role)` entries.
+pub type Ceiling = Vec<(String, Role)>;
+
+/// A ceiling's scope: `*`, a shortcode, or one ticket (`SHORTCODE-<n>`),
+/// in upper case.
+pub fn ceiling_scope_of(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    let ticket = t.split_once('-').filter(|(code, n)| {
+        crate::members::scope_of(code).is_ok_and(|c| c != EVERYWHERE) && !n.is_empty() && n.len() <= 12 && n.bytes().all(|b| b.is_ascii_digit())
+    });
+    match ticket {
+        Some((code, n)) => Ok(format!("{}-{n}", code.to_ascii_uppercase())),
+        None => crate::members::scope_of(t)
+            .map_err(|_| format!("`{t}` is not a scope: a shortcode (e.g. IDENTITY), a ticket (e.g. IDENTITY-12) or `*`")),
+    }
+}
+
+/// One `role@SCOPE` entry of a ceiling.
+pub fn ceiling_entry(text: &str) -> Result<(String, Role), String> {
+    let (role, scope) = text
+        .trim()
+        .split_once('@')
+        .ok_or_else(|| format!("`{}` is not role@SCOPE (e.g. editor@IDENTITY, viewer@*)", text.trim()))?;
+    Ok((ceiling_scope_of(scope)?, role.parse()?))
+}
+
+/// A ceiling as the wire says it: `role@SCOPE` each.
+pub fn ceiling_text(ceiling: &[(String, Role)]) -> Vec<String> {
+    ceiling.iter().map(|(s, r)| format!("{r}@{s}")).collect()
+}
+
+/// The ceilings a session's metadata carries: `[]` when none; `Err` when
+/// they cannot be read (the caller is then refused, never widened).
+fn ceilings_of(ctx: &AuthContext) -> Result<Vec<Ceiling>, String> {
+    let Some(v) = ctx.metadata.get(CEILING_KEY) else { return Ok(Vec::new()) };
+    let unreadable = || "this session's scope cannot be read: sign in again".to_string();
+    v.as_array()
+        .ok_or_else(unreadable)?
+        .iter()
+        .map(|layer| {
+            layer
+                .as_array()
+                .ok_or_else(unreadable)?
+                .iter()
+                .map(|e| e.as_str().ok_or_else(unreadable).and_then(|e| ceiling_entry(e).map_err(|_| unreadable())))
+                .collect()
+        })
+        .collect()
+}
+
+/// The scopes `entries` hold `role` (or more) on; `None`: everywhere.
+fn holding(entries: &[(String, Role)], role: Role) -> Option<Vec<String>> {
+    if entries.iter().any(|(s, r)| s == EVERYWHERE && *r >= role) {
+        return None;
+    }
+    Some(entries.iter().filter(|(_, r)| *r >= role).map(|(s, _)| s.clone()).collect())
+}
+
+/// `under` each of `scopes`, or'd: the filter text one grant list or one
+/// ceiling covers.
+fn under_text(scopes: &[String]) -> String {
+    match scopes {
+        [one] => format!("under {one}"),
+        many => format!("({})", many.iter().map(|s| format!("under {s}")).collect::<Vec<_>>().join(" or ")),
+    }
 }
 
 /// Someone signed in with no grant yet.
@@ -72,20 +176,38 @@ pub struct Caller {
     /// The name to show, when signed in.
     pub name: Option<String>,
     pub reach: Reach,
+    /// IDENTITY-42: the session's ceilings — every one must allow a check,
+    /// as the grants must. Empty: none. Fixed for a connection's life.
+    pub ceiling: Vec<Ceiling>,
 }
 
 impl Caller {
     fn everyone() -> Self {
-        Self { principal: None, name: None, reach: Reach::All }
+        Self { principal: None, name: None, reach: Reach::All, ceiling: Vec::new() }
+    }
+
+    /// The scopes the grants alone give `role` (or more) on; `None`:
+    /// everywhere.
+    fn granted(&self, role: Role) -> Option<Vec<String>> {
+        match &self.reach {
+            Reach::All => None,
+            Reach::Grants(g) => holding(g, role),
+        }
     }
 
     /// The scopes this caller holds `role` (or more) on; `None`: everywhere.
+    /// IDENTITY-42: under a ceiling, a scope both the grants and every
+    /// ceiling name (or that one names and the other holds everywhere) — a
+    /// conservative meet; [`Caller::reach_filter`] is the exact one.
     pub fn scopes(&self, role: Role) -> Option<Vec<String>> {
-        match &self.reach {
-            Reach::All => None,
-            Reach::Grants(g) if g.iter().any(|(s, r)| s == EVERYWHERE && *r >= role) => None,
-            Reach::Grants(g) => Some(g.iter().filter(|(_, r)| *r >= role).map(|(s, _)| s.clone()).collect()),
+        let mut acc = self.granted(role);
+        for layer in &self.ceiling {
+            acc = match (acc, holding(layer, role)) {
+                (None, other) | (other, None) => other,
+                (Some(a), Some(b)) => Some(a.into_iter().filter(|s| b.contains(s)).collect()),
+            };
         }
+        acc
     }
 
     /// Whether this caller holds `role` everywhere.
@@ -106,16 +228,29 @@ impl Caller {
 
     /// The filter `under` the scopes this caller holds `role` on: `None`
     /// everywhere, `Err` when none.
+    ///
+    /// IDENTITY-42: the grants' filter AND each ceiling's: a ticket is in
+    /// reach only when both cover it.
     pub fn reach_filter(&self, role: Role) -> Result<Option<Filter>, String> {
-        let Some(scopes) = self.scopes(role) else { return Ok(None) };
-        if scopes.is_empty() {
-            return Err(self.no_access());
+        let mut parts = Vec::new();
+        if let Some(scopes) = self.granted(role) {
+            if scopes.is_empty() {
+                return Err(self.no_access());
+            }
+            parts.push(under_text(&scopes));
         }
-        let text = match scopes.as_slice() {
-            [one] => format!("under {one}"),
-            many => format!("({})", many.iter().map(|s| format!("under {s}")).collect::<Vec<_>>().join(" or ")),
-        };
-        Filter::parse(&text).map(Some).map_err(|e| e.to_string())
+        for layer in &self.ceiling {
+            if let Some(scopes) = holding(layer, role) {
+                if scopes.is_empty() {
+                    return Err(format!("this session's scope ({}) holds no {role}", ceiling_text(layer).join(", ")));
+                }
+                parts.push(under_text(&scopes));
+            }
+        }
+        if parts.is_empty() {
+            return Ok(None);
+        }
+        Filter::parse(&parts.join(" and ")).map(Some).map_err(|e| e.to_string())
     }
 
     /// A read's filter text, ANDed with the scopes this caller may see:
@@ -169,6 +304,7 @@ pub struct Access {
     login: bool,
     require_login: bool,
     sessions: Option<Arc<dyn SessionCheck>>,
+    minter: Option<Arc<dyn SessionMint>>,
     store: Arc<Mutex<Option<Arc<Store>>>>,
     admins: Arc<Vec<String>>,
     waiting: Arc<Mutex<BTreeMap<String, Waiting>>>,
@@ -192,6 +328,13 @@ impl Access {
     /// call is refused. `admins` hold admin on `*` from the operator.
     pub fn with_login(sessions: Arc<dyn SessionCheck>, require_login: bool, admins: Vec<String>) -> Self {
         Self { login: true, require_login, sessions: Some(sessions), admins: Arc::new(admins), ..Self::default() }
+    }
+
+    /// IDENTITY-42: `session.login` and `session.logout` mint and end
+    /// sessions in `minter` (menger's session table).
+    pub fn minting(mut self, minter: Arc<dyn SessionMint>) -> Self {
+        self.minter = Some(minter);
+        self
     }
 
     /// The store whose members decide (the builder attaches it).
@@ -277,7 +420,7 @@ impl Access {
             return if self.require_login {
                 Err("sign in first: this menger requires it".into())
             } else {
-                Ok(Caller { principal: None, name: None, reach: Reach::Grants(Vec::new()) })
+                Ok(Caller { principal: None, name: None, reach: Reach::Grants(Vec::new()), ceiling: Vec::new() })
             };
         };
         if let Some(exp) = ctx.metadata.get("expires_at").and_then(|v| v.as_i64()) {
@@ -290,6 +433,7 @@ impl Access {
                 return Err("you have signed out: sign in again".into());
             }
         }
+        let ceiling = ceilings_of(ctx)?;
         let principal = ctx.principal().map(|p| p.to_string()).unwrap_or_else(|| ctx.user_id.clone());
         let name = ctx.get_metadata_string("name");
         let grants: Vec<(String, Role)> = self.grants_of(&principal).into_iter().map(|g| (g.scope, g.role)).collect();
@@ -314,8 +458,84 @@ impl Access {
                 waiting.remove(&principal);
             }
         }
-        Ok(Caller { principal: Some(principal), name, reach: Reach::Grants(grants) })
+        Ok(Caller { principal: Some(principal), name, reach: Reach::Grants(grants), ceiling })
     }
+
+    /// IDENTITY-42, `session.login`: a session for the caller, lasting
+    /// `ttl_secs` (default 12 h, at most 24 h), held to `scope` when given —
+    /// and to any ceiling the caller's own session holds, so it is never
+    /// wider. Any signed-in caller may mint one; it acts as the caller's
+    /// principal, agent, name and provider.
+    pub fn mint(&self, auth: Option<&AuthContext>, ttl_secs: Option<u64>, scope: Option<Vec<String>>) -> Result<Minted, String> {
+        let Some(minter) = self.minter.as_ref().filter(|_| self.login) else {
+            return Err("login is off on this menger: there is no session to log in".into());
+        };
+        let caller = self.admit(auth)?;
+        let (Some(principal), Some(ctx)) = (caller.principal.clone(), auth.filter(|c| c.is_authenticated())) else {
+            return Err("sign in first: only a signed-in caller can log in a session".into());
+        };
+        let ttl = ttl_secs.unwrap_or(MINT_TTL_DEFAULT_SECS);
+        if ttl == 0 || ttl > MINT_TTL_MAX_SECS {
+            return Err(format!("ttl_secs is 1 to {MINT_TTL_MAX_SECS} (24 h); default {MINT_TTL_DEFAULT_SECS} (12 h)"));
+        }
+        let asked: Option<Ceiling> = match scope {
+            None => None,
+            Some(entries) => {
+                let entries: Vec<String> = entries.iter().map(|e| e.trim().to_string()).filter(|e| !e.is_empty()).collect();
+                if entries.is_empty() {
+                    return Err("a scope names at least one role@SCOPE (e.g. editor@IDENTITY)".into());
+                }
+                Some(entries.iter().map(|e| ceiling_entry(e)).collect::<Result<_, _>>()?)
+            }
+        };
+        let mut ceiling = caller.ceiling.clone();
+        ceiling.extend(asked.clone());
+        let shown = asked.or_else(|| caller.ceiling.last().cloned()).map(|c| ceiling_text(&c)).unwrap_or_default();
+
+        let mut meta = serde_json::Map::new();
+        for key in KEPT_ON_MINT {
+            if let Some(v) = ctx.metadata.get(*key) {
+                meta.insert((*key).to_string(), v.clone());
+            }
+        }
+        meta.insert("principal".into(), principal.clone().into());
+        if !ceiling.is_empty() {
+            let layers: Vec<serde_json::Value> = ceiling.iter().map(|c| ceiling_text(c).into()).collect();
+            meta.insert(CEILING_KEY.into(), layers.into());
+        }
+        let agent = ctx.get_metadata_string(AGENT_KEY);
+        // A session id that says what it is (the session's key rides in the
+        // metadata): an empty one would read as no one.
+        let minted = AuthContext::new(ctx.user_id.clone(), "mgs".into(), ctx.roles.clone(), serde_json::Value::Object(meta));
+        let (token, expires_at) = minter.mint(minted, ttl as i64);
+        Ok(Minted { token, principal, agent, expires_at, scope: shown })
+    }
+
+    /// IDENTITY-42, `session.logout`: ends the session the caller's
+    /// connection is on. A connection a credential opened directly (a key
+    /// proof, a provider's token) holds no session to end.
+    pub fn logout(&self, auth: Option<&AuthContext>) -> Result<(), String> {
+        let Some(minter) = self.minter.as_ref().filter(|_| self.login) else {
+            return Err("login is off on this menger: there is no session to log out".into());
+        };
+        match auth.filter(|c| c.is_authenticated()).and_then(|c| c.get_metadata_string(SESSION_KEY)) {
+            Some(key) => {
+                minter.end_key(&key);
+                Ok(())
+            }
+            None => Err("this connection holds no session to log out (session.login mints one)".into()),
+        }
+    }
+}
+
+/// IDENTITY-42: what `session.login` minted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Minted {
+    pub token: String,
+    pub principal: String,
+    pub agent: Option<String>,
+    pub expires_at: i64,
+    pub scope: Vec<String>,
 }
 
 #[cfg(test)]
@@ -460,5 +680,118 @@ mod tests {
         let c = a.admit(Some(&ctx(json!({})))).unwrap();
         assert!(c.everywhere(Role::Admin));
         assert_eq!(a.grants_of(ALICE)[0].granted_by, OPERATOR);
+    }
+
+    // ── IDENTITY-42: a session's ceiling ─────────────────────────────
+
+    #[derive(Default)]
+    struct Mint(Mutex<Vec<AuthContext>>);
+    impl SessionMint for Mint {
+        fn mint(&self, ctx: AuthContext, ttl: i64) -> (String, i64) {
+            self.0.lock().unwrap().push(ctx);
+            ("mgs_t".into(), now() + ttl)
+        }
+        fn end_key(&self, _: &str) -> bool {
+            true
+        }
+    }
+
+    fn ceiling(layers: &[&[&str]]) -> serde_json::Value {
+        json!(layers.iter().map(|l| l.to_vec()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn a_ceiling_entry_is_role_at_scope() {
+        assert_eq!(ceiling_entry("editor@identity"), Ok(("IDENTITY".into(), Role::Editor)));
+        assert_eq!(ceiling_entry(" viewer@* "), Ok(("*".into(), Role::Viewer)));
+        assert_eq!(ceiling_entry("Admin@menger-12"), Ok(("MENGER-12".into(), Role::Admin)));
+        for bad in ["editor", "owner@X", "editor@", "editor@a b", "editor@X-", "editor@X-1a", "editor@*-1", "editor@under X"] {
+            assert!(ceiling_entry(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn every_check_needs_the_grants_and_the_ceiling() {
+        let a = Access::with_login(Arc::new(Live::default()), true, vec![ALICE.into()]);
+        let s = store().await;
+        a.attach(s.clone());
+        // Admin on * from the operator, held to editor on IDENTITY.
+        let c = a.admit(Some(&ctx(json!({ CEILING_KEY: ceiling(&[&["editor@IDENTITY"]]) })))).unwrap();
+        assert!(c.require(Role::Editor, &["IDENTITY-2"], &s).is_ok());
+        assert!(c.require(Role::Editor, &["OUGHT-2"], &s).is_err(), "elsewhere");
+        assert!(c.require(Role::Viewer, &["PLEXUS-2"], &s).is_err(), "not even to read");
+        assert!(c.require(Role::Admin, &["IDENTITY-2"], &s).is_err(), "no more than editor");
+        assert!(!c.everywhere(Role::Viewer) && !c.everywhere(Role::Admin));
+        assert_eq!(c.scopes(Role::Editor), Some(vec!["IDENTITY".into()]));
+        assert_eq!(c.scopes(Role::Admin), Some(vec![]));
+        assert_eq!(c.scoped(Some("status Ready")).unwrap().unwrap(), "status Ready and under IDENTITY");
+        // One ticket: it and its descendants.
+        let c = a.admit(Some(&ctx(json!({ CEILING_KEY: ceiling(&[&["editor@IDENTITY-2"]]) })))).unwrap();
+        assert!(c.require(Role::Editor, &["IDENTITY-2"], &s).is_ok());
+        assert!(c.require(Role::Editor, &["IDENTITY-1"], &s).is_err());
+        // `*` in the ceiling is no ceiling at that role.
+        let c = a.admit(Some(&ctx(json!({ CEILING_KEY: ceiling(&[&["admin@*"]]) })))).unwrap();
+        assert!(c.everywhere(Role::Admin));
+    }
+
+    #[tokio::test]
+    async fn a_ceiling_wider_than_the_grants_gives_no_more_than_the_grants() {
+        let a = login();
+        let s = store().await;
+        s.grant(grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
+        a.attach(s.clone());
+        let c = a.admit(Some(&ctx(json!({ CEILING_KEY: ceiling(&[&["admin@*"]]) })))).unwrap();
+        assert!(c.require(Role::Viewer, &["OUGHT-2"], &s).is_ok());
+        assert!(c.require(Role::Editor, &["OUGHT-2"], &s).is_err());
+        assert!(c.require(Role::Viewer, &["IDENTITY-2"], &s).is_err());
+    }
+
+    #[tokio::test]
+    async fn layered_ceilings_all_hold_and_an_unreadable_one_refuses() {
+        let a = Access::with_login(Arc::new(Live::default()), true, vec![ALICE.into()]);
+        let s = store().await;
+        a.attach(s.clone());
+        let c = a.admit(Some(&ctx(json!({ CEILING_KEY: ceiling(&[&["editor@PLEXUS"], &["admin@IDENTITY", "editor@OUGHT"]]) })))).unwrap();
+        assert!(c.require(Role::Editor, &["IDENTITY-2"], &s).is_ok(), "IDENTITY is hosted under PLEXUS");
+        assert!(c.require(Role::Admin, &["IDENTITY-2"], &s).is_err(), "the first holds editor");
+        assert!(c.require(Role::Viewer, &["OUGHT-2"], &s).is_err(), "the first does not reach OUGHT");
+        assert!(c.require(Role::Viewer, &["PLEXUS-2"], &s).is_err(), "the second does not reach PLEXUS-2");
+        for bad in [json!("editor@X"), json!([["owner@X"]]), json!([[1]])] {
+            assert!(a.admit(Some(&ctx(json!({ CEILING_KEY: bad.clone() })))).is_err(), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_minted_session_keeps_the_caller_and_never_widens() {
+        let mint = Arc::new(Mint::default());
+        let a = Access::with_login(Arc::new(Live::default()), true, vec![ALICE.into()]).minting(mint.clone());
+        a.attach(store().await);
+        let agent = ctx(json!({ "agent": "worker-3", "name": "worker-3", "provider": "key", "auth_method": "key", "expires_at": now() + 300 }));
+        let m = a.mint(Some(&agent), None, Some(vec!["editor@identity".into()])).unwrap();
+        assert_eq!((m.principal.as_str(), m.agent.as_deref(), m.scope.clone()), (ALICE, Some("worker-3"), vec!["editor@IDENTITY".to_string()]));
+        assert!(m.expires_at >= now() + MINT_TTL_DEFAULT_SECS as i64 - 5);
+        let minted = mint.0.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(minted.metadata["agent"], "worker-3");
+        assert_eq!(minted.metadata["provider"], "key");
+        assert_eq!(minted.metadata["principal"], ALICE);
+        assert_eq!(minted.metadata[CEILING_KEY], json!([["editor@IDENTITY"]]));
+
+        // From that session: its ceiling stays, the new one is added.
+        let m2 = a.mint(Some(&minted), Some(60), Some(vec!["admin@*".into()])).unwrap();
+        assert_eq!(m2.scope, vec!["admin@*".to_string()]);
+        let again = mint.0.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(again.metadata[CEILING_KEY], json!([["editor@IDENTITY"], ["admin@*"]]));
+        assert!(!a.admit(Some(&again)).unwrap().everywhere(Role::Viewer), "still held to IDENTITY");
+        // Asking nothing inherits it, and says so.
+        assert_eq!(a.mint(Some(&minted), None, None).unwrap().scope, vec!["editor@IDENTITY".to_string()]);
+        assert!(a.mint(Some(&agent), None, None).unwrap().scope.is_empty(), "no ceiling");
+
+        for (ttl, scope) in [(Some(0), None), (Some(MINT_TTL_MAX_SECS + 1), None), (None, Some(vec![])), (None, Some(vec!["owner@X".into()]))] {
+            assert!(a.mint(Some(&agent), ttl, scope.clone()).is_err(), "{ttl:?} {scope:?}");
+        }
+        assert!(a.mint(Some(&AuthContext::anonymous()), None, None).is_err());
+        assert!(login().mint(Some(&agent), None, None).is_err(), "nothing to mint in");
+        assert!(a.logout(Some(&agent)).is_err(), "a proof-opened connection holds no session");
+        assert!(a.logout(Some(&ctx(json!({ SESSION_KEY: "k" })))).is_ok());
     }
 }
