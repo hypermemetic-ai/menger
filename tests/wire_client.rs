@@ -510,7 +510,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 t.blocked_by.iter().all(|b| {
                     mirror
                         .get(b)
-                        .is_some_and(|blocker| matches!(blocker.status, Status::Complete | Status::Superseded))
+                        .is_some_and(|blocker| matches!(blocker.status, Status::Complete | Status::Superseded | Status::Canceled))
                 })
             })
             .map(|t| t.id.clone())

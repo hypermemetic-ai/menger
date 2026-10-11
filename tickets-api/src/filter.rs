@@ -122,7 +122,7 @@ pub const fn category_of(status: Status) -> Category {
         Status::Coding => Category::Active,
         Status::InReview => Category::Review,
         Status::Complete => Category::Done,
-        Status::Superseded => Category::Dropped,
+        Status::Superseded | Status::Canceled => Category::Dropped,
         Status::Doc => Category::Static,
     }
 }

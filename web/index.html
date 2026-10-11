@@ -78,7 +78,7 @@
 const WS_PORT = "{{WS_PORT}}";
 // The lifecycle — what a status control offers. SDLC-11: a doc has none; its
 // one status, Doc, is shown, never offered.
-const STATUSES = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded"];
+const STATUSES = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled"];
 const ws = new WebSocket(`ws://${location.hostname}:${WS_PORT}`);
 let nextId = 1;
 const awaitingSubId = new Map(); // request id -> handler

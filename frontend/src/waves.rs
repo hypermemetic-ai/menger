@@ -311,7 +311,7 @@ fn rank(status: Status) -> u8 {
         Status::Blocked => 4,
         Status::Idea => 5,
         Status::Epic => 6,
-        Status::Complete | Status::Superseded | Status::Doc => 7,
+        Status::Complete | Status::Superseded | Status::Canceled | Status::Doc => 7,
     }
 }
 
@@ -349,9 +349,10 @@ pub(crate) fn retally(a: &mut Answer) {
     (a.waves, a.missing, a.done) = (waves, missing, done);
 }
 
-/// Whether a status is done with — MNG-4's line: `Complete` or `Superseded`.
+/// Whether a status is done with — MNG-4's line: `Complete`, `Superseded`
+/// or (SDLC-15) `Canceled`.
 fn satisfied(s: Status) -> bool {
-    matches!(s, Status::Complete | Status::Superseded)
+    matches!(s, Status::Complete | Status::Superseded | Status::Canceled)
 }
 
 /// WAVE-6: `ev` applied to the board's answer — each `placements_changed`

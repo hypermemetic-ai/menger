@@ -314,8 +314,8 @@ export interface PlacementMissingBlocker {
 
 /** WAVE-4: where a ticket sits in the order of work — what `waves` says of
 each ticket it places, derived from `blocked_by` over the whole graph by
-MNG-4's rule (a blocker is satisfied iff it is a `Complete` or
-`Superseded` ticket; an id naming no ticket never is). */
+MNG-4's rule (a blocker is satisfied iff it is a `Complete`,
+`Superseded` or `Canceled` ticket; an id naming no ticket never is). */
 export type Placement = PlacementWave | PlacementDone | PlacementMissingBlocker;
 
 export function isPlacementWave(e: Placement): e is PlacementWave { return e.type === 'wave'; }
@@ -402,7 +402,7 @@ filed under its shortcode's scope root — menger's own documents
 kept by the store — equal at every moment to WAVE-4's rule over the
 whole `blocked_by` graph, moved by the write that moves it (a birth
 that resolves a forward reference, a status crossing `Complete` /
-`Superseded`), and announced by `placements_changed`. `None` —
+`Superseded` / `Canceled`), and announced by `placements_changed`. `None` —
 omitted on the wire — for a doc, which has no place in the order of
 work. */
   placement?: Placement | null;

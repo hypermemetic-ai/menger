@@ -1458,7 +1458,7 @@ fn count_children(
 
 /// A blocker satisfies the ready-set rule when it is done with.
 fn satisfied(status: Status) -> bool {
-    matches!(status, Status::Complete | Status::Superseded)
+    matches!(status, Status::Complete | Status::Superseded | Status::Canceled)
 }
 
 /// SCALE-6: what `find` matches with — the jump palette's rule (AGS-18,

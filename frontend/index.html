@@ -94,7 +94,9 @@
      Review 6.29 / 7.79). `In Review` is the one status with a space; its
      row is `st-in-review` (st_class in src/main.rs hyphenates). SDLC-11
      adds `Doc`, a doc's one status, outside the lifecycle: neutral — no
-     hue, nothing to act on — and over 4.5:1 in both themes too. */
+     hue, nothing to act on — and over 4.5:1 in both themes too. SDLC-15
+     adds `Canceled`: struck through like `Superseded`, and neutral —
+     no hue, since nothing replaced it (5.52 light / 6.99 dark). */
   .st-pending    { --st-bg: #f3e8c8; --st-fg: #7a5d00; }
   .st-ready      { --st-bg: #e3ecf7; --st-fg: #2b5b8c; }
   .st-coding     { --st-bg: #fde0c5; --st-fg: #8f3f00; }
@@ -104,6 +106,7 @@
   .st-idea       { --st-bg: #efe9e0; --st-fg: #72644c; } /* fg darkened from manifest's parked #8a7a5c (3.47:1) to clear AA */
   .st-epic       { --st-bg: #e6dcf5; --st-fg: #5b3a8c; }
   .st-superseded { --st-bg: #f3d9d9; --st-fg: #aa2222; --st-deco: line-through; }
+  .st-canceled   { --st-bg: #ecebe7; --st-fg: #5f5d57; --st-deco: line-through; }
   .st-doc        { --st-bg: #e8e8ec; --st-fg: #4a4a55; }
   .st, #nav .tag.st, select.status.st {
     background: var(--st-bg); color: var(--st-fg); border-color: transparent;
@@ -148,6 +151,7 @@
     :root:not([data-theme="light"]) .st-idea       { --st-bg: #2b2721; --st-fg: #c9b99a; }
     :root:not([data-theme="light"]) .st-epic       { --st-bg: #2e2143; --st-fg: #cdb4f2; }
     :root:not([data-theme="light"]) .st-superseded { --st-bg: #3b2224; --st-fg: #dea3a3; }
+    :root:not([data-theme="light"]) .st-canceled   { --st-bg: #2c2b28; --st-fg: #b9b6ae; }
     :root:not([data-theme="light"]) .st-doc        { --st-bg: #26262c; --st-fg: #b8b8c4; }
   }
   :root[data-theme="dark"] {
@@ -174,6 +178,7 @@
   :root[data-theme="dark"] .st-idea       { --st-bg: #2b2721; --st-fg: #c9b99a; }
   :root[data-theme="dark"] .st-epic       { --st-bg: #2e2143; --st-fg: #cdb4f2; }
   :root[data-theme="dark"] .st-superseded { --st-bg: #3b2224; --st-fg: #dea3a3; }
+  :root[data-theme="dark"] .st-canceled   { --st-bg: #2c2b28; --st-fg: #b9b6ae; }
   :root[data-theme="dark"] .st-doc        { --st-bg: #26262c; --st-fg: #b8b8c4; }
 
   * { box-sizing: border-box; }

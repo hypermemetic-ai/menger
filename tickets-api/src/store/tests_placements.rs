@@ -129,7 +129,7 @@ impl Rng {
 #[tokio::test]
 async fn kept_placements_are_the_rule_after_any_sequence_of_births_and_status_changes() {
     const EPICS: [&str; 3] = ["PA", "PB", "PC"];
-    const STATUSES: [Status; 9] = Status::LIFECYCLE;
+    const STATUSES: [Status; 10] = Status::LIFECYCLE;
     for seed in 0..120u64 {
         let store = Store::new();
         let mut rng = Rng(seed);

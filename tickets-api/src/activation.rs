@@ -513,7 +513,7 @@ impl Tickets {
         description = "List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at",
         params(
             epic = "Epic prefix filter (optional)",
-            status = "Status filter: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Doc (optional)",
+            status = "Status filter: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled | Doc (optional)",
             parent = "Only this ticket's children, e.g. PERF-3 (optional)",
             after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
             limit = "At most this many tickets; the page event carries the next cursor (optional)",
@@ -521,7 +521,7 @@ impl Tickets {
             filter = "A filter, e.g. 'ready and kind build and in SCALE' (FILTER-3's language; optional): ANDed with epic, status and parent; the page event then carries first",
             at = "Start at this position among the matches, 0-based, instead of after a cursor (optional; not with after); the page event carries first"
         ),
-        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Doc"]),
+        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled", "Doc"]),
         example(note = "a shortcode's tickets, summary rows, 20 at a time", params = r#"{"epic": "MENGER", "summary": true, "limit": 20}"#),
         example(note = "the ready build work in SCALE", params = r#"{"filter": "ready and kind build and in SCALE", "summary": true}"#)
     )]
@@ -622,9 +622,9 @@ impl Tickets {
         description = "Set a ticket's status (not a doc's: a doc has no lifecycle)",
         params(
             id = "Ticket id, e.g. MNG-2",
-            status = "New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded (case-insensitive; `active` is Coding; never Doc, a doc's own)"
+            status = "New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled (case-insensitive; `active` is Coding; never Doc, a doc's own)"
         ),
-        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded"]),
+        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled"]),
         example(note = "start work on MENGER-40", params = r#"{"id": "MENGER-40", "status": "Coding"}"#),
         example(note = "hand it to review", params = r#"{"id": "MENGER-40", "status": "In Review"}"#)
     )]
@@ -682,9 +682,9 @@ impl Tickets {
         params(
             id = "Ticket id, e.g. IDENTITY-1",
             kind = "New kind: scope | execution | build | gap | spike | doc (case-insensitive)",
-            status = "Its status with the new kind (optional): Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded — or Doc, the only one a doc takes; omitted, a doc becomes Doc, a doc becoming work becomes Epic (a scope) or Pending, and work keeps its own"
+            status = "Its status with the new kind (optional): Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled — or Doc, the only one a doc takes; omitted, a doc becomes Doc, a doc becoming work becomes Epic (a scope) or Pending, and work keeps its own"
         ),
-        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Doc"]),
+        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled", "Doc"]),
         example(note = "make a ticket a scope", params = r#"{"id": "IDENTITY-1", "kind": "scope"}"#),
         example(note = "make it a gap, ready to start", params = r#"{"id": "MENGER-40", "kind": "gap", "status": "Ready"}"#)
     )]
@@ -930,7 +930,7 @@ impl Tickets {
     /// narrows nothing (empty, a display part alone) is no filter.
     #[plexus_macros::method(
         group = "read",
-        description = "Tickets that can start now: Ready, with every blocker Complete or Superseded; optionally under a filter",
+        description = "Tickets that can start now: Ready, with every blocker Complete, Superseded or Canceled; optionally under a filter",
         params(
             epic = "Only tickets in this epic (optional; blockers still resolve globally)",
             after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",

@@ -249,7 +249,7 @@ fn local_ready(mirror: &std::collections::HashMap<String, Value>) -> Vec<String>
             t["blocked_by"].as_array().expect("blocked_by").iter().all(|b| {
                 mirror
                     .get(b.as_str().expect("blocker id"))
-                    .is_some_and(|bt| bt["status"] == "Complete" || bt["status"] == "Superseded")
+                    .is_some_and(|bt| bt["status"] == "Complete" || bt["status"] == "Superseded" || bt["status"] == "Canceled")
             })
         })
         .map(|t| t["id"].as_str().expect("id").to_string())
