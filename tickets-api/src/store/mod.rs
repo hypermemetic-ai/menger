@@ -1089,6 +1089,16 @@ pub enum StoreError {
     /// COMMENT-2: `list`'s `after` names no comment, so there is no position
     /// to resume from.
     CommentCursor(u64),
+    /// NOTE-2: `add` refused the note — a blank or oversized body or author
+    /// ([`crate::notes::Problem`], which names it). Nothing was kept.
+    NoteRefused(crate::notes::Problem),
+    /// NOTE-2: an id that names no note — `newest` the newest id there is.
+    /// Nothing changed.
+    NoteNotFound { id: u64, newest: Option<u64> },
+    /// NOTE-2: `upgrade` of a note already a ticket. Nothing changed.
+    NoteUpgraded { id: u64, ticket: String },
+    /// NOTE-2: `list`'s `after` names no note.
+    NoteCursor(u64),
 }
 
 impl StoreError {
@@ -1351,6 +1361,11 @@ impl std::fmt::Display for StoreError {
                 "no comment {id}: comment ids run from 1 to {n} (nothing changed)"
             ),
             Self::CommentCursor(id) => write!(f, "after: no comment {id} to resume after"),
+            Self::NoteRefused(problem) => write!(f, "{problem} (nothing was kept)"),
+            Self::NoteNotFound { id, newest: None } => write!(f, "no note {id}: there are no notes yet (nothing changed)"),
+            Self::NoteNotFound { id, newest: Some(n) } => write!(f, "no note {id}: note ids run from 1 to {n} (nothing changed)"),
+            Self::NoteUpgraded { id, ticket } => write!(f, "note {id} is already a ticket: {ticket} (nothing changed)"),
+            Self::NoteCursor(id) => write!(f, "after: no note {id} to resume after"),
         }
     }
 }
@@ -1579,6 +1594,9 @@ struct Cache {
     /// COMMENT-2: every comment ([`comments::Comments`]) — read from its
     /// table at open, moved by a comment's own write and by nothing else.
     comments: comments::Comments,
+    /// NOTE-2: every note ([`notes::Notes`]) — read at open, moved by `add`
+    /// and by the birth of the ticket a note becomes.
+    notes: notes::Notes,
     /// IDENTITY-21: every grant ([`members::Members`]) — read at open, moved
     /// by `grant` and `revoke` alone.
     members: members::Members,
@@ -1909,6 +1927,8 @@ impl Cache {
             inputs: inputs::Inputs::default(),
             // COMMENT-2: and the comments.
             comments: comments::Comments::default(),
+            // NOTE-2: and the notes.
+            notes: notes::Notes::default(),
             // IDENTITY-21: and the members.
             members: members::Members::default(),
             // AUTH-7: and the edited roles.
@@ -1969,6 +1989,8 @@ impl Cache {
             inputs: inputs::Inputs::default(),
             // COMMENT-2: and the comments.
             comments: comments::Comments::default(),
+            // NOTE-2: and the notes.
+            notes: notes::Notes::default(),
             // IDENTITY-21: and the members.
             members: members::Members::default(),
             // AUTH-7: and the edited roles.
@@ -2673,6 +2695,8 @@ impl Store {
         // the search index here, once, durably, every ticket's title and text
         // indexed; after it, every write that changes either keeps it.
         search::migrate(&mut conn)?;
+        // NOTE-2: a file without the notes table gains it, empty, here.
+        notes::migrate(&mut conn)?;
         // SCALE-28: the derived state is read from the file — each
         // shortcode's run, the dangling forward references, the roll-ups,
         // the children index — beside the rows, each carrying its stored
@@ -2706,6 +2730,8 @@ impl Store {
         cache.inputs = inputs::load(&conn)?;
         // COMMENT-2: the comments, as stored.
         cache.comments = comments::load(&conn)?;
+        // NOTE-2: the notes, as stored.
+        cache.notes = notes::load(&conn)?;
         // IDENTITY-21: the members, as stored.
         cache.members = members::load(&conn)?;
         // AUTH-7: the edited roles, as stored.
@@ -2964,6 +2990,25 @@ impl Store {
     /// some `blocked_by` already names ([`StoreError::DocAwaited`]) — so no
     /// ticket ever waits on a doc, which never completes.
     pub async fn create(&self, new: NewTicket) -> Result<Ticket, StoreError> {
+        self.create_from(new, None).await.map(|(ticket, _)| ticket)
+    }
+
+    /// NOTE-2: the note `id` made the ticket `new` — in one write: the
+    /// ticket born exactly as [`Store::create`] makes it, and the note marked
+    /// with its id and when, in the birth's own transaction, taken by the
+    /// cache with it. A note that is none ([`StoreError::NoteNotFound`]) or
+    /// already a ticket ([`StoreError::NoteUpgraded`]) is refused under the
+    /// write-serial lock, before anything is allocated; a ticket `create`
+    /// refuses leaves the note open, and spends no id. The ticket's events
+    /// are `create`'s; the note is returned with it.
+    pub async fn upgrade_note(&self, id: u64, new: NewTicket) -> Result<(Ticket, crate::notes::Note), StoreError> {
+        let (ticket, note) = self.create_from(new, Some(id)).await?;
+        Ok((ticket, note.expect("a note was named, so one was marked")))
+    }
+
+    /// [`Store::create`], and — NOTE-2 — the note `from` (if any) marked as
+    /// the ticket it became, in the same write.
+    async fn create_from(&self, new: NewTicket, from: Option<u64>) -> Result<(Ticket, Option<crate::notes::Note>), StoreError> {
         let epic = new.epic.trim().to_ascii_uppercase();
         if epic.is_empty() || !epic.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(StoreError::InvalidEpic(new.epic));
@@ -3008,6 +3053,22 @@ impl Store {
         }
 
         let serial = self.serial().await;
+        // NOTE-2: the note a ticket is made from — open, read under the lock
+        // so no other upgrade can take it first — or nothing happens.
+        let note = match from {
+            None => None,
+            Some(id) => {
+                let cache = self.tickets.read().expect("store lock poisoned");
+                let n = cache.notes.get(id).cloned().ok_or_else(|| StoreError::NoteNotFound {
+                    id,
+                    newest: cache.notes.next_id().checked_sub(1).filter(|n| *n > 0),
+                })?;
+                if let Some(ticket) = n.ticket {
+                    return Err(StoreError::NoteUpgraded { id, ticket });
+                }
+                Some(n)
+            }
+        };
         // Under the write-serial lock the cache mirrors the database
         // exactly, so the shortcode's highest seq + 1 is the next id —
         // monotonic across restarts (the cache was loaded from the
@@ -3251,11 +3312,21 @@ impl Store {
         let input_list = asked.list.take();
         let input_rows = input_list.clone();
         let born_id = ticket.id.clone();
+        // NOTE-2: and the note it was made from, pointing at it.
+        let upgraded = note.map(|n| crate::notes::Note {
+            ticket: Some(ticket.id.clone()),
+            upgraded_at: Some(ticket.created_unix),
+            ..n
+        });
+        let (note_row, note_kept) = (upgraded.clone(), upgraded.clone());
         let cache = Arc::clone(&self.tickets);
         self.write(
             serial,
             move |tx| {
                 db::upsert(tx, &born)?;
+                if let Some(n) = &note_row {
+                    notes::store(tx, n)?;
+                }
                 // SEARCH-2: and its row in the search index.
                 search::put(tx, &born.id, &born.title, &born.body)?;
                 if let Some(list) = &input_rows {
@@ -3275,6 +3346,9 @@ impl Store {
             },
             move |cache, _| {
                 let out = cache.created(newborn, touched.into_values(), moved);
+                if let Some(n) = note_kept {
+                    cache.notes.put(n);
+                }
                 cache.components.take(registry_moves);
                 if let Some(list) = input_list {
                     cache.inputs.take(&born_id, list);
@@ -3317,7 +3391,7 @@ impl Store {
                 if let Some(change) = under.and_then(|u| u.after(&cache)) {
                     let _ = tx.send(change);
                 }
-                ticket
+                (ticket, upgraded)
             },
         )
         .await
@@ -4370,6 +4444,62 @@ impl Store {
         .await
     }
 
+    /// NOTE-2: keeps a note — its body as given, `author` (default
+    /// [`crate::notes::DEFAULT_AUTHOR`]), the signed-in `principal` when
+    /// login is on, the next id and the time — through the write path every
+    /// write takes. A blank or oversized body or author is
+    /// [`StoreError::NoteRefused`], with nothing kept.
+    pub async fn add_note_as(
+        &self,
+        body: String,
+        author: Option<String>,
+        principal: Option<String>,
+    ) -> Result<crate::notes::Note, StoreError> {
+        let author = crate::notes::check(&body, author.as_deref()).map_err(StoreError::NoteRefused)?;
+        let serial = self.serial().await;
+        let note = crate::notes::Note {
+            id: self.tickets.read().expect("store lock poisoned").notes.next_id(),
+            at: chrono::Utc::now().timestamp(),
+            author,
+            body,
+            ticket: None,
+            upgraded_at: None,
+            principal,
+        };
+        let (stored, kept) = (note.clone(), note.clone());
+        self.write(
+            serial,
+            move |tx| Ok(notes::store(tx, &stored)?),
+            move |cache, _| cache.notes.put(kept),
+            move |(), (), _| note,
+        )
+        .await
+    }
+
+    /// NOTE-2: one page of the notes `q` admits, newest first, from the
+    /// cache ([`notes::page`]).
+    pub fn notes(&self, q: &NoteQuery, after: Option<u64>, limit: Option<u32>) -> Result<NotePage, StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        notes::page(&cache, q, after, limit)
+    }
+
+    /// NOTE-2: the note `id`, from the cache; [`StoreError::NoteNotFound`]
+    /// when it names none.
+    pub fn note(&self, id: u64) -> Result<crate::notes::Note, StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        cache.notes.get(id).cloned().ok_or_else(|| StoreError::NoteNotFound {
+            id,
+            newest: cache.notes.next_id().checked_sub(1).filter(|n| *n > 0),
+        })
+    }
+
+    /// NOTE-2: the title and body a note gives the ticket it becomes —
+    /// its first line with words (else when it was taken), and its text
+    /// with a line saying when it was noted and which note it was.
+    pub fn note_ticket_text(note: &crate::notes::Note) -> (String, String) {
+        (notes::ticket_title(note), notes::ticket_body(note))
+    }
+
     /// IDENTITY-21: a principal's grants, from the cache.
     pub fn grants_of(&self, principal: &str) -> Vec<crate::members::Grant> {
         self.tickets.read().expect("store lock poisoned").members.of(principal)
@@ -5140,6 +5270,10 @@ mod inputs;
 /// beside the tickets, behind the cache.
 mod comments;
 pub use comments::{CommentChange, CommentPage, CommentQuery};
+/// NOTE-2: the notes store — every note, kept beside the tickets; a note
+/// made a ticket in the ticket's own write.
+mod notes;
+pub use notes::{NotePage, NoteQuery};
 /// IDENTITY-21: the members store — every grant of a role on a scope, kept
 /// beside the tickets, behind the cache.
 mod members;
@@ -5223,6 +5357,11 @@ mod tests_find;
 /// built by a first open, kept by every write, held to the tickets.
 #[cfg(test)]
 mod tests_search;
+
+/// NOTE-2: the notes store — kept, listed, filtered and paged; an upgrade's
+/// one write and its refusals; across a reopen.
+#[cfg(test)]
+mod tests_notes;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).

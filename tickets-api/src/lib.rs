@@ -87,6 +87,18 @@ pub use comments_activation::CommentsClient;
 #[cfg(feature = "server")]
 pub use comments_activation::Comments;
 
+/// NOTE-2: the notes vocabulary — [`Note`], [`NoteState`], [`NotesEvent`]
+/// — the rules `add` keeps a note by, and the title a note gives its
+/// ticket. Wasm-safe, like [`comments`].
+pub mod notes;
+pub use notes::{Note, NoteState, NotesEvent};
+/// NOTE-2: the `notes` activation, declared once: the server's [`Notes`]
+/// and the browser's [`NotesClient`].
+pub mod notes_activation;
+pub use notes_activation::NotesClient;
+#[cfg(feature = "server")]
+pub use notes_activation::Notes;
+
 /// IDENTITY-21: the members vocabulary — [`Role`], [`Grant`],
 /// [`MembersEvent`]. Wasm-safe, like [`comments`].
 pub mod members;

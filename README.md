@@ -1211,6 +1211,33 @@ comment, filtered by the route's query (`?ticket=&under=&state=&author=&text=`),
 each linking back to its page and element (`…?comment=<id>`); a ticket page's
 side panel counts its open ones. All of it is live through `comments.watch`.
 
+### Notes (NOTE-2)
+
+A **note** is a thought written down before it is a ticket: dated, never
+titled, on no shortcode, kept by the server in one place for every client.
+`notes` is the activation beside `tickets` and `comments`; its notes are
+records of their own behind the service-wide cache, in a `notes` table a
+file gains, empty, on open.
+
+```sh
+synapse -P 4455 menger notes add --body "the palette should remember its last query"
+synapse -P 4455 menger notes list --state open            # newest first; --author, --text, --after/--limit
+synapse -P 4455 menger notes get --id 7
+synapse -P 4455 menger notes upgrade --id 7 --epic MENGER --parent MENGER-2
+```
+
+| method | yields |
+| -- | -- |
+| `notes.add { body, author? }` | the note kept: a new `id`, `at` (unix seconds), its `author` (`owner` unless given; a signed-in caller's own name, and its `principal`), the `body` as written, `ticket: null`. A blank body, or one over 64 KiB, is one `error` |
+| `notes.list { state?, author?, text?, after?, limit? }` | `note`s newest first, then `page { next }`. `state` is `open` (not yet a ticket) or `upgraded`; `text` a substring of the body, any ASCII case |
+| `notes.get { id }` | the note, or one `error` |
+| `notes.upgrade { id, epic, title?, kind?, parent? }` | the note, its `ticket` and `upgraded_at` set: in one write, a ticket born as `tickets.create` makes one — titled `title`, else the note's first line with words (markdown marks dropped, at most 80 characters, cut at a word), its body the note's text and a line saying when it was noted, `kind` (default build) and `parent` as `create` takes them — and the note marked. A note already a ticket is refused, naming it; a ticket `create` refuses leaves the note open and spends no id |
+
+Under login a note is any member's — `add`, `list` and `get` are a viewer's,
+held anywhere — and `upgrade` is an editor's that also needs
+`tickets.create` where the ticket lands (the parent, else the shortcode's
+root, else `*`).
+
 ### Login (IDENTITY-14)
 
 menger does not know identity providers; it knows **Plexus identities**.

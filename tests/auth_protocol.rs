@@ -259,6 +259,11 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("comments.watch", Today::Viewer, None),
     ("comments.resolve", Today::Editor, None),
     ("comments.reopen", Today::Editor, None),
+    // NOTE-2: a note is on no shortcode — any member's; an upgrade an editor's.
+    ("notes.add", Today::Viewer, None),
+    ("notes.list", Today::Viewer, None),
+    ("notes.get", Today::Viewer, None),
+    ("notes.upgrade", Today::Editor, None),
     ("members.mine", Today::Anyone, None),
     ("members.list", Today::Admin, None),
     ("members.grant", Today::Admin, Some("scope")),
@@ -299,7 +304,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     // Every method of menger's activations is in the table, once.
     let mut seen = BTreeSet::new();
     for schema in hub.list_plugin_schemas() {
-        if !["tickets", "comments", "members", "session"].contains(&schema.namespace.as_str()) {
+        if !["tickets", "comments", "notes", "members", "session"].contains(&schema.namespace.as_str()) {
             continue;
         }
         for m in &schema.methods {
@@ -534,8 +539,8 @@ async fn login_off_menger_is_as_it_was() {
     let hub = one(&c, "menger.schema", json!({})).await;
     assert!(hub.get("view").is_none());
     let kids: BTreeSet<String> = hub["children"].as_array().unwrap().iter().map(|k| k["namespace"].as_str().unwrap().to_string()).collect();
-    assert_eq!(kids, names(&["comments", "members", "session", "tickets"]), "no auth activation without login");
-    for ns in ["tickets", "comments", "members", "session"] {
+    assert_eq!(kids, names(&["comments", "members", "notes", "session", "tickets"]), "no auth activation without login");
+    for ns in ["tickets", "comments", "notes", "members", "session"] {
         let schema = one(&c, &format!("{ns}.schema"), json!({})).await;
         assert!(schema.get("view").is_none());
         for m in schema["methods"].as_array().unwrap() {

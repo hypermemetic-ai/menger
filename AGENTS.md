@@ -137,6 +137,18 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger comments list --under FILTER --state open --text title
   ```
 
+  **Notes** (NOTE-2) are the `notes` activation: dated, untitled thoughts
+  kept in one place — `add { body }`, `list` (newest first; `state`
+  open/upgraded, `author`, `text`; `after` + `limit`), `get { id }`, and
+  `upgrade { id, epic, title?, kind?, parent? }`, which makes the note a
+  ticket (titled by its first line unless given) and keeps the ticket's id
+  on the note, in one write. README "Notes" has the rest:
+
+  ```sh
+  synapse -P 4455 menger notes add --body "the palette should remember its last query"
+  synapse -P 4455 menger notes upgrade --id 7 --epic MENGER --parent MENGER-2
+  ```
+
   **Login** (IDENTITY-14) is off unless `--auth-provider` names a
   provider: `idp=…`, `auth0=…`, `oidc:<name>=…` or `nostr=…`. Each
   becomes an adapter that turns its credential into a Plexus identity at
