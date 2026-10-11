@@ -23,6 +23,10 @@ pub mod web_login;
 
 pub mod shell;
 
+/// DIST-3: the whole server started from code, without login or REST —
+/// `LocalServer::start(LocalConfig)`.
+pub mod local;
+
 /// The cache and its storage, re-exported from the activation crate so
 /// `menger::store::SeedSpec` and friends keep their paths.
 pub use menger_tickets_api::store;
