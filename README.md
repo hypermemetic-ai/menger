@@ -735,7 +735,8 @@ The host stamps the scope on the frame (`data-scope`); an editor's preview
 reads as the ticket it edits, a component's help card as its owner, and a
 frame with neither reads only `components`; **`navigate(route)`** (COMP-9,
 below); **`input`** (INPUT-4, frozen) — `ticket`, `submit` and (INPUT-9,
-1.4) `clear`, the two writes (below). Its types are
+1.4) `clear`, the two writes (below), and (1.7, COMP-14) `displayOnly`,
+true in a cited window. Its types are
 `frontend/sdk/menger.d.ts`, published at `/app/sdk/menger.d.ts`.
 
 **The typed SDK** (COMP-10, COMP-1 decision 7). `menger.tickets` is the
@@ -834,7 +835,73 @@ source, open.
   query); anything else is ignored. The badge and the tooltip's links use
   it, and so does a click on any `#/…` link in a framed body; a `{wave: ID}`
   clicked in a framed board note reveals the card on the board, as in an
-  unframed note.
+  unframed note. COMP-14: a ticket route may name a section instead —
+  `#/ticket/<id>?field=<name>` or `?anchor=<id>` — which the frame showing
+  that ticket scrolls to and flashes.
+
+**Cites** (COMP-14). A body can show a **live window into a section of
+another ticket** — cited, never copied:
+
+```html
+<m-cite ref="AUTH-10" field="findings"></m-cite>   <!-- its [data-field="findings"]: an m-field, m-cases, m-decision… -->
+<m-cite ref="AUTH-10#the-table"></m-cite>          <!-- the element with id="the-table" -->
+```
+
+The window has a header — the cited ticket's id, its **live** status, its
+title and the section's name, a link to `#/ticket/AUTH-10?field=findings` —
+over the section, drawn as it is drawn in its own ticket, at its natural
+height up to 480 px, then scrolling inside the window. An `amended` of the
+cited ticket redraws it in place (no reload, no flash); a status change
+repaints the header. The first element carrying the `data-field` is the
+section (a name several elements carry, the first of them); the `#id` form
+takes any element id the body writes. Headings are not addressed: md.rs
+gives them no ids (write `<h2 id="…">` to cite one). Failure is a named
+line, never a blank: `AUTH-10: no ticket you can read` (no such ticket —
+or, under login, one outside your reach: the server answers both
+`not_found` and never says which), `you cannot read AUTH-10` (a refusal),
+`AUTH-10 has no section `findings`` (`has no element `#x``), a malformed
+tag (`m-cite: …`), and a cite nested too deep (windows nest two deep; a
+cycle stops there).
+
+**How it is drawn — and why the citing body never holds it.** A cited
+section's HTML, and its scripts, must not run in the citing frame: that
+would give one shortcode's body the other's reach (IDENTITY-36), and the
+citer's script could read the cited text. So `<m-cite>` is built into the
+SDK (1.7) as a **placeholder** only: it reserves room and tells the host
+what it cites and where it is (`menger:cite { cite, ref, field, rect }`,
+`menger:uncite`). The **host** (`frontend/src/cite.rs`) then asks for the
+cited ticket over the viewer's own socket (`tickets.get` — the viewer's
+reach decides, never the citing frame's scope), lays the window over the
+placeholder in the app's own DOM (clamped to the citing frame's box), and
+renders the cited body in a frame of its own: the same sandbox, CSP and
+SDK as every frame (IDENTITY-28 unchanged), stamped as the **cited**
+ticket's — `data-scope` its shortcode, so its reads are what they are in
+its own ticket; no `data-ticket`, so the host answers no write from it —
+and told its section (`cite` in the init block), which its SDK alone
+shows, everything else hidden. The citing frame is answered **only the
+window's height** (`menger:cited { cite, height }`). So:
+
+- the cited content never enters the citing document — the citer's script
+  reads nothing of it, and its own reads are what they were;
+- the cited body's script runs with the cited shortcode's reach, never the
+  citer's;
+- a ticket the viewer cannot read draws its line and nothing of it — no
+  title, status or body;
+- inputs in a window are **display only**: they show their answers, and
+  `menger.input.submit` / `clear` there reject at once
+  (`menger.input.displayOnly` is `true`; the host refuses them too) — an
+  input is answered in its own ticket;
+- the citing body holds only the tag, so search, the inputs store and the
+  component registry count the section as the cited ticket's; the citer
+  references `m-cite`.
+
+The limits: the citing frame learns the window's height (it lays out
+around it), so a script there can tell roughly how tall a section the
+viewer can read is, and whether a window opened — never its text; a body
+opens at most 64 windows; the whole cited body loads in the
+window's frame (its scripts and diagrams run, hidden but for the section;
+a mermaid diagram in the section draws as in its own ticket); a window
+scrolls inside itself past 480 px.
 
 The order of work for a shortcode tree — the platform's, here — is one call
 (WAVE-4); the app's wave board (`#/waves/<SHORTCODE>`) makes the same one:
@@ -1725,7 +1792,8 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        #/components (COMP-6)
                        and the help pages, src/card.rs a definition's docs
                        card, src/inspect.rs the tooltip's checks and
-                       menger.navigate's routes (COMP-9), src/inputs.rs
+                       menger.navigate's routes (COMP-9), src/cite.rs
+                       <m-cite>'s windows (COMP-14), src/inputs.rs
                        the app's copy of the inputs and src/inputs_page.rs
                        #/inputs (INPUT-6)
 spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)

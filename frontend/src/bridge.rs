@@ -591,6 +591,13 @@ pub(crate) fn admit(sdk: &str, ticket: Option<&str>, gesture: bool) -> Result<St
     }
 }
 
+/// COMP-14: the refusal of every write from a cited window's frame — its
+/// inputs are shown, and answered only in their own ticket. The host sends
+/// nothing (the frame carries no `data-ticket` either).
+pub(crate) fn display_only(sdk: &str) -> String {
+    format!("{sdk}: display only — this is a cited window; its inputs are answered in their own ticket (nothing sent)")
+}
+
 /// The frame's params (JSON, as for a call) as a [`Submit`], or why not —
 /// an unknown field (`ticket` included), a missing one, a value that is not
 /// an [`InputValue`], each named.

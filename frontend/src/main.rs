@@ -242,6 +242,7 @@ mod board;
 mod bridge;
 mod cache;
 mod card;
+mod cite;
 mod comments;
 mod comments_page;
 mod components;

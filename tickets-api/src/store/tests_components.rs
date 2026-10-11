@@ -640,3 +640,31 @@ async fn a_table_without_preview_gains_it_from_the_owners_bodies() {
     let mut conn = Connection::open(&path).unwrap();
     assert!(!components::migrate_preview(&mut conn).unwrap(), "once");
 }
+
+/// COMP-14: a cite is a reference, never a copy. The citing body holds only
+/// its `<m-cite>` tag — so the cited section's components count as the
+/// cited ticket's references, its inputs as the cited ticket's, and a word
+/// in it is found in the cited ticket alone; the citer references `m-cite`.
+#[tokio::test]
+async fn a_cite_counts_as_its_tag_and_nothing_it_shows() {
+    let store = store().await;
+    let house = born(&store, &format!("{}{}", def("m-field", "<slot></slot>"), def("m-cite", "<docs><summary>a window</summary></docs>"))).await;
+    let cited = born(
+        &store,
+        "<m-field data-field=\"findings\">The zanzibar finding.</m-field>\n\n\
+         <m-decision data-field=\"decision\" id=\"landing\"><m-question>Ship?</m-question>\
+         <m-option name=\"Yes\"></m-option><m-option name=\"No\"></m-option></m-decision>\n",
+    )
+    .await;
+    let citer = born(&store, &format!("<m-cite ref=\"{cited}\" field=\"findings\"></m-cite>\n\n<m-cite ref=\"{cited}#landing\"></m-cite>\n")).await;
+    let reg = registry(&store);
+    assert_eq!(reg["m-field"].references, [cited.as_str()], "the cited section's component is the cited ticket's");
+    assert_eq!(reg["m-cite"].references, [citer.as_str()]);
+    assert_eq!(reg["m-cite"].owner.as_deref(), Some(house.as_str()));
+    let inputs = store.inputs(Some(&citer), None, None).unwrap();
+    assert!(inputs.is_empty(), "{inputs:?}");
+    let inputs = store.inputs(Some(&cited), None, None).unwrap();
+    assert_eq!(inputs.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["landing"]);
+    let page = store.search("zanzibar", None, None, None).await.unwrap();
+    assert_eq!(page.hits.iter().map(|h| h.summary.id.as_str()).collect::<Vec<_>>(), [cited.as_str()]);
+}

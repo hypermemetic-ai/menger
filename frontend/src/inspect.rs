@@ -19,7 +19,11 @@
 //! the app to an app route — [`app_route`]: `#/ticket/<id>` (with the card
 //! anchor's `?component=<tag>`), `#/components`, `#/components/<tag>`,
 //! `#/waves`, `#/waves/<SHORTCODE>` (with a board's query); anything else
-//! is ignored. [`card_anchor`] reads the anchor back off the hash.
+//! is ignored. [`anchor`] reads the anchor back off the hash.
+//! COMP-14: a ticket route may name a **section** instead of a card —
+//! `?field=<name>` (the element carrying `data-field="<name>"`) or
+//! `?anchor=<id>` (the element with that id) — what a cite window's header
+//! opens; [`anchor`] reads whichever the hash names.
 
 use menger_tickets_api::component_docs::is_component_name;
 use menger_tickets_api::{AttrState, Component, Known};
@@ -134,7 +138,11 @@ pub(crate) fn app_route(route: &str) -> Option<String> {
     let ok = match path.split_once('/') {
         Some(("ticket", id)) => {
             crate::kids::key(id).is_some_and(|(epic, _)| !epic.is_empty() && epic.chars().all(|c| c.is_ascii_alphanumeric()))
-                && query.is_none_or(|q| q.strip_prefix("component=").is_some_and(is_component_name))
+                && query.is_none_or(|q| {
+                    q.strip_prefix("component=").is_some_and(is_component_name)
+                        || q.strip_prefix("field=").is_some_and(section_name_ok)
+                        || q.strip_prefix("anchor=").is_some_and(section_name_ok)
+                })
         }
         Some(("components", tag)) => (tag.is_empty() || is_component_name(tag)) && query.is_none(),
         Some(("waves", sc)) => sc.is_empty() || sc.chars().all(|c| c.is_ascii_alphanumeric()),
@@ -144,20 +152,62 @@ pub(crate) fn app_route(route: &str) -> Option<String> {
     ok.then(|| format!("#/{path}{}", query.map(|q| format!("?{q}")).unwrap_or_default()))
 }
 
-/// COMP-9: the card anchor on a ticket route — `#/ticket/<OWNER>?component=<tag>`
-/// names the card to scroll to and flash.
-pub(crate) fn card_anchor(hash: &str) -> Option<String> {
+/// COMP-14: a section's name — a `data-field` value or an element id a cite
+/// addresses: 1–128 of ASCII letters, digits, `_`, `-`, `.`, `:`. Nothing
+/// that could end an attribute, a selector's string or a route.
+pub(crate) fn section_name_ok(name: &str) -> bool {
+    (1..=128).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || "_-.:".contains(c))
+}
+
+/// What a ticket route asks the frame showing it to scroll to and flash:
+/// COMP-9's card (`?component=<tag>`), or COMP-14's section (`?field=<name>`,
+/// `?anchor=<id>`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Anchor {
+    Component(String),
+    Field(String),
+    Id(String),
+}
+
+impl Anchor {
+    /// The key it travels under in `menger:reveal` / `menger:revealed`, and its value.
+    pub(crate) fn pair(&self) -> (&'static str, &str) {
+        match self {
+            Anchor::Component(n) => ("component", n),
+            Anchor::Field(n) => ("field", n),
+            Anchor::Id(n) => ("anchor", n),
+        }
+    }
+}
+
+/// The anchor on a ticket route, if it names one ([`Anchor`]).
+pub(crate) fn anchor(hash: &str) -> Option<Anchor> {
     let path = hash.strip_prefix('#').unwrap_or(hash);
     let path = path.strip_prefix('/').unwrap_or(path);
     let (path, query) = path.split_once('?')?;
     if !path.starts_with("ticket/") {
         return None;
     }
-    query
-        .split('&')
-        .find_map(|kv| kv.strip_prefix("component="))
-        .map(str::to_ascii_lowercase)
-        .filter(|n| is_component_name(n))
+    query.split('&').find_map(|kv| {
+        if let Some(n) = kv.strip_prefix("component=") {
+            let n = n.to_ascii_lowercase();
+            return is_component_name(&n).then_some(Anchor::Component(n));
+        }
+        if let Some(n) = kv.strip_prefix("field=") {
+            return section_name_ok(n).then(|| Anchor::Field(n.to_string()));
+        }
+        kv.strip_prefix("anchor=").filter(|n| section_name_ok(n)).map(|n| Anchor::Id(n.to_string()))
+    })
+}
+
+/// COMP-9: the card anchor on a ticket route — `#/ticket/<OWNER>?component=<tag>`
+/// names the card to scroll to and flash.
+#[cfg(test)]
+pub(crate) fn card_anchor(hash: &str) -> Option<String> {
+    match anchor(hash)? {
+        Anchor::Component(n) => Some(n),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -248,6 +298,9 @@ mod tests {
             ("#/waves/PLEXUS", "#/waves/PLEXUS"),
             ("#/waves/PLEXUS?sc=is:RETURNS&status=not:Complete", "#/waves/PLEXUS?sc=is:RETURNS&status=not:Complete"),
             (" #/ticket/MNG-2 ", "#/ticket/MNG-2"),
+            // COMP-14: a cite window's header opens its section.
+            ("#/ticket/AUTH-10?field=findings", "#/ticket/AUTH-10?field=findings"),
+            ("#/ticket/AUTH-10?anchor=the-table", "#/ticket/AUTH-10?anchor=the-table"),
         ] {
             assert_eq!(app_route(route).as_deref(), Some(want), "{route}");
         }
@@ -255,6 +308,7 @@ mod tests {
             "", "#", "#/", "/app/#/ticket/A-1", "https://example.com", "javascript:alert(1)", "#/ticket/", "#/ticket/A",
             "#/ticket/A-1/x", "#/ticket/A-1?component=Bad", "#/ticket/A-1?evil=1", "#/components/Not-A-Tag", "#/components?x",
             "#/settings", "#/ticket/A-1\"><script>", "#/waves/PLEX US", "#/waves/../x", "#//evil.example",
+            "#/ticket/A-1?field=", "#/ticket/A-1?field=a/b", "#/ticket/A-1?anchor=%22x", "#/components/m-x?field=a",
         ] {
             assert_eq!(app_route(route), None, "{route}");
         }
@@ -267,5 +321,20 @@ mod tests {
         assert_eq!(card_anchor("#/ticket/DEMO-5"), None);
         assert_eq!(card_anchor("#/components/m-x?component=m-x"), None);
         assert_eq!(card_anchor("#/ticket/DEMO-5?component=nohyphen"), None);
+        assert_eq!(card_anchor("#/ticket/DEMO-5?field=findings"), None);
+    }
+
+    /// COMP-14: a section anchor — by `data-field` or by id — read off a
+    /// ticket route; a name that could escape a selector is none.
+    #[test]
+    fn a_section_anchor_is_read_off_a_ticket_route() {
+        assert_eq!(anchor("#/ticket/AUTH-10?field=findings"), Some(Anchor::Field("findings".into())));
+        assert_eq!(anchor("#/ticket/AUTH-10?anchor=t.1:x"), Some(Anchor::Id("t.1:x".into())));
+        assert_eq!(anchor("#/ticket/AUTH-10?component=m-x"), Some(Anchor::Component("m-x".into())));
+        assert_eq!(anchor("#/ticket/AUTH-10?field=a\"]"), None);
+        assert_eq!(anchor("#/waves?field=a"), None);
+        assert_eq!(Anchor::Field("f".into()).pair(), ("field", "f"));
+        assert_eq!(Anchor::Id("i".into()).pair(), ("anchor", "i"));
+        assert!(!section_name_ok("") && !section_name_ok(&"x".repeat(129)) && !section_name_ok("a b"));
     }
 }

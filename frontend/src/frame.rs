@@ -128,7 +128,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{anchor, annotate, board, bridge, dom, gesture, inspect, mermaid, notes, registry, session};
+use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, mermaid, notes, registry, session};
 
 /// The SDK's version — `window.menger.version` inside every frame (pinned
 /// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
@@ -140,8 +140,11 @@ use crate::{anchor, annotate, board, bridge, dom, gesture, inspect, mermaid, not
 /// COMMENT-3's 1.5 adds annotation mode (the info card only in it);
 /// COMP-12's 1.6 puts the base typography in a cascade layer, and a body
 /// holding `<meta name="menger-base" content="markdown">` confines it to
-/// what markdown produced (`data-md`, md::MD_MARK).
-pub(crate) const SDK_VERSION: &str = "1.6.1";
+/// what markdown produced (`data-md`, md::MD_MARK); COMP-14's 1.7 adds the
+/// built-in `<m-cite>` (`menger:cite` / `menger:uncite` / `menger:cited`),
+/// a cited window's frame (`cite` in the init block; `menger:size { top,
+/// found }`; `input.displayOnly`), and section anchors in `menger:reveal`.
+pub(crate) const SDK_VERSION: &str = "1.7.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -234,6 +237,9 @@ pub(crate) struct Shell<'a> {
     /// INPUT-4: the ticket whose stored body the frame renders — `None` for
     /// one that renders none (an editor's preview, a help card).
     pub(crate) ticket: Option<&'a str>,
+    /// COMP-14: a cited window's frame — the section of the body it shows
+    /// (the SDK hides the rest); `None` for every other frame.
+    pub(crate) cite: Option<&'a cite::Section>,
 }
 
 /// A token name the frame will take: `--` and lowercase ASCII words.
@@ -281,6 +287,11 @@ pub(crate) fn init_json(shell: &Shell) -> String {
         "components": shell.components,
         // INPUT-4: `menger.input.ticket` — what `submit` answers against.
         "ticket": shell.ticket,
+        // COMP-14: a cited window shows one section, display only.
+        "cite": shell.cite.map(|c| match c {
+            cite::Section::Field(n) => serde_json::json!({ "field": n }),
+            cite::Section::Id(n) => serde_json::json!({ "anchor": n }),
+        }),
     });
     init.to_string().replace('<', "\\u003c")
 }
@@ -344,6 +355,10 @@ pub(crate) enum Msg {
     Located,
     /// COMMENT-3: `a`/`A`, or Esc in the mode — the app's keys.
     Key,
+    /// COMP-14: an `<m-cite>` placeholder says what it cites and where it is.
+    Cite,
+    /// COMP-14: an `<m-cite>` left the body.
+    Uncite,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -361,6 +376,8 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:probed" => Some(Msg::Probed),
         "menger:located" => Some(Msg::Located),
         "menger:key" => Some(Msg::Key),
+        "menger:cite" => Some(Msg::Cite),
+        "menger:uncite" => Some(Msg::Uncite),
         "menger:size" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Size { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32, settled: settled.unwrap_or(false) })
@@ -379,7 +396,8 @@ thread_local! {
     static BOARD: Cell<Option<board::Board>> = const { Cell::new(None) };
     /// COMP-9: the card the route names (`?component=m-x`), until a frame
     /// says where it is.
-    static ANCHOR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// COMP-14: or the section (`?field=`, `?anchor=`).
+    static ANCHOR: std::cell::RefCell<Option<inspect::Anchor>> = const { std::cell::RefCell::new(None) };
 }
 
 /// COMP-9: the app's board — what an instance's `shortcode` and `ticket`
@@ -500,6 +518,8 @@ pub(crate) fn broadcast_registry() {
 /// frame with no scope hears components alone), and a `group_changed`
 /// that may move a shortcode into or out of a reach asks that reach again.
 pub(crate) fn broadcast_change(ev: &TicketsEvent) {
+    // COMP-14: a cited ticket moved — its windows follow.
+    cite::heard(ev);
     if let TicketsEvent::GroupChanged { group } = ev {
         for scope in bridge::note_group(group) {
             refresh_reach(scope);
@@ -583,6 +603,7 @@ fn answer_write(
     ticket: Option<String>,
     gesture: bool,
     params: Result<String, String>,
+    cited: bool,
 ) {
     let (sdk, reply_kind, field) = if write == Msg::Clear {
         (bridge::CLEAR, "menger:cleared", "input")
@@ -591,6 +612,10 @@ fn answer_write(
     };
     spawn_local(async move {
         let reply = async {
+            // COMP-14: a cited window's inputs are display only.
+            if cited {
+                return Err(bridge::display_only(sdk));
+            }
             let ticket = bridge::admit(sdk, ticket.as_deref(), gesture)?;
             let params = params?;
             let client = || session::client().ok_or_else(|| format!("{sdk}: not connected (nothing sent)"));
@@ -651,6 +676,8 @@ fn promote(frame: &web_sys::HtmlIFrameElement) {
             }
         }
     }
+    // COMP-14: the old frame's cite windows go with it; the new one's show.
+    cite::promoted(frame);
 }
 
 fn has_live_sibling(frame: &web_sys::HtmlIFrameElement) -> bool {
@@ -721,7 +748,8 @@ fn on_message(ev: web_sys::MessageEvent) {
                 .ok_or_else(|| format!("{sdk}: its params are missing or not plain data (nothing sent)"));
             // The host's own stamp — nothing in the frame can move it.
             let ticket = frame.get_attribute("data-ticket");
-            answer_write(write, frame, channel, id, ticket, gesture, params);
+            let cited = frame.has_attribute("data-cite-key");
+            answer_write(write, frame, channel, id, ticket, gesture, params, cited);
         }
         Some(Msg::Size { height, settled }) => {
             let _ = web_sys::HtmlElement::style(&frame).set_property("height", &format!("{height}px"));
@@ -731,10 +759,20 @@ fn on_message(ev: web_sys::MessageEvent) {
             if frame.get_attribute("data-state").as_deref() == Some("pending") && (settled || !has_live_sibling(&frame)) {
                 promote(&frame);
             }
+            match frame.get_attribute("data-cite-key") {
+                // COMP-14: a window's frame — where its section runs.
+                Some(key) => {
+                    let top = field("top").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let found = field("found").and_then(|v| v.as_bool()).unwrap_or(false);
+                    cite::sized(&frame, &key, top, f64::from(height), found, settled);
+                }
+                // A citing frame resized: its windows are laid again.
+                None => cite::relayout(&channel),
+            }
             // COMP-9: a card the route names may be in this frame.
-            if settled {
-                if let Some(name) = ANCHOR.with(|a| a.borrow().clone()) {
-                    post(&frame, &reveal_message(&channel, &name));
+            if settled && !frame.has_attribute("data-cite-key") {
+                if let Some(anchor) = ANCHOR.with(|a| a.borrow().clone()) {
+                    post(&frame, &reveal_message(&channel, &anchor));
                 }
             }
         }
@@ -811,12 +849,30 @@ fn on_message(ev: web_sys::MessageEvent) {
             }
         }
         Some(Msg::Revealed) => {
-            let name = field("component").and_then(|v| v.as_string()).unwrap_or_default();
             let top = field("top").and_then(|v| v.as_f64()).filter(|t| t.is_finite()).unwrap_or(0.0);
-            let wanted = ANCHOR.with(|a| a.borrow().as_deref() == Some(name.as_str()));
+            // COMP-14: the anchor it answers for, by the key it came under.
+            let wanted = ANCHOR.with(|a| {
+                a.borrow().as_ref().is_some_and(|anchor| {
+                    let (key, value) = anchor.pair();
+                    field(key).and_then(|v| v.as_string()).as_deref() == Some(value)
+                })
+            });
             if wanted {
                 ANCHOR.with(|a| *a.borrow_mut() = None);
                 scroll_into_frame(&frame, top);
+            }
+        }
+        Some(Msg::Cite) => {
+            let Some(n) = field("cite").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0 && *v < 1e9) else { return };
+            let reference = field("ref").and_then(|v| v.as_string()).unwrap_or_default();
+            let cite_field = field("field").and_then(|v| v.as_string());
+            let r = field("rect").map(read_rect).unwrap_or_default();
+            let rect = cite::Rect { x: r.x, y: r.y, w: r.w, h: r.h };
+            cite::asked(frame, channel, n as u32, reference, cite_field, rect);
+        }
+        Some(Msg::Uncite) => {
+            if let Some(n) = field("cite").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0) {
+                cite::dropped(&channel, n as u32);
             }
         }
         None => {}
@@ -888,11 +944,22 @@ pub(crate) fn post_locate(frame: &web_sys::HtmlIFrameElement, channel: &str, id:
     post(frame, &msg.into());
 }
 
-/// `menger:reveal { component }` for the frame on `channel`.
-fn reveal_message(channel: &str, name: &str) -> JsValue {
+/// `menger:reveal { component }` (COMP-14: or `{ field }`, `{ anchor }`)
+/// for the frame on `channel`.
+fn reveal_message(channel: &str, anchor: &inspect::Anchor) -> JsValue {
     let msg = message("menger:reveal", channel);
-    set(&msg, "component", &name.into());
+    let (key, value) = anchor.pair();
+    set(&msg, key, &value.into());
     msg.into()
+}
+
+/// COMP-14: `menger:cited { cite, height }` to a citing frame — the one
+/// thing it learns of its window ([`cite::cited_reply`]).
+pub(crate) fn post_cited(citer: &web_sys::HtmlIFrameElement, channel: &str, reply: &cite::CitedReply) {
+    let msg = message("menger:cited", channel);
+    set(&msg, "cite", &JsValue::from_f64(f64::from(reply.cite)));
+    set(&msg, "height", &JsValue::from_f64(f64::from(reply.height)));
+    post(citer, &msg.into());
 }
 
 /// COMP-9: `menger.navigate`'s route, if the allow-list takes it: the app
@@ -910,12 +977,16 @@ fn navigate(route: &str) {
 /// The route's card anchor moved: remember it, and ask every frame on
 /// screen (a frame loading now asks once settled).
 fn anchor_changed(hash: &str) {
-    let anchor = inspect::card_anchor(hash);
+    let anchor = inspect::anchor(hash);
     ANCHOR.with(|a| *a.borrow_mut() = anchor.clone());
-    if let Some(name) = anchor {
+    if let Some(anchor) = anchor {
         for f in frames() {
+            // COMP-14: never a cited window — the ticket's own page reveals it.
+            if f.has_attribute("data-cite-key") {
+                continue;
+            }
             if let Some(channel) = f.get_attribute("data-channel") {
-                post(&f, &reveal_message(&channel, &name));
+                post(&f, &reveal_message(&channel, &anchor));
             }
         }
     }
@@ -964,6 +1035,43 @@ fn install_listener() {
 /// IDENTITY-36: and with `scope`, the shortcode its reads are held to
 /// (none: it reads nothing but components).
 fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, scope: Option<&str>) {
+    load_frame(container, body_html, Stamp { data_ticket: ticket, init_ticket: ticket, scope, cite: None });
+}
+
+/// What a new frame is stamped with — [`load`]'s, or (COMP-14) a cited
+/// window's ([`load_cited`]).
+struct Stamp<'a> {
+    /// `<iframe data-ticket>`: the ticket a write from it answers.
+    data_ticket: Option<&'a str>,
+    /// `menger.input.ticket`.
+    init_ticket: Option<&'a str>,
+    /// `<iframe data-scope>`.
+    scope: Option<&'a str>,
+    /// COMP-14: the section shown, the window's key, its depth.
+    cite: Option<(&'a cite::Section, &'a str, u32)>,
+}
+
+/// COMP-14: load a cited window's frame — `body_html`, the cited ticket's
+/// body, into the window's view `container`, stamped `stamps` (the cited
+/// ticket's own: [`cite::stamps`]) and told to show `section`; `key` names
+/// the window its sizes go to.
+pub(crate) fn load_cited(container: &web_sys::Element, body_html: &str, stamps: &cite::Stamps, section: &cite::Section, key: &str) {
+    install_listener();
+    registry::want();
+    load_frame(
+        container,
+        body_html,
+        Stamp {
+            data_ticket: stamps.data_ticket.as_deref(),
+            init_ticket: stamps.init_ticket.as_deref(),
+            scope: stamps.scope.as_deref(),
+            cite: Some((section, key, stamps.depth)),
+        },
+    );
+}
+
+fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
+    let Stamp { data_ticket, init_ticket, scope, cite } = stamp;
     let w = dom::window();
     let Some(doc) = w.document() else { return };
     let channel = next_channel();
@@ -972,7 +1080,15 @@ fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, sco
     let components = registry::snapshot();
     let html = srcdoc(
         body_html,
-        &Shell { channel: &channel, scheme, tokens: &tokens, mermaid_url: &mermaid_url, components: components.as_deref(), ticket },
+        &Shell {
+            channel: &channel,
+            scheme,
+            tokens: &tokens,
+            mermaid_url: &mermaid_url,
+            components: components.as_deref(),
+            ticket: init_ticket,
+            cite: cite.map(|(section, _, _)| section),
+        },
     );
     // A re-render still loading is superseded by this one.
     if let Ok(list) = container.query_selector_all(":scope > iframe[data-state=\"pending\"]") {
@@ -989,8 +1105,12 @@ fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, sco
     let _ = el.set_attribute("data-channel", &channel);
     let _ = el.set_attribute("data-state", "pending");
     let _ = el.set_attribute("data-sdk", SDK_VERSION);
-    if let Some(ticket) = ticket {
+    if let Some(ticket) = data_ticket {
         let _ = el.set_attribute("data-ticket", ticket);
+    }
+    if let Some((_, key, depth)) = cite {
+        let _ = el.set_attribute("data-cite-key", key);
+        let _ = el.set_attribute("data-cite-depth", &depth.to_string());
     }
     if let Some(scope) = scope {
         let _ = el.set_attribute("data-scope", scope);
@@ -999,7 +1119,7 @@ fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, sco
             refresh_reach(scope.to_string());
         }
     }
-    let _ = el.set_attribute("title", "ticket body");
+    let _ = el.set_attribute("title", if cite.is_some() { "cited section" } else { "ticket body" });
     let Ok(frame) = el.dyn_into::<web_sys::HtmlIFrameElement>() else { return };
     frame.set_srcdoc(&html);
     let _ = container.append_child(&frame);
@@ -1087,7 +1207,7 @@ mod tests {
     fn the_csp_comes_first_and_closes_connections_and_forms() {
         assert_eq!(CSP, "connect-src 'none'; form-action 'none'");
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f9", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: None, ticket: Some("A-1") };
+        let shell = Shell { channel: "f9", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: None, ticket: Some("A-1"), cite: None };
         let doc = srcdoc("<script>fetch('https://x')</script><form action=\"https://x\"></form>", &shell);
         let head = "<!doctype html><html lang=\"en\" data-theme=\"light\"><head>";
         assert!(
@@ -1112,7 +1232,7 @@ mod tests {
     #[test]
     fn the_srcdoc_is_the_shell_then_the_body() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", components: None, ticket: None };
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", components: None, ticket: None, cite: None };
         let doc = srcdoc("<details><summary>s</summary><p>x</p></details>", &shell);
         assert!(doc.starts_with("<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta http-equiv=\"Content-Security-Policy\""), "{doc}");
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
@@ -1130,7 +1250,7 @@ mod tests {
     #[test]
     fn the_init_block_is_json_that_cannot_close_its_script() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f1", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", components: None, ticket: None };
+        let shell = Shell { channel: "f1", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", components: None, ticket: None, cite: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1150,6 +1270,64 @@ mod tests {
         assert_eq!(v["ticket"], "INPUT-9");
     }
 
+    /// COMP-14: a cited window's frame is a frame like any other — the
+    /// same CSP first, the same sandbox (`load_frame` stamps SANDBOX on
+    /// every frame), the SDK inline — and its init block names the cited
+    /// ticket and the one section it shows; every other frame's `cite` is
+    /// null.
+    #[test]
+    fn a_cited_windows_frame_is_a_frame_told_its_section() {
+        let tokens = shell_tokens();
+        let field = cite::Section::Field("findings".into());
+        let shell = Shell {
+            channel: "f3",
+            scheme: Scheme::Light,
+            tokens: &tokens,
+            mermaid_url: "u",
+            components: None,
+            ticket: Some("AUTH-10"),
+            cite: Some(&field),
+        };
+        let doc = srcdoc("<m-field data-field=\"findings\">x</m-field>", &shell);
+        assert!(doc.starts_with(&format!(
+            "<!doctype html><html lang=\"en\" data-theme=\"light\"><head><meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\">"
+        )));
+        assert_eq!(doc.matches("Content-Security-Policy").count(), 1);
+        let v: serde_json::Value = serde_json::from_str(&init_json(&shell)).unwrap();
+        assert_eq!(v["cite"], serde_json::json!({ "field": "findings" }));
+        assert_eq!(v["ticket"], "AUTH-10");
+        let id = cite::Section::Id("t".into());
+        let v: serde_json::Value = serde_json::from_str(&init_json(&Shell { cite: Some(&id), ..shell })).unwrap();
+        assert_eq!(v["cite"], serde_json::json!({ "anchor": "t" }));
+        let v: serde_json::Value = serde_json::from_str(&init_json(&Shell { cite: None, ..shell })).unwrap();
+        assert!(v["cite"].is_null());
+    }
+
+    /// COMP-14: in the SDK, `<m-cite>` is built in and defined before the
+    /// registry's names (a registry entry named m-cite only documents it);
+    /// the placeholder posts what it cites and where, and of the host's
+    /// answer takes the height alone; a cited window's frame rejects both
+    /// writes before anything is sent.
+    #[test]
+    fn the_sdk_cites_by_placeholder_and_takes_only_a_height() {
+        let define = SDK_JS.find("CE.define(\n        \"m-cite\"").expect("m-cite defined");
+        let sync = SDK_JS.find("if (Array.isArray(init.components)) sync(init.components);").unwrap();
+        assert!(define < sync, "m-cite is defined before the registry's names");
+        let at = SDK_JS.find("function citedHeight(m) {").unwrap();
+        let body = &SDK_JS[at..at + SDK_JS[at..].find("\n  }\n").unwrap()];
+        assert!(body.contains("m.height") && !body.contains("innerHTML") && !body.contains("m.html"), "{body}");
+        for sdk in ["menger.input.submit", "menger.input.clear"] {
+            assert!(SDK_JS.contains(&format!("if (citeTarget) return Promise.reject(new Error(DISPLAY_ONLY(\"{sdk}\")));")), "{sdk}");
+        }
+        // The SDK's words and the host's agree.
+        assert!(bridge::display_only("X").ends_with(
+            "display only — this is a cited window; its inputs are answered in their own ticket (nothing sent)"
+        ));
+        assert!(SDK_JS.contains(
+            "\": display only — this is a cited window; its inputs are answered in their own ticket (nothing sent)\""
+        ));
+    }
+
     /// COMP-5: the registry rides in the init block whole, in the wire's
     /// spelling — and a source is HTML with scripts in it, which must not
     /// end the init block's `<script>` either.
@@ -1161,7 +1339,7 @@ mod tests {
             Component { name: "m-a".into(), source: source.into(), owner: Some("A-2".into()), references: vec!["A-3".into()], docs: None, preview: vec![] },
             Component { name: "m-b".into(), source: "<i>b</i>".into(), owner: None, references: vec!["m-a".into()], docs: None, preview: vec![] },
         ];
-        let shell = Shell { channel: "f2", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: Some(&components), ticket: None };
+        let shell = Shell { channel: "f2", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: Some(&components), ticket: None, cite: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1225,9 +1403,12 @@ mod tests {
         assert_eq!(parse_msg("menger:probed", None, None), Some(Msg::Probed));
         assert_eq!(parse_msg("menger:located", None, None), Some(Msg::Located));
         assert_eq!(parse_msg("menger:key", None, None), Some(Msg::Key));
+        // COMP-14: a placeholder's two.
+        assert_eq!(parse_msg("menger:cite", None, None), Some(Msg::Cite));
+        assert_eq!(parse_msg("menger:uncite", None, None), Some(Msg::Uncite));
         for outbound in [
             "menger:theme", "menger:result", "menger:components", "menger:change", "menger:inspected", "menger:reveal",
-            "menger:submitted", "menger:cleared", "menger:annotate", "menger:probe", "menger:locate",
+            "menger:submitted", "menger:cleared", "menger:annotate", "menger:probe", "menger:locate", "menger:cited",
         ] {
             assert_eq!(parse_msg(outbound, None, None), None, "{outbound}: outbound only");
         }
@@ -1248,7 +1429,10 @@ mod tests {
             "window.menger = {{ version, tickets, call, on, navigate, input }}"
         );
         // INPUT-4: `menger.input` is frozen too, with its writes (INPUT-9: clear).
-        assert!(SDK_JS.contains("var input = Object.freeze({ ticket: ticket, submit: submit, clear: clear });"), "menger.input");
+        assert!(
+            SDK_JS.contains("var input = Object.freeze({ ticket: ticket, submit: submit, clear: clear, displayOnly: !!citeTarget });"),
+            "menger.input"
+        );
         let lower = SDK_JS.to_ascii_lowercase();
         assert!(!lower.contains("</script") && !lower.contains("<!--"), "inlinable");
         let name = SDK_URL.rsplit('/').next().unwrap();
@@ -1265,7 +1449,8 @@ mod tests {
             "menger:ready", "menger:size", "menger:theme", "menger:call", "menger:result", "menger:components", "menger:change",
             "menger:navigate", "menger:inspect", "menger:inspected", "menger:reveal", "menger:revealed", "menger:submit",
             "menger:submitted", "menger:clear", "menger:cleared", "menger:annotate", "menger:hover", "menger:pick",
-            "menger:probe", "menger:probed", "menger:locate", "menger:located", "menger:key",
+            "menger:probe", "menger:probed", "menger:locate", "menger:located", "menger:key", "menger:cite",
+            "menger:uncite", "menger:cited",
         ] {
             assert!(SDK_JS.contains(&format!("\"{kind}\"")), "{kind}");
         }

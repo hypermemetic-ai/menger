@@ -1024,6 +1024,30 @@
   .mframe { position: relative; max-width: 56rem; }
   .mframe > iframe { display: block; width: 100%; border: 0; }
   .mframe > iframe[data-state="pending"] { position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none; }
+  /* COMP-14: a cite window (src/cite.rs) — laid by the host over an
+     <m-cite> placeholder in a framed body, outside that frame: a header
+     (the cited ticket's id, live status, title, and the section, linking
+     to it there) over a view of the section, which is its own frame of the
+     cited ticket's, at its natural height up to a cap, then scrolling. A
+     window of a frame still loading stays hidden until that frame shows. */
+  .mcite {
+    position: absolute; z-index: 2; box-sizing: border-box; overflow: hidden;
+    border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--bg);
+  }
+  .mcite[data-pending] { visibility: hidden; }
+  .mcite-head {
+    display: flex; gap: .5rem; align-items: baseline; padding: .2rem .6rem; min-width: 0;
+    font-size: 12px; line-height: 1.6; color: var(--muted); text-decoration: none; white-space: nowrap;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  a.mcite-head:hover .mcite-title, a.mcite-head:focus-visible .mcite-title { text-decoration: underline; color: var(--ink); }
+  .mcite-id, .mcite-sec { font-family: var(--mono); color: var(--ink); flex: none; }
+  .mcite-head .st { padding: 0 5px; border-radius: 6px; font-size: 11px; flex: none; }
+  .mcite-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .mcite-state { margin: 0; padding: .4rem .6rem; font-size: 13px; color: var(--muted); }
+  .mcite[data-state="failed"] .mcite-state { color: var(--err-fg); background: var(--err-bg); }
+  .mcite-view { height: 0; overflow: auto; }
+  .mcite-view > .mframe { max-width: none; padding: 0 .6rem; }
   .md .wave-ref {
     font-family: var(--mono); font-size: .85em; white-space: nowrap; text-decoration: none;
     border: 1px solid var(--chip-line); background: var(--chip-bg); color: var(--chip-fg); border-radius: 6px; padding: 0 5px;
