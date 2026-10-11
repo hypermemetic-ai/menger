@@ -57,6 +57,9 @@ pub enum Status {
     Idea,
     Epic,
     Superseded,
+    /// SDLC-15: work that will not be done and that nothing replaced —
+    /// `Superseded` without the successor. Done with, as `Superseded` is.
+    Canceled,
     /// SDLC-11: a doc's, and only a doc's — set at its birth, never moved by
     /// `set_status`. SDLC-13: `set_kind` gives it to a ticket that becomes a
     /// doc and takes it from one that stops being one.
@@ -64,10 +67,10 @@ pub enum Status {
 }
 
 impl Status {
-    /// Every status a ticket can hold — the lifecycle's nine, then a doc's
+    /// Every status a ticket can hold — the lifecycle's ten, then a doc's
     /// one (SDLC-11). What a status count keeps a bucket for, what `list`
     /// filters on, and what the browser app's status table paints.
-    pub const ALL: [Status; 10] = [
+    pub const ALL: [Status; 11] = [
         Status::Pending,
         Status::Ready,
         Status::Coding,
@@ -77,6 +80,7 @@ impl Status {
         Status::Idea,
         Status::Epic,
         Status::Superseded,
+        Status::Canceled,
         Status::Doc,
     ];
 
@@ -87,7 +91,7 @@ impl Status {
     /// linger in it. SDLC-7: the worker states sit where a ticket passes
     /// through them, between `Ready` and `Complete`. SDLC-11: `Doc` is not
     /// here — no ticket moves into it or out of it, so no chooser offers it.
-    pub const LIFECYCLE: [Status; 9] = [
+    pub const LIFECYCLE: [Status; 10] = [
         Status::Pending,
         Status::Ready,
         Status::Coding,
@@ -97,6 +101,7 @@ impl Status {
         Status::Idea,
         Status::Epic,
         Status::Superseded,
+        Status::Canceled,
     ];
 
     /// The wire spelling — what serde writes and what `set_status` accepts.
@@ -111,6 +116,7 @@ impl Status {
             Status::Idea => "Idea",
             Status::Epic => "Epic",
             Status::Superseded => "Superseded",
+            Status::Canceled => "Canceled",
             Status::Doc => "Doc",
         }
     }
@@ -155,10 +161,11 @@ impl FromStr for Status {
             "idea" => Ok(Self::Idea),
             "epic" => Ok(Self::Epic),
             "superseded" => Ok(Self::Superseded),
+            "canceled" | "cancelled" => Ok(Self::Canceled),
             "doc" => Ok(Self::Doc),
             other => Err(format!(
                 "unknown status '{other}' (expected Pending, Ready, Coding, In Review, Blocked, \
-                 Complete, Idea, Epic, or Superseded — or Doc, a doc's own)"
+                 Complete, Idea, Epic, Superseded or Canceled — or Doc, a doc's own)"
             )),
         }
     }
@@ -361,7 +368,7 @@ pub struct Ticket {
     /// kept by the store — equal at every moment to WAVE-4's rule over the
     /// whole `blocked_by` graph, moved by the write that moves it (a birth
     /// that resolves a forward reference, a status crossing `Complete` /
-    /// `Superseded`), and announced by `placements_changed`. `None` —
+    /// `Superseded` / `Canceled`), and announced by `placements_changed`. `None` —
     /// omitted on the wire — for a doc, which has no place in the order of
     /// work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -548,8 +555,8 @@ impl Group {
 
 /// WAVE-4: where a ticket sits in the order of work — what `waves` says of
 /// each ticket it places, derived from `blocked_by` over the whole graph by
-/// MNG-4's rule (a blocker is satisfied iff it is a `Complete` or
-/// `Superseded` ticket; an id naming no ticket never is).
+/// MNG-4's rule (a blocker is satisfied iff it is a `Complete`,
+/// `Superseded` or `Canceled` ticket; an id naming no ticket never is).
 ///
 /// - `Wave { n }` — unfinished, and `n` is 1 when every blocker is
 ///   satisfied, else 1 + the highest wave among its unsatisfied blockers.
@@ -1473,10 +1480,11 @@ mod tests {
     /// (`In Review` with its space, byte-exact), through `FromStr` from the
     /// wire spelling and from its lowercase — and the worker states parse
     /// from every spelling a worker is likely to type, to the one variant
-    /// that writes them canonically. The refusal names all nine.
+    /// that writes them canonically. The refusal names all ten. SDLC-15:
+    /// `Canceled` reads the British `cancelled` too, and writes one spelling.
     #[test]
-    fn the_nine_statuses_round_trip_and_the_worker_states_parse_leniently() {
-        assert_eq!(Status::LIFECYCLE.len(), 9);
+    fn the_ten_statuses_round_trip_and_the_worker_states_parse_leniently() {
+        assert_eq!(Status::LIFECYCLE.len(), 10);
         for s in Status::LIFECYCLE {
             let json = serde_json::to_string(&s).unwrap();
             assert_eq!(json, format!("\"{}\"", s.as_str()), "{s:?}");
@@ -1494,8 +1502,12 @@ mod tests {
         ] {
             assert_eq!(spelling.parse::<Status>(), Ok(Status::InReview), "{spelling}");
         }
+        for spelling in ["Canceled", "canceled", "CANCELED", "cancelled", "Cancelled"] {
+            assert_eq!(spelling.parse::<Status>(), Ok(Status::Canceled), "{spelling}");
+        }
         // serde is the strict reader: only the canonical spelling.
         assert!(serde_json::from_str::<Status>("\"InReview\"").is_err());
+        assert!(serde_json::from_str::<Status>("\"Cancelled\"").is_err());
 
         let err = "review".parse::<Status>().unwrap_err();
         assert!(err.contains("'review'"), "{err}");
@@ -1511,9 +1523,9 @@ mod tests {
     /// it and every other kind in `Pending`.
     #[test]
     fn doc_is_a_status_outside_the_lifecycle_and_a_docs_birth_status() {
-        assert_eq!(Status::ALL.len(), 10);
-        assert_eq!(Status::ALL[..9], Status::LIFECYCLE, "the lifecycle, then Doc");
-        assert_eq!(Status::ALL[9], Status::Doc);
+        assert_eq!(Status::ALL.len(), 11);
+        assert_eq!(Status::ALL[..10], Status::LIFECYCLE, "the lifecycle, then Doc");
+        assert_eq!(Status::ALL[10], Status::Doc);
         assert!(!Status::LIFECYCLE.contains(&Status::Doc), "no chooser offers Doc");
         for s in Status::ALL {
             let json = serde_json::to_string(&s).unwrap();

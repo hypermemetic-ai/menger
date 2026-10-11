@@ -394,6 +394,7 @@ fn every_status_has_its_category() {
         (Status::Idea, Open),
         (Status::Epic, Open),
         (Status::Superseded, Dropped),
+        (Status::Canceled, Dropped),
         (Status::Doc, Static),
     ];
     assert_eq!(want.len(), Status::ALL.len());
@@ -869,7 +870,7 @@ fn some_world_matches(f: &Filter) -> bool {
             }
         }
     }
-    assert_eq!(cells.len(), 940);
+    assert_eq!(cells.len(), 1040);
     for epic in &epics {
         for u in 0..1usize << unders.len() {
             for t in 0..1usize << texts.len() {

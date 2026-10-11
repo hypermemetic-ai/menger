@@ -48,7 +48,7 @@ pub(super) fn new_ticket(epic: &str, kind: Kind, parent: Option<String>, blocked
 /// A blocker that is done with — written out, not [`satisfied`]: the oracle
 /// owes the code under test nothing.
 pub(super) fn done(status: Status) -> bool {
-    matches!(status, Status::Complete | Status::Superseded)
+    matches!(status, Status::Complete | Status::Superseded | Status::Canceled)
 }
 
 /// Every row of the store, in its order.
@@ -781,6 +781,32 @@ async fn completing_a_ticket_that_blocks_many_moves_each_of_them_once() {
     store.set_status(&hub, Status::Coding).await.unwrap();
     assert_eq!(ready(&store), 0, "and back: every one leaves");
     assert_kept_is_a_scan(&store, Some(&path), "the fan-out, back");
+}
+
+/// SDLC-15: `Canceled` is done with, as `Superseded` is — a ticket whose
+/// one blocker is canceled is ready, its placement is `done`, its category
+/// `dropped`, a roll-up's `done` does not count it — and it is kept as the
+/// text it is written in: a reopen reads it back.
+#[tokio::test]
+async fn a_canceled_blocker_is_done_with_and_survives_a_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("canceled.db");
+    let store = Store::open(&path).unwrap();
+    store.create(new_ticket("CAN", Kind::Scope, None, vec![])).await.unwrap();
+    let dropped = store.create(new_ticket("CAN", Kind::Build, None, vec![])).await.unwrap().id;
+    let waiting = store.create(new_ticket("CAN", Kind::Build, None, vec![dropped.clone()])).await.unwrap().id;
+    store.set_status(&waiting, Status::Ready).await.unwrap();
+    let ready = |store: &Store| store.ready_page(Some("can"), None, Some(0)).unwrap().remaining;
+    assert_eq!(ready(&store), 0);
+    store.set_status(&dropped, Status::Canceled).await.unwrap();
+    assert_eq!(ready(&store), 1, "a canceled blocker is satisfied");
+    assert_eq!(crate::filter::category_of(Status::Canceled), crate::filter::Category::Dropped);
+    assert_kept_is_a_scan(&store, Some(&path), "canceled");
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.get(&dropped).await.unwrap().status, Status::Canceled, "read back as written");
+    assert_eq!(ready(&store), 1);
+    assert_kept_is_a_scan(&store, Some(&path), "canceled, reopened");
 }
 
 /// What the fan-out relies on: a blocker's `unlocks` names each ticket that

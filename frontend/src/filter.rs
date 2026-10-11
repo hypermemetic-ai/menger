@@ -103,11 +103,11 @@ pub(crate) const STATUS_GROUPS: [(&str, &[&str]); 5] = [
     ("in progress", &["Coding", "In Review"]),
     ("ready", &["Ready"]),
     ("not started", &["Pending", "Blocked", "Idea", "Epic"]),
-    ("done", &["Complete", "Superseded"]),
+    ("done", &["Complete", "Superseded", "Canceled"]),
     ("docs", &["Doc"]),
 ];
 
-const STATUSES: [&str; 10] = ["Coding", "In Review", "Ready", "Pending", "Blocked", "Idea", "Epic", "Complete", "Superseded", "Doc"];
+const STATUSES: [&str; 11] = ["Coding", "In Review", "Ready", "Pending", "Blocked", "Idea", "Epic", "Complete", "Superseded", "Canceled", "Doc"];
 
 /// Severity's values — the language's spelling.
 pub(crate) const SEVERITIES: [&str; 5] = ["critical", "high", "medium", "low", "none"];
@@ -2502,7 +2502,7 @@ pub(crate) mod tests {
         // A Status group's header, a shortcode's subtree, a surface's own
         // category: under the switch.
         f.edit_as(Cat::Status, Op::Not, |k| k.toggle_all(Cat::Status, STATUS_GROUPS[3].1));
-        assert_eq!(f.get(Cat::Status), Some(&Clause { op: Op::Not, values: strs(&["Complete", "Superseded"]) }));
+        assert_eq!(f.get(Cat::Status), Some(&Clause { op: Op::Not, values: strs(&["Complete", "Superseded", "Canceled"]) }));
         let t = platform();
         f.edit_as(Cat::Shortcode, Op::Not, |k| k.toggle_code(&t, "MACRO"));
         assert_eq!(f.get(Cat::Shortcode), Some(&Clause { op: Op::Not, values: strs(&["CODEGEN", "GEN", "MACRO"]) }));

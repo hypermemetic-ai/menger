@@ -678,7 +678,10 @@ async fn tree_and_under_equal_the_rule_on_a_nested_seed() {
     store.seed_synthetic_shaped(SeedSpec { count: 1_200, seed: 131, into_existing: false }, SeedShape::Nested).unwrap();
     let epics: Vec<String> = store.extents().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
-    let seen = tree_walk(store, &path, 0x7EE_A131, 240, 12, &epics).await;
+    // The seed only steers coverage (the answers are checked whatever it
+    // is); SDLC-15's eleventh status reshuffled the walk, and A133 is a
+    // walk that still draws matches away from their parent often enough.
+    let seen = tree_walk(store, &path, 0x7EE_A133, 240, 12, &epics).await;
     assert!(seen.pages > 300 && seen.matched > 100 && seen.holding > 10 && seen.with_under > 40, "{seen:?}");
     assert!(seen.only_pages > 300 && seen.moved_up > 20, "{seen:?}");
 }

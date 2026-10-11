@@ -43,7 +43,7 @@ export interface TicketsClient {
   list(after?: string | null, at?: number | null, epic?: string | null, filter?: string | null, limit?: number | null, parent?: string | null, status?: string | null, summary?: boolean | null): AsyncGenerator<TicketsEvent>;
   /** Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids */
   member(filter: string, ids: string[]): AsyncGenerator<TicketsEvent>;
-  /** Tickets that can start now: Ready, with every blocker Complete or Superseded; optionally under a filter */
+  /** Tickets that can start now: Ready, with every blocker Complete, Superseded or Canceled; optionally under a filter */
   readySet(after?: string | null, epic?: string | null, filter?: string | null, limit?: number | null, summary?: boolean | null): AsyncGenerator<TicketsEvent>;
   /** Reopen a closed input; yields input_changed */
   reopenInput(input: string, ticket: string): AsyncGenerator<TicketsEvent>;
