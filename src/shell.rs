@@ -27,6 +27,17 @@
 //!   (HTTP 200 — a deliberate state with build instructions, not an
 //!   error), never a crash or a 500; the root is the one that degrades
 //!   to something usable instead.
+//!
+//! DIST-3: where the table comes from is an [`AppSource`]. `Dir` is the
+//! above, unchanged — dist on disk, read again when its entrypoint's
+//! modification time changes. `Embedded` is the build compiled into the
+//! binary by `build.rs` under the `embedded-app` feature (off by default),
+//! for a menger with no checkout beside it (a published crate, a desktop
+//! host): the same table — the entrypoint stamped with `{{WS_PORT}}` and
+//! `{{TITLE}}`, the same MIME types, a request path a key and never a path —
+//! read once, since a binary's build never changes. The binary chooses:
+//! `--app-dist` given → that directory; else, with the build embedded →
+//! `Embedded`; else → [`default_app_dist`] ([`AppSource::preferred`]).
 
 use axum::body::Bytes;
 use axum::extract::{Path as AxumPath, Request, State};
@@ -42,8 +53,8 @@ use std::time::SystemTime;
 pub struct ShellConfig {
     pub port: u16,
     pub ws_port: u16,
-    /// Directory holding the Leptos app's build output.
-    pub app_dist: PathBuf,
+    /// DIST-3: where the Leptos app's build output is read from.
+    pub app: AppSource,
     /// MFE-23: the environment's name (`MENGER_ENV`), which titles the
     /// browser tab ([`tab_title`]).
     pub env: Option<String>,
@@ -77,10 +88,59 @@ pub fn default_app_dist() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("frontend/dist")
 }
 
+// DIST-3: `EMBEDDED_APP`, the app's build as build.rs found it — empty
+// unless the `embedded-app` feature is on and frontend/dist held a build.
+include!(concat!(env!("OUT_DIR"), "/embedded_app.rs"));
+
+/// DIST-3: where the app's build is served from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppSource {
+    /// A `trunk build` output directory on disk, read into the table and
+    /// read again when its entrypoint changes (ACCESS-33).
+    Dir(PathBuf),
+    /// The build compiled into this binary (`embedded-app`). With nothing
+    /// embedded it is "not built", as an empty directory is.
+    Embedded,
+}
+
+impl AppSource {
+    /// Whether this binary carries the app's build: the `embedded-app`
+    /// feature was on and frontend/dist held a build when it compiled.
+    pub fn embedded_available() -> bool {
+        EMBEDDED_APP.iter().any(|(key, _)| *key == "index.html")
+    }
+
+    /// The source when none is named: the embedded build when there is
+    /// one, else the checkout's `frontend/dist` ([`default_app_dist`]).
+    pub fn preferred() -> Self {
+        if Self::embedded_available() {
+            Self::Embedded
+        } else {
+            Self::Dir(default_app_dist())
+        }
+    }
+}
+
 /// One file of the app's build, as served.
 struct Asset {
     bytes: Bytes,
     mime: &'static str,
+}
+
+impl Asset {
+    /// A build's file as served: the entrypoint stamped (MFE-9, MFE-23),
+    /// everything else byte-exact; its MIME type from its key.
+    fn of(key: &str, data: Vec<u8>, ws_port: u16, title: &str) -> Self {
+        let data = if key == "index.html" {
+            match String::from_utf8(data) {
+                Ok(text) => stamp(&text, ws_port, title).into_bytes(),
+                Err(e) => e.into_bytes(),
+            }
+        } else {
+            data
+        };
+        Asset { bytes: Bytes::from(data), mime: mime_of(key) }
+    }
 }
 
 /// ACCESS-33: the app's build as a table — the only files `/app/…` can
@@ -130,19 +190,26 @@ impl AppFiles {
                         return Self::default();
                     }
                     let Ok(data) = std::fs::read(entry.path()) else { continue };
-                    let data = if key == "index.html" {
-                        match String::from_utf8(data) {
-                            Ok(text) => stamp(&text, ws_port, title).into_bytes(),
-                            Err(e) => e.into_bytes(),
-                        }
-                    } else {
-                        data
-                    };
-                    files.insert(key.clone(), Asset { bytes: Bytes::from(data), mime: mime_of(&key) });
+                    files.insert(key.clone(), Asset::of(&key, data, ws_port, title));
                 }
             }
         }
         Self { built, files }
+    }
+
+    /// DIST-3: the table from a build compiled into the binary — the same
+    /// keys, stamping and MIME types as [`Self::load`]. Without an
+    /// entrypoint it is no build, as on disk. Its `built` is a fixed time:
+    /// an embedded build never changes.
+    fn embedded(table: &[(&str, &[u8])], ws_port: u16, title: &str) -> Self {
+        if !table.iter().any(|(key, _)| *key == "index.html") {
+            return Self::default();
+        }
+        let files = table
+            .iter()
+            .map(|(key, data)| (key.to_string(), Asset::of(key, data.to_vec(), ws_port, title)))
+            .collect();
+        Self { built: Some(SystemTime::UNIX_EPOCH), files }
     }
 
     fn get(&self, key: &str) -> Option<&Asset> {
@@ -170,17 +237,18 @@ fn mime_of(key: &str) -> &'static str {
 /// changes, so the table is read once; in a checkout `trunk watch` rewrites
 /// dist, and a new entrypoint (its modification time — one fixed file,
 /// never a request path) has the table read again, so a reload picks up a
-/// rebuild without a restart.
+/// rebuild without a restart. DIST-3: an embedded build is read once and
+/// never again.
 struct App {
-    dist: PathBuf,
+    source: AppSource,
     ws_port: u16,
     title: &'static str,
     files: RwLock<Arc<AppFiles>>,
 }
 
 impl App {
-    async fn new(dist: PathBuf, ws_port: u16, title: &'static str) -> Self {
-        let app = Self { dist, ws_port, title, files: RwLock::default() };
+    async fn new(source: AppSource, ws_port: u16, title: &'static str) -> Self {
+        let app = Self { source, ws_port, title, files: RwLock::default() };
         app.reload().await;
         app
     }
@@ -190,11 +258,15 @@ impl App {
     }
 
     async fn reload(&self) -> Arc<AppFiles> {
-        let (dist, ws_port, title) = (self.dist.clone(), self.ws_port, self.title);
-        let fresh = Arc::new(
-            tokio::task::spawn_blocking(move || AppFiles::load(&dist, ws_port, title)).await.unwrap_or_default(),
-        );
-        tracing::debug!("app build read from {:?}: {} files", self.dist, fresh.files.len());
+        let (ws_port, title) = (self.ws_port, self.title);
+        let fresh = Arc::new(match &self.source {
+            AppSource::Dir(dist) => {
+                let dist = dist.clone();
+                tokio::task::spawn_blocking(move || AppFiles::load(&dist, ws_port, title)).await.unwrap_or_default()
+            }
+            AppSource::Embedded => AppFiles::embedded(EMBEDDED_APP, ws_port, title),
+        });
+        tracing::debug!("app build read from {:?}: {} files", self.source, fresh.files.len());
         *self.files.write().expect("app table lock poisoned") = fresh.clone();
         fresh
     }
@@ -202,7 +274,10 @@ impl App {
     /// The table, read again first if the build's entrypoint changed.
     async fn current(&self) -> Arc<AppFiles> {
         let table = self.table();
-        let built = tokio::fs::metadata(self.dist.join("index.html")).await.and_then(|m| m.modified()).ok();
+        let AppSource::Dir(dist) = &self.source else {
+            return table;
+        };
+        let built = tokio::fs::metadata(dist.join("index.html")).await.and_then(|m| m.modified()).ok();
         if built == table.built {
             table
         } else {
@@ -223,10 +298,30 @@ struct ShellState {
 }
 
 pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", cfg.port)).await?;
+    serve_on(listener, cfg, std::future::pending()).await
+}
+
+/// DIST-3: [`serve`] on a listener the caller bound (`menger::local` binds
+/// port 0 and learns the port before anything starts), until `shutdown`
+/// resolves. `cfg.port` is the listener's port.
+pub async fn serve_on(
+    listener: tokio::net::TcpListener,
+    cfg: ShellConfig,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let app = router(&cfg).await;
+    tracing::info!("App:       http://127.0.0.1:{}/", cfg.port);
+    tracing::info!("Vanilla:   http://127.0.0.1:{}/vanilla", cfg.port);
+    axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
+    Ok(())
+}
+
+async fn router(cfg: &ShellConfig) -> Router {
     let title = tab_title(cfg.env.as_deref());
     let state = Arc::new(ShellState {
         vanilla: stamp(include_str!("../web/index.html"), cfg.ws_port, title),
-        app: App::new(cfg.app_dist, cfg.ws_port, title).await,
+        app: App::new(cfg.app.clone(), cfg.ws_port, title).await,
     });
     // ACCESS-33: menger's own pages and the app's build — nothing else. The
     // `/rest/{*}` pass-through to the REST port went: the app has spoken
@@ -264,12 +359,7 @@ pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
         app = app.layer(axum::middleware::from_fn_with_state(hosts, host_is_ours));
         tracing::info!("Login:     http://127.0.0.1:{}/login", cfg.port);
     }
-    let app = app.layer(axum::middleware::from_fn(harden));
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", cfg.port)).await?;
-    tracing::info!("App:       http://127.0.0.1:{}/", cfg.port);
-    tracing::info!("Vanilla:   http://127.0.0.1:{}/vanilla", cfg.port);
-    axum::serve(listener, app).await?;
-    Ok(())
+    app.layer(axum::middleware::from_fn(harden))
 }
 
 /// IDENTITY-19: the app's routes without a session go to the login page;
@@ -359,7 +449,7 @@ async fn root_index(State(st): State<Arc<ShellState>>) -> Response {
     match st.app.current().await.get("index.html") {
         Some(index) => asset_response(index),
         None => {
-            tracing::debug!("no app build at {:?}: / degrades to the vanilla page", st.app.dist);
+            tracing::debug!("no app build at {:?}: / degrades to the vanilla page", st.app.source);
             Html(st.vanilla.clone()).into_response()
         }
     }
@@ -460,13 +550,39 @@ mod tests {
     async fn the_table_follows_a_rebuild_and_nothing_less() {
         let dist = tempfile::tempdir().unwrap();
         std::fs::write(dist.path().join("index.html"), "v1").unwrap();
-        let app = App::new(dist.path().to_path_buf(), 1, "menger").await;
+        let app = App::new(AppSource::Dir(dist.path().to_path_buf()), 1, "menger").await;
         std::fs::write(dist.path().join("late.js"), "x").unwrap();
         assert!(app.current().await.get("late.js").is_none(), "no rebuild, no new file");
         let index = std::fs::File::options().write(true).open(dist.path().join("index.html")).unwrap();
         index.set_modified(SystemTime::now() + std::time::Duration::from_secs(60)).unwrap();
         let t = app.current().await;
         assert!(t.get("late.js").is_some(), "a rebuild is read whole");
+    }
+
+    /// DIST-3: an embedded build is the same table a directory gives — the
+    /// entrypoint stamped, MIME types by key — and one with no entrypoint
+    /// is no build.
+    #[tokio::test]
+    async fn an_embedded_build_is_the_same_table() {
+        let table: &[(&str, &[u8])] =
+            &[("index.html", b"<title>{{TITLE}}</title>{{WS_PORT}}"), ("app.wasm", b"\0asm"), ("vendor/m.js", b"m")];
+        let t = AppFiles::embedded(table, 4471, "menger");
+        let mut keys: Vec<_> = t.files.keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["app.wasm", "index.html", "vendor/m.js"]);
+        assert_eq!(&t.get("index.html").unwrap().bytes[..], b"<title>menger</title>4471");
+        assert_eq!(t.get("app.wasm").unwrap().mime, "application/wasm");
+        assert_eq!(t.get("vendor/m.js").unwrap().mime, "text/javascript");
+        assert!(t.get("../index.html").is_none());
+        let headless = AppFiles::embedded(&[("app.js", b"x")], 1, "menger");
+        assert!(headless.files.is_empty() && headless.built.is_none());
+        // Without the feature (the default test build) nothing is embedded.
+        if !cfg!(feature = "embedded-app") {
+            assert!(!AppSource::embedded_available());
+            assert_eq!(AppSource::preferred(), AppSource::Dir(default_app_dist()));
+            let app = App::new(AppSource::Embedded, 1, "menger").await;
+            assert!(app.current().await.get("index.html").is_none(), "nothing embedded is not built");
+        }
     }
 
     #[test]

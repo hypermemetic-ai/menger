@@ -5,8 +5,7 @@ use menger::sessions::{Gate, Sessions};
 use menger::web_login::{Login, LoginConfig};
 use menger_tickets_api::access::Access;
 use menger::auth_backend::{BrowserLogin, MengerAuth};
-use menger::{build_rpc_login, default_db_path, shell};
-use plexus_core::plexus::DynamicHub;
+use menger::{build_rpc_login, default_db_path, local, shell};
 use plexus_transport::{ProtectedResource, RestHttpConfig, RouteFn, TransportServer};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -41,7 +40,9 @@ struct Args {
 
     /// Directory holding the built Leptos app (frontend/dist), served at
     /// /app/ on the shell port. Missing output degrades to a "frontend
-    /// not built" page, never an error.
+    /// not built" page, never an error. DIST-3: without it, a binary built
+    /// with `embedded-app` serves the build compiled into it, any other the
+    /// checkout's frontend/dist.
     #[arg(long, env = "MENGER_APP_DIST", value_name = "DIR")]
     app_dist: Option<PathBuf>,
 
@@ -267,11 +268,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Access::open()
     };
-    let shell_origins = vec![
-        format!("http://127.0.0.1:{}", args.shell_port),
-        format!("http://localhost:{}", args.shell_port),
-        menger::web_login::origin_of(&public_url),
-    ];
+    let shell_origins = local::shell_origins(args.shell_port, Some(&public_url));
     // IDENTITY-35: the dev sign-in is the test environment's, never prod's.
     // IDENTITY-38: allowed only where named for it, `--env test` — not
     // refused only where named prod, so an unnamed server is not open.
@@ -325,21 +322,11 @@ async fn main() -> anyhow::Result<()> {
     let access_for_gate = access.clone();
     let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, backend, metadata).await?;
 
-    let activations = hub.list_activations_info();
-    tracing::info!("Activations ({}):", activations.len());
-    for a in &activations {
-        tracing::info!("  {} v{} - {}", a.namespace, a.version, a.description);
-        for method in &a.methods {
-            tracing::info!("    - {}.{}", a.namespace, method);
-        }
-    }
+    local::log_activations(&hub);
 
-    let rpc_converter = |arc: Arc<DynamicHub>| {
-        DynamicHub::arc_into_rpc_module(arc)
-            .map_err(|e| anyhow::anyhow!("rpc module build failed: {e}"))
-    };
-
-    let mut builder = TransportServer::builder(hub.clone(), rpc_converter);
+    // DIST-3: the wiring shared with `menger::local` (the library's
+    // no-login server) lives there; the flags' variations stay here.
+    let mut builder = TransportServer::builder(hub.clone(), local::rpc_module);
     if args.stdio {
         builder = builder.with_stdio();
         tracing::info!("Starting stdio transport");
@@ -390,7 +377,10 @@ async fn main() -> anyhow::Result<()> {
             let cfg = shell::ShellConfig {
                 port: args.shell_port,
                 ws_port: args.port,
-                app_dist: args.app_dist.unwrap_or_else(shell::default_app_dist),
+                // DIST-3: --app-dist given → that directory; else the build
+                // embedded in this binary (`embedded-app`), if any; else the
+                // checkout's frontend/dist.
+                app: args.app_dist.map(shell::AppSource::Dir).unwrap_or_else(shell::AppSource::preferred),
                 env: args.env.clone(),
                 login: web_login,
             };

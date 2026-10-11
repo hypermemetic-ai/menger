@@ -934,7 +934,7 @@ async fn shell_serves_the_page() {
         let _ = menger::shell::serve(menger::shell::ShellConfig {
             port: shell_port,
             ws_port: 4455,
-            app_dist,
+            app: menger::shell::AppSource::Dir(app_dist),
             env: None,
             login: None,
         })

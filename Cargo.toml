@@ -18,6 +18,32 @@ version = "0.5.0"
 edition = "2021"
 license = "MIT"
 description = "A plan is a program whose leaves are prose — ticketing on Plexus RPC"
+repository = "https://github.com/hypermemetic-ai/menger"
+readme = "README.md"
+keywords = ["ticketing", "planning", "plexus", "rpc", "leptos"]
+categories = ["web-programming::http-server", "development-tools"]
+# DIST-3: what the published crate carries — the server's sources, the
+# day-one pages (web/, embedded with include_str!), the build script and the
+# app's build (frontend/dist, which `embedded-app` embeds). Cargo will not
+# package dist from the checkout — it is gitignored, and under the app's own
+# Cargo.toml — so `scripts/publish.sh` builds it and publishes from a stage
+# where neither holds. The tests, deploy/, perf/, diagrams/ and spike/ stay
+# in the repository.
+include = [
+    "/src/**",
+    "/web/**",
+    "/build.rs",
+    "/README.md",
+    "/LICENSE",
+    "/frontend/dist/**",
+]
+
+[features]
+# DIST-3: the app's build (frontend/dist) compiled into the binary by
+# build.rs, so a menger with no checkout beside it — a published crate, a
+# desktop host — serves the Leptos app. Off by default: a checkout serves a
+# fresh `trunk build` from disk without recompiling the server.
+embedded-app = []
 
 [lib]
 name = "menger"
@@ -32,23 +58,23 @@ path = "src/main.rs"
 # and its generated client, from one declaration — shared with the browser
 # app (frontend/), which takes it with `default-features = false`. Default
 # features here: `server`, the real thing.
-menger-tickets-api = { path = "tickets-api" }
+menger-tickets-api = { path = "tickets-api", version = "0.5.0" }
 
 # MFE-10: the plexus 0.6 line — plexus-core 0.6.0, plexus-macros 0.6.0
 # (the `client` / `server_cfg` activation flags, MACRO-4) and
 # plexus-transport 0.5.0 (the REST bridge fixes ported to HEAD, pinned to
-# core 0.6). None of it is published: the three come from the sibling
-# checkouts on `main`, which reference each other the same way, so the
-# graph resolves exactly one of each. Publishing or tagging the line
-# (MACRO-8) turns these into version requirements again.
-plexus-core = { path = "../plexus-core" }
+# core 0.6). In a checkout the three come from the sibling checkouts on
+# `main`, which reference each other the same way, so the graph resolves
+# exactly one of each. DIST-3: each carries its version too, which is what
+# the published crate takes from crates.io.
+plexus-core = { path = "../plexus-core", version = "0.6" }
 # Slim: default features off keeps the rmcp/MCP stack out (default-off as
 # of 0.5.0 anyway); http-gateway enables the REST + SSE bridge (MNG-8).
-plexus-transport = { path = "../plexus-transport", default-features = false, features = ["http-gateway"] }
+plexus-transport = { path = "../plexus-transport", version = "0.5", default-features = false, features = ["http-gateway"] }
 # IDENTITY-14: login at the boundary — the provider adapters (IDENTITY-13)
 # turn each provider's credential into Plexus types at the WebSocket upgrade.
 # Used only when an --auth-provider is given.
-plexus-auth-core = { path = "../plexus-auth-core", features = ["adapters"] }
+plexus-auth-core = { path = "../plexus-auth-core", version = "0.2", features = ["adapters"] }
 # IDENTITY-19: the login page — the shell asks the provider itself (discovery,
 # token endpoint), keeps sessions keyed by a random id (hashed), and runs the
 # code flow with PKCE. All already in the lock through plexus-auth-core.
@@ -59,7 +85,8 @@ sha2 = "0.10"
 base64 = "0.22"
 # IDENTITY-35: the dev sign-in registers accounts at plexus-idp over its
 # Plexus socket (identity.register); already in the lock (plexus-transport).
-jsonrpsee = { version = "0.26", features = ["ws-client"] }
+# DIST-3: `server` for the WebSocket's stop handle (menger::local).
+jsonrpsee = { version = "0.26", features = ["ws-client", "server"] }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

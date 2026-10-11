@@ -21,7 +21,12 @@ version = "0.5.0"
 edition = "2021"
 license = "MIT"
 description = "menger's ticket vocabulary, activation and Plexus RPC client — one declaration, shared by the server and the browser"
-publish = false
+repository = "https://github.com/hypermemetic-ai/menger"
+# DIST-3: published, so a host can take menger from crates.io as a library.
+# The package is this crate's own sources: the wave3 example (below) lives
+# in ../spike, outside the crate, and cargo leaves it out of the package
+# (a target whose file is not packaged is dropped from the published
+# manifest) — in a checkout it builds as before.
 
 [features]
 default = ["server"]
@@ -59,12 +64,13 @@ serde = { version = "1", features = ["derive"] }
 schemars = { version = "1.1", features = ["derive"] }
 futures = "0.3"
 
-# The 0.6 line, by sibling path (unpublished — MFE-10; the same checkouts
-# the server uses). `plexus-client` is `default-features = false` here —
-# the browser app adds the `ws-web` backend itself, the server's tests
-# `ws-native`.
-plexus-macros = { path = "../../plexus-macros" }
-plexus-client = { path = "../../plexus-macros/plexus-client", default-features = false }
+# The 0.6 line, by sibling path (MFE-10; the same checkouts the server
+# uses) and, DIST-3, by version too: a checkout builds the siblings, the
+# published crate takes the line from crates.io. `plexus-client` is
+# `default-features = false` here — the browser app adds the `ws-web`
+# backend itself, the server's tests `ws-native`.
+plexus-macros = { path = "../../plexus-macros", version = "0.6.0" }
+plexus-client = { path = "../../plexus-macros/plexus-client", version = "0.6.0", default-features = false }
 # COMP-3: the component registry reads a body as the app renders it — the
 # app's own markdown parser (frontend/src/md.rs, MFE-7), so a fence, a code
 # span and raw HTML are what the renderer will say they are. Already in the
@@ -75,10 +81,10 @@ plexus-client = { path = "../../plexus-macros/plexus-client", default-features =
 pulldown-cmark = { version = "0.13", default-features = false }
 
 # Server-only. None of these builds for wasm32-unknown-unknown.
-plexus-core = { path = "../../plexus-core", optional = true }
+plexus-core = { path = "../../plexus-core", version = "0.6", optional = true }
 # IDENTITY-21: a grant names a Plexus principal, checked as the identity
 # layer parses one. Server-only, like plexus-core.
-plexus-auth-core = { path = "../../plexus-auth-core", optional = true }
+plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2", optional = true }
 async-trait = { version = "0.1", optional = true }
 jsonrpsee = { version = "0.26", features = ["server", "macros"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }

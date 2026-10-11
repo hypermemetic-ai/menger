@@ -1614,6 +1614,75 @@ Upgrading mermaid: the app's `ASSET_URL` and `diagrams/src/node.rs`'s
 preprocessing regular expressions in `mermaid-parse.js` are re-read from
 the new bundle.
 
+## As a library (DIST-3)
+
+`menger::local` starts the whole server from code — what the binary does
+with no `--auth-provider`, `--no-rest` and no `--stdio`: the store, every
+activation, the Plexus WebSocket and the web shell on loopback; no login, no
+REST bridge, no registry announcement. It is how a host (DIST-1's desktop
+app) runs menger without copying `main.rs`:
+
+```rust
+use menger::local::{LocalConfig, LocalServer, TAURI_ORIGINS};
+
+let mut cfg = LocalConfig::new(data_dir.join("tickets.db")); // ports 0: free ones
+cfg.extra_origins = TAURI_ORIGINS.iter().map(|o| o.to_string()).collect();
+let server = LocalServer::start(cfg).await?;  // both listening when it returns
+open_window(&server.shell_url());             // http://127.0.0.1:<port>/
+// … server.ws_url() is the socket synapse or a client can use
+server.shutdown().await;                      // both stopped, ports released
+```
+
+`LocalConfig { db_path, ws_port, shell_port, env, app, extra_origins }`:
+a port of 0 is a free one (bound before anything serves, so the reported
+port is held); the database's directory is made if missing; `env` titles
+the tab as `--env` does; `app` is an `AppSource` — `Dir(path)` or
+`Embedded`, defaulting to the embedded build when the binary carries one;
+the socket admits the shell's own origins (127.0.0.1 and localhost at the
+shell's port) and `extra_origins` — `TAURI_ORIGINS` for a Tauri webview.
+Dropping a `LocalServer` stops it without waiting. `tests/local.rs` is the
+executable reference.
+
+**The app inside the binary.** The `embedded-app` feature (off by default)
+has `build.rs` compile `frontend/dist` into the binary, and the shell serves
+that table — stamped and typed exactly as a dist on disk — whenever no
+`--app-dist` names a directory. A checkout leaves it off and keeps serving a
+fresh `trunk build` from disk; the published crate carries `frontend/dist`,
+so a dependent that turns the feature on gets the Leptos app with nothing
+on disk:
+
+```toml
+menger = { version = "0.5", features = ["embedded-app"] }
+```
+
+## Publishing (DIST-3)
+
+`menger-tickets-api` and `menger` go to crates.io (after the plexus 0.6
+line they depend on — plexus-core, plexus-macros, plexus-client,
+plexus-auth-core, plexus-transport). Every sibling `path` dependency also
+names its `version`, which is what the published crates take; dev
+dependencies stay path-only and are dropped from the package.
+
+```sh
+scripts/publish.sh stage     # trunk build --release, stage the package, list it; publishes nothing
+scripts/publish.sh dry-run   # + cargo publish --dry-run, both crates
+scripts/publish.sh publish   # + cargo publish: menger-tickets-api, then menger (clean tree only)
+```
+
+The script builds the app first and refuses to go on without
+`frontend/dist/index.html`. It publishes from a stage beside the repository,
+because cargo will not package `frontend/dist` from the checkout: the
+directory sits under another package's `Cargo.toml` (`frontend/` is the
+app's crate) and is gitignored, and cargo skips both whatever `include`
+says. The stage is the files git keeps plus dist, without
+`frontend/Cargo.toml` and outside any repository, so the package is what
+`include` names — `src/`, `web/`, `build.rs`, `README.md`, `LICENSE` and
+`frontend/dist/` (66 files, ~2.3 MB compressed); never `tests/`, `deploy/`,
+`perf/`, `diagrams/` or `spike/`. `menger` is published with
+`--features embedded-app`, so cargo's verification builds the app in. The
+wave3 example of `menger-tickets-api` lives in `../spike` and is left out of
+its package (it still runs from a checkout, `spike/WAVE-2/run.sh`).
+
 ## Layout
 
 ```
@@ -1623,7 +1692,13 @@ src/
   shell.rs             / (the Leptos app, degrading to the vanilla page when
                        unbuilt), /vanilla (the embedded day-one page), /app/
                        (the app's build, read into a table — ACCESS-33);
-                       nothing else
+                       nothing else. The table from dist on disk or, with
+                       `embedded-app`, from the binary (DIST-3)
+  local.rs             menger::local — LocalServer::start(LocalConfig), the
+                       whole server without login or REST, as a library call
+                       (DIST-3)
+build.rs               `embedded-app`: frontend/dist compiled into the binary
+                       (DIST-3); without it, an empty table
 tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        typed Plexus client it emits — ONE declaration, shared by
                        the server (default features: `server`) and the app
@@ -1727,6 +1802,8 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
   tests/sdk_manifest.rs  COMP-10's drift guard: the activation's methods and
                        parameters against frontend/sdk/generated/manifest.json
 scripts/sdk-codegen.sh the frames' typed SDK, generated (COMP-10; Docker)
+scripts/publish.sh     the app built, the package staged, menger-tickets-api and
+                       menger published to crates.io (DIST-3)
 scripts/shot.mjs       screenshots of the app once it is ready, signed in where
                        it must be; only looks (DEPLOY-7)
 web/index.html         the day-one reactive shell
