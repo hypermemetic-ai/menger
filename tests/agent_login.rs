@@ -273,7 +273,10 @@ async fn logout_ends_the_session_everywhere() {
     assert_eq!(one(&a, "session.logout", json!({})).await, json!({ "type": "logged_out" }));
     let gone = one(&b, "tickets.health", json!({})).await;
     assert!(gone["message"].as_str().unwrap().contains("signed out"), "an open connection on it stops answering: {gone}");
-    assert_eq!(one(&b, "session.whoami", json!({})).await, json!({ "type": "anonymous" }));
+    // AUTH-11: a sign-in that ended proves no one — session.whoami, which
+    // only a signed-in caller reaches, is refused as to anyone anonymous.
+    let who = one(&b, "session.whoami", json!({})).await;
+    assert_eq!((who["error_kind"].as_str(), who["message"].as_str().is_some_and(|m| m.contains("signed out"))), (Some("unauthenticated"), true), "{who}");
     assert!(connect(port, &[("authorization", format!("Bearer {token}"))]).await.unwrap_err().contains("401"), "the token opens nothing");
     assert!(connect(port, &[("cookie", format!("access_token={token}"))]).await.unwrap_err().contains("401"));
     // A proof-opened connection holds no session to end.

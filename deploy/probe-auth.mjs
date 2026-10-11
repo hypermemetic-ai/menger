@@ -232,6 +232,30 @@ check(errorOf(await call(e, 'members.grant', { principal: me, scope: '*', role: 
 check(errorOf(await call(e, 'members.grant', { principal: me, scope: AWAY, role: 'admin' })), `an editor cannot grant itself admin on ${AWAY}`);
 check(errorOf(await call(e, 'members.requests')), 'only an admin of * sees who has signed in (IDENTITY-37)');
 
+// AUTH-13 (AUTH-10 #3): params that are not an object name no target, so the
+// gate would decide them as "held anywhere" while a method of one param
+// took the value as its target. menger's targeted methods all take two or
+// more (plexus-core's auth_view test plays the one-param shape); here the
+// gate must refuse the shape itself, typed, before any method sees it —
+// from an editor of AWAY, who holds set_status somewhere, aimed at HOME.
+{
+  const shapes = [
+    ['tickets.set_status', homeId],
+    ['tickets.set_status', [homeId, 'Ready']],
+    ['tickets.close_input', homeId],
+    ['members.revoke', HOME],
+    ['tickets.set_status', { id: { id: homeId }, status: 'Ready' }],
+  ];
+  const through = [];
+  for (const [m, params] of shapes) {
+    const r = refusalOf(await call(e, m, params));
+    if (r.error_kind !== 'invalid_params') through.push(`${m} ${JSON.stringify(params)} → ${JSON.stringify(r)}`);
+  }
+  check(!through.length, `a bare value or an unreadable target is refused by shape, typed invalid_params (AUTH-13${through.length ? `: ${through.join('; ')}` : ''})`);
+  const still = (await call(a, 'tickets.get', { id: homeId })).find((i) => i.ticket)?.ticket?.status;
+  check(still && still !== 'Ready', `and ${HOME}'s probe ticket is untouched (AUTH-13: ${still})`);
+}
+
 // AUTH-4/AUTH-7: each caller's view is what it holds.
 {
   const nv = await viewOf(n);
@@ -319,15 +343,75 @@ check(!JSON.stringify(heard).includes('after the revoke'), 'a watch hears nothin
   }
 }
 
+// AUTH-11 (AUTH-10 #1): a session that signed out holds nothing — the gate
+// asks whether the sign-in stands on every method, auth.* included. The
+// review's attack: an admin's session logs out, then the same socket
+// grants a stranger admin on *. Then the server closes that socket.
+{
+  const { randomBytes } = await import('node:crypto');
+  const stranger = `key:${randomBytes(32).toString('hex')}`;
+  const doomed = (await open({ session: await signIn('admin') })).ws;
+  const before = (await call(doomed, 'auth.whoami'))[0] || {};
+  check(before.type === 'whoami' && (before.memberships || []).some((m) => m.role === 'admin'), 'a second admin session signs in (AUTH-11)');
+  await call(doomed, 'auth.logout');
+  const granted = await call(doomed, 'auth.grant', { principal: stranger, role: 'admin', scope: '*' });
+  const r = refusalOf(granted);
+  check(doomed.readyState !== WebSocket.OPEN || (r.error_kind === 'unauthenticated' && r.message?.includes('signed out')),
+    `after auth.logout the same socket cannot auth.grant admin on * (AUTH-11: ${JSON.stringify(r)})`);
+  // Nothing landed: the admin finds no role of the stranger's on * to
+  // revoke (asked before the calls below, which could revoke it themselves).
+  const landed = (await call(a, 'auth.revoke', { principal: stranger, scope: '*' }))[0] || {};
+  check(!(landed.roles || []).length, `the stranger holds nothing (AUTH-11: ${JSON.stringify(landed)})`);
+  const after = [];
+  // Harmless if they ran: viewer re-set to the grants it has, the stranger's
+  // (absent) roles revoked.
+  const viewerNow = (await call(a, 'auth.roles')).find((x) => x.role === 'viewer')?.grants || [];
+  for (const m of ['auth.role_set', 'auth.revoke', 'auth.waiting', 'tickets.list']) {
+    if (doomed.readyState !== WebSocket.OPEN) break;
+    const params = m === 'auth.role_set' ? { role: 'viewer', grants: viewerNow } : m === 'auth.revoke' ? { principal: stranger, scope: '*' } : {};
+    if (refusalOf(await call(doomed, m, params)).error_kind !== 'unauthenticated') after.push(m);
+  }
+  check(!after.length, `a signed-out socket reaches no auth.* or service method (AUTH-11${after.length ? `: reached ${after.join(', ')}` : ''})`);
+  for (let i = 0; i < 30 && doomed.readyState === WebSocket.OPEN; i++) await sleep(100);
+  check(doomed.readyState !== WebSocket.OPEN, 'the server closes a socket whose session signed out (AUTH-11)');
+}
+
 // Sign-out ends the session's sockets. (AUTH-7: members.mine, which any
 // signed-in caller reaches — `nobody` holds nothing the gate would let by.)
+// AUTH-11: the server closes them, too — a call may find the socket gone.
 await fetch(`${SHELL}/logout`, { method: 'POST', redirect: 'manual', headers: { origin: SHELL, cookie: `${COOKIE}=${nobody}` } });
-check(errorOf(await call(n, 'members.mine')).includes('signed out'), 'a socket stops answering when its session signs out');
+check(n.readyState !== WebSocket.OPEN || errorOf(await call(n, 'members.mine')).includes('signed out'), 'a socket stops answering when its session signs out');
+for (let i = 0; i < 30 && n.readyState === WebSocket.OPEN; i++) await sleep(100);
+check(n.readyState !== WebSocket.OPEN, 'the server closes the signed-out session\'s socket (AUTH-11)');
 {
   // AUTH-7: the ended session's cookie is no credential: the anonymous view.
   const o = await open({ session: nobody });
   check(o.refused || refusalOf(await call(o.ws, 'session.whoami')).error_kind === 'unauthenticated', 'a signed-out session opens no socket as anyone');
   o.ws?.close();
+}
+
+// AUTH-12 (AUTH-10 #2): anonymous sockets are held to a quota well below the
+// server's ceiling — 100 of them once took jsonrpsee's default 100, and the
+// admin's 101st was refused. Open them until one is refused; a signed-in
+// person must still get in, and the places come back when they close.
+{
+  const flood = [];
+  let refusedAt = 0;
+  for (let i = 0; i < 120; i++) {
+    const s = await open({ origin: null });
+    if (s.refused) { refusedAt = i + 1; break; }
+    flood.push(s.ws);
+  }
+  check(refusedAt > 0 && refusedAt <= 64, `anonymous sockets from one address meet a quota well below the ceiling (AUTH-12: refused socket #${refusedAt || '— none of 120'})`);
+  const late = (await open({ session: await signIn('admin') })).ws;
+  const health = late && (await call(late, 'tickets.health'));
+  check(late && !errorOf(health), 'a signed-in admin still opens a socket and is answered while they are held (AUTH-12)');
+  late?.close();
+  for (const s of flood) s.close();
+  await sleep(500);
+  const again = await open({ origin: null });
+  check(again.ws, 'closed anonymous sockets give their places back (AUTH-12)');
+  again.ws?.close();
 }
 
 for (const s of [a, n, v, e, w]) s?.close();
