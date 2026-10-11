@@ -1,11 +1,13 @@
 /**
- * menger SDK 1.6 — the types of `window.menger` and of a component script's
+ * menger SDK 1.7 — the types of `window.menger` and of a component script's
  * `this`, inside every framed body (COMP-4, COMP-5, COMP-10, COMP-9,
  * INPUT-4, INPUT-9). 1.5 (COMMENT-3) changes nothing here: annotation mode
  * is the host's, spoken over the frame's own messages, and a component's
  * badge and info card show in that mode only. Nor does 1.6 (COMP-12): the
  * base typography moves into a cascade layer, and a body's
  * `<meta name="menger-base" content="markdown">` confines it to markdown.
+ * 1.7 (COMP-14) adds `input.displayOnly` and the built-in `<m-cite>`, a
+ * placeholder the host draws a cited window over (no script surface).
  *
  * Published by the app at /app/sdk/menger.d.ts, beside the SDK itself
  * (/app/sdk/menger-sdk.js) and the generated client's declarations
@@ -50,6 +52,15 @@ export interface MengerInput {
    * preview, a component's help card), where `submit` always rejects.
    */
   readonly ticket: string | null;
+
+  /**
+   * COMP-14 (1.7): `true` in a cited window's frame (an `<m-cite>`'s
+   * window, drawn by the host), where `ticket` is the cited ticket and
+   * `submit` and `clear` reject at once — a cited section's inputs are
+   * shown, and answered only in their own ticket. A component may grey its
+   * controls out on it.
+   */
+  readonly displayOnly: boolean;
 
   /**
    * Answer the input `id` of this frame's ticket — `tickets.answer`, made
@@ -102,7 +113,7 @@ export interface MengerInput {
 
 /** `window.menger` — frozen; also `this.menger` in a component script. */
 export interface Menger {
-  /** "1.6.1". */
+  /** "1.7.0". */
   readonly version: string;
 
   /**
