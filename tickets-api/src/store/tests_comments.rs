@@ -502,7 +502,7 @@ fn has_comments_table(path: &Path) -> bool {
 
 /// What the store answers, everything a reader asks of the tickets.
 async fn answers(store: &Store) -> (Vec<Ticket>, Vec<Group>, Vec<(String, u32)>, Page) {
-    let q = Filtered { lens: Lens::parse("not kind doc").unwrap(), epic: None, status: None, parent: None };
+    let q = Filtered { lens: Lens::parse("not kind doc").unwrap(), epic: None, status: None, parent: None, keep: None };
     (store.list(None, None, None).await.unwrap(), store.groups(), store.extents(), store.filtered_page(&q, None, None, Some(50)).unwrap())
 }
 

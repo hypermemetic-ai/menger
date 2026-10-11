@@ -290,7 +290,11 @@ board windows over `counts` (FILTER-12); the nav shows each shortcode with
 its matches and, inside, only the matches, each with the matches below it —
 a ticket the filter excludes is not drawn, and the matches under it move up
 to its nearest matching ancestor or the top of the shortcode, whose row is
-then a heading (`tree { matches_only }`, FILTER-13/14/23); the
+then a heading (`tree { matches_only }`, FILTER-13/14/23). The open
+ticket is always in the nav, whatever its filter (FILTER-24): it is drawn
+where a match would be, its matches under it, marked `outside` when the
+filter excludes it — and listed in the Flat view at its place — by
+`keep: <the open ticket>` on `tree`, `list` and `counts`; the
 palette searches inside the global filter with a "Search everything" row,
 and a ticket page says when its ticket is outside and filters its children
 (FILTER-16). Each level rides the route's query — `g=` global, `n=` nav,

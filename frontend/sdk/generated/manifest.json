@@ -105,7 +105,8 @@
       ],
       "components": [],
       "counts": [
-        "filter"
+        "filter",
+        "keep"
       ],
       "create": [
         "blocked_by",
@@ -148,6 +149,7 @@
         "at",
         "epic",
         "filter",
+        "keep",
         "limit",
         "parent",
         "status",
@@ -192,6 +194,7 @@
         "after",
         "epic",
         "filter",
+        "keep",
         "limit",
         "matches_only",
         "parent"

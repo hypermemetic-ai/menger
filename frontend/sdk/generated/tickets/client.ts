@@ -20,7 +20,7 @@ export interface TicketsClient {
   /** Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes */
   components(): AsyncGenerator<TicketsEvent>;
   /** Each shortcode's number of tickets matching a filter, in shortcode order — the filtered extents (every ticket without one) */
-  counts(filter?: string | null): AsyncGenerator<TicketsEvent>;
+  counts(filter?: string | null, keep?: string | null): AsyncGenerator<TicketsEvent>;
   /** Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc */
   create(epic: string, title: string, blockedBy?: string[] | null, body?: string | null, kind?: string | null, parent?: string | null, path?: string | null, severity?: string | null): AsyncGenerator<TicketsEvent>;
   /** Each shortcode's last sequence, in shortcode order — where each shortcode ends in the store's order */
@@ -40,7 +40,7 @@ export interface TicketsClient {
   /** Link commits to a ticket (the commits that finished it); yields commits_linked { ticket, added } */
   linkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
   /** List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at */
-  list(after?: string | null, at?: number | null, epic?: string | null, filter?: string | null, limit?: number | null, parent?: string | null, status?: string | null, summary?: boolean | null): AsyncGenerator<TicketsEvent>;
+  list(after?: string | null, at?: number | null, epic?: string | null, filter?: string | null, keep?: string | null, limit?: number | null, parent?: string | null, status?: string | null, summary?: boolean | null): AsyncGenerator<TicketsEvent>;
   /** Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids */
   member(filter: string, ids: string[]): AsyncGenerator<TicketsEvent>;
   /** Tickets that can start now: Ready, with every blocker Complete, Superseded or Canceled; optionally under a filter */
@@ -58,7 +58,7 @@ export interface TicketsClient {
   /** Set a ticket's status (not a doc's: a doc has no lifecycle) */
   setStatus(id: string, status: string): AsyncGenerator<TicketsEvent>;
   /** The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page; matches_only: the matches nearest below instead, then the hosted shortcodes drawn there */
-  tree(filter: string, after?: string | null, epic?: string | null, limit?: number | null, matchesOnly?: boolean | null, parent?: string | null): AsyncGenerator<TicketsEvent>;
+  tree(filter: string, after?: string | null, epic?: string | null, keep?: string | null, limit?: number | null, matchesOnly?: boolean | null, parent?: string | null): AsyncGenerator<TicketsEvent>;
   /** Unlink commits from a ticket; yields commits_unlinked { ticket, removed } */
   unlinkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
   /** Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
@@ -102,8 +102,8 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
-  async *counts(filter?: string | null): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.counts', { filter });
+  async *counts(filter?: string | null, keep?: string | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.counts', { filter, keep });
     yield* extractData<TicketsEvent>(stream);
   }
 
@@ -152,8 +152,8 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
-  async *list(after?: string | null, at?: number | null, epic?: string | null, filter?: string | null, limit?: number | null, parent?: string | null, status?: string | null, summary?: boolean | null): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.list', { after, at, epic, filter, limit, parent, status, summary });
+  async *list(after?: string | null, at?: number | null, epic?: string | null, filter?: string | null, keep?: string | null, limit?: number | null, parent?: string | null, status?: string | null, summary?: boolean | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.list', { after, at, epic, filter, keep, limit, parent, status, summary });
     yield* extractData<TicketsEvent>(stream);
   }
 
@@ -197,8 +197,8 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
-  async *tree(filter: string, after?: string | null, epic?: string | null, limit?: number | null, matchesOnly?: boolean | null, parent?: string | null): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.tree', { after, epic, filter, limit, matches_only: matchesOnly, parent });
+  async *tree(filter: string, after?: string | null, epic?: string | null, keep?: string | null, limit?: number | null, matchesOnly?: boolean | null, parent?: string | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.tree', { after, epic, filter, keep, limit, matches_only: matchesOnly, parent });
     yield* extractData<TicketsEvent>(stream);
   }
 

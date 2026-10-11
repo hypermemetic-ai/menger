@@ -113,12 +113,17 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   at its nearest matching ancestor, or at the shortcode's top), then the
   hosted shortcodes whose row is drawn there, each its root's node
   (`matched: false`: a heading); at `--epic`, the root if it matches, else
-  the shortcode's top:
+  the shortcode's top. `--keep ID` (FILTER-24, the nav's open ticket)
+  answers as if that ticket matched — drawn where a match would be, its
+  matches under it, its node still `matched: false`; `list` (with a
+  filter) and `counts` take it too, and none of them keeps a ticket
+  outside the caller's reach:
 
   ```sh
   synapse -P 4455 menger tickets tree --epic FILTER --filter 'status Ready'
   synapse -P 4455 menger tickets tree --parent FILTER-9 --filter 'not category done' --limit 50
   synapse -P 4455 menger tickets tree --epic MENGER --filter 'kind build' --matches-only true
+  synapse -P 4455 menger tickets tree --parent FILTER-1 --filter 'not category done' --matches-only true --keep FILTER-23
   synapse -P 4455 menger tickets counts --filter 'ready and under FILTER-9'
   ```
 

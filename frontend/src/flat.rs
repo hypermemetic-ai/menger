@@ -44,6 +44,13 @@
 //! - **A deep link** brings the open ticket's place into view when the list
 //!   holds it — where the rows held say, or `list { filter, after: id, limit: 0
 //!   }`'s `first` — once per navigation, and again under a new filter.
+//! - **The open ticket is always listed** (FILTER-24): under a filter every
+//!   ask carries `keep: <the open ticket>` — `counts`, `list`, the place of a
+//!   deep link — so the server counts it and pages it at its id-order place
+//!   whatever the filter says of it. Its row is marked outside the filter
+//!   while `member` says it is ([`Flat::outside`]); its own `entered` / `left`
+//!   move no count (it is counted either way). A move to a ticket outside the
+//!   filter, or away from one, asks the counts and the window again.
 //!
 //! What decides — the stored choice, the order, the cursors, the note, where
 //! to scroll — is pure, pinned by native tests.
@@ -291,8 +298,8 @@ enum Counted {
     Offline,
 }
 
-async fn count(client: &Client, filter: &str) -> Counted {
-    match client.counts_all(Some(filter.to_string())).await {
+async fn count(client: &Client, filter: &str, keep: Option<String>) -> Counted {
+    match client.counts_all(Some(filter.to_string()), keep).await {
         Ok(events) => {
             let mut runs = Vec::new();
             for ev in events {
@@ -320,10 +327,10 @@ enum Window {
 /// `list { filter, after | at, limit, summary }` — `from`, where the page
 /// was meant to start, only if the server does not say (it always does when
 /// a filter is given).
-async fn ask_page(client: &Client, filter: &str, cursor: &Cursor, from: usize, limit: usize) -> Window {
+async fn ask_page(client: &Client, filter: &str, keep: Option<String>, cursor: &Cursor, from: usize, limit: usize) -> Window {
     let (after, at) = cursor.params();
     match client
-        .list_all(None, None, None, after, Some(limit as u32), Some(true), Some(filter.to_string()), at)
+        .list_all(None, None, None, after, Some(limit as u32), Some(true), Some(filter.to_string()), at, keep)
         .await
     {
         Ok(events) => {
@@ -349,16 +356,14 @@ async fn ask_page(client: &Client, filter: &str, cursor: &Cursor, from: usize, l
 /// Where `id` sits in the list by the server's word — `None` when the filter
 /// does not admit it (`member`), or no answer came. `list { filter, after: id,
 /// limit: 0 }`'s `first` is how many matches there are up to it, so a match
-/// sits at `first - 1`.
-async fn locate(client: &Client, filter: &str, id: &str) -> Option<usize> {
-    let matched = client.member_all(vec![id.to_string()], filter.to_string()).await.ok()?.into_iter().any(|ev| {
-        matches!(ev, TicketsEvent::Member { matched: true, .. })
-    });
-    if !matched {
+/// sits at `first - 1`. FILTER-24: among the matches and the kept ticket
+/// (`keep`), which is listed whatever the filter says of it.
+async fn locate(client: &Client, filter: &str, keep: Option<String>, id: &str) -> Option<usize> {
+    if keep.as_deref() != Some(id) && !is_member(client, filter, id).await? {
         return None;
     }
     let events = client
-        .list_all(None, None, None, Some(id.to_string()), Some(0), Some(true), Some(filter.to_string()), None)
+        .list_all(None, None, None, Some(id.to_string()), Some(0), Some(true), Some(filter.to_string()), None, keep)
         .await
         .ok()?;
     let first = events.into_iter().find_map(|ev| match ev {
@@ -366,6 +371,21 @@ async fn locate(client: &Client, filter: &str, id: &str) -> Option<usize> {
         _ => None,
     })?;
     (first as usize).checked_sub(1)
+}
+
+/// Whether `filter` admits `id` (`member`) — `None` when no answer came.
+async fn is_member(client: &Client, filter: &str, id: &str) -> Option<bool> {
+    let events = client.member_all(vec![id.to_string()], filter.to_string()).await.ok()?;
+    Some(events.into_iter().any(|ev| matches!(ev, TicketsEvent::Member { matched: true, .. })))
+}
+
+/// FILTER-24: the ticket the list keeps under `filter` — the open one
+/// (`route`), while there is a filter (with none, every ticket is listed).
+pub(crate) fn kept(filter: Option<&str>, route: &Route) -> Option<String> {
+    match (filter, route) {
+        (Some(f), Route::Ticket(id)) if !f.is_empty() => Some(id.clone()),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -406,6 +426,11 @@ struct Flat {
     resyncs: StoredValue<u8>,
     /// What the server said of a filter it did not take.
     refused: RwSignal<Option<String>>,
+    /// FILTER-24: the ticket every ask keeps — the open one, under a filter.
+    keep: StoredValue<Option<String>>,
+    /// FILTER-24: the kept ticket, while the filter does not admit it — its
+    /// row is marked outside the filter.
+    outside: RwSignal<Option<String>>,
 }
 
 impl Flat {
@@ -423,7 +448,14 @@ impl Flat {
             strikes: StoredValue::new(((0, 0), 0)),
             resyncs: StoredValue::new(0),
             refused: RwSignal::new(None),
+            keep: StoredValue::new(None),
+            outside: RwSignal::new(None),
         }
+    }
+
+    /// FILTER-24: whether `id` is the kept ticket.
+    fn keeps(self, id: &str) -> bool {
+        self.keep.try_with_value(|k| k.as_deref() == Some(id)).unwrap_or(false)
     }
 
     /// Every row of the list (tracked) — 0 until counted.
@@ -467,6 +499,20 @@ impl Flat {
             return;
         }
         match ev {
+            // FILTER-24: the kept ticket is counted and listed either way —
+            // only its mark moves.
+            Member::Entered { id, .. } if self.keeps(id) => {
+                self.outside.set(None);
+            }
+            Member::Left { id, .. } if self.keeps(id) => {
+                self.outside.set(Some(id.clone()));
+            }
+            // A recount of its shortcode leaves it out while it is outside:
+            // the counts are asked again, keeping it.
+            Member::Recount { epic, .. } if self.outside.with_untracked(|o| o.as_deref().and_then(id_key).is_some_and(|(e, _)| e == *epic)) => {
+                self.moved.update_value(|n| *n = n.wrapping_add(1));
+                self.again(true);
+            }
             Member::Entered { id, epic, seq } => {
                 self.moved.update_value(|n| *n = n.wrapping_add(1));
                 let Some(mut m) = self.matches.get_untracked() else { return };
@@ -543,8 +589,9 @@ impl Flat {
     /// The asking behind [`Flat::refresh`]: `Some(false)` when the window's
     /// page did not fit the counts, `None` when no answer came.
     async fn ask(self, client: &Client, text: &str, gen: u32, counts: bool) -> Option<bool> {
+        let keep = self.keep.try_get_value()?;
         if counts || self.matches.try_with_untracked(Option::is_none)? {
-            match count(client, text).await {
+            match count(client, text, keep.clone()).await {
                 Counted::Counts(runs) => {
                     if self.gen.try_get_value()? != gen {
                         return Some(true);
@@ -568,7 +615,7 @@ impl Flat {
         }
         let moved = self.moved.get_value();
         let from = if lo == 0 { Cursor::Top } else { Cursor::At(lo) };
-        match ask_page(client, text, &from, lo, (hi - lo).min(MAX_PAGE)).await {
+        match ask_page(client, text, keep, &from, lo, (hi - lo).min(MAX_PAGE)).await {
             Window::Page { rows, first, total } => {
                 if self.gen.try_get_value()? != gen || self.moved.try_get_value()? != moved {
                     return Some(true); // the list's own asking fills what moved
@@ -651,10 +698,11 @@ impl Flat {
             let Some(ask) = ask else { return };
             let gen = self.gen.get_value();
             let moved = self.moved.get_value();
+            let keep = self.keep.get_value();
             self.flight.set_value(Some(gen));
             spawn_local(async move {
                 let answer = match session::client() {
-                    Some(client) => ask_page(&client, &text, &ask.cursor, ask.from, ask.limit).await,
+                    Some(client) => ask_page(&client, &text, keep, &ask.cursor, ask.from, ask.limit).await,
                     None => Window::Offline,
                 };
                 if self.flight.try_get_value() == Some(Some(gen)) {
@@ -708,8 +756,45 @@ impl Flat {
             return held;
         }
         let text = self.text.try_get_value()??;
+        let keep = self.keep.try_get_value()?;
         let client = session::client()?;
-        locate(&client, &text, id).await
+        locate(&client, &text, keep, id).await
+    }
+
+    /// FILTER-24: the open ticket moved — kept from now on under a filter
+    /// (`now`). Whether the filter admits it is `member`'s word; while it
+    /// does not, its row is marked. Keeping one outside the filter, or no
+    /// longer keeping one, moves the counts and the positions: they are
+    /// asked again, and the kept ticket brought into view (`show`).
+    fn keep_moved(self, now: Option<String>, show: impl Fn(usize) + 'static) {
+        self.keep.set_value(now.clone());
+        let was_outside = self.outside.get_untracked().is_some();
+        self.outside.set(None);
+        let Some(Some(text)) = self.text.try_get_value() else { return };
+        spawn_local(async move {
+            let outside = match (&now, session::client()) {
+                (Some(id), Some(client)) => is_member(&client, &text, id).await == Some(false),
+                _ => false,
+            };
+            if self.keep.try_get_value() != Some(now.clone()) {
+                return; // moved again meanwhile, or gone
+            }
+            if outside {
+                self.outside.set(now.clone());
+            }
+            if !(was_outside || outside) {
+                return;
+            }
+            self.refresh(true).await;
+            let Some(id) = now.filter(|_| outside) else { return };
+            if self.keep.try_get_value() != Some(Some(id.clone())) {
+                return;
+            }
+            if let Some(p) = self.locate(&id).await {
+                dom::sleep_ms(0).await;
+                show(p);
+            }
+        });
     }
 }
 
@@ -758,6 +843,14 @@ pub(crate) fn flat_list(
                     sc.set_scroll_top(0);
                 }
             }
+        }
+        now
+    });
+    // FILTER-24: the open ticket, kept whatever the filter.
+    Effect::new(move |prev: Option<Option<String>>| {
+        let now = filter.with(|t| route.with(|r| kept(t.as_deref(), r)));
+        if prev.as_ref() != Some(&now) {
+            f.keep_moved(now.clone(), move |p| show(list_ref, f, p));
         }
         now
     });
@@ -913,10 +1006,17 @@ fn flat_row(
     let key: Key = ticket.with_untracked(|t| (t.epic.clone(), t.seq));
     let posinset = Memo::new(move |_| f.matches.with(|m| f.ranked.with(|r| r.pos_of(m.as_ref()?, &key))).map(|p| p + 1));
     let href = format!("#/ticket/{id}");
+    // FILTER-24: the open ticket, listed though the filter excludes it.
+    let outside = {
+        let id = id.clone();
+        Memo::new(move |_| f.outside.with(|o| o.as_deref() == Some(id.as_str())))
+    };
     view! {
         <a
             class="row leaf"
             class:sel=move || sel.get()
+            class:dim=move || outside.get()
+            class:outside=move || outside.get()
             role="treeitem"
             tabindex="-1"
             aria-selected=move || sel.get().to_string()
@@ -935,6 +1035,11 @@ fn flat_row(
             </span>
             <span class="code" data-tag=crate::tags::Tag::ticket(&id).attr()>{id.clone()}</span>
             <span class="label">{move || ticket.with(|t| t.title.clone())}</span>
+            {move || {
+                outside.get().then(|| {
+                    view! { <span class="outside-mark" title="outside the nav's filter — shown because it is the open ticket">"outside"</span> }
+                })
+            }}
             // The status tag, its paint and its word one effect: they move
             // together.
             {move || {
@@ -948,7 +1053,8 @@ fn flat_row(
 
 #[cfg(test)]
 mod tests {
-    use super::{cursor, id_key, in_id_order, list_filter, next_ask, note_of, scroll_row, Ask, Cursor, Key, Note, View, MAX_PAGE, VIEW_KEY};
+    use super::{cursor, id_key, in_id_order, kept, list_filter, next_ask, note_of, scroll_row, Ask, Cursor, Key, Note, View, MAX_PAGE, VIEW_KEY};
+    use crate::Route;
     use crate::board::{ranked_slots, Landed, Matches, Ranked, Slot};
     use leptos::prelude::*;
     use menger_tickets_api::{Kind, Status, TicketSummary};
@@ -1154,5 +1260,17 @@ mod tests {
         assert_eq!(scroll_row(100.0, 40.0, 99), Some(99.0 - 19.5));
         assert_eq!(scroll_row(500.0, 40.0, 3), Some(0.0), "never above the first row");
         assert_eq!(scroll_row(0.0, 40.0, 600_000), Some(600_000.0 - 19.5));
+    }
+
+    /// FILTER-24: under a filter the list keeps the open ticket; with none
+    /// (every ticket), off a ticket's page, or when the filter admits nothing
+    /// (no ask at all), it keeps none.
+    #[test]
+    fn the_open_ticket_is_kept_under_a_filter() {
+        let open = Route::Ticket("FILTER-23".into());
+        assert_eq!(kept(Some("not category done"), &open).as_deref(), Some("FILTER-23"));
+        assert_eq!(kept(Some(""), &open), None, "every ticket is listed");
+        assert_eq!(kept(None, &open), None, "nothing is asked");
+        assert_eq!(kept(Some("kind build"), &Route::Board), None);
     }
 }

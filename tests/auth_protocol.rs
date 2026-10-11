@@ -468,6 +468,30 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
     assert_eq!((compat["type"].as_str(), compat["scope"].clone()), (Some("login"), json!(["viewer@A"])));
 }
 
+/// FILTER-24: `keep` never answers a ticket outside the caller's reach — a
+/// viewer on A keeping B's work is answered as without it.
+#[tokio::test]
+async fn keep_answers_nothing_outside_the_reach() {
+    let dir = tmp();
+    let s = spawn(&dir.path().join("t.db"), true).await;
+    let boss = as_key(s.port, &BOSS, "boss").await;
+    tickets(&boss).await;
+    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
+    let agent = as_key(s.port, &AGENT, "worker-1").await;
+    let ids = |evs: Vec<Value>| evs.iter().filter_map(|e| e["summary"]["id"].as_str().map(str::to_string)).collect::<Vec<_>>();
+    let held = |evs: Vec<Value>| evs.iter().filter_map(|e| Some((e["epic"].as_str()?.to_string(), e["held"].as_u64()?))).collect::<Vec<_>>();
+    // Nothing is Ready: only what is kept is listed.
+    let list = |keep: &str| json!({ "filter": "status Ready", "keep": keep, "summary": true });
+    assert_eq!(ids(call(&agent, "tickets.list", list("A-2")).await), ["A-2"]);
+    assert_eq!(ids(call(&agent, "tickets.list", list("B-2")).await), Vec::<String>::new(), "B is out of reach");
+    assert_eq!(ids(call(&boss, "tickets.list", list("B-2")).await), ["B-2"], "the admin's reach covers it");
+    assert_eq!(held(call(&agent, "tickets.counts", json!({ "filter": "status Ready", "keep": "A-2" })).await), [("A".to_string(), 1)]);
+    assert_eq!(held(call(&agent, "tickets.counts", json!({ "filter": "status Ready", "keep": "B-2" })).await), Vec::<(String, u64)>::new());
+    let tree = |epic: &str, keep: &str| json!({ "epic": epic, "filter": "status Ready", "matches_only": true, "keep": keep });
+    assert_eq!(ids(call(&agent, "tickets.tree", tree("A", "A-2")).await), ["A-2", "C-1"], "and C's row, hosted at A's root");
+    assert_eq!(ids(call(&agent, "tickets.tree", tree("B", "B-2")).await), Vec::<String>::new());
+}
+
 #[tokio::test]
 async fn an_admin_s_role_set_changes_a_caller_s_view_and_is_kept_across_a_restart() {
     let dir = tmp();

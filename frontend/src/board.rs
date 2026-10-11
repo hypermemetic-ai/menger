@@ -701,7 +701,7 @@ enum Answer {
 
 async fn ask(client: &Client, after: Option<String>, limit: usize) -> Answer {
     match client
-        .list_all(None, None, None, after, Some(limit.max(1) as u32), Some(true), None, None)
+        .list_all(None, None, None, after, Some(limit.max(1) as u32), Some(true), None, None, None)
         .await
     {
         Ok(events) => {
@@ -734,7 +734,7 @@ enum Counted {
 }
 
 async fn count(client: &Client, filter: &str) -> Counted {
-    match client.counts_all(Some(filter.to_string())).await {
+    match client.counts_all(Some(filter.to_string()), None).await {
         Ok(events) => {
             let mut runs = Vec::new();
             for ev in events {
@@ -761,7 +761,7 @@ enum Window {
 
 async fn ask_at(client: &Client, filter: &str, at: usize, limit: usize) -> Window {
     match client
-        .list_all(None, None, None, None, Some(limit.max(1) as u32), Some(true), Some(filter.to_string()), Some(at as u64))
+        .list_all(None, None, None, None, Some(limit.max(1) as u32), Some(true), Some(filter.to_string()), Some(at as u64), None)
         .await
     {
         Ok(events) => {
@@ -789,7 +789,7 @@ async fn ask_at(client: &Client, filter: &str, at: usize, limit: usize) -> Windo
 /// the page after X starts right after it).
 async fn ask_place(client: &Client, filter: &str, id: &str) -> Option<usize> {
     let events = client
-        .list_all(None, None, None, Some(id.to_string()), Some(0), Some(true), Some(filter.to_string()), None)
+        .list_all(None, None, None, Some(id.to_string()), Some(0), Some(true), Some(filter.to_string()), None, None)
         .await
         .ok()?;
     events.into_iter().find_map(|ev| match ev {

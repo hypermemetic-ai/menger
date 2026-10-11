@@ -235,13 +235,16 @@ impl std::fmt::Debug for Lens {
 
 /// FILTER-4: a filtered `list` — the filter, and `list`'s three old
 /// parameters, which are sugar beside it: `epic` for `in`, `status` for a
-/// status, `parent` for a parent's page.
+/// status, `parent` for a parent's page. FILTER-24: and `keep`, a ticket
+/// held as a match whatever the filter says of it (the nav's open ticket) —
+/// when it is inside the sugar.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Filtered {
     pub lens: Lens,
     pub epic: Option<String>,
     pub status: Option<Status>,
     pub parent: Option<String>,
+    pub keep: Option<String>,
 }
 
 /// FILTER-4: what `watch { filter }` adds to a write's events.
@@ -273,10 +276,32 @@ pub struct Watcher {
 /// answers `under`.
 pub(super) fn view<'c>(cache: &'c Cache, q: &Filtered) -> View<'c> {
     let view = Compiled::new(cache, &q.lens, q.status).view(q.epic.as_deref());
-    match q.parent.as_deref() {
+    let view = match q.parent.as_deref() {
         None => view,
         Some(parent) => view.within(|epic| cache.children.in_shortcode(parent, epic).map(|seqs| seqs.bitmap().into_owned())),
+    };
+    match kept(cache, q) {
+        Some(t) => view.keeping(&t.epic, t.seq),
+        None => view,
     }
+}
+
+/// FILTER-24: the ticket a `keep` names — as given, else upper-cased (as
+/// `member` takes an id).
+pub(super) fn keep_row<'c>(cache: &'c Cache, id: &str) -> Option<&'c Row> {
+    let id = id.trim();
+    cache.get(id).or_else(|| cache.get(&id.to_ascii_uppercase()))
+}
+
+/// FILTER-24: the ticket `q.keep` names, when it is inside `q`'s sugar —
+/// its shortcode, its status, its parent — and so a match of `q` whatever
+/// the filter says of it.
+fn kept<'c>(cache: &'c Cache, q: &Filtered) -> Option<&'c Row> {
+    let t = keep_row(cache, q.keep.as_deref()?)?;
+    let inside = q.epic.as_deref().is_none_or(|e| e == t.epic)
+        && q.status.is_none_or(|s| s == t.status)
+        && q.parent.as_deref().is_none_or(|p| cache.children.in_shortcode(p, &t.epic).is_some_and(|seqs| seqs.bitmap().contains(t.seq)));
+    inside.then_some(t)
 }
 
 impl Store {
@@ -284,8 +309,20 @@ impl Store {
     /// with how many, in shortcode order: the sum of the counts of the cells
     /// the filter admits there. The empty lens is each shortcode's tickets.
     pub fn counts(&self, lens: &Lens) -> Vec<(String, u64)> {
+        self.counts_keeping(lens, None)
+    }
+
+    /// FILTER-24: [`Store::counts`] with `keep` — a ticket counted as a
+    /// match whatever the filter says of it (once: a match is counted as it
+    /// was).
+    pub fn counts_keeping(&self, lens: &Lens, keep: Option<&str>) -> Vec<(String, u64)> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        let out = Compiled::new(&cache, lens, None).view(None).counts().map(|(e, n)| (e.to_string(), n)).collect();
+        let view = Compiled::new(&cache, lens, None).view(None);
+        let view = match keep.and_then(|id| keep_row(&cache, id)) {
+            Some(t) => view.keeping(&t.epic, t.seq),
+            None => view,
+        };
+        let out = view.counts().map(|(e, n)| (e.to_string(), n)).collect();
         out
     }
 
