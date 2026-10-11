@@ -44,6 +44,30 @@
       ],
       "schema": []
     },
+    "notes": {
+      "add": [
+        "author",
+        "body"
+      ],
+      "get": [
+        "id"
+      ],
+      "list": [
+        "after",
+        "author",
+        "limit",
+        "state",
+        "text"
+      ],
+      "schema": [],
+      "upgrade": [
+        "epic",
+        "id",
+        "kind",
+        "parent",
+        "title"
+      ]
+    },
     "session": {
       "login": [
         "scope",

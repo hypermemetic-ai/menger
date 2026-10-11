@@ -2485,6 +2485,64 @@ async fn search_over_the_wire() {
 }
 
 // ---------------------------------------------------------------------------
+// NOTE-2: the `notes` activation over the real protocol
+// ---------------------------------------------------------------------------
+
+/// NOTE-2 over the real protocol: `notes.add` keeps a dated, untitled note
+/// and yields it; `list` yields them newest first, filtered and paged, then
+/// one `page`; `get` one; `upgrade` makes a ticket titled by the note's
+/// first line and yields the note pointing at it — once; a refused ticket
+/// leaves the note open; every refusal is one in-band `error`.
+#[tokio::test]
+async fn notes_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    answer(&client, "tickets.create", json!({"epic": "SR", "title": "the root", "kind": "scope"})).await;
+
+    let first = answer(&client, "notes.add", json!({"body": "## watch drops **events**\nseen twice"})).await;
+    assert_eq!((&first["type"], &first["id"], &first["author"]), (&json!("note"), &json!(1), &json!("owner")), "{first}");
+    assert!(first["at"].as_i64().unwrap() > 0 && first["ticket"].is_null() && first["upgraded_at"].is_null(), "{first}");
+    assert!(first.get("title").is_none(), "a note has no title: {first}");
+    let second = answer(&client, "notes.add", json!({"body": "the palette should remember its query", "author": "ada"})).await;
+    assert_eq!((&second["id"], &second["author"]), (&json!(2), &json!("ada")));
+    let blank = collect(call(&client, "notes.add", json!({"body": "  "})).await).await;
+    assert_eq!((blank.len(), &blank[0]["type"]), (1, &json!("error")), "{blank:?}");
+
+    let listed = collect(call(&client, "notes.list", json!({})).await).await;
+    let ids: Vec<&Value> = listed.iter().map(|e| &e["id"]).collect();
+    assert_eq!(ids, [&json!(2), &json!(1), &Value::Null], "newest first, then the page");
+    assert_eq!(listed[2], json!({"type": "page", "next": null}));
+    let paged = collect(call(&client, "notes.list", json!({"limit": 1})).await).await;
+    assert_eq!((&paged[0]["id"], &paged[1]), (&json!(2), &json!({"type": "page", "next": 2})));
+    let by_ada = collect(call(&client, "notes.list", json!({"author": "ada", "text": "PALETTE"})).await).await;
+    assert_eq!((by_ada.len(), &by_ada[0]["id"]), (2, &json!(2)));
+    assert_eq!(collect(call(&client, "notes.list", json!({"state": "closed"})).await).await[0]["type"], "error");
+    assert_eq!(answer(&client, "notes.get", json!({"id": 1})).await, first);
+    assert_eq!(answer(&client, "notes.get", json!({"id": 9})).await["type"], "error");
+
+    // Upgrade: the ticket, titled by the note; the note pointing at it.
+    let up = answer(&client, "notes.upgrade", json!({"id": 1, "epic": "SR"})).await;
+    assert_eq!((&up["type"], &up["id"], &up["ticket"]), (&json!("note"), &json!(1), &json!("SR-2")), "{up}");
+    assert!(up["upgraded_at"].as_i64().is_some());
+    let made = answer(&client, "tickets.get", json!({"id": "SR-2"})).await;
+    assert_eq!((&made["ticket"]["title"], &made["ticket"]["parent"]), (&json!("watch drops events"), &json!("SR-1")));
+    assert!(made["ticket"]["body"].as_str().unwrap().ends_with(" — note 1."), "{made}");
+    let again = answer(&client, "notes.upgrade", json!({"id": 1, "epic": "SR"})).await;
+    assert!(again["message"].as_str().unwrap().contains("already a ticket: SR-2"), "{again}");
+    let open = collect(call(&client, "notes.list", json!({"state": "open"})).await).await;
+    assert_eq!(open[0]["id"], 2, "only note 2 is still open");
+
+    // A ticket refused: the note stays open; a title given wins.
+    let bad = answer(&client, "notes.upgrade", json!({"id": 2, "epic": "BAD EPIC"})).await;
+    assert_eq!(bad["type"], "error", "{bad}");
+    assert!(answer(&client, "notes.get", json!({"id": 2})).await["ticket"].is_null());
+    let titled = answer(&client, "notes.upgrade", json!({"id": 2, "epic": "SR", "title": "Remember the query", "kind": "gap"})).await;
+    assert_eq!(titled["ticket"], "SR-3", "no id was spent on the refusal: {titled}");
+    let gap = answer(&client, "tickets.get", json!({"id": "SR-3"})).await;
+    assert_eq!((&gap["ticket"]["title"], &gap["ticket"]["kind"]), (&json!("Remember the query"), &json!("gap")));
+}
+
+// ---------------------------------------------------------------------------
 // COMMENT-2: the `comments` activation over the real protocol
 // ---------------------------------------------------------------------------
 

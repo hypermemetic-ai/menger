@@ -14,7 +14,7 @@
 #![cfg(feature = "server")]
 
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{Comments, Members, Session, Store, Tickets};
+use menger_tickets_api::{Comments, Members, Notes, Session, Store, Tickets};
 use plexus_core::plexus::{Activation, PluginSchema};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -47,7 +47,10 @@ fn surface(schema: PluginSchema) -> Surface {
 fn activation() -> Surface {
     let store = Arc::new(Store::new());
     let tickets = Tickets::new(Arc::clone(&store)).plugin_schema();
-    let comments = Comments::new(store).plugin_schema();
+    let comments = Comments::new(Arc::clone(&store)).plugin_schema();
+    // NOTE-2: and notes.
+    let notes = Notes::new(store).plugin_schema();
+    assert_eq!(notes.namespace, "notes");
     let session = Session::new().plugin_schema();
     let members = Members::new(Arc::new(Store::new()), Access::open()).plugin_schema();
     assert_eq!(
@@ -56,6 +59,7 @@ fn activation() -> Surface {
     );
     let mut out = surface(tickets);
     out.extend(surface(comments));
+    out.extend(surface(notes));
     out.extend(surface(session));
     out.extend(surface(members));
     out

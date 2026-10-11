@@ -236,6 +236,40 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
     assert_eq!(mine.len(), 3, "me, then IDENTITY editor and PLEXUS viewer: {mine:?}");
 }
 
+/// NOTE-2 under login: a note is on no shortcode, so any member's — added,
+/// listed and read with a role held anywhere, signed and named by its
+/// writer; nobody's without one. An upgrade makes a ticket, so it needs
+/// what tickets.create needs where the ticket lands.
+#[tokio::test]
+async fn notes_are_any_members_and_an_upgrade_needs_what_create_needs() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    let alice = as_(&w, ALICE, "alice").await;
+    assert_eq!(call(&alice, "notes.add", json!({ "body": "before any grant" })).await[0]["type"], "error", "no role: no notes");
+    assert_eq!(call(&alice, "notes.list", json!({})).await[0]["type"], "error");
+
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "editor")).await;
+    call(&ada, "members.grant", grant(ALICE, "OUGHT", "viewer")).await;
+    let hers = call(&alice, "notes.add", json!({ "body": "alice's thought", "author": "someone else" })).await;
+    assert_eq!((&hers[0]["type"], &hers[0]["author"], &hers[0]["principal"]), (&json!("note"), &json!("alice"), &json!(format!("idp:{ALICE}"))), "{hers:?}");
+    let adas = call(&ada, "notes.add", json!({ "body": "ada's thought" })).await;
+    let listed: Vec<Value> = call(&alice, "notes.list", json!({})).await.into_iter().filter(|e| e["type"] == "note").collect();
+    assert_eq!(listed.len(), 2, "one place: every member's notes, {listed:?}");
+
+    // Editor on IDENTITY: the ticket lands there. Viewer on OUGHT: refused,
+    // and the note stays open. A new shortcode needs tickets.create on *.
+    let up = call(&alice, "notes.upgrade", json!({ "id": hers[0]["id"], "epic": "IDENTITY", "parent": "IDENTITY-1" })).await;
+    assert_eq!(up[0]["ticket"], "IDENTITY-3", "{up:?}");
+    let no = call(&alice, "notes.upgrade", json!({ "id": adas[0]["id"], "epic": "OUGHT" })).await;
+    assert_eq!(no[0]["type"], "error", "{no:?}");
+    let new = call(&alice, "notes.upgrade", json!({ "id": adas[0]["id"], "epic": "NEWCODE" })).await;
+    assert!(new[0]["message"].as_str().unwrap_or_default().contains("on *"), "{new:?}");
+    assert!(call(&alice, "notes.get", json!({ "id": adas[0]["id"] })).await[0]["ticket"].is_null(), "still open");
+    let made = call(&ada, "notes.upgrade", json!({ "id": adas[0]["id"], "epic": "OUGHT" })).await;
+    assert_eq!(made[0]["ticket"], "OUGHT-3", "an admin's upgrade: {made:?}");
+}
+
 #[tokio::test]
 async fn a_watch_hears_only_what_the_watcher_can_see() {
     let w = start().await;

@@ -1,5 +1,5 @@
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{Comments, Members, ProviderOffer, Session, Tickets};
+use menger_tickets_api::{Comments, Members, Notes, ProviderOffer, Session, Tickets};
 use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
@@ -154,6 +154,8 @@ pub async fn build_rpc_login(
     let mut hub = DynamicHub::new("menger")
         .register(Tickets::with_access(Arc::clone(&store), access.clone()))
         .register(Comments::with_access(Arc::clone(&store), access.clone()))
+        // NOTE-2: `notes` beside them, over the same store.
+        .register(Notes::with_access(Arc::clone(&store), access.clone()))
         .register(Members::new(store, access.clone()))
         // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
         .register(Session::offering(offers).with_access(access.clone()));
