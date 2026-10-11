@@ -14,3 +14,5 @@
 # The diagrams service's Node program (COMPILE-4): `npm ci --prefix
 # diagrams/node` installs jsdom from the committed lockfile.
 /diagrams/node/node_modules
+# Python bytecode from scripts/ helpers.
+__pycache__/
