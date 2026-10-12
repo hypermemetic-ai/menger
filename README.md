@@ -1453,6 +1453,33 @@ the WorkOS session too, and comes back to `/login`. The environment lists
 logout URI (`workos authkit redirect-uris set …`, `workos authkit logout-uris
 set …`).
 
+**Our own sign-in page** (AUTH-22): `--identity <spec>` puts menger's own
+page in front of an **identity backend** chosen by configuration — WorkOS's
+User Management API with no AuthKit screen (`workos:<client_…>,social=google+github+apple`),
+plexus-idp's password grant (`plexus-idp:<issuer>,<audience>`, local only),
+or the in-process `memory` backend (tests, development). The page offers
+exactly what the backend can do: an email field (a six-digit code by email,
+or straight to the company's IdP for an SSO domain), a password form, a
+button per social provider, a TOTP code when the account has a factor, and
+`/login/account` to add or remove an authenticator app. Every call to the
+backend is made by the shell; WorkOS's API key comes from
+`MENGER_WORKOS_API_KEY` or `key=@<file>` and never rides a flag, a page or a
+log line. A sign-in ends in menger's own session, as every way in does; the
+backend's tokens stay server side beside it, are refreshed, and are revoked
+at sign-out (`POST /logout`, which lands on `/login` or a `next` the return
+rules allow). The hosted-AuthKit buttons above stay available beside it,
+and stay the default until `--identity` is set.
+
+| flag | |
+|---|---|
+| `--identity <spec>` | the backend (`MENGER_IDENTITY`); its provider joins the gate's, so its tokens open the socket as a bearer |
+| `--trusted-proxy <cidr>` | a proxy whose `X-Forwarded-For` is believed for the client's IP (repeatable); none: the TCP peer is the client |
+| `--return-origin <origin>` | another origin a sign-in may return to (repeatable) |
+
+The WorkOS environment lists `<public-url>/login/callback` as a redirect URI.
+plexus-login's README ("Our own sign-in page") has the safety design, the
+capability model and how a backend is swapped.
+
 **Automation signs in with plexus-idp** at **`/login?password`**: beside an
 email field, the password form (`--auth-provider idp=…`, the default password
 provider) shows only there, so the smoke and the end-to-end scripts never

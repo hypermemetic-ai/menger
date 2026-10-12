@@ -16,7 +16,7 @@
 //! # use plexus_core::plexus::DynamicHub;
 //! # use plexus_login::{Branding, LoginOptions, Wiring, simple::SimpleAccess};
 //! # async fn run() -> anyhow::Result<()> {
-//! const BRANDING: Branding = Branding { app: "myapp", version: "0.1.0", mark: "m" };
+//! const BRANDING: Branding = Branding { app: "myapp", version: "0.1.0", mark: "m", motto: "" };
 //! let opts = LoginOptions::new(BRANDING, 4470, 4471).with_providers(["workos=client_01ABC"])?;
 //! let wiring = Wiring::new(opts)?;
 //! let access = SimpleAccess::new(wiring.sessions(), &["oidc:workos/user_01ADMIN".to_string()])?;

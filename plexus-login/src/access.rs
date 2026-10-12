@@ -94,6 +94,8 @@ pub struct Branding {
     pub version: &'static str,
     /// The brand mark beside the title (menger: `m`).
     pub mark: &'static str,
+    /// AUTH-22: a line under the brand in the side column; empty for none.
+    pub motto: &'static str,
 }
 
 /// A stub of the app's rules for the crate's own unit tests: menger's role

@@ -20,13 +20,19 @@
 //!
 //! The page is self-contained (web/login.html), so it can later be handed
 //! to an IdP as its hosted login page.
+//!
+//! AUTH-22: with an identity backend (`--identity`), the page's ways in are
+//! [`crate::signin::SignInPage`]'s — our own page over the backend, its
+//! routes merged here — and its sign-ins end in the app's session through
+//! [`crate::app_session::AppContinuation`]. Every page goes out through
+//! [`crate::page::respond`]: `no-store`, unframeable, a strict CSP.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Form, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
 use plexus_auth_core::adapters::Nip98Adapter;
 use plexus_auth_core::identity::{Authenticator, Presentation};
@@ -36,9 +42,15 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::access::{Branding, LoginAccess};
+use crate::app_session::{AppContinuation, TokenStore};
+use crate::client_ip::{Peer, TrustedProxies};
 use crate::dev_login::{self, DevLogin};
+use crate::identity::IdentityBackend;
 use crate::login::{LoginButton, Provider};
+use crate::page::{self, esc, Body, Chrome};
 use crate::sessions::{self, Sessions};
+use crate::signin::{PageConfig, ReturnTo, SignInPage};
+use crate::throttle::Limits;
 
 /// What the shell's login is configured with (main's flags).
 pub struct LoginConfig<A: LoginAccess> {
@@ -71,6 +83,15 @@ pub struct LoginConfig<A: LoginAccess> {
     pub dev: Option<DevLogin<A>>,
     /// The app's access rules (SCAFFOLD-3: [`LoginAccess`]).
     pub access: Option<A>,
+    /// AUTH-22: the identity backend behind our own sign-in page.
+    pub identity: Option<Arc<dyn IdentityBackend>>,
+    /// AUTH-22: the proxies whose `X-Forwarded-For` is believed.
+    pub trusted_proxies: TrustedProxies,
+    /// AUTH-22: more origins a sign-in may return to (the shell's own
+    /// always may).
+    pub return_origins: Vec<String>,
+    /// AUTH-22: the sign-in's throttles.
+    pub limits: Limits,
 }
 
 /// The email field's button, as `/login/start?button=` names it.
@@ -100,6 +121,11 @@ pub struct Login<A: LoginAccess> {
     branding: Branding,
     dev: Option<DevLogin<A>>,
     access: Option<A>,
+    /// AUTH-22: our own sign-in page over the identity backend.
+    signin: Option<Arc<SignInPage>>,
+    /// AUTH-22: the backend's tokens, beside the sessions.
+    tokens: Option<Arc<TokenStore>>,
+    return_to: ReturnTo,
 }
 
 impl<A: LoginAccess> Login<A> {
@@ -122,6 +148,9 @@ impl<A: LoginAccess> Login<A> {
         }
         let password = match cfg.password {
             Some(none) if none == "none" => None,
+            // AUTH-22: with an identity backend, its page takes passwords
+            // (when it does); the provider form only when named.
+            None if cfg.identity.is_some() => None,
             Some(name) => {
                 anyhow::ensure!(
                     providers.get(&name).is_some_and(|(p, _)| p.oidc().is_some()),
@@ -161,7 +190,45 @@ impl<A: LoginAccess> Login<A> {
         }
         let mut origins = vec![origin_of(&public_url)];
         origins.extend(cfg.also.iter().map(|o| origin_of(o)));
+        let return_to = ReturnTo::new(origins.iter().chain(cfg.return_origins.iter()));
+        let secure = public_url.starts_with("https://");
+        let (signin, tokens) = match cfg.identity {
+            Some(backend) => {
+                let tokens = TokenStore::new(sessions.clone());
+                let chrome = Chrome {
+                    branding: cfg.branding,
+                    title: cfg.title.to_string(),
+                    facts: vec![
+                        ("instance".into(), cfg.title.to_string()),
+                        ("version".into(), cfg.branding.version.to_string()),
+                        ("sign-in".into(), backend.name().to_string()),
+                    ],
+                    dev_cookie: sessions.names().dev_cookie.clone(),
+                    dev_toggle: String::new(),
+                };
+                let cont = Arc::new(AppContinuation { sessions: sessions.clone(), tokens: tokens.clone(), chrome, secure });
+                let page = SignInPage::new(
+                    PageConfig {
+                        backend,
+                        public_url: public_url.clone(),
+                        origins: origins.clone(),
+                        return_to: return_to.clone(),
+                        trusted_proxies: cfg.trusted_proxies,
+                        limits: cfg.limits,
+                        flow_cookie: sessions.names().flow_cookie_for(&public_url),
+                        totp_issuer: cfg.branding.app.to_string(),
+                        reauth_secs: 15 * 60,
+                    },
+                    cont,
+                );
+                (Some(page), Some(tokens))
+            }
+            None => (None, None),
+        };
         Ok(Self {
+            signin,
+            tokens,
+            return_to,
             sessions,
             providers,
             password,
@@ -328,6 +395,41 @@ impl<A: LoginAccess> Login<A> {
     /// The page; `dev`: plexus-idp alone, the dev sign-in's panel
     /// (IDENTITY-35).
     pub fn page_for(&self, next: &str, error: Option<&str>, with_password: bool, dev: bool) -> String {
+        self.page_html(next, error, with_password, dev, None)
+    }
+
+    /// AUTH-22: our own sign-in page, when there is one.
+    pub fn signin(&self) -> Option<&Arc<SignInPage>> {
+        self.signin.as_ref()
+    }
+
+    /// AUTH-22: the identity backends' tokens, beside the sessions.
+    pub fn tokens(&self) -> Option<&Arc<TokenStore>> {
+        self.tokens.as_ref()
+    }
+
+    /// The page as a response, for a browser whose headers are `headers`
+    /// (`None`: a fresh flow), the flow cookie planted when new.
+    pub fn page_view(&self, headers: Option<&HeaderMap>, next: &str, error: Option<&str>, with_password: bool, dev: bool, status: StatusCode) -> Response {
+        let (flow, set) = match (&self.signin, headers) {
+            (Some(p), Some(h)) => {
+                let (id, set) = p.flow_id(h);
+                (Some(id), set)
+            }
+            (Some(p), None) => {
+                let (id, set) = p.flow_id(&HeaderMap::new());
+                (Some(id), set)
+            }
+            (None, _) => (None, None),
+        };
+        let mut r = page::respond(status, self.page_html(next, error, with_password, dev, flow.as_deref()));
+        if let Some(c) = set {
+            r.headers_mut().append(header::SET_COOKIE, c);
+        }
+        r
+    }
+
+    fn page_html(&self, next: &str, error: Option<&str>, with_password: bool, dev: bool, flow: Option<&str>) -> String {
         let next_e = esc(next);
         let toggle = self.dev.as_ref().map(|d| {
             format!(
@@ -418,53 +520,49 @@ impl<A: LoginAccess> Login<A> {
         let nostr = self.nostr.as_ref().map(|_| {
             format!(r#"<button class="alt" type="button" id="nostr" data-next="{next_e}">{KEY_ICON}Continue with nostr</button>"#)
         });
+        // AUTH-22: our own page's ways in come first; any other provider's
+        // buttons (and, at /login?password, the provider form) follow.
+        if let (Some(p), Some(flow)) = (&self.signin, flow) {
+            let (main, alts) = p.entry(flow, next);
+            let rest = [alts, buttons, password.unwrap_or_default()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n      ");
+            let (main, rest) = if main.is_empty() { (rest, String::new()) } else { (main, rest) };
+            return self.fill(error, toggle, Some(main).filter(|m| !m.is_empty()), rest, nostr, true, false);
+        }
         let alts = !buttons.is_empty() || nostr.is_some();
         self.fill(error, toggle, password, buttons, nostr, alts, false)
     }
 
     /// The instance, as the page's side column lists it.
-    fn facts(&self, dev: bool) -> String {
-        let via = match (&self.dev, &self.email) {
-            (Some(d), _) if dev => d.provider.clone(),
-            (_, Some(e)) => e.provider.clone(),
+    fn facts(&self, dev: bool) -> Vec<(String, String)> {
+        let via = match (&self.dev, &self.email, &self.signin) {
+            (Some(d), _, _) if dev => d.provider.clone(),
+            (_, _, Some(p)) => p.backend().name().to_string(),
+            (_, Some(e), _) => e.provider.clone(),
             _ => {
                 let mut names: Vec<&str> = self.providers.keys().map(String::as_str).collect();
                 names.sort_unstable();
                 names.join(", ")
             }
         };
-        [("instance", self.title.to_string()), ("version", self.branding.version.to_string()), ("sign-in", via)]
-            .iter()
-            .map(|(k, v)| format!("<dt>{k}</dt><dd>{}</dd>", esc(v)))
-            .collect()
+        vec![("instance".into(), self.title.to_string()), ("version".into(), self.branding.version.to_string()), ("sign-in".into(), via)]
     }
 
     #[allow(clippy::too_many_arguments)]
     fn fill(&self, error: Option<&str>, toggle: Option<String>, password: Option<String>, buttons: String, nostr: Option<String>, alts: bool, dev: bool) -> String {
         let heading = if dev {
-            r#"<h1>Sign in as anyone</h1>
-      <p class="sub">Through plexus-idp. Pick a seeded user, or name one.</p>"#.to_string()
+            page::heading("Sign in as anyone", "Through plexus-idp. Pick a seeded user, or name one.")
         } else {
-            format!(r#"<h1>Sign in</h1>
-      <p class="sub">to continue to {}</p>"#, esc(self.title))
+            page::heading("Sign in", &format!("to continue to {}", self.title))
         };
-        include_str!("../web/login.html")
-            .replace("{{APP}}", self.branding.app)
-            .replace("{{MARK}}", self.branding.mark)
-            .replace("{{DEV_COOKIE}}", &self.sessions.names().dev_cookie)
-            .replace("{{DEV}}", &toggle.unwrap_or_default())
-            .replace("{{HEADING}}", &heading)
-            .replace("{{FACTS}}", &self.facts(dev))
-            .replace("{{TITLE}}", self.title)
-            .replace("{{VERSION}}", self.branding.version)
-            .replace(
-                "{{ERROR}}",
-                &error.map(|e| format!(r#"<p class="error" role="alert">{}</p>"#, esc(e))).unwrap_or_default(),
-            )
-            .replace("{{OR}}", if password.is_some() && alts { r#"<div class="or">or</div>"# } else { "" })
-            .replace("{{PASSWORD}}", &password.unwrap_or_default())
-            .replace("{{BUTTONS}}", &buttons)
-            .replace("{{NOSTR}}", &nostr.unwrap_or_default())
+        let chrome = Chrome {
+            branding: self.branding,
+            title: self.title.to_string(),
+            facts: self.facts(dev),
+            dev_cookie: self.sessions.names().dev_cookie.clone(),
+            dev_toggle: toggle.unwrap_or_default(),
+        };
+        let _ = alts;
+        page::render(&chrome, Body { heading, error: error.map(str::to_string), main: password.unwrap_or_default(), alts: buttons, extra: nostr.unwrap_or_default() })
     }
 }
 
@@ -491,13 +589,15 @@ fn cli_next(state: &str) -> String {
 pub async fn page<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Query(q): Query<PageQuery>) -> Response {
     let next = match (q.cli.as_deref(), q.state.as_deref()) {
         (Some(_), Some(state)) if login.sessions.cli_waiting(state) => cli_next(state),
+        // AUTH-22: with our own page, where to land follows its return
+        // rules (a listed origin may be named).
+        _ if login.signin.is_some() => login.return_to.check(q.next.as_deref()),
         _ => safe_next(q.next.as_deref()),
     };
     if login.session(&headers).is_some() {
         return see_other(&next);
     }
-    let html = login.page_for(&next, None, q.password.is_some(), login.dev_on(&headers));
-    (StatusCode::OK, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(html)).into_response()
+    login.page_view(Some(&headers), &next, None, q.password.is_some(), login.dev_on(&headers), StatusCode::OK)
 }
 
 #[derive(Deserialize)]
@@ -602,7 +702,13 @@ pub struct CallbackQuery {
     error_description: Option<String>,
 }
 
-pub async fn callback<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Query(q): Query<CallbackQuery>) -> Response {
+pub async fn callback<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, peer: Peer, Query(q): Query<CallbackQuery>) -> Response {
+    // AUTH-22: a round trip our own page started is its own.
+    // With no provider button of its own, every callback is the page's.
+    let hosted = !login.buttons.is_empty() || login.email.is_some();
+    if let Some(p) = login.signin.clone().filter(|p| !hosted || p.owns_callback(&headers, q.state.as_deref())) {
+        return p.callback(headers, peer, crate::signin::CallbackQuery { code: q.code, state: q.state, error: q.error }).await;
+    }
     let fail = |why: &str| page_response(&login, "/", Some(why), StatusCode::UNAUTHORIZED);
     // IDENTITY-38: the provider's words go to the log, not the page — a
     // link can carry any `error_description` to this URL.
@@ -660,7 +766,7 @@ pub async fn callback<A: LoginAccess>(State(login): State<Arc<Login<A>>>, header
 /// whose access token names nobody — gives the session its name and email,
 /// when that user is the verified token's own subject. It came from the
 /// provider's token endpoint over the same exchange as the token.
-fn named_by(ctx: &mut AuthContext, provider: &str, response: &Value) {
+pub(crate) fn named_by(ctx: &mut AuthContext, provider: &str, response: &Value) {
     let Some(user) = response.get("user") else { return };
     let s = |k: &str| user.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
     let Some(id) = s("id") else { return };
@@ -801,10 +907,7 @@ pub async fn dev<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: He
     let (Some(d), Some(access)) = (login.dev.clone(), login.access.clone()) else {
         return page_response(&login, &next, Some("The dev sign-in is not offered here."), StatusCode::NOT_FOUND);
     };
-    let refuse = |e: &str, status| {
-        (status, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(login.page_for(&next, Some(e), false, true)))
-            .into_response()
-    };
+    let refuse = |e: &str, status| page::respond(status, login.page_for(&next, Some(e), false, true));
     // A plexus-idp account by its own password: exactly that account.
     if let Some(pw) = f.password.as_deref().filter(|p| !p.is_empty()) {
         return match login.password_grant(&d.provider, f.user.trim(), pw).await {
@@ -926,9 +1029,32 @@ fn dev_panel<A: LoginAccess>(d: &DevLogin<A>, next_e: &str) -> String {
     )
 }
 
-pub async fn logout<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap) -> Response {
+/// `POST /logout`'s optional form: where to land (AUTH-22: checked by the
+/// return rules; default the sign-in page).
+#[derive(Deserialize, Default)]
+pub struct LogoutForm {
+    next: Option<String>,
+}
+
+pub async fn logout<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
     if login.foreign(&headers) {
         return (StatusCode::FORBIDDEN, "Forbidden").into_response();
+    }
+    let form: LogoutForm = serde_urlencoded_form(&body);
+    // AUTH-22: a session our own page started ends at its backend too
+    // (server side), and the browser lands where the return rules allow.
+    if let (Some(tokens), Some(ctx)) = (&login.tokens, login.session(&headers)) {
+        if let Some(key) = ctx.get_metadata_string(login.sessions.session_key()).filter(|_| ctx.get_metadata_string("identity_backend").is_some()) {
+            tokens.sign_out(&key).await;
+            login.sessions.end_key(&key);
+            let to = login.return_to.allowed(form.next.as_deref()).unwrap_or_else(|| "/login".into());
+            let mut r = see_other(&to);
+            r.headers_mut().append(
+                header::SET_COOKIE,
+                HeaderValue::from_str(&format!("{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}", login.sessions.cookie_name(), login.secure())).unwrap(),
+            );
+            return r;
+        }
     }
     // IDENTITY-30: where the provider keeps a session of its own (WorkOS),
     // the browser goes on to end it, and comes back to the page.
@@ -1020,7 +1146,7 @@ pub async fn cli<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: He
         false,
         false,
     );
-    (StatusCode::OK, [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")], Html(html)).into_response()
+    page::respond(StatusCode::OK, html)
 }
 
 #[derive(Deserialize)]
@@ -1052,18 +1178,29 @@ pub fn router<A: LoginAccess>(login: Arc<Login<A>>) -> axum::Router {
         .route("/login/dev", post(dev::<A>))
         .route("/logout", post(logout::<A>))
         .route("/auth/cli", get(cli::<A>).post(cli_confirm::<A>))
-        .with_state(login)
+        .with_state(login.clone())
+        .merge(login.signin_routes())
+}
+
+impl<A: LoginAccess> Login<A> {
+    /// AUTH-22: our own sign-in page's routes (none without a backend):
+    /// for a shell that mounts the login routes itself.
+    pub fn signin_routes(&self) -> axum::Router {
+        self.signin.as_ref().map(|p| p.routes()).unwrap_or_default()
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
 fn page_response<A: LoginAccess>(login: &Login<A>, next: &str, error: Option<&str>, status: StatusCode) -> Response {
-    (
-        status,
-        [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")],
-        Html(login.page(next, error, false)),
-    )
-        .into_response()
+    login.page_view(None, next, error, false, false, status)
+}
+
+/// A urlencoded body read leniently: an empty or unreadable one is the
+/// default (a client may POST nothing).
+fn serde_urlencoded_form<T: Default + for<'de> Deserialize<'de>>(body: &[u8]) -> T {
+    let pairs: Vec<(String, String)> = url::form_urlencoded::parse(body).into_owned().collect();
+    serde_json::to_value(pairs.into_iter().collect::<HashMap<String, String>>()).ok().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
 }
 
 fn see_other(to: &str) -> Response {
@@ -1095,14 +1232,16 @@ pub fn origin_of(url: &str) -> String {
     }
 }
 
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
-}
 
 const KEY_ICON: &str = r#"<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M14.5 9.5a4.5 4.5 0 1 1-1.3-3.2M14.5 9.5L21 16v3h-3v-2h-2v-2l-2.6-2.6"/><circle cx="10" cy="9.5" r="1.3" fill="currentColor"/></svg>"#;
 
 fn icon_for(b: &LoginButton) -> &'static str {
-    let k = format!("{} {}", b.label, b.connection.as_deref().unwrap_or("")).to_ascii_lowercase();
+    icon_for_label(&b.label, b.connection.as_deref().unwrap_or(""))
+}
+
+/// A button's icon, by its label and connection.
+pub(crate) fn icon_for_label(label: &str, connection: &str) -> &'static str {
+    let k = format!("{label} {connection}").to_ascii_lowercase();
     if k.contains("google") {
         r##"<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5a5.6 5.6 0 0 1-2.4 3.6v3h3.9c2.3-2.1 3.5-5.2 3.5-8.8z"/><path fill="#34A853" d="M12 24c3.2 0 6-1.1 8-2.9l-3.9-3c-1.1.7-2.5 1.2-4.1 1.2-3.1 0-5.8-2.1-6.7-5H1.3v3.1A12 12 0 0 0 12 24z"/><path fill="#FBBC05" d="M5.3 14.3a7.2 7.2 0 0 1 0-4.6V6.6H1.3a12 12 0 0 0 0 10.8z"/><path fill="#EA4335" d="M12 4.8c1.8 0 3.3.6 4.6 1.8l3.4-3.4A12 12 0 0 0 1.3 6.6l4 3.1c.9-2.9 3.6-4.9 6.7-4.9z"/></svg>"##
     } else if k.contains("email") || k.contains("mail ") {

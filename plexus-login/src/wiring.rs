@@ -33,6 +33,9 @@ use plexus_core::plexus::Activation;
 use plexus_transport::{ProtectedResource, TransportServerBuilder};
 
 use crate::access::{Branding, LoginAccess};
+use crate::client_ip::TrustedProxies;
+use crate::identity::IdentityBackend;
+use crate::throttle::Limits;
 use crate::auth_backend::{BrowserLogin, LoginAuth};
 use crate::dev_login::DevLogin;
 use crate::login::{self, LoginButton, Provider};
@@ -42,7 +45,7 @@ use crate::web_login::{self, origin_of, Login, LoginConfig};
 
 /// What the login is configured with — menger's login flags, as data.
 /// [`LoginOptions::new`] fills the defaults; set what the app's flags say.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LoginOptions {
     /// `--auth-provider`s. None: login off.
     pub providers: Vec<Provider>,
@@ -81,6 +84,30 @@ pub struct LoginOptions {
     /// The cookie names and the session metadata key; default
     /// [`LoginNames::for_app`] of the branding's name.
     pub names: LoginNames,
+    /// AUTH-22: the identity backend behind our own sign-in page
+    /// (`--identity`, [`crate::backends::from_spec`]). Its gate provider
+    /// (an OIDC adapter for its tokens as a bearer) joins `providers`.
+    pub identity: Option<Arc<dyn IdentityBackend>>,
+    /// AUTH-22: `--trusted-proxy` CIDRs: whose `X-Forwarded-For` is
+    /// believed for the client's IP (throttles, the backend's risk checks).
+    pub trusted_proxies: TrustedProxies,
+    /// AUTH-22: `--return-origin`s: more origins a sign-in may send the
+    /// browser back to (the shell's own always may).
+    pub return_origins: Vec<String>,
+    /// AUTH-22: the sign-in's throttles.
+    pub limits: Limits,
+}
+
+impl std::fmt::Debug for LoginOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginOptions")
+            .field("providers", &self.providers)
+            .field("identity", &self.identity.as_ref().map(|b| b.name().to_string()))
+            .field("public_url", &self.public_url)
+            .field("trusted_proxies", &self.trusted_proxies)
+            .field("require", &self.require)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LoginOptions {
@@ -104,6 +131,10 @@ impl LoginOptions {
             title: branding.app,
             branding,
             names: LoginNames::for_app(branding.app),
+            identity: None,
+            trusted_proxies: TrustedProxies::default(),
+            return_origins: Vec::new(),
+            limits: Limits::default(),
         }
     }
 
@@ -135,8 +166,15 @@ impl Wiring {
     /// not https off loopback) and `--require-login` (it needs a provider),
     /// and makes the session table, its cookies named for this shell
     /// (IDENTITY-38).
-    pub fn new(opts: LoginOptions) -> anyhow::Result<Self> {
-        if opts.require && opts.providers.is_empty() {
+    pub fn new(mut opts: LoginOptions) -> anyhow::Result<Self> {
+        // AUTH-22: the identity backend's tokens are admitted at the gate
+        // through its provider-neutral OIDC adapter, as any provider's.
+        if let Some(p) = opts.identity.as_ref().and_then(|b| b.gate_provider()) {
+            if !opts.providers.iter().any(|q| q.name() == p.name()) {
+                opts.providers.push(p);
+            }
+        }
+        if opts.require && opts.providers.is_empty() && opts.identity.is_none() {
             anyhow::bail!("--require-login needs at least one --auth-provider to log in with");
         }
         let public_url = opts.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", opts.shell_port));
@@ -155,7 +193,7 @@ impl Wiring {
 
     /// Whether login is on (any provider).
     pub fn login_on(&self) -> bool {
-        !self.opts.providers.is_empty()
+        !self.opts.providers.is_empty() || self.opts.identity.is_some()
     }
 
     /// Where people reach the shell.
@@ -181,7 +219,7 @@ impl Wiring {
     /// page, so with no page it is unused.
     pub fn finish<A: LoginAccess>(self, access: A, dev: Option<DevLogin<A>>) -> anyhow::Result<Wired<A>> {
         let Self { opts, sessions, carriers, public_url, shell_origins } = self;
-        let login_on = !opts.providers.is_empty();
+        let login_on = !opts.providers.is_empty() || opts.identity.is_some();
         let login = if login_on && opts.page {
             Some(Arc::new(Login::new(
                 LoginConfig {
@@ -198,6 +236,10 @@ impl Wiring {
                     branding: opts.branding,
                     dev,
                     access: Some(access.clone()),
+                    identity: opts.identity.clone(),
+                    trusted_proxies: opts.trusted_proxies.clone(),
+                    return_origins: opts.return_origins.clone(),
+                    limits: opts.limits,
                 },
                 sessions.clone(),
             )?))
@@ -213,7 +255,9 @@ impl Wiring {
             opts.branding.app,
         ));
         // AUTH-7: the gate notices who signs in holding nothing.
-        let gate = carriers.map(|c| Arc::new(Gate::new(sessions.clone(), Some(c)).noticing(access.clone())));
+        // AUTH-22: with only an identity backend (no provider of its own,
+        // e.g. `memory`), the gate still reads the session cookie.
+        let gate = (carriers.is_some() || login_on).then(|| Arc::new(Gate::new(sessions.clone(), carriers).noticing(access.clone())));
         // RFC 9728's metadata names the OIDC issuers a client can sign in at.
         let issuers: Vec<String> = opts.providers.iter().filter_map(|p| p.oidc().map(|(issuer, _, _)| issuer.to_string())).collect();
         let protected = ProtectedResource::new(format!("http://127.0.0.1:{}", opts.ws_port), issuers);
@@ -221,7 +265,7 @@ impl Wiring {
         // the socket from a browser; a client sends no Origin.
         let mut origins = shell_origins;
         origins.extend(opts.allowed_origins.iter().cloned());
-        Ok(Wired { sessions, login, backend, gate, protected, origins, public_url, providers: opts.providers, access })
+        Ok(Wired { sessions, login, backend, gate, protected, origins, public_url, providers: opts.providers, access, identity: opts.identity })
     }
 }
 
@@ -245,12 +289,28 @@ pub struct Wired<A: LoginAccess> {
     pub providers: Vec<Provider>,
     /// The app's rules.
     pub access: A,
+    /// AUTH-22: the identity backend behind our own page, when there is one.
+    pub identity: Option<Arc<dyn IdentityBackend>>,
 }
 
 impl<A: LoginAccess> Wired<A> {
     /// Whether login is on (any provider).
     pub fn login_on(&self) -> bool {
-        !self.providers.is_empty()
+        !self.providers.is_empty() || self.identity.is_some()
+    }
+
+    /// AUTH-22: puts another identity backend behind the running sign-in
+    /// page ([`crate::signin::SignInPage::swap`]). The gate's providers are
+    /// fixed at startup: a new backend's bearer tokens are admitted after a
+    /// restart (its browser sessions at once).
+    pub fn swap_identity(&self, backend: Arc<dyn IdentityBackend>) -> bool {
+        match self.login.as_ref().and_then(|l| l.signin()) {
+            Some(p) => {
+                p.swap(backend);
+                true
+            }
+            None => false,
+        }
     }
 
     /// The providers a person is offered (`session.providers`, the page):
@@ -307,7 +367,7 @@ mod tests {
     use super::*;
     use crate::access::test_access::TestAccess;
 
-    const BRAND: Branding = Branding { app: "toy", version: "0.0.1", mark: "t" };
+    const BRAND: Branding = Branding { app: "toy", version: "0.0.1", mark: "t", motto: "" };
 
     #[test]
     fn no_provider_is_login_off_and_nothing_refused() {

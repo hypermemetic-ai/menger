@@ -1,9 +1,9 @@
 [package]
 name = "plexus-login"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
-description = "Login for a Plexus RPC hub — provider specs (OIDC, WorkOS, Auth0, plexus-idp, nostr, agent keys), the login page and its routes, sessions, the WebSocket gate and the auth backend — generic over the app's access rules"
+description = "Login for a Plexus RPC hub — our own sign-in page over a swappable identity backend (WorkOS, plexus-idp, memory), provider specs (OIDC, WorkOS, Auth0, plexus-idp, nostr, agent keys), the login page and its routes, sessions, the WebSocket gate and the auth backend — generic over the app's access rules"
 repository = "https://github.com/hypermemetic-ai/menger"
 readme = "README.md"
 keywords = ["plexus", "login", "oidc", "workos", "auth"]
@@ -41,6 +41,10 @@ serde_json = "1"
 futures = "0.3"
 anyhow = "1"
 tracing = "0.1"
+# AUTH-22: trusted proxies' CIDRs; TOTP's HMAC-SHA1 (RFC 6238).
+ipnet = "2"
+sha1 = "0.10"
+tokio = { version = "1", features = ["rt", "time", "macros"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

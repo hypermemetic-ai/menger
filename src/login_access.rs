@@ -129,7 +129,7 @@ pub fn offer(p: &Provider) -> ProviderOffer {
 }
 
 /// What the login page says of menger.
-pub const BRANDING: Branding = Branding { app: "menger", version: env!("CARGO_PKG_VERSION"), mark: "m" };
+pub const BRANDING: Branding = Branding { app: "menger", version: env!("CARGO_PKG_VERSION"), mark: "m", motto: "A plan is a program whose leaves are prose." };
 
 /// SCAFFOLD-9: the names menger's login writes — `menger_session[_<port>]`,
 /// `menger_login[_<port>]`, `menger_dev_login`, and `menger_session` as the
