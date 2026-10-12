@@ -1121,7 +1121,9 @@ synapse -P 4455 menger tickets waves --epics PLEXUS,MACRO,SYNAPSE,TRANSPORT,STAR
 ```
 
 A ticket has two boards of its own (MENGER-31), each on the ticket menu
-(right-click a ticket anywhere, or Shift+F10 on the focused one) beside
+(right-click a ticket anywhere — a chip inside a framed body too, MENGER-34:
+the frame's SDK posts `menger:ticket-menu { id, x, y }` and the app opens the
+same menu there — or Shift+F10 on the focused one) beside
 **Open**: **Wave board for <parent>** — `waves_under`, the parent's subtree
 (any depth, hosted shortcodes included, from the kept tree), at
 `#/waves/under/<PARENT>?at=<ID>` with the ticket scrolled to and outlined;

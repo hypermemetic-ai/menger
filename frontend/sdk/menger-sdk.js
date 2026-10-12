@@ -171,6 +171,10 @@
  *                 `reveal: { id, wave }` for a {wave: ID} clicked
  *   frame → host  menger:link { href }                    a link clicked
  *                 (1.8): its href as written — the host classifies it
+ *   frame → host  menger:ticket-menu { id, x, y, keyboard }  a ticket
+ *                 chip right-clicked (1.12, MENGER-34) — or Menu /
+ *                 Shift+F10 on a focused one (`keyboard`, the point its
+ *                 rect's bottom-left); `x`, `y` in this frame's viewport
  *   frame → host  menger:inspect { id, name, attrs }      a badge hovered
  *                 or focused (`attrs`: [[name, value], …])
  *   host → frame  menger:inspected { id, inspection }     its tooltip
@@ -240,7 +244,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.11.0";
+  var VERSION = "1.12.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -2100,6 +2104,53 @@
   }
   doc.addEventListener("click", takeLink);
   doc.addEventListener("auxclick", takeLink);
+
+  // -- the ticket menu (MENGER-34, 1.12) --------------------------------------
+  // A ticket chip — the nearest `[data-ticket-id]`, or an `<m-ticket ref>`,
+  // shadow roots included — right-clicked (or Menu / Shift+F10 on a focused
+  // one) asks the host for the app's ticket menu; anything else keeps the
+  // browser's own. Annotation mode keeps every click (it stops them first),
+  // and a right-click the body's own handler prevented is the body's.
+  function chipOf(path) {
+    for (var i = 0; i < path.length; i++) {
+      var n = path[i];
+      if (!n || n.nodeType !== 1) continue;
+      var id = n.getAttribute("data-ticket-id") || (n.localName === "m-ticket" && (n.getAttribute("ref") || n.getAttribute("ticket")));
+      if (id) return { el: n, id: id };
+    }
+    return null;
+  }
+  window.addEventListener("contextmenu", function (ev) {
+    if (annotating || ev.defaultPrevented) return;
+    var chip = chipOf(ev.composedPath ? ev.composedPath() : [ev.target]);
+    if (!chip) return;
+    ev.preventDefault();
+    post("menger:ticket-menu", { id: chip.id, x: ev.clientX, y: ev.clientY, keyboard: false });
+  });
+  doc.addEventListener("keydown", function (ev) {
+    if (annotating || ev.defaultPrevented || !(ev.key === "ContextMenu" || (ev.key === "F10" && ev.shiftKey))) return;
+    var el = doc.activeElement;
+    while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+    var path = [];
+    for (; el; el = el.parentNode || el.host) path.push(el);
+    var chip = chipOf(path);
+    if (!chip) return;
+    ev.preventDefault();
+    var r = chip.el.getBoundingClientRect();
+    menuFocus = path[0];
+    post("menger:ticket-menu", { id: chip.id, x: r.left, y: r.bottom, keyboard: true });
+  });
+  // The host hands focus back to this frame when its menu closes: to the chip
+  // (a pointer coming in instead puts focus where it lands).
+  var menuFocus = null;
+  window.addEventListener("pointerdown", function () {
+    menuFocus = null;
+  }, true);
+  window.addEventListener("focus", function () {
+    var el = menuFocus;
+    menuFocus = null;
+    if (el && el.isConnected && el.focus) el.focus();
+  });
 
   // -- mermaid ----------------------------------------------------------------
   // The placeholders md.rs writes (`.mermaid[data-state=pending]`, the

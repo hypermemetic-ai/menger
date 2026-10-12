@@ -11,6 +11,9 @@
  * 1.8 (MENGER-14) changes nothing here either: a link clicked in the body is
  * handed to the host (`menger:link`), which follows it, asks before it
  * leaves menger, or refuses it.
+ * 1.12 (MENGER-34) neither: a ticket chip right-clicked in the body (an
+ * `<m-ticket ref>`, or anything carrying `data-ticket-id`) opens the app's
+ * ticket menu (`menger:ticket-menu`); plain text keeps the browser's.
  *
  * Published by the app at /app/sdk/menger.d.ts, beside the SDK itself
  * (/app/sdk/menger-sdk.js) and the generated client's declarations

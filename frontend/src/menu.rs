@@ -67,6 +67,15 @@
 //! FILTER-22: a tag the app draws inside a ticket element — a row's id,
 //! status, kind or severity chip — opens the tag's filter menu instead
 //! (src/tags.rs); a right-click anywhere else on the element opens this one.
+//!
+//! MENGER-34: a framed body is its own document, out of the listener's
+//! reach, so its SDK (frontend/sdk/menger-sdk.js, 1.12) finds the chip
+//! itself — the nearest `[data-ticket-id]` or `m-ticket[ref]` — and posts
+//! `menger:ticket-menu { id, x, y, keyboard }` out; the bridge (src/frame.rs)
+//! checks it as every frame message is checked, maps the point through the
+//! frame's box ([`frame_point`]) and opens this same menu there
+//! ([`open_from_frame`]). Focus moving into a frame (the window's `blur`)
+//! closes it, as an outside mousedown does on the app's own document.
 
 use js_sys::Reflect;
 use leptos::prelude::*;
@@ -74,8 +83,42 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
+use std::cell::Cell;
+
 use crate::{cache, dom, keys, session, st_class, tags, waves};
-use menger_tickets_api::{Kind, Status};
+use menger_tickets_api::{AttrKind, KnowNothing, Kind, Status};
+
+thread_local! {
+    /// MENGER-34: the one menu's open state, for the frame bridge to open
+    /// it through ([`open_from_frame`]) — set when the menu mounts.
+    static OPEN: Cell<Option<RwSignal<Option<Target>>>> = const { Cell::new(None) };
+}
+
+/// MENGER-34: a ticket id as a frame wrote it, if it is one — `SHORTCODE-N`,
+/// trimmed, upper case (as the server reads it); anything else is nothing.
+pub(crate) fn frame_ticket(raw: &str) -> Option<String> {
+    let v = raw.trim();
+    (v.len() <= 64 && AttrKind::Ticket.check(v, &KnowNothing).is_ok()).then(|| v.to_ascii_uppercase())
+}
+
+/// MENGER-34: a point in a frame's document, `(x, y)`, on the app's
+/// viewport — the frame's box at `(left, top)`, `width` wide on screen for
+/// `client_width` CSS px inside (a mockup's frame is scaled).
+pub(crate) fn frame_point(left: f64, top: f64, width: f64, client_width: f64, x: f64, y: f64) -> (f64, f64) {
+    let s = if client_width > 0.0 && width > 0.0 { width / client_width } else { 1.0 };
+    (left + x * s, top + y * s)
+}
+
+/// MENGER-34: open the menu on `id` at `(x, y)` on the app's viewport, as
+/// a right-click (or, `keyboard`, Menu / Shift+F10) inside a frame asked —
+/// replacing any menu open, as a second right-click does.
+pub(crate) fn open_from_frame(id: String, x: f64, y: f64, keyboard: bool) {
+    let Some(target) = OPEN.with(Cell::get) else { return };
+    if keyboard {
+        keys::remember_focus();
+    }
+    target.set(Some(Target { id, shortcode: None, x, y }));
+}
 
 /// The menu's DOM id — the one element the document-level listeners
 /// test containment against.
@@ -322,6 +365,12 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
     let on_route = Closure::<dyn FnMut()>::new(move || close_menu(target));
     let _ = win.add_event_listener_with_callback("hashchange", on_route.as_ref().unchecked_ref());
     on_route.forget();
+
+    // MENGER-34: a mousedown inside a frame never reaches this document;
+    // focus leaving for the frame (or the window) is its trace here.
+    let on_blur = Closure::<dyn FnMut()>::new(move || close_menu(target));
+    let _ = win.add_event_listener_with_callback("blur", on_blur.as_ref().unchecked_ref());
+    on_blur.forget();
 }
 
 // ---------------------------------------------------------------------
@@ -415,6 +464,7 @@ pub(crate) fn TicketMenu(last_error: RwSignal<Option<String>>) -> impl IntoView 
     let toast = RwSignal::new(None::<Toast>);
     let toast_gen = StoredValue::new(0u32);
     install_listeners(target);
+    OPEN.with(|o| o.set(Some(target)));
 
     view! {
         {move || target.get().map(|t| menu_view(t, last_error, target, toast, toast_gen))}
@@ -658,7 +708,28 @@ fn toast_view(t: Toast, toast: RwSignal<Option<Toast>>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp, step, wave_items, WaveItem, EDGE};
+    use super::{clamp, frame_point, frame_ticket, step, wave_items, WaveItem, EDGE};
+
+    /// MENGER-34: what a frame says is a ticket only when it has a ticket's
+    /// form, read as the server reads it.
+    #[test]
+    fn a_frames_ticket_is_checked_by_form() {
+        assert_eq!(frame_ticket("PANTRY-4").as_deref(), Some("PANTRY-4"));
+        assert_eq!(frame_ticket(" menger-34 ").as_deref(), Some("MENGER-34"));
+        for bad in ["", "PANTRY", "PANTRY-", "-4", "PAN TRY-4", "A-4x", "#/ticket/A-1", "<b>A-1</b>"] {
+            assert_eq!(frame_ticket(bad), None, "{bad:?}");
+        }
+        assert_eq!(frame_ticket(&format!("{}-1", "A".repeat(80))), None, "too long");
+    }
+
+    /// MENGER-34: a frame's point lands at the frame's box plus the point,
+    /// scaled as a mockup's frame is.
+    #[test]
+    fn a_frames_point_maps_through_its_box() {
+        assert_eq!(frame_point(100.0, 50.0, 800.0, 800.0, 10.0, 20.0), (110.0, 70.0));
+        assert_eq!(frame_point(100.0, 50.0, 400.0, 800.0, 10.0, 20.0), (105.0, 60.0), "drawn at half size");
+        assert_eq!(frame_point(100.0, 50.0, 0.0, 0.0, 10.0, 20.0), (110.0, 70.0), "an unmeasured box: unscaled");
+    }
 
     /// MENGER-31: the wave items per ticket — a ticket with a parent gets
     /// the parent's board (it highlighted) and the board to itself; a root,

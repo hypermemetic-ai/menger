@@ -162,8 +162,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, links,
 /// the `transition` and `history_end` events, `tz` on the filtered reads,
 /// `set_status`'s `restore_children`, `source` and `message`; MENGER-30's
 /// 1.11 adds `update` and its events (`updated`, `blockers_changed`,
-/// `unlocks_removed`, `severity_changed`).
-pub(crate) const SDK_VERSION: &str = "1.11.0";
+/// `unlocks_removed`, `severity_changed`); MENGER-34's 1.12 hands a ticket
+/// chip's right-click (or Menu / Shift+F10) to the host
+/// (`menger:ticket-menu`), which opens the app's ticket menu there.
+pub(crate) const SDK_VERSION: &str = "1.12.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -509,6 +511,8 @@ pub(crate) enum Msg {
     /// MENGER-14: a link in the body was clicked — its `href` as written,
     /// classified here (src/links.rs), never by the frame.
     Link,
+    /// MENGER-34: a ticket chip in the body asked for the ticket menu.
+    TicketMenu,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -529,6 +533,7 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:cite" => Some(Msg::Cite),
         "menger:uncite" => Some(Msg::Uncite),
         "menger:link" => Some(Msg::Link),
+        "menger:ticket-menu" => Some(Msg::TicketMenu),
         "menger:size" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Size { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32, settled: settled.unwrap_or(false) })
@@ -1107,6 +1112,32 @@ fn on_message(ev: web_sys::MessageEvent) {
             };
             let restore = frame.clone().dyn_into::<web_sys::HtmlElement>().ok();
             links::follow(&href, links::From { ticket, place }, gesture, None, restore);
+        }
+        Some(Msg::TicketMenu) => {
+            // MENGER-34: the app's one ticket menu, on a chip in the body —
+            // only while a gesture is live with focus in this very frame (a
+            // body's script cannot pop it up; it writes nothing, so not
+            // IDENTITY-36's whole reading, whose engagement a pointer resting
+            // on the frame across an Esc in the app would fail), on what has
+            // a ticket's form, at a point inside the frame's box.
+            let Some(id) = field("id").and_then(|v| v.as_string()).and_then(|v| crate::menu::frame_ticket(&v)) else { return };
+            if annotate::is_on() || !gesture::live_in(&frame) {
+                return;
+            }
+            let (cw, ch) = (frame.client_width() as f64, frame.client_height() as f64);
+            let coord = |k: &str, max: f64| field(k).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, max.max(0.0)));
+            let (Some(x), Some(y)) = (coord("x", cw), coord("y", ch)) else { return };
+            let keyboard = field("keyboard").and_then(|v| v.as_bool()).unwrap_or(false);
+            // MENGER-15: the menu is the app's, drawn above the full-screen
+            // box (z-index) but never above the browser's own full screen,
+            // which steps aside instead — the chip is then in the page again.
+            if present::native() {
+                present::escape();
+                return;
+            }
+            let r = frame.get_bounding_client_rect();
+            let (vx, vy) = crate::menu::frame_point(r.left(), r.top(), r.width(), cw, x, y);
+            crate::menu::open_from_frame(id, vx, vy, keyboard);
         }
         Some(Msg::Uncite) => {
             if let Some(n) = field("cite").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0) {
@@ -1702,6 +1733,8 @@ mod tests {
         assert_eq!(parse_msg("menger:uncite", None, None), Some(Msg::Uncite));
         // MENGER-14: a link clicked.
         assert_eq!(parse_msg("menger:link", None, None), Some(Msg::Link));
+        // MENGER-34: a chip's ticket menu.
+        assert_eq!(parse_msg("menger:ticket-menu", None, None), Some(Msg::TicketMenu));
         for outbound in [
             "menger:theme", "menger:result", "menger:components", "menger:change", "menger:inspected", "menger:reveal",
             "menger:submitted", "menger:cleared", "menger:annotate", "menger:probe", "menger:locate", "menger:cited",
