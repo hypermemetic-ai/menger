@@ -168,6 +168,19 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger notes upgrade --id 7 --epic MENGER --parent MENGER-2
   ```
 
+  **Themes** (THEME-8) are the `themes` activation: a theme is a name and
+  token overrides for light and dark (`define`; the maps go through `-p`);
+  the site or a shortcode adopts one with `set` (`--reach frame|ticket|site`,
+  `--takeover off`), a ticket in its frontmatter (`theme:`, `reach:`,
+  `takeover:`, `frame-theme:`, `frame-takeover:`); `theme_for` says who
+  wears what and from which level. README "Themes and their scopes":
+
+  ```sh
+  synapse -P 4455 -p '{"name":"ocean","light":{"--accent":"#00796b"},"dark":{"--accent":"#4db6ac"}}' menger themes define
+  synapse -P 4455 menger themes set --scope PANTRY --theme pantry --reach site
+  synapse -P 4455 menger themes theme_for --id PANTRY-4
+  ```
+
   **Login** (IDENTITY-14) is off unless `--auth-provider` names a
   provider: `idp=…`, `auth0=…`, `oidc:<name>=…` or `nostr=…`. Each
   becomes an adapter that turns its credential into a Plexus identity at

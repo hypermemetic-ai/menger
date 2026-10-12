@@ -591,6 +591,8 @@ pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
             <h2>"Settings"</h2>
             // IDENTITY-22: who is signed in, their roles, sign-out.
             <crate::signin::AccountGroup />
+            // THEME-8: the reader's own theme, and every takeover off.
+            <crate::scopes::ReaderGroup />
             <fieldset class="group" id="settings-backend">
                 <legend>"Backend"</legend>
                 {now}

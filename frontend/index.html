@@ -27,7 +27,7 @@
 <!-- AGS-17: stamp a stored theme choice before first paint, so a reload
      never flashes the system theme; src/theme.rs owns the key and
      re-applies it once mounted (a native test pins the two agree). -->
-<script>try{var t=localStorage.getItem("menger.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<script>try{var t=localStorage.getItem("menger.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}try{var s=localStorage.getItem("menger.themes.site");if(s)document.documentElement.style.cssText=s}catch(e){}</script>
 <style>
   /* AGS-15: manifest's color system (../manifest/app/src/styles.css :root,
      status.ts). Every color the app paints is named exactly once, in the
@@ -406,6 +406,9 @@
   #ticket-page aside.props section.dag.empty { display: none; }
   #ticket-page aside.props section.dag h3 { margin-top: .5rem; }
   #ticket-page #notfound, #ticket-page .loading { order: 4; }
+  /* THEME-8: a region wearing its own theme (src/scopes.rs) paints its own
+     ground and ink; under one theme it is the page's as ever. */
+  #ticket-page, .mscope-frame { background: var(--bg); color: var(--ink); }
   /* The house code chip (`#nav .code`'s face, rule below) wherever the
      page names an id or a shortcode; the page's chips set their own mono
      face, and a linked one lights up like every other link. */
@@ -501,7 +504,8 @@
     margin: .6rem 0 0; color: var(--muted); font-size: 12px;
   }
   section.histsec p.restorable { color: inherit; }
-  article.ticket > p.none, article.ticket > p.loading { font-family: var(--sans); font-size: 13px; }
+  article.ticket > p.none, article.ticket > p.loading,
+  .mscope-frame > p.none, .mscope-frame > p.loading { font-family: var(--sans); font-size: 13px; }
   /* Relation and child rows: kind glyph · code chip · title · status chip.
      The title takes the slack and truncates (whole on hover); the chip is
      pinned right at the nav's chip width, so a column of them aligns. */

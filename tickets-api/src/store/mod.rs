@@ -1680,6 +1680,8 @@ struct Cache {
     /// ([`history::Log`]) — read at open, appended to by every write that
     /// changes a status or a kind, in the same critical section as its rows.
     log: history::Log,
+    /// THEME-8: every theme and what the site and each shortcode say.
+    themes: themes::Themes,
     written: u64,
 }
 
@@ -2016,6 +2018,7 @@ impl Cache {
             roles: roles::RoleEdits::new(),
             // MENGER-13: and the transition log.
             log: history::Log::began_at(None),
+            themes: themes::Themes::default(),
             written: 0,
         }
     }
@@ -2089,6 +2092,7 @@ impl Cache {
             roles: roles::RoleEdits::new(),
             // MENGER-13: and the transition log.
             log: history::Log::began_at(None),
+            themes: themes::Themes::default(),
             written: 0,
         }
     }
@@ -2830,6 +2834,8 @@ impl Store {
         // MENGER-13: and one without the transition log gains it, empty,
         // with the moment it began — no ticket gets a history it never had.
         history::migrate(&mut conn)?;
+        // THEME-8: and one without the themes tables gains them, empty.
+        themes::migrate(&mut conn)?;
         let cache = Self::load_cache(&mut conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
@@ -2916,6 +2922,8 @@ impl Store {
         cache.roles = roles::load(conn)?;
         // MENGER-13: the transition log and its kept indexes.
         cache.log = history::load(conn, &cache.at)?;
+        // THEME-8: the themes and settings, as stored.
+        themes::load(conn, &mut cache.themes)?;
         Ok(cache)
     }
 
@@ -5620,6 +5628,9 @@ mod rules;
 /// MENGER-30: `update` — any part of a ticket in one write.
 mod update;
 pub use update::{Update, Updated};
+/// THEME-8: the themes and what the site and each shortcode say.
+mod themes;
+pub use themes::ThemeChange;
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
 /// has commits)` interned as one cell; per shortcode and cell, a Roaring
@@ -5701,6 +5712,9 @@ mod tests_search;
 /// one write and its refusals; across a reopen.
 #[cfg(test)]
 mod tests_notes;
+/// THEME-8: define, set, theme_for (every row), refusals, a reopen.
+#[cfg(test)]
+mod tests_themes;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).

@@ -30,7 +30,7 @@ use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
-use crate::{dom, frame, mermaid};
+use crate::{dom, scopes};
 
 /// The localStorage key; the value is `"light"` or `"dark"`, and the key
 /// is absent for the system default. index.html's pre-paint script reads
@@ -174,10 +174,10 @@ pub(crate) fn Toggle() -> impl IntoView {
         save(t);
         apply(t);
         if prev.is_some_and(|p| p != mode) {
-            mermaid::rerender_all();
-            // COMP-4: a framed body takes the new tokens (and redraws its
-            // own diagrams) — the frame cannot read the app's CSS.
-            frame::retheme_all();
+            // THEME-8: the one repaint path — every region's tokens for the
+            // new mode, then (COMP-4) every framed body takes its region's
+            // (the frame cannot read the app's CSS) and the diagrams redraw.
+            scopes::repaint();
         }
         mode
     });

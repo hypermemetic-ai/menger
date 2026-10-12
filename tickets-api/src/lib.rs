@@ -104,6 +104,18 @@ pub use notes_activation::NotesClient;
 #[cfg(feature = "server")]
 pub use notes_activation::Notes;
 
+/// THEME-8: the themes vocabulary — [`Theme`], the levels that adopt one,
+/// the tokens a theme may set ([`themes::TOKENS`]) and the rule that decides
+/// who wears what ([`themes::resolve`]). Wasm-safe: the app resolves with it.
+pub mod themes;
+pub use themes::{Theme, ThemesEvent};
+/// THEME-8: the `themes` activation, declared once: the server's [`Themes`]
+/// and the browser's [`ThemesClient`].
+pub mod themes_activation;
+pub use themes_activation::ThemesClient;
+#[cfg(feature = "server")]
+pub use themes_activation::Themes;
+
 /// IDENTITY-21: the members vocabulary — [`Role`], [`Grant`],
 /// [`MembersEvent`]. Wasm-safe, like [`comments`].
 pub mod members;

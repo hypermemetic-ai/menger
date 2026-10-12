@@ -1629,6 +1629,77 @@ held anywhere — and `upgrade` is an editor's that also needs
 `tickets.create` where the ticket lands (the parent, else the shortcode's
 root, else `*`).
 
+### Themes and their scopes (THEME-8)
+
+A **theme** is a name and a map of token overrides over the app's tokens
+(index.html's `:root`, the list in `tickets-api/src/themes.rs`'s `TOKENS`),
+one map for light and one for dark; `default` overrides nothing. A token set
+for light only holds in dark when the token has one value in both (a face);
+a colour set for light only leaves dark's default. `themes` is the
+activation beside `tickets`; themes and settings are kept behind the cache,
+in `themes` and `theme_settings` tables a file gains, empty, on open.
+
+**Four levels, the nearest wins.** The **site** (the shell, nav, board,
+Home — with or without a ticket open), the **shortcode** (the ticket's, or
+the nearest one hosting it that says anything), the **ticket view** (its
+header, properties and body) and the **frame** (one body, or one component;
+a component takes its frame's theme). Each may adopt a theme with a
+**reach** — `frame` (only the frames inside it), `ticket` (itself and
+everything inside; the default) or `site` (and the site, while the ticket is
+the open one) — and may say **`takeover: off`**: it and everything inside
+ignore the themes above and wear `default`, or their own adoption. The
+**reader** is outermost: `#/settings` → Themes keeps their own site theme
+(in place of the site's) and "every takeover off" (their site theme, or
+`default`, everywhere) in this browser.
+
+A ticket says it in its body's frontmatter, as MENGER-15's `view:`:
+
+```yaml
+---
+theme: pantry          # the ticket view adopts it (and its frame)
+reach: ticket          # frame | ticket | site
+takeover: off          # ignore every theme from above
+frame-theme: ocean     # its frame alone adopts one (= theme: + reach: frame)
+frame-takeover: off    # its frame alone ignores the themes above
+---
+```
+
+The site and a shortcode say it over the wire:
+
+```sh
+synapse -P 4455 -p '{"name":"ocean","light":{"--accent":"#00796b","--bg":"#eef7f6"},"dark":{"--accent":"#4db6ac"}}' menger themes define
+synapse -P 4455 menger themes set --scope site --theme ocean                     # everyone's site theme (admin)
+synapse -P 4455 menger themes set --scope PANTRY --theme pantry --reach site     # a project, taking over while open
+synapse -P 4455 menger themes set --scope MENGER --takeover off                  # keep MENGER default
+synapse -P 4455 menger themes set --scope MENGER                                 # say nothing again
+synapse -P 4455 menger themes theme_for --id PANTRY-4                            # who wears what, and from where
+synapse -P 4455 menger themes list
+```
+
+| method | yields |
+| -- | -- |
+| `themes.define { name, light?, dark? }` | the `theme` as kept (its maps whole, keys written `--name`). A token not in the contract, a value with `< > { } ; \` or a line break (or over 200 bytes), a name that is not lowercase letters, digits and `-`, or `default` is one `error`, naming each |
+| `themes.list` | every `theme` (`default` first), then a `setting` for the site and each shortcode that says anything |
+| `themes.get { name }` | the `theme`, or one `error` naming the ones there are |
+| `themes.set { scope, theme?, reach?, takeover? }` | the `setting` as kept — `scope` `site` or a shortcode holding a ticket; `theme` none or `default` adopts none; saying nothing clears it. The site takes neither a reach nor `takeover: off`; an undefined theme is refused |
+| `themes.theme_for { id }` | `regions { id, regions: { site, ticket, frame }, levels }` — each region's `theme` and the `level` it came from (`none`, `site`, `shortcode` with `from`, `ticket`, `frame`), and what each level said |
+| `themes.watch` | `theme` (defined) and `setting` (moved), in order; `lagged { missed }` |
+
+Under login the reads are a viewer's; `define` and `set` an editor's —
+`define` on `*` (a theme is the whole site's), `set` on the shortcode it
+names — and the site's theme takes admin on `*`.
+
+**In the app** each region is its own token scope: the site's tokens on
+`<html>`'s own style, the ticket view's on `#ticket-page`, the frame's on
+the box its body sits in (`.mscope-frame`) — a region wearing its outer
+region's theme writes nothing and inherits. A frame reads its tokens where
+it sits, so it wears its region's. One repaint path (`src/scopes.rs`'s
+`repaint`) takes every cause — a theme defined, a setting moved, a ticket
+opened, left or amended, the reader's choice, the light/dark toggle — and
+re-themes every frame and redraws the diagrams in place; no reload. The
+root says what each region wears (`data-theme-site`, `data-theme-ticket`,
+`data-theme-frame`: `pantry ticket`).
+
 ### Login (IDENTITY-14)
 
 **The login is a crate of its own, [`plexus-login`](plexus-login/README.md)**

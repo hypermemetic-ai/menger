@@ -16,8 +16,9 @@
 //! - `<base target="_blank">` — a link the SDK does not take (MENGER-14,
 //!   below: it takes every click) opens a new top-level tab (the sandbox's
 //!   popups escape it), never the frame itself;
-//! - `<style id="menger-theme">` — the app's theme tokens ([`THEME_TOKENS`],
-//!   read off the app's `:root` as painted now) and `color-scheme`, so the
+//! - `<style id="menger-theme">` — the app's theme tokens ([`theme_tokens`],
+//!   read where the frame sits as painted now — THEME-8: its region's
+//!   theme, src/scopes.rs) and `color-scheme`, so the
 //!   first paint is in the app's theme;
 //! - `#menger-init` — the frame's channel, the SDK version, the theme, and
 //!   where the vendored mermaid bundle is and the strict config it runs
@@ -229,13 +230,12 @@ const MAX_HEIGHT: f64 = 50_000.0;
 
 /// COMP-1 pin 10: the theme tokens a frame receives — every custom property
 /// of index.html's light `:root` block (pinned equal to it by a native
-/// test in main.rs), sent with the values the app paints now.
-pub(crate) const THEME_TOKENS: [&str; 29] = [
-    "--bg", "--panel", "--card", "--ink", "--muted", "--line", "--accent", "--hover", "--row-sel", "--sel",
-    "--chip-bg", "--chip-fg", "--chip-line", "--tree-line", "--live", "--err-bg", "--err-fg", "--err-line",
-    "--scrim", "--shadow", "--kind-scope", "--kind-build", "--kind-execution", "--kind-gap", "--kind-spike",
-    "--annot", "--annot-hi", "--mono", "--sans",
-];
+/// test in main.rs), sent with the values the app paints now. THEME-8: the
+/// contract's list ([`menger_tickets_api::themes::TOKENS`]), the one a
+/// theme may set — so a frame receives exactly what a theme can move.
+pub(crate) fn theme_tokens() -> impl Iterator<Item = &'static str> {
+    menger_tickets_api::themes::TOKENS.iter().map(|t| t.name)
+}
 
 /// The painted mode, as a frame's `color-scheme` and `data-theme`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -267,7 +267,7 @@ impl Scheme {
 pub(crate) struct Shell<'a> {
     pub(crate) channel: &'a str,
     pub(crate) scheme: Scheme,
-    /// `(token, value)` — [`THEME_TOKENS`] as painted.
+    /// `(token, value)` — [`theme_tokens`] as painted.
     pub(crate) tokens: &'a [(String, String)],
     /// The vendored mermaid bundle, absolute (the frame's origin is opaque;
     /// a classic script loads across origins).
@@ -580,17 +580,25 @@ fn next_channel() -> String {
 
 /// The theme painted now: the root's `color-scheme`, and each token's value.
 fn read_theme() -> (Scheme, Vec<(String, String)>) {
+    read_theme_at(None)
+}
+
+/// THEME-8: the theme painted now where `at` is — the root's
+/// `color-scheme`, and each token's value as `at` inherits it (its region's
+/// theme: src/scopes.rs). `None`: the root's, the site's.
+fn read_theme_at(at: Option<&web_sys::Element>) -> (Scheme, Vec<(String, String)>) {
     let w = dom::window();
-    let style = w
-        .document()
-        .and_then(|d| d.document_element())
-        .and_then(|root| w.get_computed_style(&root).ok().flatten());
+    let root = w.document().and_then(|d| d.document_element());
+    let style = root.as_ref().and_then(|root| w.get_computed_style(root).ok().flatten());
     let Some(style) = style else {
         return (Scheme::Light, Vec::new());
     };
     let scheme = Scheme::from_color_scheme(&style.get_property_value("color-scheme").unwrap_or_default());
-    let tokens = THEME_TOKENS
-        .iter()
+    let style = match at.and_then(|el| w.get_computed_style(el).ok().flatten()) {
+        Some(here) => here,
+        None => style,
+    };
+    let tokens = theme_tokens()
         .filter_map(|name| {
             let v = style.get_property_value(name).ok()?;
             let v = v.trim();
@@ -609,9 +617,9 @@ fn set(obj: &Object, key: &str, value: &JsValue) {
     let _ = Reflect::set(obj, &JsValue::from_str(key), value);
 }
 
-/// `menger:theme` for the frame on `channel`, as painted now.
-fn theme_message(channel: &str) -> JsValue {
-    let (scheme, tokens) = read_theme();
+/// `menger:theme` for `frame` on `channel`, as painted now where it is.
+fn theme_message(frame: &web_sys::HtmlIFrameElement, channel: &str) -> JsValue {
+    let (scheme, tokens) = read_theme_at(Some(frame));
     let msg = Object::new();
     set(&msg, "type", &"menger:theme".into());
     set(&msg, "channel", &channel.into());
@@ -809,8 +817,9 @@ fn frames() -> Vec<web_sys::HtmlIFrameElement> {
 }
 
 /// COMP-1 pin 10: the painted mode changed — every frame takes the new
-/// tokens (and redraws its diagrams). Called by the theme toggle beside
-/// `mermaid::rerender_all`. Nothing here can throw.
+/// tokens (and redraws its diagrams). THEME-8: each its own region's, read
+/// where the frame is. Called by the one repaint path (src/scopes.rs's
+/// `repaint`) beside `mermaid::rerender_all`. Nothing here can throw.
 pub(crate) fn retheme_all() {
     let scheme = read_theme().0;
     for f in frames() {
@@ -820,7 +829,7 @@ pub(crate) fn retheme_all() {
             if f.has_attribute("data-follow") {
                 emulate(&f, Emulate { scheme: Some(scheme), reduce: None });
             } else if !f.has_attribute("data-page") {
-                post(&f, &theme_message(&channel));
+                post(&f, &theme_message(&f, &channel));
             }
         }
     }
@@ -910,7 +919,7 @@ fn on_message(ev: web_sys::MessageEvent) {
                 }
                 return;
             }
-            post(&frame, &theme_message(&channel));
+            post(&frame, &theme_message(&frame, &channel));
             // COMMENT-3: a frame born in annotation mode is in it too.
             if annotate::is_on() {
                 post(&frame, &annotate_message(&channel, true));
@@ -1327,7 +1336,8 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     let w = dom::window();
     let Some(doc) = w.document() else { return };
     let channel = next_channel();
-    let (scheme, tokens) = read_theme();
+    // THEME-8: the frame's first paint is its region's theme.
+    let (scheme, tokens) = read_theme_at(Some(container));
     let mermaid_url = format!("{}{}", w.location().origin().unwrap_or_default(), mermaid::ASSET_URL);
     let components = registry::snapshot();
     // MENGER-15: a whole document follows the app's mode unless a mockup

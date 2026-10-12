@@ -78,6 +78,28 @@
       "schema": [],
       "whoami": []
     },
+    "themes": {
+      "define": [
+        "dark",
+        "light",
+        "name"
+      ],
+      "get": [
+        "name"
+      ],
+      "list": [],
+      "schema": [],
+      "set": [
+        "reach",
+        "scope",
+        "takeover",
+        "theme"
+      ],
+      "theme_for": [
+        "id"
+      ],
+      "watch": []
+    },
     "tickets": {
       "amend": [
         "body",

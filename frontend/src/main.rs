@@ -271,6 +271,7 @@ mod mermaid;
 mod needs;
 mod registry;
 mod saved;
+mod scopes;
 mod session;
 mod settings;
 mod signin;
@@ -1476,7 +1477,8 @@ fn ticket_view(
                 <span class="t">{move || ticket.with(|t| t.title.clone())}</span>
             </h2>
             {move || lensed.outside(&me).then(outside_notice)}
-            {body}
+            // THEME-8: the body is the ticket's frame — its own token scope.
+            <div class=scopes::FRAME_CLASS>{body}</div>
             // AGS-20/22: decomposition, under the body — the relations in
             // the aside are what this ticket waits on and frees; this is
             // what it is made of, so it sits with the prose.
@@ -1795,6 +1797,9 @@ fn TicketPage(
     // `amended` event for this ticket replaces the body without a `get`.
     session::hold_body(id.clone(), body);
     on_cleanup(move || session::release_body(body));
+    // THEME-8: the open ticket's levels — its frontmatter, live; its
+    // shortcode's, asked — and the site's back when it closes.
+    scopes::open(id.clone(), body, socket);
     // SCALE-24: what this page fetches — its ticket, its blockers, its
     // children — it holds in the row cache while it is open.
     let holder = StoredValue::new(cache::Holder::new());
@@ -2031,6 +2036,9 @@ fn App() -> impl IntoView {
     // route: the ticket page's liveness is this same stream. SCALE-26: no
     // walk — `extents` and the board's one window, then live.
     session::drive(board, dock, conn, socket, last_error, tree);
+    // THEME-8: who wears what, painted — and painted again whenever a level
+    // says something new.
+    scopes::install();
 
     // MFE-21: the backend this page's app talks to — when it is not this
     // page's server (an override from #/settings), the status names it.
@@ -2841,9 +2849,26 @@ mod tests {
         let scan = scan(&app_css());
         let defined: std::collections::BTreeSet<String> =
             declarations(&scan.light).into_iter().map(|(name, _)| name).filter(|n| n.starts_with("--")).collect();
-        let sent: std::collections::BTreeSet<String> = crate::frame::THEME_TOKENS.iter().map(|t| t.to_string()).collect();
-        assert_eq!(sent.len(), crate::frame::THEME_TOKENS.len(), "a token listed twice");
-        assert_eq!(sent, defined, "frame::THEME_TOKENS vs index.html's light :root block");
+        let sent: std::collections::BTreeSet<String> = crate::frame::theme_tokens().map(str::to_string).collect();
+        assert_eq!(sent.len(), crate::frame::theme_tokens().count(), "a token listed twice");
+        assert_eq!(sent, defined, "themes::TOKENS vs index.html's light :root block");
+    }
+
+    /// THEME-8: the contract's defaults are index.html's values, token for
+    /// token — light from the `:root` block (its last word where a token is
+    /// said twice), dark from the stamped dark block, or light's where dark
+    /// says nothing (a face) — so a region painted `default` over a themed
+    /// one is exactly the app's own look.
+    #[test]
+    fn the_token_contract_holds_index_htmls_values() {
+        let scan = scan(&app_css());
+        let last = |block: &[String], name: &str| declarations(block).into_iter().rev().find(|(n, _)| n == name).map(|(_, v)| v);
+        for t in menger_tickets_api::themes::TOKENS {
+            let light = last(&scan.light, t.name).unwrap_or_else(|| panic!("{} is not in :root", t.name));
+            assert_eq!(light, t.light, "{}'s light default", t.name);
+            let dark = last(&scan.dark_attr, t.name).unwrap_or(light);
+            assert_eq!(dark, t.dark, "{}'s dark default", t.name);
+        }
     }
 
     /// AGS-17: the two dark mechanisms — the media query (guarded) and the
