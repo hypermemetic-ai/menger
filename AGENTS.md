@@ -392,6 +392,18 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
   across an await, no I/O on the read path); writes go through the cache
   write-through to the database. Don't hand any other module a database
   handle.
+- **An activation keeps only its methods** (owner, 2026-10-12, MENGER-29:
+  "make sure that the codebase activations aren't getting too huge"). A
+  method in an activation's `impl` is its attribute, the auth check and a
+  match on what the store answers; its logic lives in the store (a write
+  of any size in a module of its own under `tickets-api/src/store/`, its
+  tests in `store/tests_<topic>.rs`) or in a module beside the activation
+  (`tickets-api/src/activation/events.rs` — answers and changes as wire
+  events; `activation/sight.rs` — the caller's reach, clock and act;
+  `activation/tests.rs`). `tickets-api/tests/sizes.rs` holds every file
+  with an `#[plexus_macros::activation]`, and `store/mod.rs`, to a line
+  budget: over it, the test says what to move out and where. Raise a
+  budget only as a deliberate edit, never to make room for logic.
 - A ticket's outputs are tickets (owner, 2026-09-06): a report, spike
   result, checkpoint, or evaluation memo is filed as a CHILD ticket of
   the ticket that generated it (`parent:` in frontmatter; typed once
