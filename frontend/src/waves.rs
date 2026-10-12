@@ -292,7 +292,13 @@ pub(crate) fn heard(ev: &TicketsEvent, epics: &BTreeSet<String>) -> Heard {
         // and a kind the board filters on may let it in or out. Elsewhere, it
         // is a status change to the cards that wait on it.
         TicketsEvent::KindChanged { ticket, .. } if epics.contains(&ticket.epic) => Heard::Ask,
+        // MENGER-30: a card's blockers moved — what it waits on is asked
+        // again (its placement, and the ones downstream, follow in the
+        // `placements_changed` behind it). Elsewhere, nothing a card shows.
+        TicketsEvent::BlockersChanged { ticket, .. } if epics.contains(&ticket.epic) => Heard::Ask,
         TicketsEvent::Lagged { .. } => Heard::Ask,
+        // MENGER-30: a severity is on the card's row.
+        TicketsEvent::SeverityChanged { ticket, .. } if epics.contains(&ticket.epic) => Heard::Apply,
         TicketsEvent::PlacementsChanged { .. } | TicketsEvent::StatusChanged { .. } | TicketsEvent::KindChanged { .. } => {
             Heard::Apply
         }
@@ -402,6 +408,16 @@ pub(crate) fn apply(a: &mut Answer, ev: &TicketsEvent) -> bool {
                         moved = true;
                     }
                 }
+            }
+        }
+        // MENGER-30: the row takes its new severity; its place is the
+        // board's.
+        TicketsEvent::SeverityChanged { ticket, .. } => {
+            if let Some(card) = a.cards.iter_mut().find(|c| c.summary.id == ticket.id) {
+                let placement = card.placement;
+                card.summary = TicketSummary::from(ticket);
+                card.summary.placement = Some(placement);
+                moved = true;
             }
         }
         _ => {}
@@ -1317,6 +1333,16 @@ mod tests {
         assert_eq!(heard(&amended, &epics), Heard::Nothing, "a new title moves no card (its row repaints in place)");
         let unlocks = TicketsEvent::UnlocksChanged { ticket: ticket("PLEXUS-3"), added: "PLEXUS-9".into() };
         assert_eq!(heard(&unlocks, &epics), Heard::Nothing);
+        // MENGER-30: a card's blockers moved on the board asks again (what
+        // it waits on); elsewhere, and a blocker's side, nothing — their
+        // placements follow; a severity is the card's row.
+        let reblocked = |id: &str| TicketsEvent::BlockersChanged { ticket: ticket(id), added: vec!["PLEXUS-9".into()], removed: vec![] };
+        assert_eq!(heard(&reblocked("PLEXUS-3"), &epics), Heard::Ask);
+        assert_eq!(heard(&reblocked("MNG-4"), &epics), Heard::Nothing);
+        let unlocked = TicketsEvent::UnlocksRemoved { ticket: ticket("PLEXUS-3"), removed: "PLEXUS-9".into() };
+        assert_eq!(heard(&unlocked, &epics), Heard::Nothing);
+        let severe = TicketsEvent::SeverityChanged { ticket: ticket("PLEXUS-3"), previous: None };
+        assert_eq!(heard(&severe, &epics), Heard::Apply);
         // SDLC-13: a kind changed on the board may add or take a card; one
         // elsewhere is a status change to the cards that wait on it.
         let rekinded = |id: &str| TicketsEvent::KindChanged { ticket: ticket(id), previous: Kind::Doc };

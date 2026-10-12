@@ -239,6 +239,10 @@
       const stream = this.rpc.call("tickets.unlink_commits", { commits, id });
       yield* extractData(stream);
     }
+    async* update(id, block, body, kind, message, parent, severity, source, status, title, unblock) {
+      const stream = this.rpc.call("tickets.update", { block, body, id, kind, message, parent, severity, source, status, title, unblock });
+      yield* extractData(stream);
+    }
     async* watch(epic, filter, membership, tz) {
       const stream = this.rpc.call("tickets.watch", { epic, filter, membership, tz });
       yield* extractData(stream);

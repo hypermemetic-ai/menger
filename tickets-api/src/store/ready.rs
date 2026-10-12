@@ -261,6 +261,22 @@ impl Ready {
         (m, touched)
     }
 
+    /// MENGER-30: `t`'s `blocked_by` moved (`rows` hold it as moved): its
+    /// own count, from its blockers as they now stand, and whether that moves
+    /// it into or out of the ready set. No status moved, so no other count
+    /// does — `t` is the one ticket touched.
+    pub(super) fn reblocked_touching<'a>(&self, rows: Rows<'a>, t: &'a Row) -> (Move, Vec<Touched<'a>>) {
+        let mut m = Move::default();
+        let was = self.count(&t.id);
+        let now = unsatisfied_of(rows, t);
+        if now != was {
+            m.counts.push((t.id.clone(), now));
+        }
+        let touched: Vec<Touched<'a>> = vec![(t, was, now)];
+        self.settle(&touched, &mut m);
+        (m, touched)
+    }
+
     /// [`Ready::status_changed_touching`]'s move alone — what the tests
     /// count a fan-out by.
     #[cfg(test)]

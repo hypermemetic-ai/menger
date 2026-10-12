@@ -97,6 +97,10 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         }
         Change::LabelsChanged { ticket, added, removed } => TicketsEvent::LabelsChanged { ticket, added, removed },
         Change::UnlocksChanged { ticket, added } => TicketsEvent::UnlocksChanged { ticket, added },
+        // MENGER-30: `update`'s.
+        Change::UnlocksRemoved { ticket, removed } => TicketsEvent::UnlocksRemoved { ticket, removed },
+        Change::BlockersChanged { ticket, added, removed } => TicketsEvent::BlockersChanged { ticket, added, removed },
+        Change::SeverityChanged { ticket, previous } => TicketsEvent::SeverityChanged { ticket, previous },
         // SCALE-4: the parent's shortcode filtered `watch { epic }` on the
         // way here; the wire carries the id and the count.
         Change::ChildrenChanged {

@@ -406,6 +406,9 @@ pub(super) struct Changes {
     /// Ids born: every reference that named them leaves.
     pub(super) refs_born: Vec<String>,
     pub(super) refs_named: Vec<(RefKey, String)>,
+    /// MENGER-30: references a ticket no longer makes (`update { unblock }`
+    /// of an id that names no ticket).
+    pub(super) refs_unnamed: Vec<RefKey>,
     /// Each ticket whose `child_count` moves, with the count it moves to.
     pub(super) counts: Vec<(String, u64)>,
     /// `None`: the row goes.
@@ -452,6 +455,10 @@ impl Changes {
         for id in &self.refs_born {
             conn.prepare_cached("DELETE FROM forward_refs WHERE id = ?1")?
                 .execute([id])?;
+        }
+        for (id, key) in &self.refs_unnamed {
+            conn.prepare_cached("DELETE FROM forward_refs WHERE id = ?1 AND epic = ?2 AND seq = ?3")?
+                .execute(params![id, key.epic, key.seq])?;
         }
         for (key, referrer) in &self.refs_named {
             put_ref(conn, key, referrer)?;

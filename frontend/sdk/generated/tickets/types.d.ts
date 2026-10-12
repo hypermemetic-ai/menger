@@ -540,6 +540,41 @@ export interface TicketsEventUnlocksChanged {
     added: string;
     ticket: Ticket;
 }
+/** MENGER-30: an existing ticket's `unlocks` lost `removed`, which no
+longer waits on it (`update { unblock }`; yielded by `watch`). The
+full updated ticket, as `unlocks_changed`. */
+export interface TicketsEventUnlocksRemoved {
+    type: 'unlocks_removed';
+    removed: string;
+    ticket: Ticket;
+}
+/** MENGER-30: a ticket's `blocked_by` moved after birth (`update`;
+yielded by `watch`) — `added` and `removed` as they moved. The whole
+ticket rides along; each blocker's side follows, `unlocks_changed` or
+`unlocks_removed`, then the placements it moved. */
+export interface TicketsEventBlockersChanged {
+    type: 'blockers_changed';
+    added: string[];
+    removed: string[];
+    ticket: Ticket;
+}
+/** MENGER-30: a ticket's severity moved (`update`; yielded by `watch`);
+`previous` the one it had (`null`: none). The whole ticket rides along. */
+export interface TicketsEventSeverityChanged {
+    type: 'severity_changed';
+    previous: Severity | null;
+    ticket: Ticket;
+}
+/** MENGER-30: `update`'s answer — the ticket as the write left it, and
+the aspects that moved, in this order: `title`, `body`, `kind`,
+`status`, `parent`, `severity`, `blocked_by`. Empty when nothing
+would change, which wrote nothing; `watch` never carries it (it
+carries each aspect's own event). */
+export interface TicketsEventUpdated {
+    type: 'updated';
+    changed: string[];
+    ticket: Ticket;
+}
 /** AGS-19: the ticket `id` gained the child `added` — a child was born
 naming it as `parent`, or was moved under it by `set_parent`
 (yielded by `watch`). SCALE-4: the parent's id and its new
@@ -851,7 +886,7 @@ export interface TicketsEventHistoryEnd {
     beganUnix: number | null;
     restorable: string[];
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -864,6 +899,10 @@ export declare function isTicketsEventCommitsLinked(e: TicketsEvent): e is Ticke
 export declare function isTicketsEventCommitsUnlinked(e: TicketsEvent): e is TicketsEventCommitsUnlinked;
 export declare function isTicketsEventLabelsChanged(e: TicketsEvent): e is TicketsEventLabelsChanged;
 export declare function isTicketsEventUnlocksChanged(e: TicketsEvent): e is TicketsEventUnlocksChanged;
+export declare function isTicketsEventUnlocksRemoved(e: TicketsEvent): e is TicketsEventUnlocksRemoved;
+export declare function isTicketsEventBlockersChanged(e: TicketsEvent): e is TicketsEventBlockersChanged;
+export declare function isTicketsEventSeverityChanged(e: TicketsEvent): e is TicketsEventSeverityChanged;
+export declare function isTicketsEventUpdated(e: TicketsEvent): e is TicketsEventUpdated;
 export declare function isTicketsEventChildrenChanged(e: TicketsEvent): e is TicketsEventChildrenChanged;
 export declare function isTicketsEventParentChanged(e: TicketsEvent): e is TicketsEventParentChanged;
 export declare function isTicketsEventChildRemoved(e: TicketsEvent): e is TicketsEventChildRemoved;

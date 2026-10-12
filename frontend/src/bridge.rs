@@ -485,6 +485,10 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::CommitsUnlinked { ref ticket, .. }
         | E::LabelsChanged { ref ticket, .. }
         | E::UnlocksChanged { ref ticket, .. }
+        | E::UnlocksRemoved { ref ticket, .. }
+        | E::BlockersChanged { ref ticket, .. }
+        | E::SeverityChanged { ref ticket, .. }
+        | E::Updated { ref ticket, .. }
         | E::ParentChanged { ref ticket, .. }
         | E::Blocker { ref ticket } => inside(&ticket.epic).then_some(ev),
         E::Summary { ref summary } | E::Placed { ref summary, .. } | E::Node { ref summary, .. } | E::Hit { ref summary, .. } => {

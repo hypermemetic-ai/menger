@@ -310,14 +310,19 @@ fn remember(t: &TicketSummary) {
 }
 
 /// A `watch` event that carries a ticket whose row it replaces whole —
-/// `status_changed`, `kind_changed` (SDLC-13), `unlocks_changed` — applied:
+/// `status_changed`, `kind_changed` (SDLC-13), `unlocks_changed` — and
+/// MENGER-30's `blockers_changed`, `unlocks_removed`, `severity_changed` —
+/// applied:
 /// remembered as the newest row for its id, and put on the row the cache
 /// holds (dropped where no view holds it). True when a view holds it.
 pub(crate) fn upsert(ev: &TicketsEvent) -> bool {
     let ticket = match ev {
         TicketsEvent::StatusChanged { ticket, .. }
         | TicketsEvent::KindChanged { ticket, .. }
-        | TicketsEvent::UnlocksChanged { ticket, .. } => ticket,
+        | TicketsEvent::UnlocksChanged { ticket, .. }
+        | TicketsEvent::UnlocksRemoved { ticket, .. }
+        | TicketsEvent::BlockersChanged { ticket, .. }
+        | TicketsEvent::SeverityChanged { ticket, .. } => ticket,
         _ => return false,
     };
     let summary = TicketSummary::from(ticket);
@@ -868,11 +873,17 @@ async fn session(
             // where none does. SDLC-13: a `kind_changed` as a
             // `status_changed` — the row upserts, so every view that draws
             // it (the nav's glyph, the board's kind and status, the ticket
-            // page's kind) moves with it.
+            // page's kind) moves with it. MENGER-30: an `update`'s blockers
+            // (the ticket's and each blocker's side) and severity, the same
+            // way — the board's waves move by the `placements_changed`
+            // behind them, the ticket page's blockers with the row.
             ClientEvent::Data(
                 ev @ (TicketsEvent::StatusChanged { .. }
                 | TicketsEvent::KindChanged { .. }
-                | TicketsEvent::UnlocksChanged { .. }),
+                | TicketsEvent::UnlocksChanged { .. }
+                | TicketsEvent::UnlocksRemoved { .. }
+                | TicketsEvent::BlockersChanged { .. }
+                | TicketsEvent::SeverityChanged { .. }),
             ) => {
                 upsert(&ev);
             }

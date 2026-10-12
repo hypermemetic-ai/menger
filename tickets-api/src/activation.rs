@@ -82,9 +82,13 @@ mod events;
 #[cfg(feature = "server")]
 mod sight;
 #[cfg(feature = "server")]
+mod update;
+#[cfg(feature = "server")]
 use events::*;
 #[cfg(feature = "server")]
 use sight::*;
+#[cfg(feature = "server")]
+use update::*;
 #[cfg(all(test, feature = "server"))]
 mod tests;
 
@@ -108,7 +112,7 @@ mod tests;
         ],
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
-            "unlink_commits", "label", "answer", "clear_answer", "close_input", "reopen_input"
+            "unlink_commits", "label", "update", "answer", "clear_answer", "close_input", "reopen_input"
         ],
     )
 )]
@@ -859,6 +863,76 @@ impl Tickets {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
                 Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            }
+        }
+    }
+
+    /// MENGER-30: any part of a ticket in one write, all of it or none — the
+    /// rules, the steps and the events are [`crate::store::Update`]'s
+    /// module's. Yields exactly one event: `Updated { ticket, changed }`
+    /// (`changed` empty: nothing written or sent), `NotFound`,
+    /// `BodyTooLarge`, or one `Error` naming every refusal.
+    #[plexus_macros::method(
+        group = "write",
+        target = "id",
+        description = "Change any part of a ticket in one write — title, body, kind, status, parent, severity, blockers (block / unblock); all lands or none does; yields updated { ticket, changed }",
+        params(
+            id = "Ticket id, e.g. MENGER-40",
+            title = "New title (optional; must not be blank)",
+            body = "New markdown body, the whole of it (optional)",
+            kind = "New kind: scope | execution | build | gap | spike | doc (optional; set_kind's rules — to a doc the status becomes Doc)",
+            status = "New status (optional; with a new kind, its status as set_kind takes it; alone, as set_status takes it — Canceled cascades)",
+            parent = "Id of the ticket to file it under (optional; set_parent's rules)",
+            severity = "Critical | High | Medium | Low — or none, to clear it (optional)",
+            block = "Ticket ids it waits on from now on (optional; never itself, a cycle or a doc; an id not born yet is a forward reference)",
+            unblock = "Ticket ids it no longer waits on (optional; an id in both block and unblock is refused)",
+            source = "Where the change comes from: app | api | pipeline (optional, default api) — kept in its transitions",
+            message = "Why, kept in its transitions (optional)"
+        ),
+        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled", "Doc"], severity = ["Critical", "High", "Medium", "Low", "none"], source = ["app", "api", "pipeline"]),
+        example(note = "add a blocker after filing", params = r#"{"id": "THEME-4", "block": ["THEME-7"]}"#),
+        example(note = "swap a blocker and set the severity", params = r#"{"id": "THEME-4", "unblock": ["THEME-3"], "severity": "High"}"#),
+        example(note = "several aspects at once", params = r#"{"id": "MENGER-40", "title": "Board loses focus on reload", "kind": "gap", "status": "Ready", "parent": "MENGER-2"}"#)
+    )]
+    pub async fn update(
+        &self, auth: Option<&AuthContext>, reach: Reach,
+        id: String,
+        title: Option<String>,
+        body: Option<String>,
+        kind: Option<String>,
+        status: Option<String>,
+        parent: Option<String>,
+        severity: Option<String>,
+        block: Option<Vec<String>>,
+        unblock: Option<Vec<String>>,
+        source: Option<String>,
+        message: Option<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        let admitted = self.access.admit(auth, &reach);
+        stream! {
+            // AUTH-7: the gate held the grant on the target; a parent or a
+            // blocker beyond it is asked here (`update_reach`).
+            let asked = update_of(title, body, kind, status, parent, severity, block, unblock);
+            let caller = match admitted.and_then(|c| update_reach(&store, &c, &id, &asked).map(|()| c)) {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            let (act, sight) = match (act_of(&caller, source.as_deref(), message), sight_lens(&caller)) {
+                (Ok(a), Ok(s)) => (a, s),
+                (Err(message), _) | (_, Err(message)) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            match store.update_by(&id, asked, act).await {
+                Ok(crate::store::Updated { ticket, changed }) => yield TicketsEvent::Updated { ticket, changed },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
+                Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, sight.as_ref(), id)) },
             }
         }
     }
@@ -2040,7 +2114,7 @@ impl Tickets {
     #[plexus_macros::method(
         group = "read",
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
+        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
         params(
             epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)",
             filter = "A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256",

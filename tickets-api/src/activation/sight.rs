@@ -150,6 +150,10 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
         | TicketsEvent::CommitsUnlinked { ticket, .. }
         | TicketsEvent::LabelsChanged { ticket, .. }
         | TicketsEvent::UnlocksChanged { ticket, .. }
+        | TicketsEvent::UnlocksRemoved { ticket, .. }
+        | TicketsEvent::BlockersChanged { ticket, .. }
+        | TicketsEvent::SeverityChanged { ticket, .. }
+        | TicketsEvent::Updated { ticket, .. }
         | TicketsEvent::ParentChanged { ticket, .. }
         | TicketsEvent::Blocker { ticket } => Some(ticket.id.clone()),
         TicketsEvent::Summary { summary } | TicketsEvent::Placed { summary, .. } | TicketsEvent::Node { summary, .. } => {
@@ -288,11 +292,23 @@ pub(super) fn too_large(e: StoreError) -> TicketsEvent {
 /// may see — a ticket out of its reach that a cycle passes through, or that
 /// already waits on a doc's id, is said as such, not by its id.
 pub(super) fn redacted(e: StoreError, sees: impl Fn(&str) -> bool) -> String {
+    redact(e, &sees)
+}
+
+/// [`redacted`], over a reference — MENGER-30: an update's refusals are
+/// each redacted the same way.
+fn redact(e: StoreError, sees: &dyn Fn(&str) -> bool) -> String {
     const HIDDEN: &str = "(a ticket out of your reach)";
     let veil = |ids: Vec<String>| -> Vec<String> { ids.into_iter().map(|i| if sees(&i) { i } else { HIDDEN.to_string() }).collect() };
     match e {
         StoreError::Cycle { id, path } => StoreError::Cycle { id, path: veil(path) }.to_string(),
         StoreError::DocAwaited { id, by } => StoreError::DocAwaited { id, by: veil(by) }.to_string(),
+        // MENGER-30: `update`'s cycle, and each of its refusals.
+        StoreError::BlockCycle { id, path } => StoreError::BlockCycle { id, path: veil(path) }.to_string(),
+        StoreError::Refused { id, refusals } => {
+            let each: Vec<String> = refusals.into_iter().map(|r| redact(r, sees)).collect();
+            format!("update of '{id}' refused, nothing written — {}", each.join("; "))
+        }
         e => e.to_string(),
     }
 }
