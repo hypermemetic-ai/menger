@@ -371,7 +371,7 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
     let offers = wired.offered().map(menger::offer).collect();
     // AUTH-7: the protocol's auth over menger's backend, whose loopback
     // sign-in goes through this shell's login page.
-    let hub = build_rpc_login(&dir.path().join("t.db"), None, Default::default(), offers, access, wired.backend.clone(), None).await.unwrap();
+    let hub = build_rpc_login(&dir.path().join("t.db"), None, Default::default(), offers, access, wired.backend.clone(), None, menger_tickets_api::store::BODY_MAX_DEFAULT).await.unwrap();
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
     // AUTH-6/AUTH-7: the gate (it notices who signs in holding nothing); no
     // credential is the anonymous view; only a bearer or the access_token

@@ -79,7 +79,7 @@ pub async fn build_rpc_offering(
     let providers: Vec<AuthProvider> =
         offers.iter().map(|o| AuthProvider { name: o.name.clone(), kind: AuthKind::Browser, label: None }).collect();
     let backend = Arc::new(MengerAuth::new(access.clone(), providers, None, crate::login_access::BRANDING.app));
-    build_rpc_login(db_path, seed, shape, offers, access, backend, None).await
+    build_rpc_login(db_path, seed, shape, offers, access, backend, None, menger_tickets_api::store::BODY_MAX_DEFAULT).await
 }
 
 /// AUTH-7: the hub, and — when `access` has login on — the protocol's gate
@@ -88,6 +88,7 @@ pub async fn build_rpc_offering(
 /// declared roles seeded, menger's own signed-in methods
 /// ([`SIGNED_IN_GRANTS`]), and `resource_metadata` (RFC 9728's URL) named to
 /// an anonymous `_info`. Without login: the hub as it always was, no gate.
+#[allow(clippy::too_many_arguments)]
 pub async fn build_rpc_login(
     db_path: &Path,
     seed: Option<SeedSpec>,
@@ -96,10 +97,12 @@ pub async fn build_rpc_login(
     access: Access,
     backend: Arc<dyn AuthBackend>,
     resource_metadata: Option<String>,
+    body_max: usize,
 ) -> anyhow::Result<Arc<DynamicHub>> {
     let path = db_path.to_path_buf();
     let started = Instant::now();
-    let store = tokio::task::spawn_blocking(move || Store::open(&path)).await??;
+    // MENGER-15: and its cap on a body (`--max-body-bytes`).
+    let store = tokio::task::spawn_blocking(move || Store::open(&path)).await??.with_body_max(body_max);
     tracing::info!("database: {}", db_path.display());
     tracing::info!(
         "loaded {} tickets from the database in {:.1} ms",

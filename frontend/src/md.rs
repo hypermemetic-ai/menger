@@ -482,6 +482,42 @@ fn with_diagrams(block: &str, diagrams: &mut usize) -> String {
     out
 }
 
+/// MENGER-15: where a whole document's markup starts — past a byte-order
+/// mark, whitespace and comments — or `None` for a body that is not one.
+/// A whole document is one whose first markup is `<!doctype html` or an
+/// `<html` tag (any case).
+pub fn page_start(src: &str) -> Option<usize> {
+    let mut at = src.len() - src.trim_start_matches('\u{feff}').len();
+    loop {
+        at += src[at..].len() - src[at..].trim_start().len();
+        let rest = &src[at..];
+        if let Some(after) = rest.strip_prefix("<!--") {
+            at += 4 + after.find("-->")? + 3;
+            continue;
+        }
+        let head = rest.get(..14).unwrap_or(rest).to_ascii_lowercase();
+        let tag_ends = |n: usize| rest.as_bytes().get(n).is_some_and(|c| c.is_ascii_whitespace() || *c == b'>');
+        // A doctype alone is no document (COMP-4: it never framed): an
+        // element must follow it.
+        let doctype = head.starts_with("<!doctype")
+            && tag_ends(9)
+            && rest[9..].trim_start().get(..4).is_some_and(|w| w.eq_ignore_ascii_case("html"))
+            && rest.find('>').is_some_and(|e| {
+                let b = &rest.as_bytes()[e..];
+                b.windows(2).any(|w| w[0] == b'<' && w[1].is_ascii_alphabetic())
+            });
+        return (doctype || (head.starts_with("<html") && tag_ends(5))).then_some(at);
+    }
+}
+
+/// MENGER-15: is this body (its frontmatter already split off) a whole HTML
+/// document? Such a body frames as itself — its own head, styles and
+/// scripts — not as markdown, and not under the app's ticket styles
+/// (src/frame.rs, `page_srcdoc`).
+pub fn is_page(src: &str) -> bool {
+    page_start(src).is_some()
+}
+
 /// COMP-4: does this body (its frontmatter already split off) render in a
 /// frame? Yes when the markdown holds HTML outside code — a block or inline
 /// tag naming an HTML element or a custom element, or a comment (see the
@@ -489,6 +525,10 @@ fn with_diagrams(block: &str, diagrams: &mut usize) -> String {
 /// fences (mermaid's included) and indented code never frame: what is in
 /// them is text, and the parser never reports it as HTML.
 pub fn is_framed(src: &str) -> bool {
+    // MENGER-15: a whole document frames as itself.
+    if is_page(src) {
+        return true;
+    }
     if !src.contains('<') && !src.contains("component") {
         return false;
     }
@@ -968,6 +1008,29 @@ mod tests {
         let (fm, rest) = split_frontmatter("---\na: 1\n---");
         assert_eq!(fm, Some("a: 1\n"));
         assert_eq!(rest, "");
+    }
+
+    /// MENGER-15: a whole document — `<!doctype html` or `<html` first, past
+    /// a byte-order mark, whitespace and comments, any case — frames as
+    /// itself; a fragment, prose that mentions one, or a code block is not.
+    #[test]
+    fn a_whole_document_is_a_page() {
+        for page in [
+            "<!doctype html><html><body>x</body></html>",
+            "<!DOCTYPE HTML>\n<title>t</title>",
+            "\u{feff}\n  <!-- a\ncomment --><!-- two -->\n<html lang=\"en\">",
+            "<html>",
+            "<!doctype   html> <p>x</p>",
+        ] {
+            assert!(is_page(page), "{page:?}");
+            assert!(is_framed(page), "{page:?}");
+        }
+        for not in ["<div>x</div>", "<htmlx>", "<!doctype htm>", "<!DOCTYPE html>", "intro\n<!doctype html>", "```html\n<!doctype html>\n```", "<!-- unclosed <html>", ""] {
+            assert!(!is_page(not), "{not:?}");
+        }
+        let (fm, rest) = split_frontmatter("---\nview: mockup\n---\n<!doctype html><html></html>");
+        assert_eq!(fm, Some("view: mockup\n"));
+        assert!(is_page(rest));
     }
 
     #[test]

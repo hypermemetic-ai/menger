@@ -1033,6 +1033,52 @@
   .mframe { position: relative; max-width: 56rem; }
   .mframe > iframe { display: block; width: 100%; border: 0; }
   .mframe > iframe[data-state="pending"] { position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none; }
+  /* MENGER-15: the box a framed body sits in (src/present.rs) — a slim bar
+     (full screen; a mockup's devices, scheme and motion) over the frame. A
+     whole document is a page, not a flow: it gets a viewport of its own
+     and scrolls inside it. Full screen is the same box, fixed over the app
+     (and the browser's own full screen when a gesture allowed it). */
+  .framed { position: relative; max-width: 56rem; }
+  #ticket-page .framed { max-width: none; }
+  .framed-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem; justify-content: flex-end;
+    font-size: .78rem; color: var(--muted); padding: 0 0 .3rem; }
+  .framed-gap { flex: 1; }
+  .framed-group { display: inline-flex; }
+  .framed-group .framed-btn { border-radius: 0; margin-left: -1px; }
+  .framed-group .framed-btn:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+  .framed-group .framed-btn:last-child { border-radius: 0 4px 4px 0; }
+  .framed-btn { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 4px; padding: .12rem .5rem; cursor: pointer; }
+  .framed-btn:hover { background: var(--hover); }
+  .framed-btn[aria-pressed="true"] { background: var(--sel); border-color: var(--accent); }
+  .framed-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .framed-id { font-family: var(--mono); color: var(--ink); }
+  .framed-title { color: var(--ink); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+  .framed[data-view="inline"] .mframe, .framed[data-view="full"] .mframe { max-width: none; }
+  .mframe:not(.mframe-fixed) > iframe[data-page] { height: 80vh; border: 1px solid var(--line); border-radius: 4px; }
+  .framed.is-full { position: fixed; inset: 0; z-index: 950; max-width: none; margin: 0; display: flex; flex-direction: column;
+    background: var(--bg); padding: .4rem .6rem .6rem; box-sizing: border-box; }
+  .framed.is-full .framed-bar { padding-bottom: .4rem; border-bottom: 1px solid var(--line); margin-bottom: .4rem; }
+  .framed.is-full .framed-stage { flex: 1; min-height: 0; overflow: auto; }
+  .framed.is-full .mframe { max-width: none; }
+  .framed.is-full .mframe:not(.mframe-fixed) > iframe[data-page] { height: calc(100vh - 3.5rem); border: 0; border-radius: 0; }
+  .framed:fullscreen { background: var(--bg); }
+  /* A mockup: each device a frame at its own viewport, scaled to fit. */
+  .framed[data-view="mockup"] { max-width: none; }
+  .framed[data-view="mockup"] .framed-stage { display: flex; flex-wrap: nowrap; gap: 24px; align-items: flex-start; padding: 4px; }
+  .framed.is-full[data-view="mockup"] .framed-stage { justify-content: center; }
+  .device { margin: 0; flex: none; }
+  .device.hidden { display: none; }
+  .device-label { display: flex; gap: .5rem; font-size: .72rem; color: var(--muted); padding: 0 0 .3rem; }
+  .device-label .code { font-family: var(--mono); }
+  .device-scale { margin-left: auto; }
+  .device-screen { position: relative; overflow: hidden; box-sizing: content-box; background: var(--card);
+    border: 6px solid var(--ink); border-radius: 14px; box-shadow: 0 6px 18px var(--shadow); }
+  .device[data-kind="phone"] .device-screen { border-width: 8px; border-radius: 26px; }
+  .device[data-kind="desktop"] .device-screen { border-width: 18px 2px 2px; border-color: var(--line); border-radius: 8px 8px 4px 4px; }
+  .device-inner { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  .mframe.mframe-fixed { width: 100%; height: 100%; max-width: none; }
+  .mframe.mframe-fixed > iframe { width: 100%; height: 100%; border: 0; border-radius: 0; }
   /* COMP-14: a cite window (src/cite.rs) — laid by the host over an
      <m-cite> placeholder in a framed body, outside that frame: a header
      (the cited ticket's id, live status, title, and the section, linking

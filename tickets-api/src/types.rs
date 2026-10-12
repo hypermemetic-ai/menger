@@ -1379,6 +1379,13 @@ pub enum TicketsEvent {
     /// A *data* event: the call succeeded and the activation said no,
     /// which is not the same thing as a transport or remote failure.
     Error { message: String },
+    /// MENGER-15: a `create` or `amend` refused for its body's size — the
+    /// body was `bytes` bytes, past the server's cap, `max`
+    /// (`--max-body-bytes`, 8 MiB by default); `id` the amended ticket
+    /// (`None` for a `create`, which allocated no id). Typed, so a client can
+    /// say so without reading `message`; `message` says it in words. Nothing
+    /// was written.
+    BodyTooLarge { id: Option<String>, bytes: u64, max: u64, message: String },
     /// FILTER-13: one row of `tree` — a parent's child, or a shortcode's top
     /// row, that matches the filter or holds a match below it: `matched`
     /// whether it matches itself, `below` how many matches are strictly

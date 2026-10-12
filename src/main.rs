@@ -107,6 +107,16 @@ struct Args {
     #[arg(long)]
     verify_derived: bool,
 
+    /// MENGER-15: the longest ticket body `create` and `amend` store, in
+    /// bytes (default 8 MiB: a whole page with its media inlined). A larger
+    /// body is refused with the typed `body_too_large { bytes, max }`.
+    /// Bodies are not cached (SCALE-14), so this bounds one read or write,
+    /// not the process. Above ~9 MB the WebSocket's own 10 MB request limit
+    /// refuses first (JSON escaping grows a body), and the REST bridge's
+    /// request limit (2 MB, axum's default) is lower still.
+    #[arg(long, env = "MENGER_MAX_BODY_BYTES", value_name = "BYTES", default_value_t = menger_tickets_api::store::BODY_MAX_DEFAULT)]
+    max_body_bytes: usize,
+
     /// IDENTITY-14: admit callers through this identity provider
     /// (repeatable): `idp=<issuer>,<audience>`,
     /// `auth0=<domain>,<audience>[,<roles-claim>]`,
@@ -324,7 +334,7 @@ async fn main() -> anyhow::Result<()> {
     let wired = wiring.finish(MengerAccess(access.clone()), dev)?;
     let offers = wired.offered().map(menger::offer).collect();
     let metadata = wired.metadata_url().filter(|_| !args.stdio);
-    let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata).await?;
+    let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes).await?;
 
     local::log_activations(&hub);
 

@@ -208,9 +208,16 @@
  *   frame → host  menger:probed { id, ok: [bool, …] }
  *   host → frame  menger:locate { id, paths }             where these are
  *   frame → host  menger:located { id, found: [{ rect, text } | null, …] }
- *   frame → host  menger:key { key }                      `a`, `A`, or Esc in
- *                 the mode — the app's keys; `palette` for ⌘K (Ctrl+K off a
- *                 Mac), from anywhere in the body (1.6.1, MENGER-6)
+ *   frame → host  menger:key { key }                      `a`, `A`, `z`
+ *                 (full screen, 1.9) or Esc (always, 1.9: the host decides
+ *                 whether it leaves the mode or full screen) — the app's
+ *                 keys; `palette` for ⌘K (Ctrl+K off a Mac), from anywhere
+ *                 in the body (1.6.1, MENGER-6)
+ *   host → frame  menger:emulate { scheme, reduce }       a mockup's
+ *                 toggles (MENGER-15) — answered by the page shim
+ *                 (menger-page.js), inlined after this script in a
+ *                 mockup's frames: `prefers-color-scheme` and
+ *                 `prefers-reduced-motion` as emulated
  *   frame → host  menger:size   { height, settled }       whenever the
  *                 height changes; `settled` turns true once the first
  *                 paint is complete (diagrams drawn, the registry in hand,
@@ -233,7 +240,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.8.0";
+  var VERSION = "1.9.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -1798,15 +1805,17 @@
   }, true);
 
   // `a`/`A` turn the host's mode, and Esc leaves it — the app's keys, from
-  // a body that has focus; never from a field.
+  // a body that has focus; never from a field. MENGER-15 (1.9): `z` turns
+  // full screen, and Esc (always, now) leaves it — the host decides what an
+  // Esc closes.
   doc.addEventListener("keydown", function (ev) {
     if (ev.defaultPrevented || ev.isComposing || ev.ctrlKey || ev.metaKey || ev.altKey) return;
     var t = ev.composedPath ? ev.composedPath()[0] : ev.target;
     if (t && t.nodeType === 1 && (/^(input|textarea|select)$/i.test(t.tagName) || t.isContentEditable)) return;
-    if (ev.key === "a" || ev.key === "A") {
+    if (ev.key === "a" || ev.key === "A" || ev.key === "z") {
       ev.preventDefault();
       post("menger:key", { key: ev.key });
-    } else if (ev.key === "Escape" && annotating) {
+    } else if (ev.key === "Escape") {
       post("menger:key", { key: "Escape" });
     }
   });
