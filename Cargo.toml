@@ -10,11 +10,16 @@
 # workspace test run covers it; menger neither depends on it nor needs Node
 # to build or test (its Node-backed tests skip, saying so, where there is
 # none).
-members = [".", "tickets-api", "diagrams"]
+#
+# SCAFFOLD-5: `plexus-shell/` is the shell and LocalServer lifted out of
+# menger as a crate of their own (published as `plexus-shell`), and
+# `plexus-shell/toy` its worked example — both members so the workspace
+# test run covers them.
+members = [".", "tickets-api", "diagrams", "plexus-shell", "plexus-shell/toy"]
 
 [package]
 name = "menger"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 description = "A plan is a program whose leaves are prose — ticketing on Plexus RPC"
@@ -59,6 +64,11 @@ path = "src/main.rs"
 # app (frontend/), which takes it with `default-features = false`. Default
 # features here: `server`, the real thing.
 menger-tickets-api = { path = "tickets-api", version = "0.5.0" }
+
+# SCAFFOLD-5: the shell (the app's build as a table, stamped and served) and
+# the local server (`menger::local`'s serving) — lifted out of menger into
+# plexus-shell, which menger consumes: one copy.
+plexus-shell = { path = "plexus-shell", version = "0.1" }
 
 # MFE-10: the plexus 0.6 line — plexus-core 0.6.0, plexus-macros 0.6.0
 # (the `client` / `server_cfg` activation flags, MACRO-4) and
@@ -109,6 +119,11 @@ dirs = "6"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[build-dependencies]
+# SCAFFOLD-5: build.rs embeds frontend/dist through plexus-shell's build
+# half — no dependencies of its own.
+plexus-shell = { path = "plexus-shell", version = "0.1", default-features = false, features = ["build"] }
 
 [dev-dependencies]
 # Wire-level tests speak the same protocol as web/index.html.

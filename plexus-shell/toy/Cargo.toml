@@ -1,0 +1,37 @@
+# SCAFFOLD-5: plexus-shell's worked example — a hub with one activation and a
+# two-file app, the app embedded by this crate's build script and served by
+# plexus-shell's LocalServer. `cargo test -p plexus-shell-toy` runs it;
+# `cargo run -p plexus-shell-toy` serves it until Ctrl-C. Never published.
+[package]
+name = "plexus-shell-toy"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[features]
+# The toy always embeds its app; the feature is here to show the switch an
+# app uses (menger's `embedded-app`).
+default = ["embedded-app"]
+embedded-app = []
+
+[build-dependencies]
+plexus-shell = { path = "..", default-features = false, features = ["build"] }
+
+[dependencies]
+plexus-shell = { path = ".." }
+plexus-core = { path = "../../../plexus-core" }
+plexus-macros = { path = "../../../plexus-macros" }
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "v5"] }
+async-stream = "0.3"
+futures = "0.3"
+jsonrpsee = { version = "0.26", features = ["server", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+
+[dev-dependencies]
+jsonrpsee = { version = "0.26", features = ["ws-client"] }

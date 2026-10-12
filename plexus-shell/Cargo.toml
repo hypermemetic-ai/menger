@@ -1,0 +1,52 @@
+# SCAFFOLD-5: menger's shell and LocalServer (DIST-3), lifted so any Plexus
+# RPC app serves its frontend's build the same way — from disk in a
+# checkout, embedded in the binary when published — and starts as a library
+# call (a desktop host, a test). menger consumes it; there is no second copy.
+#
+# Three features, so each consumer takes only its half:
+#
+#   build   the build-script half (`plexus_shell::build::embed_dir`) — no
+#           dependencies at all; an app takes it as a build-dependency with
+#           `default-features = false, features = ["build"]`
+#   serve   the shell: `AppSource`, `ShellConfig`, `router`, `serve_on`
+#   local   (default) `LocalServer`: a hub's WebSocket and its shell on
+#           loopback, started from code
+[package]
+name = "plexus-shell"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Serve a Plexus RPC app's frontend build (from disk or embedded in the binary) beside its hub, and start the whole server as a library call"
+repository = "https://github.com/hypermemetic-ai/menger"
+readme = "README.md"
+keywords = ["plexus", "rpc", "embedded", "static-files", "tauri"]
+categories = ["web-programming::http-server"]
+# The crate's own sources; toy/ (the worked example, its own package) stays
+# in the repository.
+include = ["/src/**", "/README.md", "/LICENSE", "/Cargo.toml"]
+
+[features]
+default = ["local"]
+# The build-script half is always compiled (it needs nothing); the feature
+# names the intent in a build-dependency line.
+build = []
+serve = ["dep:axum", "dep:tokio", "dep:tracing"]
+local = ["serve", "dep:plexus-core", "dep:plexus-transport", "dep:jsonrpsee", "dep:anyhow"]
+
+[dependencies]
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["rt", "fs", "net", "sync", "time", "macros"], optional = true }
+tracing = { version = "0.1", optional = true }
+anyhow = { version = "1", optional = true }
+# The plexus 0.6 line, by sibling path in a checkout (as menger takes it) and
+# by version from crates.io once published.
+plexus-core = { path = "../../plexus-core", version = "0.6", optional = true }
+plexus-transport = { path = "../../plexus-transport", version = "0.5", default-features = false, optional = true }
+jsonrpsee = { version = "0.26", features = ["server"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"
+
+[package.metadata.docs.rs]
+all-features = true

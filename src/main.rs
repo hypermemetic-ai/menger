@@ -380,7 +380,7 @@ async fn main() -> anyhow::Result<()> {
                 // DIST-3: --app-dist given → that directory; else the build
                 // embedded in this binary (`embedded-app`), if any; else the
                 // checkout's frontend/dist.
-                app: args.app_dist.map(shell::AppSource::Dir).unwrap_or_else(shell::AppSource::preferred),
+                app: args.app_dist.map(shell::AppSource::Dir).unwrap_or_else(shell::preferred_app),
                 env: args.env.clone(),
                 login: web_login,
             };
