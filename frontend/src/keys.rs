@@ -102,6 +102,13 @@
 //! a click — and "Search everything" asks both without the filter and marks
 //! the hits outside it as it marks the jump rows.
 //!
+//! AGS-26: **the nav's cursor is the open ticket** (src/nav.rs). On a ticket
+//! page ↑/↓ (k/j) open the previous/next ticket in the nav from wherever focus
+//! is (a text field, a dialog, a menu aside), → moves focus from the nav into
+//! the page and ← back, and `f` filters the nav to the open ticket and its
+//! descendants; in the nav l/h open and close (the arrows no longer do). The
+//! board's j/k are as they were.
+//!
 //! COMMENT-3: **`a` (or `A`) is annotation mode** (src/annotate.rs) — on, and
 //! off again; Esc closes what the mode has open (a pin's list, a comment
 //! box) and then leaves it. A body's frame that has focus posts the same
@@ -153,15 +160,17 @@ pub(crate) enum Overlay {
 /// handlers implement appears here).
 pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
     ("Tab", "into the nav tree, the board rows, and the controls"),
-    ("j / ↓", "next row (nav tree, board)"),
-    ("k / ↑", "previous row"),
-    ("l / →", "expand a group, or step into it"),
-    ("h / ←", "collapse a group, or step out to it"),
+    ("j / ↓", "the next ticket in the nav, opened — from anywhere on a ticket page; the next row on the board"),
+    ("k / ↑", "the previous ticket, opened; on the nav's first ticket, its `under` filter one parent wider"),
+    ("→", "from the nav into the page beside it"),
+    ("←", "from the page back to the open ticket in the nav"),
+    ("l", "expand a group in the nav, or step into it"),
+    ("h", "collapse a group in the nav, or step out to it"),
     ("Home / End", "first / last row (nav tree, board)"),
     ("Enter", "open the focused ticket"),
     ("/ or Ctrl+K", "jump to a ticket (⌘K on a Mac)"),
     ("g h", "go to the board"),
-    ("f", "filter this view (the board, the wave board, the nav)"),
+    ("f", "on a ticket page: filter the nav to this ticket and its children; elsewhere: filter this view"),
     ("F", "filter every view (the global filter)"),
     ("/ filter SC", "the global filter becomes a shortcode (its tree)"),
     ("a or A", "annotation mode: outline the page, click anything to comment on it"),
@@ -1888,13 +1897,15 @@ mod tests {
             "Tab",         // reaches the nav
             "j / ↓",       // move
             "k / ↑",
-            "l / →",       // expand / into
-            "h / ←",       // collapse / out
+            "→",           // into the page (AGS-26)
+            "←",           // back to the nav (AGS-26)
+            "l",           // expand / into
+            "h",           // collapse / out
             "Home / End",
             "Enter",       // open
             "/ or Ctrl+K", // palette
             "g h",         // board
-            "f",           // the view's filter (WAVE-12)
+            "f",           // the view's filter (WAVE-12); the open ticket's tree (AGS-26)
             "F",           // the global filter (FILTER-11)
             "/ filter SC", // the palette's filter (FILTER-22)
             "a or A",      // annotation mode (COMMENT-3)

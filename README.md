@@ -225,6 +225,16 @@ windowed like the board: `counts { filter }` places each row, and a page is
 at }` after a jump; a membership watch keeps it live. At 10^6 its first rows
 show in ~0.3 s and the last ticket is a scroll away (five pages).
 
+The nav's cursor is the open ticket (AGS-26). Every navigation selects its
+row and centres it in the nav, as near as the list's ends allow, in Tree and
+Flat. On a ticket page ↑/↓ (k/j) open the previous/next ticket in the nav —
+from the nav or from anywhere else outside a text field, a dialog or a menu —
+passing over shortcode headings; → moves focus from the nav into the page and
+← back to the open ticket's row; in the tree, h/l open and close. `f` on a
+ticket page makes the nav's filter `under <the ticket>` (it and its
+descendants); ↑ on the nav's first ticket then widens that `under` by one
+parent — a shortcode's to its root's host — and drops it at a top root.
+
 The wave board (WAVE-5) is `#/waves/<SHORTCODE>` — e.g.
 `http://127.0.0.1:4456/app/#/waves/PLEXUS`, the platform's work in order:
 the shortcode and every shortcode hosted under it (the nav's `host` chain
