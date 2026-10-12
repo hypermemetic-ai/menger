@@ -25,11 +25,15 @@
 // the switch and must still carry its mark). A diagram must be redrawn in
 // the new theme's --diagram-* colours. Then (--rows) every row of THEME-8's
 // table is checked region by region, and (--signin-shell) the sign-in page
-// is shown to wear the site theme and follow it live.
+// is shown to wear the site theme and follow it live. THEME-4's walk
+// (--project): #/board → a project's ticket → back repaints twice, the
+// shell's and the frame's tokens the project's each time, no reload; a
+// hosted shortcode inherits until it says its own; a reader's "project
+// themes off" (settings, in another tab) puts the site's back.
 //
 // Usage (a throwaway server first — README "The sweep test"):
 //   node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --seed
-//   node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --browsers chromium,firefox --rows
+//   node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --browsers chromium,firefox --rows --project
 //
 // Exit 0 when every check held, 1 when one failed, 2 on usage. Playwright
 // comes from perf/node_modules ((cd perf && npm ci)).
@@ -48,6 +52,10 @@ const HELP = `usage: scripts/theme-sweep.mjs --ws PORT --shell PORT [options]
   --epic CODE          the shortcode the sweep's tickets live in   [SWEEP]
   --browsers LIST      chromium,firefox                            [chromium]
   --rows               also every row of THEME-8's table
+  --project            also THEME-4's walk into a project and out, and a
+                       hosted shortcode inheriting
+  --project-ticket ID  walk into this ticket's shortcode (e.g. PANTRY-4)
+                       instead of the sweep's own project
   --signin-shell PORT  also the sign-in page on a server with login
   --out DIR            screenshots and the report      [$TMPDIR/theme-sweep]
   --headed             show the browsers
@@ -69,6 +77,8 @@ try {
       epic: { type: 'string', default: 'SWEEP' },
       browsers: { type: 'string', default: 'chromium' },
       rows: { type: 'boolean', default: false },
+      project: { type: 'boolean', default: false },
+      'project-ticket': { type: 'string' },
       'signin-shell': { type: 'string' },
       out: { type: 'string' },
       headed: { type: 'boolean', default: false },
@@ -654,6 +664,7 @@ async function sweep(browserName, idsBy) {
   }
 
   if (opt.rows) await rows(browserName, ctx, idsBy);
+  if (opt.project) await project(browserName, ctx, idsBy);
   await browser.close();
 }
 
@@ -694,6 +705,121 @@ async function rows(browserName, ctx, idsBy) {
     check(browserName, `row ${i + 1}`, `nothing of the previous row's themes (${r.n} elements)`, r.found.length === 0, r.found.slice(0, 5).join(' | '));
   }
   synapse(['themes', 'set', '--scope', 'site']);
+  await page.close();
+}
+
+/** THEME-4: #/board → a project's ticket → back, a hosted shortcode, and a
+ * reader's "project themes off". */
+async function project(browserName, ctx, idsBy) {
+  const NAMES = TOKENS.map((t) => t.name);
+  const sc = `${EPIC}P`;
+  const hosted = `${EPIC}H`;
+  // The sweep's project: its own shortcode, hosted under the sweep's root;
+  // and a shortcode hosted under it.
+  const list = (code) => synapse(['tickets', 'list', '--epic', code]).filter((e) => e.type === 'ticket').map((e) => e.ticket);
+  let p = list(sc);
+  if (!p.length) {
+    const root = one(['tickets', 'create', '--epic', sc, '--title', 'A project', '--kind', 'scope', '--parent', idsBy.get('Theme sweep')]).ticket.id;
+    one(['tickets', 'create', '--epic', sc, '--title', 'A ticket of the project', '--kind', 'build', '--body', FRAMED_BODY(EPIC), '--parent', root]);
+    p = list(sc);
+  }
+  let h = list(hosted);
+  if (!h.length) {
+    const hroot = one(['tickets', 'create', '--epic', hosted, '--title', 'A hosted shortcode', '--kind', 'scope', '--parent', p.find((t) => t.kind === 'scope').id]).ticket.id;
+    one(['tickets', 'create', '--epic', hosted, '--title', 'A ticket of the hosted shortcode', '--kind', 'build', '--body', FRAMED_BODY(EPIC), '--parent', hroot]);
+    h = list(hosted);
+  }
+  const own = p.find((t) => t.kind !== 'scope').id;
+  const walk = opt['project-ticket'] ? opt['project-ticket'].toUpperCase() : own;
+  const walkSc = walk.replace(/-\d+$/, '');
+  const hticket = h.find((t) => t.kind !== 'scope').id;
+  synapse(['themes', 'set', '--scope', 'site']);
+  synapse(['themes', 'set', '--scope', hosted]);
+  synapse(['themes', 'set', '--scope', sc, '--theme', 'pantry', '--reach', 'site']);
+  if (walkSc !== sc) synapse(['themes', 'set', '--scope', walkSc, '--theme', 'pantry', '--reach', 'site']);
+  const step = `project ${walkSc}`;
+  const siteIs = (w) => page.waitForFunction((w) => (document.documentElement.getAttribute('data-theme-site') || '').startsWith(w + ' '), w, { timeout: 10000 }).catch(() => {});
+
+  const page = await ctx.newPage();
+  await page.goto(`${BASE}/#/`);
+  await ready(page);
+  await page.evaluate(() => {
+    window.__sweepMark = 'project';
+    window.__repaints = [];
+    new MutationObserver(() => window.__repaints.push(document.documentElement.getAttribute('data-theme-site'))).observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme-site'],
+    });
+  });
+  const tokensAt = () => page.evaluate(regionTokens, NAMES);
+  const frameAccent = async () => {
+    const fr = (await frameDocs(page))[0];
+    return fr ? fr.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()) : null;
+  };
+  const board = await tokensAt();
+  check(browserName, step, 'the board wears the site theme', (board.worn.site || '').startsWith('default '), board.worn.site);
+  // In, by the app's own navigation (no reload).
+  await page.evaluate((id) => (location.hash = `#/ticket/${id}`), walk);
+  await siteIs('pantry');
+  await page.waitForSelector('iframe.mframe-doc', { timeout: 10000 }).catch(() => {});
+  await sleep(1000);
+  const inside = await tokensAt();
+  const fa = await frameAccent();
+  check(browserName, step, `in ${walk}: the shell wears pantry, from ${walkSc}`, (inside.worn.site || '').startsWith('pantry ') && /shortcode/.test(inside.worn.ticket || ''), `${inside.worn.site} / ${inside.worn.ticket}`);
+  check(browserName, step, `in ${walk}: the frame's tokens are the shell's`, fa === null || fa === inside.site['--accent'], `${fa} vs ${inside.site['--accent']}`);
+  let r = await scanPage(page, staleOf(board, inside));
+  check(browserName, step, `in ${walk}: nothing of the site theme left (${r.n} elements)`, r.found.length === 0, r.found.slice(0, 5).join(' | '));
+  await page.screenshot({ path: join(OUT, `${browserName}.project.in.png`) });
+  // Out.
+  await page.evaluate(() => (location.hash = '#/'));
+  await siteIs('default');
+  await sleep(600);
+  const out = await tokensAt();
+  check(browserName, step, 'back on the board: the site theme again', (out.worn.site || '').startsWith('default '), out.worn.site);
+  r = await scanPage(page, staleOf(inside, out));
+  check(browserName, step, `back on the board: nothing of pantry left (${r.n} elements)`, r.found.length === 0, r.found.slice(0, 5).join(' | '));
+  const repaints = await page.evaluate(() => window.__repaints.filter((v, i, a) => i === 0 || v !== a[i - 1]));
+  check(browserName, step, 'repainted twice (in, out)', repaints.length === 2, repaints.join(' → '));
+  check(browserName, step, 'no reload', (await page.evaluate(() => window.__sweepMark)) === 'project');
+  await page.screenshot({ path: join(OUT, `${browserName}.project.out.png`) });
+
+  // A hosted shortcode inherits — painted at once, no detour by the site's.
+  await page.evaluate((id) => (location.hash = `#/ticket/${id}`), own);
+  await siteIs('pantry');
+  await sleep(600);
+  await page.evaluate(() => (window.__repaints = []));
+  await page.evaluate((id) => (location.hash = `#/ticket/${id}`), hticket);
+  await page.waitForSelector('iframe.mframe-doc', { timeout: 10000 }).catch(() => {});
+  await sleep(1200);
+  let w = await tokensAt();
+  const detour = await page.evaluate(() => window.__repaints);
+  check(browserName, 'hosted', `${hticket} (${hosted}, hosted under ${sc}) inherits pantry`, (w.worn.site || '').startsWith('pantry ') && /shortcode/.test(w.worn.ticket || ''), `${w.worn.site} / ${w.worn.ticket}`);
+  check(browserName, 'hosted', `from ${own} to ${hticket}: no repaint through the site's`, detour.every((v) => (v || '').startsWith('pantry ')), detour.join(' → ') || 'none');
+  synapse(['themes', 'set', '--scope', hosted, '--theme', 'ocean']);
+  await page.waitForFunction(() => (document.documentElement.getAttribute('data-theme-ticket') || '').startsWith('ocean '), null, { timeout: 10000 }).catch(() => {});
+  w = await tokensAt();
+  check(browserName, 'hosted', `${hosted}'s own setting (ocean) overrides, live`, (w.worn.ticket || '').startsWith('ocean ') && (w.worn.site || '').startsWith('default '), `${w.worn.site} / ${w.worn.ticket}`);
+  synapse(['themes', 'set', '--scope', hosted]);
+  await siteIs('pantry');
+
+  // A reader turns project themes off in settings, in another tab: the
+  // project's page wears the site's, live.
+  await page.evaluate((id) => (location.hash = `#/ticket/${id}`), walk);
+  await siteIs('pantry');
+  const other = await ctx.newPage();
+  await other.goto(`${BASE}/#/settings`);
+  await ready(other);
+  await other.check('#theme-projects-off');
+  await siteIs('default');
+  w = await tokensAt();
+  check(browserName, 'projects off', `${walk} wears the site's theme`, (w.worn.site || '').startsWith('default ') && (w.worn.ticket || '').startsWith('default '), `${w.worn.site} / ${w.worn.ticket}`);
+  await other.uncheck('#theme-projects-off');
+  await siteIs('pantry');
+  w = await tokensAt();
+  check(browserName, 'projects off', 'turned back on: pantry again', (w.worn.site || '').startsWith('pantry '), w.worn.site);
+  await other.close();
+  synapse(['themes', 'set', '--scope', sc]);
+  if (walkSc !== sc) synapse(['themes', 'set', '--scope', walkSc]);
   await page.close();
 }
 

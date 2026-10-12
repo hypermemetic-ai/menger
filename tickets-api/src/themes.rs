@@ -361,6 +361,10 @@ pub struct Reader {
     /// Every takeover off: they wear their own site theme (or `default`)
     /// everywhere, whatever the site, a shortcode, a ticket or a frame says.
     pub takeovers_off: bool,
+    /// THEME-4: project themes off — no shortcode's setting reaches them
+    /// (the shortcode level says nothing); the site's, a ticket's and a
+    /// frame's still do.
+    pub projects_off: bool,
 }
 
 /// What a region wears, and the level it came from.
@@ -410,7 +414,7 @@ pub fn resolve(levels: &Levels, reader: &Reader) -> Regions {
     if reader.takeovers_off {
         return Regions { site: base.clone(), ticket: base.clone(), frame: base };
     }
-    let shortcode = levels.shortcode.as_ref().map(|s| (s.said(), Some(s.scope.clone())));
+    let shortcode = levels.shortcode.as_ref().filter(|_| !reader.projects_off).map(|s| (s.said(), Some(s.scope.clone())));
     let steps = [
         (ThemeLevel::Shortcode, shortcode.unwrap_or_default()),
         (ThemeLevel::Ticket, (levels.ticket.clone(), None)),

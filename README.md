@@ -1671,8 +1671,22 @@ everything inside; the default) or `site` (and the site, while the ticket is
 the open one) — and may say **`takeover: off`**: it and everything inside
 ignore the themes above and wear `default`, or their own adoption. The
 **reader** is outermost: `#/settings` → Themes keeps their own site theme
-(in place of the site's) and "every takeover off" (their site theme, or
-`default`, everywhere) in this browser.
+(in place of the site's), "project themes off" (THEME-4: no shortcode's
+setting reaches them — the site's, a ticket's and a frame's own still do)
+and "every takeover off" (their site theme, or `default`, everywhere) in
+this browser.
+
+**A project adopts a theme** (THEME-4): a shortcode's setting is kept with
+it; a hosted shortcode without one inherits the nearest host's that says
+anything, up the kept tree, ending at `default` — the server answers it
+(`theme_for`), and the app paints the same answer at once from the
+shortcode tree it keeps, so walking from a project into a shortcode hosted
+under it never detours by the site's theme. Walking into a project's ticket
+repaints the page through THEME-7's one path, and walking out (the board,
+Home, any page without a ticket open — they span projects) puts the site
+theme back. The tracker's spelling is `themes set --scope PANTRY …` (THEME-8);
+the `tickets set_theme --epic` of THEME-4's first draft was not added beside
+it.
 
 A ticket says it in its body's frontmatter, as MENGER-15's `view:`:
 
@@ -1773,14 +1787,18 @@ font-family): none may hold a value the old theme painted that the new one
 does not; no page may reload and no frame be replaced; a component's
 `on('theme')` is heard once, after the tokens; the diagrams are redrawn in
 the new `--diagram-*`; a planted element in an old value is found (the
-control). `--rows` checks THEME-8's table region by region,
-`--signin-shell` the sign-in page:
+control). `--rows` checks THEME-8's table region by region, `--project`
+THEME-4's walk (`#/board` → a project's ticket → back: two repaints, no
+reload, the shell's and the frame's tokens the project's; a hosted
+shortcode inheriting and then saying its own; "project themes off" from
+another tab; `--project-ticket PANTRY-4` walks into that ticket's
+shortcode), `--signin-shell` the sign-in page:
 
 ```sh
 cargo build && (cd frontend && trunk build --release)
 cp ~/.local/share/menger/tickets.db /tmp/sweep.db      # a copy; never prod's file
 PLEXUS_NO_REGISTRY=1 target/debug/menger --port 4510 --shell-port 4511 --rest-port 4512 --db-path /tmp/sweep.db &
-node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --seed --browsers chromium,firefox --rows
+node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --seed --browsers chromium,firefox --rows --project
 ```
 
 It refuses prod's and test's ports (4450–4458): it writes. Exit 0 when every

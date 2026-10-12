@@ -84,20 +84,43 @@ fn the_shortcode_sits_between_the_site_and_the_ticket() {
     assert_eq!(themes(&r), ["ocean", "mint", "mint"], "the nearer adoption covers the frame");
 }
 
+/// THEME-4: a reader may turn project themes off — no shortcode's setting
+/// reaches them (a takeover of the site, an opt-out, a frame's), while the
+/// site's, a ticket's and a frame's own still do.
+#[test]
+fn a_reader_turns_project_themes_off() {
+    let off = Reader { projects_off: true, ..Reader::default() };
+    let code = |theme: Option<&str>, reach, takeover| ThemeSetting { scope: "PANTRY".into(), theme: theme.map(str::to_string), reach, takeover };
+    let with = |s: ThemeSetting, fm: &str| Levels { shortcode: Some(s), ..levels(Some("ocean"), fm) };
+    let r = resolve(&with(code(Some("pantry"), ThemeReach::Site, Takeover::On), ""), &Reader::default());
+    assert_eq!(themes(&r), ["pantry", "pantry", "pantry"], "on: the project takes the page");
+    let r = resolve(&with(code(Some("pantry"), ThemeReach::Site, Takeover::On), ""), &off);
+    assert_eq!(themes(&r), ["ocean", "ocean", "ocean"], "off: the site's");
+    assert_eq!(r.ticket.level, ThemeLevel::Site);
+    let r = resolve(&with(code(None, ThemeReach::Ticket, Takeover::Off), ""), &off);
+    assert_eq!(themes(&r), ["ocean", "ocean", "ocean"], "a project's opt-out is a project theme too");
+    let r = resolve(&with(code(Some("pantry"), ThemeReach::Site, Takeover::On), "theme: mint
+frame-theme: sea"), &off);
+    assert_eq!(themes(&r), ["ocean", "mint", "sea"], "a ticket's and a frame's own still wear theirs");
+    let both = Reader { site: Some("mint".into()), takeovers_off: false, projects_off: true };
+    let r = resolve(&with(code(Some("pantry"), ThemeReach::Site, Takeover::On), ""), &both);
+    assert_eq!(themes(&r), ["mint", "mint", "mint"], "their own site theme in the project");
+}
+
 /// The reader is outermost: their site theme stands in for the site's, and
 /// with every takeover off they wear it everywhere.
 #[test]
 fn the_reader_is_outermost() {
-    let reader = Reader { site: Some("mint".into()), takeovers_off: false };
+    let reader = Reader { site: Some("mint".into()), takeovers_off: false, projects_off: false };
     let r = resolve(&levels(Some("ocean"), ""), &reader);
     assert_eq!(themes(&r), ["mint", "mint", "mint"]);
     assert_eq!(r.site.level, ThemeLevel::Reader);
     let r = resolve(&levels(Some("ocean"), "theme: pantry\nreach: site"), &reader);
     assert_eq!(themes(&r), ["pantry", "pantry", "pantry"], "a takeover still reaches them");
-    let off = Reader { site: Some("mint".into()), takeovers_off: true };
+    let off = Reader { site: Some("mint".into()), takeovers_off: true, projects_off: false };
     let r = resolve(&levels(Some("ocean"), "theme: pantry\nreach: site\nframe-theme: x"), &off);
     assert_eq!(themes(&r), ["mint", "mint", "mint"]);
-    let off = Reader { site: None, takeovers_off: true };
+    let off = Reader { site: None, takeovers_off: true, projects_off: false };
     let r = resolve(&levels(Some("ocean"), "theme: pantry"), &off);
     assert_eq!(themes(&r), ["default", "default", "default"]);
     // No ticket open: the site's alone.

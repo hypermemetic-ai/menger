@@ -177,7 +177,9 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   `m-*::part(…)`, looks only; a refusal names the block's line), or with
   `define` for admin and tests (the maps go through `-p`);
   the site or a shortcode adopts one with `set` (`--reach frame|ticket|site`,
-  `--takeover off`), a ticket in its frontmatter (`theme:`, `reach:`,
+  `--takeover off`; THEME-4: a hosted shortcode inherits its host's, and a
+  reader may turn project themes off in settings — `themes set --scope`
+  is the spelling, there is no `tickets set_theme`), a ticket in its frontmatter (`theme:`, `reach:`,
   `takeover:`, `frame-theme:`, `frame-takeover:`); `theme_for` says who
   wears what and from which level; `watch` says `theme_changed` /
   `theme_removed`. README "Themes and their scopes", "A theme is a ticket":

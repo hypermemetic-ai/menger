@@ -134,6 +134,11 @@ pub(crate) struct Open {
     pub(crate) epic: String,
     pub(crate) declared: Declared,
     pub(crate) shortcode: Option<Option<ThemeSetting>>,
+    /// THEME-4: the shortcodes hosting `epic`, nearest first, as the app's
+    /// shortcode tree (the groups' hosts) has them — what stands in for the
+    /// server's answer until it lands, so entering a hosted shortcode paints
+    /// its inherited theme at once, not the site's first.
+    pub(crate) hosts: Vec<String>,
 }
 
 /// What every level says now: the site's, the open ticket's (none: the
@@ -144,7 +149,10 @@ pub(crate) fn levels(held: &Held, open: Option<&Open>) -> Levels {
         None => Levels { site, ..Default::default() },
         Some(o) => Levels {
             site,
-            shortcode: o.shortcode.clone().unwrap_or_else(|| held.settings.get(&o.epic).cloned()),
+            shortcode: o
+                .shortcode
+                .clone()
+                .unwrap_or_else(|| std::iter::once(&o.epic).chain(&o.hosts).find_map(|sc| held.settings.get(sc).cloned())),
             ticket: o.declared.ticket.clone(),
             frame: o.declared.frame.clone(),
         },
@@ -209,17 +217,19 @@ pub(crate) fn scoped_css(held: &Held, r: &Regions, scheme: Scheme) -> String {
     css
 }
 
-/// The reader's choices as stored: `{"site": "mint" | null, "takeovers_off": bool}`.
+/// The reader's choices as stored: `{"site": "mint" | null, "takeovers_off":
+/// bool, "projects_off": bool}` (THEME-4: a record without it is "on").
 pub(crate) fn reader_of(stored: Option<&str>) -> Reader {
     let Some(v) = stored.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()) else { return Reader::default() };
     Reader {
         site: v["site"].as_str().and_then(|s| themes::name_of(s).ok()),
         takeovers_off: v["takeovers_off"].as_bool().unwrap_or(false),
+        projects_off: v["projects_off"].as_bool().unwrap_or(false),
     }
 }
 
 pub(crate) fn reader_text(r: &Reader) -> String {
-    serde_json::json!({ "site": r.site, "takeovers_off": r.takeovers_off }).to_string()
+    serde_json::json!({ "site": r.site, "takeovers_off": r.takeovers_off, "projects_off": r.projects_off }).to_string()
 }
 
 thread_local! {
@@ -394,18 +404,28 @@ pub(crate) fn repaint() {
 pub(crate) fn open(id: String, body: RwSignal<Option<String>>, socket: RwSignal<u32>) {
     let epic = crate::bridge::shortcode_of(&id);
     let open = OPEN.with(Clone::clone);
+    // THEME-4: the hosting chain from the shortcode tree the app keeps.
+    let sctree = use_context::<crate::lens::Lens>().map(|l| l.sctree());
+    let next = move |open: &ArcRwSignal<Option<Open>>, id: &String, epic: &String, tracked: bool| {
+        let declared = if tracked { body.with(|b| b.as_deref().map(themes::declared)) } else { body.with_untracked(|b| b.as_deref().map(themes::declared)) }.unwrap_or_default();
+        let hosts_now = |t: &Option<crate::filter::ScTree>| t.as_ref().map(|t| hosts_of(&t.hosting(epic)));
+        let hosts = sctree.and_then(|t| if tracked { t.with(hosts_now) } else { t.with_untracked(hosts_now) }).unwrap_or_default();
+        let next = match open.get_untracked() {
+            Some(o) if o.id == *id => Open { declared, hosts, ..o },
+            _ => Open { id: id.clone(), epic: epic.clone(), declared, shortcode: None, hosts },
+        };
+        if open.with_untracked(|o| o.as_ref() != Some(&next)) {
+            open.set(Some(next));
+        }
+    };
+    // THEME-4: said at once, not in an effect — going from one ticket to
+    // another, the page left may clear the open ticket before this one's
+    // effects run, and the repaint would see none between them (a detour
+    // by the site's theme). Set here, in the same turn, it sees only this.
+    next(&open, &id, &epic, false);
     {
-        let (id, open) = (id.clone(), open.clone());
-        Effect::new(move |_| {
-            let declared = body.with(|b| b.as_deref().map(themes::declared).unwrap_or_default());
-            let next = match open.get_untracked() {
-                Some(o) if o.id == id => Open { declared, ..o },
-                _ => Open { id: id.clone(), epic: epic.clone(), declared, shortcode: None },
-            };
-            if open.with_untracked(|o| o.as_ref() != Some(&next)) {
-                open.set(Some(next));
-            }
-        });
+        let (id, open, epic) = (id.clone(), open.clone(), epic.clone());
+        Effect::new(move |_| next(&open, &id, &epic, true));
     }
     {
         let id = id.clone();
@@ -422,6 +442,12 @@ pub(crate) fn open(id: String, body: RwSignal<Option<String>>, socket: RwSignal<
             open.set(None);
         }
     });
+}
+
+/// THEME-4: the shortcodes of a hosting chain (`ScTree::hosting`'s host
+/// ticket, then its shortcode, up the chain), nearest first.
+pub(crate) fn hosts_of(chain: &[String]) -> Vec<String> {
+    chain.iter().skip(1).step_by(2).cloned().collect()
 }
 
 /// `themes.theme_for { id }`: the shortcode level the server reads (the
@@ -509,8 +535,8 @@ fn fetch() {
     });
 }
 
-/// `#/settings`: the reader's own — their site theme, and every takeover
-/// off.
+/// `#/settings`: the reader's own — their site theme, project themes off
+/// (THEME-4), and every takeover off.
 #[component]
 pub(crate) fn ReaderGroup() -> impl IntoView {
     let reader = reader();
@@ -519,7 +545,7 @@ pub(crate) fn ReaderGroup() -> impl IntoView {
         let held = held.clone();
         move || held.with(Held::names)
     };
-    let (r1, r2, r3) = (reader.clone(), reader.clone(), reader.clone());
+    let (r1, r2, r3, r4) = (reader.clone(), reader.clone(), reader.clone(), reader.clone());
     view! {
         <fieldset class="group" id="settings-themes">
             <legend>"Themes"</legend>
@@ -551,6 +577,23 @@ pub(crate) fn ReaderGroup() -> impl IntoView {
                                 .collect_view()
                         }}
                     </select>
+                </div>
+            </div>
+            <div class="field">
+                <label for="theme-projects-off">"Project themes off"</label>
+                <div class="control">
+                    <input
+                        id="theme-projects-off"
+                        type="checkbox"
+                        prop:checked=move || r4.with(|r| r.projects_off)
+                        on:change=move |ev| {
+                            let checked = event_target_checked(&ev);
+                            let mut r = load_reader();
+                            r.projects_off = checked;
+                            set_reader(r);
+                        }
+                    />
+                    <span class="hint">" a project (a shortcode) never restyles menger for you — the board and every ticket wear your site theme, or the site's"</span>
                 </div>
             </div>
             <div class="field">
@@ -617,7 +660,7 @@ mod tests {
         let mut h = held();
         h.apply(&ThemesEvent::Setting { setting: setting("site", Some("ocean")) });
         h.apply(&ThemesEvent::Setting { setting: setting("PANTRY", Some("pantry")) });
-        let mut open = Open { id: "PANTRY-2".into(), epic: "PANTRY".into(), declared: themes::declared("---\nframe-takeover: off\n---\n"), shortcode: None };
+        let mut open = Open { id: "PANTRY-2".into(), epic: "PANTRY".into(), declared: themes::declared("---\nframe-takeover: off\n---\n"), shortcode: None, hosts: vec![] };
         let l = levels(&h, Some(&open));
         assert_eq!((l.site.as_deref(), l.shortcode.as_ref().and_then(|s| s.theme.as_deref())), (Some("ocean"), Some("pantry")));
         let r = themes::resolve(&l, &Reader::default());
@@ -627,6 +670,16 @@ mod tests {
         assert_eq!(levels(&h, Some(&open)).shortcode, None);
         assert_eq!(levels(&h, None), Levels { site: Some("ocean".into()), ..Default::default() });
         assert_eq!(open.declared.frame, Said { theme: None, reach: ThemeReach::Frame, takeover: Takeover::Off });
+        // THEME-4: a hosted shortcode, before the server answers, takes the
+        // nearest host's setting from the tree the app keeps.
+        let hosted = Open { id: "LARDER-3".into(), epic: "LARDER".into(), declared: Declared::default(), shortcode: None, hosts: hosts_of(&["PANTRY-1".into(), "PANTRY".into(), "HOME-1".into(), "HOME".into()]) };
+        assert_eq!(hosted.hosts, ["PANTRY", "HOME"]);
+        assert_eq!(levels(&h, Some(&hosted)).shortcode.map(|s| s.scope), Some("PANTRY".into()));
+        let mut own = hosted.clone();
+        h.apply(&ThemesEvent::Setting { setting: setting("LARDER", Some("ocean")) });
+        assert_eq!(levels(&h, Some(&own)).shortcode.map(|s| s.scope), Some("LARDER".into()), "its own setting wins");
+        own.shortcode = Some(None);
+        assert_eq!(levels(&h, Some(&own)).shortcode, None, "the server's answer, once it lands");
     }
 
     /// A region wearing its outer region's theme writes nothing; another
@@ -658,8 +711,11 @@ mod tests {
     /// The reader's record round-trips; anything unreadable is no choice.
     #[test]
     fn the_readers_choices_round_trip() {
-        let r = Reader { site: Some("mint".into()), takeovers_off: true };
+        let r = Reader { site: Some("mint".into()), takeovers_off: true, projects_off: false };
         assert_eq!(reader_of(Some(&reader_text(&r))), r);
+        let r = Reader { site: None, takeovers_off: false, projects_off: true };
+        assert_eq!(reader_of(Some(&reader_text(&r))), r, "THEME-4: project themes off");
+        assert_eq!(reader_of(Some(r#"{"site": "mint", "takeovers_off": false}"#)).projects_off, false, "a record from before THEME-4: on");
         assert_eq!(reader_of(Some("{")), Reader::default());
         assert_eq!(reader_of(Some(r#"{"site": "Not A Name"}"#)), Reader::default());
         assert_eq!(reader_of(None), Reader::default());
@@ -700,7 +756,7 @@ mod tests {
         assert!(h.apply(&ThemesEvent::ThemeChanged { theme: p }));
         assert_ne!(mid, key(&h, &r, Scheme::Light), "an amended token moves it");
         // The reader's pick is a region's theme like any other.
-        let picked = themes::resolve(&Levels::default(), &Reader { site: Some("ocean".into()), takeovers_off: false });
+        let picked = themes::resolve(&Levels::default(), &Reader { site: Some("ocean".into()), takeovers_off: false, projects_off: false });
         assert_eq!(picked.site.theme, "ocean");
     }
 
