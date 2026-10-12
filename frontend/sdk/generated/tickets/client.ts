@@ -71,6 +71,10 @@ export interface TicketsClient {
   watch(epic?: string | null, filter?: string | null, membership?: boolean | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
   /** The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts */
   waves(epics: string[], kinds?: string[] | null): AsyncGenerator<TicketsEvent>;
+  /** The wave board whose final state is one ticket: its blockers transitively (and a scope's open descendants) placed in waves, done blockers done, the ticket alone in the last wave; cycles named; then the wave counts */
+  wavesTo(id: string, kinds?: string[] | null): AsyncGenerator<TicketsEvent>;
+  /** The order of work under one ticket: each ticket of its subtree placed in its wave (or missing_blocker, or done) with what it waits on, then the wave counts */
+  wavesUnder(id: string, kinds?: string[] | null): AsyncGenerator<TicketsEvent>;
 }
 
 /** Typed client implementation for tickets plugin */
@@ -235,6 +239,16 @@ class TicketsClientImpl implements TicketsClient {
 
   async *waves(epics: string[], kinds?: string[] | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.waves', { epics, kinds });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *wavesTo(id: string, kinds?: string[] | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.waves_to', { id, kinds });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *wavesUnder(id: string, kinds?: string[] | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.waves_under', { id, kinds });
     yield* extractData<TicketsEvent>(stream);
   }
 }

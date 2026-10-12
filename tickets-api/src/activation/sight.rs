@@ -184,6 +184,11 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
             let kept: Vec<_> = changes.iter().filter(|c| sees(&c.id)).cloned().collect();
             return (!kept.is_empty()).then_some(TicketsEvent::PlacementsChanged { changes: kept });
         }
+        // MENGER-31: a cycle, of the tickets on it the reach holds.
+        TicketsEvent::WaveCycle { ids } => {
+            let kept: Vec<String> = ids.iter().filter(|id| sees(id)).cloned().collect();
+            return (!kept.is_empty()).then_some(TicketsEvent::WaveCycle { ids: kept });
+        }
         TicketsEvent::Hit { summary, .. } => Some(summary.id.clone()),
         TicketsEvent::DanglingBlocker { id } | TicketsEvent::Member { id, .. } | TicketsEvent::NotFound { id } => Some(id.clone()),
         TicketsEvent::Extent { epic, .. } | TicketsEvent::Count { epic, .. } | TicketsEvent::Recount { epic, .. } => {

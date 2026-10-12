@@ -798,6 +798,15 @@ export interface TicketsEventWaveCounts {
   waves: number[];
 }
 
+/** MENGER-31: a `blocked_by` cycle among what a `waves_to` target waits
+on (yielded after the `placed`, before the `wave_counts`, one per
+cycle): its ids in the store's order. Every ticket on it — and the
+target behind it — is `missing_blocker`: no status change ends it. */
+export interface TicketsEventWaveCycle {
+  type: 'wave_cycle';
+  ids: string[];
+}
+
 /** WAVE-6: the kept placements one write moved (yielded by `watch`) —
 one event per write that moved any, after that write's other events,
 each change the ticket's id and its placement now: the ticket a
@@ -976,7 +985,7 @@ export interface TicketsEventHistoryEnd {
   restorable: string[];
 }
 
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
 
 export function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth { return e.type === 'health'; }
 export function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated { return e.type === 'created'; }
@@ -1008,6 +1017,7 @@ export function isTicketsEventLeft(e: TicketsEvent): e is TicketsEventLeft { ret
 export function isTicketsEventRecount(e: TicketsEvent): e is TicketsEventRecount { return e.type === 'recount'; }
 export function isTicketsEventPlaced(e: TicketsEvent): e is TicketsEventPlaced { return e.type === 'placed'; }
 export function isTicketsEventWaveCounts(e: TicketsEvent): e is TicketsEventWaveCounts { return e.type === 'wave_counts'; }
+export function isTicketsEventWaveCycle(e: TicketsEvent): e is TicketsEventWaveCycle { return e.type === 'wave_cycle'; }
 export function isTicketsEventPlacementsChanged(e: TicketsEvent): e is TicketsEventPlacementsChanged { return e.type === 'placements_changed'; }
 export function isTicketsEventComponent(e: TicketsEvent): e is TicketsEventComponent { return e.type === 'component'; }
 export function isTicketsEventComponentChanged(e: TicketsEvent): e is TicketsEventComponentChanged { return e.type === 'component_changed'; }

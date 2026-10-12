@@ -89,6 +89,10 @@ use events::*;
 use sight::*;
 #[cfg(feature = "server")]
 use update::*;
+#[cfg(feature = "server")]
+mod waves;
+#[cfg(feature = "server")]
+use waves::*;
 #[cfg(all(test, feature = "server"))]
 mod tests;
 
@@ -108,7 +112,7 @@ mod tests;
     roles(
         viewer = [
             "health", "get", "list", "ready_set", "find", "search", "member", "groups", "components",
-            "inputs", "extents", "counts", "facets", "tree", "waves", "blockers", "watch", "history"
+            "inputs", "extents", "counts", "facets", "tree", "waves", "waves_under", "waves_to", "blockers", "watch", "history"
         ],
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
@@ -1873,59 +1877,35 @@ impl Tickets {
         epics: Vec<String>,
         kinds: Option<Vec<String>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
-        stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            let visible = match visible_epics(&store, &caller) {
-                Ok(v) => v,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            if epics.is_empty() {
-                yield TicketsEvent::Error {
-                    message: "waves: epics is empty — name at least one shortcode, e.g. [\"MNG\"]".into(),
-                };
-                return;
-            }
-            if let Some(v) = &visible {
-                if let Some(hidden) = epics.iter().find(|e| !v.contains(&e.to_ascii_uppercase())) {
-                    yield TicketsEvent::Error { message: format!("waves: no access to {hidden}") };
-                    return;
-                }
-            }
-            let kinds: Vec<Kind> = match kinds {
-                None => crate::store::waves::DEFAULT_KINDS.to_vec(),
-                Some(given) => match given.iter().map(|k| k.parse::<Kind>()).collect() {
-                    Ok(kinds) => kinds,
-                    Err(e) => {
-                        yield TicketsEvent::Error { message: e };
-                        return;
-                    }
-                },
-            };
-            let answer = store.waves(&epics, &kinds);
-            for p in answer.placed {
-                yield TicketsEvent::Placed {
-                    summary: p.summary,
-                    placement: p.placement,
-                    waiting_on: p.waiting_on,
-                };
-            }
-            yield TicketsEvent::WaveCounts {
-                waves: answer.waves,
-                missing: answer.missing,
-                done: answer.done,
-            };
-        }
+        futures::stream::iter(waves_answer(&self.store, self.access.admit(auth, &reach), epics, kinds))
+    }
+
+    /// MENGER-31: the wave board of `id`'s subtree (activation/waves.rs).
+    #[plexus_macros::method(
+        group = "read",
+        description = "The order of work under one ticket: each ticket of its subtree placed in its wave (or missing_blocker, or done) with what it waits on, then the wave counts",
+        params(
+            id = "Ticket whose subtree is placed, e.g. MENGER-2 (it and every ticket under it, any depth, hosted shortcodes included)",
+            kinds = "Kinds to place: scope | execution | build | gap | spike (optional; default build, spike, gap — a doc is never placed)"
+        ),
+        values(kinds = ["scope", "execution", "build", "gap", "spike"])
+    )]
+    pub async fn waves_under(&self, auth: Option<&AuthContext>, reach: Reach, id: String, kinds: Option<Vec<String>>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        futures::stream::iter(waves_under_answer(&self.store, self.access.admit(auth, &reach), id, kinds))
+    }
+
+    /// MENGER-31: the wave board whose final state is `id` (activation/waves.rs).
+    #[plexus_macros::method(
+        group = "read",
+        description = "The wave board whose final state is one ticket: its blockers transitively (and a scope's open descendants) placed in waves, done blockers done, the ticket alone in the last wave; cycles named; then the wave counts",
+        params(
+            id = "The final ticket, e.g. MENGER-31",
+            kinds = "Kinds to yield: scope | execution | build | gap | spike (optional; default all five — never a doc; the ticket itself always; every kind is followed)"
+        ),
+        values(kinds = ["scope", "execution", "build", "gap", "spike"])
+    )]
+    pub async fn waves_to(&self, auth: Option<&AuthContext>, reach: Reach, id: String, kinds: Option<Vec<String>>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        futures::stream::iter(waves_to_answer(&self.store, self.access.admit(auth, &reach), id, kinds))
     }
 
     /// "Why can't this start?" in one call. Yields, in `blocked_by`

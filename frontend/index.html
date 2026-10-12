@@ -897,6 +897,14 @@
   }
   #waves .card { cursor: pointer; }
   #waves .card:hover { border-color: var(--accent); }
+  /* MENGER-31: a ticket's boards — the heading, the ticket the menu was
+     opened on, and a blocked_by cycle. */
+  #waves .scope-h { font-size: 1rem; margin: 0 0 .2rem; display: flex; gap: .4rem; align-items: baseline; flex-wrap: wrap; }
+  #waves .scope-h .title { font-weight: 400; }
+  #waves p.about { margin: 0 0 .5rem; font-size: .8rem; }
+  #waves .card.at { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+  #waves p.cycle { color: var(--err-fg); background: var(--err-bg); border: 1px solid var(--err-line); border-radius: 6px; padding: .3rem .5rem; font-size: .8rem; }
+  #waves p.cycle .ring { font-family: var(--mono); }
   #waves .card .top { display: flex; align-items: baseline; gap: .4rem; }
   #waves .card .kind { color: var(--muted); font-size: 10.5px; }
   #waves .card[data-kind="scope"] .kind { color: var(--kind-scope); }

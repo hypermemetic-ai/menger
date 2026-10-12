@@ -74,8 +74,8 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-use crate::{cache, dom, keys, session, st_class, tags};
-use menger_tickets_api::Status;
+use crate::{cache, dom, keys, session, st_class, tags, waves};
+use menger_tickets_api::{Kind, Status};
 
 /// The menu's DOM id — the one element the document-level listeners
 /// test containment against.
@@ -86,6 +86,32 @@ const EDGE: f64 = 4.0;
 /// the manual-copy fallback holds its selected id until the user acts.
 const TOAST_MS: i32 = 2200;
 const TOAST_MANUAL_MS: i32 = 12_000;
+
+/// MENGER-31: the menu's wave items for a ticket, each its words, its link
+/// and the attribute a harness finds it by. The owner's reading (MENGER-31's
+/// `reading` input, recommended): **Wave board for <parent>** — the parent's
+/// subtree's board, this ticket highlighted; absent for a root — and **Waves
+/// to <ticket>**, the board whose final state it is. One function, so the
+/// one-item variant (the parent's board cut off at this ticket) is a change
+/// here and a scope there, not in every surface.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WaveItem {
+    pub(crate) words: String,
+    pub(crate) href: String,
+    /// `data-wave`: `parent` or `to`.
+    pub(crate) kind: &'static str,
+}
+
+pub(crate) fn wave_items(id: &str, parent: Option<&str>) -> Vec<WaveItem> {
+    let mut out = Vec::new();
+    if let Some(p) = parent {
+        let href = waves::scoped_href(&waves::Scope::Under(p.to_string()), Some(id));
+        out.push(WaveItem { words: format!("Wave board for {p}"), href, kind: "parent" });
+    }
+    let href = waves::scoped_href(&waves::Scope::To(id.to_string()), None);
+    out.push(WaveItem { words: format!("Waves to {id}"), href, kind: "to" });
+    out
+}
 
 /// What was right-clicked, and where.
 #[derive(Clone, PartialEq)]
@@ -562,6 +588,25 @@ fn menu_view(
             <a class="item" role="menuitem" href=href target="_blank" rel="noopener" on:click=move |_| close()>
                 "Open in new tab"
             </a>
+            // MENGER-31: the parent's wave board (none for a root) and the
+            // board whose final state this ticket is (none for a doc, which
+            // has no place in the order of work) — from the row, once held.
+            {
+                let id = id.clone();
+                move || {
+                    let (parent, doc) = ticket
+                        .get()
+                        .map(|s| s.with(|x| (x.parent.clone(), x.kind == Kind::Doc)))
+                        .unwrap_or((None, false));
+                    wave_items(&id, parent.as_deref())
+                        .into_iter()
+                        .filter(|w| !(doc && w.kind == "to"))
+                        .map(|w| view! {
+                            <a class="item" role="menuitem" href=w.href data-wave=w.kind on:click=move |_| close()>{w.words}</a>
+                        })
+                        .collect_view()
+                }
+            }
             // WAVE-5: a shortcode's row offers the shortcode's wave board.
             {shortcode.map(|sc| view! {
                 <a class="item" role="menuitem" href=format!("#/waves/{sc}") data-wave-board=sc.clone() on:click=move |_| close()>
@@ -613,7 +658,33 @@ fn toast_view(t: Toast, toast: RwSignal<Option<Toast>>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp, step, EDGE};
+    use super::{clamp, step, wave_items, WaveItem, EDGE};
+
+    /// MENGER-31: the wave items per ticket — a ticket with a parent gets
+    /// the parent's board (it highlighted) and the board to itself; a root,
+    /// only the latter. The menu is one, so every surface that carries
+    /// `data-ticket-id` (a board row, a nav row, a wave card, a Needs-you
+    /// row, a palette result, the ticket page's heading) gets these.
+    #[test]
+    fn the_wave_items_per_ticket() {
+        let words = |items: Vec<WaveItem>| items.into_iter().map(|w| (w.words, w.href, w.kind)).collect::<Vec<_>>();
+        assert_eq!(
+            words(wave_items("MENGER-31", Some("MENGER-2"))),
+            [
+                ("Wave board for MENGER-2".to_string(), "#/waves/under/MENGER-2?at=MENGER-31".to_string(), "parent"),
+                ("Waves to MENGER-31".to_string(), "#/waves/to/MENGER-31".to_string(), "to"),
+            ]
+        );
+        assert_eq!(
+            words(wave_items("MENGER-1", None)),
+            [("Waves to MENGER-1".to_string(), "#/waves/to/MENGER-1".to_string(), "to")],
+            "a root has no parent's board"
+        );
+        // The links are the routes the app parses.
+        for w in wave_items("A-2", Some("A-1")) {
+            assert!(matches!(crate::parse_route(&w.href), crate::Route::WavesOf(_)), "{}", w.href);
+        }
+    }
 
     /// The menu opens at the cursor and is shifted only by its overflow.
     #[test]

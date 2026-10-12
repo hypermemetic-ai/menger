@@ -3643,6 +3643,55 @@ impl Store {
         waves::waves(cache.rows(), &epics, kinds)
     }
 
+    /// MENGER-31: the wave board of a ticket's subtree — `id` and every
+    /// ticket under it, at any depth and in any shortcode hosted there (the
+    /// kept tree, FILTER-13's `under`) — placed as [`Store::waves`] places a
+    /// shortcode's, of the kinds `kinds`, never a doc; only tickets whose
+    /// shortcode `visible` holds (all with `None`). Rows only, under the
+    /// read lock. [`StoreError::NotFound`] when `id` names no ticket.
+    pub fn waves_under(
+        &self,
+        id: &str,
+        kinds: &[Kind],
+        visible: Option<&std::collections::HashSet<String>>,
+    ) -> Result<waves::Waves, StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let row = cache.get(id).ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+        let sub = lineage::subtree(&cache, &row.id, Some(row));
+        let tickets = sub
+            .iter()
+            .flat_map(|(epic, seqs)| seqs.iter().filter_map(|seq| cache.order.get(&OrderKey { epic: epic.clone(), seq })));
+        let admit = |t: &Row| visible.is_none_or(|v| v.contains(&t.epic));
+        Ok(waves::of(cache.rows(), tickets, kinds, &admit))
+    }
+
+    /// MENGER-31: the wave board whose final state is `id` ([`waves::to`]):
+    /// what must happen first — its blockers, theirs, transitively, and a
+    /// scope's or an execution's open descendants (the kept tree) and what
+    /// they wait on — each where the store keeps it, the ticket alone in the
+    /// last wave, done blockers `Done`, and the cycles among them named.
+    /// Rows only, under the read lock. [`StoreError::NotFound`] when `id`
+    /// names no ticket.
+    pub fn waves_to(
+        &self,
+        id: &str,
+        kinds: &[Kind],
+        visible: Option<&std::collections::HashSet<String>>,
+    ) -> Result<waves::WavesTo, StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let row = cache.get(id).ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+        if row.kind == Kind::Doc {
+            return Err(StoreError::DocHasNoLifecycle { id: row.id.clone() });
+        }
+        let sub = lineage::subtree(&cache, &row.id, None);
+        let descendants = sub
+            .iter()
+            .flat_map(|(epic, seqs)| seqs.iter().filter_map(|seq| cache.order.get(&OrderKey { epic: epic.clone(), seq })))
+            .filter(|t| t.id != row.id);
+        let admit = |t: &Row| visible.is_none_or(|v| v.contains(&t.epic));
+        Ok(waves::to(cache.rows(), row, descendants, kinds, &admit))
+    }
+
     /// One ticket, whole. SCALE-14: its row from the cache and its body from
     /// the database ([`Store::full`]); [`StoreError::NotFound`] when `id`
     /// names no ticket — answered by the cache, with no read.
@@ -5712,6 +5761,11 @@ mod tests_ready;
 /// the yield order and the tally, and a hand-edited cycle that terminates.
 #[cfg(test)]
 mod tests_waves;
+
+/// MENGER-31: `waves_to` — a ticket as the final state: chains, diamonds,
+/// done blockers, a scope's descendants, a cycle named — and `waves_under`.
+#[cfg(test)]
+mod tests_waves_to;
 
 /// WAVE-10: path addresses — `create { path }` on each row of the ticket's
 /// table, `get` by `SHORTCODE/path`, uniqueness in the cache and the file,

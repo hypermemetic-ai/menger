@@ -1337,3 +1337,44 @@ async fn waves_errors_are_in_band_and_alone() {
         other => panic!("expected Error, got {other:?}"),
     }
 }
+
+/// MENGER-31: `waves_to` and `waves_under` on the wire's terms — the placed
+/// rows in order, the ticket last, then the tally; an unknown id is
+/// `NotFound`, a doc and a bad kind one in-band `Error`, alone.
+#[tokio::test]
+async fn waves_to_and_under_answer_as_waves_does() {
+    use crate::types::Placement::Wave;
+    let hub = hub();
+    let create = |kind: &str, blocked_by: &[&str], parent: Option<&str>| {
+        let blocked_by = (!blocked_by.is_empty()).then(|| blocked_by.iter().map(|b| b.to_string()).collect());
+        let (kind, parent, hub) = (kind.to_string(), parent.map(String::from), hub.clone());
+        async move { one(hub.create(None, Reach::everywhere(), "WT".into(), "t".into(), Some(kind), None, blocked_by, parent, None, None).await).await }
+    };
+    create("scope", &[], None).await; // WT-1
+    create("build", &[], Some("WT-1")).await; // WT-2
+    create("build", &["WT-2"], Some("WT-1")).await; // WT-3
+    create("build", &["WT-2"], None).await; // WT-4
+    create("build", &["WT-3", "WT-4"], None).await; // WT-5
+    create("doc", &[], None).await; // WT-6
+
+    let (placed, counts) = placed_and_counts(hub.waves_to(None, Reach::everywhere(), "WT-5".into(), None).await).await;
+    let got: Vec<(&str, crate::types::Placement)> = placed.iter().map(|(id, p, _)| (id.as_str(), *p)).collect();
+    assert_eq!(got, [("WT-2", Wave { n: 1 }), ("WT-3", Wave { n: 2 }), ("WT-4", Wave { n: 2 }), ("WT-5", Wave { n: 3 })]);
+    assert_eq!(counts, (vec![1, 2, 1], 0, 0));
+
+    let (placed, _) = placed_and_counts(hub.waves_under(None, Reach::everywhere(), "WT-1".into(), None).await).await;
+    assert_eq!(placed.iter().map(|(id, ..)| id.as_str()).collect::<Vec<_>>(), ["WT-2", "WT-3", "WT-4", "WT-5"], "a root's subtree is its shortcode's work");
+
+    for evs in [
+        Box::pin(hub.waves_to(None, Reach::everywhere(), "WT-99".into(), None).await).collect::<Vec<_>>().await,
+        Box::pin(hub.waves_under(None, Reach::everywhere(), "WT-99".into(), None).await).collect::<Vec<_>>().await,
+    ] {
+        assert!(matches!(evs.as_slice(), [TicketsEvent::NotFound { id }] if id == "WT-99"), "{evs:?}");
+    }
+    for evs in [
+        Box::pin(hub.waves_to(None, Reach::everywhere(), "WT-6".into(), None).await).collect::<Vec<_>>().await,
+        Box::pin(hub.waves_to(None, Reach::everywhere(), "WT-5".into(), Some(vec!["bug".into()])).await).collect::<Vec<_>>().await,
+    ] {
+        assert!(matches!(evs.as_slice(), [TicketsEvent::Error { .. }]), "{evs:?}");
+    }
+}

@@ -513,6 +513,11 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
             let changes: Vec<_> = changes.into_iter().filter(|c| reach.holds_id(&c.id)).collect();
             (!changes.is_empty()).then_some(E::PlacementsChanged { changes })
         }
+        // MENGER-31: a cycle, of the tickets on it the frame reaches.
+        E::WaveCycle { ids } => {
+            let ids: Vec<_> = ids.into_iter().filter(|id| reach.holds_id(id)).collect();
+            (!ids.is_empty()).then_some(E::WaveCycle { ids })
+        }
         // The reach's own count, never the viewer's whole store.
         E::Health { version, unix_now, .. } => Some(E::Health { version, unix_now, ticket_count: reach.tickets }),
         // A dangling blocker's id names no ticket: nothing to read.
