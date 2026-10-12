@@ -137,7 +137,7 @@ fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
     // Every field the roll-ups keep — the pools, the cross trees, the marks a
     // hand edit leaves — is what a build by scan of the file's tickets stores:
     // `--verify-derived`'s own comparison, and its own scan.
-    let scanned = Cache::new(file.rows.clone().into_iter().collect());
+    let scanned = Cache::new(file.rows.clone().into_iter().collect(), store.tickets.read().unwrap().inputs.clone());
     assert_eq!(stored::compare(&file.form, &scanned.form()), Vec::<String>::new(), "after {after}");
     assert!(scanned.children.differences(&file.children).is_empty(), "after {after}");
 

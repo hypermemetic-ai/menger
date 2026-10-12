@@ -384,6 +384,7 @@ async fn a_hand_edited_cycle_terminates_in_the_missing_lane() {
 fn a_chain_longer_than_any_call_stack_is_placed() {
     const N: u32 = 200_000;
     let row = |seq: u32| Row {
+        labels: Vec::new(),
         id: format!("LONG-{seq}"),
         epic: "LONG".into(),
         seq,

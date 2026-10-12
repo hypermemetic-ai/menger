@@ -250,6 +250,8 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.amend", Today::Editor, Some("id")),
     ("tickets.link_commits", Today::Editor, Some("id")),
     ("tickets.unlink_commits", Today::Editor, Some("id")),
+    // MENGER-12: an editor's, on the ticket it labels.
+    ("tickets.label", Today::Editor, Some("id")),
     ("tickets.answer", Today::Editor, Some("ticket")),
     ("tickets.clear_answer", Today::Editor, Some("ticket")),
     ("tickets.close_input", Today::Editor, Some("ticket")),

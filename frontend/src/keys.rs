@@ -170,6 +170,7 @@ pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
     ("Enter", "open the focused ticket"),
     ("/ or Ctrl+K", "jump to a ticket (⌘K on a Mac)"),
     ("g h", "go to the board"),
+    ("g n", "go to Needs you (Home's panel of what waits on you)"),
     ("f", "on a ticket page: filter the nav to this ticket and its children; elsewhere: filter this view"),
     ("F", "filter every view (the global filter)"),
     ("/ filter SC", "the global filter becomes a shortcode (its tree)"),
@@ -224,6 +225,30 @@ pub(crate) fn filter_command(query: &str) -> Option<String> {
         return None;
     }
     Cat::Shortcode.token(code)
+}
+
+/// MENGER-12: `filter <text>` where the text is a filter in the language
+/// (`filter label needs-you`, `filter asking`, `filter ready and in MNG`) —
+/// its canonical text, offered as one row: the global filter becomes it. A
+/// bare shortcode is no filter text (the language reads it as nothing), so
+/// `filter DEMAND` stays FILTER-22's.
+pub(crate) fn filter_text_command(query: &str) -> Option<String> {
+    let rest = query.trim_start();
+    let (word, rest) = rest.split_at(rest.find(char::is_whitespace)?);
+    if !word.eq_ignore_ascii_case("filter") {
+        return None;
+    }
+    let f = menger_tickets_api::filter::Filter::parse(rest.trim()).ok()?;
+    (!f.groups.is_empty()).then(|| f.format())
+}
+
+/// A command row the palette offers above the tickets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PalCmd {
+    /// FILTER-22: the global filter becomes this shortcode's tree.
+    Code(String),
+    /// MENGER-12: the global filter becomes this text.
+    Text(String),
 }
 
 /// How many shortcodes `filter <shortcode>` offers at most.
@@ -714,6 +739,12 @@ pub(crate) fn consume_go_prefix(key: &str) -> bool {
         "h" if armed => {
             GO_ARMED_AT.with(|c| c.set(f64::NEG_INFINITY));
             let _ = dom::window().location().set_hash("/");
+            true
+        }
+        // MENGER-12: `g n` — Home, focus on Needs you.
+        "n" if armed => {
+            GO_ARMED_AT.with(|c| c.set(f64::NEG_INFINITY));
+            crate::needs::go();
             true
         }
         _ => {
@@ -1260,8 +1291,17 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     // tickets.
     let sctree = lens.sctree();
     let offers = Memo::new(move |_| {
-        let typed = filter_command(&query.get());
-        typed.map(|t| sctree.with(|tree| filter_offers(&t, tree.as_ref().map(|t| t.known())))).unwrap_or_default()
+        let q = query.get();
+        let typed = filter_command(&q);
+        let mut out: Vec<PalCmd> = typed
+            .map(|t| sctree.with(|tree| filter_offers(&t, tree.as_ref().map(|t| t.known()))))
+            .unwrap_or_default()
+            .into_iter()
+            .map(PalCmd::Code)
+            .collect();
+        // MENGER-12: and the text, when it is a filter.
+        out.extend(filter_text_command(&q).map(PalCmd::Text));
+        out
     });
     // Enter pressed while the answer was on its way, with nothing to open.
     let enter_waits = StoredValue::new(false);
@@ -1278,9 +1318,16 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     // under a global filter — the other pass.
     let open_at = move |i: usize| {
         let cmds = offers.with_untracked(Vec::len);
-        if let Some(code) = offers.with_untracked(|o| o.get(i).cloned()) {
+        if let Some(cmd) = offers.with_untracked(|o| o.get(i).cloned()) {
             close_overlay(overlay);
-            tags::filter_globally(lens, &code);
+            match cmd {
+                PalCmd::Code(code) => tags::filter_globally(lens, &code),
+                PalCmd::Text(text) => {
+                    if let Ok(f) = menger_tickets_api::filter::Filter::parse(&text) {
+                        lens.edit(lens::Level::Global, |k| *k = crate::saved::chosen(f));
+                    }
+                }
+            }
             return;
         }
         let i = i - cmds;
@@ -1446,8 +1493,14 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                         let cmd_rows = cmds
                             .into_iter()
                             .enumerate()
-                            .map(|(i, code)| {
-                                let hint = format!("the global filter becomes Shortcode is {code}");
+                            .map(|(i, cmd)| {
+                                let (code, hint) = match cmd {
+                                    PalCmd::Code(code) => {
+                                        let hint = format!("the global filter becomes Shortcode is {code}");
+                                        (code, hint)
+                                    }
+                                    PalCmd::Text(text) => (text, "the global filter becomes this".to_string()),
+                                };
                                 let at = code.clone();
                                 view! {
                                     <li
@@ -1647,7 +1700,7 @@ fn Cheats(overlay: RwSignal<Overlay>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_words, filter_command, filter_offers, narrows, palette_chord, palette_match, pass, Found, Pass, FILTER_OFFERS, SHORTCUTS};
+    use super::{count_words, filter_command, filter_offers, filter_text_command, narrows, palette_chord, palette_match, pass, Found, Pass, FILTER_OFFERS, SHORTCUTS};
 
     #[test]
     fn the_palette_chord_is_cmd_k_on_a_mac_and_ctrl_k_elsewhere() {
@@ -1715,6 +1768,7 @@ mod tests {
     fn hit(id: &str, title: &str) -> TicketSummary {
         let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
         TicketSummary {
+            labels: Vec::new(),
             id: id.to_string(),
             epic: epic.to_string(),
             seq: seq.parse().expect("seq"),
@@ -1905,6 +1959,7 @@ mod tests {
             "Enter",       // open
             "/ or Ctrl+K", // palette
             "g h",         // board
+            "g n",         // Needs you (MENGER-12)
             "f",           // the view's filter (WAVE-12); the open ticket's tree (AGS-26)
             "F",           // the global filter (FILTER-11)
             "/ filter SC", // the palette's filter (FILTER-22)
@@ -1921,6 +1976,14 @@ mod tests {
     #[test]
     fn the_palette_reads_filter_and_a_shortcode() {
         assert_eq!(filter_command("filter demand"), Some("DEMAND".into()));
+        // MENGER-12: a filter in the language is offered as itself; a bare
+        // shortcode is not one.
+        assert_eq!(filter_text_command("filter label Needs-You"), Some("label needs-you".into()));
+        assert_eq!(filter_text_command("filter asking or label needs-you"), Some("(asking or label needs-you)".into()));
+        assert_eq!(filter_text_command("Filter asking"), Some("asking".into()));
+        assert_eq!(filter_text_command("filter demand"), None);
+        assert_eq!(filter_text_command("filter"), None);
+        assert_eq!(filter_text_command("asking"), None);
         assert_eq!(filter_command("  Filter   DEMAND "), Some("DEMAND".into()));
         assert_eq!(filter_command("FILTER plexus_2"), Some("PLEXUS_2".into()));
         for not in ["", "filter", "filter ", "filters demand", "filter demand now", "filter de$mand", "demand", "find demand"] {

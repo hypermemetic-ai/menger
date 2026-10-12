@@ -35,15 +35,19 @@ fn random_field(rng: &mut Rng, field: usize, names: &[String]) -> Field {
         8 => Field::Under(names[rng.below(names.len())].to_ascii_uppercase()),
         // FILTER-21: `menger doc`.
         10 => Field::MengerDoc,
+        // MENGER-12: `asking`, and `label` — one the walk files, or one it
+        // never does.
+        11 => Field::Asking,
+        12 => Field::Label(["needs-you", "p1", "later", "never"][rng.below(4)].into()),
         _ => Field::HasCommits,
     }
 }
 
-/// FILTER-21: `menger` draws `menger doc` among the fields; without it the
-/// draws are the ones they were (`tests_tree` and `tests_lensed` replay
-/// them).
+/// FILTER-21: `menger` draws `menger doc` among the fields — MENGER-12: and
+/// `asking` and `label`; without it the draws are the ones they were
+/// (`tests_tree` and `tests_lensed` replay them).
 fn random_pred(rng: &mut Rng, names: &[String], menger: bool) -> Predicate {
-    let which = rng.below(if menger { 11 } else { 10 });
+    let which = rng.below(if menger { 13 } else { 10 });
     let field = random_field(rng, if which == 9 { 8 } else { which }, names);
     Predicate { field, not: rng.below(2) == 0 }
 }
@@ -68,7 +72,8 @@ fn random_group(rng: &mut Rng, epics: &[String], menger: bool) -> Group {
         2 => {
             // `field in (a, b)`, or `not field in (a, b)` — FILTER-13: of
             // `under` too.
-            let field = [0, 1, 2, 3, 4, 8][rng.below(6)];
+            // MENGER-12: and of `label`, in this module's own walks.
+            let field = if menger { [0, 1, 2, 3, 4, 8, 12][rng.below(7)] } else { [0, 1, 2, 3, 4, 8][rng.below(6)] };
             let (incl, n) = (rng.below(2) == 0, 2 + rng.below(2));
             let preds = (0..n).map(|_| Predicate { field: random_field(rng, field, epics), not: !incl }).collect();
             if incl {
@@ -127,6 +132,11 @@ fn facets_by_rows(plain: &Plain, filter: &Filter, base: &Filter) -> Vec<(String,
                 continue;
             }
             let yes = |b: bool| if b { "yes" } else { "no" }.to_string();
+            // MENGER-12: a ticket counts under each label it holds.
+            if field == "label" {
+                t.labels.iter().for_each(|l| add(l.clone()));
+                continue;
+            }
             add(match field {
                 "status" => t.status.as_str().to_string(),
                 "category" => category_of(t.status).as_str().to_string(),
@@ -136,6 +146,7 @@ fn facets_by_rows(plain: &Plain, filter: &Filter, base: &Filter) -> Vec<(String,
                 "ready" => yes(category_of(t.status) == Category::Ready && !k.blocked()),
                 "has commits" => yes(!t.commits.is_empty()),
                 "menger doc" => yes(t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/"))),
+                "asking" => yes(k.asking()),
                 _ => t.epic.clone(),
             });
         }
@@ -145,7 +156,7 @@ fn facets_by_rows(plain: &Plain, filter: &Filter, base: &Filter) -> Vec<(String,
             "category" => Category::ALL.iter().map(|c| c.as_str().to_string()).collect(),
             "kind" => Kind::ALL.iter().map(|k| k.as_str().to_string()).collect(),
             "severity" => ["critical", "high", "medium", "low", "none"].map(String::from).to_vec(),
-            "in" => {
+            "in" | "label" => {
                 let mut e: Vec<String> = tally.iter().map(|(v, _)| v.clone()).collect();
                 e.sort();
                 e
@@ -181,8 +192,9 @@ fn assert_filter_is_a_scan(store: &Store, plain: &Plain, rng: &mut Rng, epics: &
 
 async fn walk(store: Store, path: &Path, seed: u64, writes: usize, every: usize, epics: &[&str]) -> Store {
     let mut rng = Rng(seed);
-    // FILTER-21: board notes among the docs.
-    let mut tally = Tally::filing_menger_docs();
+    // FILTER-21: board notes among the docs — MENGER-12: and inputs and
+    // labels moving.
+    let mut tally = Tally::asking_and_labelling();
     let names = filter_names;
     for step in 0..writes {
         let what = random_write(&store, &mut rng, epics, &mut tally).await;

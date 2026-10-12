@@ -381,6 +381,7 @@ mod tests {
     fn row(id: &str) -> TicketSummary {
         let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
         TicketSummary {
+            labels: Vec::new(),
             id: id.to_string(),
             epic: epic.to_string(),
             seq: seq.parse().expect("seq"),

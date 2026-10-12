@@ -370,12 +370,81 @@ pub(super) struct Tally {
     /// exactly as they did. And how many were born.
     pub(super) file_menger_docs: bool,
     pub(super) mengers: usize,
+    /// MENGER-12: whether the walk also asks and labels — bodies that open,
+    /// re-declare and drop inputs, answers, clears, closes and reopens, and
+    /// labels added and removed; opt-in, as the board notes are, so the
+    /// other walks walk as they did. And how many of each moved something.
+    pub(super) ask_and_label: bool,
+    pub(super) asked: usize,
+    pub(super) labelled: usize,
 }
 
 impl Tally {
     /// FILTER-21: a walk that files board notes among its docs.
     pub(super) fn filing_menger_docs() -> Self {
         Self { file_menger_docs: true, ..Self::default() }
+    }
+
+    /// MENGER-12: a walk that files board notes, asks and labels.
+    pub(super) fn asking_and_labelling() -> Self {
+        Self { file_menger_docs: true, ask_and_label: true, ..Self::default() }
+    }
+}
+
+/// MENGER-12: one write that moves `asking` or a label — on draws of its own
+/// (`own`), so the walk's draws stay the ones it had. A body that declares a
+/// text input and a decision, or one of them, or none; an answer, a clear, a
+/// close or a reopen of one of a ticket's inputs (a refusal — a closed or
+/// removed input — is a write too); a label added or removed.
+pub(super) async fn random_ask_or_label(store: &Store, own: &mut Rng, all: &[Row], tally: &mut Tally) -> String {
+    let id = all[own.below(all.len())].id.clone();
+    let text = "<m-input id=\"q\" kind=\"text\"><m-question>Anything else?</m-question></m-input>\n";
+    let decision = "<m-decision data-field=\"decision\" id=\"d\">\n\n<m-question data-field=\"question\">Which?</m-question>\n\n\
+                    <m-option data-field=\"option\" name=\"A\" value=\"a\"></m-option>\n\
+                    <m-option data-field=\"option\" name=\"B\" value=\"b\"></m-option>\n\n</m-decision>\n";
+    let held: Vec<String> = store.inputs(Some(&id), None, None).unwrap().into_iter().map(|i| i.id).collect();
+    match own.below(10) {
+        0..=2 => {
+            let body = match own.below(4) {
+                0 => format!("asks\n\n{text}\n{decision}"),
+                1 => format!("asks\n\n{text}"),
+                2 => format!("decides\n\n{decision}"),
+                _ => "asks nothing".to_string(),
+            };
+            store.amend(&id, None, Some(body)).await.unwrap();
+            tally.asked += 1;
+            format!("amend {id}'s inputs")
+        }
+        3..=6 if !held.is_empty() => {
+            let input = held[own.below(held.len())].clone();
+            let done = match own.below(4) {
+                0 => {
+                    let value = match input.as_str() {
+                        "q" => InputValue::Text { text: "yes".into() },
+                        _ => InputValue::Choice { option: "a".into() },
+                    };
+                    store.answer(&id, &input, value, None, crate::types::AnswerSource::Api).await
+                }
+                1 => store.clear_answer(&id, &input, crate::types::AnswerSource::Api).await,
+                2 => store.close_input(&id, &input).await,
+                _ => store.reopen_input(&id, &input).await,
+            };
+            tally.asked += usize::from(matches!(done, Ok(InputWrite::Changed(_))));
+            format!("an input write to {id}'s {input}")
+        }
+        _ => {
+            let names = ["needs-you", "p1", "later"];
+            let (add, remove): (Vec<String>, Vec<String>) = match own.below(3) {
+                0 => (vec![names[own.below(3)].into()], vec![]),
+                1 => (vec![], vec![names[own.below(3)].into()]),
+                _ => (vec![names[own.below(3)].into(), names[own.below(3)].to_ascii_uppercase()], vec![names[own.below(3)].into()]),
+            };
+            match store.label(&id, add.clone(), remove.clone()).await.unwrap() {
+                Change::LabelsChanged { added, removed, .. } if !(added.is_empty() && removed.is_empty()) => tally.labelled += 1,
+                _ => {}
+            }
+            format!("label {id} +{add:?} -{remove:?}")
+        }
     }
 }
 
@@ -406,6 +475,12 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
         tally.joined += usize::from(members_after > members_before);
         tally.left += usize::from(members_after < members_before);
         return what;
+    }
+    // MENGER-12: every fifth write, when the walk asks for them, one that
+    // asks or labels — by the count, on draws of its own.
+    if tally.ask_and_label && !all.is_empty() && tally.writes % 5 == 3 {
+        let mut own = Rng(rng.0 ^ (tally.writes as u64).wrapping_mul(0x4E12_0012_0000_0001));
+        return random_ask_or_label(store, &mut own, &all, tally).await;
     }
     let what = match if all.is_empty() { 0 } else { rng.below(20) } {
         0..=6 => {

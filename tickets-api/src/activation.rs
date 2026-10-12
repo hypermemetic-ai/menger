@@ -158,6 +158,7 @@ fn wire_event(change: Change) -> Option<TicketsEvent> {
         Change::CommitsUnlinked { ticket, removed } => {
             TicketsEvent::CommitsUnlinked { ticket, removed }
         }
+        Change::LabelsChanged { ticket, added, removed } => TicketsEvent::LabelsChanged { ticket, added, removed },
         Change::UnlocksChanged { ticket, added } => TicketsEvent::UnlocksChanged { ticket, added },
         // SCALE-4: the parent's shortcode filtered `watch { epic }` on the
         // way here; the wire carries the id and the count.
@@ -277,7 +278,7 @@ fn input_event(written: Result<InputWrite, StoreError>, ticket: String) -> Ticke
         ],
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
-            "unlink_commits", "answer", "clear_answer", "close_input", "reopen_input"
+            "unlink_commits", "label", "answer", "clear_answer", "close_input", "reopen_input"
         ],
     )
 )]
@@ -915,6 +916,53 @@ impl Tickets {
                 return;
             }
             match store.unlink_commits(&id, commits).await {
+                Ok(change) => yield change_event(change),
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            }
+        }
+    }
+
+    /// MENGER-12: moves a ticket's labels — free-form tags such as
+    /// `needs-you`, which puts the ticket on Home's "Needs you" panel.
+    /// `add` and `remove` are label names (letters, digits and `-`, at most
+    /// 32 characters, folded to lower case); a label in both is added. The
+    /// ticket keeps its labels sorted, each once, at most 16. Yields exactly
+    /// one event: `LabelsChanged { ticket, added, removed }` — both empty
+    /// when nothing moved (every added label already held, every removed one
+    /// not), which writes and broadcasts nothing — `NotFound` if `id` names
+    /// no ticket, or an in-band `Error` naming every entry that is not a
+    /// label, or a result past 16; an error writes nothing. Moves
+    /// `updated_unix` and the ticket's filter cell (`label <name>`), nothing
+    /// else. `watch` carries every `LabelsChanged` that moved something.
+    #[plexus_macros::method(
+        group = "write",
+        target = "id",
+        description = "Add or remove a ticket's labels (e.g. needs-you); yields labels_changed { ticket, added, removed }",
+        params(
+            id = "Ticket id, e.g. MENGER-12",
+            add = "Labels to add — letters, digits and -, at most 32 characters, lower-cased (e.g. [\"needs-you\"]) (optional)",
+            remove = "Labels to remove (optional)"
+        ),
+        example(note = "put a ticket in front of the owner", params = r#"{"id": "MENGER-40", "add": ["needs-you"]}"#),
+        example(note = "and take it off once acted on", params = r#"{"id": "MENGER-40", "remove": ["needs-you"]}"#)
+    )]
+    pub async fn label(
+        &self, auth: Option<&AuthContext>, reach: Reach,
+        id: String,
+        add: Option<Vec<String>>,
+        remove: Option<Vec<String>>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        let admitted = self.access.admit(auth, &reach);
+        stream! {
+            // AUTH-7: the gate held the grant on the target; the sign-in
+            // must still stand.
+            if let Err(message) = admitted {
+                yield TicketsEvent::Error { message };
+                return;
+            }
+            match store.label(&id, add.unwrap_or_default(), remove.unwrap_or_default()).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
                 Err(e) => yield TicketsEvent::Error { message: e.to_string() },
@@ -2002,7 +2050,7 @@ impl Tickets {
     #[plexus_macros::method(
         group = "read",
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
+        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
         params(
             epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)",
             filter = "A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256",
@@ -2251,6 +2299,7 @@ fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> Option<Ticke
         | TicketsEvent::Amended { ticket, .. }
         | TicketsEvent::CommitsLinked { ticket, .. }
         | TicketsEvent::CommitsUnlinked { ticket, .. }
+        | TicketsEvent::LabelsChanged { ticket, .. }
         | TicketsEvent::UnlocksChanged { ticket, .. }
         | TicketsEvent::ParentChanged { ticket, .. }
         | TicketsEvent::Blocker { ticket } => Some(ticket.id.clone()),

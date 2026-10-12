@@ -772,6 +772,7 @@ mod tests {
     fn ticket(id: &str, title: &str, body: &str) -> Ticket {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         Ticket {
+            labels: Vec::new(),
             id: id.into(),
             epic: epic.into(),
             seq: seq.parse().unwrap(),

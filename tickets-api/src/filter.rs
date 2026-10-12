@@ -17,6 +17,8 @@
 //!   `status <name>` · `category <open|ready|active|review|done|dropped|static>`
 //!   · `kind <name>` · `severity <critical|high|medium|low|none>` ·
 //!   `blocked` · `ready` · `has commits` · `menger doc` (FILTER-21) ·
+//!   `asking` (MENGER-12: it has an open input) · `label <name>` (and
+//!   `label in (a, b)`; MENGER-12) ·
 //!   `in <SHORTCODE>` (and `in (A, B)`, `not in (A, B)`) ·
 //!   `under <ID or SHORTCODE>` · `text "…"`, or a bare `"…"`. A value
 //!   holding spaces, commas or parentheses is quoted with `"`; the language
@@ -152,6 +154,15 @@ pub enum Field {
     /// starts with `_MENGER/` (WAVE-10), as each shortcode's board note's
     /// does.
     MengerDoc,
+    /// `asking` (MENGER-12): it has an input in the state `open` — a
+    /// question waiting on the owner (INPUT-1). An answer, a close or the
+    /// body dropping it takes the ticket out; a clear or a reopen with no
+    /// answer puts it back.
+    Asking,
+    /// `label <name>` (MENGER-12): the ticket holds the label (lower case,
+    /// [`crate::labels::normalize`]). A ticket holds many, so — as `under` —
+    /// two inclusions never intersect.
+    Label(String),
     /// `in <SHORTCODE>`: its shortcode is the one named (upper case).
     In(String),
     /// `under <ID or SHORTCODE>`: the one named is in its lineage — it is
@@ -174,6 +185,8 @@ impl Field {
             Field::Ready => "ready",
             Field::HasCommits => "has commits",
             Field::MengerDoc => "menger doc",
+            Field::Asking => "asking",
+            Field::Label(_) => "label",
             Field::In(_) => "in",
             Field::Under(_) => "under",
             Field::Text(_) => "text",
@@ -188,8 +201,8 @@ impl Field {
             Field::Category(c) => c.as_str().into(),
             Field::Kind(k) => k.as_str().into(),
             Field::Severity(s) => severity_name(*s).into(),
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc => return None,
-            Field::In(x) | Field::Under(x) | Field::Text(x) => x.clone(),
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking => return None,
+            Field::In(x) | Field::Under(x) | Field::Text(x) | Field::Label(x) => x.clone(),
         })
     }
 
@@ -197,15 +210,22 @@ impl Field {
     const fn listable(&self) -> bool {
         matches!(
             self,
-            Field::Status(_) | Field::Category(_) | Field::Kind(_) | Field::Severity(_) | Field::In(_) | Field::Under(_)
+            Field::Status(_)
+                | Field::Category(_)
+                | Field::Kind(_)
+                | Field::Severity(_)
+                | Field::In(_)
+                | Field::Under(_)
+                | Field::Label(_)
         )
     }
 
     /// Whether a ticket holds exactly one value of this field — what lets
-    /// two inclusions intersect and an exclusion subtract. `under` is the
-    /// one listable field that does not: a lineage holds many names.
+    /// two inclusions intersect and an exclusion subtract. `under` and
+    /// `label` (MENGER-12) are the listable fields that do not: a lineage
+    /// holds many names, a ticket many labels.
     const fn single_valued(&self) -> bool {
-        self.listable() && !matches!(self, Field::Under(_))
+        self.listable() && !matches!(self, Field::Under(_) | Field::Label(_))
     }
 
     /// The field tested on a cell, `None` for a position or row field.
@@ -219,7 +239,8 @@ impl Field {
             Field::Ready => category_of(c.status) == Category::Ready && !c.blocked,
             Field::HasCommits => c.commits,
             Field::MengerDoc => c.menger,
-            Field::In(_) | Field::Under(_) | Field::Text(_) => return None,
+            Field::Asking => c.asking,
+            Field::In(_) | Field::Under(_) | Field::Text(_) | Field::Label(_) => return None,
         })
     }
 
@@ -231,6 +252,7 @@ impl Field {
             Field::In(e) => f.epic.eq_ignore_ascii_case(e),
             Field::Under(x) => f.lineage.iter().any(|l| l.eq_ignore_ascii_case(x)),
             Field::Text(t) => text_matches(t, &f.id, &f.title),
+            Field::Label(l) => f.labels.iter().any(|x| x.eq_ignore_ascii_case(l)),
             _ => false,
         }
     }
@@ -263,7 +285,9 @@ impl Predicate {
     pub fn format(&self) -> String {
         let head = if self.not { "not " } else { "" };
         match &self.field {
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc => format!("{head}{}", self.field.name()),
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking => {
+                format!("{head}{}", self.field.name())
+            }
             Field::Text(t) => format!("{head}text \"{t}\""),
             f => format!("{head}{} {}", f.name(), quoted(&f.value().unwrap_or_default())),
         }
@@ -517,6 +541,10 @@ pub struct Facts {
     /// FILTER-21: its path starts with `_MENGER/` — one of menger's own
     /// documents ([`crate::is_menger_doc`]).
     pub menger_doc: bool,
+    /// MENGER-12: it has an input in the state `open`.
+    pub asking: bool,
+    /// MENGER-12: its labels, lower case.
+    pub labels: Vec<String>,
     /// What `under` finds it under: its own id, its ancestors' ids, its
     /// shortcode and the shortcodes hosting it.
     pub lineage: Vec<String>,
@@ -531,6 +559,7 @@ impl Facts {
             blocked: self.blocked,
             commits: self.has_commits,
             menger: self.menger_doc,
+            asking: self.asking,
         }
     }
 }
@@ -646,7 +675,7 @@ impl FromStr for Filter {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 22] = [
+const NAMES: [&str; 24] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -657,11 +686,13 @@ const NAMES: [&str; 22] = [
     "archived",
     "blocked",
     "session",
+    "asking",
     "created",
     "written",
     "status",
     "lowest",
     "under",
+    "label",
     "ready",
     "depth",
     "kind",
@@ -677,7 +708,8 @@ const MIXED: &str = "`or` and `and` do not mix inside one pair of parentheses: a
 const NESTED: &str = "groups do not nest: parentheses hold predicates, not groups";
 const LIST_NESTED: &str = "a list `field in (…)` is a group of its own, never inside parentheses or `or`";
 const NOT_UNDERSTOOD: &str = "not understood: a predicate is `status`, `category`, `kind`, `severity`, `blocked`, \
-                              `ready`, `has commits`, `menger doc`, `in`, `under` or `text`, or a quoted text";
+                              `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under` or `text`, or a \
+                              quoted text";
 const QUOTES: &str = "a quoted value is quoted whole — one `\"` before it and one after, none inside";
 
 /// `raw` cut at `sep` (ASCII case-insensitive) where it stands outside
@@ -846,6 +878,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "ready" => flag(Field::Ready),
         "has commits" => flag(Field::HasCommits),
         "menger doc" => flag(Field::MengerDoc),
+        "asking" => flag(Field::Asking),
+        "label" => crate::labels::normalize(value()?).map(Field::Label),
         "text" => text(value()?),
         "status" => {
             let v = value()?;
@@ -1089,6 +1123,8 @@ struct Cell {
     blocked: bool,
     commits: bool,
     menger: bool,
+    /// MENGER-12: it has an open input.
+    asking: bool,
 }
 
 const SEVERITIES: [Option<Severity>; 5] =
@@ -1097,9 +1133,10 @@ const SEVERITIES: [Option<Severity>; 5] =
 /// Every cell a ticket can be in: status × kind × severity-or-none ×
 /// blocked × has commits × menger doc, where a doc holds `Doc` and only a
 /// doc does (SDLC-11), and only a doc carries a path (WAVE-10), so only a
-/// doc is one of menger's own — 940 of them.
+/// doc is one of menger's own — 940 of them; MENGER-12: × asking, any
+/// ticket may ask (a doc's body may declare an input) — 1,880.
 fn cells() -> Vec<Cell> {
-    let mut out = Vec::with_capacity(940);
+    let mut out = Vec::with_capacity(1880);
     for status in Status::ALL {
         for kind in Kind::ALL {
             if (status == Status::Doc) != (kind == Kind::Doc) {
@@ -1110,7 +1147,9 @@ fn cells() -> Vec<Cell> {
                 for blocked in [false, true] {
                     for commits in [false, true] {
                         for &menger in mengers {
-                            out.push(Cell { status, kind, severity, blocked, commits, menger });
+                            for asking in [false, true] {
+                                out.push(Cell { status, kind, severity, blocked, commits, menger, asking });
+                            }
                         }
                     }
                 }
@@ -1131,9 +1170,14 @@ enum Dim {
     Blocked,
     Severity,
     Commits,
+    /// MENGER-12: whether it has an open input.
+    Asking,
     Epic,
     Under(String),
     Text(String),
+    /// MENGER-12: whether it holds this label — a free truth, as an
+    /// `under` name: a ticket holds any set of labels.
+    Label(String),
 }
 
 fn dims(field: &Field) -> Vec<Dim> {
@@ -1143,8 +1187,9 @@ fn dims(field: &Field) -> Vec<Dim> {
         Field::Blocked => vec![Dim::Blocked],
         Field::Severity(_) => vec![Dim::Severity],
         Field::HasCommits => vec![Dim::Commits],
+        Field::Asking => vec![Dim::Asking],
         Field::In(_) => vec![Dim::Epic],
-        Field::Under(_) | Field::Text(_) => var(field).into_iter().collect(),
+        Field::Under(_) | Field::Text(_) | Field::Label(_) => var(field).into_iter().collect(),
     }
 }
 
@@ -1154,6 +1199,7 @@ fn dims(field: &Field) -> Vec<Dim> {
 fn var(field: &Field) -> Option<Dim> {
     match field {
         Field::Under(x) => Some(Dim::Under(x.to_ascii_uppercase())),
+        Field::Label(l) => Some(Dim::Label(l.to_ascii_lowercase())),
         Field::Text(t) => {
             let key = t.trim().to_ascii_lowercase();
             (!key.is_empty()).then_some(Dim::Text(key))
@@ -1223,7 +1269,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
                     epics.push(e);
                 }
             }
-            f @ (Field::Under(_) | Field::Text(_)) => {
+            f @ (Field::Under(_) | Field::Text(_) | Field::Label(_)) => {
                 if let Some(v) = var(f).filter(|v| !vars.contains(v)) {
                     vars.push(v);
                 }
@@ -1234,7 +1280,15 @@ fn satisfiable(groups: &[&Group]) -> bool {
     let cells = match cell {
         true => cells(),
         // Nothing reads the cell: any one stands for all.
-        false => vec![Cell { status: Status::Pending, kind: Kind::Build, severity: None, blocked: false, commits: false, menger: false }],
+        false => vec![Cell {
+            status: Status::Pending,
+            kind: Kind::Build,
+            severity: None,
+            blocked: false,
+            commits: false,
+            menger: false,
+            asking: false,
+        }],
     };
     if vars.len() > 20 || cells.len().saturating_mul(epics.len() + 1).saturating_mul(1 << vars.len()) > WORLD_LIMIT {
         return true;
@@ -1250,7 +1304,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
                         Field::In(e) => {
                             Lit::Epic(epics.iter().position(|x| x.eq_ignore_ascii_case(e)).unwrap_or(usize::MAX))
                         }
-                        f @ (Field::Under(_) | Field::Text(_)) => match var(f) {
+                        f @ (Field::Under(_) | Field::Text(_) | Field::Label(_)) => match var(f) {
                             Some(v) => Lit::Var(vars.iter().position(|x| *x == v).unwrap_or(usize::MAX)),
                             None => Lit::Always,
                         },

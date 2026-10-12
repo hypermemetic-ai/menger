@@ -663,6 +663,8 @@ async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkil
         t["child_count"] = json!(kids.as_array().unwrap().len());
         // SDLC-9: and every row carries its linked commits — none, here.
         t["commits"] = json!([]);
+        // MENGER-12: and its labels — none, here.
+        t["labels"] = json!([]);
     }
     let statuses: Vec<&str> = expected.iter().map(|t| t["status"].as_str().unwrap()).collect();
     for s in ["Pending", "Ready", "Blocked", "Complete", "Idea", "Epic", "Superseded"] {

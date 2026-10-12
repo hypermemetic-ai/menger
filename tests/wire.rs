@@ -2333,6 +2333,126 @@ async fn menger_doc_is_a_filter_on_every_read_over_the_wire() {
     assert!(!evs.iter().any(|e| e["type"] == "left"));
 }
 
+/// MENGER-12 over the real protocol: `tickets.label` moves a ticket's labels
+/// (normalized, sorted, each once; a no-op answers empty and writes
+/// nothing; a bad label is one in-band error), the row carries them, and
+/// `label <name>` and `asking` (an input in state `open`) are filters on
+/// every read — `list`, `counts`, `facets` (`asking` yes / no, `label` a
+/// count per label), `member` — and on `watch { filter }`, where a label
+/// added, an input opened, answered, cleared and closed each enter or leave
+/// the Home panel's default `asking or label needs-you`.
+#[tokio::test]
+async fn labels_and_asking_are_filters_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let ids = |rows: &[Value]| -> Vec<String> { rows.iter().map(|r| r["summary"]["id"].as_str().unwrap().to_string()).collect() };
+    answer(&client, "tickets.create", json!({"epic": "HOME", "title": "home", "kind": "scope"})).await; // HOME-1
+    let asks = "<m-input id=\"notes\" kind=\"text\"><m-question data-field=\"question\">Anything else?</m-question></m-input>";
+    answer(&client, "tickets.create", json!({"epic": "HOME", "title": "asks", "parent": "HOME-1", "body": asks})).await; // HOME-2
+    answer(&client, "tickets.create", json!({"epic": "HOME", "title": "labelled", "parent": "HOME-1"})).await; // HOME-3
+    answer(&client, "tickets.create", json!({"epic": "HOME", "title": "quiet", "parent": "HOME-1"})).await; // HOME-4
+
+    // label: normalized, sorted, each once; what moved, in the order given.
+    let ev = answer(&client, "tickets.label", json!({"id": "home-3", "add": ["Needs-You", "p1", "p1"]})).await;
+    assert_eq!(ev["type"], "labels_changed", "{ev}");
+    assert_eq!((ev["added"].clone(), ev["removed"].clone()), (json!(["needs-you", "p1"]), json!([])));
+    assert_eq!(ev["ticket"]["labels"], json!(["needs-you", "p1"]));
+    let ev = answer(&client, "tickets.label", json!({"id": "HOME-3", "add": ["p1"], "remove": ["later"]})).await;
+    assert_eq!((ev["type"].as_str(), ev["added"].clone(), ev["removed"].clone()), (Some("labels_changed"), json!([]), json!([])), "a no-op");
+    let ev = answer(&client, "tickets.label", json!({"id": "HOME-3", "remove": ["P1"]})).await;
+    assert_eq!((ev["removed"].clone(), ev["ticket"]["labels"].clone()), (json!(["p1"]), json!(["needs-you"])));
+    let ev = answer(&client, "tickets.label", json!({"id": "HOME-3", "add": ["two words"]})).await;
+    assert_eq!(ev["type"], "error", "{ev}");
+    assert!(ev["message"].as_str().unwrap().contains("`two words` is not a label"), "{ev}");
+    let ev = answer(&client, "tickets.label", json!({"id": "HOME-99", "add": ["x"]})).await;
+    assert_eq!(ev["type"], "not_found", "{ev}");
+    let got = answer(&client, "tickets.get", json!({"id": "HOME-3"})).await;
+    assert_eq!(got["ticket"]["labels"], json!(["needs-you"]), "kept");
+    let (rows, _) = paged(call(&client, "tickets.list", json!({"summary": true, "epic": "HOME"})).await).await;
+    assert_eq!(rows[2]["summary"]["labels"], json!(["needs-you"]), "on the row");
+    assert_eq!(rows[3]["summary"]["labels"], json!([]), "none is []");
+
+    // The filters, on every read.
+    for (filter, want) in [
+        ("label needs-you", vec!["HOME-3"]),
+        ("asking", vec!["HOME-2"]),
+        ("asking or label needs-you", vec!["HOME-2", "HOME-3"]),
+        ("not asking and not label needs-you", vec!["HOME-1", "HOME-4"]),
+        ("label in (p1, needs-you)", vec!["HOME-3"]),
+    ] {
+        let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": filter, "summary": true})).await).await;
+        assert_eq!(ids(&rows), want, "{filter}");
+    }
+    let counts = collect(call(&client, "tickets.counts", json!({"filter": "asking or label needs-you"})).await).await;
+    assert_eq!(counts, [json!({"type": "count", "epic": "HOME", "held": 2})]);
+    // FILTER-24: `keep` holds the open ticket in, under these cells too.
+    let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": "asking or label needs-you", "keep": "HOME-4", "summary": true})).await).await;
+    assert_eq!(ids(&rows), ["HOME-2", "HOME-3", "HOME-4"], "kept beside the matches");
+    let counts = collect(call(&client, "tickets.counts", json!({"filter": "label needs-you", "keep": "HOME-4"})).await).await;
+    assert_eq!(counts, [json!({"type": "count", "epic": "HOME", "held": 2})]);
+    let menu = |facets: &[Value], field: &str| -> Vec<(String, u64)> {
+        facets
+            .iter()
+            .filter(|f| f["field"] == field)
+            .map(|f| (f["value"].as_str().unwrap().to_string(), f["held"].as_u64().unwrap()))
+            .collect()
+    };
+    let facets = collect(call(&client, "tickets.facets", json!({})).await).await;
+    assert_eq!(menu(&facets, "asking"), [("yes".to_string(), 1), ("no".to_string(), 3)]);
+    assert_eq!(menu(&facets, "label"), [("needs-you".to_string(), 1)]);
+    let fields: Vec<&str> = facets.iter().map(|f| f["field"].as_str().unwrap()).collect();
+    let at = |name: &str| fields.iter().position(|f| *f == name).unwrap();
+    assert!(at("menger doc") < at("asking") && at("asking") < at("label") && at("label") < at("in"), "{fields:?}");
+    let members = collect(call(&client, "tickets.member", json!({"ids": ["HOME-2", "HOME-3", "HOME-4"], "filter": "asking or label needs-you"})).await).await;
+    let matched: Vec<bool> = members.iter().map(|m| m["matched"].as_bool().unwrap()).collect();
+    assert_eq!(matched, [true, true, false]);
+    let open = collect(call(&client, "tickets.inputs", json!({"state": "open", "filter": "asking or label needs-you"})).await).await;
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!((open[0]["input"]["ticket"].as_str(), open[0]["input"]["question"].as_str()), (Some("HOME-2"), Some("Anything else?")));
+
+    // watch { filter }: Home's panel, live.
+    let mut watch = call(&client, "tickets.watch", json!({"filter": "asking or label needs-you"})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    answer(&client, "tickets.label", json!({"id": "HOME-4", "add": ["needs-you"]})).await; // enters
+    let answered = answer(&client, "tickets.answer", json!({"ticket": "HOME-2", "input": "notes", "value": {"type": "text", "text": "no"}})).await;
+    assert_eq!(answered["type"], "input_changed", "{answered}"); // leaves: answered, not open
+    answer(&client, "tickets.clear_answer", json!({"ticket": "HOME-2", "input": "notes"})).await; // enters: open again
+    answer(&client, "tickets.close_input", json!({"ticket": "HOME-2", "input": "notes"})).await; // leaves: closed
+    answer(&client, "tickets.label", json!({"id": "HOME-3", "remove": ["needs-you"]})).await; // leaves
+    answer(&client, "tickets.amend", json!({"id": "HOME-1", "body": asks})).await; // enters: its body asks
+    answer(&client, "tickets.amend", json!({"id": "HOME-4", "body": "marker"})).await;
+    let mut evs: Vec<Value> = Vec::new();
+    loop {
+        let ev = next_events(&mut watch, 1).await.remove(0);
+        let done = ev["type"] == "amended" && ev["ticket"]["id"] == "HOME-4";
+        evs.push(ev);
+        if done {
+            break;
+        }
+    }
+    let moves: Vec<(String, String)> = evs
+        .iter()
+        .filter(|e| e["type"] == "entered" || e["type"] == "left")
+        .map(|e| (e["type"].as_str().unwrap().to_string(), e["id"].as_str().unwrap().to_string()))
+        .collect();
+    let want: Vec<(String, String)> = [
+        ("entered", "HOME-4"),
+        ("left", "HOME-2"),
+        ("entered", "HOME-2"),
+        ("left", "HOME-2"),
+        ("left", "HOME-3"),
+        ("entered", "HOME-1"),
+    ]
+    .iter()
+    .map(|(a, b)| (a.to_string(), b.to_string()))
+    .collect();
+    assert_eq!(moves, want, "{evs:#?}");
+    let labelled = evs.iter().filter(|e| e["type"] == "labels_changed").count();
+    assert_eq!(labelled, 2, "watch carries each label that moved something");
+    let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": "asking or label needs-you", "summary": true})).await).await;
+    assert_eq!(ids(&rows), ["HOME-1", "HOME-4"]);
+}
+
 /// FILTER-15 over the real protocol: `find`, `ready_set` and `inputs` take a
 /// filter — the rows the filter admits, paged as without it, no `first`;
 /// without one, or with one that narrows nothing, today's answer — and

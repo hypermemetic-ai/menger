@@ -78,6 +78,11 @@ pub(crate) enum Cat {
     Commits,
     /// FILTER-21: menger's own documents (`_MENGER/` paths) — `menger doc`.
     MengerDocs,
+    /// MENGER-12: the ticket has an open input — `asking`.
+    Asking,
+    /// MENGER-12: the ticket's labels — `label <name>`; its values are the
+    /// labels `facets` counts (and the clause's, and `needs-you`).
+    Label,
     Wave,
     Readiness,
     OffBoard,
@@ -123,7 +128,7 @@ pub(crate) const INPUT_STATES: [&str; 3] = ["open", "answered", "closed"];
 pub(crate) const ALL: &str = "all";
 
 impl Cat {
-    pub(crate) const ALL: [Cat; 14] = [
+    pub(crate) const ALL: [Cat; 16] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Kind,
@@ -132,6 +137,8 @@ impl Cat {
         Cat::Blocked,
         Cat::Commits,
         Cat::MengerDocs,
+        Cat::Asking,
+        Cat::Label,
         Cat::Wave,
         Cat::Readiness,
         Cat::OffBoard,
@@ -158,12 +165,24 @@ impl Cat {
 
     /// The server-backed categories, offered at every level, in the menu's
     /// order.
-    pub(crate) const SERVER: [Cat; 8] =
-        [Cat::Shortcode, Cat::Status, Cat::Kind, Cat::Severity, Cat::Ready, Cat::Blocked, Cat::Commits, Cat::MengerDocs];
+    pub(crate) const SERVER: [Cat; 10] = [
+        Cat::Shortcode,
+        Cat::Status,
+        Cat::Kind,
+        Cat::Severity,
+        Cat::Ready,
+        Cat::Blocked,
+        Cat::Commits,
+        Cat::MengerDocs,
+        Cat::Asking,
+        Cat::Label,
+    ];
 
     /// The wave board's categories, in its menu's order: WAVE-12's, with the
-    /// server's flags after Severity.
-    pub(crate) const WAVES: [Cat; 12] = [
+    /// server's flags after Severity. MENGER-12: Label, which a card's row
+    /// carries — not Asking, which the board evaluates on its cards and a
+    /// card does not say.
+    pub(crate) const WAVES: [Cat; 13] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Wave,
@@ -173,6 +192,7 @@ impl Cat {
         Cat::Blocked,
         Cat::Commits,
         Cat::MengerDocs,
+        Cat::Label,
         Cat::Readiness,
         Cat::OffBoard,
         Cat::Title,
@@ -181,7 +201,7 @@ impl Cat {
     /// FILTER-16: the inputs page's categories, in its menu's order — its
     /// own (State, Removed) first, then the server-backed ones, which filter
     /// the inputs' tickets.
-    pub(crate) const INPUTS: [Cat; 10] = [
+    pub(crate) const INPUTS: [Cat; 12] = [
         Cat::State,
         Cat::Removed,
         Cat::Shortcode,
@@ -192,6 +212,8 @@ impl Cat {
         Cat::Blocked,
         Cat::Commits,
         Cat::MengerDocs,
+        Cat::Asking,
+        Cat::Label,
     ];
 
     /// A surface's own category — evaluated by the surface, kept beside the
@@ -203,7 +225,7 @@ impl Cat {
     /// A yes · no category — the server's flags, and the inputs page's
     /// Removed (`yes`: the removed show).
     pub(crate) fn is_flag(self) -> bool {
-        matches!(self, Cat::Ready | Cat::Blocked | Cat::Commits | Cat::MengerDocs | Cat::Removed)
+        matches!(self, Cat::Ready | Cat::Blocked | Cat::Commits | Cat::MengerDocs | Cat::Asking | Cat::Removed)
     }
 
     /// The category's key — WAVE-12's in the URL for the wave board's (and
@@ -218,6 +240,8 @@ impl Cat {
             Cat::Blocked => "blocked",
             Cat::Commits => "commits",
             Cat::MengerDocs => "menger",
+            Cat::Asking => "asking",
+            Cat::Label => "label",
             Cat::Wave => "wave",
             Cat::Readiness => "ready",
             Cat::OffBoard => "off",
@@ -242,6 +266,8 @@ impl Cat {
             Cat::Blocked => "Blocked",
             Cat::Commits => "Commits",
             Cat::MengerDocs => "Menger docs",
+            Cat::Asking => "Asking",
+            Cat::Label => "Label",
             Cat::Wave => "Wave",
             Cat::Readiness => "Readiness",
             Cat::OffBoard => "Off-board blockers",
@@ -269,6 +295,8 @@ impl Cat {
             Cat::Blocked => "⊘",
             Cat::Commits => "⑂",
             Cat::MengerDocs => "§",
+            Cat::Asking => "⁇",
+            Cat::Label => "⌗",
             Cat::Wave => "≋",
             Cat::Readiness => "▸",
             Cat::OffBoard => "⧖",
@@ -285,11 +313,11 @@ impl Cat {
             Cat::Status => &STATUSES,
             Cat::Kind => &KINDS,
             Cat::Severity => &SEVERITIES,
-            Cat::Ready | Cat::Blocked | Cat::Commits | Cat::MengerDocs | Cat::Removed => &FLAG,
+            Cat::Ready | Cat::Blocked | Cat::Commits | Cat::MengerDocs | Cat::Asking | Cat::Removed => &FLAG,
             Cat::Readiness => &["workable", "waiting", "missing"],
             Cat::State => &INPUT_STATES,
             Cat::OffBoard => &["some", "none"],
-            Cat::Shortcode | Cat::Wave | Cat::Title => &[],
+            Cat::Shortcode | Cat::Wave | Cat::Title | Cat::Label => &[],
         }
     }
 
@@ -310,6 +338,8 @@ impl Cat {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
                 .then(|| raw.to_ascii_uppercase()),
             Cat::Status => raw.parse::<Status>().ok().map(|s| s.as_str().to_string()),
+            // MENGER-12: a label, lower case — the language's own rule.
+            Cat::Label => menger_tickets_api::labels::normalize(raw).ok(),
             Cat::Wave => match raw.to_ascii_lowercase().as_str() {
                 "missing" => Some("missing".into()),
                 "done" => Some("done".into()),
@@ -323,7 +353,7 @@ impl Cat {
     /// then done; Shortcode: the code's).
     fn rank(self, t: &str) -> (u64, String) {
         match self {
-            Cat::Shortcode | Cat::Title => (0, t.to_string()),
+            Cat::Shortcode | Cat::Title | Cat::Label => (0, t.to_string()),
             Cat::Wave => (
                 match t {
                     "missing" => u64::MAX - 1,
@@ -345,6 +375,8 @@ impl Cat {
             (Cat::Severity, "none") => "no severity".into(),
             (Cat::Commits, "yes") => "has commits".into(),
             (Cat::Commits, "no") => "none".into(),
+            (Cat::Asking, "yes") => "asking".into(),
+            (Cat::Asking, "no") => "not asking".into(),
             (Cat::Readiness, "workable") => "workable now".into(),
             (Cat::OffBoard, "some") => "has some".into(),
             (Cat::Removed, "yes") => "shown".into(),
@@ -1020,8 +1052,18 @@ pub(crate) fn offered(c: Cat, k: &MenuFacts) -> Vec<Row> {
                 .collect()
         }
         Cat::Title => Vec::new(),
+        Cat::Label => label_values(k).iter().map(|t| value(t, 0)).collect(),
         c => c.fixed().iter().map(|t| value(t, 0)).collect(),
     }
+}
+
+/// MENGER-12: Label's values, in name order — `needs-you` always (Home's
+/// panel asks for it), every label the counts name, and the clause's own.
+pub(crate) fn label_values(k: &MenuFacts) -> Vec<String> {
+    let mut out: BTreeSet<String> = BTreeSet::from([menger_tickets_api::labels::NEEDS_YOU.to_string()]);
+    out.extend(k.counts.get(&Cat::Label).into_iter().flat_map(|m| m.keys().cloned()));
+    out.extend(k.clauses.get(Cat::Label).into_iter().flat_map(|cl| cl.values.iter().cloned()));
+    out.into_iter().collect()
 }
 
 /// `c`'s values matching what is typed (all of them, as offered, when
@@ -2358,6 +2400,7 @@ pub(crate) mod tests {
                 "Blocked",
                 "Commits",
                 "Menger docs",
+                "Label",
                 "Readiness",
                 "Off-board blockers",
                 "Title contains…"
@@ -2387,12 +2430,27 @@ pub(crate) mod tests {
 
         // The global menu: the server's categories, no Title to offer.
         let g = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &Clauses::default(), counts: &HashMap::new() };
-        assert_eq!(search("", &g).len(), 8);
+        assert_eq!(search("", &g).len(), 10);
         // FILTER-21: typing finds Menger docs, by its name.
         assert_eq!(search("menger", &g)[0], Row::Cat(Cat::MengerDocs));
         assert_eq!(offered(Cat::MengerDocs, &g), [val(Cat::MengerDocs, "yes"), val(Cat::MengerDocs, "no")]);
         assert!(!search("ret", &g).iter().any(|r| matches!(r, Row::TitleContains(_))));
         assert!(!search("wave", &g).iter().any(|r| matches!(r, Row::Cat(Cat::Wave))));
+        // MENGER-12: Asking is a flag; Label offers `needs-you`, every label
+        // the counts name and the clause's own, in name order.
+        assert_eq!(search("asking", &g)[0], Row::Cat(Cat::Asking));
+        assert_eq!(offered(Cat::Asking, &g), [val(Cat::Asking, "yes"), val(Cat::Asking, "no")]);
+        assert_eq!(offered(Cat::Label, &g), [val(Cat::Label, "needs-you")]);
+        let mut counts = HashMap::new();
+        counts.insert(Cat::Label, [("blocked-on-ci", 2), ("needs-you", 3)].into_iter().map(|(k, v)| (k.to_string(), v)).collect());
+        let clauses = Clauses::default().with(Cat::Label, Op::Is, strs(&["zz-mine"]));
+        let l = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &clauses, counts: &counts };
+        assert_eq!(
+            offered(Cat::Label, &l),
+            [val(Cat::Label, "blocked-on-ci"), val(Cat::Label, "needs-you"), val(Cat::Label, "zz-mine")]
+        );
+        assert_eq!(Cat::Label.token("Needs-You").as_deref(), Some("needs-you"));
+        assert_eq!(Cat::Label.token("two words"), None, "not a label");
     }
 
     /// A pill: its operator in words, its values first-then-`+n` — the
@@ -2440,10 +2498,11 @@ pub(crate) mod tests {
             assert_eq!(switch_words(c), Some(("is", "is not")), "{c:?}");
         }
         assert_eq!(switch_words(Cat::Title), Some(("contains", "does not contain")));
-        for c in [Cat::Ready, Cat::Blocked, Cat::Commits, Cat::MengerDocs, Cat::Removed] {
+        for c in [Cat::Ready, Cat::Blocked, Cat::Commits, Cat::MengerDocs, Cat::Asking, Cat::Removed] {
             assert_eq!(switch_words(c), None, "{c:?}: its yes / no is the negation");
         }
-        assert_eq!(Cat::ALL.into_iter().filter(|c| switch_words(*c).is_some()).count(), 9, "every category but the flags");
+        assert_eq!(switch_words(Cat::Label), Some(("is", "is not")));
+        assert_eq!(Cat::ALL.into_iter().filter(|c| switch_words(*c).is_some()).count(), 10, "every category but the flags");
 
         let not = Clause { op: Op::Not, values: strs(&["doc"]) };
         let is = Clause { op: Op::Is, values: strs(&["doc"]) };

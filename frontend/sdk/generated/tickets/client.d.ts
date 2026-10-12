@@ -32,6 +32,8 @@ export interface TicketsClient {
     health(): AsyncGenerator<TicketsEvent>;
     /** Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket */
     inputs(epic?: string | null, filter?: string | null, state?: string | null, ticket?: string | null): AsyncGenerator<TicketsEvent>;
+    /** Add or remove a ticket's labels (e.g. needs-you); yields labels_changed { ticket, added, removed } */
+    label(id: string, add?: string[] | null, remove?: string[] | null): AsyncGenerator<TicketsEvent>;
     /** Link commits to a ticket (the commits that finished it); yields commits_linked { ticket, added } */
     linkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
     /** List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at */
@@ -56,7 +58,7 @@ export interface TicketsClient {
     tree(filter: string, after?: string | null, epic?: string | null, keep?: string | null, limit?: number | null, matchesOnly?: boolean | null, parent?: string | null): AsyncGenerator<TicketsEvent>;
     /** Unlink commits from a ticket; yields commits_unlinked { ticket, removed } */
     unlinkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
-    /** Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
+    /** Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
     watch(epic?: string | null, filter?: string | null, membership?: boolean | null): AsyncGenerator<TicketsEvent>;
     /** The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts */
     waves(epics: string[], kinds?: string[] | null): AsyncGenerator<TicketsEvent>;

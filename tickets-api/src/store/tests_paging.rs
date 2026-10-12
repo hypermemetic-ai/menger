@@ -68,6 +68,7 @@ pub(super) fn write_runs(path: &Path, rows: &[(&str, u32)]) {
         db::upsert(
             &conn,
             &Ticket {
+                labels: Vec::new(),
                 id: format!("{epic}-{seq}"),
                 epic: epic.to_string(),
                 seq: *seq,

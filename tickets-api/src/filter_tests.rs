@@ -409,6 +409,8 @@ fn every_status_has_its_category() {
 fn facts(id: &str, title: &str, status: Status, kind: Kind) -> Facts {
     let epic = id.rsplit_once('-').map_or(id, |(e, _)| e).to_string();
     Facts {
+        asking: false,
+        labels: Vec::new(),
         id: id.into(),
         lineage: vec![id.into(), epic.clone()],
         epic,
@@ -491,6 +493,82 @@ fn menger_doc_is_a_flag_that_round_trips_and_admits_menger_paths() {
     assert!(m("menger doc and kind doc and category static and in PLEXUS", &board));
     assert!(m("(menger doc or ready)", &board) && m("(menger doc or ready)", &work) && !m("(menger doc or ready)", &plain));
     assert!(m("not menger doc and kind doc", &plain) && !m("not menger doc and kind doc", &board));
+}
+
+/// MENGER-12: `asking` is a flag like `menger doc`, and `label <name>` a
+/// value — read whatever their case (a label folded to lower case), written
+/// back canonical, `label` listable (`label in (a, b)`); `asking` admits the
+/// tickets with an open input, `label x` those holding `x`; a bad label is
+/// refused, naming why.
+#[test]
+fn asking_and_label_round_trip_and_admit() {
+    let label = |l: &str| Field::Label(l.into());
+    let cases: Vec<(&str, Vec<Group>, &str)> = vec![
+        ("asking", vec![one(is(Field::Asking))], "asking"),
+        ("NOT Asking", vec![one(not(Field::Asking))], "not asking"),
+        ("label needs-you", vec![one(is(label("needs-you")))], "label needs-you"),
+        ("label Needs-You", vec![one(is(label("needs-you")))], "label needs-you"),
+        ("label \"needs-you\"", vec![one(is(label("needs-you")))], "label needs-you"),
+        ("not label p1", vec![one(not(label("p1")))], "not label p1"),
+        ("asking or label needs-you", vec![Group::any(vec![is(Field::Asking), is(label("needs-you"))])], "(asking or label needs-you)"),
+        ("label in (a, b)", vec![Group::any(vec![is(label("a")), is(label("b"))])], "label in (a, b)"),
+        ("not label in (a, b)", vec![Group::all(vec![not(label("a")), not(label("b"))])], "not label in (a, b)"),
+        ("asking and in MENGER", vec![one(is(Field::Asking)), one(is(within("MENGER")))], "asking and in MENGER"),
+    ];
+    for (text, want, canonical) in cases {
+        let f = parsed(text);
+        assert_eq!(f.groups, want, "{text}");
+        assert_eq!(f.format(), canonical, "{text}");
+        assert_eq!(parsed(canonical), f, "{canonical} is a fixed point");
+    }
+    assert_eq!((Field::Asking.name(), Field::Asking.value()), ("asking", None));
+    assert_eq!((label("x").name(), label("x").value()), ("label", Some("x".to_string())));
+    for (text, why) in [
+        ("asking yes", "takes no value"),
+        ("label", "needs a value"),
+        ("label \"two words\"", "not a label"),
+        ("label a_b", "not a label"),
+        ("tag needs-you", "no data"),
+    ] {
+        let e = refused(text);
+        assert_eq!(e.chunks.len(), 1, "{text}: {e}");
+        assert!(e.chunks[0].why.contains(why), "{text}: {}", e.chunks[0].why);
+    }
+    assert!(refused("frobnicate").chunks[0].why.contains("`asking`, `label`"), "the predicates listed name them");
+
+    // The evaluator: one asking, one labelled, one both, one neither.
+    let mut asks = facts("MENGER-2", "asks", Status::Coding, Kind::Build);
+    asks.asking = true;
+    let mut tagged = facts("MENGER-3", "tagged", Status::Ready, Kind::Build);
+    tagged.labels = vec!["needs-you".into(), "p1".into()];
+    let mut both = facts("MENGER-4", "both", Status::Doc, Kind::Doc);
+    (both.asking, both.labels) = (true, vec!["needs-you".into()]);
+    let quiet = facts("MENGER-5", "quiet", Status::Pending, Kind::Build);
+    let m = |text: &str, t: &Facts| parsed(text).matches(t);
+    let who = |text: &str| -> Vec<&str> {
+        [&asks, &tagged, &both, &quiet].into_iter().filter(|t| m(text, t)).map(|t| t.id.as_str()).collect()
+    };
+    assert_eq!(who("asking"), ["MENGER-2", "MENGER-4"]);
+    assert_eq!(who("not asking"), ["MENGER-3", "MENGER-5"]);
+    assert_eq!(who("label needs-you"), ["MENGER-3", "MENGER-4"]);
+    assert_eq!(who("asking or label needs-you"), ["MENGER-2", "MENGER-3", "MENGER-4"]);
+    assert_eq!(who("label in (p1, later)"), ["MENGER-3"]);
+    assert_eq!(who("not label in (p1, needs-you)"), ["MENGER-2", "MENGER-5"]);
+    assert_eq!(who("label needs-you and label p1"), ["MENGER-3"], "two labels of one ticket: both hold");
+
+    // Merges: a ticket holds many labels, so two inclusions never
+    // intersect (as `under`'s), and an inclusion is not cut by an exclusion.
+    let a = parsed("label in (a, b)");
+    assert_eq!(a.and(&parsed("label in (b, c)")).format(), "label in (a, b) and label in (b, c)");
+    assert_eq!(a.and(&parsed("not label a")).format(), "label in (a, b) and not label a");
+    assert_eq!(parsed("not label a").and(&parsed("not label b")).format(), "not label in (a, b)");
+
+    // Contradictions: the flag against itself; a label against itself; two
+    // different labels never clash.
+    assert!(parsed("asking and not asking").admits_nothing().is_some());
+    assert!(parsed("label a and not label a").admits_nothing().is_some());
+    assert!(parsed("label a and not label b").admits_nothing().is_none());
+    assert!(parsed("asking and kind doc and status Doc").admits_nothing().is_none(), "a doc may ask");
 }
 
 /// `palette_match` from `frontend/src/keys.rs` — find's rule, which the
@@ -695,6 +773,8 @@ struct Pools {
     epics: &'static [&'static str],
     unders: &'static [&'static str],
     texts: &'static [&'static str],
+    /// MENGER-12: the labels a filter names and a ticket holds.
+    labels: &'static [&'static str],
 }
 
 const WIDE: Pools = Pools {
@@ -703,6 +783,7 @@ const WIDE: Pools = Pools {
     // quoting's hard cases: spaces, commas, parentheses, `·`, the joiners,
     // a leading `not`, a field's name, padding, a blank
     texts: &["watch", "In Review", "a, b", "x (y)", "not this", "a and b", "c or d", "dot · dot", "  pad  ", "status", " "],
+    labels: &["needs-you", "p1", "later"],
 };
 
 /// For the exhaustive checks: texts no one of which holds another, none in
@@ -711,6 +792,7 @@ const NARROW: Pools = Pools {
     epics: &["SCALE", "MNG", "FILTER"],
     unders: &["SCALE", "SCALE-13"],
     texts: &["alpha", "ALPHA ", "bravo", "  "],
+    labels: &["needs-you", "p1"],
 };
 
 fn random_value(rng: &mut Rng, field: usize, pools: &Pools) -> Field {
@@ -725,13 +807,16 @@ fn random_value(rng: &mut Rng, field: usize, pools: &Pools) -> Field {
         7 => Field::Ready,
         8 => Field::HasCommits,
         9 => Field::MengerDoc,
+        // MENGER-12.
+        11 => Field::Asking,
+        12 => Field::Label(rng.pick(pools.labels).to_string()),
         _ => text(rng.pick(pools.texts)),
     }
 }
 
 /// Any predicate but `text`.
 fn random_pred(rng: &mut Rng, pools: &Pools) -> Predicate {
-    let field = rng.below(10);
+    let field = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12][rng.below(12)];
     Predicate { field: random_value(rng, field, pools), not: rng.coin() }
 }
 
@@ -740,7 +825,7 @@ fn random_group(rng: &mut Rng, pools: &Pools) -> Group {
     match rng.below(6) {
         0 | 1 => one(random_pred(rng, pools)),
         2 => {
-            let (field, incl, n) = (rng.below(6), rng.coin(), 2 + rng.below(2));
+            let (field, incl, n) = ([0, 1, 2, 3, 4, 5, 12][rng.below(7)], rng.coin(), 2 + rng.below(2));
             let preds = (0..n).map(|_| Predicate { field: random_value(rng, field, pools), not: !incl }).collect();
             match incl {
                 true => Group::any(preds),
@@ -784,6 +869,8 @@ fn random_facts(rng: &mut Rng, pools: &Pools) -> Facts {
     let mut lineage = vec![id.clone(), epic.clone()];
     lineage.extend(pools.unders.iter().filter(|_| rng.below(3) == 0).map(|u| u.to_string()));
     Facts {
+        asking: rng.coin(),
+        labels: pools.labels.iter().filter(|_| rng.coin()).map(|l| l.to_string()).collect(),
         id,
         epic,
         title: words.join(" "),
@@ -841,10 +928,12 @@ fn and_matches_what_both_match() {
 /// filter names and one it does not, every set of its `under` names and of
 /// its texts — passes `f`, asked of the evaluator itself.
 fn some_world_matches(f: &Filter) -> bool {
-    let (mut epics, mut unders, mut texts) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut epics, mut unders, mut texts, mut labels) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for p in f.groups.iter().flat_map(|g| &g.preds) {
         match &p.field {
             Field::In(e) if !epics.contains(e) => epics.push(e.clone()),
+            // MENGER-12: each label named, held or not.
+            Field::Label(l) if !labels.contains(l) => labels.push(l.clone()),
             Field::Under(u) if !unders.contains(u) => unders.push(u.clone()),
             Field::Text(t) if !t.trim().is_empty() && !texts.contains(&t.trim().to_ascii_lowercase()) => {
                 texts.push(t.trim().to_ascii_lowercase())
@@ -864,20 +953,26 @@ fn some_world_matches(f: &Filter) -> bool {
             for severity in [None, Some(Severity::Critical), Some(Severity::High), Some(Severity::Medium), Some(Severity::Low)] {
                 for (blocked, commits) in [(false, false), (false, true), (true, false), (true, true)] {
                     for &menger in mengers {
-                        cells.push(Cell { status, kind, severity, blocked, commits, menger });
+                        // MENGER-12: any ticket may ask.
+                        for asking in [false, true] {
+                            cells.push(Cell { asking, status, kind, severity, blocked, commits, menger });
+                        }
                     }
                 }
             }
         }
     }
-    assert_eq!(cells.len(), 1040);
+    assert_eq!(cells.len(), 2080);
     for epic in &epics {
         for u in 0..1usize << unders.len() {
             for t in 0..1usize << texts.len() {
+              for l in 0..1usize << labels.len() {
                 let chosen = |xs: &[String], mask: usize| -> Vec<String> {
                     xs.iter().enumerate().filter(|(i, _)| mask >> i & 1 == 1).map(|(_, x)| x.clone()).collect()
                 };
                 let mut x = Facts {
+                    asking: false,
+                    labels: chosen(&labels, l),
                     id: "QQ-1".into(),
                     epic: epic.clone(),
                     title: chosen(&texts, t).join("|"),
@@ -890,12 +985,13 @@ fn some_world_matches(f: &Filter) -> bool {
                     lineage: chosen(&unders, u),
                 };
                 for c in &cells {
-                    (x.status, x.kind, x.severity, x.blocked, x.has_commits, x.menger_doc) =
-                        (c.status, c.kind, c.severity, c.blocked, c.commits, c.menger);
+                    (x.status, x.kind, x.severity, x.blocked, x.has_commits, x.menger_doc, x.asking) =
+                        (c.status, c.kind, c.severity, c.blocked, c.commits, c.menger, c.asking);
                     if f.matches(&x) {
                         return true;
                     }
                 }
+              }
             }
         }
     }

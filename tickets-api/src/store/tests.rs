@@ -565,6 +565,7 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
             .into_iter()
             .map(|t| (t.id.clone(), t))
             .collect(),
+        Default::default(),
     );
     assert_eq!(
         find_parent_cycle(&tickets, "CHAIN-1", "OTHER-2"),
@@ -1596,6 +1597,7 @@ pub(super) fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)])
         .map(|(id, kind, status, parent)| {
             let (epic, seq) = id.rsplit_once('-').unwrap();
             Ticket {
+                labels: Vec::new(),
                 id: id.to_string(),
                 epic: epic.into(),
                 seq: seq.parse().unwrap(),
@@ -1968,6 +1970,7 @@ fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
         db::upsert(
             &conn,
             &Ticket {
+                labels: Vec::new(),
                 id: id.to_string(),
                 epic: epic.into(),
                 seq: seq.parse().unwrap(),

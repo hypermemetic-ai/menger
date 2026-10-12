@@ -69,7 +69,7 @@ and share of the ready set — is stored in the database beside them,
 written by every write in the same transaction as its tickets, and read
 at start instead of rebuilt by a pass over every ticket. A database written before SCALE-28
 — or in an older form of it: SCALE-32's is form 2, SDLC-11's (the roll-ups'
-`docs`) form 3 —
+`docs`) form 3, … MENGER-12's (a cell's `asking` and labels) form 10 —
 has it built once, on first open, durably, and the log says so
 (`SCALE-28: stored the derived state for the first time …`); every later
 start logs `read the derived state from the database … nothing rebuilt`.
@@ -327,6 +327,40 @@ header's "menger docs" toggle is gone. The flag is a cell coordinate, so
 stored form 6 gives `cells` a `menger` column: a form-5 file is built again
 once on first open, and an older build cannot open it after.
 
+What waits on the owner is a filter too (MENGER-12): **`asking`** admits
+the tickets with an input in the state `open` (INPUT-1 — a question nobody
+has answered yet: an answer, a close or the body dropping it takes the
+ticket out; a clear, or a reopen with no answer, puts it back), and
+**`label <name>`** the tickets holding that label (`label needs-you`,
+`label in (p1, later)`; a ticket holds many, so two `label` inclusions never
+merge). Both are cell coordinates — a cell holds its tickets' `asking` and
+their set of labels — answered from the cells on every filtered read and on
+`watch { filter }`, kept by the write that moves them (a `label`; an
+`answer`, `clear_answer`, `close_input` or `reopen_input`; a `create` or
+`amend` whose body opens or drops an input), and `facets` counts `asking`
+(yes / no) and `label` (a count per label held, in name order) after
+`menger doc`, before `in`. Stored form 10 gives `cells` `asking` and
+`labels` columns: a form-9 (or older) file is built again once on first
+open, and an older build cannot open it after.
+
+**Needs you** (MENGER-12): the first thing on Home is a panel of what
+waits on the owner — the live result of the saved filter named "Needs you"
+(`VIEW/_MENGER/view/needs-you`; until one is saved, the default
+`(asking or label needs-you)`). Its header says "Needs you · N", and the
+header nav's **needs you N** link goes to it; each row is the ticket (id,
+title, status chip, label chips) and what it needs: each open input's
+question, with **answer ›** opening the ticket's frame at that input. It
+follows `watch` (`entered` / `left` / `recount` for its filter,
+`input_changed`, `labels_changed`), so an answer or a label in another
+window moves it at once; with nothing waiting it says "Nothing needs you."
+**change** edits its filter and saves it under that name — an ordinary
+saved filter, in `Saved ▾` at every level. `g n` focuses it (listed in
+`?`). Labels are chips on every row (board, nav, flat, wave cards) and on
+the ticket page, where an editor adds and removes them; the menus offer
+**Asking** (yes / no) and **Label** (a value per label, with `facets`'
+counts), and the palette takes `filter <text>` — `filter label needs-you`,
+`filter asking` — as the global filter.
+
 **Saved filters** (FILTER-6): `Saved ▾` beside each level's `Filter`
 button (the global one in the header) lists the saved filters by name; a
 name applies its filter to that level (a surface's own categories cleared),
@@ -515,6 +549,27 @@ it still opens the file.
 ```sh
 synapse -P 4455 menger tickets link_commits --id MNG-10 --commits 77df9a0
 synapse -P 4455 menger tickets link_commits --id SCALE-4 --commits 0bb28b2 --commits 090cdec
+```
+
+A ticket carries **labels** (MENGER-12): free-form tags on every row and
+ticket (`labels`, `[]` when none), written by `label { id, add, remove }`
+alone. A label is letters, digits and `-`, at most 32 characters, folded to
+lower case (`Needs-You` is `needs-you`); a ticket holds at most 16, kept
+sorted, each once. A label named in both `add` and `remove` is added; a
+call that moves nothing answers `labels_changed` with `added: []` and
+`removed: []` and writes nothing; an entry that is not a label (or a result
+past 16) is one in-band `error` naming it, and nothing is written. Labelling
+moves `updated_unix` and the ticket's cell (`label <name>`), nothing else.
+**`needs-you`** is the label that puts a ticket in front of the owner: Home's
+"Needs you" panel shows every ticket labelled `needs-you` beside every
+ticket `asking`. A database written before MENGER-12 gains the `labels`
+column on first open, durably — `ADD COLUMN … DEFAULT '[]'`, instant at any
+size.
+
+```sh
+synapse -P 4455 menger tickets label --id MENGER-40 --add needs-you
+synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you
+synapse -P 4455 menger tickets list --filter 'asking or label needs-you' --summary
 ```
 
 A ticket may also carry a **path address** (WAVE-10): an optional
@@ -1148,6 +1203,7 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
 | `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id. COMP-3: a new body moves the component registry (definitions, references, orphans); a malformed ` ```component ` block (COMP-8: or `<docs>`), or a name another ticket defines, is an in-band `error` and nothing is written, title included |
 | `tickets.link_commits { id, commits }` | `commits_linked { ticket, added }` (SDLC-9) — appends every commit reference in `commits` the ticket does not already carry, in the order given; `added` is what was newly linked, in order. Every entry already linked, or `commits` empty, is no write and no broadcast and answers `added: []`. An entry that is not a commit reference is one in-band `error` naming every such entry, and nothing is written — a call is all or nothing; so is a link that would put more than 256 commits on the ticket. An id naming no ticket is `not_found`. Durable before it is acknowledged; `updated_unix` moves, nothing else does |
 | `tickets.unlink_commits { id, commits }` | `commits_unlinked { ticket, removed }` (SDLC-9) — every entry the ticket carries is removed; `removed` names them in the order given; none of them linked is no write, `removed: []`. The same grammar, the same all-or-nothing `error`, `not_found` |
+| `tickets.label { id, add?, remove? }` | `labels_changed { ticket, added, removed }` (MENGER-12) — each entry a label (letters, digits, `-`, ≤ 32, lower-cased), `add` added and `remove` taken off (a label in both is added), the ticket's labels kept sorted, each once, ≤ 16; `added` / `removed` are what moved, in the order given — both empty is no write and no broadcast. A bad entry or too many is one in-band `error`, nothing written; `not_found`. Durable before it is acknowledged; `updated_unix` and the ticket's cell (`label <name>`) move, nothing else; `watch` carries every `labels_changed` that moved something |
 | `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's row is written, and it leaves the old parent's children and joins the new one's (SCALE-4: neither parent's row is rewritten — SCALE-28 stores each one's new `child_count` on it, in the move's transaction; `watch` carries `children_changed` and `child_removed` with each parent's new `child_count`); the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, docs, root, root_row, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only; SDLC-11: the work only — `docs` counts the docs, and a row of docs alone is drawn), `root` is the lowest-seq `scope` (or `doc`), `root_row` the root's `{ title, status, kind }` (AGS-23: the nav draws the shortcode as the root's row; `null` with no root), `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
 | `tickets.components {}` | one `component { component: { name, source, owner, references, docs, preview } }` per component, in name order, then the stream's own `done` (COMP-3) — `source` the ` ```component name ` block's content, `owner` the defining ticket (`null`: an orphan), `references` the tickets whose bodies use `<name`, in the store's order, then the components whose sources do, by name; COMP-8: `docs` the source's `<docs>` parsed (`{ summary, attrs, slots, examples, help }`, `null` without one), `preview` the opening line's attributes (`[[name, value], …]`). From the cache; `watch` keeps it current with `component_changed` / `component_removed` |
@@ -1158,7 +1214,7 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
 | `tickets.reopen_input { ticket, input }` | `input_changed { input }` — `answered` again when it holds an answer, else `open`; `input { input }` when it was not closed; in-band `error` when removed or not declared (INPUT-3) |
 | `tickets.extents {}` | one `extent { epic, last_seq }` per shortcode that holds a ticket, in shortcode order (the store's), then the stream's own `done` (SCALE-16) — where each shortcode ends: ids are allocated highest-plus-one and never deleted, so a shortcode holds `last_seq` tickets, row k of it is `EPIC-k`, and a position in the store's order becomes a `list { after }` cursor without a walk; every `last_seq` together sums to `health.ticket_count` (a hand-edited database with a hole still reports the highest sequence; `after` naming the missing id is `list`'s cursor error). Not a roll-up: the shortcode's own tickets only, and every shortcode has one whether or not the nav draws it a row. Read from the sequence `create` allocates from (SCALE-3), so the cost is the number of shortcodes; no `watch` event — `created` carries the shortcode's new `last_seq` as its `seq` |
 | `tickets.waves { epics, kinds? }` | the order of work (WAVE-4): one `placed { summary, placement, waiting_on }` per ticket of the shortcodes `epics` (case-insensitive; one with no tickets contributes nothing) whose kind is in `kinds` (default `build`, `spike`, `gap`; a doc is never placed), then exactly one `wave_counts { waves, missing, done }` — `waves[i]` counts the placed tickets in wave `i + 1`. `placement` is computed over the **whole** `blocked_by` graph by `ready_set`'s rule (MNG-4), blockers followed into any shortcode, asked for or not: `{"type": "done"}` when the ticket is `Complete`, `Superseded` or `Canceled`; `{"type": "missing_blocker"}` when it, or anything it waits on, names a blocker that is no ticket (or, only by a hand edit, sits on or behind a `blocked_by` cycle); otherwise `{"type": "wave", "n": n}` — 1 with every blocker satisfied, else 1 + the highest wave among its unsatisfied blockers. `parent` orders nothing, and a `Blocked` status is a marker, not an edge. `waiting_on` is the ticket's unsatisfied direct blockers (missing ids included), in `blocked_by` order, distinct; `[]` when done. Order: waves ascending, inside a wave `Coding`, `In Review`, `Ready`, `Pending`, `Blocked`, `Idea`, `Epic`, then (epic, seq); then the missing lane; then the done — each in (epic, seq). `epics` empty, or a kind outside the six, is one in-band `error` and nothing else. WAVE-6: read from the placements the store keeps (below) — the cost is the placed tickets — and `waiting_on` worked out per row |
-| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `kind_changed` / `amended` / `commits_linked` / `commits_unlinked` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` / `placements_changed` / `component_changed` / `component_removed` / `input_changed` — INPUT-3: an input a write moved is one **`input_changed { input }`** — the whole input, its state, answer and history, so applying it is one upsert — after every other event of the write, the component events included: an `answer`, `clear_answer`, `close_input` or `reopen_input` (its one event), or a `create` / `amend` whose body declared, re-declared or removed inputs (in the body's order, the removed after); `epic` filters it by its ticket's shortcode — COMP-3: a `create` or `amend` that moved the component registry ends — after every other event of the write, `placements_changed` included — with one **`component_changed { component }`** per component it registered or moved (source, owner, references: the whole component, so applying it is one upsert), in name order, then one **`component_removed { name }`** per component it took out; a component is in no shortcode, so both pass any `epic` filter — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`) — WAVE-6: and a write that moved any kept placement ends with one **`placements_changed { changes: [{ id, placement }] }`**, after its other events (`epic` keeps the changes in its shortcode, and the event only when one is left) — AGS-23: so is a shortcode root's status change (any, not only across `Complete`) or new title, which moves its group's `root_row`; `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
+| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `kind_changed` / `amended` / `commits_linked` / `commits_unlinked` / `labels_changed` / `unlocks_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` / `placements_changed` / `component_changed` / `component_removed` / `input_changed` — INPUT-3: an input a write moved is one **`input_changed { input }`** — the whole input, its state, answer and history, so applying it is one upsert — after every other event of the write, the component events included: an `answer`, `clear_answer`, `close_input` or `reopen_input` (its one event), or a `create` / `amend` whose body declared, re-declared or removed inputs (in the body's order, the removed after); `epic` filters it by its ticket's shortcode — COMP-3: a `create` or `amend` that moved the component registry ends — after every other event of the write, `placements_changed` included — with one **`component_changed { component }`** per component it registered or moved (source, owner, references: the whole component, so applying it is one upsert), in name order, then one **`component_removed { name }`** per component it took out; a component is in no shortcode, so both pass any `epic` filter — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`) — WAVE-6: and a write that moved any kept placement ends with one **`placements_changed { changes: [{ id, placement }] }`**, after its other events (`epic` keeps the changes in its shortcode, and the event only when one is left) — AGS-23: so is a shortcode root's status change (any, not only across `Complete`) or new title, which moves its group's `root_row`; `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
 
 Paging (MNG-9). `(epic, seq)` is a total order the schema keeps unique, so
 a ticket id is a cursor: a client that renders opens `watch` first, then
@@ -1610,7 +1666,7 @@ activation — every method answers everyone, as before; schemas only gain
 | role | its grants (declared with `roles(...)` on each activation) |
 |---|---|
 | `viewer` | the reads: `tickets.{health, get, list, ready_set, find, search, member, groups, components, inputs, extents, counts, facets, tree, waves, blockers, watch}`, `comments.{add, list, watch}` |
-| `editor` | viewer's, and the writes: `tickets.{create, set_status, set_kind, set_parent, amend, link_commits, unlink_commits, answer, clear_answer, close_input, reopen_input}`, `comments.{resolve, reopen}` |
+| `editor` | viewer's, and the writes: `tickets.{create, set_status, set_kind, set_parent, amend, link_commits, unlink_commits, label, answer, clear_answer, close_input, reopen_input}`, `comments.{resolve, reopen}` |
 | `admin` | every grant (built in): `members.{list, grant, revoke, requests}`, `auth.{roles, role_set, grant, revoke, waiting}` |
 | any signed-in caller | `session.*`, `members.mine`, `auth.{whoami, logout, requires}` |
 

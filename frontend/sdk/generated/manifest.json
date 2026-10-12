@@ -140,6 +140,11 @@
         "state",
         "ticket"
       ],
+      "label": [
+        "add",
+        "id",
+        "remove"
+      ],
       "link_commits": [
         "commits",
         "id"
