@@ -345,6 +345,12 @@ export interface Ticket {
     /** `EPIC-N`, allocated by the store. */
     id: string;
     kind: Kind;
+    /** MENGER-12: the ticket's labels — free-form tags (`needs-you`, …),
+  each lower-case letters, digits and `-` ([`crate::labels`]), sorted,
+  each once, at most 16; `[]` when none. Moved by `tickets.label`
+  alone, and asked by the filter cell `label <name>`. `default`: a
+  server from before MENGER-12 sends none. */
+    labels?: string[];
     /** AGS-19: the ticket this one is an output of, if any. Any epic; the
   parent must exist at creation and the chain is acyclic. */
     parent?: string | null;
@@ -395,6 +401,9 @@ export interface TicketSummary {
     epic: string;
     id: string;
     kind: Kind;
+    /** MENGER-12: as on [`Ticket`] — on the row, so the board, the nav and
+  Home's "Needs you" draw a ticket's label chips without a `get`. */
+    labels?: string[];
     parent?: string | null;
     /** WAVE-10: as on [`Ticket`] — on the row, so the nav can hide
   `_MENGER/` documents without a `get`. Unlike `severity` and
@@ -503,6 +512,18 @@ something). `removed` is what came off, in the order given; empty
 when none of it was linked, which `watch` never carries. */
 export interface TicketsEventCommitsUnlinked {
     type: 'commits_unlinked';
+    removed: string[];
+    ticket: Ticket;
+}
+/** MENGER-12: a ticket's labels moved (yielded by `label`, and by
+`watch` for every `label` that changed something). `added` and
+`removed` are what moved, in the order given — both empty is
+`label`'s own answer to a call that moved nothing, which `watch`
+never carries. The whole ticket rides along, its `labels` as the
+write left them. */
+export interface TicketsEventLabelsChanged {
+    type: 'labels_changed';
+    added: string[];
     removed: string[];
     ticket: Ticket;
 }
@@ -791,7 +812,7 @@ export interface TicketsEventSearched {
     next: number | null;
     words: SearchWord[];
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventNode | TicketsEventHit | TicketsEventSearched;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventNode | TicketsEventHit | TicketsEventSearched;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -802,6 +823,7 @@ export declare function isTicketsEventKindChanged(e: TicketsEvent): e is Tickets
 export declare function isTicketsEventAmended(e: TicketsEvent): e is TicketsEventAmended;
 export declare function isTicketsEventCommitsLinked(e: TicketsEvent): e is TicketsEventCommitsLinked;
 export declare function isTicketsEventCommitsUnlinked(e: TicketsEvent): e is TicketsEventCommitsUnlinked;
+export declare function isTicketsEventLabelsChanged(e: TicketsEvent): e is TicketsEventLabelsChanged;
 export declare function isTicketsEventUnlocksChanged(e: TicketsEvent): e is TicketsEventUnlocksChanged;
 export declare function isTicketsEventChildrenChanged(e: TicketsEvent): e is TicketsEventChildrenChanged;
 export declare function isTicketsEventParentChanged(e: TicketsEvent): e is TicketsEventParentChanged;

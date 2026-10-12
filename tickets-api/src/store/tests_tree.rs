@@ -43,9 +43,9 @@ pub(super) type Tallies = BTreeMap<(String, String, Key), u32>;
 pub(super) type Holders = BTreeMap<(String, String, String, Key), Vec<u32>>;
 
 /// The oracle: every tally and every holder, from the rows and their cells.
-pub(super) fn oracle(rows: &[Row]) -> (Tallies, Holders) {
+pub(super) fn oracle(rows: &[Row], asking: &std::collections::BTreeSet<String>) -> (Tallies, Holders) {
     let by_id: HashMap<&str, &Row> = rows.iter().map(|t| (t.id.as_str(), t)).collect();
-    let cells = scanned(rows);
+    let cells = scanned(rows, asking);
     let mut tallies = Tallies::new();
     for t in rows {
         let k = cells[&OrderKey::of(t)];
@@ -127,7 +127,7 @@ fn filed(path: &Path) -> (State, Tallies, Holders, tree::Stored) {
 /// The kept tree is the oracle's — in the cache, and in the file.
 #[track_caller]
 pub(super) fn assert_tree_is_a_scan(store: &Store, path: Option<&Path>, after: &str) {
-    let (want_tallies, want_holders) = oracle(&rows(store));
+    let (want_tallies, want_holders) = oracle(&rows(store), &super::tests_cells::asking(store));
     let (tallies, holders) = kept(store);
     assert_eq!(tallies, want_tallies, "the cache's tallies, after {after}");
     assert_eq!(holders, want_holders, "the cache's holders, after {after}");

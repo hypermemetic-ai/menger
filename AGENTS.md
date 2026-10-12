@@ -286,6 +286,20 @@ synapse -P 4455 menger tickets clear_answer --ticket T --input landing
 A `multi` answer goes through `-p` for now — synapse sends a list inside a
 nested parameter as one string (SYNAPSE-9).
 
+**A question for the owner is filed, never asked only in chat** (owner,
+2026-10-12, MENGER-12). Put it on its ticket as an input — or, when it is
+not a choice or a reply, label the ticket `needs-you` with the reason in its
+body — and only then mention it in chat, with the ticket id. Home's "Needs
+you" panel (filter `asking or label needs-you`) is where the owner looks;
+a question that lives only in a chat transcript is never seen. Whoever acts
+on a `needs-you` takes the label off:
+
+```sh
+synapse -P 4455 menger tickets label --id MENGER-40 --add needs-you      # the reason is in the body
+synapse -P 4455 menger tickets list --filter 'asking or label needs-you' --summary
+synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once acted on
+```
+
 ## Conventions
 
 - Plexus crates come from the **0.6 line by sibling path** (MFE-10):
@@ -379,6 +393,12 @@ nested parameter as one string (SYNAPSE-9).
   store and the server*, MENGER-4 *tickets*, MENGER-5 *running it*; work on
   the platform goes under PLEXUS-1. To move a shortcode, `set_parent` its
   root; a hosted root can't return to the top level.
+- **Ask through the tracker** (owner, 2026-10-12, MENGER-12): a question
+  for the owner is an input on its ticket (or the `needs-you` label with
+  the reason in the body), and is mentioned in chat with the ticket id —
+  never asked only in chat. `asking` and `label <name>` are filter cells
+  (FILTER-3's language); Home's "Needs you" panel shows `asking or label
+  needs-you`.
 - Ticketing follows **ought** (`../ought`, the house methodology — its
   `ticketing/`, `building/`, `methodology/` skills). Its lifecycle is
   `Pending → Ready → active → in review → done` (+ `archived`, always

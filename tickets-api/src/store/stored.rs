@@ -61,11 +61,23 @@ use std::path::Path;
 /// open ([`upgrade`]); older forms are built again and gain it with the
 /// rest. An older build reads a form-9 file as its own (it never looks at
 /// the table).
-const FORM: i64 = 9;
+///
+/// MENGER-12 is form 10: a cell says whether its tickets are `asking` (an
+/// input of theirs is `open`) and which labels they hold — the cell table
+/// gains `asking` and `labels` (the set as a JSON list, sorted), a ticket
+/// with an open input or a label no longer shares a cell with one without,
+/// so every cell id the derived state names may move. A file in form 9 or
+/// older gains the columns and is built again, once, on its first open (the
+/// tables forms 7 to 9 add come with the build). One way: an older build
+/// reads the table without the columns, so an asking cell reads as its
+/// quiet twin — a file holding both is refused as interning one cell twice
+/// (`promote`'s rollback restores the backup it took first).
+const FORM: i64 = 10;
 
 /// COMMENT-2, IDENTITY-21, AUTH-7: the forms [`upgrade`] takes to [`FORM`]
-/// in place.
-const UPGRADES_FROM: [i64; 3] = [6, 7, 8];
+/// in place. MENGER-12: none — form 10 moves the cells, so every older form
+/// is built again.
+const UPGRADES_FROM: [i64; 0] = [];
 
 /// IDENTITY-21: what form 8 adds beside the tables — a comment's signer.
 fn add_comment_principal(conn: &Connection) -> rusqlite::Result<()> {
@@ -89,6 +101,11 @@ const DOCS_COLUMNS: [(&str, &str); 4] = [
 /// what a build gives a file in form 4 or 5, as it gives the roll-ups their
 /// `docs`.
 const MENGER_COLUMN: (&str, &str) = ("cells", "menger");
+
+/// MENGER-12: the columns form 10 adds to the cell table, `(table, column,
+/// type and default)`.
+const ASKING_COLUMNS: [(&str, &str, &str); 2] =
+    [("cells", "asking", "INTEGER NOT NULL DEFAULT 0"), ("cells", "labels", "TEXT NOT NULL DEFAULT '[]'")];
 
 /// The tables the derived state is stored in, and the index children are
 /// read from — each keyed the way the read that will answer from it asks
@@ -215,7 +232,9 @@ const SCHEMA: &str = "
             severity TEXT,
             blocked  INTEGER NOT NULL,
             commits  INTEGER NOT NULL,
-            menger   INTEGER NOT NULL DEFAULT 0
+            menger   INTEGER NOT NULL DEFAULT 0,
+            asking   INTEGER NOT NULL DEFAULT 0,
+            labels   TEXT NOT NULL DEFAULT '[]'
         );
         CREATE TABLE IF NOT EXISTS cell_bits (
             epic TEXT NOT NULL,
@@ -566,16 +585,21 @@ fn write_tree(conn: &Connection, t: &tree::Stored) -> rusqlite::Result<()> {
 
 /// FILTER-4: one cell of the table.
 fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
-    conn.prepare_cached("INSERT INTO cells (id, state, kind, severity, blocked, commits, menger) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")?
-        .execute(params![
-            id,
-            key.status().as_str(),
-            key.kind().as_str(),
-            key.severity().map(|s| s.as_str()),
-            key.blocked(),
-            key.commits(),
-            key.menger()
-        ])?;
+    conn.prepare_cached(
+        "INSERT INTO cells (id, state, kind, severity, blocked, commits, menger, asking, labels)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    )?
+    .execute(params![
+        id,
+        key.status().as_str(),
+        key.kind().as_str(),
+        key.severity().map(|s| s.as_str()),
+        key.blocked(),
+        key.commits(),
+        key.menger(),
+        key.asking(),
+        serde_json::to_string(&*key.labels().labels()).expect("serialize labels"),
+    ])?;
     Ok(())
 }
 
@@ -788,6 +812,12 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
             tx.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"), [])?;
         }
     }
+    // MENGER-12: and from form 9 or older its `asking` and `labels`.
+    for (table, column, decl) in ASKING_COLUMNS {
+        if !db::has_column(&tx, table, column)? {
+            tx.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+        }
+    }
     create_children_index(&tx)?;
     drop_ready_index(&tx)?;
     // COMMENT-2: form 7's comments table — empty for a file that had none.
@@ -797,7 +827,9 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     add_comment_principal(&tx)?;
     // AUTH-7: form 9's roles table.
     tx.execute_batch(super::roles::TABLE)?;
-    let cache = Cache::new(db::load_rows(&tx)?);
+    // MENGER-12: the inputs say which tickets are `asking` — read before
+    // the cells are built (`inputs::migrate` made the tables before this).
+    let cache = Cache::new(db::load_rows(&tx)?, super::inputs::load(&tx)?);
     let form = cache.form();
     write_all(&tx, &form)?;
     create_ready_index(&tx)?;
@@ -1136,7 +1168,8 @@ fn parsed<T: std::str::FromStr<Err = String>>(column: usize, stored: &str) -> ru
 /// FILTER-4: the cell table, by id.
 fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
     let mut out = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT id, state, kind, severity, blocked, commits, menger FROM cells ORDER BY id")?;
+    let mut stmt =
+        conn.prepare("SELECT id, state, kind, severity, blocked, commits, menger, asking, labels FROM cells ORDER BY id")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let severity = match r.get_ref(3)?.as_str_or_null()? {
@@ -1151,6 +1184,11 @@ fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
             r.get(5)?,
             r.get(6)?,
         );
+        // MENGER-12: the set as stored, interned again in this process.
+        let labels: Vec<String> = serde_json::from_str(r.get_ref(8)?.as_str()?).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, e.to_string().into())
+        })?;
+        let key = key.with(r.get(7)?, cells::LabelSet::of(&labels));
         out.insert(r.get(0)?, key);
     }
     Ok(out)
@@ -1371,7 +1409,8 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
             ))
         }
     }
-    let scanned = Cache::new(db::load_rows(&tx)?);
+    // MENGER-12: the inputs say which tickets are `asking`.
+    let scanned = Cache::new(db::load_rows(&tx)?, super::inputs::load_if_any(&tx)?);
     let stored = read(&tx)?;
     let stored_children = read_children(&tx)?;
     let stored_ready = read_ready(&tx)?;

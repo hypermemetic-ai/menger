@@ -634,6 +634,28 @@ async fn remove(id: String) -> Result<Vec<Entry>, String> {
     Ok(entries(&after))
 }
 
+/// MENGER-12: the filter `id`'s doc holds, or `None` while nothing is saved
+/// under it — Home's "Needs you" reads its saved filter this way, and falls
+/// back to its default.
+pub(crate) async fn load_if_saved(id: &str) -> Result<Option<Filter>, String> {
+    let client = connected()?;
+    let address = address_of(id);
+    match get(&client, &address).await? {
+        None => Ok(None),
+        Some(doc) => filter_of(&doc.body).map(Some).map_err(|why| format!("{address}: {why}")),
+    }
+}
+
+/// MENGER-12: Save as… `name` with `filter`, replacing what that name holds —
+/// the entry saved. Home's "Needs you" saves its filter through here, so it
+/// is one of the saved filters (`Saved ▾` lists it, any level applies it).
+pub(crate) async fn save_as(filter: Filter, name: &str) -> Result<Entry, String> {
+    save(filter, name.to_string(), true).await.map(|(e, _)| e).map_err(|f| match f {
+        Failure::Refused(r) => r.words(),
+        Failure::Failed(why) => why,
+    })
+}
+
 /// The filter `id`'s doc holds.
 async fn load(id: String) -> Result<Filter, String> {
     let client = connected()?;

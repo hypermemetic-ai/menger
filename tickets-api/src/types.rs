@@ -373,6 +373,13 @@ pub struct Ticket {
     /// work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<Placement>,
+    /// MENGER-12: the ticket's labels — free-form tags (`needs-you`, …),
+    /// each lower-case letters, digits and `-` ([`crate::labels`]), sorted,
+    /// each once, at most 16; `[]` when none. Moved by `tickets.label`
+    /// alone, and asked by the filter cell `label <name>`. `default`: a
+    /// server from before MENGER-12 sends none.
+    #[serde(default)]
+    pub labels: Vec<String>,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
     pub body: String,
     pub created_unix: i64,
@@ -417,6 +424,10 @@ pub struct TicketSummary {
     /// omitted for a doc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<Placement>,
+    /// MENGER-12: as on [`Ticket`] — on the row, so the board, the nav and
+    /// Home's "Needs you" draw a ticket's label chips without a `get`.
+    #[serde(default)]
+    pub labels: Vec<String>,
     pub created_unix: i64,
     pub updated_unix: i64,
 }
@@ -438,6 +449,7 @@ impl From<Ticket> for TicketSummary {
             commits: t.commits,
             path: t.path,
             placement: t.placement,
+            labels: t.labels,
             created_unix: t.created_unix,
             updated_unix: t.updated_unix,
         }
@@ -1188,6 +1200,13 @@ pub enum TicketsEvent {
     /// something). `removed` is what came off, in the order given; empty
     /// when none of it was linked, which `watch` never carries.
     CommitsUnlinked { ticket: Ticket, removed: Vec<String> },
+    /// MENGER-12: a ticket's labels moved (yielded by `label`, and by
+    /// `watch` for every `label` that changed something). `added` and
+    /// `removed` are what moved, in the order given — both empty is
+    /// `label`'s own answer to a call that moved nothing, which `watch`
+    /// never carries. The whole ticket rides along, its `labels` as the
+    /// write left them.
+    LabelsChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
     /// An existing ticket's `unlocks` gained `added`: a newly created
     /// ticket named it in `blocked_by` (yielded by `watch`). Carries the
     /// full updated ticket so a watch-only client stays coherent.
@@ -1587,6 +1606,7 @@ mod tests {
             json!({"type": "wave_counts", "waves": [2, 0, 1], "missing": 1, "done": 4})
         );
         let summary = TicketSummary {
+            labels: Vec::new(),
             id: "W-2".into(),
             epic: "W".into(),
             seq: 2,
@@ -1670,6 +1690,7 @@ mod tests {
             commits: vec!["77df9a0".into()],
             path: Some("_MENGER/board".into()),
             placement: Some(Placement::MissingBlocker),
+            labels: vec!["needs-you".into()],
             body: "## Problem\n\nthe weight of a list".into(),
             created_unix: 1,
             updated_unix: 2,

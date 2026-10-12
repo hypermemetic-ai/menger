@@ -461,6 +461,7 @@ pub(crate) fn face(g: &Group) -> Option<TicketSummary> {
 
 fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, status: Status, kind: Kind) -> TicketSummary {
     TicketSummary {
+        labels: Vec::new(),
         id: id.to_string(),
         epic: epic.to_string(),
         seq: key(id).map_or(0, |(_, s)| s),
@@ -3689,6 +3690,8 @@ fn leaf_row(
                     view! { <span class="outside-mark" title="outside the nav's filter — shown because it is the open ticket">"outside"</span> }
                 })
             }}
+            // MENGER-12: its labels.
+            {crate::labels::row_chips(move || ticket.with(|t| t.labels.clone()))}
             // FILTER-14: the matches under the row, as its badge (a
             // shortcode's row has its tally instead).
             {move || {
@@ -3753,6 +3756,7 @@ mod tests {
     fn row(id: &str, parent: Option<&str>) -> TicketSummary {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         TicketSummary {
+            labels: Vec::new(),
             id: id.into(),
             epic: epic.into(),
             seq: seq.parse().unwrap(),

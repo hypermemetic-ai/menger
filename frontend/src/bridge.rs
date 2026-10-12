@@ -483,6 +483,7 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::Amended { ref ticket, .. }
         | E::CommitsLinked { ref ticket, .. }
         | E::CommitsUnlinked { ref ticket, .. }
+        | E::LabelsChanged { ref ticket, .. }
         | E::UnlocksChanged { ref ticket, .. }
         | E::ParentChanged { ref ticket, .. }
         | E::Blocker { ref ticket } => inside(&ticket.epic).then_some(ev),
@@ -1093,6 +1094,7 @@ mod tests {
     fn tkt(id: &str) -> Ticket {
         let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
         Ticket {
+            labels: Vec::new(),
             id: id.to_string(),
             epic: epic.to_string(),
             seq: seq.parse().expect("seq"),
@@ -1283,6 +1285,7 @@ mod tests {
             TicketsEvent::Amended { ticket: outside(), changed: vec!["body".into()] },
             TicketsEvent::CommitsLinked { ticket: outside(), added: vec![] },
             TicketsEvent::CommitsUnlinked { ticket: outside(), removed: vec![] },
+            TicketsEvent::LabelsChanged { ticket: outside(), added: vec!["needs-you".into()], removed: vec![] },
             TicketsEvent::UnlocksChanged { ticket: outside(), added: "AREA-2".into() },
             TicketsEvent::ParentChanged { ticket: outside(), previous: Some("AREA-1".into()) },
             TicketsEvent::Blocker { ticket: outside() },

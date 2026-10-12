@@ -333,6 +333,8 @@ pub(crate) fn field_of(c: Cat, t: &str) -> Option<Field> {
         Cat::Blocked => Field::Blocked,
         Cat::Commits => Field::HasCommits,
         Cat::MengerDocs => Field::MengerDoc,
+        Cat::Asking => Field::Asking,
+        Cat::Label => Field::Label(menger_tickets_api::labels::normalize(t).ok()?),
         _ => return None,
     })
 }
@@ -350,6 +352,8 @@ pub(crate) fn token_of(f: &Field) -> Option<(Cat, Option<String>)> {
         Field::Blocked => (Cat::Blocked, None),
         Field::HasCommits => (Cat::Commits, None),
         Field::MengerDoc => (Cat::MengerDocs, None),
+        Field::Asking => (Cat::Asking, None),
+        Field::Label(l) => (Cat::Label, Some(l.to_ascii_lowercase())),
         Field::Category(_) | Field::Under(_) | Field::Text(_) => return None,
     })
 }
@@ -1220,7 +1224,7 @@ mod tests {
     #[test]
     fn each_categorys_pill_is_its_group() {
         use Op::{Is, Not};
-        let cases: [(Cat, Clause, &str); 23] = [
+        let cases: [(Cat, Clause, &str); 27] = [
             (Cat::Shortcode, clause(Is, &["MNG"]), "in MNG"),
             (Cat::Shortcode, clause(Is, &["CONTEXT", "RETURNS"]), "in (CONTEXT, RETURNS)"),
             (Cat::Shortcode, clause(Not, &["CONTEXT", "RETURNS"]), "not in (CONTEXT, RETURNS)"),
@@ -1242,6 +1246,10 @@ mod tests {
             (Cat::Commits, clause(Is, &["no"]), "not has commits"),
             (Cat::MengerDocs, clause(Is, &["yes"]), "menger doc"),
             (Cat::MengerDocs, clause(Is, &["no"]), "not menger doc"),
+            (Cat::Asking, clause(Is, &["yes"]), "asking"),
+            (Cat::Asking, clause(Is, &["no"]), "not asking"),
+            (Cat::Label, clause(Is, &["needs-you"]), "label needs-you"),
+            (Cat::Label, clause(Not, &["a", "b"]), "not label in (a, b)"),
             (Cat::Status, clause(Is, &["In Review"]), "status \"In Review\""),
             (Cat::Kind, clause(Is, &["scope", "execution"]), "kind in (scope, execution)"),
         ];
@@ -1439,6 +1447,8 @@ mod tests {
         assert_eq!(d.clauses().get(Cat::MengerDocs), Some(&clause(Op::Is, &["no"])));
         assert_eq!(d.local, Clauses::default());
         let ticket = |id: &str, kind: menger_tickets_api::Kind, path: Option<&str>| menger_tickets_api::filter::Facts {
+            asking: false,
+            labels: Vec::new(),
             id: id.into(),
             epic: "PLEXUS".into(),
             title: String::new(),

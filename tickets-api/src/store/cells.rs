@@ -4,7 +4,9 @@
 //! whether it is `blocked` (its kept count of unsatisfied blockers is above
 //! 0, SCALE-32), whether it `has commits` (SDLC-9) and — FILTER-21 —
 //! whether it is a `menger doc` (its path starts with `_MENGER/`, WAVE-10;
-//! set at birth, so only a birth moves it). A cell is interned
+//! set at birth, so only a birth moves it) and — MENGER-12 — whether it is
+//! `asking` (it has an input in the state `open`) and which labels it holds
+//! (the set, interned: [`LabelSet`]). A cell is interned
 //! into the cell table on first use and named by its id from then on. Per
 //! shortcode and per cell it holds, the sequences of the shortcode's tickets
 //! in that cell are kept as a Roaring bitmap; its count is the bitmap's
@@ -23,7 +25,8 @@
 //! ([`super::stored::cell_differences`]).
 //!
 //! Stored form 4: `cells (id, state, kind, severity, blocked, commits)` —
-//! form 6 (FILTER-21) adds `menger` —
+//! form 6 (FILTER-21) adds `menger`, form 10 (MENGER-12) `asking` and
+//! `labels` (the set as a JSON list, sorted) —
 //! `cell_bits (epic, cell, hi, card, bits)` — one row per 2¹⁶-sequence
 //! container, `bits` the container serialized as Roaring serializes one: at
 //! most 4,096 members as their low 16 bits, little-endian, two bytes each;
@@ -35,7 +38,70 @@ use super::{Kind, OrderKey, Row, Rows, Severity, Status};
 use roaring::RoaringBitmap;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, RwLock};
+
+/// MENGER-12: a set of labels as a cell holds it — a handle on the set,
+/// interned once per process ([`LabelSet::of`]), so a cell stays small and
+/// `Copy` and two cells holding the same labels are one. `0` is no label,
+/// which needs no lookup. The handle is the process's: what is stored is the
+/// set itself (`cells.labels`), and a start interns it again.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default)]
+pub struct LabelSet(u32);
+
+/// Every label set a cell has named in this process: id → set, set → id.
+type Interned = (Vec<Arc<[String]>>, HashMap<Arc<[String]>, u32>);
+
+static LABEL_SETS: LazyLock<RwLock<Interned>> = LazyLock::new(|| {
+    let none: Arc<[String]> = Arc::from(Vec::new());
+    RwLock::new((vec![Arc::clone(&none)], HashMap::from([(none, 0)])))
+});
+
+impl LabelSet {
+    /// No label.
+    pub const NONE: LabelSet = LabelSet(0);
+
+    /// The set `labels` names — sorted and each once, as a row keeps them
+    /// ([`crate::labels::apply`]); sorted and deduplicated here too, so a
+    /// hand edit's order cannot make two cells of one set.
+    pub fn of(labels: &[String]) -> Self {
+        if labels.is_empty() {
+            return Self::NONE;
+        }
+        let sorted = labels.windows(2).all(|w| w[0] < w[1]);
+        let owned;
+        let set: &[String] = if sorted {
+            labels
+        } else {
+            let mut v = labels.to_vec();
+            v.sort();
+            v.dedup();
+            owned = v;
+            &owned
+        };
+        if let Some(id) = LABEL_SETS.read().expect("label sets poisoned").1.get(set) {
+            return Self(*id);
+        }
+        let mut sets = LABEL_SETS.write().expect("label sets poisoned");
+        if let Some(id) = sets.1.get(set) {
+            return Self(*id);
+        }
+        let id = sets.0.len() as u32;
+        let arc: Arc<[String]> = Arc::from(set.to_vec());
+        sets.0.push(Arc::clone(&arc));
+        sets.1.insert(arc, id);
+        Self(id)
+    }
+
+    /// The labels, sorted.
+    pub fn labels(self) -> Arc<[String]> {
+        Arc::clone(&LABEL_SETS.read().expect("label sets poisoned").0[self.0 as usize])
+    }
+
+    /// Whether it holds no label.
+    pub fn is_empty(self) -> bool {
+        self == Self::NONE
+    }
+}
 
 /// A severity as a cell holds it: none, then the four, in the language's
 /// order (`critical`, `high`, `medium`, `low`).
@@ -51,7 +117,8 @@ pub(super) const SEVERITIES: [Option<Severity>; 5] = [
 /// (Roaring's own threshold).
 const ARRAY_MAX: usize = 4096;
 
-/// One cell: `(status, kind, severity, blocked, has commits, menger doc)`,
+/// One cell: `(status, kind, severity, blocked, has commits, menger doc,
+/// asking, labels)`,
 /// each as its place in [`Status::ALL`], [`Kind::ALL`] and [`SEVERITIES`] —
 /// so it is small, `Copy`, hashable and ordered without the wire enums
 /// being any of those.
@@ -64,6 +131,10 @@ pub struct Key {
     commits: bool,
     /// FILTER-21: one of menger's own documents.
     menger: bool,
+    /// MENGER-12: it has an input in the state `open`.
+    asking: bool,
+    /// MENGER-12: the labels it holds.
+    labels: LabelSet,
 }
 
 fn place<T: PartialEq>(all: &[T], v: &T) -> u8 {
@@ -79,13 +150,22 @@ impl Key {
             blocked,
             commits,
             menger,
+            asking: false,
+            labels: LabelSet::NONE,
         }
     }
 
-    /// A ticket's cell: its row as the write leaves it, and its count of
-    /// unsatisfied blockers as the write leaves it. FILTER-21: its path says
-    /// whether it is a menger doc ([`crate::is_menger_doc`]).
-    pub(super) fn of(t: &Row, unsatisfied: u32) -> Self {
+    /// MENGER-12: this cell, asking or not, holding `labels`.
+    pub(super) fn with(self, asking: bool, labels: LabelSet) -> Self {
+        Self { asking, labels, ..self }
+    }
+
+    /// A ticket's cell: its row as the write leaves it, its count of
+    /// unsatisfied blockers as the write leaves it, and — MENGER-12 —
+    /// whether it is asking as the write leaves it (the inputs say; the row
+    /// does not). FILTER-21: its path says whether it is a menger doc
+    /// ([`crate::is_menger_doc`]). MENGER-12: its row's labels are its set.
+    pub(super) fn of(t: &Row, unsatisfied: u32, asking: bool) -> Self {
         Self::new(
             t.status,
             t.kind,
@@ -94,6 +174,7 @@ impl Key {
             !t.commits.is_empty(),
             crate::is_menger_doc(t.path.as_deref()),
         )
+        .with(asking, LabelSet::of(&t.labels))
     }
 
     pub fn status(self) -> Status {
@@ -120,21 +201,38 @@ impl Key {
     pub fn menger(self) -> bool {
         self.menger
     }
+
+    /// MENGER-12: whether it has an open input.
+    pub fn asking(self) -> bool {
+        self.asking
+    }
+
+    /// MENGER-12: the labels it holds.
+    pub fn labels(self) -> LabelSet {
+        self.labels
+    }
 }
 
 /// As `--verify-derived` names a cell: `(Ready, build, none, blocked, no
-/// commits)` — FILTER-21: `, menger doc` last when it is one.
+/// commits)` — FILTER-21: `, menger doc` last when it is one; MENGER-12:
+/// then `, asking` when it is, and `, labels a b` when it holds any.
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let labels = match self.labels.is_empty() {
+            true => String::new(),
+            false => format!(", labels {}", self.labels.labels().join(" ")),
+        };
         write!(
             f,
-            "({}, {}, {}, {}, {}{})",
+            "({}, {}, {}, {}, {}{}{}{})",
             self.status(),
             self.kind(),
             self.severity().map_or("none".to_string(), |s| s.as_str().to_ascii_lowercase()),
             if self.blocked { "blocked" } else { "not blocked" },
             if self.commits { "has commits" } else { "no commits" },
             if self.menger { ", menger doc" } else { "" },
+            if self.asking { ", asking" } else { "" },
+            labels,
         )
     }
 }
@@ -412,11 +510,11 @@ impl Cells {
     /// Every ticket's cell, from the rows and the counts as kept — at a
     /// build, after a seed, and for `--verify-derived` to compare with. The
     /// rows arrive in the store's order, so each bitmap is built by pushing.
-    pub(super) fn build(rows: Rows<'_>, unsatisfied: impl Fn(&str) -> u32) -> Self {
+    pub(super) fn build(rows: Rows<'_>, unsatisfied: impl Fn(&str) -> u32, asking: impl Fn(&str) -> bool) -> Self {
         let mut c = Self::default();
         let mut here: Option<(String, Held)> = None;
         for t in rows.tickets() {
-            let id = c.intern(Key::of(t, unsatisfied(&t.id)));
+            let id = c.intern(Key::of(t, unsatisfied(&t.id), asking(&t.id)));
             if here.as_ref().is_none_or(|(e, _)| *e != t.epic) {
                 if let Some((e, held)) = here.take() {
                     c.held.insert(e, held);

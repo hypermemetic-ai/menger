@@ -341,6 +341,7 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
         members[e].push(i);
         index.insert(id.clone(), i);
         out.push(Ticket {
+            labels: Vec::new(),
             id,
             epic,
             seq: seq[e],

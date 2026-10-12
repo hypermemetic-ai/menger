@@ -27,7 +27,7 @@
 //! cycle (whose subtree holds its own ancestors) is answered by looking at
 //! every ticket of each child's subtree.
 
-use super::cells::{self, Admit, Key, View};
+use super::cells::{self, Admit, View};
 use super::children::Names;
 use super::filtered::{self, Lens};
 use super::tree::{self, g_cell, g_epic};
@@ -442,13 +442,13 @@ impl<'c> Compiled<'c> {
 
     /// `t`'s cell id.
     fn cell(&self, t: &Row) -> u32 {
-        self.cache.cells.id(Key::of(t, self.cache.ready.count(&t.id))).expect("every ticket's cell is interned")
+        self.cache.cells.id(self.cache.key(t)).expect("every ticket's cell is interned")
     }
 
     /// Whether the filter admits `t`, by its whole lineage — the reference
     /// evaluator's question, asked of one ticket (a hand-edited cycle's).
     fn judge_row(&self, t: &Row) -> bool {
-        let key = Key::of(t, self.cache.ready.count(&t.id));
+        let key = self.cache.key(t);
         if self.status.is_some_and(|s| key.status() != s) {
             return false;
         }

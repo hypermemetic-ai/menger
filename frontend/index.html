@@ -1503,6 +1503,65 @@
   }
   #comments .cflip:hover { border-color: var(--accent); color: var(--accent); }
   #comments .cerr { color: var(--err-fg); font-size: .75rem; }
+  /* MENGER-12: a ticket's labels — chips on its rows and its page;
+     `needs-you` wears the accent (it puts the ticket on Needs you). */
+  .lchips { display: inline-flex; flex-wrap: nowrap; gap: .25rem; margin-left: .4rem; vertical-align: 1px; }
+  .lchip {
+    display: inline-block; font-family: var(--sans); font-size: 10px; line-height: 1.5; white-space: nowrap;
+    padding: 0 6px; border-radius: 8px; color: var(--chip-fg); background: var(--chip-bg); border: 1px solid var(--chip-line);
+  }
+  .lchip.needs { color: var(--accent); background: var(--sel); border-color: var(--accent); font-weight: 600; }
+  #t-labels .lchips { flex-wrap: wrap; margin-left: 0; }
+  #t-labels .lwrap { display: inline-flex; align-items: center; }
+  #t-labels .lx {
+    border: none; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 12px; line-height: 1;
+  }
+  #t-labels .lx:hover, #t-labels .lx:focus-visible { color: var(--err-fg); }
+  #t-labels .ladd { display: flex; gap: .3rem; margin-top: .35rem; }
+  #t-labels .ladd input {
+    flex: 1; min-width: 0; font: inherit; font-size: 12px; padding: 1px 5px;
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 4px;
+  }
+  .lproblem { margin: .3rem 0 0; font-size: .8rem; color: var(--err-fg); overflow-wrap: anywhere; }
+  /* MENGER-12: the header's `needs you` count — the accent while anything
+     waits, quiet at 0 (the inputs badge's look). */
+  header .hlink .hbadge.needs { background: var(--accent); color: var(--bg); }
+  /* MENGER-12: Needs you, first on Home — a card per ticket, its open
+     questions under it, each with `answer ›`. */
+  #needs-you {
+    margin: 0 0 1rem; padding: .6rem .75rem .7rem; background: var(--panel);
+    border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px;
+  }
+  #needs-you .nhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .6rem; margin: 0 0 .45rem; }
+  #needs-you h2 { font-size: 1rem; margin: 0; }
+  #needs-you h2 .sep, #needs-you h2 .n { font-weight: 400; color: var(--muted); }
+  #needs-you h2 .n { color: var(--accent); font-weight: 600; }
+  #needs-you .nsrc { color: var(--muted); font-size: .75rem; min-width: 0; overflow-wrap: anywhere; }
+  #needs-you .nsrc code { font-family: var(--mono); font-size: 11px; }
+  #needs-you #needs-change { margin-left: auto; }
+  #needs-you .nedit { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0 0 .45rem; }
+  #needs-you .nedit input {
+    flex: 1 1 16rem; min-width: 0; font-family: var(--mono); font-size: 12px; padding: 2px 6px;
+    background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 4px;
+  }
+  #needs-you .none { margin: 0; color: var(--muted); font-size: .85rem; }
+  #needs-you ul.nrows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
+  #needs-you .nrow { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: .35rem .6rem; font-size: 13px; }
+  #needs-you .nline { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .45rem; min-width: 0; }
+  #needs-you .nline .code {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .02em; color: var(--chip-fg); background: var(--chip-bg);
+    border: 1px solid var(--chip-line); border-radius: 5px; padding: 0 5px; white-space: nowrap; text-decoration: none;
+  }
+  #needs-you .nline a.code:hover, #needs-you .nline a.code:focus-visible { color: var(--accent); border-color: var(--accent); }
+  #needs-you .ntitle { color: var(--ink); text-decoration: none; min-width: 0; overflow-wrap: anywhere; flex: 1 1 12rem; }
+  #needs-you .ntitle:hover { color: var(--accent); }
+  #needs-you .nline .tag { font-size: 10px; padding: 0 5px; border-radius: 6px; white-space: nowrap; }
+  #needs-you .nline .lchips { margin-left: 0; flex-wrap: wrap; }
+  #needs-you ul.nqs { list-style: none; margin: .3rem 0 0; padding: 0 0 0 .6rem; border-left: 2px solid var(--line); }
+  #needs-you .nq { margin: .15rem 0; font-family: var(--sans); font-size: 13px; overflow-wrap: anywhere; }
+  #needs-you .nanswer { white-space: nowrap; color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; }
+  #needs-you .nanswer:hover, #needs-you .nanswer:focus-visible { text-decoration: underline; }
+  #needs-you .nmore { margin: .4rem 0 0; font-size: .8rem; }
 </style>
 </head>
 <body></body>

@@ -81,6 +81,21 @@ impl Account {
         self.known() && !self.may_view()
     }
 
+    /// MENGER-12: whether the person may write — no login, or a grant that
+    /// writes somewhere (editor or admin). Where it writes is the server's
+    /// to decide, call by call; this keeps a reader from being offered what
+    /// would be refused.
+    pub(crate) fn may_write(&self) -> bool {
+        match self.login {
+            None => false,
+            Some(false) => true,
+            Some(true) => {
+                self.admin_everywhere
+                    || self.grants.as_ref().is_some_and(|g| g.iter().any(|g| matches!(g.role, Role::Editor | Role::Admin)))
+            }
+        }
+    }
+
     /// Whether the person administers anything (`#/members`).
     pub(crate) fn is_admin(&self) -> bool {
         self.admin_everywhere || self.grants.as_ref().is_some_and(|g| g.iter().any(|g| g.role == Role::Admin))

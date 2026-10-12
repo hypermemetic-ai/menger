@@ -257,6 +257,7 @@ mod inputs_page;
 mod inspect;
 mod keys;
 mod kids;
+mod labels;
 mod lens;
 mod md;
 mod menu;
@@ -264,6 +265,7 @@ mod nav;
 mod notes;
 
 mod mermaid;
+mod needs;
 mod registry;
 mod saved;
 mod session;
@@ -927,7 +929,11 @@ fn Board(
                                 // MFE-12: one line per row (the window's
                                 // geometry rests on it); a title cut short
                                 // keeps its whole text on hover.
-                                <td title=move || ticket.with(|t| t.title.clone())>{move || ticket.with(|t| t.title.clone())}</td>
+                                <td title=move || ticket.with(|t| t.title.clone())>
+                                    {move || ticket.with(|t| t.title.clone())}
+                                    // MENGER-12: its labels, after the title.
+                                    {labels::row_chips(move || ticket.with(|t| t.labels.clone()))}
+                                </td>
                                 <td class="kind">
                                     <span data-tag=move || ticket.with(|t| tags::Tag::kind(t.kind).attr())>{move || ticket.with(|t| t.kind.to_string())}</span>
                                 </td>
@@ -1529,6 +1535,8 @@ fn ticket_view(
                     </dd>
                 </div>
                 <div><dt>"Commits"</dt><dd id="t-commits">{commits_view}</dd></div>
+                // MENGER-12: its labels — chips, editable by a writer.
+                <div><dt>"Labels"</dt><dd id="t-labels"><labels::Editor ticket /></dd></div>
                 // COMMENT-3: its open comments, linking to them on #/comments.
                 <div>
                     <dt>"Comments"</dt>
@@ -1986,6 +1994,9 @@ fn App() -> impl IntoView {
     lens.install();
     // FILTER-6: saved filters — each level's `Saved ▾` and Save as….
     saved::Saved::new(lens);
+    // MENGER-12: Needs you — its saved filter and its live count, for the
+    // header's link and Home's panel.
+    needs::NeedsYou::install();
     let route = use_route(lens);
     // COMMENT-3: annotation mode — its state, its listeners, its layer.
     let annot = annotate::install(route);
@@ -2140,6 +2151,9 @@ fn App() -> impl IntoView {
                             })
                         }}
                     </a>
+                    // MENGER-12: what waits on the owner — Home's panel, and
+                    // its live count.
+                    <needs::HeaderLink />
                     // COMMENT-3: every comment, beside them — the open count
                     // once the app holds the comments.
                     <a
@@ -2249,7 +2263,8 @@ fn App() -> impl IntoView {
                                 view! { <signin::Checking /> }.into_any()
                             }
                         }
-                        Route::Board => view! { <Board board last_error viewport /> }.into_any(),
+                        // MENGER-12: Needs you, first thing on Home.
+                        Route::Board => view! { <needs::Panel /> <Board board last_error viewport /> }.into_any(),
                         Route::Ticket(id) => {
                             view! { <TicketPage id socket last_error /> }.into_any()
                         }

@@ -183,6 +183,10 @@
       const stream = this.rpc.call("tickets.inputs", { epic, filter, state, ticket });
       yield* extractData(stream);
     }
+    async* label(id, add, remove) {
+      const stream = this.rpc.call("tickets.label", { add, id, remove });
+      yield* extractData(stream);
+    }
     async* linkCommits(commits, id) {
       const stream = this.rpc.call("tickets.link_commits", { commits, id });
       yield* extractData(stream);

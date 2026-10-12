@@ -77,7 +77,7 @@ fn assert_kept(store: &Store, after: &str) {
     assert_eq!(store.groups(), tests::nav(store), "the roll-ups the nav draws, after {after}");
     tests_placements::assert_kept_placements_are_the_rule(store, after);
     let cache = store.tickets.read().unwrap();
-    let scanned = Cache::new(cache.order.values().map(|t| (t.id.clone(), t.clone())).collect());
+    let scanned = Cache::new(cache.order.values().map(|t| (t.id.clone(), t.clone())).collect(), cache.inputs.clone());
     assert_eq!(stored::compare(&cache.form(), &scanned.form()), Vec::<String>::new(), "after {after}");
 }
 
@@ -414,10 +414,10 @@ async fn every_pair_of_kinds_with_and_without_a_status() {
                     store.create(new("P", Kind::Build, None, &[t.id.as_str()])).await.unwrap();
                 }
                 let _ = drained(&mut rx);
-                let before = tests_cells::scanned(&tests_ready::rows(&store));
+                let before = tests_cells::scanned(&tests_ready::rows(&store), &tests_cells::asking(&store));
                 let what = format!("{} {from} -> {to} {status:?}", t.id);
                 let got = store.set_kind(&t.id, to, status).await;
-                let after = tests_cells::scanned(&tests_ready::rows(&store));
+                let after = tests_cells::scanned(&tests_ready::rows(&store), &tests_cells::asking(&store));
                 let moved: BTreeSet<OrderKey> = drained(&mut rx)
                     .into_iter()
                     .flat_map(|c| match c {

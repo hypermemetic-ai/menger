@@ -184,10 +184,31 @@ pub(crate) struct Inputs {
     by_ticket: HashMap<String, Vec<Input>>,
 }
 
+/// MENGER-12: whether `list` asks the owner something — holds an input in
+/// the state `open`: the filter cell `asking`.
+pub(crate) fn asking_in(list: &[Input]) -> bool {
+    list.iter().any(|i| i.state == InputState::Open)
+}
+
 impl Inputs {
     /// `ticket`'s inputs, in order.
     pub(crate) fn of(&self, ticket: &str) -> &[Input] {
         self.by_ticket.get(ticket).map_or(&[], Vec::as_slice)
+    }
+
+    /// MENGER-12: whether `ticket` is `asking` — one of its inputs is
+    /// `open` ([`asking_in`]).
+    pub(crate) fn asking(&self, ticket: &str) -> bool {
+        asking_in(self.of(ticket))
+    }
+
+    /// MENGER-12: whether `ticket` is asking once `input` (one of its own,
+    /// as a write leaves it) stands in its list.
+    pub(crate) fn asking_with(&self, ticket: &str, input: &Input) -> bool {
+        self.of(ticket)
+            .iter()
+            .map(|i| if i.id == input.id { input } else { i })
+            .any(|i| i.state == InputState::Open)
     }
 
     /// One input.
@@ -412,6 +433,15 @@ pub(crate) fn load(conn: &Connection) -> rusqlite::Result<Inputs> {
         input.state = state_of(input.state != InputState::Removed, &input.history);
     }
     Ok(inputs)
+}
+
+/// MENGER-12: [`load`], or none for a file without the tables — what
+/// `--verify-derived` reads, which runs no migration.
+pub(crate) fn load_if_any(conn: &Connection) -> rusqlite::Result<Inputs> {
+    match has_tables(conn)? {
+        true => load(conn),
+        false => Ok(Inputs::default()),
+    }
 }
 
 /// Whether the file has the tables.

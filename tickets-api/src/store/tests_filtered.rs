@@ -120,7 +120,8 @@ pub(super) struct Plain {
 impl Plain {
     pub(super) fn of(store: &Store) -> Self {
         let rows = rows(store);
-        let by = scanned(&rows);
+        let asking = super::tests_cells::asking(store);
+        let by = scanned(&rows, &asking);
         let cells = rows.iter().map(|t| by[&OrderKey::of(t)]).collect();
         let at = rows.iter().enumerate().map(|(i, t)| (t.id.clone(), i)).collect();
         let by_id: HashMap<&str, &Row> = rows.iter().map(|t| (t.id.as_str(), t)).collect();
@@ -161,6 +162,8 @@ impl Plain {
     /// its whole lineage included.
     pub(super) fn facts(&self, t: &Row, k: Key) -> crate::filter::Facts {
         crate::filter::Facts {
+            asking: k.asking(),
+            labels: t.labels.clone(),
             id: t.id.clone(),
             epic: t.epic.clone(),
             title: t.title.clone(),
@@ -373,7 +376,7 @@ pub(super) fn assert_lens_is_a_scan(store: &Store, plain: &Plain, lens: &Lens, j
 async fn walk(store: Store, path: &Path, seed: u64, writes: usize, every: usize, epics: &[&str]) -> Store {
     let mut rng = Rng(seed);
     // FILTER-21: board notes among the docs.
-    let mut tally = Tally::filing_menger_docs();
+    let mut tally = Tally::asking_and_labelling();
     for step in 0..writes {
         let what = random_write(&store, &mut rng, epics, &mut tally).await;
         if step % every == every - 1 {
@@ -448,7 +451,7 @@ async fn membership_is_the_scans_difference() {
     let mut rx = store.subscribe_filtered();
     let epic_refs: Vec<&str> = epics.iter().map(String::as_str).collect();
     // FILTER-21: board notes among the docs.
-    let mut tally = Tally::filing_menger_docs();
+    let mut tally = Tally::asking_and_labelling();
     let mut moved = 0;
     for step in 0..200 {
         let before = Plain::of(&store);

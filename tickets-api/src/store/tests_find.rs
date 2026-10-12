@@ -44,6 +44,7 @@ fn write_titled(path: &Path, rows: &[(&str, &str)]) {
         db::upsert(
             &conn,
             &Ticket {
+                labels: Vec::new(),
                 id: id.to_string(),
                 epic: epic.into(),
                 seq: seq.parse().unwrap(),

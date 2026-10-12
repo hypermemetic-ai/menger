@@ -550,6 +550,11 @@ pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&s
         lineage.extend(t.hosting(&s.epic));
     }
     Facts {
+        // MENGER-12: a card does not say whether its ticket asks — [`narrow`]
+        // reads it from the app's inputs when the filter asks; its labels
+        // are on its row.
+        asking: false,
+        labels: s.labels.clone(),
         id: s.id.clone(),
         epic: s.epic.clone(),
         title: s.title.clone(),
@@ -578,6 +583,9 @@ pub(crate) fn value_of(c: Cat, card: &Card, off: bool) -> Option<String> {
         Cat::Blocked => flag(!card.waiting_on.is_empty()),
         Cat::Commits => flag(!s.commits.is_empty()),
         Cat::MengerDocs => flag(menger_tickets_api::is_menger_doc(s.path.as_deref())),
+        // MENGER-12: a card holds any number of labels — counted apart
+        // ([`counts`]); Asking is not the board's.
+        Cat::Asking | Cat::Label => None,
         Cat::Wave => Some(match card.placement {
             Placement::Wave { n } => n.to_string(),
             Placement::MissingBlocker => "missing".into(),
@@ -617,13 +625,38 @@ pub(crate) fn narrow(a: &Answer, eff: &Effective, tree: Option<&ScTree>) -> Answ
         parents.get(id).map(|p| p.to_string()).or_else(|| cache::get(id).and_then(|r| r.try_with_untracked(|t| t.parent.clone()).flatten()))
     };
     let (filter, local) = eff;
+    // MENGER-12: a filter that asks `asking` reads the app's inputs — the
+    // tickets with an open one — and follows them as they move.
+    let asks: Option<HashSet<String>> = filter
+        .groups
+        .iter()
+        .flat_map(|g| &g.preds)
+        .any(|p| p.field == menger_tickets_api::filter::Field::Asking)
+        .then(|| {
+            crate::inputs::want();
+            crate::inputs::signal().with(|held| {
+                held.as_ref()
+                    .map(|i| {
+                        i.list()
+                            .iter()
+                            .filter(|x| x.state == menger_tickets_api::InputState::Open)
+                            .map(|x| x.ticket.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+        });
     let mut out = Answer {
         cards: a
             .cards
             .iter()
             .filter(|c| {
                 let off = !off_board(c, &on).is_empty();
-                admits_local(local, c, off) && filter.matches(&facts_of(c, tree, &parent_of))
+                let mut facts = facts_of(c, tree, &parent_of);
+                if let Some(asks) = &asks {
+                    facts.asking = asks.contains(&c.summary.id);
+                }
+                admits_local(local, c, off) && filter.matches(&facts)
             })
             .cloned()
             .collect(),
@@ -652,6 +685,9 @@ pub(crate) fn counts(a: &Answer, asked: &BTreeSet<String>) -> Counts {
             if let Some(v) = value_of(c, card, off) {
                 *out.entry(c).or_default().entry(v).or_default() += 1;
             }
+        }
+        for l in &card.summary.labels {
+            *out.entry(Cat::Label).or_default().entry(l.clone()).or_default() += 1;
         }
     }
     out.remove(&Cat::Title);
@@ -1052,6 +1088,8 @@ fn card_view(p: Placed, on_board: Memo<HashSet<String>>) -> impl IntoView {
                 {badge.map(|b| view! { <span class="badge">{b}</span> })}
             </div>
             <a class="title" href=href>{move || row.with(|t| t.title.clone())}</a>
+            // MENGER-12: its labels.
+            {crate::labels::row_chips(move || row.with(|t| t.labels.clone()))}
             <div class="foot">
                 {move || {
                     let st = row.with(|t| t.status);
@@ -1110,6 +1148,7 @@ mod tests {
     fn summary(id: &str, status: Status) -> TicketSummary {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         TicketSummary {
+            labels: Vec::new(),
             id: id.into(),
             epic: epic.into(),
             seq: seq.parse().unwrap(),
@@ -1231,6 +1270,7 @@ mod tests {
     fn ticket(id: &str) -> Ticket {
         let s = summary(id, Status::Pending);
         Ticket {
+            labels: Vec::new(),
             id: s.id,
             epic: s.epic,
             seq: s.seq,

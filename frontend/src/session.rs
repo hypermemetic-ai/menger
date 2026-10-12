@@ -901,7 +901,9 @@ async fn session(
             // through it, shows them; the body did not change.
             ClientEvent::Data(
                 TicketsEvent::CommitsLinked { ticket, .. }
-                | TicketsEvent::CommitsUnlinked { ticket, .. },
+                | TicketsEvent::CommitsUnlinked { ticket, .. }
+                // MENGER-12: labels are on the row the same way.
+                | TicketsEvent::LabelsChanged { ticket, .. },
             ) => {
                 let summary = TicketSummary::from(&ticket);
                 remember(&summary);
@@ -1325,6 +1327,7 @@ mod tests {
     fn ticket(id: &str, kind: Kind, status: Status) -> Ticket {
         let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
         Ticket {
+            labels: Vec::new(),
             id: id.to_string(),
             epic: epic.to_string(),
             seq: seq.parse().expect("seq"),

@@ -151,6 +151,8 @@ fn facts(epic: &str, key: Key, lineage: &[&str]) -> Facts {
         blocked: key.blocked(),
         has_commits: key.commits(),
         menger_doc: key.menger(),
+        asking: key.asking(),
+        labels: key.labels().labels().to_vec(),
         lineage: lineage.iter().map(|l| l.to_string()).collect(),
     }
 }
@@ -178,8 +180,22 @@ pub fn refuse(filter: &Filter) -> Result<(), StoreError> {
 
 /// FILTER-4: the fields `facets` counts, in the order it answers them — each
 /// as the language spells it. FILTER-21: `menger doc` after the other flags.
-pub const FACET_FIELDS: [&str; 9] =
-    ["status", "category", "kind", "severity", "blocked", "ready", "has commits", "menger doc", "in"];
+/// MENGER-12: `asking` after it, then `label` — a count per label held, in
+/// name order (a ticket with two labels is counted under each) — before
+/// `in`.
+pub const FACET_FIELDS: [&str; 11] = [
+    "status",
+    "category",
+    "kind",
+    "severity",
+    "blocked",
+    "ready",
+    "has commits",
+    "menger doc",
+    "asking",
+    "label",
+    "in",
+];
 
 /// One field's tally: a count per value, in the order `facets` answers.
 fn tally(field: &str) -> Vec<(String, u64)> {
@@ -194,7 +210,7 @@ fn tally(field: &str) -> Vec<(String, u64)> {
             .chain(&SEVERITIES[..1])
             .map(|s| (Field::Severity(*s).value().expect("a severity has a value"), 0))
             .collect(),
-        "blocked" | "ready" | "has commits" | "menger doc" => yes_no(),
+        "blocked" | "ready" | "has commits" | "menger doc" | "asking" => yes_no(),
         _ => Vec::new(),
     }
 }
@@ -217,6 +233,7 @@ fn slot(field: &str, k: Key) -> usize {
         "ready" => flag(crate::filter::category_of(k.status()) == Category::Ready && !k.blocked()),
         "has commits" => flag(k.commits()),
         "menger doc" => flag(k.menger()),
+        "asking" => flag(k.asking()),
         other => unreachable!("not a cell field: {other}"),
     }
 }
@@ -355,6 +372,9 @@ impl Store {
         let cache = self.tickets.read().expect("store lock poisoned");
         let mut tallies: Vec<Vec<(String, u64)>> = FACET_FIELDS.iter().map(|f| tally(f)).collect();
         let mut shortcodes: Vec<(String, u64)> = Vec::new();
+        // MENGER-12: a count per label, in name order — the values are the
+        // labels the admitted cells hold, not a closed list.
+        let mut labels: BTreeMap<String, u64> = BTreeMap::new();
         for (rest, fields) in &distinct {
             let both = Lens::of(&base.and(rest))?;
             let compiled = Compiled::new(&cache, &both, None);
@@ -365,6 +385,12 @@ impl Store {
                     let key = cache.cells.keys()[cell as usize];
                     in_epic += n;
                     for field in fields.iter().filter(|f| **f != "in") {
+                        if *field == "label" {
+                            for l in key.labels().labels().iter() {
+                                *labels.entry(l.clone()).or_default() += n;
+                            }
+                            continue;
+                        }
                         let i = FACET_FIELDS.iter().position(|f| f == field).expect("a facet field");
                         tallies[i][slot(field, key)].1 += n;
                     }
@@ -378,6 +404,8 @@ impl Store {
             }
         }
         *tallies.last_mut().expect("`in` is the last field") = shortcodes;
+        let at = FACET_FIELDS.iter().position(|f| *f == "label").expect("`label` is a facet field");
+        tallies[at] = labels.into_iter().collect();
         Ok(FACET_FIELDS
             .iter()
             .zip(tallies)

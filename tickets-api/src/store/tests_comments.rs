@@ -509,11 +509,12 @@ async fn answers(store: &Store) -> (Vec<Ticket>, Vec<Group>, Vec<(String, u32)>,
 /// Row 8 (the upgrade), in process: a file as a form-6 build leaves it — no
 /// comments table, the derived state saying form 6. `--verify-derived` says
 /// it is not this build's form and what the open will do; the first open
-/// gains form 7 in place — the table, empty, and the form, nothing derived
-/// built again (one stored number altered by hand is answered as stored) —
-/// and answers as before; the next open reads (nothing to upgrade), and a
-/// comment added between them is kept. A form-7 file an older build stored
-/// form 6 into again keeps its comments through the second upgrade.
+/// gains the table, empty, and answers as before; the next open reads
+/// (nothing to upgrade), and a comment added between them is kept. A
+/// form-7 file an older build stored form 6 into again keeps its comments.
+/// MENGER-12: form 10 moves the cells, so a form-6 file is built again
+/// rather than upgraded in place — one stored number altered by hand is
+/// answered as built, not as stored.
 #[tokio::test]
 async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     let dir = tempfile::tempdir().unwrap();
@@ -532,12 +533,12 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     assert_eq!(read_state(&path), State::Older(6));
     assert!(!has_comments_table(&path));
     match Store::verify_derived(&path).unwrap() {
-        Verdict::NotStored(why) => assert!(why.contains("stored in form 6; this build reads 9") && why.contains("adds the comments, members and roles tables"), "{why}"),
+        Verdict::NotStored(why) => assert!(why.contains("stored in form 6; this build reads 10") && why.contains("builds it again"), "{why}"),
         other => panic!("a form-6 file is not this build's: {other:?}"),
     }
 
     let store = Store::open(&path).unwrap();
-    assert_eq!(read_state(&path), State::Current, "form 9, committed by the first open");
+    assert_eq!(read_state(&path), State::Current, "form 10, committed by the first open");
     assert!(has_comments_table(&path));
     assert_eq!(all(&store, CommentQuery::default()), Vec::<u64>::new(), "the table starts empty");
     assert_eq!(answers(&store).await, before, "answers as before");
@@ -545,22 +546,22 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     drop(store);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 10, .. }));
 
-    // Nothing derived is built again by the upgrade: a number stored by
-    // hand in a form-6 file is answered as stored.
+    // MENGER-12: a form-6 file is built again — a number stored by hand in
+    // it is answered as built.
     let conn = Connection::open(&path).unwrap();
-    assert!(!stored::upgrade(&mut Connection::open(&path).unwrap(), 9).unwrap(), "form 9: nothing to upgrade");
+    assert!(!stored::upgrade(&mut Connection::open(&path).unwrap(), 10).unwrap(), "form 10: nothing to upgrade");
+    assert!(!stored::upgrade(&mut Connection::open(&path).unwrap(), 6).unwrap(), "form 6: built again, not upgraded");
     conn.execute_batch("UPDATE rollup_groups SET total = total + 100 WHERE epic = 'SOLO'; UPDATE derived_state SET form = 6;").unwrap();
     drop(conn);
     let store = Store::open(&path).unwrap();
     let solo = |g: &[Group]| g.iter().find(|g| g.epic == "SOLO").unwrap().total;
-    assert_eq!(solo(&store.groups()), solo(&before.1) + 100, "read as stored, not built");
+    assert_eq!(solo(&store.groups()), solo(&before.1), "built again, not read as stored");
     assert_eq!(store.comment(c.id), Some(c.clone()), "a form-7 file stored as form 6 again keeps its comments");
     assert_eq!(all(&store, CommentQuery::default()), [c.id]);
     drop(store);
     assert_eq!(read_state(&path), State::Current);
     let conn = Connection::open(&path).unwrap();
-    conn.execute("UPDATE rollup_groups SET total = total - 100 WHERE epic = 'SOLO'", []).unwrap();
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 9);
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 10);
     drop(conn);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
 

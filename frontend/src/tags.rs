@@ -57,6 +57,8 @@ pub(crate) enum Tag {
     Status(String),
     Kind(String),
     Severity(String),
+    /// MENGER-12: a label (src/labels.rs's chips).
+    Label(String),
 }
 
 impl Tag {
@@ -88,6 +90,7 @@ impl Tag {
             Tag::Status(v) => ("status", v),
             Tag::Kind(v) => ("kind", v),
             Tag::Severity(v) => ("sev", v),
+            Tag::Label(v) => ("label", v),
         };
         format!("{k}:{v}")
     }
@@ -102,6 +105,7 @@ impl Tag {
             "status" => Tag::Status(Cat::Status.token(v)?),
             "kind" => Tag::Kind(Cat::Kind.token(v)?),
             "sev" => Tag::Severity(Cat::Severity.token(v).filter(|s| s != "none")?),
+            "label" => Tag::Label(Cat::Label.token(v)?),
             _ => return None,
         })
     }
@@ -194,6 +198,7 @@ pub(crate) fn offers(tag: &Tag, tree: Option<&ScTree>) -> Vec<Offer> {
         Tag::Status(v) => value_offer(Cat::Status, v).into_iter().collect(),
         Tag::Kind(v) => value_offer(Cat::Kind, v).into_iter().collect(),
         Tag::Severity(v) => value_offer(Cat::Severity, v).into_iter().collect(),
+        Tag::Label(v) => value_offer(Cat::Label, v).into_iter().collect(),
     }
 }
 
@@ -399,6 +404,7 @@ fn chip(tag: &Tag) -> AnyView {
         Tag::Status(v) => view! { <span class=format!("tag {}", st_class(v))>{v.clone()}</span> }.into_any(),
         Tag::Kind(v) => view! { <span class="kind">{nav::kind_glyph(v)}" "{v.clone()}</span> }.into_any(),
         Tag::Severity(v) => view! { <span class="sev">{Cat::Severity.value_label(v)}</span> }.into_any(),
+        Tag::Label(v) => view! { <span class=crate::labels::chip_class(v)>{v.clone()}</span> }.into_any(),
     }
 }
 

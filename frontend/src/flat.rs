@@ -1051,6 +1051,8 @@ fn flat_row(
                     view! { <span class="outside-mark" title="outside the nav's filter — shown because it is the open ticket">"outside"</span> }
                 })
             }}
+            // MENGER-12: its labels.
+            {crate::labels::row_chips(move || ticket.with(|t| t.labels.clone()))}
             // The status tag, its paint and its word one effect: they move
             // together.
             {move || {
@@ -1182,6 +1184,7 @@ mod tests {
     fn row(id: &str) -> TicketSummary {
         let (epic, seq) = id.rsplit_once('-').expect("EPIC-N");
         TicketSummary {
+            labels: Vec::new(),
             id: id.to_string(),
             epic: epic.to_string(),
             seq: seq.parse().expect("seq"),

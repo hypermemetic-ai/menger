@@ -72,6 +72,8 @@ pub(crate) fn cat_of_field(field: &str) -> Option<Cat> {
         "blocked" => Cat::Blocked,
         "has commits" => Cat::Commits,
         "menger doc" => Cat::MengerDocs,
+        "asking" => Cat::Asking,
+        "label" => Cat::Label,
         _ => return None,
     })
 }
@@ -337,6 +339,9 @@ mod tests {
             ("has commits", "yes", 4),
             ("menger doc", "yes", 2),
             ("menger doc", "no", 11),
+            ("asking", "yes", 5),
+            ("label", "needs-you", 3),
+            ("label", "Bad Label", 1),
             ("in", "MNG", 6),
             ("in", "FILTER", 3),
             ("kind", "bogus", 1),
@@ -359,6 +364,10 @@ mod tests {
         // FILTER-21: Menger docs, a flag category with both counts.
         assert_eq!((get(Cat::MengerDocs, "yes"), get(Cat::MengerDocs, "no")), (Some(2), Some(11)));
         assert_eq!(cat_of_field("menger doc"), Some(Cat::MengerDocs));
+        // MENGER-12: Asking a flag with both counts; Label each label held.
+        assert_eq!((get(Cat::Asking, "yes"), get(Cat::Asking, "no")), (Some(5), Some(0)));
+        assert_eq!(get(Cat::Label, "needs-you"), Some(3));
+        assert_eq!(get(Cat::Label, "Bad Label"), None, "not a label: not counted");
         assert_eq!(get(Cat::Shortcode, "MNG"), Some(6));
         assert_eq!(get(Cat::Shortcode, "PLEXUS"), Some(0), "a known shortcode with none");
         assert_eq!(get(Cat::Shortcode, "FILTER"), Some(3), "named, though the tree did not know it");
