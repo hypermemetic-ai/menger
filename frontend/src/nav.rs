@@ -275,8 +275,9 @@
 //!   anywhere else on a ticket page (not a text field, a dialog, a menu) from
 //!   the open ticket's row ([`page_keydown`]), which is always drawn
 //!   (FILTER-24). h/l's steps land the same way.
-//! - **← and → between the nav and the page.** → in the nav focuses the page
-//!   beside it ([`focus_view`]), ← there focuses the open ticket's row. The
+//! - **← and → are not the app's** (AGS-27, owner: "the arrow keys are
+//!   janky. remove left and right"): they move no focus between the nav and
+//!   the page, as AGS-26 had them, and do not open or close a row. The
 //!   tree's open and close are h/l's alone.
 //! - **`f` on a ticket page** makes the nav's filter `under <the ticket>` —
 //!   the ticket and its descendants — and opens its row ([`filter_to`]).
@@ -1890,9 +1891,8 @@ fn to_the_top() {
 /// AGS-26: **the cursor is the open ticket.** A step (Up/Down, j/k, and h/l's
 /// steps) lands on the next ticket's row — a shortcode's heading is passed
 /// over — and opens it ([`land`]); Up on the first ticket widens an `under`
-/// filter by one parent ([`widen`]). Right moves focus out of the nav into
-/// the page beside it ([`focus_view`]); the arrows no longer open and close
-/// (h and l do).
+/// filter by one parent ([`widen`]). AGS-27: Left and Right are left to the
+/// browser — they no longer open and close (h and l do) and move no focus.
 ///
 /// SCALE-24: the visible rows are the mounted ones, and a windowed list
 /// mounts only those near the viewport. A step whose next row is a gap — a
@@ -1992,13 +1992,6 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
             }
             true
         }
-        // AGS-26: out of the nav, into the page beside it; Left is already
-        // here.
-        "ArrowRight" => {
-            focus_view();
-            true
-        }
-        "ArrowLeft" => true,
         "Enter" => {
             match &leaf_id {
                 // The row is a real <a href>, so the browser would
@@ -2043,10 +2036,10 @@ fn step_from(steps: &[web_sys::HtmlElement], at: usize, down: bool, ctx: Ctx, le
 
 /// AGS-26: the nav's keys where focus is not in its tree — on a ticket page,
 /// anywhere but a text field, a dialog, a menu or an overlay, while the nav
-/// is shown: Up/Down (k/j) step the cursor from the open ticket's row, Left
-/// puts focus on that row, and `f` filters the nav to the open ticket and
-/// its descendants. The open ticket is always drawn and selected (FILTER-24,
-/// [`reveal`]), so the keys always have a row to start from.
+/// is shown: Up/Down (k/j) step the cursor from the open ticket's row, and
+/// `f` filters the nav to the open ticket and its descendants. The open
+/// ticket is always drawn and selected (FILTER-24, [`reveal`]), so the keys
+/// always have a row to start from.
 fn page_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens, hidden: RwSignal<bool>) {
     if ev.default_prevented() || ev.is_composing() || ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
         return;
@@ -2066,10 +2059,6 @@ fn page_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens, hidden: RwSign
         }
         "ArrowUp" | "k" => {
             step_selected(id, false, ctx, lens);
-            true
-        }
-        "ArrowLeft" => {
-            focus_selected(&id);
             true
         }
         "f" => {
@@ -2104,47 +2093,6 @@ fn step_selected(id: String, down: bool, ctx: Ctx, lens: Lens) {
             }
         }
     });
-}
-
-/// AGS-26: Left from the page — focus on the open ticket's row (the tree's
-/// tab stop, when it is not drawn).
-fn focus_selected(id: &str) {
-    if let Some(row) = selected_row(id) {
-        keys::focus_and_rove(&tree_items(), &row);
-        return;
-    }
-    ensure_tree_tab_stop();
-    if let Some(stop) = keys::query_all("#nav .tree [role=treeitem][tabindex=\"0\"]").into_iter().next() {
-        keys::focus_row(&stop);
-    }
-}
-
-/// The page beside the nav — its scroller.
-fn the_view() -> Option<web_sys::HtmlElement> {
-    dom::window().document()?.query_selector("#app .content").ok().flatten()?.dyn_into().ok()
-}
-
-/// AGS-26: Right from the nav — focus in the page beside it: its scroller,
-/// where Space and Page Up/Down scroll it and Tab walks it. It is focusable
-/// only while it has the focus this gives it ([`unfocusable_view`]): a click
-/// in the page focuses nothing, as before, so the board's keys still resume
-/// from the row they left (MFE-12).
-fn focus_view() {
-    if let Some(view) = the_view() {
-        let _ = view.set_attribute("tabindex", "-1");
-        let _ = view.focus();
-    }
-}
-
-/// AGS-26: the page's scroller losing focus — to anything, or to nothing (a
-/// click where nothing takes focus) — takes back the tab index
-/// [`focus_view`] gave it.
-fn unfocusable_view(ev: web_sys::FocusEvent) {
-    let Some(view) = the_view() else { return };
-    let off_view = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).is_some_and(|t| t.is_same_node(Some(&view)));
-    if off_view && view.has_attribute("tabindex") {
-        let _ = view.remove_attribute("tabindex");
-    }
 }
 
 /// AGS-26: `f` on a ticket page — the nav's filter becomes the ticket and its
@@ -2655,10 +2603,8 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
         });
     });
     let _ = window_event_listener(leptos::ev::resize, move |_| tree.viewport.notify());
-    // AGS-26: the nav's keys from anywhere on a ticket page; the page beside
-    // the nav focusable only while Right has put focus there.
+    // AGS-26: the nav's keys from anywhere on a ticket page.
     let _ = window_event_listener(leptos::ev::keydown, move |ev: web_sys::KeyboardEvent| page_keydown(ev, ctx, lens, hidden));
-    let _ = window_event_listener(leptos::ev::focusout, unfocusable_view);
     let tree_ref = NodeRef::<leptos::html::Div>::new();
     tree_ref.on_load(|el: web_sys::HtmlDivElement| keep_focus(&el));
 
