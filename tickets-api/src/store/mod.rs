@@ -5789,6 +5789,10 @@ mod tests_placements;
 /// reference, durability, events, and a database from before the table.
 #[cfg(test)]
 mod tests_components;
+/// THEME-5: documented parts registered, a part the template lacks refused,
+/// and (on demand) the house bodies checked.
+#[cfg(test)]
+mod tests_parts;
 /// INPUT-3: the inputs store — every row of the ticket's table: parsed on
 /// write (and refused), answered (and refused), cleared, closed, reopened,
 /// removed and restored; the query; the events and their place; durability;

@@ -53,7 +53,7 @@ pub mod filter;
 pub mod labels;
 pub use types::{
     is_menger_doc, is_menger_path, path_address, Answer, AnswerSource, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, Input,
-    InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, SlotDoc, Kind, Marked, Placement,
+    InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, PartDoc, SlotDoc, Kind, Marked, Placement,
     PlacementChange, RootRow, SearchWord, Severity, Status, Ticket, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
 };
 // MENGER-13: the transition log's vocabulary.

@@ -749,8 +749,12 @@
   }
   /* Prose is sans, code stays mono — manifest's split. */
   .md { line-height: 1.6; max-width: 56rem; font-family: var(--sans); }
-  .md h1 { font-size: calc(1.1rem * var(--text-scale)); margin: 1.1rem 0 .4rem; }
-  .md h2, .md h3, .md h4 { font-size: calc(1rem * var(--text-scale)); margin: 1.1rem 0 .4rem; }
+  /* THEME-5: headings in the display face, with room (the frame SDK's base says the same) */
+  .md :is(h1, h2, h3, h4) { font-family: var(--font-display); font-weight: var(--weight-strong); line-height: 1.25; letter-spacing: -.005em; margin: 1.6rem 0 .55rem; }
+  .md h1 { font-size: calc(1.5rem * var(--text-scale)); }
+  .md h2 { font-size: calc(1.25rem * var(--text-scale)); }
+  .md h3 { font-size: calc(1.1rem * var(--text-scale)); }
+  .md h4 { font-size: calc(1rem * var(--text-scale)); }
   .md code {
     font-family: var(--mono); font-size: calc(.92em * var(--text-scale));
     background: var(--panel); border: var(--border) solid var(--line);

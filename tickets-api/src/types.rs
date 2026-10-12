@@ -671,6 +671,10 @@ pub struct Component {
 ///   trimmed (`""` when there is none).
 /// - `attrs` — one [`AttrDoc`] per `<attr>`, in the order written.
 /// - `slots` — one [`SlotDoc`] per `<slot>`, in the order written.
+/// - `parts` — THEME-5: one [`PartDoc`] per `<part>`, in the order written:
+///   what a theme may skin with `m-name::part(name)`. Each names a `part`
+///   the component's `<template>` carries (or, marked `scripted`, one its
+///   script makes) — a documented part the template lacks is refused.
 /// - `examples` — each `<example>`'s inner HTML as written, its common
 ///   indentation and the blank lines around it removed.
 /// - `help` — everything else inside `<docs>`, as markdown: the lines the
@@ -680,6 +684,8 @@ pub struct ComponentDocs {
     pub summary: String,
     pub attrs: Vec<AttrDoc>,
     pub slots: Vec<SlotDoc>,
+    #[serde(default)]
+    pub parts: Vec<PartDoc>,
     pub examples: Vec<String>,
     pub help: String,
 }
@@ -702,6 +708,19 @@ pub struct AttrDoc {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SlotDoc {
     pub name: Option<String>,
+    pub description: String,
+}
+
+/// THEME-5: one declared part — `<part name="label">The field's
+/// label.</part>` — a piece of the component's shadow tree that a theme may
+/// skin with `m-name::part(label)` (looks only, THEME-1's `skins`).
+/// `scripted`: the component's script makes it (`el.part = …`), so the
+/// template is not asked for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PartDoc {
+    pub name: String,
+    #[serde(default)]
+    pub scripted: bool,
     pub description: String,
 }
 

@@ -1608,7 +1608,7 @@ async fn components_over_the_wire() {
 }
 
 /// COMP-8 acceptance 2: a component's docs and preview line on the wire —
-/// `components` and `component_changed` carry them, typed attributes
+/// `components` and `component_changed` carry them (THEME-5: its parts too), typed attributes
 /// internally tagged; a malformed `<docs>` is one in-band `error` naming the
 /// problem, and nothing is allocated.
 #[tokio::test]
@@ -1617,9 +1617,10 @@ async fn component_docs_over_the_wire() {
     let client = connect(port).await;
     collect(call(&client, "tickets.create", json!({"epic": "CMP", "title": "root", "kind": "scope"})).await).await;
     let body = "```component m-wave-summary board=RETURNS label=\"Platform team\"\n\
-                <template><b id=\"n\"></b></template>\n\
+                <template><b id=\"n\" part=\"count\"></b></template>\n\
                 <docs>\n\
                   <summary>How many of a board's tickets are workable now.</summary>\n\
+                  <part name=\"count\">The number.</part>\n\
                   <attr name=\"board\" type=\"shortcode\" required>The shortcode to count.</attr>\n\
                   <attr name=\"size\" type=\"enum(s|m)\">How big.</attr>\n\
                   <slot name=\"title\">Optional title markup.</slot>\n\
@@ -1637,6 +1638,7 @@ async fn component_docs_over_the_wire() {
             {"name": "size", "kind": {"type": "enum", "values": ["s", "m"]}, "required": false, "description": "How big."}
         ],
         "slots": [{"name": "title", "description": "Optional title markup."}],
+        "parts": [{"name": "count", "scripted": false, "description": "The number."}],
         "examples": ["<m-wave-summary board=\"RETURNS\"></m-wave-summary>"],
         "help": "Longer help, as markdown prose."
     });

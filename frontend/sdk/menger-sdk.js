@@ -907,8 +907,13 @@
     ":where(html){overflow:hidden;height:auto;background:transparent}",
     ":where(body){margin:0;padding:0;display:flow-root;overflow-x:auto;background:transparent;" +
       "color:var(--ink);font:calc(14px * var(--text-scale))/1.6 var(--sans)}",
-    ":where(" + EVERY + "h1,h1[data-md]){font-size:calc(1.1rem * var(--text-scale));margin:1.1rem 0 .4rem}",
-    ":where(" + EVERY + ":is(h2,h3,h4),:is(h2,h3,h4)[data-md]){font-size:calc(1rem * var(--text-scale));margin:1.1rem 0 .4rem}",
+    // THEME-5: headings in the display face (a theme's --font-display), with room.
+    ":where(" + EVERY + ":is(h1,h2,h3,h4),:is(h1,h2,h3,h4)[data-md]){font-family:var(--font-display);font-weight:var(--weight-strong);" +
+      "line-height:1.25;letter-spacing:-.005em;margin:1.6rem 0 .55rem}",
+    ":where(" + EVERY + "h1,h1[data-md]){font-size:calc(1.5rem * var(--text-scale))}",
+    ":where(" + EVERY + "h2,h2[data-md]){font-size:calc(1.25rem * var(--text-scale))}",
+    ":where(" + EVERY + "h3,h3[data-md]){font-size:calc(1.1rem * var(--text-scale))}",
+    ":where(" + EVERY + "h4,h4[data-md]){font-size:calc(1rem * var(--text-scale))}",
     ":where(" + EVERY + "code,code[data-md]," + CARD_CODE + "){font-family:var(--mono);font-size:calc(.92em * var(--text-scale));background:var(--panel);" +
       "border:var(--border) solid var(--line);border-radius:var(--radius-sm);padding:0 .25rem}",
     ":where(" + EVERY + "pre,pre[data-md]," + CARD_PRE + "){font-family:var(--mono);background:var(--panel);border:var(--border) solid var(--line);" +

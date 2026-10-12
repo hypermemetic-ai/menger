@@ -752,14 +752,16 @@ as `docs` (`null` without one):
 | `<summary>` (at most one) | `summary` — its text: tags dropped, whitespace collapsed, trimmed (`""` without one) |
 | `<attr name type? required?>` | `attrs[]` — `{ name, kind, required, description }`, in order; `name` lowercased; `kind` the `type`: `string` (the default), `number`, `boolean`, `shortcode` (an existing shortcode), `ticket` (an existing id) or `enum(a\|b\|c)`, internally tagged — `{"type": "shortcode"}`, `{"type": "enum", "values": ["a", "b", "c"]}`; `required` whether the attribute is present |
 | `<slot name?>` | `slots[]` — `{ name, description }`; `name` `null` for the default slot |
+| `<part name scripted?>` | `parts[]` — `{ name, scripted, description }`, in order (THEME-5): what a theme may skin as `m-name::part(name)`; the template must carry `part="name"` on an element, unless `scripted` (the component's script makes it) |
 | `<example>` | `examples[]` — each one's inner HTML as written (its common indentation and surrounding blank lines removed) |
-| everything else | `help` — markdown: the four elements' lines removed, the rest de-indented, runs of blank lines one |
+| everything else | `help` — markdown: the five elements' lines removed, the rest de-indented, runs of blank lines one |
 
-The four are the `<docs>` element's own children: one inside another
+The five are the `<docs>` element's own children: one inside another
 element of the help (`<details><summary>`) or a backtick code span or fence
 is help. A malformed `<docs>` — two of them, one never closed, two
 `<summary>`s, an `<attr>` without a `name`, an unknown `type`, an `enum()`
-naming nothing, an attribute or slot declared twice — is an in-band `error`
+naming nothing, an attribute, slot or part declared twice, a part with no
+name, a documented part no element of the `<template>` carries — is an in-band `error`
 on the `create` or `amend` that carries it, naming the component and the
 problem, and nothing is written.
 
@@ -1858,6 +1860,42 @@ m-ring::part(ring) { outline: 1px solid var(--accent); }
   so a frame is handed its theme's rules with its tokens (`menger:theme`'s
   `css`); the app's own document takes the fonts of every theme a region
   wears (`<style id="menger-theme-fonts">`).
+
+### Parts to skin, and the house redone (THEME-5)
+
+A theme changes how a house component looks, never what it does (THEME-1,
+`skins`): through the tokens, and through the **parts** each component
+exposes. A component documents its parts in its `<docs>` —
+
+```html
+<template><section class="f" part="section"><header part="head"><span class="l" part="label"></span>…</header>…</section></template>
+<docs>
+  <part name="section">The section the field is.</part>
+  <part name="label">The field's label.</part>
+  <part name="submit" scripted>Submit (the script makes it).</part>
+</docs>
+```
+
+— and a theme skins them: `m-field::part(label) { font-family: var(--font-display); }`.
+A documented part the template does not carry is refused by the write that
+holds it, so a part in the docs is always one the component exposes. The
+docs card (a definition's card, `#/components/<name>`) lists them under
+**parts a theme may skin**, each as the selector a theme writes.
+`MENGER_HOUSE_BODIES=a.md:b.md cargo test -p menger-tickets-api house_bodies`
+files bodies on a throwaway store and fails unless every component they
+define (but one that renders nothing) documents its parts — the check the
+house's own bodies are held to before they are filed.
+
+The house components (ART-9; m-cite in COMP-15; m-ring and m-dial in
+DESIGN-26; m-sponge in DESIGN-20) live in the tracker, not here. THEME-5's
+versions — less chrome (a field is a section under a quiet label, the panel
+an option: `panel` on the tag), columns not rows (two options or cards side
+by side, more than two or under 720px stacked), the display face for what
+leads (a summary's lead, a question, a stat, an option's name), two new
+components (`m-beat`, a claim beside its figure; `m-walk`, numbered steps
+lit as they scroll in), and parts on every one — are filed by amending
+their owners when the owner approves the look. A frame's base styles and
+the app's bodies set headings in `--font-display`.
 
 ### The token contract (THEME-2)
 

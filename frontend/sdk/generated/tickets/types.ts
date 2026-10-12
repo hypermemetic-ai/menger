@@ -122,6 +122,10 @@ export interface Component {
   trimmed (`""` when there is none).
 - `attrs` — one [`AttrDoc`] per `<attr>`, in the order written.
 - `slots` — one [`SlotDoc`] per `<slot>`, in the order written.
+- `parts` — THEME-5: one [`PartDoc`] per `<part>`, in the order written:
+  what a theme may skin with `m-name::part(name)`. Each names a `part`
+  the component's `<template>` carries (or, marked `scripted`, one its
+  script makes) — a documented part the template lacks is refused.
 - `examples` — each `<example>`'s inner HTML as written, its common
   indentation and the blank lines around it removed.
 - `help` — everything else inside `<docs>`, as markdown: the lines the
@@ -130,6 +134,7 @@ export interface ComponentDocs {
   attrs: AttrDoc[];
   examples: string[];
   help: string;
+  parts?: PartDoc[];
   slots: SlotDoc[];
   summary: string;
 }
@@ -302,6 +307,17 @@ of one title or passage, joined, are its text. */
 export interface Marked {
   hit: boolean;
   text: string;
+}
+
+/** THEME-5: one declared part — `<part name="label">The field's
+label.</part>` — a piece of the component's shadow tree that a theme may
+skin with `m-name::part(label)` (looks only, THEME-1's `skins`).
+`scripted`: the component's script makes it (`el.part = …`), so the
+template is not asked for it. */
+export interface PartDoc {
+  description: string;
+  name: string;
+  scripted?: boolean;
 }
 
 export interface PlacementWave {
