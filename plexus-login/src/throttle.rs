@@ -1,35 +1,28 @@
-//! AUTH-22: throttles for our own sign-in page — codes sent, codes,
-//! passwords and TOTP codes tried, and sign-in flows started.
+//! AUTH-22: throttles for our own sign-in page — codes sent, SSO lookups,
+//! guesses (codes, passwords, TOTP codes) and sign-in flows started.
 //!
-//! AUTH-24 #1: **a guess is counted before it is made.** Every attempt
-//! reserves its place in the same critical section that checks the limit
-//! ([`Throttles::reserve_code`] …): the attempt is recorded as a failure up
-//! front, and a right answer refunds it ([`Throttles::refund`]). So a key has
-//! exactly its allowance of guesses in flight, and a burst of any size gets
-//! no more than that to the backend.
+//! Three rules, from two adversarial reviews:
 //!
-//! Two shapes:
+//! 1. **A guess is counted before it is made** (AUTH-24 #1). An attempt
+//!    reserves its place in the same critical section that checks the limit
+//!    ([`Throttles::reserve_code`] …). Only a definite answer settles it: a
+//!    right one is refunded, a wrong one stays counted, and only an answer
+//!    that is no verdict at all (the backend down, or rate-limiting us) is
+//!    given back (AUTH-25 N8). So a key gets exactly its allowance of
+//!    guesses in flight, and a burst of any size gets no more.
+//! 2. **No limit refuses everyone** (AUTH-25 N1–N3). There is no global
+//!    ceiling. A distributed attacker is bounded by **network aggregation**:
+//!    each per-client limit is kept at three levels — IPv6 /64, /48 and /32,
+//!    IPv4 /32, /24 and /16 — each with its own, looser allowance. A
+//!    thousand /64s from one provider share a /48 or /32 budget, and an
+//!    unrelated network is untouched.
+//! 3. **Bounded memory without collateral** (AUTH-25 N1). Each table drops
+//!    entries idle past its *own* window. When still full, it evicts the
+//!    least-recently-used entries that hold no lock, taken first from the
+//!    most-represented network (the flooder's own). Locked entries survive
+//!    as long as anything else can go. A new key is always admitted.
 //!
-//! - a **rate** ([`Rate`]): at most `max` events in a sliding `window`
-//!   (codes sent, flows started);
-//! - a **backoff** ([`Backoff`]): `free` attempts in `window`, then the n-th
-//!   attempt past them waits `base · 2^(n−1)` seconds (capped at `cap`)
-//!   after the one before it.
-//!
-//! AUTH-24 #3: a third party must not lock the owner of an address out.
-//! Codes and passwords tried are limited per **(address, client)** — the
-//! attacker's guesses lock the attacker's own client — and only a looser
-//! ceiling counts every client's guesses at one address. A code *send* is
-//! limited per (address, client) and per client, never per address alone,
-//! so nobody can use up the owner's sends.
-//!
-//! AUTH-24 #6: a client is its address's network: IPv4 by /32 and IPv6 by
-//! /64 unless configured ([`Limits::ipv4_prefix`], [`Limits::ipv6_prefix`]).
-//!
-//! Every table is bounded ([`MAX_KEYS`]) and keyed by a salted hash, so
-//! the tables hold no address. A full table purges what has aged out (at
-//! most every few seconds) and otherwise **refuses** a new key rather than
-//! evict one: evicting would let a flood of fresh keys wipe out a lock.
+//! Every table is keyed by a salted hash, so the tables hold no address.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -38,15 +31,6 @@ use std::sync::Mutex;
 use sha2::{Digest, Sha256};
 
 use crate::sessions::now;
-
-/// The most keys one table holds.
-pub const MAX_KEYS: usize = 100_000;
-/// The longest window any limit uses: an entry idle this long holds nothing.
-const MAX_WINDOW: i64 = 24 * 3600;
-/// How often a full table may purge.
-const PURGE_EVERY: i64 = 5;
-/// What a full table answers a new key.
-const FULL_WAIT: i64 = 60;
 
 /// What a throttle says: go on, or wait this many seconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,106 +62,207 @@ pub struct Backoff {
     pub window: i64,
 }
 
+/// A per-client limit at the three network levels: the client's own
+/// network (/64, /32), its neighbourhood (/48, /24) and its provider
+/// (/32, /16).
+pub type Tiered<T> = [T; 3];
+
 /// The sign-in's limits. [`Limits::default`] is what a deployment gets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
-    /// Codes sent to one address from one client.
-    pub send_per_address_client: Rate,
-    /// Codes sent (and SSO lookups) from one client, any address.
-    pub send_per_client: Rate,
-    /// Codes sent by the whole server: our standing with the mail sender.
-    pub send_total: Rate,
-    /// Codes (or passwords) tried for one address from one client.
-    pub try_per_address_client: Backoff,
-    /// Codes (or passwords) tried for one address from every client: the
-    /// looser ceiling against a distributed guess.
-    pub try_per_address: Backoff,
-    /// Codes, passwords and TOTP codes tried from one client.
-    pub try_per_client: Backoff,
+    /// Codes sent to one address from one neighbourhood (/48, /24).
+    pub send_per_address_network: Rate,
+    /// … and per day.
+    pub send_per_address_network_day: Rate,
+    /// Codes sent to one address per day from every network that has never
+    /// signed that address in (AUTH-25 N5): a stranger's sends. The owner's
+    /// own networks keep their own allowance, which strangers cannot use.
+    pub send_per_address_foreign_day: Rate,
+    /// Codes sent from one client, at each level.
+    pub send_per_client: Tiered<Rate>,
+    /// SSO lookups (an email's domain) from one client, at each level.
+    pub sso_per_client: Tiered<Rate>,
+    /// Wrong guesses allowed for one sent code in its flow; then that flow
+    /// needs a new code (AUTH-25 N4).
+    pub code_tries_per_flow: u32,
+    /// Guesses (codes, passwords, TOTP codes) from one client, at each
+    /// level.
+    pub try_per_client: Tiered<Backoff>,
+    /// Passwords tried for one username from one neighbourhood.
+    pub try_per_user_network: Backoff,
     /// TOTP codes tried for one user (reached only past the first factor).
     pub totp_per_user: Backoff,
-    /// Sign-in flows a client may start.
-    pub flows_per_client: Rate,
-    /// Sign-in flows one client may hold at once; its oldest makes room.
-    pub flows_held_per_client: usize,
-    /// Sign-in flows held in all; past it new ones are refused (never
-    /// someone else's evicted).
+    /// Sign-in flows started by one client, at each level.
+    pub flows_per_client: Tiered<Rate>,
+    /// Sign-in flows held in all; past it the most-represented network's
+    /// newest flows make room — never a refusal.
     pub flows_total: usize,
-    /// A client's IPv4 network (32: the address).
-    pub ipv4_prefix: u8,
-    /// A client's IPv6 network (64: a subscriber's usual delegation).
-    pub ipv6_prefix: u8,
+    /// Keys one throttle table holds before it evicts.
+    pub table_cap: usize,
+    /// How long a network that signed an address in stays its owner's.
+    pub known_network_secs: i64,
+    /// IPv4 prefixes of the three levels.
+    pub ipv4_prefixes: [u8; 3],
+    /// IPv6 prefixes of the three levels.
+    pub ipv6_prefixes: [u8; 3],
 }
+
+const DAY: i64 = 86_400;
 
 impl Default for Limits {
     fn default() -> Self {
+        let rate = |max, window| Rate { max, window };
+        let backoff = |free, window| Backoff { free, base: 30, cap: 900, window };
         Self {
-            send_per_address_client: Rate { max: 3, window: 600 },
-            send_per_client: Rate { max: 20, window: 600 },
-            send_total: Rate { max: 2000, window: 600 },
-            try_per_address_client: Backoff { free: 5, base: 30, cap: 900, window: 3600 },
-            try_per_address: Backoff { free: 50, base: 60, cap: 900, window: 3600 },
-            try_per_client: Backoff { free: 20, base: 30, cap: 900, window: 3600 },
+            send_per_address_network: rate(3, 600),
+            send_per_address_network_day: rate(10, DAY),
+            send_per_address_foreign_day: rate(3, DAY),
+            send_per_client: [rate(20, 600), rate(100, 600), rate(500, 600)],
+            sso_per_client: [rate(60, 600), rate(300, 600), rate(1500, 600)],
+            code_tries_per_flow: 5,
+            try_per_client: [backoff(30, 3600), backoff(150, 3600), backoff(600, 3600)],
+            try_per_user_network: Backoff { free: 5, base: 30, cap: 900, window: 3600 },
             totp_per_user: Backoff { free: 5, base: 30, cap: 900, window: 3600 },
-            flows_per_client: Rate { max: 60, window: 600 },
-            flows_held_per_client: 20,
-            flows_total: 20_000,
-            ipv4_prefix: 32,
-            ipv6_prefix: 64,
+            flows_per_client: [rate(60, 600), rate(600, 600), rate(3000, 600)],
+            flows_total: 200_000,
+            table_cap: 100_000,
+            known_network_secs: 90 * DAY,
+            ipv4_prefixes: [32, 24, 16],
+            ipv6_prefixes: [64, 48, 32],
         }
     }
 }
 
-#[derive(Default)]
+/// A client's networks, own to widest, and the neighbourhood its entries
+/// are counted under when a table must evict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Net {
+    pub levels: [String; 3],
+    agg: u64,
+}
+
+impl Net {
+    /// The client's own network (/64, /32): its key in the per-client tables.
+    pub fn own(&self) -> &str {
+        &self.levels[0]
+    }
+
+    /// The neighbourhood (/48, /24) a flood is grouped by.
+    pub fn neighbourhood(&self) -> &str {
+        &self.levels[1]
+    }
+
+    /// The neighbourhood as a number (eviction's grouping).
+    pub fn agg(&self) -> u64 {
+        self.agg
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Rate(Rate),
+    Backoff(Backoff),
+}
+
+impl Kind {
+    fn window(self) -> i64 {
+        match self {
+            Kind::Rate(r) => r.window,
+            Kind::Backoff(b) => b.window,
+        }
+    }
+}
+
 struct Entry {
     /// Event (attempt) times, oldest first.
     times: Vec<i64>,
+    /// The neighbourhood that made it.
+    agg: u64,
 }
 
-/// One table of keys.
+impl Entry {
+    fn last(&self) -> i64 {
+        self.times.last().copied().unwrap_or(i64::MIN)
+    }
+}
+
+/// One table of keys under one limit.
 struct Table {
-    entries: Mutex<(HashMap<[u8; 32], Entry>, i64)>,
+    entries: Mutex<HashMap<[u8; 32], Entry>>,
+    kind: Kind,
     cap: usize,
 }
 
 impl Table {
-    fn new() -> Self {
-        Self::with_cap(MAX_KEYS)
+    fn rate(r: Rate, cap: usize) -> Self {
+        Self { entries: Mutex::new(HashMap::new()), kind: Kind::Rate(r), cap: cap.max(16) }
     }
 
-    fn with_cap(cap: usize) -> Self {
-        Self { entries: Mutex::new((HashMap::new(), 0)), cap }
+    fn backoff(b: Backoff, cap: usize) -> Self {
+        Self { entries: Mutex::new(HashMap::new()), kind: Kind::Backoff(b), cap: cap.max(16) }
     }
 
-    /// `f` over the key's entry; `None` when the table is full of live keys.
-    fn with<R>(&self, key: [u8; 32], f: impl FnOnce(&mut Entry) -> R) -> Option<R> {
-        let mut guard = self.entries.lock().unwrap();
-        let (map, purged) = &mut *guard;
+    /// Whether an entry holds a lock (at or past its limit): what eviction
+    /// spares.
+    fn locked(&self, e: &Entry, t: i64) -> bool {
+        let w = self.kind.window();
+        let live = e.times.iter().filter(|&&at| t - at < w).count();
+        match self.kind {
+            Kind::Rate(r) => live >= r.max,
+            Kind::Backoff(b) => live >= b.free as usize,
+        }
+    }
+
+    /// Makes room in a full table (see the module docs). Takes it down to
+    /// nine tenths, so a pass runs once per tenth of the cap.
+    fn evict(&self, map: &mut HashMap<[u8; 32], Entry>, t: i64) {
+        let w = self.kind.window();
+        map.retain(|_, e| t.saturating_sub(e.last()) < w);
+        let target = self.cap - self.cap / 10;
+        if map.len() < self.cap {
+            return;
+        }
+        let mut per_agg: HashMap<u64, usize> = HashMap::new();
+        for e in map.values() {
+            *per_agg.entry(e.agg).or_default() += 1;
+        }
+        let top = per_agg.into_iter().max_by_key(|&(_, n)| n).map(|(a, _)| a).unwrap_or(0);
+        // Unlocked from the top neighbourhood, then unlocked anywhere, then
+        // the top neighbourhood's locks, then anything: oldest first.
+        for pass in 0..4 {
+            if map.len() <= target {
+                return;
+            }
+            let mut victims: Vec<([u8; 32], i64)> = map
+                .iter()
+                .filter(|(_, e)| match pass {
+                    0 => e.agg == top && !self.locked(e, t),
+                    1 => !self.locked(e, t),
+                    2 => e.agg == top,
+                    _ => true,
+                })
+                .map(|(k, e)| (*k, e.last()))
+                .collect();
+            victims.sort_unstable_by_key(|&(_, last)| last);
+            for (k, _) in victims.into_iter().take(map.len() - target) {
+                map.remove(&k);
+            }
+        }
+    }
+
+    fn with<R>(&self, key: [u8; 32], agg: u64, f: impl FnOnce(&mut Entry) -> R) -> R {
+        let mut map = self.entries.lock().unwrap();
         if !map.contains_key(&key) && map.len() >= self.cap {
-            let t = now();
-            if t - *purged >= PURGE_EVERY {
-                *purged = t;
-                map.retain(|_, e| e.times.last().is_some_and(|&l| t - l < MAX_WINDOW));
-            }
-            if map.len() >= self.cap {
-                return None;
-            }
+            self.evict(&mut map, now());
         }
-        Some(f(map.entry(key).or_default()))
+        f(map.entry(key).or_insert_with(|| Entry { times: Vec::new(), agg }))
     }
 
-    /// Counts an event against a rate, if it fits.
-    fn take(&self, key: [u8; 32], rate: Rate) -> Verdict {
-        match self.take_at(key, rate) {
-            Ok(_) => Verdict::Allow,
-            Err(w) => Verdict::Wait(w),
-        }
-    }
-
-    /// [`Table::take`], the time it was counted at (to refund).
-    fn take_at(&self, key: [u8; 32], rate: Rate) -> Result<i64, i64> {
+    /// Counts an event against the rate, if it fits: when, or the wait.
+    fn take(&self, key: [u8; 32], agg: u64) -> Result<i64, i64> {
+        let Kind::Rate(rate) = self.kind else { unreachable!("a rate table") };
         let t = now();
-        self.with(key, |e| {
+        self.with(key, agg, |e| {
             e.times.retain(|&at| t - at < rate.window);
             if e.times.len() >= rate.max {
                 return Err((e.times[0] + rate.window - t).max(1));
@@ -185,18 +270,18 @@ impl Table {
             e.times.push(t);
             Ok(t)
         })
-        .unwrap_or(Err(FULL_WAIT))
     }
 
-    /// Reserves an attempt against a backoff — checked and counted in one
-    /// step: the time it was counted at, or the wait.
-    fn reserve(&self, key: [u8; 32], b: Backoff) -> Result<i64, i64> {
+    /// Reserves an attempt against the backoff — checked and counted in one
+    /// step: when, or the wait.
+    fn reserve(&self, key: [u8; 32], agg: u64) -> Result<i64, i64> {
+        let Kind::Backoff(b) = self.kind else { unreachable!("a backoff table") };
         let t = now();
-        self.with(key, |e| {
+        self.with(key, agg, |e| {
             e.times.retain(|&at| t - at < b.window);
             let n = e.times.len() as u32;
             if n >= b.free {
-                let last = *e.times.last().expect("n ≥ free ≥ … has a last");
+                let last = *e.times.last().expect("n ≥ free > 0");
                 let wait = b.base.saturating_mul(1i64 << (n - b.free).min(20)).min(b.cap);
                 if t < last + wait {
                     return Err(last + wait - t);
@@ -205,12 +290,17 @@ impl Table {
             e.times.push(t);
             Ok(t)
         })
-        .unwrap_or(Err(FULL_WAIT))
     }
 
-    /// Takes back one reserved attempt.
+    /// Whether a key has a live event (membership tables).
+    fn holds(&self, key: [u8; 32]) -> bool {
+        let w = self.kind.window();
+        let t = now();
+        self.entries.lock().unwrap().get(&key).is_some_and(|e| t.saturating_sub(e.last()) < w)
+    }
+
     fn refund(&self, key: [u8; 32], at: i64) {
-        if let Some(e) = self.entries.lock().unwrap().0.get_mut(&key) {
+        if let Some(e) = self.entries.lock().unwrap().get_mut(&key) {
             if let Some(i) = e.times.iter().rposition(|&x| x == at) {
                 e.times.remove(i);
             }
@@ -218,60 +308,72 @@ impl Table {
     }
 
     fn clear(&self, key: [u8; 32]) {
-        self.entries.lock().unwrap().0.remove(&key);
+        self.entries.lock().unwrap().remove(&key);
+    }
+
+    fn len(&self) -> usize {
+        self.entries.lock().unwrap().len()
     }
 }
 
-/// Which table a reserved slot is in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Which {
-    AddressClient,
-    Address,
-    Client,
-    TotpUser,
+/// Attempts reserved for one guess, settled by its answer.
+#[derive(Debug)]
+#[must_use = "a reservation is settled by the answer; dropping it keeps the attempt counted"]
+pub struct Reservation {
+    slots: Vec<(usize, [u8; 32], i64)>,
+    /// Keys a right answer clears.
+    forgive: Vec<(usize, [u8; 32])>,
 }
 
-/// Attempts reserved for one guess: refunded when it was right (or never
-/// reached a verdict).
-#[derive(Debug)]
-#[must_use = "a reservation is refunded on success; dropping it keeps the attempt counted"]
-pub struct Reservation {
-    slots: Vec<(Which, [u8; 32], i64)>,
-    /// The (address, client) key a right answer clears.
-    forgive: Option<[u8; 32]>,
-    forgive_totp: Option<[u8; 32]>,
+/// How a guess ended, for [`Throttles::settle`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// Definitely right.
+    Right,
+    /// Wrong — or any answer that is not definitely right or no verdict
+    /// (a 401/403 included: AUTH-25 N8).
+    Wrong,
+    /// No verdict: the backend unreachable, failing, or rate-limiting us.
+    NoVerdict,
 }
+
+// Table indices.
+const SEND_ADDR_NET: usize = 0;
+const SEND_ADDR_NET_DAY: usize = 1;
+const SEND_ADDR_FOREIGN: usize = 2;
+const SEND_CLIENT: usize = 3; // 3, 4, 5
+const SSO_CLIENT: usize = 6; // 6, 7, 8
+const TRY_CLIENT: usize = 9; // 9, 10, 11
+const TRY_USER_NET: usize = 12;
+const TOTP_USER: usize = 13;
+const FLOW_CLIENT: usize = 14; // 14, 15, 16
+const KNOWN: usize = 17;
 
 /// Every throttle the sign-in page keeps. See the module docs.
 pub struct Throttles {
     pub limits: Limits,
     salt: [u8; 32],
-    sent_address_client: Table,
-    sent_client: Table,
-    sent_total: Table,
-    tried_address_client: Table,
-    tried_address: Table,
-    tried_client: Table,
-    totp_user: Table,
-    flows_client: Table,
+    tables: Vec<Table>,
 }
 
 impl Throttles {
     pub fn new(limits: Limits) -> Self {
         let mut salt = [0u8; 32];
         rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
-        Self {
-            limits,
-            salt,
-            sent_address_client: Table::new(),
-            sent_client: Table::new(),
-            sent_total: Table::new(),
-            tried_address_client: Table::new(),
-            tried_address: Table::new(),
-            tried_client: Table::new(),
-            totp_user: Table::new(),
-            flows_client: Table::new(),
-        }
+        let c = limits.table_cap;
+        let mut tables = vec![
+            Table::rate(limits.send_per_address_network, c),
+            Table::rate(limits.send_per_address_network_day, c),
+            Table::rate(limits.send_per_address_foreign_day, c),
+        ];
+        tables.extend(limits.send_per_client.iter().map(|r| Table::rate(*r, c)));
+        tables.extend(limits.sso_per_client.iter().map(|r| Table::rate(*r, c)));
+        tables.extend(limits.try_per_client.iter().map(|b| Table::backoff(*b, c)));
+        tables.push(Table::backoff(limits.try_per_user_network, c));
+        tables.push(Table::backoff(limits.totp_per_user, c));
+        tables.extend(limits.flows_per_client.iter().map(|r| Table::rate(*r, c)));
+        tables.push(Table::rate(Rate { max: 1, window: limits.known_network_secs }, c));
+        Self { limits, salt, tables }
     }
 
     fn key(&self, kind: &str, value: &str) -> [u8; 32] {
@@ -283,76 +385,40 @@ impl Throttles {
         h.finalize().into()
     }
 
-    /// A client: its address's network (AUTH-24 #6), or `unknown`.
-    pub fn client(&self, ip: Option<IpAddr>) -> String {
-        match ip {
-            Some(IpAddr::V4(v4)) => {
-                let p = self.limits.ipv4_prefix.min(32);
+    /// A client's networks (AUTH-24 #6, AUTH-25): `unknown` when there is
+    /// no address.
+    pub fn net(&self, ip: Option<IpAddr>) -> Net {
+        let levels: [String; 3] = match ip {
+            Some(IpAddr::V4(v4)) => self.limits.ipv4_prefixes.map(|p| {
+                let p = p.min(32);
                 let mask = if p == 0 { 0 } else { u32::MAX << (32 - p) };
                 format!("{}/{p}", std::net::Ipv4Addr::from(u32::from(v4) & mask))
-            }
-            Some(IpAddr::V6(v6)) => {
-                let p = self.limits.ipv6_prefix.min(128);
+            }),
+            Some(IpAddr::V6(v6)) => self.limits.ipv6_prefixes.map(|p| {
+                let p = p.min(128);
                 let mask = if p == 0 { 0 } else { u128::MAX << (128 - p) };
                 format!("{}/{p}", std::net::Ipv6Addr::from(u128::from(v6) & mask))
-            }
-            None => "unknown".into(),
-        }
+            }),
+            None => ["unknown".into(), "unknown".into(), "unknown".into()],
+        };
+        let agg = u64::from_le_bytes(self.key("agg", &levels[1])[..8].try_into().expect("8 bytes"));
+        Net { levels, agg }
     }
 
-    fn table(&self, w: Which) -> &Table {
-        match w {
-            Which::AddressClient => &self.tried_address_client,
-            Which::Address => &self.tried_address,
-            Which::Client => &self.tried_client,
-            Which::TotpUser => &self.totp_user,
-        }
+    /// The client's own network (its throttle key, its flow grouping).
+    pub fn client(&self, ip: Option<IpAddr>) -> String {
+        self.net(ip).levels[0].clone()
     }
 
-    fn backoff(&self, w: Which) -> Backoff {
-        match w {
-            Which::AddressClient => self.limits.try_per_address_client,
-            Which::Address => self.limits.try_per_address,
-            Which::Client => self.limits.try_per_client,
-            Which::TotpUser => self.limits.totp_per_user,
-        }
-    }
-
-    /// Reserves in every table or none: the reservation, or the longest
-    /// wait.
-    fn reserve_all(&self, wanted: &[(Which, [u8; 32])]) -> Result<Vec<(Which, [u8; 32], i64)>, i64> {
+    /// Takes from every (table, key) or none: the longest wait otherwise.
+    fn take_all(&self, wanted: &[(usize, [u8; 32])], agg: u64) -> Verdict {
         let mut got = Vec::new();
-        for &(w, k) in wanted {
-            match self.table(w).reserve(k, self.backoff(w)) {
-                Ok(at) => got.push((w, k, at)),
-                Err(wait) => {
-                    for (w, k, at) in got {
-                        self.table(w).refund(k, at);
-                    }
-                    return Err(wait);
-                }
-            }
-        }
-        Ok(got)
-    }
-
-    /// A code send for `address` from `ip`: counted against the client's
-    /// sends to that address, the client's sends, and the server's, or the
-    /// wait (nothing counted then).
-    pub fn send(&self, address: &str, ip: Option<IpAddr>) -> Verdict {
-        let client = self.client(ip);
-        let steps = [
-            (&self.sent_address_client, self.key("addr-client", &format!("{address}\u{0}{client}")), self.limits.send_per_address_client),
-            (&self.sent_client, self.key("client", &client), self.limits.send_per_client),
-            (&self.sent_total, self.key("total", ""), self.limits.send_total),
-        ];
-        let mut taken = Vec::new();
-        for (table, key, rate) in steps {
-            match table.take_at(key, rate) {
-                Ok(at) => taken.push((table, key, at)),
+        for &(i, k) in wanted {
+            match self.tables[i].take(k, agg) {
+                Ok(at) => got.push((i, k, at)),
                 Err(w) => {
-                    for (table, key, at) in taken {
-                        table.refund(key, at);
+                    for (i, k, at) in got {
+                        self.tables[i].refund(k, at);
                     }
                     return Verdict::Wait(w);
                 }
@@ -361,42 +427,117 @@ impl Throttles {
         Verdict::Allow
     }
 
+    fn reserve_all(&self, wanted: &[(usize, [u8; 32])], agg: u64) -> Result<Vec<(usize, [u8; 32], i64)>, i64> {
+        let mut got = Vec::new();
+        for &(i, k) in wanted {
+            match self.tables[i].reserve(k, agg) {
+                Ok(at) => got.push((i, k, at)),
+                Err(w) => {
+                    for (i, k, at) in got {
+                        self.tables[i].refund(k, at);
+                    }
+                    return Err(w);
+                }
+            }
+        }
+        Ok(got)
+    }
+
+    fn tiers(&self, base: usize, kind: &str, net: &Net) -> [(usize, [u8; 32]); 3] {
+        [0, 1, 2].map(|l| (base + l, self.key(kind, &net.levels[l])))
+    }
+
+    /// Whether `ip`'s neighbourhood has signed `address` in before: the
+    /// owner's network, whose sends no stranger can use up.
+    pub fn known(&self, address: &str, ip: Option<IpAddr>) -> bool {
+        let net = self.net(ip);
+        self.tables[KNOWN].holds(self.key("known", &format!("{address}\u{0}{}", net.neighbourhood())))
+    }
+
+    /// `address` signed in from `ip`: its neighbourhood is the owner's now.
+    pub fn signed_in(&self, address: &str, ip: Option<IpAddr>) {
+        let net = self.net(ip);
+        let k = self.key("known", &format!("{address}\u{0}{}", net.neighbourhood()));
+        self.tables[KNOWN].clear(k);
+        let _ = self.tables[KNOWN].take(k, net.agg);
+    }
+
+    /// A code send for `address` from `ip`: counted against the client at
+    /// every level and against (address, neighbourhood) — and, from a
+    /// network that never signed the address in, against the address's
+    /// strangers' day — or the wait (nothing counted then).
+    pub fn send(&self, address: &str, ip: Option<IpAddr>) -> Verdict {
+        let net = self.net(ip);
+        let an = format!("{address}\u{0}{}", net.neighbourhood());
+        let mut wanted: Vec<(usize, [u8; 32])> = self.tiers(SEND_CLIENT, "send", &net).to_vec();
+        wanted.push((SEND_ADDR_NET, self.key("addr-net", &an)));
+        wanted.push((SEND_ADDR_NET_DAY, self.key("addr-net", &an)));
+        if !self.known(address, ip) {
+            wanted.push((SEND_ADDR_FOREIGN, self.key("addr-foreign", address)));
+        }
+        self.take_all(&wanted, net.agg)
+    }
+
+    /// An SSO lookup from `ip` (AUTH-25 N3: apart from sends).
+    pub fn sso(&self, ip: Option<IpAddr>) -> Verdict {
+        let net = self.net(ip);
+        self.take_all(&self.tiers(SSO_CLIENT, "sso", &net), net.agg)
+    }
+
     /// A sign-in flow started by `ip`.
     pub fn flow(&self, ip: Option<IpAddr>) -> Verdict {
-        self.flows_client.take(self.key("flow", &self.client(ip)), self.limits.flows_per_client)
+        let net = self.net(ip);
+        self.take_all(&self.tiers(FLOW_CLIENT, "flow", &net), net.agg)
     }
 
-    /// Reserves a guess of `address`'s code (or `address`'s password) from
-    /// `ip`, or the wait.
-    pub fn reserve_code(&self, address: &str, ip: Option<IpAddr>) -> Result<Reservation, i64> {
-        let client = self.client(ip);
-        let ac = self.key("addr-client", &format!("{address}\u{0}{client}"));
-        let slots = self.reserve_all(&[(Which::AddressClient, ac), (Which::Address, self.key("addr", address)), (Which::Client, self.key("client", &client))])?;
-        Ok(Reservation { slots, forgive: Some(ac), forgive_totp: None })
+    /// Reserves a guess of an emailed code from `ip` (the code's own budget
+    /// is its flow's: [`Limits::code_tries_per_flow`]).
+    pub fn reserve_code(&self, ip: Option<IpAddr>) -> Result<Reservation, i64> {
+        let net = self.net(ip);
+        let slots = self.reserve_all(&self.tiers(TRY_CLIENT, "try", &net), net.agg)?;
+        Ok(Reservation { slots, forgive: Vec::new() })
     }
 
-    /// Reserves a guess of `user`'s TOTP code from `ip`, or the wait.
+    /// Reserves a password guess for `user` from `ip`.
+    pub fn reserve_password(&self, user: &str, ip: Option<IpAddr>) -> Result<Reservation, i64> {
+        let net = self.net(ip);
+        let un = self.key("user-net", &format!("{user}\u{0}{}", net.neighbourhood()));
+        let mut wanted = vec![(TRY_USER_NET, un)];
+        wanted.extend(self.tiers(TRY_CLIENT, "try", &net));
+        let slots = self.reserve_all(&wanted, net.agg)?;
+        Ok(Reservation { slots, forgive: vec![(TRY_USER_NET, un)] })
+    }
+
+    /// Reserves a TOTP guess for `user` from `ip`.
     pub fn reserve_totp(&self, user: &str, ip: Option<IpAddr>) -> Result<Reservation, i64> {
-        let client = self.client(ip);
+        let net = self.net(ip);
         let u = self.key("user", user);
-        let slots = self.reserve_all(&[(Which::TotpUser, u), (Which::Client, self.key("client", &client))])?;
-        Ok(Reservation { slots, forgive: None, forgive_totp: Some(u) })
+        let mut wanted = vec![(TOTP_USER, u)];
+        wanted.extend(self.tiers(TRY_CLIENT, "try", &net));
+        let slots = self.reserve_all(&wanted, net.agg)?;
+        Ok(Reservation { slots, forgive: vec![(TOTP_USER, u)] })
     }
 
-    /// The guess was right (or never reached a verdict): its attempts are
-    /// taken back, and a right one forgives its (address, client) or user.
-    pub fn refund(&self, r: Reservation, right: bool) {
-        for (w, k, at) in r.slots {
-            self.table(w).refund(k, at);
-        }
-        if right {
-            if let Some(k) = r.forgive {
-                self.tried_address_client.clear(k);
+    /// Settles a reservation by the guess's outcome (see [`Outcome`]).
+    pub fn settle(&self, r: Reservation, outcome: Outcome) {
+        match outcome {
+            Outcome::Wrong => {}
+            Outcome::NoVerdict | Outcome::Right => {
+                for (i, k, at) in r.slots {
+                    self.tables[i].refund(k, at);
+                }
+                if outcome == Outcome::Right {
+                    for (i, k) in r.forgive {
+                        self.tables[i].clear(k);
+                    }
+                }
             }
-            if let Some(k) = r.forgive_totp {
-                self.totp_user.clear(k);
-            }
         }
+    }
+
+    /// The largest table's size (tests).
+    pub fn largest_table(&self) -> usize {
+        self.tables.iter().map(Table::len).max().unwrap_or(0)
     }
 }
 
@@ -408,105 +549,103 @@ mod tests {
         Some(s.parse().unwrap())
     }
 
-    fn tight() -> Limits {
-        Limits {
-            try_per_address_client: Backoff { free: 3, base: 10, cap: 25, window: 600 },
-            try_per_address: Backoff { free: 8, base: 10, cap: 25, window: 600 },
-            try_per_client: Backoff { free: 100, base: 10, cap: 25, window: 600 },
-            ..Limits::default()
-        }
-    }
-
     #[test]
     fn a_burst_gets_exactly_its_allowance() {
-        let t = Throttles::new(tight());
-        let passed = (0..200).filter_map(|_| t.reserve_code("a@x", ip("1.1.1.1")).ok()).count();
+        let t = Throttles::new(Limits { totp_per_user: Backoff { free: 3, base: 10, cap: 25, window: 600 }, ..Limits::default() });
+        let passed = (0..200).filter_map(|i| t.reserve_totp("user_1", ip(&format!("10.{}.0.1", i % 250))).ok()).count();
         assert_eq!(passed, 3, "counted before the guess is made");
     }
 
     #[test]
-    fn a_right_answer_refunds_and_forgives() {
-        let t = Throttles::new(tight());
+    fn only_a_definite_answer_settles_a_guess() {
+        let t = Throttles::new(Limits { totp_per_user: Backoff { free: 2, base: 10, cap: 25, window: 600 }, ..Limits::default() });
+        let r = t.reserve_totp("u", ip("1.1.1.1")).unwrap();
+        t.settle(r, Outcome::NoVerdict);
+        let r = t.reserve_totp("u", ip("1.1.1.1")).unwrap();
+        t.settle(r, Outcome::Wrong);
+        let r = t.reserve_totp("u", ip("1.1.1.1")).unwrap();
+        t.settle(r, Outcome::Wrong);
+        assert!(t.reserve_totp("u", ip("1.1.1.1")).is_err(), "two wrong: locked");
+        let t2 = Throttles::new(t.limits);
+        let r = t2.reserve_totp("u", ip("1.1.1.1")).unwrap();
+        t2.settle(r, Outcome::Wrong);
+        let r = t2.reserve_totp("u", ip("1.1.1.1")).unwrap();
+        t2.settle(r, Outcome::Right);
         for _ in 0..2 {
-            let _ = t.reserve_code("a@x", ip("1.1.1.1")).unwrap();
+            let _ = t2.reserve_totp("u", ip("1.1.1.1")).expect("forgiven");
         }
-        let r = t.reserve_code("a@x", ip("1.1.1.1")).unwrap();
-        t.refund(r, true);
-        for _ in 0..3 {
-            let _ = t.reserve_code("a@x", ip("1.1.1.1")).expect("forgiven");
-        }
-        assert!(t.reserve_code("a@x", ip("1.1.1.1")).is_err());
     }
 
     #[test]
-    fn past_the_allowance_each_guess_waits_longer() {
-        let t = Throttles::new(Limits { try_per_address_client: Backoff { free: 1, base: 10, cap: 25, window: 600 }, ..tight() });
-        let _ = t.reserve_code("a@x", ip("1.1.1.1")).unwrap();
-        assert_eq!(t.reserve_code("a@x", ip("1.1.1.1")).unwrap_err(), 10);
-        // Another client is not held up by it.
-        assert!(t.reserve_code("a@x", ip("2.2.2.2")).is_ok());
-    }
-
-    #[test]
-    fn another_client_cannot_lock_the_owner_out() {
-        let t = Throttles::new(tight());
-        for _ in 0..6 {
-            let _ = t.reserve_code("victim@x", ip("198.51.100.66"));
-        }
-        assert!(t.reserve_code("victim@x", ip("198.51.100.66")).is_err(), "the attacker is locked");
-        assert!(t.reserve_code("victim@x", ip("203.0.113.5")).is_ok(), "the owner is not");
-        // Only many clients reach the address's own ceiling.
-        for i in 0..10 {
-            let _ = t.reserve_code("victim@x", ip(&format!("192.0.2.{i}")));
-        }
-        assert!(t.reserve_code("victim@x", ip("203.0.113.9")).is_err(), "the looser ceiling");
-    }
-
-    #[test]
-    fn sends_are_per_address_and_client_per_client_and_in_all() {
-        let t = Throttles::new(Limits { send_per_address_client: Rate { max: 2, window: 600 }, send_per_client: Rate { max: 3, window: 600 }, send_total: Rate { max: 5, window: 600 }, ..Limits::default() });
-        assert!(t.send("a@x", ip("1.1.1.1")).allowed());
-        assert!(t.send("a@x", ip("1.1.1.1")).allowed());
-        assert!(!t.send("a@x", ip("1.1.1.1")).allowed(), "per (address, client)");
-        assert!(t.send("a@x", ip("2.2.2.2")).allowed(), "the owner can still ask");
-        assert!(t.send("b@x", ip("1.1.1.1")).allowed());
-        assert!(!t.send("c@x", ip("1.1.1.1")).allowed(), "per client");
-        assert!(t.send("d@x", ip("3.3.3.3")).allowed());
-        assert!(!t.send("e@x", ip("4.4.4.4")).allowed(), "in all");
-    }
-
-    #[test]
-    fn ipv6_is_bucketed_by_its_network() {
+    fn networks_are_aggregated_at_three_levels() {
         let t = Throttles::new(Limits::default());
-        assert_eq!(t.client(ip("2001:db8:1:2::1")), t.client(ip("2001:db8:1:2:ffff::28")));
-        assert_ne!(t.client(ip("2001:db8:1:2::1")), t.client(ip("2001:db8:1:3::1")));
-        assert_eq!(t.client(ip("192.0.2.1")), "192.0.2.1/32");
-        let wide = Throttles::new(Limits { ipv4_prefix: 24, ipv6_prefix: 48, ..Limits::default() });
-        assert_eq!(wide.client(ip("192.0.2.77")), "192.0.2.0/24");
-        assert_eq!(wide.client(ip("2001:db8:1:2::1")), wide.client(ip("2001:db8:1:ffff::1")));
+        let a = t.net(ip("2001:db8:1:2::1"));
+        assert_eq!(a.levels, ["2001:db8:1:2::/64", "2001:db8:1::/48", "2001:db8::/32"].map(String::from));
+        assert_eq!(t.net(ip("192.0.2.77")).levels, ["192.0.2.77/32", "192.0.2.0/24", "192.0.0.0/16"].map(String::from));
+        assert_eq!(a.agg(), t.net(ip("2001:db8:1:ffff::9")).agg(), "one neighbourhood");
+        assert_ne!(a.agg(), t.net(ip("2001:db8:2::1")).agg());
     }
 
     #[test]
-    fn totp_is_reserved_per_user() {
-        let t = Throttles::new(Limits { totp_per_user: Backoff { free: 2, base: 5, cap: 5, window: 600 }, ..Limits::default() });
-        let passed = (0..50).filter_map(|i| t.reserve_totp("user_1", ip(&format!("10.0.0.{i}"))).ok()).count();
-        assert_eq!(passed, 2);
+    fn a_thousand_slash_64s_share_their_provider_s_budget_and_others_are_untouched() {
+        let limits = Limits { send_per_client: [Rate { max: 20, window: 600 }, Rate { max: 50, window: 600 }, Rate { max: 80, window: 600 }], ..Limits::default() };
+        let t = Throttles::new(limits);
+        let sent = (0..1000u32).filter(|i| t.send(&format!("x{i}@junk.example"), ip(&format!("2001:db8:1:{:x}::1", i))).allowed()).count();
+        assert_eq!(sent, 50, "one /48's budget");
+        assert!(t.send("owner@example.com", ip("203.0.113.5")).allowed(), "an unrelated network is untouched");
     }
 
     #[test]
-    fn a_full_table_refuses_new_keys_and_never_evicts_a_lock() {
-        let table = Table::with_cap(100);
-        let b = Backoff { free: 1, base: 60, cap: 60, window: 600 };
+    fn the_owner_s_network_keeps_its_own_sends() {
+        let t = Throttles::new(Limits::default());
+        t.signed_in("owner@x", ip("203.0.113.5"));
+        for i in 0..10 {
+            let _ = t.send("owner@x", ip(&format!("198.51.{i}.66")));
+        }
+        assert!(!t.send("owner@x", ip("192.0.2.1")).allowed(), "strangers' day is used up");
+        assert!(t.send("owner@x", ip("203.0.113.9")).allowed(), "the owner's neighbourhood is not a stranger");
+    }
+
+    #[test]
+    fn a_full_table_evicts_the_flooder_s_unlocked_keys_and_admits_newcomers() {
+        let t = Table::rate(Rate { max: 2, window: 600 }, 1000);
+        // A lock somebody earned.
         let locked = [7u8; 32];
-        let _ = table.reserve(locked, b).unwrap();
-        assert!(table.reserve(locked, b).is_err());
-        for i in 0..500u64 {
+        t.take(locked, 99).unwrap();
+        t.take(locked, 99).unwrap();
+        assert!(t.take(locked, 99).is_err());
+        // A flood of fresh keys from one neighbourhood.
+        for i in 0..100_000u64 {
             let mut k = [0u8; 32];
             k[..8].copy_from_slice(&i.to_le_bytes());
-            let _ = table.take(k, Rate { max: 1, window: 60 });
+            let _ = t.take(k, 1);
         }
-        assert_eq!(table.entries.lock().unwrap().0.len(), 100);
-        assert!(table.reserve(locked, b).is_err(), "the lock survived the flood");
-        assert_eq!(table.take([9u8; 32], Rate { max: 1, window: 60 }), Verdict::Wait(FULL_WAIT));
+        assert!(t.len() <= 1000);
+        assert!(t.take(locked, 99).is_err(), "the lock survived");
+        assert!(t.take([9u8; 32], 5).is_ok(), "a newcomer is served");
+    }
+
+    #[test]
+    fn a_hundred_thousand_key_flood_leaves_new_visitors_served() {
+        // AUTH-25 N1, its probe: 100,050 clients from distinct /64s (in
+        // distinct /48s) fill the flow tables; a fresh visitor still starts.
+        let t = Throttles::new(Limits { table_cap: 10_000, ..Limits::default() });
+        for i in 0..100_050u64 {
+            let _ = t.flow(ip(&format!("2001:db8:{:x}:{:x}::1", (i >> 16) & 0xffff, i & 0xffff)));
+        }
+        assert!(t.largest_table() <= 10_000);
+        assert!(t.flow(ip("192.0.2.200")).allowed(), "a new visitor is served");
+        assert!(t.send("someone@example.com", ip("198.51.100.7")).allowed());
+    }
+
+    #[test]
+    fn an_idle_entry_goes_by_its_table_s_own_window() {
+        let t = Table::rate(Rate { max: 1, window: 1 }, 16);
+        for i in 0..16u8 {
+            let _ = t.take([i; 32], 1);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let _ = t.take([200u8; 32], 2);
+        assert_eq!(t.len(), 1, "everything past its 1 s window went");
     }
 }

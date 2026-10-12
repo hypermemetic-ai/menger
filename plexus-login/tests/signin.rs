@@ -258,7 +258,7 @@ async fn a_social_button_goes_out_and_back_bound_to_this_browser() {
 #[tokio::test]
 async fn plexus_idp_signs_in_with_a_password_and_backs_off() {
     let under = Under::plexus_idp().await;
-    let limits = Limits { try_per_address_client: Backoff { free: 2, base: 60, cap: 60, window: 600 }, ..Limits::default() };
+    let limits = Limits { try_per_user_network: Backoff { free: 2, base: 60, cap: 60, window: 600 }, ..Limits::default() };
     let a = app_with(under.clone(), Tweaks { limits, ..Tweaks::default() }).await;
     let b = Browser::new(&a);
     let csrf = b.csrf().await;
@@ -527,10 +527,9 @@ async fn return_to_stays_on_this_origin_or_a_listed_one() {
 #[tokio::test]
 async fn codes_sent_and_tried_are_throttled_per_address_and_per_ip_through_trusted_proxies_only() {
     let limits = Limits {
-        send_per_address_client: Rate { max: 2, window: 600 },
-        send_per_client: Rate { max: 3, window: 600 },
-        try_per_address_client: Backoff { free: 3, base: 60, cap: 600, window: 3600 },
-        try_per_client: Backoff { free: 100, base: 60, cap: 600, window: 3600 },
+        send_per_address_network: Rate { max: 2, window: 600 },
+        send_per_client: [Rate { max: 3, window: 600 }, Rate { max: 100, window: 600 }, Rate { max: 500, window: 600 }],
+        code_tries_per_flow: 3,
         totp_per_user: Backoff { free: 3, base: 60, cap: 600, window: 3600 },
         ..Limits::default()
     };
@@ -547,12 +546,12 @@ async fn codes_sent_and_tried_are_throttled_per_address_and_per_ip_through_trust
             b.post("/login/email", &[("csrf", &csrf), ("email", email)]).await.status
         }
     };
-    // Per (address, client): two codes, then a wait — but another client
-    // (the address's owner) can still ask (AUTH-24 #3).
+    // Per (address, neighbourhood): two codes, then a wait — but another
+    // network can still ask (AUTH-24 #3).
     assert_eq!(send("198.51.100.1", "t1@example.test").await, 200);
-    assert_eq!(send("198.51.100.1", "t1@example.test").await, 200);
-    assert_eq!(send("198.51.100.1", "t1@example.test").await, 429);
-    assert_eq!(send("198.51.100.2", "t1@example.test").await, 200, "the owner is never out of sends");
+    assert_eq!(send("198.51.100.2", "t1@example.test").await, 200);
+    assert_eq!(send("198.51.100.3", "t1@example.test").await, 429, "one /24");
+    assert_eq!(send("192.0.2.77", "t1@example.test").await, 200, "another network");
     // Per IP: three sends from one client, then a wait.
     assert_eq!(send("203.0.113.9", "t2@example.test").await, 200);
     assert_eq!(send("203.0.113.9", "t3@example.test").await, 200);
@@ -579,8 +578,8 @@ async fn codes_sent_and_tried_are_throttled_per_address_and_per_ip_through_trust
     }
     assert_eq!(statuses, [200, 200, 200, 429], "spoofed addresses are one peer");
 
-    // Codes tried: three wrong, then this client is locked out of the
-    // address — even for the right code.
+    // Codes tried: three wrong, then this flow's code is spent — even the
+    // right one is refused (AUTH-25 N4).
     let b = Browser::new(&a);
     let csrf = b.csrf().await;
     let sent = b.post("/login/email", &[("csrf", &csrf), ("email", "locked@example.test")]).await;

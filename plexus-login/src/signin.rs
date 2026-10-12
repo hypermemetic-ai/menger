@@ -48,7 +48,7 @@
 mod routes;
 pub use routes::CallbackQuery;
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use async_trait::async_trait;
@@ -67,6 +67,8 @@ use crate::throttle::{Limits, Throttles, Verdict};
 
 /// How long a sign-in flow lasts.
 const FLOW_SECS: i64 = 900;
+/// How long a form's CSRF token lasts.
+pub const TOKEN_SECS: i64 = 900;
 /// How long an enrolled factor waits to be confirmed before it is deleted.
 const ENROLL_SECS: i64 = 600;
 /// How long an SSO lookup is remembered, and how many.
@@ -176,9 +178,15 @@ enum CodeKind {
 
 enum Step {
     Idle,
-    CodeSent { email: String },
+    /// A code went to `email` from this flow; `wrong` guesses of it so far
+    /// (AUTH-25 N4: a code is guessed only in the flow that asked for it,
+    /// at most [`Limits::code_tries_per_flow`] times).
+    CodeSent { email: String, wrong: u32 },
     Code { ticket: Ticket, kind: CodeKind, subject: Option<String> },
     Choose { ticket: Ticket, choices: Vec<Choice> },
+    /// A flow id a flow was started from: it starts no other (one page's
+    /// token, one flow — AUTH-25's note on the social form).
+    Spent,
 }
 
 struct OAuth {
@@ -192,30 +200,33 @@ struct Flow {
     next: String,
     oauth: Option<OAuth>,
     expires: i64,
-    /// The client that started it (its network, [`Throttles::client`]).
-    client: String,
+    /// The neighbourhood that started it ([`crate::throttle::Net::agg`]).
+    agg: u64,
+    /// Its place in the order flows were started.
+    seq: u64,
     /// AUTH-24 #11: the backend that started it, which finishes it — a swap
     /// midway does not change who completes a sign-in.
-    backend: Arc<dyn IdentityBackend>,
+    backend: Option<Arc<dyn IdentityBackend>>,
 }
 
-/// AUTH-24 #4: the sign-in flows, bounded without scans and without one
-/// client's flood touching another's: each client holds at most
-/// `per_client` (its own oldest makes room), the table at most `total`
-/// (past it a new flow is refused, never another's evicted), and expiry
-/// runs off a wheel of one-minute buckets, so a flow is expired in O(1)
-/// amortised.
+/// The sign-in flows (AUTH-24 #4, AUTH-25 N2/N6). Expiry runs off a wheel of
+/// one-minute buckets (O(1) amortised). No flow is ever refused: past
+/// `cap`, room is made from the **most-represented neighbourhood's newest**
+/// flows — the flooder's own — so a sign-in already under way (older) and a
+/// visitor from an unrelated network are untouched. No per-client holding
+/// cap evicts a NAT neighbour's flow; how fast a network may *start* flows
+/// is the throttles' ([`Throttles::flow`]).
 struct FlowTable {
     map: HashMap<String, Flow>,
-    by_client: HashMap<String, VecDeque<String>>,
+    by_agg: HashMap<u64, BTreeMap<u64, String>>,
     wheel: BTreeMap<i64, Vec<String>>,
-    total: usize,
-    per_client: usize,
+    cap: usize,
+    seq: u64,
 }
 
 impl FlowTable {
-    fn new(total: usize, per_client: usize) -> Self {
-        Self { map: HashMap::new(), by_client: HashMap::new(), wheel: BTreeMap::new(), total, per_client: per_client.max(1) }
+    fn new(cap: usize) -> Self {
+        Self { map: HashMap::new(), by_agg: HashMap::new(), wheel: BTreeMap::new(), cap: cap.max(16), seq: 0 }
     }
 
     fn bucket(t: i64) -> i64 {
@@ -224,10 +235,10 @@ impl FlowTable {
 
     fn forget(&mut self, key: &str) -> Option<Flow> {
         let flow = self.map.remove(key)?;
-        if let Some(q) = self.by_client.get_mut(&flow.client) {
-            q.retain(|k| k != key);
-            if q.is_empty() {
-                self.by_client.remove(&flow.client);
+        if let Some(by) = self.by_agg.get_mut(&flow.agg) {
+            by.remove(&flow.seq);
+            if by.is_empty() {
+                self.by_agg.remove(&flow.agg);
             }
         }
         Some(flow)
@@ -257,24 +268,31 @@ impl FlowTable {
         self.map.get_mut(key)
     }
 
-    /// Keeps a new flow, or refuses (the table is full of other flows).
-    fn insert(&mut self, key: String, flow: Flow) -> bool {
-        self.expire(now());
-        let client = flow.client.clone();
-        let mine = self.by_client.get(&client).map(|q| q.len()).unwrap_or(0);
-        if mine >= self.per_client {
-            let oldest = self.by_client.get(&client).and_then(|q| q.front().cloned());
-            if let Some(k) = oldest {
+    /// Makes room: the most-represented neighbourhood's newest flows go,
+    /// a hundredth of the table at a time.
+    fn make_room(&mut self) {
+        let target = self.cap - (self.cap / 100).max(1);
+        while self.map.len() > target {
+            let Some(top) = self.by_agg.iter().max_by_key(|(_, by)| by.len()).map(|(a, _)| *a) else { return };
+            let batch = (self.map.len() - target).min(self.by_agg[&top].len());
+            let newest: Vec<String> = self.by_agg[&top].values().rev().take(batch).cloned().collect();
+            for k in newest {
                 self.forget(&k);
             }
         }
-        if self.map.len() >= self.total {
-            return false;
+    }
+
+    /// Keeps a flow. Always.
+    fn insert(&mut self, key: String, mut flow: Flow) {
+        self.expire(now());
+        if self.map.len() >= self.cap {
+            self.make_room();
         }
+        self.seq += 1;
+        flow.seq = self.seq;
         self.wheel.entry(Self::bucket(flow.expires)).or_default().push(key.clone());
-        self.by_client.entry(client).or_default().push_back(key.clone());
+        self.by_agg.entry(flow.agg).or_default().insert(flow.seq, key.clone());
         self.map.insert(key, flow);
-        true
     }
 
     fn len(&self) -> usize {
@@ -321,7 +339,7 @@ impl SignInPage {
             me: me.clone(),
             throttles: Throttles::new(cfg.limits),
             backend: RwLock::new(cfg.backend.clone()),
-            flows: Mutex::new(FlowTable::new(cfg.limits.flows_total, cfg.limits.flows_held_per_client)),
+            flows: Mutex::new(FlowTable::new(cfg.limits.flows_total)),
             cfg,
             cont,
             enrolling: Mutex::new(HashMap::new()),
@@ -400,14 +418,24 @@ impl SignInPage {
         HeaderValue::from_str(&format!("{}={id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=1800{secure}", self.cfg.flow_cookie)).expect("a cookie")
     }
 
-    /// The CSRF token for a flow: HMAC-SHA256 of its id under this
-    /// process's key.
+    /// The CSRF token for a flow: when it was issued, and an HMAC-SHA256 of
+    /// the flow id and that time under this process's key. It lasts
+    /// [`TOKEN_SECS`] (AUTH-25: one token can't drive a flood for long), and
+    /// a flow id starts one flow at most ([`Step::Spent`]).
     pub fn csrf(&self, flow_id: &str) -> String {
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hmac_sha256(&self.csrf_key, flow_id.as_bytes()))
+        self.csrf_at(flow_id, now())
+    }
+
+    fn csrf_at(&self, flow_id: &str, at: i64) -> String {
+        let mac = hmac_sha256(&self.csrf_key, format!("{flow_id}.{at}").as_bytes());
+        format!("{at}.{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac))
     }
 
     fn csrf_ok(&self, flow_id: Option<&str>, token: &str) -> bool {
-        flow_id.is_some_and(|id| constant_eq(self.csrf(id).as_bytes(), token.as_bytes()))
+        let (Some(id), Some((at, _))) = (flow_id, token.split_once('.')) else { return false };
+        let Ok(at) = at.parse::<i64>() else { return false };
+        let age = now() - at;
+        (0..=TOKEN_SECS).contains(&age) && constant_eq(self.csrf_at(id, at).as_bytes(), token.as_bytes())
     }
 
     fn key(id: &str) -> String {
@@ -425,19 +453,26 @@ impl SignInPage {
     #[allow(clippy::result_large_err)]
     fn fresh_flow(&self, old: Option<&str>, next: String, r: &Req) -> Result<(String, HeaderValue), Response> {
         let restart_id = old.map(str::to_string).unwrap_or_else(random_token);
+        // One page's token starts one flow (AUTH-25): a spent id starts none.
+        if old.is_some_and(|o| self.with_flow(o, |f| matches!(f.step, Step::Spent)).unwrap_or(false)) {
+            let fresh = random_token();
+            let mut resp = self.restart(&fresh, &next, "That page was already used. Start again.", StatusCode::BAD_REQUEST);
+            resp.headers_mut().append(header::SET_COOKIE, self.flow_cookie_header(&fresh));
+            return Err(resp);
+        }
         if let Verdict::Wait(w) = self.throttles.flow(r.info.ip) {
             tracing::info!("sign-in flows throttled for a client");
             return Err(self.restart(&restart_id, &next, &Self::wait_words(w), StatusCode::TOO_MANY_REQUESTS));
         }
+        let agg = self.throttles.net(r.info.ip).agg();
+        let mut flows = self.flows.lock().unwrap();
         if let Some(o) = old {
-            self.end_flow(o);
+            flows.forget(&Self::key(o));
+            flows.insert(Self::key(o), Flow { step: Step::Spent, next: String::new(), oauth: None, expires: now() + TOKEN_SECS, agg, seq: 0, backend: None });
         }
         let id = random_token();
-        let flow = Flow { step: Step::Idle, next: next.clone(), oauth: None, expires: now() + FLOW_SECS, client: self.throttles.client(r.info.ip), backend: self.backend() };
-        if !self.flows.lock().unwrap().insert(Self::key(&id), flow) {
-            tracing::warn!("the sign-in flow table is full: a new sign-in was refused");
-            return Err(self.restart(&restart_id, &next, "Sign-in is busy right now. Try again in a minute.", StatusCode::SERVICE_UNAVAILABLE));
-        }
+        flows.insert(Self::key(&id), Flow { step: Step::Idle, next, oauth: None, expires: now() + FLOW_SECS, agg, seq: 0, backend: Some(self.backend()) });
+        drop(flows);
         let set = self.flow_cookie_header(&id);
         Ok((id, set))
     }
@@ -448,7 +483,7 @@ impl SignInPage {
 
     /// The backend a flow started with (the current one when it has none).
     fn flow_backend(&self, id: &str) -> Arc<dyn IdentityBackend> {
-        self.with_flow(id, |f| f.backend.clone()).unwrap_or_else(|| self.backend())
+        self.with_flow(id, |f| f.backend.clone()).flatten().unwrap_or_else(|| self.backend())
     }
 
     /// How many flows are held (tests, metrics).
@@ -880,6 +915,65 @@ mod tests {
         ] {
             assert_eq!(r.check(Some(bad)), "/", "{bad:?}");
         }
+    }
+
+    struct Plain;
+
+    #[async_trait]
+    impl Continuation for Plain {
+        async fn signed_in(&self, _: SignedIn, _: Arc<dyn IdentityBackend>, _: &str) -> Response {
+            StatusCode::OK.into_response()
+        }
+        fn account(&self, _: &HeaderMap) -> Option<AccountHolder> {
+            None
+        }
+        fn draw(&self, _: Body) -> page::Page {
+            page::Page::plain(String::new())
+        }
+    }
+
+    fn page() -> Arc<SignInPage> {
+        let backend: Arc<dyn IdentityBackend> = Arc::new(crate::backends::memory::Memory::new(Default::default()));
+        SignInPage::new(
+            PageConfig {
+                backend,
+                public_url: "http://127.0.0.1:1".into(),
+                origins: vec![],
+                return_to: ReturnTo::new(["http://127.0.0.1:1"]),
+                trusted_proxies: TrustedProxies::default(),
+                limits: Limits::default(),
+                flow_cookie: "f".into(),
+                totp_issuer: "t".into(),
+                reauth_secs: 900,
+            },
+            Arc::new(Plain),
+        )
+    }
+
+    #[test]
+    fn a_csrf_token_is_the_flow_s_and_short_lived() {
+        let p = page();
+        let id = "a".repeat(43);
+        let token = p.csrf(&id);
+        assert!(p.csrf_ok(Some(&id), &token));
+        assert!(!p.csrf_ok(Some(&"b".repeat(43)), &token), "another flow's");
+        let old = p.csrf_at(&id, now() - TOKEN_SECS - 1);
+        assert!(!p.csrf_ok(Some(&id), &old), "expired");
+        assert!(!p.csrf_ok(Some(&id), "garbage"));
+    }
+
+    #[test]
+    fn the_flow_table_never_refuses_and_makes_room_from_the_flooder_s_newest() {
+        let mut t = FlowTable::new(100);
+        let flow = |agg| Flow { step: Step::Idle, next: String::new(), oauth: None, expires: now() + 900, agg, seq: 0, backend: None };
+        t.insert("victim".into(), flow(1));
+        for i in 0..10_000 {
+            t.insert(format!("flood{i}"), flow(2));
+        }
+        assert!(t.len() <= 100);
+        assert!(t.get_mut("victim").is_some(), "an older flow of another network survives");
+        t.insert("newcomer".into(), flow(3));
+        assert!(t.get_mut("newcomer").is_some());
     }
 
     #[test]

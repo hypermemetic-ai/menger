@@ -98,13 +98,6 @@ impl TokenStore {
         }
     }
 
-    /// [`TokenStore::revoke_later`], awaited (the refresher's own use).
-    async fn sign_out(&self, session_key: &str) {
-        let held = self.map.lock().unwrap().remove(session_key);
-        if let Some(h) = held {
-            revoke(h).await;
-        }
-    }
 
     /// Starts the refresher (once).
     pub fn start(self: &Arc<Self>) {
@@ -129,7 +122,8 @@ impl TokenStore {
         let snapshot: Vec<(String, Held)> = self.map.lock().unwrap().iter().map(|(k, h)| (k.clone(), h.clone())).collect();
         for (key, h) in snapshot {
             if !self.sessions.alive(&key) {
-                self.sign_out(&key).await;
+                // AUTH-25 N7: off this pass, in its own task.
+                self.revoke_later(&key);
                 out.dropped += 1;
                 continue;
             }

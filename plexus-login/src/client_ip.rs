@@ -76,7 +76,9 @@ impl TrustedProxies {
     pub fn client_ip(&self, peer: Option<IpAddr>, headers: &HeaderMap) -> Option<IpAddr> {
         let peer = canonical(peer?);
         if !self.contains(&peer) {
-            if headers.contains_key("x-forwarded-for") && !self.direct {
+            // AUTH-25 N9: said under `none` too — a forwarded header arriving
+            // is evidence that `none` is wrong.
+            if headers.contains_key("x-forwarded-for") {
                 warn_once(&UNTRUSTED_XFF, "X-Forwarded-For arrives from a peer that is not a trusted proxy: if a proxy is in front, name it with --trusted-proxy, or every visitor counts as that proxy");
             }
             return Some(peer);

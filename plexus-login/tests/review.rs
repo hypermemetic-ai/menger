@@ -14,6 +14,20 @@
 //! | 9 | the address in the SSO URL | `signin.rs`'s `an_sso_domain_goes_to_its_idp…` |
 //! | 11 | a swap midway labelled a sign-in with the new backend | `a_swap_midway_finishes_with_the_backend_that_started_it` |
 //! | 12 | a non-ASCII `next`; a fail-open refresh | `a_non_ascii_next_is_percent_encoded`, `a_refresh_that_cannot_be_made_after_expiry_ends_the_session` |
+//!
+//! AUTH-25, the re-review:
+//!
+//! | # | finding | test |
+//! | --- | --- | --- |
+//! | N1 | a full throttle table refused new visitors for a day | `throttle::tests` (100k keys), `a_key_flood_leaves_new_visitors_served` |
+//! | N2 | a full flow table answered everyone 503 | `a_thousand_slash_64_flow_flood_leaves_an_unrelated_visitor_able_to_sign_in`, `a_flood_cannot_evict_another_browser_s_flow` |
+//! | N3 | the global send ceiling stopped every code and SSO | `a_hundred_slash_64_send_flood_leaves_another_network_able_to_send_and_sso_to_route` |
+//! | N4, #3 | ten clients locked the owner out | `ten_foreign_clients_cannot_stop_the_owner_s_code_in_the_owner_s_flow` |
+//! | N5 | sends to one address unbounded | `strangers_send_an_address_three_codes_a_day` |
+//! | N6 | a NAT neighbour's flows evicted | `a_nat_neighbour_s_flow_survives_twenty_of_another_s` |
+//! | N8 | a 401/403 refunded the guess | `signin::routes::tests`, `throttle::tests` |
+//! | N9 | the proxy check read only --public-url; `none` silenced the warning | `wiring::tests`, `none_still_warns_when_a_forwarded_header_arrives` |
+//! | social token | one page's token drove a flood | `one_page_s_token_starts_one_flow` |
 
 mod support;
 
@@ -39,7 +53,7 @@ async fn a_burst_of_wrong_codes_reaches_the_backend_no_more_than_the_allowance()
     }))
     .await;
     let reached = under.fake().auths(WORKOS_MAGIC);
-    let allowance = Limits::default().try_per_address_client.free as usize;
+    let allowance = Limits::default().code_tries_per_flow as usize;
     assert!(reached <= allowance, "{reached} guesses reached WorkOS; the allowance is {allowance}");
     assert_eq!(statuses.iter().filter(|s| **s == 401).count(), reached);
     assert_eq!(statuses.iter().filter(|s| **s == 429).count(), 200 - reached);
@@ -97,30 +111,21 @@ async fn a_third_party_cannot_lock_the_owner_out() {
 #[tokio::test]
 async fn a_flood_cannot_evict_another_browser_s_flow() {
     let under = Under::memory();
-    let limits = Limits { flows_total: 50, flows_held_per_client: 5, flows_per_client: Rate { max: 10_000, window: 600 }, ..Limits::default() };
+    let big = Rate { max: 100_000, window: 600 };
+    let limits = Limits { flows_total: 50, flows_per_client: [big, big, big], ..Limits::default() };
     let a = app_with(under.clone(), Tweaks { trusted: vec!["127.0.0.1/32"], limits, ..Tweaks::default() }).await;
     let mut victim = Browser::new(&a);
     victim.xff = Some("203.0.113.5".into());
     let out = victim.social("github", "/app/v").await;
     assert_eq!(out.status, 303);
     let back = out.location.unwrap();
-    // One client floods: it only rotates its own few flows.
-    let mut one = Browser::new(&a);
-    one.xff = Some("198.51.100.1".into());
-    for _ in 0..100 {
-        one.social("google", "/").await;
-    }
-    assert!(a.login.signin().unwrap().flows_held() <= 1 + 5, "one client holds at most its share");
-    // Many clients flood: the table fills and refuses; nobody is evicted.
-    let mut refused = 0;
+    // 120 clients of one neighbourhood flood a 50-flow table: nothing is
+    // refused, and room comes from the flooders' own newest flows.
     for i in 0..120 {
         let mut b = Browser::new(&a);
         b.xff = Some(format!("192.0.2.{i}"));
-        if b.social("google", "/").await.status == 503 {
-            refused += 1;
-        }
+        assert_eq!(b.social("google", "/").await.status, 303, "no flow is ever refused");
     }
-    assert!(refused > 0, "a full table refuses");
     assert!(a.login.signin().unwrap().flows_held() <= 50);
     let done = victim.get(&back).await;
     assert_eq!((done.status, done.location.as_deref()), (303, Some("/app/v")), "{}", done.body);
@@ -129,7 +134,7 @@ async fn a_flood_cannot_evict_another_browser_s_flow() {
 #[tokio::test]
 async fn flows_are_throttled_per_client() {
     let under = Under::memory();
-    let limits = Limits { flows_per_client: Rate { max: 5, window: 600 }, ..Limits::default() };
+    let limits = Limits { flows_per_client: [Rate { max: 5, window: 600 }, Rate { max: 1000, window: 600 }, Rate { max: 1000, window: 600 }], ..Limits::default() };
     let a = app_with(under.clone(), Tweaks { limits, ..Tweaks::default() }).await;
     // Eight browsers of one client (one address).
     let mut statuses = Vec::new();
@@ -175,9 +180,9 @@ async fn an_ipv6_client_is_its_network() {
             ok += 1;
         }
     }
-    let per_client = Limits::default().send_per_client.max;
+    let per_client = Limits::default().send_per_client[0].max;
     assert_eq!(ok, per_client, "one /64, one client");
-    assert!(under.fake().calls_starting("organizations:") <= per_client, "SSO lookups bounded with the sends");
+    assert!(under.fake().calls_starting("organizations:") <= Limits::default().sso_per_client[0].max, "SSO lookups bounded by their own limit");
     let mut other = Browser::new(&a);
     other.xff = Some("2001:db8:1:3::1".into());
     let csrf = other.csrf().await;
@@ -189,7 +194,7 @@ async fn an_untrusted_forwarded_header_is_not_believed() {
     // Loopback (no --trusted-proxy needed): the peer is the client, whatever
     // it forwards; and the server says so in its log.
     let under = Under::memory();
-    let limits = Limits { send_per_client: Rate { max: 2, window: 600 }, ..Limits::default() };
+    let limits = Limits { send_per_client: [Rate { max: 2, window: 600 }, Rate { max: 100, window: 600 }, Rate { max: 500, window: 600 }], ..Limits::default() };
     let a = app_with(under.clone(), Tweaks { limits, ..Tweaks::default() }).await;
     let mut statuses = Vec::new();
     for i in 0..3 {
@@ -242,4 +247,186 @@ async fn a_refresh_that_cannot_be_made_after_expiry_ends_the_session() {
     assert_eq!(r.ended, 1, "{r:?}");
     assert!(stale.me().await.is_none(), "expired and unrefreshable: fail closed");
     assert!(fresh.me().await.is_some(), "still valid: tried again next pass");
+}
+
+// ── AUTH-25 ────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn a_key_flood_leaves_new_visitors_served() {
+    // 3,000 keys from distinct /64s in distinct /48s into tables of 500:
+    // the tables evict the flood's unlocked keys and a new visitor is
+    // served (the 100,000-key version is throttle::tests).
+    let under = Under::memory();
+    let limits = Limits { table_cap: 500, ..Limits::default() };
+    let a = app_with(under.clone(), Tweaks { trusted: vec!["127.0.0.1/32"], limits, ..Tweaks::default() }).await;
+    let page = Browser::new(&a).get("/login").await;
+    let token = page.csrf();
+    let cookie = page.headers.get_all("set-cookie").iter().map(|v| v.to_str().unwrap().split(';').next().unwrap().to_string()).find(|c| c.starts_with("toy_flow")).unwrap();
+    let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    for i in 0..3000u32 {
+        let _ = http
+            .post(format!("{}/login/social", a.base))
+            .header("cookie", &cookie)
+            .header("origin", &a.base)
+            .header("x-forwarded-for", format!("2001:db8:{:x}:{:x}::1", i / 7, i))
+            .form(&[("csrf", token.as_str()), ("provider", "google")])
+            .send()
+            .await;
+    }
+    let mut fresh = Browser::new(&a);
+    fresh.xff = Some("100.64.9.9".into());
+    let out = fresh.social("google", "/app/f").await;
+    assert_eq!(out.status, 303, "{}", out.body);
+    let done = fresh.get(&out.location.unwrap()).await;
+    assert_eq!(done.location.as_deref(), Some("/app/f"));
+}
+
+#[tokio::test]
+async fn a_thousand_slash_64_flow_flood_leaves_an_unrelated_visitor_able_to_sign_in() {
+    let under = Under::memory();
+    let limits = Limits { flows_total: 300, ..Limits::default() };
+    let a = app_with(under.clone(), Tweaks { trusted: vec!["127.0.0.1/32"], limits, ..Tweaks::default() }).await;
+    let mut early = Browser::new(&a);
+    early.xff = Some("203.0.113.5".into());
+    let back = early.social("github", "/app/e").await.location.unwrap();
+    let mut started = 0;
+    for i in 0..1000u32 {
+        let mut b = Browser::new(&a);
+        b.xff = Some(format!("2001:db8:1:{i:x}::1"));
+        let s = b.social("google", "/").await.status;
+        assert_ne!(s, 503, "never a global refusal");
+        if s == 303 {
+            started += 1;
+        }
+    }
+    assert!(started <= Limits::default().flows_per_client[1].max, "one /48's budget: {started}");
+    assert!(a.login.signin().unwrap().flows_held() <= 300);
+    let mut fresh = Browser::new(&a);
+    fresh.xff = Some("198.51.100.200".into());
+    let r = fresh.sign_in_by_email(&under, "fresh@example.test", "/app/n").await;
+    assert_eq!((r.status, r.location.as_deref()), (303, Some("/app/n")), "an unrelated visitor signs in");
+    let done = early.get(&back).await;
+    assert_eq!(done.location.as_deref(), Some("/app/e"), "a sign-in under way survived");
+}
+
+#[tokio::test]
+async fn a_hundred_slash_64_send_flood_leaves_another_network_able_to_send_and_sso_to_route() {
+    let under = Under::workos().await;
+    let a = app_with(under.clone(), Tweaks { trusted: vec!["127.0.0.1/32"], ..Tweaks::default() }).await;
+    for n in 0..100u32 {
+        for j in 0..10u32 {
+            let mut b = Browser::new(&a);
+            b.xff = Some(format!("2001:db8:7:{n:x}::{:x}", j + 1));
+            let csrf = b.csrf().await;
+            b.post("/login/email", &[("csrf", &csrf), ("email", &format!("junk{n}-{j}@junk{n}.example"))]).await;
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let sent = under.fake().state.lock().unwrap().sends.len();
+    assert!(sent <= Limits::default().send_per_client[1].max, "one /48's sends: {sent}");
+    // Another network sends.
+    let mut other = Browser::new(&a);
+    other.xff = Some("198.51.100.9".into());
+    let csrf = other.csrf().await;
+    assert_eq!(other.post("/login/email", &[("csrf", &csrf), ("email", "someone@example.test")]).await.status, 200);
+    // SSO routes from another network even when that network has used up
+    // its own code sends (AUTH-25 N3: SSO before any send limit).
+    let mut corp = Browser::new(&a);
+    corp.xff = Some("198.51.100.50".into());
+    let mut last = 0;
+    for j in 0..25 {
+        let csrf = corp.csrf().await;
+        last = corp.post("/login/email", &[("csrf", &csrf), ("email", &format!("c{j}@junk-c.example"))]).await.status;
+    }
+    assert_eq!(last, 429, "its sends are used up");
+    let csrf = corp.csrf().await;
+    let r = corp.post("/login/email", &[("csrf", &csrf), ("email", "ceo@sso.example")]).await;
+    assert_eq!(r.status, 303, "a company domain goes to its IdP whatever the send limits say");
+}
+
+#[tokio::test]
+async fn ten_foreign_clients_cannot_stop_the_owner_s_code_in_the_owner_s_flow() {
+    let under = Under::workos().await;
+    let a = app_with(under.clone(), Tweaks { trusted: vec!["127.0.0.1/32"], ..Tweaks::default() }).await;
+    // The owner has signed in from home before.
+    let mut owner = Browser::new(&a);
+    owner.xff = Some("203.0.113.5".into());
+    assert_eq!(owner.sign_in_by_email(&under, "owner@example.test", "/").await.status, 303);
+    owner.post("/logout", &[]).await;
+    // Ten clients on ten networks: a send each (where allowed) and five
+    // wrong guesses each.
+    for i in 0..10 {
+        let mut x = Browser::new(&a);
+        x.xff = Some(format!("198.51.{i}.66"));
+        let csrf = x.csrf().await;
+        let sent = x.post("/login/email", &[("csrf", &csrf), ("email", "owner@example.test")]).await;
+        if sent.status == 200 {
+            for g in 0..6 {
+                x.post("/login/code", &[("csrf", &sent.csrf()), ("code", &format!("10000{g}"))]).await;
+            }
+        }
+    }
+    let wrong = under.fake().auths(WORKOS_MAGIC) - 1;
+    assert!(wrong <= 15, "strangers: 3 codes a day × 5 guesses each — {wrong}");
+    // The owner, in the owner's own flow, from the owner's network.
+    let r = owner.sign_in_by_email(&under, "owner@example.test", "/app/o").await;
+    assert_eq!((r.status, r.location.as_deref()), (303, Some("/app/o")), "{}", r.body);
+}
+
+#[tokio::test]
+async fn strangers_send_an_address_three_codes_a_day() {
+    let under = Under::workos().await;
+    let a = app_with(under.clone(), Tweaks { trusted: vec!["127.0.0.1/32"], ..Tweaks::default() }).await;
+    for i in 0..50 {
+        let mut b = Browser::new(&a);
+        b.xff = Some(format!("10.{i}.0.1"));
+        let csrf = b.csrf().await;
+        b.post("/login/email", &[("csrf", &csrf), ("email", "inbox@example.test")]).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(under.fake().sends_to("inbox@example.test").len(), Limits::default().send_per_address_foreign_day.max);
+}
+
+#[tokio::test]
+async fn a_nat_neighbour_s_flow_survives_twenty_of_another_s() {
+    let under = Under::memory();
+    let a = app_with(under.clone(), Tweaks { trusted: vec!["127.0.0.1/32"], ..Tweaks::default() }).await;
+    let mut victim = Browser::new(&a);
+    victim.xff = Some("100.64.0.1".into());
+    let back = victim.social("github", "/app/n").await.location.unwrap();
+    for _ in 0..20 {
+        let mut b = Browser::new(&a);
+        b.xff = Some("100.64.0.1".into());
+        b.social("google", "/").await;
+    }
+    let done = victim.get(&back).await;
+    assert_eq!(done.location.as_deref(), Some("/app/n"), "{}", done.body);
+}
+
+#[tokio::test]
+async fn one_page_s_token_starts_one_flow() {
+    let under = Under::memory();
+    let a = app(under.clone()).await;
+    let b = Browser::new(&a);
+    let page = b.get("/login").await;
+    let token = page.csrf();
+    let original = b.jar.lock().unwrap().iter().find(|(k, _)| k.starts_with("toy_flow")).map(|(k, v)| (k.clone(), v.clone())).unwrap();
+    assert_eq!(b.post("/login/social", &[("csrf", &token), ("provider", "google")]).await.status, 303);
+    // The same page's cookie and token, replayed.
+    b.jar.lock().unwrap().insert(original.0.clone(), original.1.clone());
+    let again = b.post("/login/social", &[("csrf", &token), ("provider", "google")]).await;
+    assert_eq!(again.status, 400, "{}", again.body);
+    assert!(again.body.contains("already used"));
+}
+
+#[tokio::test]
+async fn none_still_warns_when_a_forwarded_header_arrives() {
+    let under = Under::memory();
+    let a = app_with(under.clone(), Tweaks { trusted: vec!["none"], ..Tweaks::default() }).await;
+    let mut b = Browser::new(&a);
+    b.xff = Some("203.0.113.1".into());
+    b.get("/login").await;
+    let csrf = b.csrf().await;
+    b.post("/login/email", &[("csrf", &csrf), ("email", "n@example.test")]).await;
+    assert!(log_text().contains("X-Forwarded-For arrives from a peer that is not a trusted proxy"));
 }

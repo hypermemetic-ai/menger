@@ -100,6 +100,10 @@ pub struct LoginOptions {
     /// may sign people in here — the app decides where (menger: only
     /// `--env test`, as the dev sign-in).
     pub allow_development_backends: bool,
+    /// AUTH-25 N9: whether the shell listens on loopback only (menger's
+    /// does). With no `public_url`, a shell listening elsewhere is reachable
+    /// through whatever is in front of it, so it must name its proxy too.
+    pub shell_loopback: bool,
 }
 
 impl std::fmt::Debug for LoginOptions {
@@ -140,6 +144,7 @@ impl LoginOptions {
             return_origins: Vec::new(),
             limits: Limits::default(),
             allow_development_backends: false,
+            shell_loopback: true,
         }
     }
 
@@ -190,7 +195,11 @@ impl Wiring {
         // AUTH-24 #2: off loopback, a proxy in front makes every visitor one
         // client. Say which it is, or do not start.
         let public = opts.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", opts.shell_port));
-        if opts.identity.is_some() && !opts.trusted_proxies.configured() && !is_loopback_url(&public) {
+        let exposed = match &opts.public_url {
+            Some(p) => !is_loopback_url(p),
+            None => !opts.shell_loopback,
+        };
+        if opts.identity.is_some() && !opts.trusted_proxies.configured() && exposed {
             anyhow::bail!(
                 "the sign-in page at {public} needs --trusted-proxy: the edge in front of it (its address or network, e.g. the Docker network's subnet), \
                  or `none` when people connect to it directly — without it, every visitor behind a proxy is one client to the throttles"
@@ -451,6 +460,11 @@ mod tests {
         assert!(e.contains("--trusted-proxy"), "{e}");
         assert!(Wiring::new(opts("https://toy.example", &["172.18.0.0/16"], true)).is_ok());
         assert!(Wiring::new(opts("https://toy.example", &["none"], true)).is_ok(), "direct, said so");
+        // AUTH-25 N9: no public URL, but the shell listens off loopback.
+        let off = LoginOptions { identity: Some(mem.clone()), allow_development_backends: true, shell_loopback: false, ..LoginOptions::new(BRAND, 1, 2) };
+        assert!(Wiring::new(off).err().unwrap().to_string().contains("--trusted-proxy"));
+        let on = LoginOptions { identity: Some(mem.clone()), allow_development_backends: true, ..LoginOptions::new(BRAND, 1, 2) };
+        assert!(Wiring::new(on).is_ok(), "a loopback shell with no public URL");
     }
 
     #[test]
