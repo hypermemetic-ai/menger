@@ -48,7 +48,7 @@
 mod routes;
 pub use routes::CallbackQuery;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 
 use async_trait::async_trait;
@@ -65,9 +65,8 @@ use crate::page::{self, esc, heading, Body};
 use crate::sessions::{cookie, now, random_token};
 use crate::throttle::{Limits, Throttles, Verdict};
 
-/// How long a sign-in flow lasts, and how many wait at once.
+/// How long a sign-in flow lasts.
 const FLOW_SECS: i64 = 900;
-const MAX_FLOWS: usize = 20_000;
 /// How long an enrolled factor waits to be confirmed before it is deleted.
 const ENROLL_SECS: i64 = 600;
 /// How long an SSO lookup is remembered, and how many.
@@ -104,7 +103,8 @@ impl ReturnTo {
             if n == "/login/account" {
                 return Some(n.into());
             }
-            return (crate::web_login::safe_next(Some(n)) == n).then(|| n.to_string());
+            // AUTH-24 #12: a `Location` carries ASCII only.
+            return (crate::web_login::safe_next(Some(n)) == n).then(|| ascii_path(n));
         }
         let u = url::Url::parse(n).ok()?;
         let ok = matches!(u.scheme(), "http" | "https")
@@ -139,7 +139,7 @@ pub trait Continuation: Send + Sync + 'static {
     fn account(&self, headers: &HeaderMap) -> Option<AccountHolder>;
 
     /// The page, drawn around `body`.
-    fn draw(&self, body: Body) -> String;
+    fn draw(&self, body: Body) -> page::Page;
 }
 
 /// The page's settings.
@@ -192,11 +192,93 @@ struct Flow {
     next: String,
     oauth: Option<OAuth>,
     expires: i64,
+    /// The client that started it (its network, [`Throttles::client`]).
+    client: String,
+    /// AUTH-24 #11: the backend that started it, which finishes it — a swap
+    /// midway does not change who completes a sign-in.
+    backend: Arc<dyn IdentityBackend>,
 }
 
-impl Flow {
-    fn new(next: String) -> Self {
-        Self { step: Step::Idle, next, oauth: None, expires: now() + FLOW_SECS }
+/// AUTH-24 #4: the sign-in flows, bounded without scans and without one
+/// client's flood touching another's: each client holds at most
+/// `per_client` (its own oldest makes room), the table at most `total`
+/// (past it a new flow is refused, never another's evicted), and expiry
+/// runs off a wheel of one-minute buckets, so a flow is expired in O(1)
+/// amortised.
+struct FlowTable {
+    map: HashMap<String, Flow>,
+    by_client: HashMap<String, VecDeque<String>>,
+    wheel: BTreeMap<i64, Vec<String>>,
+    total: usize,
+    per_client: usize,
+}
+
+impl FlowTable {
+    fn new(total: usize, per_client: usize) -> Self {
+        Self { map: HashMap::new(), by_client: HashMap::new(), wheel: BTreeMap::new(), total, per_client: per_client.max(1) }
+    }
+
+    fn bucket(t: i64) -> i64 {
+        t.div_euclid(60)
+    }
+
+    fn forget(&mut self, key: &str) -> Option<Flow> {
+        let flow = self.map.remove(key)?;
+        if let Some(q) = self.by_client.get_mut(&flow.client) {
+            q.retain(|k| k != key);
+            if q.is_empty() {
+                self.by_client.remove(&flow.client);
+            }
+        }
+        Some(flow)
+    }
+
+    /// Drops every flow whose bucket has passed.
+    fn expire(&mut self, t: i64) {
+        while let Some((&b, _)) = self.wheel.first_key_value() {
+            if (b + 1) * 60 > t {
+                break;
+            }
+            let (_, keys) = self.wheel.pop_first().expect("a first bucket");
+            for k in keys {
+                if self.map.get(&k).is_some_and(|f| f.expires <= t) {
+                    self.forget(&k);
+                }
+            }
+        }
+    }
+
+    fn get_mut(&mut self, key: &str) -> Option<&mut Flow> {
+        let t = now();
+        if self.map.get(key).is_some_and(|f| f.expires <= t) {
+            self.forget(key);
+            return None;
+        }
+        self.map.get_mut(key)
+    }
+
+    /// Keeps a new flow, or refuses (the table is full of other flows).
+    fn insert(&mut self, key: String, flow: Flow) -> bool {
+        self.expire(now());
+        let client = flow.client.clone();
+        let mine = self.by_client.get(&client).map(|q| q.len()).unwrap_or(0);
+        if mine >= self.per_client {
+            let oldest = self.by_client.get(&client).and_then(|q| q.front().cloned());
+            if let Some(k) = oldest {
+                self.forget(&k);
+            }
+        }
+        if self.map.len() >= self.total {
+            return false;
+        }
+        self.wheel.entry(Self::bucket(flow.expires)).or_default().push(key.clone());
+        self.by_client.entry(client).or_default().push_back(key.clone());
+        self.map.insert(key, flow);
+        true
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
     }
 }
 
@@ -214,7 +296,7 @@ pub struct SignInPage {
     backend: RwLock<Arc<dyn IdentityBackend>>,
     cont: Arc<dyn Continuation>,
     throttles: Throttles,
-    flows: Mutex<HashMap<String, Flow>>,
+    flows: Mutex<FlowTable>,
     enrolling: Mutex<HashMap<String, PendingFactor>>,
     sso: Mutex<HashMap<String, (Option<Federated>, i64)>>,
     csrf_key: [u8; 32],
@@ -239,9 +321,9 @@ impl SignInPage {
             me: me.clone(),
             throttles: Throttles::new(cfg.limits),
             backend: RwLock::new(cfg.backend.clone()),
+            flows: Mutex::new(FlowTable::new(cfg.limits.flows_total, cfg.limits.flows_held_per_client)),
             cfg,
             cont,
-            flows: Mutex::new(HashMap::new()),
             enrolling: Mutex::new(HashMap::new()),
             sso: Mutex::new(HashMap::new()),
             csrf_key,
@@ -255,14 +337,12 @@ impl SignInPage {
         self.backend.read().unwrap().clone()
     }
 
-    /// Puts another backend behind the page, now. Sign-ins midway start
-    /// again (their steps were the old backend's); sessions already made
-    /// stay as they are, and keep refreshing and signing out through the
-    /// backend that made them; unconfirmed factors are still deleted at
-    /// theirs.
+    /// Puts another backend behind the page, now. Sign-ins midway finish
+    /// with the backend that started them (AUTH-24 #11); sessions already
+    /// made keep refreshing and signing out through the backend that made
+    /// them; unconfirmed factors are still deleted at theirs.
     pub fn swap(&self, next: Arc<dyn IdentityBackend>) {
         let old = std::mem::replace(&mut *self.backend.write().unwrap(), next);
-        self.flows.lock().unwrap().clear();
         self.sso.lock().unwrap().clear();
         tracing::info!(from = old.name(), to = self.backend().name(), "the sign-in page's identity backend was swapped");
     }
@@ -276,13 +356,21 @@ impl SignInPage {
         self.cfg.public_url.starts_with("https://")
     }
 
-    fn req(&self, headers: &HeaderMap, peer: &Peer) -> Req {
-        let flow_id = headers
+    /// The flow id this browser's cookie names.
+    fn cookie_flow(&self, headers: &HeaderMap) -> Option<String> {
+        headers
             .get(header::COOKIE)
             .and_then(|c| c.to_str().ok())
             .and_then(|c| cookie(c, &self.cfg.flow_cookie))
             .filter(|v| v.len() >= 32 && v.len() <= 64 && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
-            .map(str::to_string);
+            .map(str::to_string)
+    }
+
+    fn req(&self, headers: &HeaderMap, peer: &Peer) -> Req {
+        let flow_id = self.cookie_flow(headers);
+        if peer.is_none() {
+            crate::client_ip::warn_no_peer();
+        }
         let ip = self.cfg.trusted_proxies.client_ip(peer_ip(peer), headers);
         let user_agent = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()).map(|v| v.chars().take(512).collect());
         let foreign = headers
@@ -297,7 +385,7 @@ impl SignInPage {
     /// This browser's flow id — its cookie's, or a new one and the
     /// `Set-Cookie` that plants it.
     pub fn flow_id(&self, headers: &HeaderMap) -> (String, Option<HeaderValue>) {
-        match self.req(headers, &None).flow_id {
+        match self.cookie_flow(headers) {
             Some(id) => (id, None),
             None => {
                 let id = random_token();
@@ -327,46 +415,45 @@ impl SignInPage {
     }
 
     fn with_flow<R>(&self, id: &str, f: impl FnOnce(&mut Flow) -> R) -> Option<R> {
-        let mut flows = self.flows.lock().unwrap();
-        let k = Self::key(id);
-        match flows.get_mut(&k) {
-            Some(fl) if fl.expires > now() => Some(f(fl)),
-            Some(_) => {
-                flows.remove(&k);
-                None
-            }
-            None => None,
-        }
-    }
-
-    fn start_flow(&self, id: &str, next: String) {
-        let mut flows = self.flows.lock().unwrap();
-        let t = now();
-        if flows.len() >= MAX_FLOWS {
-            flows.retain(|_, f| f.expires > t);
-        }
-        while flows.len() >= MAX_FLOWS {
-            let Some(k) = flows.iter().min_by_key(|(_, f)| f.expires).map(|(k, _)| k.clone()) else { break };
-            flows.remove(&k);
-        }
-        flows.insert(Self::key(id), Flow::new(next));
+        self.flows.lock().unwrap().get_mut(&Self::key(id)).map(f)
     }
 
     /// A new flow under a fresh id, the browser's old one dropped — so a
     /// flow id another page planted in this browser never carries a
-    /// sign-in: the id and the `Set-Cookie` that hands it over.
-    fn fresh_flow(&self, old: Option<&str>, next: String) -> (String, HeaderValue) {
+    /// sign-in: the id and the `Set-Cookie` that hands it over. Throttled
+    /// per client; refused when the table is full (AUTH-24 #4).
+    #[allow(clippy::result_large_err)]
+    fn fresh_flow(&self, old: Option<&str>, next: String, r: &Req) -> Result<(String, HeaderValue), Response> {
+        let restart_id = old.map(str::to_string).unwrap_or_else(random_token);
+        if let Verdict::Wait(w) = self.throttles.flow(r.info.ip) {
+            tracing::info!("sign-in flows throttled for a client");
+            return Err(self.restart(&restart_id, &next, &Self::wait_words(w), StatusCode::TOO_MANY_REQUESTS));
+        }
         if let Some(o) = old {
             self.end_flow(o);
         }
         let id = random_token();
-        self.start_flow(&id, next);
+        let flow = Flow { step: Step::Idle, next: next.clone(), oauth: None, expires: now() + FLOW_SECS, client: self.throttles.client(r.info.ip), backend: self.backend() };
+        if !self.flows.lock().unwrap().insert(Self::key(&id), flow) {
+            tracing::warn!("the sign-in flow table is full: a new sign-in was refused");
+            return Err(self.restart(&restart_id, &next, "Sign-in is busy right now. Try again in a minute.", StatusCode::SERVICE_UNAVAILABLE));
+        }
         let set = self.flow_cookie_header(&id);
-        (id, set)
+        Ok((id, set))
     }
 
     fn end_flow(&self, id: &str) {
-        self.flows.lock().unwrap().remove(&Self::key(id));
+        self.flows.lock().unwrap().forget(&Self::key(id));
+    }
+
+    /// The backend a flow started with (the current one when it has none).
+    fn flow_backend(&self, id: &str) -> Arc<dyn IdentityBackend> {
+        self.with_flow(id, |f| f.backend.clone()).unwrap_or_else(|| self.backend())
+    }
+
+    /// How many flows are held (tests, metrics).
+    pub fn flows_held(&self) -> usize {
+        self.flows.lock().unwrap().len()
     }
 
     fn next_of(&self, id: &str) -> String {
@@ -412,10 +499,11 @@ impl SignInPage {
                 if email.is_none() { "primary" } else { "alt" }
             )
         });
-        let next_q = url::form_urlencoded::byte_serialize(next.as_bytes()).collect::<String>();
+        // AUTH-24 #4: a CSRF'd form, so no other page can start (or end) a
+        // flow in this browser.
         let social = caps.social.iter().map(|s| {
             format!(
-                r#"<a class="alt" href="/login/social?provider={}&amp;next={next_q}">{}Continue with {}</a>"#,
+                r#"<form method="post" action="/login/social"><input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="provider" value="{}"><input type="hidden" name="next" value="{next_e}"><button class="alt" type="submit">{}Continue with {}</button></form>"#,
                 s.name(),
                 crate::web_login::icon_for_label(s.label(), ""),
                 s.label()
@@ -539,13 +627,12 @@ impl SignInPage {
         let verifier = random_token();
         let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         let next = self.next_of(flow_id);
-        let url = match self.backend().federated_url(target, &self.redirect_uri, &state, &challenge, login_hint) {
+        let url = match self.flow_backend(flow_id).federated_url(target, &self.redirect_uri, &state, &challenge, login_hint) {
             Ok(u) => u,
             Err(e) => return self.failed(flow_id, &next, e),
         };
         let kept = self.with_flow(flow_id, |f| {
             f.oauth = Some(OAuth { state, verifier, expires: now() + 600 });
-            f.expires = f.expires.max(now() + 600);
         });
         if kept.is_none() {
             return self.restart(flow_id, "/", "That sign-in took too long. Start again.", StatusCode::BAD_REQUEST);
@@ -559,7 +646,7 @@ impl SignInPage {
 
     /// The backend signed someone in.
     async fn finish(&self, flow_id: &str, mut who: SignedIn) -> Response {
-        let backend = self.backend();
+        let backend = self.flow_backend(flow_id);
         let next = self.cfg.return_to.check(Some(&self.next_of(flow_id)));
         if let Some(meta) = who.ctx.metadata.as_object_mut() {
             meta.insert("auth_time".into(), Value::from(now()));
@@ -570,9 +657,6 @@ impl SignInPage {
             }
         }
         self.end_flow(flow_id);
-        if let Some(e) = who.user.email.as_deref() {
-            self.throttles.tried_right(&normalize(e));
-        }
         tracing::info!(principal = %who.ctx.principal().map(|p| p.to_string()).unwrap_or_default(), backend = backend.name(), method = %who.method, "signed in");
         self.cont.signed_in(who, backend, &next).await
     }
@@ -602,7 +686,7 @@ impl SignInPage {
             }
             IdentityError::MfaEnrollmentRequired { ticket, subject, enrolment } => {
                 if let Some(s) = &subject {
-                    self.remember_enrollment(s, &enrolment);
+                    self.remember_enrollment(s, &enrolment, self.flow_backend(flow_id));
                 }
                 set_code(ticket, CodeKind::EnrollAtSignIn, subject);
                 self.continue_page(flow_id, CodeKind::EnrollAtSignIn, Some(enrolment.as_ref()), None, StatusCode::OK)
@@ -672,8 +756,8 @@ impl SignInPage {
         }
     }
 
-    fn remember_enrollment(&self, subject: &str, e: &TotpEnrolment) {
-        let pending = PendingFactor { factor: e.factor.clone(), confirm: e.confirm.clone(), backend: self.backend(), expires: now() + ENROLL_SECS };
+    fn remember_enrollment(&self, subject: &str, e: &TotpEnrolment, backend: Arc<dyn IdentityBackend>) {
+        let pending = PendingFactor { factor: e.factor.clone(), confirm: e.confirm.clone(), backend, expires: now() + ENROLL_SECS };
         let old = self.enrolling.lock().unwrap().insert(subject.to_string(), pending);
         if let Some(old) = old {
             self.discard(old);
@@ -705,7 +789,7 @@ impl SignInPage {
                 tracing::warn!(kind = e.kind(), "an unconfirmed TOTP factor could not be deleted");
             }
         }
-        self.flows.lock().unwrap().retain(|_, f| f.expires > t);
+        self.flows.lock().unwrap().expire(t);
     }
 
     fn sweep_later(self: &Arc<Self>) {
@@ -721,6 +805,22 @@ impl SignInPage {
             }
         });
     }
+}
+
+/// A path with every non-ASCII character percent-encoded (UTF-8).
+fn ascii_path(p: &str) -> String {
+    let mut out = String::with_capacity(p.len());
+    for c in p.chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            let mut buf = [0u8; 4];
+            for b in c.encode_utf8(&mut buf).bytes() {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        }
+    }
+    out
 }
 
 /// An address as the throttles key it.
@@ -793,6 +893,7 @@ mod tests {
             assert!(clean_code(bad).is_none(), "{bad}");
         }
         assert_eq!(social_of(Some("GitHub")), Some(Social::GitHub));
+        assert_eq!(ReturnTo::new(["https://a.example"]).check(Some("/é?x=ü")), "/%C3%A9?x=%C3%BC");
         assert_eq!(social_of(Some("myspace")), None);
     }
 }

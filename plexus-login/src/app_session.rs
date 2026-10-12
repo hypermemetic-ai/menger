@@ -11,8 +11,14 @@
 //!   the one that made them. Every 30 s, an access token within two minutes
 //!   of expiry is refreshed through its backend. A refused refresh — the
 //!   session revoked or expired at the backend — ends the app's session
-//!   too, which closes its sockets (AUTH-11). The app's session ending
-//!   (sign-out, expiry) drops the tokens and ends the backend's session.
+//!   too, which closes its sockets (AUTH-11). AUTH-24 #12: so does a refresh
+//!   that cannot be made (the backend unavailable) once the access token
+//!   has expired — fail closed. The app's session ending (sign-out,
+//!   expiry) drops the tokens and ends the backend's session.
+//! - **Sign-out** (AUTH-24 #5) ends the app's session first, at once, and
+//!   then revokes at the backend off the request, with retries
+//!   ([`TokenStore::revoke_later`]): a dropped request never leaves the
+//!   session alive.
 //!
 //! AUTH-17 goes further: the browser's credential *is* the identity
 //! provider's token and the app mints no session. This is the step before:
@@ -83,15 +89,20 @@ impl TokenStore {
         self.len() == 0
     }
 
-    /// The session signs out: its tokens dropped and its backend session
-    /// ended (best effort, logged).
-    pub async fn sign_out(&self, session_key: &str) {
+    /// The session signs out: its tokens dropped now, and its backend
+    /// session ended off the request, retried a few times (logged).
+    pub fn revoke_later(&self, session_key: &str) {
         let held = self.map.lock().unwrap().remove(session_key);
         if let Some(h) = held {
-            match h.backend.sign_out(&h.tokens).await {
-                Ok(()) => tracing::info!(backend = h.backend.name(), "the identity backend's session was ended"),
-                Err(e) => tracing::warn!(backend = h.backend.name(), kind = e.kind(), "the identity backend's session could not be ended"),
-            }
+            tokio::spawn(revoke(h));
+        }
+    }
+
+    /// [`TokenStore::revoke_later`], awaited (the refresher's own use).
+    async fn sign_out(&self, session_key: &str) {
+        let held = self.map.lock().unwrap().remove(session_key);
+        if let Some(h) = held {
+            revoke(h).await;
         }
     }
 
@@ -137,7 +148,7 @@ impl TokenStore {
                     self.end(&key);
                     out.ended += 1;
                 }
-                Err(IdentityError::Unavailable(_) | IdentityError::RateLimited { .. }) => {
+                Err(IdentityError::Unavailable(_) | IdentityError::RateLimited { .. }) if h.tokens.expires_at > now() => {
                     tracing::warn!(backend = h.backend.name(), "a session could not be refreshed now; trying again next pass");
                 }
                 Err(e) => {
@@ -153,6 +164,20 @@ impl TokenStore {
     fn end(&self, key: &str) {
         self.map.lock().unwrap().remove(key);
         self.sessions.end_key(key);
+    }
+}
+
+/// Ends a backend session: three tries, a second and then four apart.
+async fn revoke(h: Held) {
+    for (i, pause) in [0u64, 1, 4].into_iter().enumerate() {
+        tokio::time::sleep(std::time::Duration::from_secs(pause)).await;
+        match h.backend.sign_out(&h.tokens).await {
+            Ok(()) => {
+                tracing::info!(backend = h.backend.name(), "the identity backend's session was ended");
+                return;
+            }
+            Err(e) => tracing::warn!(backend = h.backend.name(), kind = e.kind(), attempt = i + 1, "the identity backend's session could not be ended"),
+        }
     }
 }
 
@@ -196,7 +221,7 @@ impl Continuation for AppContinuation {
         })
     }
 
-    fn draw(&self, body: Body) -> String {
+    fn draw(&self, body: Body) -> page::Page {
         page::render(&self.chrome, body)
     }
 }

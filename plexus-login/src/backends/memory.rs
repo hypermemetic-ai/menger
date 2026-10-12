@@ -193,6 +193,10 @@ impl IdentityBackend for Memory {
         "memory"
     }
 
+    fn for_development(&self) -> bool {
+        true
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities { email_code: true, password: false, social: Social::ALL.to_vec(), sso_by_domain: false, totp: true, refresh: false }
     }

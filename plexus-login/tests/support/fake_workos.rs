@@ -68,6 +68,10 @@ pub struct FakeState {
     n: u64,
     /// The access tokens' lifetime.
     pub token_secs: i64,
+    /// How long `sessions/revoke` takes.
+    pub revoke_delay_ms: u64,
+    /// `refresh_token` answers 503.
+    pub refresh_unavailable: bool,
     iss: String,
 }
 
@@ -119,6 +123,16 @@ impl FakeWorkOs {
 
     pub fn sends_to(&self, email: &str) -> Vec<Value> {
         self.state.lock().unwrap().sends.iter().filter(|s| s["email"] == email).cloned().collect()
+    }
+
+    /// How many authenticate calls used `grant`.
+    pub fn auths(&self, grant: &str) -> usize {
+        self.state.lock().unwrap().auths.iter().filter(|a| a["grant_type"] == grant).count()
+    }
+
+    /// How many calls of this kind were made (`organizations:<domain>`, …).
+    pub fn calls_starting(&self, prefix: &str) -> usize {
+        self.state.lock().unwrap().calls.iter().filter(|c| c.starts_with(prefix)).count()
     }
 
     pub fn last_auth(&self, grant: &str) -> Option<Value> {
@@ -318,6 +332,7 @@ async fn authenticate(State(w): State<FakeWorkOs>, Json(b): Json<Value>) -> Resp
             }
             _ => bad(json!({ "code": "invalid_one_time_code", "message": "Invalid one-time code." })),
         },
+        "refresh_token" if st.refresh_unavailable => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "message": "unavailable" }))).into_response(),
         "refresh_token" => {
             let Some((email, sid)) = st.refresh.remove(&s("refresh_token")) else {
                 return bad(json!({ "error": "invalid_grant", "error_description": "Invalid refresh token." }));
@@ -450,6 +465,8 @@ async fn revoke(State(w): State<FakeWorkOs>, h: HeaderMap, Json(b): Json<Value>)
     if !bearer_ok(&h) {
         return unauthorized();
     }
+    let delay = w.state.lock().unwrap().revoke_delay_ms;
+    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
     let mut st = w.state.lock().unwrap();
     st.calls.push("revoke".into());
     st.revoked.insert(b["session_id"].as_str().unwrap_or_default().to_string());

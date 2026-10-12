@@ -1472,8 +1472,8 @@ and stay the default until `--identity` is set.
 
 | flag | |
 |---|---|
-| `--identity <spec>` | the backend (`MENGER_IDENTITY`); its provider joins the gate's, so its tokens open the socket as a bearer |
-| `--trusted-proxy <cidr>` | a proxy whose `X-Forwarded-For` is believed for the client's IP (repeatable); none: the TCP peer is the client |
+| `--identity <spec>` | the backend (`MENGER_IDENTITY`); its provider joins the gate's, so its tokens open the socket as a bearer; `memory` and `plexus-idp` only with `--env test` |
+| `--trusted-proxy <cidr>\|none` | the edge whose `X-Forwarded-For` is believed for the client's IP (repeatable), or `none` when people connect directly; with `--identity` off loopback one is required (AUTH-24) — behind the infra's Caddy, the edge's address on the `edge` Docker network |
 | `--return-origin <origin>` | another origin a sign-in may return to (repeatable) |
 
 The WorkOS environment lists `<public-url>/login/callback` as a redirect URI.

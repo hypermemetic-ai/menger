@@ -30,7 +30,7 @@ async fn the_page_offers_exactly_what_the_backend_can_do() {
         assert_eq!(page.body.contains(r#"action="/login/email""#), caps.email_code, "{}", under.name());
         assert_eq!(page.body.contains(r#"action="/login/password""#), caps.password, "{}", under.name());
         for s in Social::ALL {
-            assert_eq!(page.body.contains(&format!("/login/social?provider={}", s.name())), caps.social.contains(&s), "{} {}", under.name(), s.name());
+            assert_eq!(page.body.contains(&format!(r#"name="provider" value="{}""#, s.name())), caps.social.contains(&s), "{} {}", under.name(), s.name());
         }
         assert!(!page.body.to_lowercase().contains("authkit"), "never AuthKit");
         // Form hygiene: not stored, not framed, a strict CSP, the flow
@@ -215,9 +215,8 @@ async fn a_social_button_goes_out_and_back_bound_to_this_browser() {
     for under in code_backends().await {
         let a = app(under.clone()).await;
         let b = Browser::new(&a);
-        b.get("/login").await;
-        let out = b.get("/login/social?provider=google&next=%2Fapp%2Fg").await;
-        assert_eq!(out.status, 303);
+        let out = b.social("google", "/app/g").await;
+        assert_eq!(out.status, 303, "{}", out.body);
         let to = out.location.clone().unwrap();
         if let Under::WorkOs(f, _) = &under {
             // Straight to the provider through WorkOS: provider=GoogleOAuth,
@@ -245,8 +244,12 @@ async fn a_social_button_goes_out_and_back_bound_to_this_browser() {
             again.jar.lock().unwrap().insert(k.clone(), v.clone());
         }
         assert_eq!(again.get(&back).await.status, 400, "taken once");
-        // A provider the backend does not offer.
-        assert_eq!(b.get("/login/social?provider=myspace").await.status, 404);
+        // A provider the backend does not offer; and the button is a form of
+        // this page's: a link from elsewhere starts nothing.
+        let c = Browser::new(&a);
+        assert_eq!(c.social("myspace", "/").await.status, 404);
+        assert_eq!(c.get("/login/social?provider=google").await.status, 405);
+        assert_eq!(c.post("/login/social", &[("provider", "google")]).await.status, 403);
     }
 }
 
@@ -255,7 +258,7 @@ async fn a_social_button_goes_out_and_back_bound_to_this_browser() {
 #[tokio::test]
 async fn plexus_idp_signs_in_with_a_password_and_backs_off() {
     let under = Under::plexus_idp().await;
-    let limits = Limits { try_per_address: Backoff { free: 2, base: 60, cap: 60, window: 600 }, ..Limits::default() };
+    let limits = Limits { try_per_address_client: Backoff { free: 2, base: 60, cap: 60, window: 600 }, ..Limits::default() };
     let a = app_with(under.clone(), Tweaks { limits, ..Tweaks::default() }).await;
     let b = Browser::new(&a);
     let csrf = b.csrf().await;
@@ -294,7 +297,8 @@ async fn an_sso_domain_goes_to_its_idp_and_a_pending_one_does_not() {
     assert_eq!(r.status, 303, "{}", r.body);
     let to = r.location.unwrap();
     let q: std::collections::HashMap<String, String> = url::Url::parse(&to).unwrap().query_pairs().into_owned().collect();
-    assert_eq!((q["organization_id"].as_str(), q["login_hint"].as_str()), ("org_SSO", "ceo@sso.example"));
+    assert_eq!(q["organization_id"].as_str(), "org_SSO");
+    assert!(!q.contains_key("login_hint") && !to.contains("ceo%40sso.example") && !to.contains("ceo@sso.example"), "AUTH-24 #9: no address in the URL");
     let back = b.get(&to).await.location.unwrap();
     let done = b.get(&back).await;
     assert_eq!((done.status, done.location.as_deref()), (303, Some("/app/s")), "{}", done.body);
@@ -344,8 +348,7 @@ async fn every_workos_step_is_drawn_on_our_page() {
 
     // email_verification_required (GitHub's account is unverified).
     let b = Browser::new(&a);
-    b.get("/login").await;
-    let back = b.get(&b.get("/login/social?provider=github").await.location.unwrap()).await.location.unwrap();
+    let back = b.get(&b.social("github", "/").await.location.unwrap()).await.location.unwrap();
     let verify = b.get(&back).await;
     assert!(verify.body.contains("Verify your email"), "{}", verify.body);
     assert_eq!(b.post("/login/continue", &[("csrf", &verify.csrf()), ("code", "111111")]).await.status, 401);
@@ -354,8 +357,7 @@ async fn every_workos_step_is_drawn_on_our_page() {
 
     // organization_selection_required (Apple's account is in two).
     let b = Browser::new(&a);
-    b.get("/login").await;
-    let back = b.get(&b.get("/login/social?provider=apple").await.location.unwrap()).await.location.unwrap();
+    let back = b.get(&b.social("apple", "/").await.location.unwrap()).await.location.unwrap();
     let pick = b.get(&back).await;
     assert!(pick.body.contains("Choose an organization") && pick.body.contains("Bar &lt;Corp&gt;"), "{}", pick.body);
     let r = b.post("/login/choose", &[("csrf", &pick.csrf()), ("index", "1")]).await;
@@ -416,6 +418,13 @@ async fn sign_out_revokes_and_a_revoked_session_ends_at_the_next_refresh() {
     let before = under.fake().state.lock().unwrap().revoked.len();
     let r = c.post("/logout", &[("next", "https://evil.example/")]).await;
     assert_eq!((r.status, r.location.as_deref()), (303, Some("/login")));
+    // The session ended at once; WorkOS is told just after (AUTH-24 #5).
+    for _ in 0..40 {
+        if under.fake().state.lock().unwrap().revoked.len() == before + 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     assert_eq!(under.fake().state.lock().unwrap().revoked.len(), before + 1);
     assert!(tokens.is_empty());
     let d = Browser::new(&a);
@@ -510,8 +519,7 @@ async fn return_to_stays_on_this_origin_or_a_listed_one() {
     }
     // The social round trip checks it too.
     let b = Browser::new(&a);
-    b.get("/login").await;
-    let out = b.get("/login/social?provider=github&next=https%3A%2F%2Fevil.example%2F").await;
+    let out = b.social("github", "https://evil.example/").await;
     let done = b.get(&out.location.unwrap()).await;
     assert_eq!(done.location.as_deref(), Some("/"));
 }
@@ -519,11 +527,12 @@ async fn return_to_stays_on_this_origin_or_a_listed_one() {
 #[tokio::test]
 async fn codes_sent_and_tried_are_throttled_per_address_and_per_ip_through_trusted_proxies_only() {
     let limits = Limits {
-        send_per_address: Rate { max: 2, window: 600 },
-        send_per_ip: Rate { max: 3, window: 600 },
-        try_per_address: Backoff { free: 3, base: 60, cap: 600, window: 3600 },
-        try_per_ip: Backoff { free: 100, base: 60, cap: 600, window: 3600 },
+        send_per_address_client: Rate { max: 2, window: 600 },
+        send_per_client: Rate { max: 3, window: 600 },
+        try_per_address_client: Backoff { free: 3, base: 60, cap: 600, window: 3600 },
+        try_per_client: Backoff { free: 100, base: 60, cap: 600, window: 3600 },
         totp_per_user: Backoff { free: 3, base: 60, cap: 600, window: 3600 },
+        ..Limits::default()
     };
     let under = Under::workos().await;
     // Behind a trusted proxy (the test's own 127.0.0.1): X-Forwarded-For
@@ -538,10 +547,12 @@ async fn codes_sent_and_tried_are_throttled_per_address_and_per_ip_through_trust
             b.post("/login/email", &[("csrf", &csrf), ("email", email)]).await.status
         }
     };
-    // Per address: two codes, then a wait — whichever IP asks.
+    // Per (address, client): two codes, then a wait — but another client
+    // (the address's owner) can still ask (AUTH-24 #3).
     assert_eq!(send("198.51.100.1", "t1@example.test").await, 200);
-    assert_eq!(send("198.51.100.2", "t1@example.test").await, 200);
-    assert_eq!(send("198.51.100.3", "t1@example.test").await, 429);
+    assert_eq!(send("198.51.100.1", "t1@example.test").await, 200);
+    assert_eq!(send("198.51.100.1", "t1@example.test").await, 429);
+    assert_eq!(send("198.51.100.2", "t1@example.test").await, 200, "the owner is never out of sends");
     // Per IP: three sends from one client, then a wait.
     assert_eq!(send("203.0.113.9", "t2@example.test").await, 200);
     assert_eq!(send("203.0.113.9", "t3@example.test").await, 200);
@@ -557,6 +568,8 @@ async fn codes_sent_and_tried_are_throttled_per_address_and_per_ip_through_trust
     // Not behind a trusted proxy: X-Forwarded-For is ignored, the peer is
     // the client.
     let plain = app_with(Under::workos().await, Tweaks { limits, ..Tweaks::default() }).await;
+    // (Loopback, so no --trusted-proxy is needed; an X-Forwarded-For from an
+    // untrusted peer is logged once.)
     let mut statuses = Vec::new();
     for (i, xff) in ["1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"].iter().enumerate() {
         let mut b = Browser::new(&plain);
@@ -566,8 +579,8 @@ async fn codes_sent_and_tried_are_throttled_per_address_and_per_ip_through_trust
     }
     assert_eq!(statuses, [200, 200, 200, 429], "spoofed addresses are one peer");
 
-    // Codes tried: three wrong, then the address is locked — even for the
-    // right code, from anywhere.
+    // Codes tried: three wrong, then this client is locked out of the
+    // address — even for the right code.
     let b = Browser::new(&a);
     let csrf = b.csrf().await;
     let sent = b.post("/login/email", &[("csrf", &csrf), ("email", "locked@example.test")]).await;
@@ -612,7 +625,7 @@ async fn the_backend_swaps_without_a_restart_and_sessions_survive_it() {
     let workos = Under::workos_with(fake_workos::KEY, vec![Social::GitHub]).await;
     assert!(a.wired.swap_identity(workos.backend()));
     let page = Browser::new(&a).get("/login").await;
-    assert!(page.body.contains("provider=github") && !page.body.contains("provider=google"), "the new backend's capabilities");
+    assert!(page.body.contains(r#"value="github""#) && !page.body.contains(r#"value="google""#), "the new backend's capabilities");
     assert_eq!(b.me().await.unwrap()["principal"], principal, "a session made before the swap stands");
     let c = Browser::new(&a);
     assert_eq!(c.sign_in_by_email(&workos, "after@example.test", "/").await.status, 303);
@@ -658,8 +671,7 @@ async fn no_code_token_address_or_key_is_ever_logged() {
     a.login.tokens().unwrap().refresh_due(100_000).await;
     b.post("/logout", &[]).await;
     let s = Browser::new(&a);
-    s.get("/login").await;
-    let back = s.get(&s.get("/login/social?provider=google").await.location.unwrap()).await.location.unwrap();
+    let back = s.get(&s.social("google", "/").await.location.unwrap()).await.location.unwrap();
     s.get(&back).await;
     let o = Browser::new(&a);
     let csrf = o.csrf().await;

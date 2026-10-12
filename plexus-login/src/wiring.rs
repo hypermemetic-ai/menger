@@ -96,6 +96,10 @@ pub struct LoginOptions {
     pub return_origins: Vec<String>,
     /// AUTH-22: the sign-in's throttles.
     pub limits: Limits,
+    /// AUTH-24 #8: whether a development backend (`memory`, `plexus-idp`)
+    /// may sign people in here — the app decides where (menger: only
+    /// `--env test`, as the dev sign-in).
+    pub allow_development_backends: bool,
 }
 
 impl std::fmt::Debug for LoginOptions {
@@ -135,6 +139,7 @@ impl LoginOptions {
             trusted_proxies: TrustedProxies::default(),
             return_origins: Vec::new(),
             limits: Limits::default(),
+            allow_development_backends: false,
         }
     }
 
@@ -173,6 +178,23 @@ impl Wiring {
             if !opts.providers.iter().any(|q| q.name() == p.name()) {
                 opts.providers.push(p);
             }
+        }
+        if let Some(b) = &opts.identity {
+            if b.for_development() && !opts.allow_development_backends {
+                anyhow::bail!(
+                    "--identity {}: a development backend (it signs anyone in, or trusts a local issuer); allowed only where the app allows it (menger: --env test)",
+                    b.name()
+                );
+            }
+        }
+        // AUTH-24 #2: off loopback, a proxy in front makes every visitor one
+        // client. Say which it is, or do not start.
+        let public = opts.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", opts.shell_port));
+        if opts.identity.is_some() && !opts.trusted_proxies.configured() && !is_loopback_url(&public) {
+            anyhow::bail!(
+                "the sign-in page at {public} needs --trusted-proxy: the edge in front of it (its address or network, e.g. the Docker network's subnet), \
+                 or `none` when people connect to it directly — without it, every visitor behind a proxy is one client to the throttles"
+            );
         }
         if opts.require && opts.providers.is_empty() && opts.identity.is_none() {
             anyhow::bail!("--require-login needs at least one --auth-provider to log in with");
@@ -351,6 +373,16 @@ impl<A: LoginAccess> Wired<A> {
     }
 }
 
+/// Whether a URL's host is this machine (127.0.0.0/8, ::1, localhost).
+fn is_loopback_url(url: &str) -> bool {
+    match url::Url::parse(url).ok().and_then(|u| u.host().map(|h| h.to_owned())) {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost") || d.to_ascii_lowercase().ends_with(".localhost"),
+        None => false,
+    }
+}
+
 /// The origins a shell on `shell_port` is reached at: `127.0.0.1`,
 /// `localhost`, and `public_url`'s.
 pub fn shell_origins(shell_port: u16, public_url: &str) -> Vec<String> {
@@ -399,6 +431,26 @@ mod tests {
         assert!(LoginOptions::new(BRAND, 1, 2).with_providers(["ldap=x"]).is_err());
         let off_loopback = LoginOptions::new(BRAND, 1, 2).with_providers(["idp=http://idp.example,plexus:toy"]).unwrap();
         assert!(Wiring::new(off_loopback).is_err());
+    }
+
+    #[test]
+    fn a_page_off_loopback_must_name_its_proxy_and_development_backends_are_refused() {
+        use crate::backends::memory::{Memory, MemoryOptions};
+        let mem: Arc<dyn IdentityBackend> = Arc::new(Memory::new(MemoryOptions::default()));
+        let opts = |public: &str, proxies: &[&str], dev: bool| LoginOptions {
+            identity: Some(mem.clone()),
+            public_url: Some(public.into()),
+            trusted_proxies: TrustedProxies::parse(proxies.iter().copied()).unwrap(),
+            allow_development_backends: dev,
+            ..LoginOptions::new(BRAND, 1, 2)
+        };
+        let e = Wiring::new(opts("http://127.0.0.1:2", &[], false)).err().unwrap().to_string();
+        assert!(e.contains("development backend"), "{e}");
+        assert!(Wiring::new(opts("http://127.0.0.1:2", &[], true)).is_ok(), "loopback: the peer is the client");
+        let e = Wiring::new(opts("https://toy.example", &[], true)).err().unwrap().to_string();
+        assert!(e.contains("--trusted-proxy"), "{e}");
+        assert!(Wiring::new(opts("https://toy.example", &["172.18.0.0/16"], true)).is_ok());
+        assert!(Wiring::new(opts("https://toy.example", &["none"], true)).is_ok(), "direct, said so");
     }
 
     #[test]

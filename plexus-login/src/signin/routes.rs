@@ -5,6 +5,7 @@ use axum::extract::{Form, Query, State};
 use serde::Deserialize;
 
 use super::*;
+use crate::throttle::Reservation;
 
 #[derive(Deserialize)]
 pub struct CsrfForm {
@@ -59,7 +60,9 @@ pub struct RemoveForm {
 }
 
 #[derive(Deserialize)]
-pub struct SocialQuery {
+pub struct SocialForm {
+    #[serde(default)]
+    csrf: String,
     provider: Option<String>,
     next: Option<String>,
 }
@@ -81,7 +84,7 @@ pub struct PageQuery {
 fn forbidden() -> Response {
     page::respond(
         StatusCode::FORBIDDEN,
-        "<!doctype html><title>Forbidden</title><p>Forbidden: that form did not come from this sign-in page. Go back to the sign-in page and start again.</p>".into(),
+        page::Page::plain("<!doctype html><title>Forbidden</title><p>Forbidden: that form did not come from this sign-in page. Go back to the sign-in page and start again.</p>".into()),
     )
 }
 
@@ -109,7 +112,7 @@ impl SignInPage {
             .route("/login/password", post(password))
             .route("/login/continue", post(continue_code))
             .route("/login/choose", post(choose))
-            .route("/login/social", get(social))
+            .route("/login/social", post(social))
             .route("/login/account", get(account))
             .route("/login/account/totp", post(enroll))
             .route("/login/account/totp/confirm", post(confirm))
@@ -128,7 +131,7 @@ impl SignInPage {
 
     /// Whether a callback's `state` is this browser's round trip.
     pub fn owns_callback(&self, headers: &HeaderMap, state: Option<&str>) -> bool {
-        let (Some(id), Some(state)) = (self.req(headers, &None).flow_id, state) else { return false };
+        let (Some(id), Some(state)) = (self.cookie_flow(headers), state) else { return false };
         self.with_flow(&id, |f| f.oauth.as_ref().is_some_and(|o| constant_eq(o.state.as_bytes(), state.as_bytes()))).unwrap_or(false)
     }
 
@@ -166,7 +169,7 @@ impl SignInPage {
         let Some(code) = q.code.filter(|c| !c.is_empty() && c.len() <= 512) else {
             return self.restart(&id, &next, "The sign-in service sent back nothing to sign in with.", StatusCode::BAD_REQUEST);
         };
-        let r2 = self.backend().complete_federated(&code, &oauth.verifier, &self.redirect_uri, &r.info).await;
+        let r2 = self.flow_backend(&id).complete_federated(&code, &oauth.verifier, &self.redirect_uri, &r.info).await;
         self.answer(&id, r2, |p| p.restart(&id, &next, "That sign-in didn't work. Start again.", StatusCode::UNAUTHORIZED)).await
     }
 
@@ -182,21 +185,23 @@ impl SignInPage {
         Ok((r, id))
     }
 
-    /// A wrong code against `key` (an address, a username, a flow): the
-    /// words, with the wait once the backoff locks.
-    fn wrong_words(&self, key: &str, r: &Req) -> (String, StatusCode) {
-        match self.throttles.tried_wrong(key, r.info.ip) {
-            Verdict::Wait(w) => (Self::wait_words(w), StatusCode::TOO_MANY_REQUESTS),
-            Verdict::Allow => (WRONG.into(), StatusCode::UNAUTHORIZED),
+    /// AUTH-24 #1: what a backend's answer does to the attempt reserved
+    /// for it. A wrong code stays counted; a right one (or a first factor
+    /// that was right, asking for a next step) is refunded and forgiven; an
+    /// answer that is no verdict (the backend unavailable, refusing this
+    /// app) is refunded.
+    fn settle<T>(&self, res: Reservation, outcome: &Result<T, IdentityError>) {
+        match outcome {
+            Err(IdentityError::InvalidCode) => drop(res),
+            Err(IdentityError::Unavailable(_) | IdentityError::RateLimited { .. } | IdentityError::Misconfigured(_) | IdentityError::Unsupported(_)) => self.throttles.refund(res, false),
+            _ => self.throttles.refund(res, true),
         }
     }
+}
 
-    fn wrong_totp(&self, key: &str, r: &Req) -> (String, StatusCode) {
-        match self.throttles.totp_wrong(key, r.info.ip) {
-            Verdict::Wait(w) => (Self::wait_words(w), StatusCode::TOO_MANY_REQUESTS),
-            Verdict::Allow => (WRONG.into(), StatusCode::UNAUTHORIZED),
-        }
-    }
+/// The words for a reservation refused.
+fn wait_page_words(w: i64) -> String {
+    SignInPage::wait_words(w)
 }
 
 /// `GET /login` of [`SignInPage::standalone_router`].
@@ -230,12 +235,17 @@ async fn email(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer,
         tracing::info!("a code send throttled");
         return p.restart(&id, &next, &SignInPage::wait_words(w), StatusCode::TOO_MANY_REQUESTS);
     }
-    let (id, set) = p.fresh_flow(Some(&id), next.clone());
+    let (id, set) = match p.fresh_flow(Some(&id), next.clone(), &r) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
     p.sweep_later();
     match p.sso_for(&domain).await {
         // Revealing that a domain has SSO is the trade-off every SSO
-        // sign-in makes; whether an address has an account is not.
-        Ok(Some(target)) => p.federated(&id, &target, Some(&address), Some(set)),
+        // sign-in makes; whether an address has an account is not. The
+        // address stays out of the URL (AUTH-24 #9): the organization
+        // routes, and the IdP asks for the account itself.
+        Ok(Some(target)) => p.federated(&id, &target, None, Some(set)),
         Ok(None) if p.backend().sends_codes() => with_cookie(send_and_ask(&p, &id, address, r.info), Some(set)),
         // An email field for SSO alone: any other address is told so, the
         // same words for any address.
@@ -248,13 +258,13 @@ async fn email(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer,
 /// address, at the same speed.
 fn send_and_ask(p: &Arc<SignInPage>, id: &str, address: String, info: RequestInfo) -> Response {
     p.with_flow(id, |f| f.step = Step::CodeSent { email: address.clone() });
-    let backend = p.backend();
+    let backend = p.flow_backend(id);
     let to = address.clone();
     tokio::spawn(async move {
         match backend.send_email_code(&to, &info).await {
             Ok(()) => tracing::info!(backend = backend.name(), "the backend took a sign-in code request"),
-            Err(refused @ IdentityError::Misconfigured(_)) => {
-                tracing::error!(backend = backend.name(), problem = ?refused, "no sign-in code was sent: the backend refuses this app's request")
+            Err(IdentityError::Misconfigured(problem)) => {
+                tracing::error!(backend = backend.name(), %problem, "no sign-in code was sent: the backend refuses this app's request")
             }
             Err(e) => tracing::warn!(backend = backend.name(), refusal = e.kind(), "no sign-in code was sent"),
         }
@@ -290,18 +300,19 @@ async fn code(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, 
         _ => None,
     });
     let Some(Some(address)) = found else { return p.restart(&id, "/", STALE, StatusCode::BAD_REQUEST) };
-    if let Verdict::Wait(w) = p.throttles.may_try(&address, r.info.ip) {
-        return p.email_code_page(&id, &address, Some(&SignInPage::wait_words(w)), StatusCode::TOO_MANY_REQUESTS);
-    }
-    let Some(c) = clean_code(&f.code) else {
-        let (words, status) = p.wrong_words(&address, &r);
-        return p.email_code_page(&id, &address, Some(&words), status);
+    // AUTH-24 #1: the guess is counted before it is made.
+    let reserved = match p.throttles.reserve_code(&address, r.info.ip) {
+        Ok(x) => x,
+        Err(w) => return p.email_code_page(&id, &address, Some(&wait_page_words(w)), StatusCode::TOO_MANY_REQUESTS),
     };
-    let res = p.backend().verify_email_code(&address, &c, &r.info).await;
+    let Some(c) = clean_code(&f.code) else {
+        return p.email_code_page(&id, &address, Some(WRONG), StatusCode::UNAUTHORIZED);
+    };
+    let res = p.flow_backend(&id).verify_email_code(&address, &c, &r.info).await;
+    p.settle(reserved, &res);
     p.answer(&id, res, |p| {
-        let (words, status) = p.wrong_words(&address, &r);
-        tracing::info!(throttled = status == StatusCode::TOO_MANY_REQUESTS, "a wrong email code");
-        p.email_code_page(&id, &address, Some(&words), status)
+        tracing::info!("a wrong email code");
+        p.email_code_page(&id, &address, Some(WRONG), StatusCode::UNAUTHORIZED)
     })
     .await
 }
@@ -321,20 +332,17 @@ async fn password(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Pe
         return p.restart(&id, &next, "Enter your username and password.", StatusCode::BAD_REQUEST);
     }
     let key = format!("user:{user}");
-    if let Verdict::Wait(w) = p.throttles.may_try(&key, r.info.ip) {
-        return p.restart(&id, &next, &SignInPage::wait_words(w), StatusCode::TOO_MANY_REQUESTS);
-    }
-    let (id, set) = p.fresh_flow(Some(&id), next.clone());
-    let res = p.backend().password(f.username.trim(), &f.password, &r.info).await;
-    let resp = p
-        .answer(&id, res, |p| {
-            let words = match p.throttles.tried_wrong(&key, r.info.ip) {
-                Verdict::Wait(w) => SignInPage::wait_words(w),
-                Verdict::Allow => "Wrong username or password.".into(),
-            };
-            p.restart(&id, &next, &words, StatusCode::UNAUTHORIZED)
-        })
-        .await;
+    let (id, set) = match p.fresh_flow(Some(&id), next.clone(), &r) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
+    let reserved = match p.throttles.reserve_code(&key, r.info.ip) {
+        Ok(x) => x,
+        Err(w) => return with_cookie(p.restart(&id, &next, &wait_page_words(w), StatusCode::TOO_MANY_REQUESTS), Some(set)),
+    };
+    let res = p.flow_backend(&id).password(f.username.trim(), &f.password, &r.info).await;
+    p.settle(reserved, &res);
+    let resp = p.answer(&id, res, |p| p.restart(&id, &next, "Wrong username or password.", StatusCode::UNAUTHORIZED)).await;
     with_cookie(resp, Some(set))
 }
 
@@ -352,21 +360,17 @@ async fn continue_code(State(p): State<Arc<SignInPage>>, headers: HeaderMap, pee
     let Some(Some((ticket, kind, subject))) = found else { return p.restart(&id, "/", STALE, StatusCode::BAD_REQUEST) };
     let totp = matches!(kind, CodeKind::Totp | CodeKind::EnrollAtSignIn);
     let key = subject.clone().unwrap_or_else(|| format!("flow:{}", SignInPage::key(&id)));
-    let wait = if totp { p.throttles.may_try_totp(&key, r.info.ip) } else { p.throttles.may_try(&key, r.info.ip) };
+    let reserved = if totp { p.throttles.reserve_totp(&key, r.info.ip) } else { p.throttles.reserve_code(&key, r.info.ip) };
     // A retry shows no enrolment again: its key was shown once.
-    if let Verdict::Wait(w) = wait {
-        return p.continue_page(&id, kind, None, Some(&SignInPage::wait_words(w)), StatusCode::TOO_MANY_REQUESTS);
-    }
-    let wrong = |p: &SignInPage| {
-        let (words, status) = if totp { p.wrong_totp(&key, &r) } else { p.wrong_words(&key, &r) };
-        p.continue_page(&id, kind, None, Some(&words), status)
+    let reserved = match reserved {
+        Ok(x) => x,
+        Err(w) => return p.continue_page(&id, kind, None, Some(&wait_page_words(w)), StatusCode::TOO_MANY_REQUESTS),
     };
+    let wrong = |p: &SignInPage| p.continue_page(&id, kind, None, Some(WRONG), StatusCode::UNAUTHORIZED);
     let Some(c) = clean_code(&f.code) else { return wrong(&p) };
-    let res = p.backend().continue_with_code(&ticket, &c, &r.info).await;
+    let res = p.flow_backend(&id).continue_with_code(&ticket, &c, &r.info).await;
+    p.settle(reserved, &res);
     if res.is_ok() {
-        if totp {
-            p.throttles.totp_right(&key);
-        }
         if let (CodeKind::EnrollAtSignIn, Some(s)) = (kind, &subject) {
             p.enrolling.lock().unwrap().remove(s);
         }
@@ -386,19 +390,26 @@ async fn choose(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer
     });
     let Some(Some((ticket, choice))) = found else { return p.restart(&id, "/", STALE, StatusCode::BAD_REQUEST) };
     let next = p.next_of(&id);
-    let res = p.backend().choose(&ticket, &choice, &r.info).await;
+    let res = p.flow_backend(&id).choose(&ticket, &choice, &r.info).await;
     p.answer(&id, res, |p| p.restart(&id, &next, "That sign-in didn't work. Start again.", StatusCode::UNAUTHORIZED)).await
 }
 
-/// `GET /login/social?provider=google`: out to the provider.
-async fn social(State(p): State<Arc<SignInPage>>, headers: HeaderMap, Query(q): Query<SocialQuery>) -> Response {
-    let next = p.cfg.return_to.check(q.next.as_deref());
-    let (id, set) = p.flow_id(&headers);
-    let offered = social_of(q.provider.as_deref()).filter(|s| p.backend().capabilities().social.contains(s));
-    let Some(s) = offered else {
-        return with_cookie(p.restart(&id, &next, "That sign-in is not offered here.", StatusCode::NOT_FOUND), set);
+/// `POST /login/social` (`provider=google`): out to the provider. A form
+/// of this page's, with its CSRF token (AUTH-24 #4).
+async fn social(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer, Form(f): Form<SocialForm>) -> Response {
+    let (r, id) = match p.posted(&headers, &peer, &f.csrf) {
+        Ok(x) => x,
+        Err(resp) => return resp,
     };
-    let (id, set) = p.fresh_flow(Some(&id), next);
+    let next = p.cfg.return_to.check(f.next.as_deref());
+    let offered = social_of(f.provider.as_deref()).filter(|s| p.backend().capabilities().social.contains(s));
+    let Some(s) = offered else {
+        return p.restart(&id, &next, "That sign-in is not offered here.", StatusCode::NOT_FOUND);
+    };
+    let (id, set) = match p.fresh_flow(Some(&id), next, &r) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
     p.sweep_later();
     p.federated(&id, &Federated::Social(s), None, Some(set))
 }
@@ -507,7 +518,7 @@ async fn enroll(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer
     let label = who.email.clone().unwrap_or_else(|| who.subject.clone());
     match p.backend().totp_enroll(&who.subject, &p.cfg.totp_issuer, &label).await {
         Ok(e) => {
-            p.remember_enrollment(&who.subject, &e);
+            p.remember_enrollment(&who.subject, &e, p.backend());
             let csrf = p.csrf(&id);
             let main = format!(
                 r#"{}
@@ -536,24 +547,26 @@ async fn confirm(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Pee
     let Some((ticket, backend)) = pending else {
         return p.account_view(&id, &who, None, Some("That took too long. Add the app again."), StatusCode::BAD_REQUEST).await;
     };
-    if let Verdict::Wait(w) = p.throttles.may_try_totp(&who.subject, r.info.ip) {
-        return p.enroll_retry(&id, &SignInPage::wait_words(w), StatusCode::TOO_MANY_REQUESTS);
-    }
+    let reserved = match p.throttles.reserve_totp(&who.subject, r.info.ip) {
+        Ok(x) => x,
+        Err(w) => return p.enroll_retry(&id, &wait_page_words(w), StatusCode::TOO_MANY_REQUESTS),
+    };
     let ok = match clean_code(&f.code) {
         Some(c) => backend.totp_confirm(&ticket, &c).await,
         None => Ok(false),
     };
+    match &ok {
+        Ok(true) => p.throttles.refund(reserved, true),
+        Ok(false) => drop(reserved),
+        Err(_) => p.throttles.refund(reserved, false),
+    }
     match ok {
         Ok(true) => {
-            p.throttles.totp_right(&who.subject);
             p.enrolling.lock().unwrap().remove(&who.subject);
             tracing::info!("a TOTP factor was confirmed");
             p.account_view(&id, &who, Some("Authenticator app added. You'll be asked for a code when you sign in."), None, StatusCode::OK).await
         }
-        Ok(false) => {
-            let (words, status) = p.wrong_totp(&who.subject, &r);
-            p.enroll_retry(&id, &words, status)
-        }
+        Ok(false) => p.enroll_retry(&id, WRONG, StatusCode::UNAUTHORIZED),
         Err(e) => {
             tracing::warn!(kind = e.kind(), "a TOTP enrolment could not be confirmed");
             p.enroll_retry(&id, "That didn't work. Try again in a little while.", StatusCode::SERVICE_UNAVAILABLE)
@@ -595,23 +608,25 @@ async fn remove(State(p): State<Arc<SignInPage>>, headers: HeaderMap, peer: Peer
     if !factors.iter().any(|x| x.id == f.factor) {
         return p.account_page(&id, &who, &factors, None, Some("That authenticator app is not on your account."), StatusCode::BAD_REQUEST);
     }
-    if let Verdict::Wait(w) = p.throttles.may_try_totp(&who.subject, r.info.ip) {
-        return p.account_page(&id, &who, &factors, None, Some(&SignInPage::wait_words(w)), StatusCode::TOO_MANY_REQUESTS);
-    }
+    let reserved = match p.throttles.reserve_totp(&who.subject, r.info.ip) {
+        Ok(x) => x,
+        Err(w) => return p.account_page(&id, &who, &factors, None, Some(&wait_page_words(w)), StatusCode::TOO_MANY_REQUESTS),
+    };
     let ok = match clean_code(&f.code) {
         Some(c) => backend.totp_remove(&who.subject, &f.factor, &c).await,
         None => Ok(false),
     };
+    match &ok {
+        Ok(true) => p.throttles.refund(reserved, true),
+        Ok(false) => drop(reserved),
+        Err(_) => p.throttles.refund(reserved, false),
+    }
     match ok {
         Ok(true) => {
-            p.throttles.totp_right(&who.subject);
             tracing::info!("a TOTP factor was removed");
             p.account_view(&id, &who, Some("Authenticator app removed."), None, StatusCode::OK).await
         }
-        Ok(false) => {
-            let (words, status) = p.wrong_totp(&who.subject, &r);
-            p.account_page(&id, &who, &factors, None, Some(&words), status)
-        }
+        Ok(false) => p.account_page(&id, &who, &factors, None, Some(WRONG), StatusCode::UNAUTHORIZED),
         Err(e) => {
             tracing::warn!(kind = e.kind(), "a TOTP factor could not be removed");
             p.account_page(&id, &who, &factors, None, Some("That didn't work. Try again in a little while."), StatusCode::SERVICE_UNAVAILABLE)

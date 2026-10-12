@@ -395,7 +395,7 @@ impl<A: LoginAccess> Login<A> {
     /// The page; `dev`: plexus-idp alone, the dev sign-in's panel
     /// (IDENTITY-35).
     pub fn page_for(&self, next: &str, error: Option<&str>, with_password: bool, dev: bool) -> String {
-        self.page_html(next, error, with_password, dev, None)
+        self.page_html(next, error, with_password, dev, None).html
     }
 
     /// AUTH-22: our own sign-in page, when there is one.
@@ -429,7 +429,7 @@ impl<A: LoginAccess> Login<A> {
         r
     }
 
-    fn page_html(&self, next: &str, error: Option<&str>, with_password: bool, dev: bool, flow: Option<&str>) -> String {
+    fn page_html(&self, next: &str, error: Option<&str>, with_password: bool, dev: bool, flow: Option<&str>) -> page::Page {
         let next_e = esc(next);
         let toggle = self.dev.as_ref().map(|d| {
             format!(
@@ -548,7 +548,7 @@ impl<A: LoginAccess> Login<A> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn fill(&self, error: Option<&str>, toggle: Option<String>, password: Option<String>, buttons: String, nostr: Option<String>, alts: bool, dev: bool) -> String {
+    fn fill(&self, error: Option<&str>, toggle: Option<String>, password: Option<String>, buttons: String, nostr: Option<String>, alts: bool, dev: bool) -> page::Page {
         let heading = if dev {
             page::heading("Sign in as anyone", "Through plexus-idp. Pick a seeded user, or name one.")
         } else {
@@ -907,7 +907,7 @@ pub async fn dev<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: He
     let (Some(d), Some(access)) = (login.dev.clone(), login.access.clone()) else {
         return page_response(&login, &next, Some("The dev sign-in is not offered here."), StatusCode::NOT_FOUND);
     };
-    let refuse = |e: &str, status| page::respond(status, login.page_for(&next, Some(e), false, true));
+    let refuse = |e: &str, status| page::respond(status, login.page_html(&next, Some(e), false, true, None));
     // A plexus-idp account by its own password: exactly that account.
     if let Some(pw) = f.password.as_deref().filter(|p| !p.is_empty()) {
         return match login.password_grant(&d.provider, f.user.trim(), pw).await {
@@ -1045,8 +1045,10 @@ pub async fn logout<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers:
     // (server side), and the browser lands where the return rules allow.
     if let (Some(tokens), Some(ctx)) = (&login.tokens, login.session(&headers)) {
         if let Some(key) = ctx.get_metadata_string(login.sessions.session_key()).filter(|_| ctx.get_metadata_string("identity_backend").is_some()) {
-            tokens.sign_out(&key).await;
+            // AUTH-24 #5: the session ends first, here and now; the backend
+            // is told after, off the request, with retries.
             login.sessions.end_key(&key);
+            tokens.revoke_later(&key);
             let to = login.return_to.allowed(form.next.as_deref()).unwrap_or_else(|| "/login".into());
             let mut r = see_other(&to);
             r.headers_mut().append(

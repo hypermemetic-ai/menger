@@ -107,7 +107,7 @@ were not there.
 | `plexus-idp:<issuer>,<audience>` | — (it sends no email) | the password grant | — | — | — | yes / nothing to revoke |
 | `memory[:outbox=<file>][,mfa=required]` | to an outbox (and `Memory::last_code`) | — | simulated, approved at once | — | real RFC 6238 | — |
 
-`memory` is for tests and local development: users live in the process.
+`memory` and `plexus-idp` are for tests and local development and are refused unless the app allows them (`LoginOptions::allow_development_backends`; menger: `--env test`, AUTH-24 #8): `memory` signs anyone in.
 WorkOS's API key never rides the spec (a flag shows in `ps`): it comes from
 `<APP>_WORKOS_API_KEY` or the file `key=@<path>` names, and a spec holding
 `key=sk_…` is refused without echoing it.
@@ -138,11 +138,11 @@ Each sign-in also records the backend and its subject in the session
 | # | safety rule | how | tested by (`tests/signin.rs`) |
 | --- | --- | --- | --- |
 | 1 | server side only | forms post to the shell; the backend's secrets stay in its adapter (`ApiKey`'s `Debug` prints no key) | `every_workos_step_…` (the secret rides only the server's call) |
-| 2 | nothing secret in a log, error, URL or redirect; one answer for any address | codes, tokens, tickets and TOTP keys are `Secret`s whose `Debug` prints nothing; logs name kinds, never values; a code is sent *after* the page answers, so its timing says nothing; a wrong code and an unknown address read the same | `no_code_token_address_or_key_is_ever_logged`, `sending_a_code_answers_the_same_for_any_address` |
-| 3 | throttles per address, per user and per IP, with backoff; the IP from `X-Forwarded-For` only through trusted proxies | `throttle::Throttles` (codes sent per address and per IP; codes and passwords tried per address and per IP; TOTP tried per user), hashed keys, bounded tables; `client_ip::TrustedProxies`: the rightmost untrusted hop when the peer is a trusted proxy, else the peer; the IP and user agent go to every backend call | `codes_sent_and_tried_are_throttled_…`, `totp_tries_are_throttled_per_user`, `plexus_idp_signs_in_with_a_password_and_backs_off` |
-| 4 | CSRF, cookies, CSP, `no-store` | every form carries an HMAC of the flow cookie (`HttpOnly; SameSite=Lax`, `__Host-` over https); another site's `Origin` is refused; a sign-in starts under a fresh flow id (a planted one carries nothing); every page `no-store`, unframeable, `default-src 'none'` with its own inline blocks by hash | `a_form_without_this_browser_s_csrf_token_…`, `a_flow_id_planted_in_a_browser_…`, `the_page_offers_exactly_…` |
+| 2 | nothing secret in a log, error, URL or redirect; one answer for any address | codes, tokens, tickets and TOTP keys are `Secret`s whose `Debug` prints nothing; logs name kinds, never values, and a backend's errors by their code (AUTH-24 #10); a code is sent *after* the page answers, so its timing says nothing; a wrong code and an unknown address read the same; the SSO redirect carries the organization, not the address (AUTH-24 #9) | `no_code_token_address_or_key_is_ever_logged`, `sending_a_code_answers_the_same_for_any_address`, `an_sso_domain_goes_to_its_idp_…` |
+| 3 | throttles per address, per user and per IP, with backoff; the IP from `X-Forwarded-For` only through trusted proxies | `throttle::Throttles`: **a guess is reserved — counted — before it is made** and refunded when right, so a burst gets no more than the allowance to the backend (AUTH-24 #1); codes and passwords tried per (address, client) with a looser per-address ceiling, so a third party locks only itself (#3); sends per (address, client), per client and in all, never per address alone; TOTP per user; a client is its /32 or /64 (#6); bounded tables that refuse rather than evict; `client_ip::TrustedProxies`: the rightmost untrusted hop when the peer is a trusted proxy, else the peer; off loopback the page refuses to start until `--trusted-proxy` names the edge or says `none` (#2); the IP and user agent go to every backend call | `review.rs` (bursts of 200, the owner not locked out, IPv6), `codes_sent_and_tried_are_throttled_…`, `totp_tries_are_throttled_per_user`, `wiring::tests` |
+| 4 | CSRF, cookies, CSP, `no-store` | every form — the social buttons too (AUTH-24 #4) — carries an HMAC of the flow cookie (`HttpOnly; SameSite=Lax`, `__Host-` over https); another site's `Origin` is refused; a sign-in starts under a fresh flow id (a planted one carries nothing); flows are throttled per client, each client holds a few, and a full table refuses rather than evicts another's (#4); every page `no-store`, unframeable, `default-src 'none'`, its script and style hashes taken from the **template**, and a page holding any other block is refused (#7); filled in one pass, escaped once | `a_form_without_this_browser_s_csrf_token_…`, `a_flow_id_planted_in_a_browser_…`, `a_flood_cannot_evict_another_browser_s_flow`, `flows_are_throttled_per_client`, `page::tests` |
 | 5 | federated round trips | `state` and the PKCE verifier live in the flow this browser's cookie names, taken once; the redirect URI is exactly `<public-url>/login/callback`; where to land is checked by `ReturnTo` when the flow starts and ends — a path on this origin, or an origin on the list (`--return-origin`) | `a_social_button_goes_out_and_back_bound_to_this_browser`, `return_to_stays_on_this_origin_or_a_listed_one` |
-| 6 | tokens | the backend verifies its own (WorkOS's against its JWKS with the gate's own OIDC adapter); they stay in `app_session::TokenStore` beside the session, refreshed before expiry; a refused refresh ends the session (and its sockets); sign-out ends the backend's session | `sign_out_revokes_and_a_revoked_session_ends_at_the_next_refresh` |
+| 6 | tokens | the backend verifies its own (WorkOS's against its JWKS with the gate's own OIDC adapter); they stay in `app_session::TokenStore` beside the session, refreshed before expiry; a refused refresh ends the session (and its sockets), and so does one that cannot be made once the token has expired (fail closed, AUTH-24 #12); sign-out ends the app's session **first**, then revokes at the backend off the request with retries (#5); a sign-in finishes with the backend that started it, whatever a swap did meanwhile (#11) | `sign_out_revokes_…`, `sign_out_ends_the_session_before_the_backend_is_told`, `a_refresh_that_cannot_be_made_after_expiry_…`, `a_swap_midway_finishes_…` |
 | 7 | MFA | enrolment from `/login/account` needs a sign-in in the last 15 minutes; the key is shown once and the factor deleted unless confirmed within 10 minutes (or on cancel); removal needs a current code from that factor; the sign-in challenge comes whenever the backend asks | `totp_is_enrolled_challenged_at_sign_in_and_removed`, `an_unconfirmed_factor_is_deleted`, `enrolling_needs_a_recent_sign_in`, `a_backend_that_requires_mfa_enrols_at_sign_in` |
 
 Revealing that a **domain** has SSO is the trade-off every SSO sign-in makes
@@ -180,7 +180,7 @@ and `GET /login/callback`.
 | `POST /login/password` | a username and password |
 | `POST /login/continue` | a code a step waits for (TOTP, email verification, an extra check, a factor enrolled at sign-in) |
 | `POST /login/choose` | an organization |
-| `GET /login/social?provider=google` | out to the provider; back at `GET /login/callback` |
+| `POST /login/social` (`provider=google`, the page's CSRF token) | out to the provider; back at `GET /login/callback` |
 | `GET /login/account`; `POST /login/account/totp`, `…/confirm`, `…/cancel`, `…/remove` | two-step verification |
 
 ## Login in a dozen lines: `Wiring` and `SimpleAccess`
@@ -406,11 +406,22 @@ through `LoginAccess::dev_grant` / `dev_set_grants`.
 | `POST /login/dev` | the dev sign-in |
 | `POST /logout` | sign-out (and WorkOS's) |
 | `GET`/`POST /auth/cli` | the loopback sign-in's hand-back to a client (`auth.login {browser}`) |
-| `POST /login/email`, `/login/code`, `/login/password`, `/login/continue`, `/login/choose`, `GET /login/social`, `/login/account…` | AUTH-22: our own page's steps, with an identity backend (above) |
+| `POST /login/email`, `/login/code`, `/login/password`, `/login/continue`, `/login/choose`, `/login/social`, `GET`/`POST /login/account…` | AUTH-22: our own page's steps, with an identity backend (above) |
 
 A POST from another origin is refused.
 
 ## Serving the page
+
+**Behind a proxy (AUTH-24 #2).** A sign-in page whose public URL is not
+loopback refuses to start until `trusted_proxies` says what is in front of
+it: the edge's address or network (`--trusted-proxy 172.18.0.2/32`), or
+`none` when people connect directly. Without it, every visitor behind an
+edge is one client: one bucket for every throttle, and the edge's address
+sent to the backend's risk checks for everyone. Trust as little as you can:
+the edge's own container address beats its whole Docker network, since any
+other container on that network could otherwise forge `X-Forwarded-For`.
+An `X-Forwarded-For` from a peer that is not trusted is logged once, as an
+error.
 
 Serve the router with the peer's address, so the throttles see who asks:
 `axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())`
@@ -422,7 +433,11 @@ bucket. Behind an edge, name it with `trusted_proxies`.
 AUTH-22: `identity` (the `IdentityBackend` trait), `backends` (WorkOS,
 plexus-idp, memory; `--identity` specs), `signin` (our own page), `app_session`
 (the backend's tokens beside the session), `throttle`, `client_ip`,
-`crypto`, `page` (the chrome, the CSP). Breaking: `Branding` gains `motto`;
+`crypto`, `page` (the chrome, the CSP). AUTH-24's review fixed before
+release: reserved (atomic) throttles, per-(address, client) limits, /64
+buckets, the trusted-proxy requirement, the flow table, CSRF'd social
+buttons, sign-out order, template-hashed CSP, development backends gated.
+Breaking: `Branding` gains `motto`;
 `LoginNames` gains `flow_cookie`; `LoginOptions` gains `identity`,
 `trusted_proxies`, `return_origins`, `limits` (and is no longer `Debug`-derived:
 its `Debug` names the backend, not its contents); `LoginConfig` likewise;

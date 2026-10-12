@@ -280,6 +280,7 @@ pub async fn app_with(under: Under, t: Tweaks) -> App {
         trusted_proxies: TrustedProxies::parse(t.trusted).unwrap(),
         limits: t.limits,
         return_origins: t.return_origins,
+        allow_development_backends: true,
         ..LoginOptions::new(BRANDING, ws, shell_port)
     };
     let wiring = Wiring::new(opts).unwrap();
@@ -403,6 +404,15 @@ impl Browser {
     /// The sign-in page's CSRF token (planting the flow cookie).
     pub async fn csrf(&self) -> String {
         self.get("/login").await.csrf()
+    }
+
+    /// Presses a social button (the page's CSRF'd form): the answer.
+    pub async fn social(&self, provider: &str, next: &str) -> Resp {
+        let csrf = match self.get("/login").await {
+            r if r.status == 200 => r.csrf(),
+            _ => panic!("signed in already"),
+        };
+        self.post("/login/social", &[("csrf", &csrf), ("provider", provider), ("next", next)]).await
     }
 
     /// Signs in with an emailed code; the answer to the code.

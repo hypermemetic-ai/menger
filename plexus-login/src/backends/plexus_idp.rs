@@ -107,6 +107,10 @@ impl IdentityBackend for PlexusIdp {
         "plexus-idp"
     }
 
+    fn for_development(&self) -> bool {
+        true
+    }
+
     fn capabilities(&self) -> Capabilities {
         Capabilities { password: true, refresh: true, ..Capabilities::default() }
     }

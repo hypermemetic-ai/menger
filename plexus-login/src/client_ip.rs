@@ -16,7 +16,12 @@
 //!   trusted, the leftmost is the client.
 //!
 //! With no trusted proxy configured (the default) the peer is always the
-//! client. The peer comes from axum's `ConnectInfo<SocketAddr>`: serve the
+//! client. AUTH-24 #2: behind an edge, that makes every visitor one client,
+//! so a page served off loopback must say which it is — `--trusted-proxy
+//! <the edge>` or `--trusted-proxy none` (people connect directly) — or it
+//! does not start ([`crate::wiring::Wiring::new`]). And an
+//! `X-Forwarded-For` arriving from a peer that is not trusted is logged
+//! once, loudly: a proxy is in front and is not named. The peer comes from axum's `ConnectInfo<SocketAddr>`: serve the
 //! router with `into_make_service_with_connect_info::<SocketAddr>()`
 //! (plexus-shell's `serve_on` does). Without it there is no peer, and the
 //! throttles share one bucket for every unknown client.
@@ -28,25 +33,42 @@ use axum::http::HeaderMap;
 use axum::Extension;
 pub use ipnet::IpNet;
 
-/// The proxies whose `X-Forwarded-For` is believed (`--trusted-proxy CIDR`).
+/// The proxies whose `X-Forwarded-For` is believed (`--trusted-proxy CIDR`),
+/// or `direct`: no proxy, said so (`--trusted-proxy none`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TrustedProxies(pub Vec<IpNet>);
+pub struct TrustedProxies {
+    pub nets: Vec<IpNet>,
+    /// People connect directly: no proxy is in front.
+    pub direct: bool,
+}
 
 impl TrustedProxies {
-    /// Parses CIDRs (`10.0.0.0/8`, `::1/128`) or bare addresses (a /32 or
-    /// /128).
+    /// Parses CIDRs (`10.0.0.0/8`, `::1/128`), bare addresses (a /32 or
+    /// /128), or `none` alone (direct).
     pub fn parse<I, S>(specs: I) -> Result<Self, String>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        specs.into_iter().map(|s| parse_net(s.as_ref())).collect::<Result<Vec<_>, _>>().map(Self)
+        let specs: Vec<String> = specs.into_iter().map(|s| s.as_ref().trim().to_string()).filter(|s| !s.is_empty()).collect();
+        if specs.iter().any(|s| s == "none") {
+            if specs.len() > 1 {
+                return Err("--trusted-proxy none stands alone: no proxy, or name them".into());
+            }
+            return Ok(Self { nets: Vec::new(), direct: true });
+        }
+        Ok(Self { nets: specs.iter().map(|s| parse_net(s)).collect::<Result<_, _>>()?, direct: false })
+    }
+
+    /// Whether anything was said: a proxy named, or `none`.
+    pub fn configured(&self) -> bool {
+        self.direct || !self.nets.is_empty()
     }
 
     /// Whether `ip` is one of the trusted proxies.
     pub fn contains(&self, ip: &IpAddr) -> bool {
         let ip = canonical(*ip);
-        self.0.iter().any(|n| n.contains(&ip))
+        self.nets.iter().any(|n| n.contains(&ip))
     }
 
     /// The client's address for a request from `peer` carrying `headers`.
@@ -54,6 +76,9 @@ impl TrustedProxies {
     pub fn client_ip(&self, peer: Option<IpAddr>, headers: &HeaderMap) -> Option<IpAddr> {
         let peer = canonical(peer?);
         if !self.contains(&peer) {
+            if headers.contains_key("x-forwarded-for") && !self.direct {
+                warn_once(&UNTRUSTED_XFF, "X-Forwarded-For arrives from a peer that is not a trusted proxy: if a proxy is in front, name it with --trusted-proxy, or every visitor counts as that proxy");
+            }
             return Some(peer);
         }
         // Every X-Forwarded-For header, in order, as one list.
@@ -74,6 +99,21 @@ impl TrustedProxies {
         }
         Some(nearest_trusted)
     }
+}
+
+static UNTRUSTED_XFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NO_PEER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn warn_once(flag: &std::sync::atomic::AtomicBool, words: &str) {
+    if !flag.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::error!("{words}");
+    }
+}
+
+/// AUTH-24 #12: a router served without `ConnectInfo` knows no peer, and
+/// every client shares one bucket: said once.
+pub fn warn_no_peer() {
+    warn_once(&NO_PEER, "the sign-in page is served without the peer's address (serve with into_make_service_with_connect_info::<SocketAddr>()): every client shares one throttle bucket");
 }
 
 /// A CIDR or a bare address.
@@ -158,6 +198,10 @@ mod tests {
         assert_eq!(edge.client_ip(Some(ip("::ffff:127.0.0.1")), &xff("[2001:db8::1]:443")), Some(ip("2001:db8::1")));
         assert!(TrustedProxies::parse(["10.0.0.0/33"]).is_err());
         assert!(TrustedProxies::parse(["edge"]).is_err());
+        let none = TrustedProxies::parse(["none"]).unwrap();
+        assert!(none.direct && none.configured() && none.nets.is_empty());
+        assert!(TrustedProxies::parse(["none", "10.0.0.0/8"]).is_err());
+        assert!(!TrustedProxies::default().configured());
     }
 
     #[test]

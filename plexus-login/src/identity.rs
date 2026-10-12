@@ -298,6 +298,13 @@ pub trait IdentityBackend: Send + Sync + 'static {
         None
     }
 
+    /// AUTH-24 #8: a backend for development and tests only (it signs
+    /// anyone in, or trusts a local issuer): refused unless the app says so
+    /// ([`crate::wiring::LoginOptions::allow_development_backends`]).
+    fn for_development(&self) -> bool {
+        false
+    }
+
     /// Whether the email field sends codes (else it is there for SSO
     /// domains alone). Default: whenever the backend offers email codes.
     fn sends_codes(&self) -> bool {

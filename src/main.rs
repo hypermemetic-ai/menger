@@ -212,17 +212,18 @@ struct Args {
     /// (WorkOS's User Management API, no AuthKit screen; the API key from
     /// MENGER_WORKOS_API_KEY or the file `key=@` names, never the flag),
     /// `plexus-idp:<issuer>,<audience>` (passwords; local only), or `memory`
-    /// (tests and development). Its tokens are admitted at the socket through
+    /// (tests and development) — those two only with `--env test`. Its tokens are admitted at the socket through
     /// its provider, as any --auth-provider's. Changing it needs a restart.
     #[arg(long, env = "MENGER_IDENTITY", value_name = "SPEC")]
     identity: Option<plexus_login::backends::IdentitySpec>,
 
     /// AUTH-22: a proxy (CIDR or address, repeatable) whose X-Forwarded-For
-    /// is believed for the client's IP — the edge in front of the shell.
-    /// None: the TCP peer is the client, and X-Forwarded-For is ignored. In
-    /// the env var, separated by `;`.
-    #[arg(long = "trusted-proxy", env = "MENGER_TRUSTED_PROXIES", value_name = "CIDR", value_delimiter = ';', value_parser = plexus_login::client_ip::parse_net)]
-    trusted_proxy: Vec<plexus_login::client_ip::IpNet>,
+    /// is believed for the client's IP — the edge in front of the shell —
+    /// or `none`: people connect directly. AUTH-24 #2: with --identity and a
+    /// --public-url off loopback, one of the two is required. In the env
+    /// var, separated by `;`.
+    #[arg(long = "trusted-proxy", env = "MENGER_TRUSTED_PROXIES", value_name = "CIDR|none", value_delimiter = ';')]
+    trusted_proxy: Vec<String>,
 
     /// AUTH-22: another origin a sign-in may send the browser back to
     /// (repeatable); the shell's own always may.
@@ -278,8 +279,11 @@ async fn main() -> anyhow::Result<()> {
         title: shell::tab_title(args.env.as_deref()),
         names: menger::login_names(),
         identity: args.identity.as_ref().map(|s| s.build(menger::login_access::BRANDING.app)).transpose()?,
-        trusted_proxies: plexus_login::client_ip::TrustedProxies(args.trusted_proxy.clone()),
+        trusted_proxies: plexus_login::client_ip::TrustedProxies::parse(&args.trusted_proxy).map_err(anyhow::Error::msg)?,
         return_origins: args.return_origin.clone(),
+        // AUTH-24 #8: `memory` and `plexus-idp` sign people in only where
+        // the dev sign-in may (IDENTITY-38: `--env test`).
+        allow_development_backends: dev_login_allowed(args.env.as_deref()),
         ..LoginOptions::new(menger::login_access::BRANDING, args.port, args.shell_port)
     })?;
     if args.require_login && !args.no_rest && !args.stdio {

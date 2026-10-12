@@ -339,8 +339,9 @@ impl WorkOsApi {
             429 => Err(CallError::RateLimited),
             // Live on staging (AUTH-22): a method switched off in the
             // environment is the operator's to switch on.
+            // AUTH-24 #10: logged by its code only, never WorkOS's words.
             400 if value.get("error").and_then(Value::as_str) == Some("authentication_method_not_allowed") => {
-                Err(CallError::Misconfigured(format!("{path}: {}", value.get("error_description").and_then(Value::as_str).unwrap_or("that method is disabled in the WorkOS environment"))))
+                Err(CallError::Misconfigured(format!("{path}: authentication_method_not_allowed (the method is disabled in the WorkOS environment)")))
             }
             s @ (400 | 404 | 409 | 422) => Err(CallError::Refused(s)),
             s => Err(CallError::Unavailable(format!("{path}: HTTP {s}"))),
