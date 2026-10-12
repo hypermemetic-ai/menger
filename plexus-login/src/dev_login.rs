@@ -26,9 +26,6 @@ use serde_json::{json, Value};
 
 use crate::access::LoginAccess;
 
-/// The cookie the checkbox sets: this browser's sign-in goes to plexus-idp.
-pub const COOKIE: &str = "menger_dev_login";
-
 /// One seeded user: `name=role@SCOPE[,role@SCOPE…]`, or `name=` for one
 /// with no grant at all (who waits for an admin). Roles and scopes in the
 /// app's vocabulary ([`LoginAccess::Role`], [`LoginAccess::scope_of`]).

@@ -180,7 +180,9 @@ impl Session {
 #[cfg(all(test, feature = "server"))]
 mod tests {
     use super::*;
-    use crate::access::{SessionCheck, SESSION_KEY};
+    use crate::access::SessionCheck;
+
+    const SESSION_KEY: &str = "menger_session";
     use futures::StreamExt;
     use std::sync::Mutex;
 
@@ -188,6 +190,9 @@ mod tests {
     impl SessionCheck for Live {
         fn alive(&self, _: &str) -> bool {
             *self.0.lock().unwrap()
+        }
+        fn key(&self) -> &str {
+            SESSION_KEY
         }
     }
 

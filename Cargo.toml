@@ -14,7 +14,10 @@ members = [".", "tickets-api", "diagrams", "plexus-login"]
 
 [package]
 name = "menger"
-version = "0.5.0"
+# SCAFFOLD-9: 0.6 — the login moved to plexus-login; `menger::sessions`,
+# `menger::login`, … are its re-exports, and their signatures changed
+# (`Sessions::new(ttl, &names)`, `LoginAuth::new(…, app)`).
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 description = "A plan is a program whose leaves are prose — ticketing on Plexus RPC"
@@ -58,7 +61,7 @@ path = "src/main.rs"
 # and its generated client, from one declaration — shared with the browser
 # app (frontend/), which takes it with `default-features = false`. Default
 # features here: `server`, the real thing.
-menger-tickets-api = { path = "tickets-api", version = "0.5.0" }
+menger-tickets-api = { path = "tickets-api", version = "0.6.0" }
 
 # MFE-10: the plexus 0.6 line — plexus-core 0.6.0, plexus-macros 0.6.0
 # (the `client` / `server_cfg` activation flags, MACRO-4) and
@@ -75,9 +78,10 @@ plexus-transport = { path = "../plexus-transport", version = "0.5", default-feat
 # turn each provider's credential into Plexus types at the WebSocket upgrade.
 # Used only when an --auth-provider is given.
 plexus-auth-core = { path = "../plexus-auth-core", version = "0.2", features = ["adapters"] }
-# SCAFFOLD-3: the login — providers, the page, sessions, the gate, the auth
-# backend — lifted into its own crate (a workspace member for now); menger
-# implements its `LoginAccess` over `Access` (src/login_access.rs).
+# SCAFFOLD-3/SCAFFOLD-9: the login — providers, the page, sessions, the
+# gate, the auth backend, the wiring — its own crate (a workspace member,
+# published before menger); menger implements its `LoginAccess` over
+# `Access` (src/login_access.rs) and `main` runs on its `Wiring`.
 plexus-login = { path = "plexus-login", version = "0.1" }
 # IDENTITY-19: the login page — the shell asks the provider itself (discovery,
 # token endpoint), keeps sessions keyed by a random id (hashed), and runs the

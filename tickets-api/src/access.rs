@@ -47,10 +47,6 @@ use crate::filter::Filter;
 use crate::members::{Grant, Role, EVERYWHERE};
 use crate::store::{Lens, Store};
 
-/// The metadata key a session-backed identity carries: the key
-/// [`SessionCheck::alive`] is asked about (menger's `sessions`).
-pub const SESSION_KEY: &str = "menger_session";
-
 /// The grantor named on `--admin` grants.
 pub const OPERATOR: &str = "--admin";
 
@@ -97,6 +93,11 @@ const KEPT_ON_MINT: &[&str] = &["principal", AGENT_KEY, "name", "username", "pro
 /// Whether a session the server issued still stands.
 pub trait SessionCheck: Send + Sync {
     fn alive(&self, key: &str) -> bool;
+    /// SCAFFOLD-9: the metadata key a session-backed identity carries — the
+    /// value [`SessionCheck::alive`] is asked about. The session table's own
+    /// (menger's: plexus-login's `Sessions::session_key`), its one
+    /// definition: this crate keeps no copy.
+    fn key(&self) -> &str;
 }
 
 /// IDENTITY-42: the session table, as `session.login` and `session.logout`
@@ -104,9 +105,9 @@ pub trait SessionCheck: Send + Sync {
 pub trait SessionMint: Send + Sync {
     /// Starts a session for `ctx`, lasting `ttl_secs`: the token that opens
     /// it and when it ends. The token is kept only hashed; `ctx` is stamped
-    /// with [`SESSION_KEY`] and `expires_at`.
+    /// with its session key ([`SessionCheck::key`]) and `expires_at`.
     fn mint(&self, ctx: AuthContext, ttl_secs: i64) -> (String, i64);
-    /// Ends the session whose [`SESSION_KEY`] is `key`; whether it stood.
+    /// Ends the session whose session key is `key`; whether it stood.
     fn end_key(&self, key: &str) -> bool;
 }
 
@@ -531,6 +532,12 @@ impl Access {
         self
     }
 
+    /// SCAFFOLD-9: the metadata key a session-backed identity carries — the
+    /// session table's ([`SessionCheck::key`]); `None` with login off.
+    pub fn session_key(&self) -> Option<&str> {
+        self.sessions.as_ref().map(|s| s.key())
+    }
+
     /// The store whose members and roles decide (the builder attaches it).
     pub fn attach(&self, store: Arc<Store>) {
         let _ = self.book.store.set(store);
@@ -633,8 +640,8 @@ impl Access {
                 return Err("your sign-in has expired: sign in again".into());
             }
         }
-        if let Some(key) = ctx.get_metadata_string(SESSION_KEY) {
-            if !self.sessions.as_ref().is_some_and(|s| s.alive(&key)) {
+        if let Some((sessions, key)) = self.sessions.as_ref().and_then(|s| Some((s, ctx.get_metadata_string(s.key())?))) {
+            if !sessions.alive(&key) {
                 return Err("you have signed out: sign in again".into());
             }
         }
@@ -764,7 +771,7 @@ impl Access {
         let mut meta = serde_json::Map::new();
         if let Some(obj) = ctx.metadata.as_object() {
             for (k, v) in obj {
-                if k != SESSION_KEY && k != "expires_at" && k != CEILING_KEY {
+                if Some(k.as_str()) != self.session_key() && k != "expires_at" && k != CEILING_KEY {
                     meta.insert(k.clone(), v.clone());
                 }
             }
@@ -784,7 +791,7 @@ impl Access {
         let Some(minter) = self.minter.as_ref().filter(|_| self.login) else {
             return Err("login is off on this menger: there is no session to log out".into());
         };
-        match auth.filter(|c| c.is_authenticated()).and_then(|c| c.get_metadata_string(SESSION_KEY)) {
+        match auth.filter(|c| c.is_authenticated()).and_then(|c| c.get_metadata_string(self.session_key()?)) {
             Some(key) => {
                 minter.end_key(&key);
                 Ok(())
@@ -818,7 +825,13 @@ mod tests {
         fn alive(&self, key: &str) -> bool {
             self.0.lock().unwrap().contains(key)
         }
+        fn key(&self) -> &str {
+            SESSION_KEY
+        }
     }
+
+    /// The session table's metadata key, as menger's names it.
+    const SESSION_KEY: &str = "menger_session";
 
     const ALICE: &str = "idp:c952acd3-60aa-4534-b2e3-83634591fee1";
 

@@ -1,8 +1,9 @@
-//! AUTH-7: menger's half of the protocol's `auth` activation — the
+//! AUTH-7: the app's half of the protocol's `auth` activation — the
 //! [`AuthBackend`] plexus-core's `auth.providers`, `auth.login`,
-//! `auth.signup` and `auth.logout` ask (AUTH-5).
+//! `auth.signup` and `auth.logout` ask (AUTH-5), over the app's rules
+//! ([`LoginAccess`]).
 //!
-//! | flow | what menger does |
+//! | flow | what it does |
 //! | --- | --- |
 //! | `providers` | each `--auth-provider`: `key` for agents, every other a person's way in through the login page (`browser`) |
 //! | `login {browser {redirect}}` | a loopback sign-in: a state bound to `redirect` (`http://127.0.0.1:<port>/…` or `localhost`, nothing else) and the login page's URL, `<public-url>/login?cli=1&state=…`; the person signs in there as anyone does, and the shell sends the browser on to `redirect?code=…&state=…` ([`crate::web_login`]'s `/auth/cli`) |
@@ -22,7 +23,7 @@ use plexus_core::plexus::{
 
 use crate::access::LoginAccess;
 use crate::login::Provider;
-use crate::sessions::{loopback_redirect, Sessions, SESSION_KEY};
+use crate::sessions::{loopback_redirect, Sessions};
 
 /// The loopback flow's half: the session table its states and codes live
 /// in, and where the login page is reached.
@@ -39,14 +40,18 @@ pub struct LoginAuth<A: LoginAccess> {
     access: A,
     providers: Vec<AuthProvider>,
     browser: Option<BrowserLogin>,
+    /// The app's name, in the refusals' words ("this menger has no login
+    /// page …").
+    app: String,
 }
 
 impl<A: LoginAccess> LoginAuth<A> {
     /// A backend over `access` (its sessions, waiting list and minting),
     /// offering `providers`; `browser` when there is a login page to sign
-    /// a person in through.
-    pub fn new(access: impl Into<A>, providers: Vec<AuthProvider>, browser: Option<BrowserLogin>) -> Self {
-        Self { access: access.into(), providers, browser }
+    /// a person in through. `app` names the app in its refusals
+    /// ([`crate::Branding::app`]).
+    pub fn new(access: impl Into<A>, providers: Vec<AuthProvider>, browser: Option<BrowserLogin>, app: &str) -> Self {
+        Self { access: access.into(), providers, browser, app: app.to_string() }
     }
 
     /// `auth.providers` from `--auth-provider`s: `key` an agent's, every
@@ -73,7 +78,7 @@ impl<A: LoginAccess> AuthBackend for LoginAuth<A> {
         match flow {
             LoginFlow::Browser { redirect } => {
                 let Some(b) = &self.browser else {
-                    return Err(AuthFailure::new("this menger has no login page to sign a person in through"));
+                    return Err(AuthFailure::new(format!("this {} has no login page to sign a person in through", self.app)));
                 };
                 let redirect = loopback_redirect(&redirect).map_err(AuthFailure::new)?;
                 let state = b.sessions.begin_cli(redirect);
@@ -82,7 +87,7 @@ impl<A: LoginAccess> AuthBackend for LoginAuth<A> {
             }
             LoginFlow::Code { code, state } => {
                 let Some(b) = &self.browser else {
-                    return Err(AuthFailure::new("this menger has no login page: there is no code to trade"));
+                    return Err(AuthFailure::new(format!("this {} has no login page: there is no code to trade", self.app)));
                 };
                 let ctx = b
                     .sessions
@@ -91,9 +96,10 @@ impl<A: LoginAccess> AuthBackend for LoginAuth<A> {
                 let secs = b.sessions.ttl_secs().max(1) as u64;
                 self.access.mint_for(ctx, secs).map(LoginAnswer::Session).map_err(AuthFailure::new)
             }
-            LoginFlow::Password { .. } => Err(AuthFailure::new(
-                "this menger takes passwords on its login page (/login?password); from a client, sign in with auth.login {browser}",
-            )),
+            LoginFlow::Password { .. } => Err(AuthFailure::new(format!(
+                "this {} takes passwords on its login page (/login?password); from a client, sign in with auth.login {{browser}}",
+                self.app
+            ))),
             LoginFlow::Session { ttl_secs, ceiling } => {
                 self.access.mint(caller, ttl_secs, ceiling).map(LoginAnswer::Session).map_err(AuthFailure::new)
             }
@@ -119,7 +125,8 @@ impl<A: LoginAccess> AuthBackend for LoginAuth<A> {
     }
 
     async fn logout(&self, caller: &AuthContext) -> Result<(), AuthFailure> {
-        if caller.get_metadata_string(SESSION_KEY).is_none() {
+        // A connection a credential opened directly holds no session: no error.
+        if self.access.session_key().and_then(|k| caller.get_metadata_string(k)).is_none() {
             return Ok(());
         }
         self.access.logout(Some(caller)).map_err(AuthFailure::new)

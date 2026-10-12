@@ -161,7 +161,7 @@ async fn start_with(port: u16, providers: &[Provider], require_login: bool, admi
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
     let offers = providers.iter().map(menger::offer).collect();
     // As main wires it (IDENTITY-19): sessions, the per-call rule, the gate.
-    let sessions = Arc::new(Sessions::new(3600));
+    let sessions = Arc::new(Sessions::new(3600, &menger::login_names()));
     let access = if providers.is_empty() { Access::open() } else { Access::with_login(menger::session_table(&sessions), require_login, admins.iter().map(|a| a.to_string()).collect()) };
     let hub = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers, access.clone())
         .await

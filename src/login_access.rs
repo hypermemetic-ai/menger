@@ -17,7 +17,7 @@ use menger_tickets_api::{ProviderKind, ProviderOffer};
 use plexus_core::plexus::{AuthContext, Session, Waiting};
 use plexus_login::login::{OfferKind, Provider};
 use plexus_login::sessions::Sessions;
-use plexus_login::{Branding, LoginAccess};
+use plexus_login::{Branding, LoginAccess, LoginNames};
 
 /// menger's access rules, as plexus-login reaches them.
 #[derive(Clone)]
@@ -80,6 +80,10 @@ impl LoginAccess for MengerAccess {
     fn logout(&self, caller: Option<&AuthContext>) -> Result<(), String> {
         self.0.logout(caller)
     }
+
+    fn session_key(&self) -> Option<&str> {
+        self.0.session_key()
+    }
 }
 
 /// plexus-login's session table, as menger's `Access` asks it: is this
@@ -90,6 +94,11 @@ pub struct SessionTable(pub Arc<Sessions>);
 impl SessionCheck for SessionTable {
     fn alive(&self, key: &str) -> bool {
         self.0.alive(key)
+    }
+
+    /// SCAFFOLD-9: the table's own metadata key — its one definition.
+    fn key(&self) -> &str {
+        self.0.session_key()
     }
 }
 
@@ -121,3 +130,11 @@ pub fn offer(p: &Provider) -> ProviderOffer {
 
 /// What the login page says of menger.
 pub const BRANDING: Branding = Branding { app: "menger", version: env!("CARGO_PKG_VERSION"), mark: "m" };
+
+/// SCAFFOLD-9: the names menger's login writes — `menger_session[_<port>]`,
+/// `menger_login[_<port>]`, `menger_dev_login`, and `menger_session` as the
+/// session metadata key: what they were before the lift, so a signed-in
+/// browser stays signed in across the upgrade.
+pub fn login_names() -> LoginNames {
+    LoginNames::for_app(BRANDING.app)
+}

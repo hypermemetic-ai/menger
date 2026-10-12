@@ -40,17 +40,6 @@ use crate::dev_login::{self, DevLogin};
 use crate::login::{LoginButton, Provider};
 use crate::sessions::{self, Sessions};
 
-/// The login transaction's cookie for a session cookie of that name: binds
-/// a callback to the browser that started it. Named per shell as the
-/// session's is (IDENTITY-38); `__Secure-` where the session is `__Host-`
-/// (this one lives at `Path=/login`, which `__Host-` forbids).
-fn txn_cookie(session: &str) -> String {
-    match session.strip_prefix("__Host-") {
-        Some(rest) => format!("__Secure-{}", rest.replace("menger_session", "menger_login")),
-        None => session.replace("menger_session", "menger_login"),
-    }
-}
-
 /// What the shell's login is configured with (main's flags).
 pub struct LoginConfig<A: LoginAccess> {
     pub providers: Vec<Provider>,
@@ -299,7 +288,7 @@ impl<A: LoginAccess> Login<A> {
             && headers
                 .get(header::COOKIE)
                 .and_then(|c| c.to_str().ok())
-                .and_then(|c| sessions::cookie(c, dev_login::COOKIE))
+                .and_then(|c| sessions::cookie(c, &self.sessions.names().dev_cookie))
                 .is_some_and(|v| v == "1")
     }
 
@@ -320,7 +309,7 @@ impl<A: LoginAccess> Login<A> {
         );
         h.append(
             header::SET_COOKIE,
-            HeaderValue::from_str(&format!("{}=; Path=/login; HttpOnly; SameSite=Lax; Max-Age=0{secure}", txn_cookie(name))).unwrap(),
+            HeaderValue::from_str(&format!("{}=; Path=/login; HttpOnly; SameSite=Lax; Max-Age=0{secure}", self.sessions.login_cookie_name())).unwrap(),
         );
         r
     }
@@ -462,6 +451,7 @@ impl<A: LoginAccess> Login<A> {
         include_str!("../web/login.html")
             .replace("{{APP}}", self.branding.app)
             .replace("{{MARK}}", self.branding.mark)
+            .replace("{{DEV_COOKIE}}", &self.sessions.names().dev_cookie)
             .replace("{{DEV}}", &toggle.unwrap_or_default())
             .replace("{{HEADING}}", &heading)
             .replace("{{FACTS}}", &self.facts(dev))
@@ -555,22 +545,21 @@ pub async fn start<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: 
 /// Out to a button's provider: the authorization code flow with PKCE, the
 /// state bound to this browser by the transaction cookie.
 async fn begin<A: LoginAccess>(login: &Login<A>, b: &LoginButton, login_hint: Option<&str>, sign_up: bool, next: String) -> Response {
-    let login = login;
     let (provider, _) = &login.providers[&b.provider];
     let (issuer, audience, client) = provider.oidc().expect("checked at start");
     let client = client.expect("checked at start");
     let d = match login.discover(&b.provider, issuer).await {
         Ok(d) => d,
-        Err(e) => return page_response(&login, &next, Some(&e), StatusCode::BAD_GATEWAY),
+        Err(e) => return page_response(login, &next, Some(&e), StatusCode::BAD_GATEWAY),
     };
     let Some(auth) = d.authorization_endpoint else {
-        return page_response(&login, &next, Some("That sign-in service has no authorization endpoint."), StatusCode::BAD_GATEWAY);
+        return page_response(login, &next, Some("That sign-in service has no authorization endpoint."), StatusCode::BAD_GATEWAY);
     };
     let verifier = sessions::random_token();
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let state = login.sessions.begin(&b.provider, verifier, next.clone());
     let Ok(mut url) = url::Url::parse(&auth) else {
-        return page_response(&login, &next, Some("That sign-in service's address is malformed."), StatusCode::BAD_GATEWAY);
+        return page_response(login, &next, Some("That sign-in service's address is malformed."), StatusCode::BAD_GATEWAY);
     };
     {
         let mut qp = url.query_pairs_mut();
@@ -597,7 +586,7 @@ async fn begin<A: LoginAccess>(login: &Login<A>, b: &LoginButton, login_hint: Op
         header::SET_COOKIE,
         HeaderValue::from_str(&format!(
             "{}={state}; Path=/login; HttpOnly; SameSite=Lax; Max-Age=600{}",
-            txn_cookie(login.sessions.cookie_name()),
+            login.sessions.login_cookie_name(),
             login.secure()
         ))
         .unwrap(),
@@ -637,7 +626,7 @@ pub async fn callback<A: LoginAccess>(State(login): State<Arc<Login<A>>>, header
     let ours = headers
         .get(header::COOKIE)
         .and_then(|c| c.to_str().ok())
-        .and_then(|c| sessions::cookie(c, &txn_cookie(login.sessions.cookie_name())).map(str::to_string));
+        .and_then(|c| sessions::cookie(c, login.sessions.login_cookie_name()).map(str::to_string));
     if ours.as_deref() != Some(state.as_str()) {
         return fail("That sign-in was not started in this browser. Start again.");
     }

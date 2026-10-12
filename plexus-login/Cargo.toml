@@ -3,16 +3,30 @@ name = "plexus-login"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Login for a Plexus RPC hub — provider specs, the login page and its routes, sessions, the WebSocket gate and the auth backend — generic over the app's access rules"
+description = "Login for a Plexus RPC hub — provider specs (OIDC, WorkOS, Auth0, plexus-idp, nostr, agent keys), the login page and its routes, sessions, the WebSocket gate and the auth backend — generic over the app's access rules"
 repository = "https://github.com/hypermemetic-ai/menger"
-# SCAFFOLD-3 (S1): menger's login lifted as it is (owner, 2026-10-11) — a
-# workspace member of menger for now; SCAFFOLD-9 (B5) publishes it. The seam
-# to the app is one trait, `LoginAccess` (src/access.rs); menger implements
-# it over its `Access`.
+readme = "README.md"
+keywords = ["plexus", "login", "oidc", "workos", "auth"]
+categories = ["authentication", "web-programming::http-server"]
+# SCAFFOLD-3 (S1): menger's login lifted as it is (owner, 2026-10-11).
+# SCAFFOLD-9 (B5): named for whichever app takes it, wired in two calls,
+# published. A workspace member of menger; the seam to the app is one
+# trait, `LoginAccess` (src/access.rs); menger implements it over its
+# `Access`, `simple::SimpleAccess` is the ready-made one.
+#
+# What the package carries: the sources and the page (src/web_login.rs
+# include_str!s web/login.html). The tests and the example stay in the
+# repository.
+include = ["/src/**", "/web/login.html", "/README.md", "/LICENSE"]
 
 [dependencies]
+# The plexus 0.6 line, by sibling path in a checkout (menger's MFE-10) and
+# by version from crates.io once published.
 plexus-core = { path = "../../plexus-core", version = "0.6" }
 plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2", features = ["adapters"] }
+# SCAFFOLD-9: `Wired::apply` puts the gate, the anonymous view and the
+# protected resource on a TransportServerBuilder. Slim: no MCP, no REST.
+plexus-transport = { path = "../../plexus-transport", version = "0.5", default-features = false }
 axum = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 url = "2"
@@ -30,7 +44,8 @@ tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-# examples/toy.rs: a second hub on the crate, served over the transport.
-plexus-transport = { path = "../../plexus-transport", version = "0.5", default-features = false }
 jsonrpsee = { version = "0.26", features = ["ws-client", "server"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# tests/simple_login.rs: a fixture OIDC issuer mints the tokens plexus-idp
+# would (menger's tests/login_page.rs does the same).
+jsonwebtoken = "9"

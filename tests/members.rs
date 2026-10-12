@@ -92,7 +92,7 @@ async fn start() -> World {
     let port = free_port().await;
     let providers: Vec<Provider> = vec![format!("idp={iss},plexus:menger").parse().unwrap()];
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let sessions = Arc::new(Sessions::new(3600));
+    let sessions = Arc::new(Sessions::new(3600, &menger::login_names()));
     let access = Access::with_login(menger::session_table(&sessions), true, vec![format!("idp:{ADA}")]);
     let offers = providers.iter().map(menger::offer).collect();
     let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();

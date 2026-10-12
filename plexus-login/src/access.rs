@@ -70,15 +70,25 @@ pub trait LoginAccess: Clone + Send + Sync + 'static {
     /// `auth.waiting`: everyone signed in who holds nothing yet.
     fn waiting(&self) -> Vec<Waiting>;
 
-    /// `auth.logout`: ends the session the caller's connection is on.
+    /// `auth.logout`: ends the session the caller's connection is on. Only
+    /// asked of a caller whose identity carries [`LoginAccess::session_key`].
     fn logout(&self, caller: Option<&AuthContext>) -> Result<(), String>;
+
+    /// The metadata key a session-backed identity carries — the session
+    /// table's ([`crate::sessions::Sessions::session_key`]), never a copy.
+    /// `None`: the rules keep no sessions (login off), so no identity
+    /// carries one.
+    fn session_key(&self) -> Option<&str>;
 }
 
 /// What the login page says of the app it signs in to.
 #[derive(Debug, Clone, Copy)]
 pub struct Branding {
     /// The app's name, in the page's own words ("sign in from menger's own
-    /// page", "menger did not accept the signature") and its theme key.
+    /// page", "menger did not accept the signature"), the auth backend's
+    /// refusals ("this menger has no login page …"), the page's theme key,
+    /// and — through [`crate::LoginNames::for_app`] — the default cookie
+    /// names.
     pub app: &'static str,
     /// The app's version, as the page's side column lists it.
     pub version: &'static str,
@@ -162,6 +172,9 @@ pub(crate) mod test_access {
         }
         fn logout(&self, _: Option<&AuthContext>) -> Result<(), String> {
             Ok(())
+        }
+        fn session_key(&self) -> Option<&str> {
+            None
         }
     }
 }

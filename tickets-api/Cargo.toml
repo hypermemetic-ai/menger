@@ -17,7 +17,9 @@
 # half on the same predicate.
 [package]
 name = "menger-tickets-api"
-version = "0.5.0"
+# SCAFFOLD-9: 0.6 — `SessionCheck::key` (the session table names its own
+# metadata key) replaced `access::SESSION_KEY`.
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 description = "menger's ticket vocabulary, activation and Plexus RPC client — one declaration, shared by the server and the browser"

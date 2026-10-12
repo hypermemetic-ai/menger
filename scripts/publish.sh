@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# DIST-3: publish menger to crates.io — `menger-tickets-api`, then `menger`
-# with the app's build inside it (the `embedded-app` feature embeds it).
+# DIST-3: publish menger to crates.io — `menger-tickets-api`, then
+# `plexus-login` (SCAFFOLD-9), then `menger` with the app's build inside it
+# (the `embedded-app` feature embeds it).
 #
 #   scripts/publish.sh stage     build the app, stage the package, list it —
 #                                publishes nothing (a dirty tree is allowed:
 #                                it stages the working tree)
-#   scripts/publish.sh dry-run   stage, then `cargo publish --dry-run` both
-#   scripts/publish.sh publish   stage, then `cargo publish` both — for real;
-#                                refuses a dirty tree
+#   scripts/publish.sh dry-run   stage, then `cargo publish --dry-run` all three
+#   scripts/publish.sh publish   stage, then `cargo publish` all three — for
+#                                real; refuses a dirty tree
 #
 # 1. `trunk build --release` in frontend/ (README "Frontend" has the
 #    toolchain). The app's build is frontend/dist; no build, no publish.
@@ -22,10 +23,13 @@
 #    so the package carries what `include` names. The cost: the published
 #    crate has no .cargo_vcs_info.json (the commit is in this script's
 #    output instead).
-# 3. `cargo publish -p menger-tickets-api`, then `cargo publish -p menger
-#    --features embedded-app` — the feature only changes what cargo's
-#    verification builds, so the build it checks is the one with the app
-#    embedded from the packaged dist.
+# 3. `cargo publish -p menger-tickets-api`, then `-p plexus-login` (menger
+#    depends on both), then `cargo publish -p menger --features
+#    embedded-app` — the feature only changes what cargo's verification
+#    builds, so the build it checks is the one with the app embedded from
+#    the packaged dist. The dry run is one multi-package `cargo publish`
+#    (cargo ≥ 1.90), so menger's verification resolves the other two from
+#    their packages, not from crates.io where they are not yet.
 #
 # Publishing needs the plexus 0.6 line (plexus-core, plexus-macros,
 # plexus-client, plexus-auth-core, plexus-transport) on crates.io first
@@ -95,16 +99,16 @@ case $mode in
     say "staged; nothing published (scripts/publish.sh publish publishes it)"
     ;;
   dry-run)
-    step "cargo publish --dry-run -p menger-tickets-api"
-    cargo publish --dry-run -p menger-tickets-api
-    step "cargo publish --dry-run -p menger --features embedded-app"
-    cargo publish --dry-run -p menger --features embedded-app
+    step "cargo publish --dry-run -p menger-tickets-api -p plexus-login -p menger --features menger/embedded-app"
+    cargo publish --dry-run -p menger-tickets-api -p plexus-login -p menger --features menger/embedded-app
     ;;
   publish)
     step "cargo publish -p menger-tickets-api"
     cargo publish -p menger-tickets-api
+    step "cargo publish -p plexus-login"
+    cargo publish -p plexus-login
     step "cargo publish -p menger --features embedded-app"
     cargo publish -p menger --features embedded-app
-    say "published menger-tickets-api and menger from $commit"
+    say "published menger-tickets-api, plexus-login and menger from $commit"
     ;;
 esac

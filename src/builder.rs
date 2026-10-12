@@ -78,7 +78,7 @@ pub async fn build_rpc_offering(
 ) -> anyhow::Result<Arc<DynamicHub>> {
     let providers: Vec<AuthProvider> =
         offers.iter().map(|o| AuthProvider { name: o.name.clone(), kind: AuthKind::Browser, label: None }).collect();
-    let backend = Arc::new(MengerAuth::new(access.clone(), providers, None));
+    let backend = Arc::new(MengerAuth::new(access.clone(), providers, None, crate::login_access::BRANDING.app));
     build_rpc_login(db_path, seed, shape, offers, access, backend, None).await
 }
 

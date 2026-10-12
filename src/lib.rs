@@ -16,7 +16,7 @@ mod builder;
 /// SCAFFOLD-3: menger's side of plexus-login's seam — `MengerAccess`
 /// (the `LoginAccess` impl over `Access`), `SessionTable`, `offer`.
 pub mod login_access;
-pub use login_access::{offer, session_table, MengerAccess, SessionTable};
+pub use login_access::{login_names, offer, session_table, MengerAccess, SessionTable};
 
 /// SCAFFOLD-3: the login lives in plexus-login; these keep its paths
 /// (`menger::login::Provider`, `menger::sessions::Gate`, …), its generic
@@ -41,6 +41,13 @@ pub mod web_login {
     pub use plexus_login::web_login::*;
     pub type Login = plexus_login::web_login::Login<crate::MengerAccess>;
     pub type LoginConfig = plexus_login::web_login::LoginConfig<crate::MengerAccess>;
+}
+
+/// SCAFFOLD-9: the login wired in two calls (`main` runs on it), over
+/// menger's rules.
+pub mod wiring {
+    pub use plexus_login::wiring::*;
+    pub type Wired = plexus_login::wiring::Wired<crate::MengerAccess>;
 }
 
 pub mod shell;
