@@ -44,6 +44,9 @@
 //! - **A deep link** brings the open ticket's place into view when the list
 //!   holds it — where the rows held say, or `list { filter, after: id, limit: 0
 //!   }`'s `first` — once per navigation, and again under a new filter.
+//!   AGS-26: into the middle of the nav, every navigation, and kept there
+//!   while the rows around it arrive; a row already drawn is centred where it
+//!   is.
 //! - **The open ticket is always listed** (FILTER-24): under a filter every
 //!   ask carries `keep: <the open ticket>` — `counts`, `list`, the place of a
 //!   deep link — so the server counts it and pages it at its id-order place
@@ -237,16 +240,14 @@ pub(crate) fn next_ask<T>(m: &Matches, r: &Ranked<T>, lo: usize, hi: usize) -> O
     Some(Ask { from, cursor: cursor(m, r, from), limit: (last + 1 - from).min(MAX_PAGE) })
 }
 
-/// Where to scroll so row `i` shows — given the row at the viewport's top
-/// (`top`, fractional) and how many rows fit (`fits`): `None` when it shows
-/// already; else the row to put at the top so it sits mid-viewport (never
-/// above the first).
+/// Where to scroll so row `i` sits mid-viewport — given the row at the
+/// viewport's top (`top`, fractional) and how many rows fit (`fits`): the row
+/// to put at the top (never above the first), or `None` when it is there
+/// already, to half a row. AGS-26: the open ticket is centred, not merely
+/// shown.
 pub(crate) fn scroll_row(top: f64, fits: f64, i: usize) -> Option<f64> {
-    let i = i as f64;
-    if i >= top && i + 1.0 <= top + fits {
-        return None;
-    }
-    Some((i - (fits - 1.0).max(0.0) / 2.0).max(0.0))
+    let want = (i as f64 - (fits - 1.0).max(0.0) / 2.0).max(0.0);
+    ((want - top).abs() >= 0.5).then_some(want)
 }
 
 /// The line under the list, when it has one to say.
@@ -914,7 +915,9 @@ pub(crate) fn flat_list(
     });
 
     // A deep link: the open ticket's place brought into view, once the list
-    // is counted.
+    // is counted. AGS-26: centred, and kept there while the rows around it
+    // arrive; a row already drawn (a step of the cursor, a click) is centred
+    // where it is, with nothing to ask.
     Effect::new(move |_| {
         let Route::Ticket(id) = route.get() else { return };
         if f.matches.with(Option::is_none) {
@@ -925,12 +928,20 @@ pub(crate) fn flat_list(
         }
         revealed.set_value(Some(id.clone()));
         spawn_local(async move {
-            let Some(p) = f.locate(&id).await else { return };
-            if revealed.try_get_value() != Some(Some(id)) {
-                return; // a newer navigation, or the list is gone
-            }
+            let alive = {
+                let id = id.clone();
+                move || revealed.try_get_value() == Some(Some(id.clone()))
+            };
             dom::sleep_ms(0).await;
-            show(list_ref, f, p);
+            if nav::selected_row(&id).is_none() {
+                let Some(p) = f.locate(&id).await else { return };
+                if !alive() {
+                    return; // a newer navigation, or the list is gone
+                }
+                dom::sleep_ms(0).await;
+                show(list_ref, f, p);
+            }
+            nav::settle_centred(id, alive).await;
         });
     });
 
@@ -971,8 +982,8 @@ pub(crate) fn flat_list(
     .into_any()
 }
 
-/// Scroll the nav so position `p` shows — mid-viewport, unless it shows
-/// already. The window follows the scroll and fetches what is there.
+/// Scroll the nav so position `p` sits mid-viewport (AGS-26: in view or
+/// not). The window follows the scroll and fetches what is there.
 fn show(list_ref: NodeRef<leptos::html::Div>, f: Flat, p: usize) {
     let Some(Some(el)) = list_ref.try_get_untracked() else { return };
     let Some(sc) = nav::scroller() else { return };
@@ -1249,16 +1260,21 @@ mod tests {
         assert_eq!(note_of(Some("kind build"), Some(12), Some("no")), Some(Note::Refused("no".into())));
     }
 
-    /// FILTER-20, a deep link: a row that shows is left where it is; one
-    /// above or below the viewport is brought to its middle, never above the
-    /// first row.
+    /// FILTER-20, a deep link: the open ticket is brought to the viewport's
+    /// middle, never above the first row — AGS-26: wherever it was, in view
+    /// or not; a row already in the middle stays.
     #[test]
-    fn the_open_ticket_is_scrolled_to_mid_viewport_unless_it_shows() {
-        assert_eq!(scroll_row(100.0, 40.0, 100), None, "the top row");
-        assert_eq!(scroll_row(100.0, 40.0, 139), None, "the bottom row");
+    fn the_open_ticket_is_scrolled_to_mid_viewport() {
+        // AGS-26: a row in view is centred too — at the top, at the bottom.
+        assert_eq!(scroll_row(100.0, 40.0, 100), Some(100.0 - 19.5), "the top row");
+        assert_eq!(scroll_row(100.0, 40.0, 139), Some(139.0 - 19.5), "the bottom row");
         assert_eq!(scroll_row(100.0, 40.0, 140), Some(140.0 - 19.5));
         assert_eq!(scroll_row(100.0, 40.0, 99), Some(99.0 - 19.5));
+        assert_eq!(scroll_row(80.5, 40.0, 100), None, "already in the middle");
+        assert_eq!(scroll_row(80.2, 40.0, 100), None, "to half a row");
+        assert_eq!(scroll_row(80.0, 40.0, 100), Some(80.5));
         assert_eq!(scroll_row(500.0, 40.0, 3), Some(0.0), "never above the first row");
+        assert_eq!(scroll_row(0.0, 40.0, 3), None, "the first rows sit as near the middle as they can");
         assert_eq!(scroll_row(0.0, 40.0, 600_000), Some(600_000.0 - 19.5));
     }
 

@@ -258,6 +258,31 @@
 //! windowed and paged and live (src/flat.rs). Tree is everything above,
 //! unchanged: while Flat is chosen the tree is unmounted and its deep-link
 //! reveal waits; while Tree is chosen the flat list does not exist.
+//!
+//! AGS-26: **the cursor is the open ticket** (owner, 2026-10-12: "make sure
+//! that whatever ticket is open is selected in the nav and centered. that way
+//! key bindings that impact the nav selection always succeed"; "moving up
+//! should open the ticket the cursor is under"). So:
+//!
+//! - **Centred.** Every navigation to a ticket centres its row in the nav —
+//!   a row already drawn where it is, otherwise once the reveal has opened its
+//!   chain — and keeps it there while the lists around it settle
+//!   ([`settle_centred`]); a new nav filter centres it again in the new tree.
+//!   The Flat view does the same (src/flat.rs).
+//! - **↑/↓ (k/j) step and open.** A step goes to the previous/next ticket's
+//!   row — a shortcode's heading is passed over ([`next_stop`]) — focuses it
+//!   and opens it ([`land`]). In the tree it steps from the focused row;
+//!   anywhere else on a ticket page (not a text field, a dialog, a menu) from
+//!   the open ticket's row ([`page_keydown`]), which is always drawn
+//!   (FILTER-24). h/l's steps land the same way.
+//! - **← and → between the nav and the page.** → in the nav focuses the page
+//!   beside it ([`focus_view`]), ← there focuses the open ticket's row. The
+//!   tree's open and close are h/l's alone.
+//! - **`f` on a ticket page** makes the nav's filter `under <the ticket>` —
+//!   the ticket and its descendants — and opens its row ([`filter_to`]).
+//!   **↑ on the first ticket** widens the nav's first `under T` group to T's
+//!   parent, a shortcode's to its root's host, and drops it at a top root
+//!   ([`widen`]).
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -273,7 +298,8 @@ use crate::flat::{self, View};
 use crate::kids::key;
 use crate::lens::{use_lens, Lens, Level};
 use crate::session::Member;
-use crate::{cache, dom, keys, session, st_class, Route};
+use crate::{cache, dom, keys, session, st_class, tags, Route};
+use menger_tickets_api::filter::{Field, Filter, Group as FGroup, Predicate};
 use menger_tickets_api::{Group, Kind, Status, TicketSummary, TicketsEvent};
 
 /// Every treeitem in the nav, in document order (group rows and leaves).
@@ -1600,18 +1626,67 @@ async fn get_summary(id: &str) -> Option<TicketSummary> {
     })
 }
 
-/// Bring the selected row into view (block: nearest — no jump if it is
-/// already visible). Called a tick after a route change so the `.sel`
-/// class has been applied.
-fn scroll_selected_into_view() -> bool {
-    let Some(doc) = dom::window().document() else { return false };
-    if let Ok(Some(el)) = doc.query_selector("#nav .row.sel") {
-        let opts = web_sys::ScrollIntoViewOptions::new();
-        opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
-        el.scroll_into_view_with_scroll_into_view_options(&opts);
-        return true;
+/// AGS-26: the open ticket's row, when it is drawn — the tree's or the flat
+/// list's.
+pub(crate) fn selected_row(id: &str) -> Option<web_sys::HtmlElement> {
+    dom::window()
+        .document()?
+        .query_selector(&format!("#nav .row.sel[data-nav-id=\"{id}\"]"))
+        .ok()
+        .flatten()?
+        .dyn_into()
+        .ok()
+}
+
+/// AGS-26: how far the nav must scroll for a row to sit in its middle — the
+/// row's middle less the viewport's (px; the scroller clamps it at the list's
+/// ends).
+pub(crate) fn centring(view_top: f64, view_height: f64, row_top: f64, row_height: f64) -> f64 {
+    (row_top + row_height / 2.0) - (view_top + view_height / 2.0)
+}
+
+/// AGS-26: scroll the nav so `row` sits in its middle, as near as the list's
+/// ends allow. Whether the scroll moved.
+fn center_row(sc: &web_sys::HtmlElement, row: &web_sys::Element) -> bool {
+    let (s, r) = (sc.get_bounding_client_rect(), row.get_bounding_client_rect());
+    let delta = centring(s.top(), f64::from(sc.client_height()), r.top(), r.height()).round() as i32;
+    let before = sc.scroll_top();
+    if delta != 0 {
+        sc.set_scroll_top(before + delta);
     }
-    false
+    sc.scroll_top() != before
+}
+
+/// AGS-26: the open ticket's row centred, and kept there while the lists
+/// around it settle — a page arriving above it, a list asking again under a
+/// new filter, moves it after the first scroll. Polled every 50 ms until the
+/// row has stood still for a quarter of a second, for at most three seconds;
+/// it stops when `alive` says the navigation is over, and when the reader
+/// scrolls the nav themselves (the scroll is not where it was left).
+pub(crate) async fn settle_centred(id: String, alive: impl Fn() -> bool) {
+    let mut left: Option<i32> = None;
+    let mut still = 0;
+    for _ in 0..60 {
+        if !alive() {
+            return;
+        }
+        let Some(sc) = scroller() else { return };
+        if left.is_some_and(|l| sc.scroll_top() != l) {
+            return; // the reader scrolled
+        }
+        if let Some(row) = selected_row(&id) {
+            if center_row(&sc, &row) {
+                still = 0;
+            } else {
+                still += 1;
+                if still >= 5 {
+                    return;
+                }
+            }
+            left = Some(sc.scroll_top());
+        }
+        dom::sleep_ms(50).await;
+    }
 }
 
 /// The nav's scroller.
@@ -1644,13 +1719,58 @@ thread_local! {
     static CROSSING: Cell<Option<(bool, u32)>> = const { Cell::new(None) };
 }
 
+/// AGS-26: what a walkable element is to a step of the nav's cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Stop {
+    /// A ticket's row: a step lands here and opens it.
+    Ticket,
+    /// A row that is no ticket — a shortcode's heading (FILTER-23), a
+    /// rootless shortcode's row: a step passes over it.
+    Group,
+    /// Rows not fetched yet — a spacer, a pending stretch: a step crosses it
+    /// once they are rows ([`cross_gap`]).
+    Gap,
+}
+
+fn stop_of(el: &web_sys::Element) -> Stop {
+    if is_gap(el) {
+        Stop::Gap
+    } else if el.has_attribute("data-nav-id") {
+        Stop::Ticket
+    } else {
+        Stop::Group
+    }
+}
+
+/// AGS-26: where a step from `at` goes (towards the end when `down`) — the
+/// next ticket's row or gap, passing over the rows that are no ticket;
+/// `None` at the nav's end, which ↑ at the top widens ([`widen`]).
+pub(crate) fn next_stop(stops: &[Stop], at: usize, down: bool) -> Option<usize> {
+    if down {
+        (at + 1..stops.len()).find(|&j| stops[j] != Stop::Group)
+    } else {
+        (0..at.min(stops.len())).rev().find(|&j| stops[j] != Stop::Group)
+    }
+}
+
+/// AGS-26: the cursor lands on `row` — it takes focus (and the tree's tab
+/// stop) and, a ticket's row, its ticket opens: the cursor and the open
+/// ticket are one row.
+fn land(row: &web_sys::HtmlElement) {
+    keys::focus_and_rove(&tree_items(), row);
+    if let Some(id) = row.get_attribute("data-nav-id") {
+        crate::navigate_to_ticket(&id);
+    }
+}
+
 /// SCALE-24: a step from the row `from` into the gap beside it — a spacer,
 /// or rows still being fetched. Scroll the least that brings the gap's near
 /// edge (and a row of it) into view, so the window mounts and fetches what
-/// is there; then focus the row that is next to `from` once it is a row.
-/// Polled a frame at a time, as the board's j/k does past its window
-/// (MFE-12), for as long as a fetch can reasonably take. A press while it
-/// waits is one more step, taken when it lands ([`tree_keydown`]).
+/// is there; then land on the ticket row next to `from` once it is a row
+/// (AGS-26: and open it). Polled a frame at a time, as the board's j/k does
+/// past its window (MFE-12), for as long as a fetch can reasonably take. A
+/// press while it waits is one more step, taken when it lands
+/// ([`tree_keydown`]) — the cursor lands, and a ticket opens, once.
 fn cross_gap(from: String, down: bool) {
     if let Some((dir, extra)) = CROSSING.with(Cell::get) {
         // One in flight: this press is a step more (or one less, against it).
@@ -1666,38 +1786,34 @@ fn cross_gap(from: String, down: bool) {
             let Some(i) = els.iter().position(|el| el.get_attribute("data-node-key").as_deref() == Some(&from)) else {
                 break; // the row we started from is gone: nothing to step from
             };
-            let next = if down { els.get(i + 1) } else { i.checked_sub(1).and_then(|j| els.get(j)) };
-            let Some(next) = next else { break };
-            if !is_gap(next) {
-                keys::focus_and_rove(&tree_items(), next);
+            let stops: Vec<Stop> = els.iter().map(|el| stop_of(el)).collect();
+            let Some(j) = next_stop(&stops, i, down) else { break };
+            if stops[j] != Stop::Gap {
                 // The steps pressed while this one waited, through rows
                 // that are mounted, until another gap (or none are left).
                 let mut extra = CROSSING.with(Cell::get).map_or(0, |(_, e)| e);
-                let mut at = next.clone();
+                let mut at = j;
                 while extra > 0 {
-                    let els = walkable();
-                    let Some(i) = els.iter().position(|el| el.is_same_node(Some(&at))) else { break };
-                    let n = if down { els.get(i + 1) } else { i.checked_sub(1).and_then(|j| els.get(j)) };
-                    match n {
-                        Some(n) if !is_gap(n) => {
-                            keys::focus_and_rove(&tree_items(), n);
-                            at = n.clone();
+                    match next_stop(&stops, at, down) {
+                        Some(n) if stops[n] == Stop::Ticket => {
+                            at = n;
                             extra -= 1;
                         }
                         _ => break,
                     }
                 }
+                land(&els[at]);
                 if extra == 0 {
                     break;
                 }
                 // Another gap with steps still to take: cross it from here.
                 CROSSING.with(|c| c.set(Some((down, extra - 1))));
-                let Some(key) = at.get_attribute("data-node-key") else { break };
+                let Some(key) = els[at].get_attribute("data-node-key") else { break };
                 from = key;
                 continue;
             }
             if let Some(sc) = scroller() {
-                let (s, g) = (sc.get_bounding_client_rect(), next.get_bounding_client_rect());
+                let (s, g) = (sc.get_bounding_client_rect(), els[j].get_bounding_client_rect());
                 let pitch = PITCH_GUESS;
                 let delta = if down { g.top() + pitch - s.bottom() } else { g.bottom() - pitch - s.top() };
                 if (down && delta > 0.5) || (!down && delta < -0.5) {
@@ -1762,20 +1878,27 @@ fn to_the_top() {
 /// keystrokes arrive here having bubbled from whichever row has focus,
 /// so there is no per-row listener and no second notion of "current".
 ///
-/// Up/Down (j/k) walk the visible rows; Right (l) opens a closed node or
-/// steps into an open one; Left (h) closes an open node or steps out to
-/// its parent row; Enter opens the focused ticket (or toggles a group
-/// row); Home/End jump. AGS-20: "node" is any row with children — an
-/// epic's shortcode row or a ticket that decomposes — so the map is the
-/// same at every depth. Everything else — `/`, `?`, `g h` — is left to
-/// bubble to the global listener.
+/// Up/Down (j/k) walk the visible rows; l opens a closed node or steps into
+/// an open one; h closes an open node or steps out to its parent row; Enter
+/// opens the focused ticket (or toggles a group row); Home/End jump.
+/// AGS-20: "node" is any row with children — an epic's shortcode row or a
+/// ticket that decomposes — so the map is the same at every depth.
+/// Everything else — `/`, `?`, `g h` — is left to bubble to the global
+/// listener.
+///
+/// AGS-26: **the cursor is the open ticket.** A step (Up/Down, j/k, and h/l's
+/// steps) lands on the next ticket's row — a shortcode's heading is passed
+/// over — and opens it ([`land`]); Up on the first ticket widens an `under`
+/// filter by one parent ([`widen`]). Right moves focus out of the nav into
+/// the page beside it ([`focus_view`]); the arrows no longer open and close
+/// (h and l do).
 ///
 /// SCALE-24: the visible rows are the mounted ones, and a windowed list
 /// mounts only those near the viewport. A step whose next row is a gap — a
 /// spacer, or a row still being fetched — scrolls it into the window and
-/// focuses it when it is mounted ([`cross_gap`]); End does the same for the
+/// lands when it is mounted ([`cross_gap`]); End does the same for the
 /// end of the tree.
-fn tree_keydown(ev: web_sys::KeyboardEvent, expanded: RwSignal<BTreeSet<String>>) {
+fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
     if ev.default_prevented() || ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
         return;
     }
@@ -1812,38 +1935,21 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, expanded: RwSignal<BTreeSet<String>>
     let open = current.get_attribute("aria-expanded").as_deref() == Some("true");
     let toggle = |k: Option<String>| {
         if let Some(k) = k {
-            expanded.update(|e| {
+            ctx.expanded.update(|e| {
                 if !e.remove(&k) {
                     e.insert(k);
                 }
             });
         }
     };
-    let step = |down: bool| {
-        if CROSSING.with(Cell::get).is_some() {
-            // a crossing is in flight: this press is counted there
-            cross_gap(String::new(), down);
-            return;
-        }
-        let next = if down { steps.get(at + 1) } else { at.checked_sub(1).and_then(|j| steps.get(j)) };
-        match next {
-            Some(el) if is_gap(el) => {
-                if let Some(k) = node_key.clone() {
-                    cross_gap(k, down);
-                }
-            }
-            Some(el) => keys::focus_and_rove(&all, el),
-            None => {}
-        }
-    };
 
     let handled = match key.as_str() {
         "ArrowDown" | "j" => {
-            step(true);
+            step_from(&steps, at, true, ctx, lens);
             true
         }
         "ArrowUp" | "k" => {
-            step(false);
+            step_from(&steps, at, false, ctx, lens);
             true
         }
         "Home" => {
@@ -1865,26 +1971,33 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, expanded: RwSignal<BTreeSet<String>>
         // Open a closed node in place; step into an open one. On a row
         // with no children there is nowhere further in — the pattern says
         // do nothing.
-        "ArrowRight" | "l" => {
+        "l" => {
             if expandable {
                 if !open {
                     toggle(node_key.clone());
                 } else {
-                    step(true);
+                    step_from(&steps, at, true, ctx, lens);
                 }
             }
             true
         }
         // Close an open node in place; otherwise step out to the row it
-        // hangs under (which is where a second Left then closes it).
-        "ArrowLeft" | "h" => {
+        // hangs under (which is where a second h then closes it).
+        "h" => {
             if expandable && open {
                 toggle(node_key.clone());
             } else if let Some(row) = parent_row(&current) {
-                keys::focus_and_rove(&all, &row);
+                land(&row);
             }
             true
         }
+        // AGS-26: out of the nav, into the page beside it; Left is already
+        // here.
+        "ArrowRight" => {
+            focus_view();
+            true
+        }
+        "ArrowLeft" => true,
         "Enter" => {
             match &leaf_id {
                 // The row is a real <a href>, so the browser would
@@ -1901,6 +2014,206 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, expanded: RwSignal<BTreeSet<String>>
         ev.prevent_default();
         ev.stop_propagation();
     }
+}
+
+/// AGS-26: a step of the nav's cursor from `steps[at]` — onto the next
+/// ticket's row, which opens; across a gap once it is fetched; and Up with no
+/// ticket above, the nav's `under` filter one parent wider.
+fn step_from(steps: &[web_sys::HtmlElement], at: usize, down: bool, ctx: Ctx, lens: Lens) {
+    if CROSSING.with(Cell::get).is_some() {
+        // a crossing is in flight: this press is counted there
+        cross_gap(String::new(), down);
+        return;
+    }
+    let stops: Vec<Stop> = steps.iter().map(|el| stop_of(el)).collect();
+    match next_stop(&stops, at, down) {
+        Some(j) if stops[j] == Stop::Gap => {
+            if let Some(k) = steps[at].get_attribute("data-node-key") {
+                cross_gap(k, down);
+            }
+        }
+        Some(j) => land(&steps[j]),
+        None if !down => {
+            widen(lens, ctx.tree);
+        }
+        None => {}
+    }
+}
+
+/// AGS-26: the nav's keys where focus is not in its tree — on a ticket page,
+/// anywhere but a text field, a dialog, a menu or an overlay, while the nav
+/// is shown: Up/Down (k/j) step the cursor from the open ticket's row, Left
+/// puts focus on that row, and `f` filters the nav to the open ticket and
+/// its descendants. The open ticket is always drawn and selected (FILTER-24,
+/// [`reveal`]), so the keys always have a row to start from.
+fn page_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens, hidden: RwSignal<bool>) {
+    if ev.default_prevented() || ev.is_composing() || ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+        return;
+    }
+    let Some(Route::Ticket(id)) = ctx.route.try_get_untracked() else { return };
+    if hidden.try_get_untracked() != Some(false) || !keys::no_overlay() {
+        return;
+    }
+    let target = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+    if target.as_ref().is_some_and(|t| keys::defer_to_focus(t) || t.closest("#nav .tree").ok().flatten().is_some()) {
+        return;
+    }
+    let handled = match ev.key().as_str() {
+        "ArrowDown" | "j" => {
+            step_selected(id, true, ctx, lens);
+            true
+        }
+        "ArrowUp" | "k" => {
+            step_selected(id, false, ctx, lens);
+            true
+        }
+        "ArrowLeft" => {
+            focus_selected(&id);
+            true
+        }
+        "f" => {
+            filter_to(&id, ctx, lens);
+            true
+        }
+        _ => false,
+    };
+    if handled {
+        ev.prevent_default();
+    }
+}
+
+/// AGS-26: a step from the open ticket's row — at once when it is drawn,
+/// otherwise once it is (a deep link still revealing it), for a while.
+fn step_selected(id: String, down: bool, ctx: Ctx, lens: Lens) {
+    let from_row = move || {
+        let row = selected_row(&id)?;
+        let steps = walkable();
+        let at = steps.iter().position(|el| el.is_same_node(Some(&row)))?;
+        step_from(&steps, at, down, ctx, lens);
+        Some(())
+    };
+    if from_row().is_some() {
+        return;
+    }
+    spawn_local(async move {
+        for _ in 0..40 {
+            dom::sleep_ms(50).await;
+            if from_row().is_some() {
+                return;
+            }
+        }
+    });
+}
+
+/// AGS-26: Left from the page — focus on the open ticket's row (the tree's
+/// tab stop, when it is not drawn).
+fn focus_selected(id: &str) {
+    if let Some(row) = selected_row(id) {
+        keys::focus_and_rove(&tree_items(), &row);
+        return;
+    }
+    ensure_tree_tab_stop();
+    if let Some(stop) = keys::query_all("#nav .tree [role=treeitem][tabindex=\"0\"]").into_iter().next() {
+        keys::focus_row(&stop);
+    }
+}
+
+/// The page beside the nav — its scroller.
+fn the_view() -> Option<web_sys::HtmlElement> {
+    dom::window().document()?.query_selector("#app .content").ok().flatten()?.dyn_into().ok()
+}
+
+/// AGS-26: Right from the nav — focus in the page beside it: its scroller,
+/// where Space and Page Up/Down scroll it and Tab walks it. It is focusable
+/// only while it has the focus this gives it ([`unfocusable_view`]): a click
+/// in the page focuses nothing, as before, so the board's keys still resume
+/// from the row they left (MFE-12).
+fn focus_view() {
+    if let Some(view) = the_view() {
+        let _ = view.set_attribute("tabindex", "-1");
+        let _ = view.focus();
+    }
+}
+
+/// AGS-26: the page's scroller losing focus — to anything, or to nothing (a
+/// click where nothing takes focus) — takes back the tab index
+/// [`focus_view`] gave it.
+fn unfocusable_view(ev: web_sys::FocusEvent) {
+    let Some(view) = the_view() else { return };
+    let off_view = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).is_some_and(|t| t.is_same_node(Some(&view)));
+    if off_view && view.has_attribute("tabindex") {
+        let _ = view.remove_attribute("tabindex");
+    }
+}
+
+/// AGS-26: `f` on a ticket page — the nav's filter becomes the ticket and its
+/// descendants, `under <id>` (what its tag's "Filter under" makes, FILTER-22),
+/// and its row opens to show them. The open ticket is centred in the new tree
+/// ([`reveal`], once per filter).
+fn filter_to(id: &str, ctx: Ctx, lens: Lens) {
+    lens.edit(Level::Nav, |k| *k = tags::only(&tags::TagClause::Under(id.to_string()), k));
+    if ctx.expanded.with_untracked(|e| !e.contains(id)) {
+        ctx.expanded.update(|e| {
+            e.insert(id.to_string());
+        });
+    }
+}
+
+/// AGS-26: the first `under T` group of a filter — at its place, with T
+/// (a ticket or a shortcode).
+pub(crate) fn under_group(f: &Filter) -> Option<(usize, String)> {
+    f.groups.iter().enumerate().find_map(|(i, g)| match g.preds.as_slice() {
+        [p] if !p.not => match &p.field {
+            Field::Under(t) => Some((i, t.clone())),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// AGS-26: the filter with its group at `at` made `under up` — or, with no
+/// `up` (T had no parent), taken out.
+pub(crate) fn with_under(f: &Filter, at: usize, up: Option<&str>) -> Filter {
+    let mut next = f.clone();
+    if at < next.groups.len() {
+        match up {
+            Some(p) => next.groups[at] = FGroup::one(Predicate::is(Field::Under(p.to_ascii_uppercase()))),
+            None => {
+                next.groups.remove(at);
+            }
+        }
+    }
+    next
+}
+
+/// AGS-26: Up on the nav's first ticket — its filter one parent more
+/// permissive: its first `under T` group becomes `under` T's parent (for a
+/// shortcode, its root's host), and goes when T has none. Nothing without
+/// such a group. The open ticket stays selected and is centred in the wider
+/// tree ([`reveal`], once per filter).
+fn widen(lens: Lens, tree: Tree) {
+    let Some(kept) = untrack(|| lens.kept(Level::Nav)) else { return };
+    let Some((at, t)) = under_group(&kept.filter) else { return };
+    spawn_local(async move {
+        let up = if key(&t).is_some() {
+            match get_summary(&t).await {
+                Some(s) => s.parent,
+                None => return, // the server could not say: the filter stays
+            }
+        } else {
+            let sc = t.to_ascii_uppercase();
+            match tree.groups.with_untracked(|m| m.as_ref().map(|m| m.get(&sc).and_then(|g| g.host.clone()))) {
+                Some(host) => host,
+                None => return, // no groups yet
+            }
+        };
+        lens.edit(Level::Nav, |k| {
+            // Only the filter that was widened: a change since is the reader's.
+            if under_group(&k.filter).is_some_and(|(a, x)| a == at && x == t) {
+                k.filter = with_under(&k.filter, at, up.as_deref());
+            }
+        });
+    });
 }
 
 /// What every node in the tree needs, in one Copy bundle (signals and
@@ -2094,22 +2407,21 @@ async fn reveal(ctx: Ctx, leaf: String, gen: u32) {
         if REVEAL_GEN.with(Cell::get) != gen {
             return;
         }
-        let sel = dom::window()
-            .document()
-            .and_then(|d| d.query_selector(&format!("#nav .row.sel[data-nav-id=\"{leaf}\"]")).ok().flatten());
-        if sel.is_some() {
-            scroll_selected_into_view();
+        // AGS-26: the selected row, centred and kept there as the lists
+        // around it settle.
+        if selected_row(&leaf).is_some() {
+            settle_centred(leaf, move || REVEAL_GEN.with(Cell::get) == gen).await;
             return;
         }
         // FILTER-14: the open ticket outside the lens — its deepest drawn
-        // ancestor, into view (FILTER-23: a shortcode's heading among them).
+        // ancestor, centred (FILTER-23: a shortcode's heading among them).
         let row = dom::window()
             .document()
             .and_then(|d| d.query_selector(&format!("#nav .row[data-node-key=\"{leaf}\"]")).ok().flatten());
         if let Some(row) = row {
-            let opts = web_sys::ScrollIntoViewOptions::new();
-            opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
-            row.scroll_into_view_with_scroll_into_view_options(&opts);
+            if let Some(sc) = scroller() {
+                center_row(&sc, &row);
+            }
             return;
         }
     }
@@ -2290,9 +2602,13 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
     // does not fight a node the user then chose to close. SCALE-24: the
     // chain comes from the server (`get` per ancestor), so it waits for the
     // first groups — not for any walk.
-    let revealed = StoredValue::new(None::<String>);
+    // AGS-26: and once per filter — a new nav filter draws a new tree, and the
+    // open ticket is centred in it again. A row already drawn (a step of the
+    // cursor, a click) is centred where it is, with no chain to fetch.
+    let revealed = StoredValue::new(None::<(String, Option<String>)>);
     Effect::new(move |_| {
         let Route::Ticket(id) = route.get() else { return };
+        let filter = under.text.get();
         if tree.epoch.get() == 0 {
             return; // no groups yet: this effect re-runs when there are
         }
@@ -2302,15 +2618,24 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
             revealed.set_value(None);
             return;
         }
-        if revealed.get_value().as_deref() == Some(id.as_str()) {
+        let was = revealed.get_value();
+        if was.as_ref().is_some_and(|(i, f)| *i == id && *f == filter) {
             return;
         }
-        revealed.set_value(Some(id.clone()));
+        let same_tree = was.is_some_and(|(_, f)| f == filter);
+        revealed.set_value(Some((id.clone(), filter)));
         let gen = REVEAL_GEN.with(|g| {
             g.set(g.get().wrapping_add(1));
             g.get()
         });
-        spawn_local(reveal(ctx, id, gen));
+        spawn_local(async move {
+            dom::sleep_ms(0).await;
+            if same_tree && selected_row(&id).is_some() {
+                settle_centred(id, move || REVEAL_GEN.with(Cell::get) == gen).await;
+            } else {
+                reveal(ctx, id, gen).await;
+            }
+        });
     });
 
     // AGS-18: keep exactly one row as the tree's tab stop as the tree
@@ -2329,6 +2654,10 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
         });
     });
     let _ = window_event_listener(leptos::ev::resize, move |_| tree.viewport.notify());
+    // AGS-26: the nav's keys from anywhere on a ticket page; the page beside
+    // the nav focusable only while Right has put focus there.
+    let _ = window_event_listener(leptos::ev::keydown, move |ev: web_sys::KeyboardEvent| page_keydown(ev, ctx, lens, hidden));
+    let _ = window_event_listener(leptos::ev::focusout, unfocusable_view);
     let tree_ref = NodeRef::<leptos::html::Div>::new();
     tree_ref.on_load(|el: web_sys::HtmlDivElement| keep_focus(&el));
 
@@ -2339,8 +2668,9 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
             // FILTER-22: a tag in the nav builds the nav's filter.
             data-tag-level="nav"
             class:lensed=move || under.on.get()
-            // FILTER-14: `f` opens the nav's filter while the nav has focus.
-            on:keydown=move |ev| nav_f(ev, lens)
+            // FILTER-14: `f` opens the nav's filter while the nav has focus —
+            // AGS-26: on a ticket page, filters it to the open ticket's tree.
+            on:keydown=move |ev| nav_f(ev, ctx, lens)
         >
             <div class="brand">
                 "menger"
@@ -2379,7 +2709,7 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
             // nav: the server-backed categories, the inherited global pills,
             // the menu's counts from `facets`.
             <div class="nbar">
-                <FilterBar level=Level::Nav cats=Cat::SERVER.to_vec() counts=crate::counts::provider(Level::Nav) hint="Filter the nav (f)" />
+                <FilterBar level=Level::Nav cats=Cat::SERVER.to_vec() counts=crate::counts::provider(Level::Nav) hint="Filter the nav (f — on a ticket page, f filters it to that ticket and its children)" />
             </div>
             <div class="tree-scroll" on:scroll=move |_| tree.viewport.notify()>
                 <div
@@ -2388,7 +2718,7 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                     aria-label="tickets"
                     data-view=move || nav_view.get().name()
                     node_ref=tree_ref
-                    on:keydown=move |ev| tree_keydown(ev, expanded)
+                    on:keydown=move |ev| tree_keydown(ev, ctx, lens)
                 >
                     {move || match nav_view.get() {
                         View::Tree => view! {
@@ -2413,8 +2743,10 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
 }
 
 /// FILTER-14: `f` in the nav opens the nav's filter menu — unless typing,
-/// or in a dialog or menu (the filter's own menu among them).
-fn nav_f(ev: web_sys::KeyboardEvent, lens: Lens) {
+/// or in a dialog or menu (the filter's own menu among them). AGS-26: on a
+/// ticket page it filters the nav to the open ticket and its descendants, as
+/// it does anywhere on the page ([`filter_to`]).
+fn nav_f(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
     if ev.key() != "f" || ev.default_prevented() || ev.is_composing() || ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
         return;
     }
@@ -2423,6 +2755,10 @@ fn nav_f(ev: web_sys::KeyboardEvent, lens: Lens) {
         return;
     }
     ev.prevent_default();
+    if let Some(Route::Ticket(id)) = ctx.route.try_get_untracked() {
+        filter_to(&id, ctx, lens);
+        return;
+    }
     if !lens.pop(Level::Nav).is_open() {
         lens.open_menu(Level::Nav, None, None);
     }
@@ -3378,7 +3714,7 @@ mod tests {
     use super::{
         art, chunks, climb, drawn_steps, face, face_of, hidden_count, kept_codes, kept_face, Holds, hidden_line, kind_glyph, last_drawn, migrate_expanded, offset_of,
         on_chain, rollup_label, root_has_kids, shortcode_face, shortcode_node, shown, span, summed, Ask, Climb, Face, Geom, List, Mark,
-        Node, Source, CHUNK, PAGE, WHOLE,
+        Node, Source, CHUNK, PAGE, WHOLE, centring, next_stop, under_group, with_under, Stop,
     };
     use crate::board::Matches;
     use crate::filter::ScTree;
@@ -4035,5 +4371,62 @@ mod tests {
         assert_eq!(steps, [(Node::Group("PRE".into()), "PRE-3".to_string())]);
         assert_eq!(drawn_steps(&chain, &[false, false, false]), None, "nothing drawn: nothing opens");
         assert_eq!(drawn_steps(&[], &[]), None);
+    }
+
+    /// AGS-26: a step of the cursor lands on the next ticket's row or gap,
+    /// passing over the rows that are no ticket (a shortcode's heading); at
+    /// the nav's end there is nowhere to go — which is where ↑ widens.
+    #[test]
+    fn a_step_lands_on_the_next_ticket_passing_over_headings() {
+        use Stop::{Gap, Group as G, Ticket as T};
+        // MENGER's heading, FILTER's heading, FILTER-9, its builds, a gap.
+        let stops = [G, G, T, T, T, Gap, T];
+        assert_eq!(next_stop(&stops, 2, true), Some(3));
+        assert_eq!(next_stop(&stops, 4, true), Some(5), "a gap is a stop: it is crossed when fetched");
+        assert_eq!(next_stop(&stops, 6, true), None, "the end");
+        assert_eq!(next_stop(&stops, 3, false), Some(2));
+        assert_eq!(next_stop(&stops, 2, false), None, "the first ticket: only headings above it");
+        assert_eq!(next_stop(&stops, 1, true), Some(2), "from a heading, onto the ticket under it");
+        assert_eq!(next_stop(&[T, G, G, T], 0, true), Some(3), "headings between two tickets are passed over");
+        assert_eq!(next_stop(&[T, G, G, T], 3, false), Some(0));
+        assert_eq!(next_stop(&[], 0, true), None);
+        assert_eq!(next_stop(&[T], 5, false), Some(0), "an index past the end steps back into the list");
+    }
+
+    /// AGS-26: the open ticket's row is centred — the scroll that puts its
+    /// middle on the nav's middle.
+    #[test]
+    fn a_row_is_centred_on_the_navs_middle() {
+        // the nav 100 px from the top, 600 tall: its middle at 400
+        assert_eq!(centring(100.0, 600.0, 390.0, 20.0), 0.0, "already in the middle");
+        assert_eq!(centring(100.0, 600.0, 690.0, 20.0), 300.0, "at the bottom: scroll down 300");
+        assert_eq!(centring(100.0, 600.0, 90.0, 20.0), -300.0, "above the nav: scroll up");
+    }
+
+    /// AGS-26: `f`'s filter one parent more permissive — its first `under T`
+    /// group, made `under` T's parent, in its place; the group goes when T
+    /// has none; nothing else moves.
+    #[test]
+    fn widening_moves_the_under_group_one_parent_up() {
+        use menger_tickets_api::filter::Filter;
+        let f = |t: &str| Filter::parse(t).unwrap();
+        assert_eq!(under_group(&f("under FILTER-9")), Some((0, "FILTER-9".to_string())));
+        assert_eq!(under_group(&f("status Ready and under FILTER-9")), Some((1, "FILTER-9".to_string())));
+        assert_eq!(under_group(&f("under FILTER")), Some((0, "FILTER".to_string())), "a shortcode");
+        assert_eq!(under_group(&f("not under FILTER-9")), None, "a negated group is no subtree");
+        assert_eq!(under_group(&f("under in (FILTER-9, FILTER-2)")), None, "nor is a choice of two");
+        assert_eq!(under_group(&f("status Ready")), None);
+        assert_eq!(under_group(&Filter::default()), None);
+
+        assert_eq!(with_under(&f("under FILTER-9"), 0, Some("FILTER-1")), f("under FILTER-1"));
+        assert_eq!(with_under(&f("under FILTER-1"), 0, Some("menger-2")), f("under MENGER-2"), "upper case");
+        assert_eq!(
+            with_under(&f("status Ready and under FILTER-9 and kind build"), 1, Some("FILTER-1")),
+            f("status Ready and under FILTER-1 and kind build"),
+            "the other groups stay, in their places"
+        );
+        assert_eq!(with_under(&f("under MENGER-1"), 0, None), Filter::default(), "a top root: the group goes");
+        assert_eq!(with_under(&f("status Ready and under MENGER-1"), 1, None), f("status Ready"));
+        assert_eq!(with_under(&f("under FILTER-9"), 3, Some("X-1")), f("under FILTER-9"), "no group there: unchanged");
     }
 }
