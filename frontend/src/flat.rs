@@ -300,7 +300,7 @@ enum Counted {
 }
 
 async fn count(client: &Client, filter: &str, keep: Option<String>) -> Counted {
-    match client.counts_all(Some(filter.to_string()), keep).await {
+    match client.counts_all(Some(filter.to_string()), keep, crate::session::tz()).await {
         Ok(events) => {
             let mut runs = Vec::new();
             for ev in events {
@@ -331,7 +331,7 @@ enum Window {
 async fn ask_page(client: &Client, filter: &str, keep: Option<String>, cursor: &Cursor, from: usize, limit: usize) -> Window {
     let (after, at) = cursor.params();
     match client
-        .list_all(None, None, None, after, Some(limit as u32), Some(true), Some(filter.to_string()), at, keep)
+        .list_all(None, None, None, after, Some(limit as u32), Some(true), Some(filter.to_string()), at, keep, crate::session::tz())
         .await
     {
         Ok(events) => {
@@ -364,7 +364,7 @@ async fn locate(client: &Client, filter: &str, keep: Option<String>, id: &str) -
         return None;
     }
     let events = client
-        .list_all(None, None, None, Some(id.to_string()), Some(0), Some(true), Some(filter.to_string()), None, keep)
+        .list_all(None, None, None, Some(id.to_string()), Some(0), Some(true), Some(filter.to_string()), None, keep, crate::session::tz())
         .await
         .ok()?;
     let first = events.into_iter().find_map(|ev| match ev {
@@ -376,7 +376,7 @@ async fn locate(client: &Client, filter: &str, keep: Option<String>, id: &str) -
 
 /// Whether `filter` admits `id` (`member`) — `None` when no answer came.
 async fn is_member(client: &Client, filter: &str, id: &str) -> Option<bool> {
-    let events = client.member_all(vec![id.to_string()], filter.to_string()).await.ok()?;
+    let events = client.member_all(vec![id.to_string()], filter.to_string(), crate::session::tz()).await.ok()?;
     Some(events.into_iter().any(|ev| matches!(ev, TicketsEvent::Member { matched: true, .. })))
 }
 

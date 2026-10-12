@@ -49,6 +49,7 @@ server = [
     "dep:anyhow",
     "dep:tracing",
     "dep:roaring",
+    "dep:jiff",
 ]
 # WAVE-3, measurement only: a build of the store without WAVE-6's
 # re-placement pass and its startup placement — the "without" half of the
@@ -100,6 +101,11 @@ tracing = { version = "0.1", optional = true }
 # FILTER-4: the cells' bitmaps (FILTER-3 §6.1) — pure Rust, and the server's
 # only: the wasm build (default-features = false) never pulls it in.
 roaring = { version = "0.10", optional = true }
+# MENGER-13: a history filter's calendar windows (`today`, `yesterday`, `this
+# week`, a date) in the viewer's time zone — an IANA name read from the
+# system's tzdb, or a fixed offset. Server-only: the app sends its zone's
+# name and never evaluates a window.
+jiff = { version = "0.2", optional = true }
 
 [dev-dependencies]
 # The wire-casing tests assert what serde writes; the store's tests open

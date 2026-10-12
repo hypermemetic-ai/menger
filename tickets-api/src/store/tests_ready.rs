@@ -134,7 +134,7 @@ fn filed(path: &Path) -> (Vec<Row>, State, Scan) {
 /// Acceptance 1: the kept counts, the ready set and the status counts are
 /// a scan's — in the cache, and in the file, whose rows are the cache's.
 #[track_caller]
-fn assert_kept_is_a_scan(store: &Store, path: Option<&Path>, after: &str) {
+pub(super) fn assert_kept_is_a_scan(store: &Store, path: Option<&Path>, after: &str) {
     let rows = rows(store);
     let want = scan(&rows);
     assert_eq!(kept(store), want, "the cache, after {after}");

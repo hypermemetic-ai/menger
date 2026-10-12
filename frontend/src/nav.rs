@@ -1534,7 +1534,7 @@ async fn ask_page(source: &Source, after: Option<String>, limit: usize) -> Asked
         Source::Parent(p) => (None, Some(p.clone())),
         Source::Epic(e) => (Some(e.clone()), None),
     };
-    match client.list_all(epic, None, parent, after, Some(limit as u32), Some(true), None, None, None).await {
+    match client.list_all(epic, None, parent, after, Some(limit as u32), Some(true), None, None, None, crate::session::tz()).await {
         Ok(events) => {
             let mut rows = Vec::new();
             let mut remaining = None;
@@ -1567,7 +1567,7 @@ async fn ask_tree(source: &Source, filter: &str, after: Option<String>, limit: u
         Source::Epic(e) => (Some(e.clone()), None),
     };
     let keep = KEPT.with(|k| k.borrow().clone());
-    match client.tree_all(parent, epic, filter.to_string(), after, Some(limit as u32), Some(true), keep).await {
+    match client.tree_all(parent, epic, filter.to_string(), after, Some(limit as u32), Some(true), keep, crate::session::tz()).await {
         Ok(events) => {
             let mut rows = Vec::new();
             let mut marks = Vec::new();
@@ -1602,7 +1602,7 @@ async fn ask_tree(source: &Source, filter: &str, after: Option<String>, limit: u
 /// the shortcode matches), or no answer came.
 async fn ask_root(epic: &str, root: &str, filter: &str) -> Option<Mark> {
     let client = session::client()?;
-    let events = client.tree_all(None, Some(epic.to_string()), filter.to_string(), None, Some(1), None, None).await.ok()?;
+    let events = client.tree_all(None, Some(epic.to_string()), filter.to_string(), None, Some(1), None, None, crate::session::tz()).await.ok()?;
     events.into_iter().find_map(|ev| match ev {
         TicketsEvent::Node { summary, matched, below } if summary.id == root => Some(Mark { matched, below }),
         _ => None,
@@ -2793,6 +2793,21 @@ struct Pos {
 /// row and an empty container, whatever it holds. SCALE-24: and a closed
 /// node asks the server nothing; what it shows of its children is its
 /// row's `child_count` (a ticket) or its roll-up (a shortcode).
+/// MENGER-13: whether `ancestor` is on the open ticket `open`'s chain of
+/// parents, as the row cache holds it — what keeps a canceled row open so
+/// the cursor (AGS-26) can stand on a ticket below it.
+fn open_is_below(open: &str, ancestor: &str) -> bool {
+    let mut cur = cache::find(open).and_then(|t| t.with(|t| t.parent.clone()));
+    for _ in 0..64 {
+        match cur {
+            Some(p) if p == ancestor => return true,
+            Some(p) => cur = cache::find(&p).and_then(|t| t.with(|t| t.parent.clone())),
+            None => return false,
+        }
+    }
+    false
+}
+
 fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>>, pos: Option<Pos>) -> AnyView {
     let key = node.key().to_string();
     let tree = ctx.tree;
@@ -2832,11 +2847,27 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
         let k = key.clone();
         Memo::new(move |_| last.with(|l| l.as_deref() == Some(k.as_str())))
     };
+    // MENGER-13: a canceled ticket's descendants are not shown under it — the
+    // row stays closed, its count beside it, unless the reader opens it here
+    // (`peek`, this view's alone, never kept) or the open ticket is below it
+    // (the reveal's chain opens it, so the cursor can stand on its row).
+    let canceled = Memo::new(move |_| ticket.is_some_and(|t| t.with(|t| t.status == Status::Canceled)));
+    let peek = RwSignal::new(false);
     let open = {
         let k = key.clone();
         let expanded = ctx.expanded;
-        Memo::new(move |_| expanded.with(|e| e.contains(&k)))
+        let route = ctx.route;
+        Memo::new(move |_| {
+            expanded.with(|e| e.contains(&k))
+                && (!canceled.get()
+                    || peek.get()
+                    || route.with(|r| matches!(r, Route::Ticket(open) if open_is_below(open, &k))))
+        })
     };
+    // MENGER-13: what a closed canceled row says it holds.
+    let folded = Memo::new(move |_| {
+        (canceled.get() && !open.get()).then(|| ticket.map_or(0, |t| t.with(|t| t.child_count))).filter(|n| *n > 0)
+    });
     // FILTER-14: how the row is drawn under the lens — `None` off it (as
     // today). A ticket row as `tree` answered it; a shortcode's row by its
     // matches (and its root's word, when its host's page said it).
@@ -2925,6 +2956,19 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
         let k = key.clone();
         let expanded = ctx.expanded;
         move || {
+            // MENGER-13: a canceled row opens for this view only.
+            if canceled.get_untracked() {
+                let now = !open.get_untracked();
+                peek.set(now);
+                expanded.update(|e| {
+                    if now {
+                        e.insert(k.clone());
+                    } else {
+                        e.remove(&k);
+                    }
+                });
+                return;
+            }
             expanded.update(|e| {
                 if !e.remove(&k) {
                     e.insert(k.clone());
@@ -2976,6 +3020,7 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
                             t,
                             Some(rollup),
                             face,
+                            folded,
                             shortcode.clone(),
                             ctx,
                             pos,
@@ -2996,6 +3041,7 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
             t,
             rollup,
             face,
+            folded,
             shortcode.clone(),
             ctx,
             pos,
@@ -3593,6 +3639,7 @@ fn leaf_row(
     ticket: Signal<TicketSummary>,
     rollup: Option<Memo<String>>,
     face: Memo<Option<Face>>,
+    folded: Memo<Option<u64>>,
     shortcode: Option<String>,
     ctx: Ctx,
     pos: Option<Pos>,
@@ -3701,6 +3748,11 @@ fn leaf_row(
                 })
             }}
             {rollup.map(|r| roll_tag(r, face))}
+            // MENGER-13: a canceled row, closed: what it holds, not shown.
+            {move || folded.get().map(|n| {
+                let title = format!("canceled: its {n} child ticket{} not shown — open it to look", if n == 1 { "" } else { "s" });
+                view! { <span class="folded" title=title>{format!("{n} hidden")}</span> }
+            })}
             // The status tag, its paint and its word one effect: they move
             // together.
             {move || {

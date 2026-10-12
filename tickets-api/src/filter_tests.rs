@@ -413,6 +413,7 @@ fn facts(id: &str, title: &str, status: Status, kind: Kind) -> Facts {
         labels: Vec::new(),
         id: id.into(),
         lineage: vec![id.into(), epic.clone()],
+        history: Vec::new(),
         epic,
         title: title.into(),
         status,
@@ -881,6 +882,7 @@ fn random_facts(rng: &mut Rng, pools: &Pools) -> Facts {
         has_commits: rng.coin(),
         menger_doc: kind == Kind::Doc && rng.coin(),
         lineage,
+        history: Vec::new(),
     }
 }
 
@@ -983,6 +985,7 @@ fn some_world_matches(f: &Filter) -> bool {
                     has_commits: false,
                     menger_doc: false,
                     lineage: chosen(&unders, u),
+                    history: Vec::new(),
                 };
                 for c in &cells {
                     (x.status, x.kind, x.severity, x.blocked, x.has_commits, x.menger_doc, x.asking) =
@@ -1055,4 +1058,82 @@ fn admits_nothing_is_sound_on_random_tickets() {
         }
     }
     assert!(found > 300, "the rounds hold contradictions: {found}");
+}
+
+// -- MENGER-13: history ---------------------------------------------------------------
+
+/// The history predicates read and write canonically — the ticket's
+/// examples among them — with their windows, `by`, and `between … and …`
+/// kept whole by the `and` that joins groups.
+#[test]
+fn history_predicates_read_and_write_canonically() {
+    for (text, canonical) in [
+        ("status \"In Review\" and entered \"In Review\" within 12h", "status \"In Review\" and entered \"In Review\" within 12h"),
+        ("entered Coding yesterday", "entered Coding yesterday"),
+        ("changed within 1h and under SCAFFOLD-1", "changed within 1h and under SCAFFOLD-1"),
+        ("entered Complete this week and kind build", "entered Complete this week and kind build"),
+        ("entered Canceled within 1d by system", "entered Canceled within 1d by system"),
+        ("entered complete since 2026-10-10", "entered Complete since 2026-10-10"),
+        ("entered in review within 12 hours", "entered \"In Review\" within 12h"),
+        ("left Pending before 2026-10-10 08:30", "left Pending before 2026-10-10T08:30"),
+        ("changed between 2026-10-01 and 2026-10-05 and kind gap", "changed between 2026-10-01 and 2026-10-05 and kind gap"),
+        ("by me", "changed by me"),
+        ("by system today", "changed today by system"),
+        ("changed by idp:ada", "changed by idp:ada"),
+        ("not entered Ready within 30m", "not entered Ready within 30m"),
+        ("(entered Ready within 2w or left Coding within 1d)", "(entered Ready within 2w or left Coding within 1d)"),
+        ("changed", "changed"),
+    ] {
+        let f = parsed(text);
+        assert_eq!(f.format(), canonical, "{text}");
+        assert_eq!(parsed(canonical), f, "{canonical} reads back");
+    }
+    let f = parsed("changed between 2026-10-01 and 2026-10-05 and kind gap");
+    assert_eq!(f.groups.len(), 2, "the window's `and` is not a group's");
+    match &f.groups[0].preds[0].field {
+        Field::History(h) => {
+            assert_eq!(h.event, Event::Changed);
+            assert!(matches!(h.window, Some(Window::Between(a, b)) if a.day == 1 && b.day == 5));
+            assert!(!h.relative(), "fixed moments do not age");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(&parsed("entered Coding within 1h").groups[0].preds[0].field, Field::History(h) if h.relative()));
+}
+
+/// What a history predicate cannot be is named, and nothing is parsed.
+#[test]
+fn malformed_history_predicates_are_refused() {
+    for (text, says) in [
+        ("entered", "names a status"),
+        ("entered Shipped", "unknown status `Shipped`"),
+        ("entered Coding within", "takes a length"),
+        ("entered Coding within 0h", "a length of 1 or more"),
+        ("entered Coding within 3", "needs a unit"),
+        ("entered Coding within 3y", "needs a unit"),
+        ("changed since 2026-13-01", "is not a date"),
+        ("changed since 2026-02-30", "is not a date"),
+        ("changed between 2026-10-01", "between <date> and <date>"),
+        ("changed this month", "`this` is `this week`"),
+        ("changed lately", "is not understood here"),
+        ("by", "names who"),
+        ("changed today by", "names who"),
+    ] {
+        let e = refused(text).to_string();
+        assert!(e.contains(says), "{text}: {e}");
+    }
+}
+
+/// A history predicate is a free truth: `admits_nothing` sees a predicate
+/// and its negation clash, and nothing else.
+#[test]
+fn a_history_predicate_is_a_free_truth() {
+    assert!(parsed("entered Coding within 1h and not entered Coding within 1h").admits_nothing().is_some());
+    assert!(parsed("entered Coding within 1h and not entered Coding within 2h").admits_nothing().is_none());
+    assert!(parsed("changed today and status Doc").admits_nothing().is_none());
+    let mut x = facts("H-1", "", Status::Coding, Kind::Build);
+    let f = parsed("status Coding and entered Coding within 12h");
+    assert!(!f.matches(&x));
+    x.history = vec!["entered Coding within 12h".into()];
+    assert!(f.matches(&x));
 }

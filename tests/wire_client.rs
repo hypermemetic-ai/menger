@@ -128,6 +128,9 @@ fn apply(
             }
             return "placements_changed";
         }
+        // MENGER-13: a transition says what its ticket's own event said —
+        // nothing for the mirror to apply.
+        TicketsEvent::Transition { .. } => return "transition",
         other => panic!("unexpected watch event {other:?}"),
     };
     mirror.insert(ticket.id.clone(), ticket.clone());
@@ -221,7 +224,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- watch, subscribed before any mutation ------------------------------
     // The subscribe frame is written by `call`, not by the first poll; the
     // round trip flushes it past the server's dispatcher.
-    let mut watch = client.watch(None, None, None);
+    let mut watch = client.watch(None, None, None, None);
     let _ = client.health_all().await.expect("round trip");
     tokio::time::sleep(Duration::from_millis(250)).await;
 
@@ -262,7 +265,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- set_status ---------------------------------------------------------
     match one(
         client
-            .set_status_all("WIRE-1".into(), "Ready".into())
+            .set_status_all("WIRE-1".into(), "Ready".into(), None, None, None)
             .await
             .expect("set_status"),
     ) {
@@ -276,7 +279,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- list replays current state, paged (MNG-9) ---------------------------
     let listed = rows(
         client
-            .list_all(Some("WIRE".into()), None, None, None, None, None, None, None, None)
+            .list_all(Some("WIRE".into()), None, None, None, None, None, None, None, None, None)
             .await
             .expect("list"),
     );
@@ -285,7 +288,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- find (SCALE-6) -----------------------------------------------------
     // The generated client's `find`: typed `summary` rows, then the page.
     let found = client
-        .find_all(" OVER the ".into(), None, None, None)
+        .find_all(" OVER the ".into(), None, None, None, None)
         .await
         .expect("find");
     match found.as_slice() {
@@ -296,19 +299,19 @@ async fn the_wire_assertions_through_the_generated_client() {
         other => panic!("expected one `summary` and the page, got {other:?}"),
     }
     assert!(
-        rows(client.find_all("zzz".into(), None, Some(2), None).await.expect("find")).is_empty(),
+        rows(client.find_all("zzz".into(), None, Some(2), None, None).await.expect("find")).is_empty(),
         "nothing matches"
     );
 
     // -- FILTER-15: find under a filter, and member -------------------------
     // WIRE-1 is Ready: a filter that does not admit it hides it from find.
     assert!(
-        rows(client.find_all(" OVER the ".into(), None, None, Some("status Pending".into())).await.expect("find")).is_empty(),
+        rows(client.find_all(" OVER the ".into(), None, None, Some("status Pending".into()), None).await.expect("find")).is_empty(),
         "the filter does not admit it"
     );
-    assert_eq!(rows(client.find_all(" OVER the ".into(), None, None, Some("ready".into())).await.expect("find")).len(), 1);
+    assert_eq!(rows(client.find_all(" OVER the ".into(), None, None, Some("ready".into()), None).await.expect("find")).len(), 1);
     let members = client
-        .member_all(vec!["WIRE-1".into(), "NOPE-1".into(), "wire-1".into()], "status Ready".into())
+        .member_all(vec!["WIRE-1".into(), "NOPE-1".into(), "wire-1".into()], "status Ready".into(), None)
         .await
         .expect("member");
     match members.as_slice() {
@@ -334,12 +337,12 @@ async fn the_wire_assertions_through_the_generated_client() {
             .expect("create DG-1"),
     );
     client
-        .set_status_all("DG-1".into(), "Ready".into())
+        .set_status_all("DG-1".into(), "Ready".into(), None, None, None)
         .await
         .expect("promote DG-1");
     let ready = rows(
         client
-            .ready_set_all(Some("DG".into()), None, None, None, None)
+            .ready_set_all(Some("DG".into()), None, None, None, None, None)
             .await
             .expect("ready_set"),
     );
@@ -388,7 +391,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     }
     let children = ids(rows(
         client
-            .list_all(None, None, Some("PA-1".into()), None, None, None, None, None, None)
+            .list_all(None, None, Some("PA-1".into()), None, None, None, None, None, None, None)
             .await
             .expect("list by parent"),
     ));
@@ -442,13 +445,13 @@ async fn the_wire_assertions_through_the_generated_client() {
             .await
             .expect("create KD-1"),
     );
-    match one(client.set_kind_all("KD-1".into(), "scope".into(), None).await.expect("set_kind")) {
+    match one(client.set_kind_all("KD-1".into(), "scope".into(), None, None, None).await.expect("set_kind")) {
         TicketsEvent::KindChanged { ticket, previous } => {
             assert_eq!((ticket.kind, ticket.status, previous), (Kind::Scope, Status::Epic, Kind::Doc));
         }
         other => panic!("expected `kind_changed`, got {other:?}"),
     }
-    match one(client.set_kind_all("KD-1".into(), "build".into(), Some("Ready".into())).await.expect("set_kind")) {
+    match one(client.set_kind_all("KD-1".into(), "build".into(), Some("Ready".into()), None, None).await.expect("set_kind")) {
         TicketsEvent::Error { message } => assert!(message.contains("'KD-1' is the root of KD"), "{message}"),
         other => panic!("expected the in-band `error`, got {other:?}"),
     }
@@ -498,7 +501,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // Server and watch-only mirror agree on the ready set, computed two ways.
     let server_ready = ids(rows(
         client
-            .ready_set_all(Some("WIRE".into()), None, None, None, None)
+            .ready_set_all(Some("WIRE".into()), None, None, None, None, None)
             .await
             .expect("ready_set"),
     ));
@@ -650,7 +653,7 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
     let port = start_server().await;
     let transport = connect(port).await;
     let client = TicketsClient::new(&transport);
-    let mut watch = client.watch(None, None, None);
+    let mut watch = client.watch(None, None, None, None);
     let mut make = |kind: &str, blocked_by: Option<Vec<String>>, path: Option<&str>| {
         client.create_all("PT".into(), "t".into(), Some(kind.into()), None, blocked_by, None, None, path.map(Into::into))
     };
@@ -665,7 +668,7 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.id, "PT-4"),
         other => panic!("expected the ticket, got {other:?}"),
     }
-    client.set_status_all("PT-2".into(), "Complete".into()).await.expect("set_status");
+    client.set_status_all("PT-2".into(), "Complete".into(), None, None, None).await.expect("set_status");
     let mut changes = None;
     while changes.is_none() {
         let ev = tokio::time::timeout(Duration::from_secs(5), watch.next()).await.expect("watch").expect("open");
@@ -681,7 +684,7 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
         ]
     );
     let rows: Vec<_> = client
-        .list_all(Some("PT".into()), None, None, None, None, Some(true), None, None, None)
+        .list_all(Some("PT".into()), None, None, None, None, Some(true), None, None, None, None)
         .await
         .expect("list")
         .into_iter()

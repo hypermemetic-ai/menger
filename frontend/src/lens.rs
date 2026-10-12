@@ -335,6 +335,10 @@ pub(crate) fn field_of(c: Cat, t: &str) -> Option<Field> {
         Cat::MengerDocs => Field::MengerDoc,
         Cat::Asking => Field::Asking,
         Cat::Label => Field::Label(menger_tickets_api::labels::normalize(t).ok()?),
+        // MENGER-13: a preset window, as the language reads `changed <window>`.
+        Cat::Changed if crate::filter::CHANGED.contains(&t) => {
+            Filter::parse(&format!("changed {t}")).ok()?.groups.into_iter().next()?.preds.into_iter().next()?.field
+        }
         _ => return None,
     })
 }
@@ -354,7 +358,12 @@ pub(crate) fn token_of(f: &Field) -> Option<(Cat, Option<String>)> {
         Field::MengerDoc => (Cat::MengerDocs, None),
         Field::Asking => (Cat::Asking, None),
         Field::Label(l) => (Cat::Label, Some(l.to_ascii_lowercase())),
-        Field::Category(_) | Field::Under(_) | Field::Text(_) => return None,
+        // MENGER-13: `changed <preset>`, by anyone, is Changed recently's.
+        Field::History(h) if h.event == menger_tickets_api::filter::Event::Changed && h.by.is_none() => {
+            let w = h.window.as_ref()?.format();
+            (Cat::Changed, Some(crate::filter::CHANGED.iter().find(|p| **p == w)?.to_string()))
+        }
+        Field::Category(_) | Field::Under(_) | Field::Text(_) | Field::History(_) => return None,
     })
 }
 
@@ -1224,7 +1233,7 @@ mod tests {
     #[test]
     fn each_categorys_pill_is_its_group() {
         use Op::{Is, Not};
-        let cases: [(Cat, Clause, &str); 27] = [
+        let cases: [(Cat, Clause, &str); 29] = [
             (Cat::Shortcode, clause(Is, &["MNG"]), "in MNG"),
             (Cat::Shortcode, clause(Is, &["CONTEXT", "RETURNS"]), "in (CONTEXT, RETURNS)"),
             (Cat::Shortcode, clause(Not, &["CONTEXT", "RETURNS"]), "not in (CONTEXT, RETURNS)"),
@@ -1250,6 +1259,9 @@ mod tests {
             (Cat::Asking, clause(Is, &["no"]), "not asking"),
             (Cat::Label, clause(Is, &["needs-you"]), "label needs-you"),
             (Cat::Label, clause(Not, &["a", "b"]), "not label in (a, b)"),
+            // MENGER-13: Changed recently, a preset window over the log.
+            (Cat::Changed, clause(Is, &["today"]), "changed today"),
+            (Cat::Changed, clause(Is, &["within 1h", "yesterday"]), "(changed within 1h or changed yesterday)"),
             (Cat::Status, clause(Is, &["In Review"]), "status \"In Review\""),
             (Cat::Kind, clause(Is, &["scope", "execution"]), "kind in (scope, execution)"),
         ];
@@ -1459,6 +1471,7 @@ mod tests {
             has_commits: false,
             menger_doc: menger_tickets_api::is_menger_doc(path),
             lineage: vec![id.into(), "PLEXUS".into()],
+            history: Vec::new(),
         };
         use menger_tickets_api::Kind::{Build, Doc};
         assert!(!d.filter.matches(&ticket("PLEXUS-2", Doc, Some("_MENGER/board"))), "the board note: out");

@@ -83,6 +83,9 @@ pub(crate) enum Cat {
     /// MENGER-12: the ticket's labels — `label <name>`; its values are the
     /// labels `facets` counts (and the clause's, and `needs-you`).
     Label,
+    /// MENGER-13: changed recently — `changed within 1h`, `changed today`, …
+    /// (a preset window over the transition log; uncounted).
+    Changed,
     Wave,
     Readiness,
     OffBoard,
@@ -117,6 +120,10 @@ const STATUSES: [&str; 11] = ["Coding", "In Review", "Ready", "Pending", "Blocke
 /// Severity's values — the language's spelling.
 pub(crate) const SEVERITIES: [&str; 5] = ["critical", "high", "medium", "low", "none"];
 
+/// MENGER-13: Changed recently's presets — windows over the transition log,
+/// in the viewer's own days.
+pub(crate) const CHANGED: [&str; 5] = ["within 1h", "within 12h", "today", "yesterday", "this week"];
+
 /// A flag's two values.
 pub(crate) const FLAG: [&str; 2] = ["yes", "no"];
 
@@ -128,7 +135,7 @@ pub(crate) const INPUT_STATES: [&str; 3] = ["open", "answered", "closed"];
 pub(crate) const ALL: &str = "all";
 
 impl Cat {
-    pub(crate) const ALL: [Cat; 16] = [
+    pub(crate) const ALL: [Cat; 17] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Kind,
@@ -139,6 +146,7 @@ impl Cat {
         Cat::MengerDocs,
         Cat::Asking,
         Cat::Label,
+        Cat::Changed,
         Cat::Wave,
         Cat::Readiness,
         Cat::OffBoard,
@@ -165,7 +173,7 @@ impl Cat {
 
     /// The server-backed categories, offered at every level, in the menu's
     /// order.
-    pub(crate) const SERVER: [Cat; 10] = [
+    pub(crate) const SERVER: [Cat; 11] = [
         Cat::Shortcode,
         Cat::Status,
         Cat::Kind,
@@ -176,6 +184,7 @@ impl Cat {
         Cat::MengerDocs,
         Cat::Asking,
         Cat::Label,
+        Cat::Changed,
     ];
 
     /// The wave board's categories, in its menu's order: WAVE-12's, with the
@@ -201,7 +210,7 @@ impl Cat {
     /// FILTER-16: the inputs page's categories, in its menu's order — its
     /// own (State, Removed) first, then the server-backed ones, which filter
     /// the inputs' tickets.
-    pub(crate) const INPUTS: [Cat; 12] = [
+    pub(crate) const INPUTS: [Cat; 13] = [
         Cat::State,
         Cat::Removed,
         Cat::Shortcode,
@@ -214,6 +223,7 @@ impl Cat {
         Cat::MengerDocs,
         Cat::Asking,
         Cat::Label,
+        Cat::Changed,
     ];
 
     /// A surface's own category — evaluated by the surface, kept beside the
@@ -242,6 +252,7 @@ impl Cat {
             Cat::MengerDocs => "menger",
             Cat::Asking => "asking",
             Cat::Label => "label",
+            Cat::Changed => "changed",
             Cat::Wave => "wave",
             Cat::Readiness => "ready",
             Cat::OffBoard => "off",
@@ -268,6 +279,7 @@ impl Cat {
             Cat::MengerDocs => "Menger docs",
             Cat::Asking => "Asking",
             Cat::Label => "Label",
+            Cat::Changed => "Changed recently",
             Cat::Wave => "Wave",
             Cat::Readiness => "Readiness",
             Cat::OffBoard => "Off-board blockers",
@@ -297,6 +309,7 @@ impl Cat {
             Cat::MengerDocs => "§",
             Cat::Asking => "⁇",
             Cat::Label => "⌗",
+            Cat::Changed => "↻",
             Cat::Wave => "≋",
             Cat::Readiness => "▸",
             Cat::OffBoard => "⧖",
@@ -317,6 +330,7 @@ impl Cat {
             Cat::Readiness => &["workable", "waiting", "missing"],
             Cat::State => &INPUT_STATES,
             Cat::OffBoard => &["some", "none"],
+            Cat::Changed => &CHANGED,
             Cat::Shortcode | Cat::Wave | Cat::Title | Cat::Label => &[],
         }
     }
@@ -377,6 +391,8 @@ impl Cat {
             (Cat::Commits, "no") => "none".into(),
             (Cat::Asking, "yes") => "asking".into(),
             (Cat::Asking, "no") => "not asking".into(),
+            (Cat::Changed, "within 1h") => "in the last hour".into(),
+            (Cat::Changed, "within 12h") => "in the last 12 hours".into(),
             (Cat::Readiness, "workable") => "workable now".into(),
             (Cat::OffBoard, "some") => "has some".into(),
             (Cat::Removed, "yes") => "shown".into(),
@@ -2430,7 +2446,8 @@ pub(crate) mod tests {
 
         // The global menu: the server's categories, no Title to offer.
         let g = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &Clauses::default(), counts: &HashMap::new() };
-        assert_eq!(search("", &g).len(), 10);
+        assert_eq!(search("", &g).len(), 11, "MENGER-13: Changed recently among them");
+        assert_eq!(offered(Cat::Changed, &g).len(), CHANGED.len());
         // FILTER-21: typing finds Menger docs, by its name.
         assert_eq!(search("menger", &g)[0], Row::Cat(Cat::MengerDocs));
         assert_eq!(offered(Cat::MengerDocs, &g), [val(Cat::MengerDocs, "yes"), val(Cat::MengerDocs, "no")]);
@@ -2502,7 +2519,7 @@ pub(crate) mod tests {
             assert_eq!(switch_words(c), None, "{c:?}: its yes / no is the negation");
         }
         assert_eq!(switch_words(Cat::Label), Some(("is", "is not")));
-        assert_eq!(Cat::ALL.into_iter().filter(|c| switch_words(*c).is_some()).count(), 10, "every category but the flags");
+        assert_eq!(Cat::ALL.into_iter().filter(|c| switch_words(*c).is_some()).count(), 11, "every category but the flags");
 
         let not = Clause { op: Op::Not, values: strs(&["doc"]) };
         let is = Clause { op: Op::Is, values: strs(&["doc"]) };

@@ -6,6 +6,7 @@
 //! nothing more: not ready, not done, not a satisfied blocker.
 
 use super::*;
+use super::tests::Changes;
 
 fn ticket(epic: &str, kind: Kind, blocked_by: &[&str]) -> NewTicket {
     NewTicket {
@@ -90,8 +91,8 @@ async fn the_worker_states_are_neither_ready_nor_done() {
     let mut rx = store.subscribe();
     for s in [Status::Ready, Status::Coding, Status::InReview] {
         store.set_status("WS-2", s).await.unwrap();
-        assert!(matches!(rx.try_recv(), Ok(Change::StatusChanged { .. })));
-        assert!(rx.try_recv().is_err(), "{s}: no group_changed — nothing crossed Complete");
+        assert!(matches!(rx.try_change(), Ok(Change::StatusChanged { .. })));
+        assert!(rx.try_change().is_err(), "{s}: no group_changed — nothing crossed Complete");
         assert_eq!(done(&store), 0, "{s}");
         let ready: Vec<String> = store.ready_set(None).await.unwrap().into_iter().map(|t| t.id).collect();
         let want: &[&str] = if s == Status::Ready { &["WS-2"] } else { &[] };

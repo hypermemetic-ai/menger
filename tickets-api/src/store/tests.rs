@@ -2,6 +2,34 @@ use super::*;
 // SCALE-4: a ticket's children are read by `list { parent }` now.
 use super::tests_children::children;
 
+/// MENGER-13: a write's changes as the tests written before the transition
+/// log read them — each `Transition` (said right after its ticket's event)
+/// set aside. The transitions and where they stand are `tests_history`'s.
+pub(super) trait Changes {
+    fn try_change(&mut self) -> Result<Change, broadcast::error::TryRecvError>;
+    async fn change(&mut self) -> Result<Change, broadcast::error::RecvError>;
+}
+
+impl Changes for broadcast::Receiver<Change> {
+    fn try_change(&mut self) -> Result<Change, broadcast::error::TryRecvError> {
+        loop {
+            match self.try_recv()? {
+                Change::Transition { .. } => continue,
+                c => return Ok(c),
+            }
+        }
+    }
+
+    async fn change(&mut self) -> Result<Change, broadcast::error::RecvError> {
+        loop {
+            match self.recv().await? {
+                Change::Transition { .. } => continue,
+                c => return Ok(c),
+            }
+        }
+    }
+}
+
 fn new_ticket(epic: &str, title: &str) -> NewTicket {
     NewTicket {
         path: None,
@@ -461,11 +489,11 @@ async fn a_childs_birth_updates_its_parent_and_is_broadcast() {
     assert_eq!(child.parent.as_deref(), Some("FAM-1"));
     assert_eq!(child.child_count, 0);
 
-    match rx.recv().await.unwrap() {
+    match rx.change().await.unwrap() {
         Change::Created { ticket } => assert_eq!(ticket.id, "FAM-2"),
         other => panic!("expected Created, got {other:?}"),
     }
-    match rx.recv().await.unwrap() {
+    match rx.change().await.unwrap() {
         Change::ChildrenChanged { id, added, child_count, .. } => {
             assert_eq!(id, "FAM-1");
             assert_eq!(added, "FAM-2");
@@ -600,14 +628,14 @@ async fn a_parent_that_is_also_a_blocker_gets_both_edges() {
     assert_eq!(parent.child_count, 1);
     assert_eq!(parent.unlocks, vec!["BOTH-2"], "neither edge overwrote the other");
 
-    assert!(matches!(rx.recv().await.unwrap(), Change::Created { .. }));
-    match rx.recv().await.unwrap() {
+    assert!(matches!(rx.change().await.unwrap(), Change::Created { .. }));
+    match rx.change().await.unwrap() {
         Change::ChildrenChanged { id, child_count, .. } => {
             assert_eq!((id.as_str(), child_count), ("BOTH-1", parent.child_count))
         }
         other => panic!("expected ChildrenChanged, got {other:?}"),
     }
-    match rx.recv().await.unwrap() {
+    match rx.change().await.unwrap() {
         Change::UnlocksChanged { ticket, .. } => assert_eq!(ticket, parent),
         other => panic!("expected UnlocksChanged, got {other:?}"),
     }
@@ -1154,13 +1182,13 @@ async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
         }
         other => panic!("expected ParentChanged, got {other:?}"),
     }
-    match rx.recv().await.unwrap() {
+    match rx.change().await.unwrap() {
         Change::ParentChanged { ticket, .. } => {
             assert_eq!(ticket.parent.as_deref(), Some("AD-2"))
         }
         other => panic!("expected ParentChanged, got {other:?}"),
     }
-    match rx.recv().await.unwrap() {
+    match rx.change().await.unwrap() {
         Change::ChildrenChanged { id, added, child_count, .. } => {
             assert_eq!(id, "AD-2");
             assert_eq!(added, "AD-3");
@@ -1168,7 +1196,7 @@ async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
         }
         other => panic!("expected ChildrenChanged, got {other:?}"),
     }
-    match rx.recv().await.unwrap() {
+    match rx.change().await.unwrap() {
         Change::ChildRemoved { id, removed, child_count, .. } => {
             assert_eq!(id, "AD-1");
             assert_eq!(removed, "AD-3");
@@ -1176,14 +1204,14 @@ async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
         }
         other => panic!("expected ChildRemoved, got {other:?}"),
     }
-    assert!(rx.try_recv().is_err());
+    assert!(rx.try_change().is_err());
 
     // Idempotent: the parent it already has writes and emits nothing.
     match store.set_parent("AD-3", "AD-2").await.unwrap() {
         Change::ParentChanged { previous, .. } => assert_eq!(previous.as_deref(), Some("AD-2")),
         other => panic!("expected ParentChanged, got {other:?}"),
     }
-    assert!(rx.try_recv().is_err(), "a no-op emits nothing");
+    assert!(rx.try_change().is_err(), "a no-op emits nothing");
 
     drop(store);
     let store = Store::open(&path).unwrap();
@@ -1238,16 +1266,16 @@ async fn set_parent_guards_ancestry_and_a_move_removes_from_the_old_parent() {
     let mut rx = store.subscribe();
     store.set_parent("MV-3", "MV-1").await.unwrap();
     assert!(matches!(
-        rx.recv().await.unwrap(),
+        rx.change().await.unwrap(),
         Change::ParentChanged { previous: Some(p), .. } if p == "MV-2"
     ));
-    match rx.recv().await.unwrap() {
+    match rx.change().await.unwrap() {
         Change::ChildrenChanged { id, added, child_count, .. } => {
             assert_eq!((id.as_str(), added.as_str(), child_count), ("MV-1", "MV-3", 3));
         }
         other => panic!("expected ChildrenChanged, got {other:?}"),
     }
-    match rx.recv().await.unwrap() {
+    match rx.change().await.unwrap() {
         Change::ChildRemoved { id, removed, child_count, .. } => {
             assert_eq!((id.as_str(), removed.as_str(), child_count), ("MV-2", "MV-3", 0));
         }
@@ -1313,7 +1341,7 @@ fn bare(groups: Vec<Group>) -> Vec<Group> {
 /// changes around them drained and dropped).
 fn group_changes(rx: &mut broadcast::Receiver<Change>) -> Vec<Group> {
     let mut out = Vec::new();
-    while let Ok(change) = rx.try_recv() {
+    while let Ok(change) = rx.try_change() {
         if let Change::GroupChanged { group } = change {
             out.push(group);
         }
@@ -1449,19 +1477,19 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     // Acceptance 2: one shortcode, one event, done + 1, after the
     // status change it follows from.
     store.set_status("SOLO-2", Status::Complete).await.unwrap();
-    assert!(matches!(rx.try_recv().unwrap(), Change::StatusChanged { .. }));
-    match rx.try_recv().unwrap() {
+    assert!(matches!(rx.try_change().unwrap(), Change::StatusChanged { .. }));
+    match rx.try_change().unwrap() {
         Change::GroupChanged { group: g } => assert_eq!(bare(vec![g]), [group("SOLO", 2, 1, "SOLO-1", None)]),
         other => panic!("expected GroupChanged, got {other:?}"),
     }
     // WAVE-6: and, last, the placement the completion moved.
-    assert!(matches!(rx.try_recv().unwrap(), Change::PlacementsChanged { .. }));
-    assert!(rx.try_recv().is_err(), "one group moved, one event");
+    assert!(matches!(rx.try_change().unwrap(), Change::PlacementsChanged { .. }));
+    assert!(rx.try_change().is_err(), "one group moved, one event");
 
     // Not a crossing of Complete: nothing moves.
     store.set_status("WIRE-2", Status::Ready).await.unwrap();
-    assert!(matches!(rx.try_recv().unwrap(), Change::StatusChanged { .. }));
-    assert!(rx.try_recv().is_err(), "Pending → Ready moves no count");
+    assert!(matches!(rx.try_change().unwrap(), Change::StatusChanged { .. }));
+    assert!(rx.try_change().is_err(), "Pending → Ready moves no count");
 
     // Deepest first: WIRE, the TRAN row it nests in, then PLEX.
     store.set_status("WIRE-2", Status::Complete).await.unwrap();
@@ -1490,9 +1518,9 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     // TRAN-2 to under SOLO-1. After the ticket events, every row that
     // moved — innermost first, then shortcode order.
     store.set_parent("WIRE-1", "SOLO-1").await.unwrap();
-    assert!(matches!(rx.try_recv().unwrap(), Change::ParentChanged { .. }));
-    assert!(matches!(rx.try_recv().unwrap(), Change::ChildrenChanged { .. }));
-    assert!(matches!(rx.try_recv().unwrap(), Change::ChildRemoved { .. }));
+    assert!(matches!(rx.try_change().unwrap(), Change::ParentChanged { .. }));
+    assert!(matches!(rx.try_change().unwrap(), Change::ChildrenChanged { .. }));
+    assert!(matches!(rx.try_change().unwrap(), Change::ChildRemoved { .. }));
     assert_eq!(
         bare(group_changes(&mut rx)),
         vec![
@@ -1546,15 +1574,15 @@ async fn a_group_carries_its_roots_row_and_a_change_to_it_is_a_group_change() {
 
     // A root's status, crossing nothing: its group, once, after the ticket.
     store.set_status("SUB-1", Status::Ready).await.unwrap();
-    assert!(matches!(rx.try_recv().unwrap(), Change::StatusChanged { .. }));
-    match rx.try_recv().unwrap() {
+    assert!(matches!(rx.try_change().unwrap(), Change::StatusChanged { .. }));
+    match rx.try_change().unwrap() {
         Change::GroupChanged { group } => {
             assert_eq!((group.epic.as_str(), group.total, group.done), ("SUB", 1, 0));
             assert_eq!(group.root_row, row("the sub", Status::Ready));
         }
         other => panic!("expected GroupChanged, got {other:?}"),
     }
-    assert!(rx.try_recv().is_err(), "the root's group only — not the host's");
+    assert!(rx.try_change().is_err(), "the root's group only — not the host's");
 
     // Across Complete: the counts' own report carries the new row, once.
     store.set_status("SUB-1", Status::Complete).await.unwrap();
@@ -1565,27 +1593,27 @@ async fn a_group_carries_its_roots_row_and_a_change_to_it_is_a_group_change() {
 
     // The status it already has: the ticket event, no group.
     store.set_status("SUB-1", Status::Complete).await.unwrap();
-    assert!(matches!(rx.try_recv().unwrap(), Change::StatusChanged { .. }));
-    assert!(rx.try_recv().is_err());
+    assert!(matches!(rx.try_change().unwrap(), Change::StatusChanged { .. }));
+    assert!(rx.try_change().is_err());
 
     // A root's title: its group, after the `Amended`; a body alone, none.
     store.amend("HOST-1", Some("the host, renamed".into()), None).await.unwrap();
-    assert!(matches!(rx.try_recv().unwrap(), Change::Amended { .. }));
-    match rx.try_recv().unwrap() {
+    assert!(matches!(rx.try_change().unwrap(), Change::Amended { .. }));
+    match rx.try_change().unwrap() {
         Change::GroupChanged { group } => assert_eq!(group.root_row, row("the host, renamed", Status::Pending)),
         other => panic!("expected GroupChanged, got {other:?}"),
     }
-    assert!(rx.try_recv().is_err());
+    assert!(rx.try_change().is_err());
     store.amend("HOST-1", None, Some("a body".into())).await.unwrap();
-    assert!(matches!(rx.try_recv().unwrap(), Change::Amended { .. }));
-    assert!(rx.try_recv().is_err(), "a body is not on the row");
+    assert!(matches!(rx.try_change().unwrap(), Change::Amended { .. }));
+    assert!(rx.try_change().is_err(), "a body is not on the row");
 
     // Not a root: a ticket event and nothing more.
     store.set_status("HOST-2", Status::Ready).await.unwrap();
     store.amend("HOST-2", Some("other work".into()), None).await.unwrap();
-    assert!(matches!(rx.try_recv().unwrap(), Change::StatusChanged { .. }));
-    assert!(matches!(rx.try_recv().unwrap(), Change::Amended { .. }));
-    assert!(rx.try_recv().is_err());
+    assert!(matches!(rx.try_change().unwrap(), Change::StatusChanged { .. }));
+    assert!(matches!(rx.try_change().unwrap(), Change::Amended { .. }));
+    assert!(rx.try_change().is_err());
     assert_eq!(store.groups(), nav(&store));
 }
 

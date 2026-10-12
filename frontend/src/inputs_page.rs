@@ -60,7 +60,10 @@ use crate::{counts, fmt_relative, fmt_unix, now_unix};
 pub(crate) const SHOWN: [InputState; 3] = [InputState::Open, InputState::Answered, InputState::Closed];
 
 /// Every group the page can show, in its order.
-const GROUPS: [InputState; 4] = [InputState::Open, InputState::Answered, InputState::Closed, InputState::Removed];
+/// MENGER-13: a canceled ticket's withdrawn inputs, before the removed — both
+/// set aside, shown together by Removed.
+const GROUPS: [InputState; 5] =
+    [InputState::Open, InputState::Answered, InputState::Closed, InputState::Withdrawn, InputState::Removed];
 
 /// The shortcode an input's ticket is in.
 pub(crate) fn shortcode_of(ticket: &str) -> &str {
@@ -101,7 +104,7 @@ impl Shown {
     /// Whether the group `state` shows.
     pub(crate) fn shows(&self, state: InputState) -> bool {
         match state {
-            InputState::Removed => self.removed,
+            InputState::Removed | InputState::Withdrawn => self.removed,
             s => self.states.contains(&s),
         }
     }
@@ -183,7 +186,7 @@ pub(crate) fn local_counts(list: &[Input]) -> Counts {
     let n = |s: InputState| list.iter().filter(|i| i.state == s).count();
     let mut out: Counts = HashMap::new();
     out.insert(Cat::State, INPUT_STATES.iter().zip(SHOWN).map(|(t, s)| (t.to_string(), n(s))).collect());
-    let removed = n(InputState::Removed);
+    let removed = n(InputState::Removed) + n(InputState::Withdrawn);
     out.insert(Cat::Removed, HashMap::from([("yes".to_string(), removed), ("no".to_string(), list.len() - removed)]));
     out
 }
@@ -397,6 +400,7 @@ pub(crate) fn group_empty(s: InputState) -> &'static str {
         InputState::Answered => "Nothing answered and still open to change.",
         InputState::Closed => "Nothing closed.",
         InputState::Removed => "Nothing removed.",
+        InputState::Withdrawn => "Nothing withdrawn.",
     }
 }
 
@@ -421,6 +425,7 @@ fn source_title(s: AnswerSource) -> &'static str {
     match s {
         AnswerSource::App => "app: a viewer's click",
         AnswerSource::Api => "api: synapse or an agent",
+        AnswerSource::System => "system: its ticket was canceled, or is not any more",
     }
 }
 
@@ -814,9 +819,10 @@ mod tests {
 
         let with_removed = Shown { removed: true, ..Shown::default() };
         let g = groups(&fixture(), &with_removed);
-        assert_eq!(g.len(), 4);
-        assert_eq!(g[3].state, InputState::Removed);
-        assert_eq!(keys(&g[3]), ["INPUT-9#old"]);
+        // MENGER-13: the withdrawn (a canceled ticket's) with them, before.
+        assert_eq!(g.len(), 5);
+        assert_eq!((g[3].state, g[4].state), (InputState::Withdrawn, InputState::Removed));
+        assert_eq!(keys(&g[4]), ["INPUT-9#old"]);
 
         let none_closed: Vec<Input> = fixture().into_iter().filter(|i| i.state != InputState::Closed).collect();
         let g = groups(&none_closed, &Shown::default());
@@ -836,7 +842,7 @@ mod tests {
         assert_eq!(states(&clauses(Some((Op::Not, &["closed"])), None)), [InputState::Open, InputState::Answered]);
         assert_eq!(states(&clauses(Some((Op::Not, &["open", "answered", "closed"])), None)), Vec::<InputState>::new(), "none of them");
         assert_eq!(states(&clauses(None, Some("yes"))), GROUPS, "the removed too, last");
-        assert_eq!(states(&clauses(Some((Op::Is, &["closed"])), Some("yes"))), [InputState::Closed, InputState::Removed]);
+        assert_eq!(states(&clauses(Some((Op::Is, &["closed"])), Some("yes"))), [InputState::Closed, InputState::Withdrawn, InputState::Removed]);
         assert_eq!(states(&clauses(None, Some("no"))), SHOWN, "Removed is hidden: the default");
         let g = groups(&fixture(), &Shown::of(&clauses(Some((Op::Is, &["open"])), None)));
         assert_eq!(keys(&g[0]), ["INPUT-6#a", "INPUT-9#notes", "MNG-2#c"]);

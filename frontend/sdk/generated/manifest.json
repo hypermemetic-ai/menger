@@ -106,7 +106,8 @@
       "components": [],
       "counts": [
         "filter",
-        "keep"
+        "keep",
+        "tz"
       ],
       "create": [
         "blocked_by",
@@ -121,24 +122,30 @@
       "extents": [],
       "facets": [
         "base",
-        "filter"
+        "filter",
+        "tz"
       ],
       "find": [
         "after",
         "filter",
         "limit",
-        "query"
+        "query",
+        "tz"
       ],
       "get": [
         "id"
       ],
       "groups": [],
       "health": [],
+      "history": [
+        "id"
+      ],
       "inputs": [
         "epic",
         "filter",
         "state",
-        "ticket"
+        "ticket",
+        "tz"
       ],
       "label": [
         "add",
@@ -158,18 +165,21 @@
         "limit",
         "parent",
         "status",
-        "summary"
+        "summary",
+        "tz"
       ],
       "member": [
         "filter",
-        "ids"
+        "ids",
+        "tz"
       ],
       "ready_set": [
         "after",
         "epic",
         "filter",
         "limit",
-        "summary"
+        "summary",
+        "tz"
       ],
       "reopen_input": [
         "input",
@@ -180,11 +190,14 @@
         "filter",
         "limit",
         "offset",
-        "query"
+        "query",
+        "tz"
       ],
       "set_kind": [
         "id",
         "kind",
+        "message",
+        "source",
         "status"
       ],
       "set_parent": [
@@ -193,6 +206,9 @@
       ],
       "set_status": [
         "id",
+        "message",
+        "restore_children",
+        "source",
         "status"
       ],
       "tree": [
@@ -202,7 +218,8 @@
         "keep",
         "limit",
         "matches_only",
-        "parent"
+        "parent",
+        "tz"
       ],
       "unlink_commits": [
         "commits",
@@ -211,7 +228,8 @@
       "watch": [
         "epic",
         "filter",
-        "membership"
+        "membership",
+        "tz"
       ],
       "waves": [
         "epics",

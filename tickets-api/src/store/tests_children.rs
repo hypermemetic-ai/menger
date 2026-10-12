@@ -8,6 +8,7 @@
 //! the same set, in the store's order — and without the column.
 
 use super::*;
+use super::tests::Changes;
 use std::collections::BTreeSet;
 
 /// SplitMix64, as the store's other randomized tests use: reproducible,
@@ -407,25 +408,25 @@ async fn a_birth_and_a_move_broadcast_the_parents_id_and_count() {
         })
         .await
         .unwrap(); // EV-2 → EV-1, blocked by it
-    assert!(matches!(rx.try_recv().unwrap(), Change::Created { .. }));
-    match rx.try_recv().unwrap() {
+    assert!(matches!(rx.try_change().unwrap(), Change::Created { .. }));
+    match rx.try_change().unwrap() {
         Change::ChildrenChanged { id, epic, added, child_count } => {
             assert_eq!((id.as_str(), epic.as_str(), added.as_str(), child_count), ("EV-1", "EV", "EV-2", 1));
         }
         other => panic!("expected ChildrenChanged, got {other:?}"),
     }
-    match rx.try_recv().unwrap() {
+    match rx.try_change().unwrap() {
         Change::UnlocksChanged { ticket, .. } => {
             assert_eq!(ticket.child_count, 1, "the blocker carries the count it now has");
             assert_eq!(ticket, store.get("EV-1").await.unwrap());
         }
         other => panic!("expected UnlocksChanged, got {other:?}"),
     }
-    while rx.try_recv().is_ok() {}
+    while rx.try_change().is_ok() {}
 
     store.create(new_ticket("EV", Kind::Build, None)).await.unwrap(); // EV-3 → EV-1
     store.create(new_ticket("HOSTED", Kind::Scope, Some("EV-3"))).await.unwrap();
-    let parents: Vec<(String, String, u64)> = std::iter::from_fn(|| rx.try_recv().ok())
+    let parents: Vec<(String, String, u64)> = std::iter::from_fn(|| rx.try_change().ok())
         .filter_map(|c| match c {
             Change::ChildrenChanged { id, epic, child_count, .. } => Some((id, epic, child_count)),
             _ => None,
@@ -438,7 +439,7 @@ async fn a_birth_and_a_move_broadcast_the_parents_id_and_count() {
     );
 
     store.set_parent("EV-3", "EV-2").await.unwrap();
-    let changes: Vec<Change> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    let changes: Vec<Change> = std::iter::from_fn(|| rx.try_change().ok()).collect();
     match &changes[..3] {
         [Change::ParentChanged { ticket, previous }, Change::ChildrenChanged { id, added, child_count, .. }, Change::ChildRemoved { id: old, removed, child_count: left, .. }] =>
         {

@@ -93,6 +93,20 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger tickets member --ids FILTER-4,FILTER-5 --filter 'status Ready'
   ```
 
+  **History** (MENGER-13): every status and kind change is a transition —
+  who, from where, why, caused by what — read with `history --id X`.
+  `set_status … Canceled` cancels the ticket's open descendants in the same
+  write (and withdraws their open inputs); leaving `Canceled` with
+  `--restore-children true` puts back what that cancel canceled. Filters
+  read the log: `entered <status> [window] [by who]`, `left …`, `changed
+  …`, `by …`; windows `within 12h`, `today`, `yesterday`, `this week`,
+  `since/before/between` (UTC unless `--tz Europe/Berlin`):
+
+  ```sh
+  synapse -P 4455 menger tickets list --filter 'status "In Review" and entered "In Review" within 12h' --summary true
+  synapse -P 4455 menger tickets set_status --id MNG-7 --status Canceled --message "folded into MNG-9"
+  ```
+
   **Search inside tickets** (SEARCH-2) is `search` — titles and bodies,
   every word required, prefixes and typos too, best first; each `hit`
   carries the passage that matched (`find` stays the jump by id or title).

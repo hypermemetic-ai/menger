@@ -246,16 +246,16 @@ async fn run(client: &Client, call: Call) -> Result<Vec<TicketsEvent>, String> {
     let answer = match call {
         Call::Get { id } => client.get_all(id).await,
         Call::List { epic, status, parent, after, limit, summary, filter } => {
-            client.list_all(epic, status, parent, after, limit, summary, filter, None, None).await
+            client.list_all(epic, status, parent, after, limit, summary, filter, None, None, crate::session::tz()).await
         }
-        Call::Find { query, after, limit, filter } => client.find_all(query, after, limit, filter).await,
+        Call::Find { query, after, limit, filter } => client.find_all(query, after, limit, filter, crate::session::tz()).await,
         Call::Waves { epics, kinds } => client.waves_all(epics, kinds).await,
         Call::Groups => client.groups_all().await,
         Call::Extents => client.extents_all().await,
         Call::Blockers { id } => client.blockers_all(id).await,
         Call::Health => client.health_all().await,
         Call::Components => client.components_all().await,
-        Call::Inputs { ticket, epic, state, filter } => client.inputs_all(ticket, epic, state, filter).await,
+        Call::Inputs { ticket, epic, state, filter } => client.inputs_all(ticket, epic, state, filter, crate::session::tz()).await,
     };
     answer.map_err(|e| crate::session::describe(&e))
 }
@@ -397,7 +397,7 @@ pub(crate) fn moved(reaches: &mut HashMap<String, Reach>, group: &menger_tickets
 /// Ask the server how far `epic` reaches for this viewer, and remember it.
 pub(crate) async fn reach_of(client: &Client, epic: &str) -> Result<Reach, String> {
     let filter = scoped_filter(None, epic)?;
-    let events = client.counts_all(Some(filter), None).await.map_err(|e| crate::session::describe(&e))?;
+    let events = client.counts_all(Some(filter), None, crate::session::tz()).await.map_err(|e| crate::session::describe(&e))?;
     let reach = Reach::from_counts(epic, events)?;
     REACHES.with(|r| r.borrow_mut().insert(reach.epic.clone(), reach.clone()));
     Ok(reach)
@@ -494,6 +494,10 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
             reach.holds_id(id).then_some(ev)
         }
         E::Input { ref input } | E::InputChanged { ref input } => reach.holds_id(&input.ticket).then_some(ev),
+        // MENGER-13: a transition is its ticket's; a history's end names no
+        // ticket of its own (a frame does not read `history`).
+        E::Transition { ref transition } => reach.holds_id(&transition.ticket).then_some(ev),
+        E::HistoryEnd { .. } => None,
         E::Group { group } => inside(&group.epic).then(|| E::Group { group: top(group) }),
         E::GroupChanged { group } => inside(&group.epic).then(|| E::GroupChanged { group: top(group) }),
         E::Extent { ref epic, .. }
@@ -645,6 +649,7 @@ fn open_input<'a>(sdk: &str, ticket: &str, id: &str, held: &'a [Input]) -> Resul
     };
     match input.state {
         InputState::Removed => Err(format!("{sdk}: {ticket}'s '{id}' was removed from its body (nothing sent)")),
+        InputState::Withdrawn => Err(format!("{sdk}: {ticket}'s '{id}' is withdrawn: {ticket} is canceled (nothing sent)")),
         InputState::Closed => {
             Err(format!("{sdk}: {ticket}'s '{id}' is closed: its answer is frozen until it is reopened (nothing sent)"))
         }
@@ -682,7 +687,7 @@ pub(crate) fn recorded(events: Vec<TicketsEvent>) -> Result<Answer, String> {
 /// `tickets.answer` with source `app` — the recorded answer, or why not.
 pub(crate) async fn submit(client: &Client, ticket: String, submit: Submit) -> Result<Answer, String> {
     let described = |e: plexus_client::ClientError| format!("{SUBMIT}: {}", crate::session::describe(&e));
-    let held = inputs_of(SUBMIT, client.inputs_all(Some(ticket.clone()), None, None, None).await.map_err(described)?)?;
+    let held = inputs_of(SUBMIT, client.inputs_all(Some(ticket.clone()), None, None, None, crate::session::tz()).await.map_err(described)?)?;
     let value = check_submit(&ticket, &submit, &held)?;
     let source = Some(AnswerSource::App.as_str().to_string());
     recorded(client.answer_all(ticket, submit.input, value, submit.rationale, source).await.map_err(described)?)
@@ -731,7 +736,7 @@ pub(crate) fn cleared(events: Vec<TicketsEvent>) -> Result<Input, String> {
 /// `tickets.clear_answer` with source `app` — the input, or why not.
 pub(crate) async fn clear(client: &Client, ticket: String, clear: Clear) -> Result<Input, String> {
     let described = |e: plexus_client::ClientError| format!("{CLEAR}: {}", crate::session::describe(&e));
-    let held = inputs_of(CLEAR, client.inputs_all(Some(ticket.clone()), None, None, None).await.map_err(described)?)?;
+    let held = inputs_of(CLEAR, client.inputs_all(Some(ticket.clone()), None, None, None, crate::session::tz()).await.map_err(described)?)?;
     check_clear(&ticket, &clear, &held)?;
     let source = Some(AnswerSource::App.as_str().to_string());
     cleared(client.clear_answer_all(ticket, clear.input, source).await.map_err(described)?)

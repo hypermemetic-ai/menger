@@ -83,6 +83,50 @@ pub(super) struct Compiled<'c> {
     /// FILTER-24: `tree`'s `keep` — a ticket the filter does not admit,
     /// answered as if it did ([`Compiled::keep`]).
     kept: Option<&'c Row>,
+    /// MENGER-13: what the transition log says of the filter's history
+    /// predicates, when it asks any ([`Hist`]).
+    hist: Option<Hist>,
+}
+
+/// MENGER-13: a filter's history predicates against the log, for one read.
+///
+/// Every table the compile makes is the filter with each history predicate
+/// false — the **base**, what a ticket the log says nothing of gets, and what
+/// the cells and the kept tree answer as they always did. The tickets some
+/// predicate holds for (`any`, a range of the log's kept indexes per
+/// predicate, so few for a short window) are the only ones whose answer can
+/// differ from the base; each is judged on its own, with its truths, and the
+/// difference corrects what was counted from the base: its own match, the
+/// matches of its shortcode, and — in the kept tree — the `below` of each of
+/// its ancestors ([`Hist::delta`]), so a node is its tally's sum and a
+/// correction, never a walk.
+struct Hist {
+    /// Each predicate's canonical text, and the tickets it holds for.
+    keys: Vec<String>,
+    sets: Vec<BTreeMap<String, RoaringBitmap>>,
+    /// The tickets any holds for, per shortcode.
+    any: BTreeMap<String, RoaringBitmap>,
+    /// Per ticket id, how many more matches are below it than its tally
+    /// says (worked out once a read needs it).
+    delta: OnceCell<HashMap<String, i64>>,
+    /// Per parent id, its children whose node may differ from the base:
+    /// those the log speaks of, and their ancestors.
+    affected: OnceCell<HashMap<String, Vec<(String, u32)>>>,
+}
+
+impl Hist {
+    fn holds(&self, epic: &str, seq: u32) -> bool {
+        self.any.get(epic).is_some_and(|b| b.contains(seq))
+    }
+
+    fn truths(&self, epic: &str, seq: u32) -> Vec<&str> {
+        self.keys
+            .iter()
+            .zip(&self.sets)
+            .filter(|(_, s)| s.get(epic).is_some_and(|b| b.contains(seq)))
+            .map(|(k, _)| k.as_str())
+            .collect()
+    }
 }
 
 /// The ticket an `under` name names, and its entry in the children index —
@@ -215,6 +259,19 @@ impl<'c> Compiled<'c> {
                 }
             }
         }
+        // MENGER-13: each history predicate, a range of the log's indexes.
+        let hist = lens.has_history().then(|| {
+            let clock = lens.clock();
+            let keys: Vec<String> = lens.history().iter().map(crate::filter::History::format).collect();
+            let sets: Vec<BTreeMap<String, RoaringBitmap>> = lens.history().iter().map(|h| cache.log.holds(h, clock)).collect();
+            let mut any: BTreeMap<String, RoaringBitmap> = BTreeMap::new();
+            for s in &sets {
+                for (e, b) in s {
+                    *any.entry(e.clone()).or_default() |= b;
+                }
+            }
+            Hist { keys, sets, any, delta: OnceCell::new(), affected: OnceCell::new() }
+        });
         Self {
             cache,
             lens: lens.clone(),
@@ -225,7 +282,86 @@ impl<'c> Compiled<'c> {
             admits: RefCell::new(HashMap::new()),
             admitted: RefCell::new(HashMap::new()),
             kept: None,
+            hist,
         }
+    }
+
+    /// MENGER-13: the tickets some history predicate holds for, per
+    /// shortcode — the only ones time can move.
+    pub(super) fn history_candidates(&self) -> BTreeMap<String, RoaringBitmap> {
+        self.hist.as_ref().map(|h| h.any.clone()).unwrap_or_default()
+    }
+
+    /// MENGER-13: whether the filter admits `t`, its history truths and all
+    /// — [`Self::matches_alone`], for a caller outside the module.
+    pub(super) fn matches_row(&self, t: &Row) -> bool {
+        self.matches_alone(t)
+    }
+
+    /// MENGER-13: whether the log speaks of `t` (a history predicate holds).
+    fn spoken(&self, t: &Row) -> bool {
+        self.hist.as_ref().is_some_and(|h| h.holds(&t.epic, t.seq))
+    }
+
+    /// MENGER-13: how many more matches are strictly below each ticket than
+    /// the base counts — each ticket the log speaks of moving its
+    /// ancestors' counts by its own difference from the base.
+    fn delta(&self) -> Option<&HashMap<String, i64>> {
+        let h = self.hist.as_ref()?;
+        Some(h.delta.get_or_init(|| {
+            let rows = self.cache.rows();
+            let mut d: HashMap<String, i64> = HashMap::new();
+            for (e, bm) in &h.any {
+                for seq in bm {
+                    let Some(t) = self.cache.order.get(&OrderKey { epic: e.clone(), seq }) else { continue };
+                    let diff = i64::from(self.judge_row(t)) - i64::from(self.base_alone(t));
+                    if diff == 0 {
+                        continue;
+                    }
+                    for a in tree::ancestors(rows, &t.id, t.parent.as_deref()) {
+                        *d.entry(a.to_string()).or_insert(0) += diff;
+                    }
+                }
+            }
+            d
+        }))
+    }
+
+    /// MENGER-13: the children of `p` in `epic` whose node may differ from
+    /// the base — those the log speaks of, and their ancestors.
+    fn affected(&self, p: &str, epic: &str) -> Vec<u32> {
+        let Some(h) = self.hist.as_ref() else { return Vec::new() };
+        let by = h.affected.get_or_init(|| {
+            let rows = self.cache.rows();
+            let mut by: HashMap<String, Vec<(String, u32)>> = HashMap::new();
+            let mut seen: HashSet<(String, u32)> = HashSet::new();
+            for (e, bm) in &h.any {
+                for seq in bm {
+                    let Some(t) = self.cache.order.get(&OrderKey { epic: e.clone(), seq }) else { continue };
+                    let mut chain: Vec<&Row> = vec![t];
+                    chain.extend(tree::ancestors(rows, &t.id, t.parent.as_deref()).into_iter().filter_map(|a| self.cache.get(a)));
+                    for x in chain {
+                        if let Some(parent) = x.parent.as_deref() {
+                            if seen.insert((x.epic.clone(), x.seq)) {
+                                by.entry(parent.to_string()).or_default().push((x.epic.clone(), x.seq));
+                            }
+                        }
+                    }
+                }
+            }
+            by
+        });
+        by.get(p).map(|v| v.iter().filter(|(e, _)| e == epic).map(|(_, s)| *s).collect()).unwrap_or_default()
+    }
+
+    /// MENGER-13: a node the base worked out, corrected by the log: its own
+    /// match judged with its truths when the log speaks of it, and its
+    /// `below` moved by its descendants' differences.
+    fn corrected(&self, t: &Row, (matched, below): (bool, u64)) -> (bool, u64) {
+        let Some(delta) = self.delta() else { return (matched, below) };
+        let matched = if self.spoken(t) { self.judge_row(t) } else { matched };
+        let below = (below as i64 + delta.get(&t.id).copied().unwrap_or(0)).max(0) as u64;
+        (matched, below)
     }
 
     /// FILTER-23: `epic`'s tickets whose cell `admit(mask)` admits, as one
@@ -350,8 +486,23 @@ impl<'c> Compiled<'c> {
         out
     }
 
-    /// The matches in `epic`, per cell: `(cell, how many)`.
+    /// The matches in `epic`, per cell: `(cell, how many)`. MENGER-13: the
+    /// base's, each ticket the log speaks of moved from its base answer to
+    /// its own.
     pub(super) fn cell_counts(&self, epic: &str) -> Vec<(u32, u64)> {
+        let base = self.base_cell_counts(epic);
+        let Some(spoken) = self.hist.as_ref().and_then(|h| h.any.get(epic)) else { return base };
+        let mut by: BTreeMap<u32, i64> = base.into_iter().map(|(c, n)| (c, n as i64)).collect();
+        for seq in spoken {
+            let Some(t) = self.cache.order.get(&OrderKey { epic: epic.to_string(), seq }) else { continue };
+            let c = self.cell(t);
+            *by.entry(c).or_insert(0) += i64::from(self.judge_row(t)) - i64::from(self.base_alone(t));
+        }
+        by.into_iter().filter(|(_, n)| *n > 0).map(|(c, n)| (c, n as u64)).collect()
+    }
+
+    /// The base's matches in `epic`, per cell.
+    fn base_cell_counts(&self, epic: &str) -> Vec<(u32, u64)> {
         let Some(held) = self.cache.cells.held_in(epic) else { return Vec::new() };
         match self.mode(epic) {
             Mode::Constant(m) => {
@@ -373,8 +524,25 @@ impl<'c> Compiled<'c> {
         }
     }
 
-    /// The matches in `epic`, as one bitmap.
+    /// The matches in `epic`, as one bitmap. MENGER-13: the base's, less the
+    /// tickets the log speaks of, and those of them that match with their
+    /// truths.
     pub(super) fn matches_in(&self, epic: &str) -> RoaringBitmap {
+        let base = self.base_matches_in(epic);
+        let Some(spoken) = self.hist.as_ref().and_then(|h| h.any.get(epic)) else { return base };
+        let mut out = base - spoken;
+        for seq in spoken {
+            if let Some(t) = self.cache.order.get(&OrderKey { epic: epic.to_string(), seq }) {
+                if self.judge_row(t) {
+                    out.insert(seq);
+                }
+            }
+        }
+        out
+    }
+
+    /// The base's matches in `epic`, as one bitmap.
+    fn base_matches_in(&self, epic: &str) -> RoaringBitmap {
         let Some(held) = self.cache.cells.held_in(epic) else { return RoaringBitmap::new() };
         let admitted = |mask: u64, within: Option<&RoaringBitmap>| -> RoaringBitmap {
             let admit = self.admit(mask);
@@ -411,7 +579,11 @@ impl<'c> Compiled<'c> {
             .shortcodes()
             .filter(|(epic, _)| only.is_none_or(|o| o == *epic))
             .filter_map(|(epic, held)| {
-                let bms: Vec<Cow<'c, RoaringBitmap>> = match self.mode(epic) {
+                // MENGER-13: a shortcode the log speaks of is one bitmap of
+                // its own, corrected.
+                let spoken = self.hist.as_ref().is_some_and(|h| h.any.contains_key(epic));
+                let mode = if spoken { Mode::Partial } else { self.mode(epic) };
+                let bms: Vec<Cow<'c, RoaringBitmap>> = match mode {
                     Mode::Constant(m) => {
                         let admit = self.admit(m);
                         let table = admit.of(epic);
@@ -448,6 +620,13 @@ impl<'c> Compiled<'c> {
     /// Whether the filter admits `t`, by its whole lineage — the reference
     /// evaluator's question, asked of one ticket (a hand-edited cycle's).
     fn judge_row(&self, t: &Row) -> bool {
+        let truths = self.hist.as_ref().map(|h| h.truths(&t.epic, t.seq)).unwrap_or_default();
+        self.judge_row_holding(t, &truths)
+    }
+
+    /// [`Self::judge_row`] with the history predicates `holds` holding —
+    /// none: the base's answer.
+    fn judge_row_holding(&self, t: &Row, holds: &[&str]) -> bool {
         let key = self.cache.key(t);
         if self.status.is_some_and(|s| key.status() != s) {
             return false;
@@ -456,7 +635,7 @@ impl<'c> Compiled<'c> {
         let mut lineage: Vec<&str> = vec![t.id.as_str()];
         lineage.extend(tree::ancestors(rows, &t.id, t.parent.as_deref()));
         lineage.extend(self.shortcode_lineage(&t.epic));
-        self.lens.judge(&t.epic, key, &lineage)
+        self.lens.judge_holding(&t.epic, key, &lineage, holds)
     }
 
     /// `t`'s node by looking at every ticket of its subtree — for a ticket
@@ -572,15 +751,23 @@ impl<'c> Compiled<'c> {
         }
         let mut ids: Vec<&str> = vec![t.id.as_str()];
         ids.extend(tree::ancestors(rows, &t.id, t.parent.as_deref()));
-        self.node(t, self.holding(&ids), &self.below(t))
+        self.corrected(t, self.node(t, self.holding(&ids), &self.below(t)))
     }
 
     /// FILTER-23: whether `t` matches, by its own lineage — [`Self::node_alone`]'s
-    /// `matched`, without its count.
+    /// `matched`, without its count. MENGER-13: with its history truths.
     fn matches_alone(&self, t: &Row) -> bool {
+        if self.spoken(t) {
+            return self.judge_row(t);
+        }
+        self.base_alone(t)
+    }
+
+    /// The base's answer for `t` alone: every history predicate false.
+    fn base_alone(&self, t: &Row) -> bool {
         let rows = self.cache.rows();
         if tree::on_cycle(rows, &t.id, t.parent.as_deref()) {
-            return self.judge_row(t);
+            return self.judge_row_holding(t, &[]);
         }
         let mut ids: Vec<&str> = vec![t.id.as_str()];
         ids.extend(tree::ancestors(rows, &t.id, t.parent.as_deref()));
@@ -788,6 +975,29 @@ impl<'c> Compiled<'c> {
                 }
                 rowed.known.insert((e, *s), node);
             }
+            // MENGER-13: the children the log may move — those it speaks of
+            // and their ancestors — each the base's node, corrected.
+            if !cycle {
+                for s in self.affected(p, e) {
+                    let Some(r) = cache.order.get(&OrderKey { epic: e.to_string(), seq: s }) else { continue };
+                    let base = match rowed.known.get(&(e, s)) {
+                        Some(n) => *n,
+                        None => bulk(r),
+                    };
+                    let node = self.corrected(r, base);
+                    if node.0 || node.1 > 0 {
+                        q.insert(s);
+                    } else {
+                        q.remove(s);
+                    }
+                    if node.0 {
+                        hit.insert(s);
+                    } else {
+                        hit.remove(s);
+                    }
+                    rowed.known.insert((e, s), node);
+                }
+            }
             if !q.is_empty() {
                 rowed.by_epic.push((e, q));
             }
@@ -820,7 +1030,9 @@ impl<'c> Compiled<'c> {
         let cut = self.atoms.iter().enumerate().any(|(i, a)| {
             held & (1 << i) == 0 && a.row.is_some_and(|x| tree::ancestors(rows, &x.id, x.parent.as_deref()).contains(&p))
         });
-        if !cut && !prow.is_some_and(|r| tree::on_cycle(rows, &r.id, r.parent.as_deref())) {
+        // MENGER-13: the fast walk reads one table for every ticket below —
+        // a filter asking the log is answered by the corrected walk.
+        if !cut && self.hist.is_none() && !prow.is_some_and(|r| tree::on_cycle(rows, &r.id, r.parent.as_deref())) {
             let by = self.nearest_fast(p, held, &hosted);
             let mut rowed = Rowed { by_epic: by.into_iter().collect(), alone: true, ..Rowed::default() };
             self.splice_kept(&mut rowed, Place::Ticket(p));
@@ -1176,7 +1388,8 @@ impl<'c> Compiled<'c> {
                 None => {
                     let matched = tables.admits(tree::g(names.get(&r.epic).expect("a child's shortcode is interned"), self.cell(r)));
                     let below = self.cache.children.kids(&r.id).map_or(0, |k| tables.sum(k.tally.iter().map(|(g, n)| (*g, u64::from(*n)))));
-                    (matched, below)
+                    // MENGER-13: corrected by the log (a no-op without one).
+                    self.corrected(r, (matched, below))
                 }
             };
             nodes.push(Node { summary: r.clone(), matched, below });
@@ -1317,7 +1530,15 @@ impl Store {
     /// what the write touches and which of it each such watch's filter
     /// matches. `None`, and nothing worked out, when none is open.
     pub(super) fn under_before(&self, cache: &Cache, touched: impl FnOnce() -> Touched) -> Option<UnderBefore> {
-        let watches = self.unders.live();
+        under_before_with(&self.unders, cache, touched)
+    }
+}
+
+/// [`Store::under_before`] over `unders` — MENGER-13: what a batch's steps
+/// ask, each against the cache as the steps before it left it.
+pub(super) fn under_before_with(unders: &UnderWatches, cache: &Cache, touched: impl FnOnce() -> Touched) -> Option<UnderBefore> {
+    {
+        let watches = unders.live();
         if watches.is_empty() {
             return None;
         }
@@ -1349,11 +1570,17 @@ impl UnderBefore {
     /// past [`cells::RECOUNT_OVER`], its count of each shortcode they are
     /// in, as the write left it. `None` when no watch's membership moved.
     pub(super) fn after(self, tickets: &RwLock<Cache>) -> Option<Change> {
-        use filtered::Membership;
         let cache = tickets.read().expect("store lock poisoned");
+        self.after_in(&cache)
+    }
+
+    /// [`UnderBefore::after`] against `cache` in hand — MENGER-13: a batch's
+    /// step, under the write lock it holds.
+    pub(super) fn after_in(self, cache: &Cache) -> Option<Change> {
+        use filtered::Membership;
         let mut by: HashMap<u64, Vec<Membership>> = HashMap::new();
         for (w, before) in self.watches.iter().zip(&self.before) {
-            let c = Compiled::new(&cache, &w.lens, None);
+            let c = Compiled::new(cache, &w.lens, None);
             let mut moved: Vec<(&str, u32, bool)> = Vec::new();
             let mut epics: Vec<&str> = Vec::new();
             for (e, area) in self.touched.areas() {

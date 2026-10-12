@@ -297,7 +297,7 @@ async fn a_list_across_the_threshold_and_a_subtree_moved_whole() {
 // ---------------------------------------------------------------------------
 // `tree`, and `under` on every filtered read, against the rule.
 
-use super::tests_filtered::{assert_lens_is_a_scan, Plain};
+use super::tests_filtered::{assert_lens_is_a_scan, Plain, HISTORY_VOCAB};
 use super::tests_language::{filter_names, random_filter};
 use crate::filter::Filter;
 
@@ -307,13 +307,31 @@ type TreeAnswer = (Vec<(String, bool, u64)>, Option<String>, u64);
 
 /// A random filter, half the time with an `under` of its own beside it.
 fn tree_filter(rng: &mut Rng, names: &[String]) -> Filter {
+    // MENGER-13: a quarter of the time a history group beside it — drawn from a
+    // generator of its own, so the draws below are the ones they were.
+    let mut hrng = Rng(rng.0 ^ 0x4E11_6E13);
     let f = random_filter(rng, names);
+    let f = if hrng.below(4) == 0 { f.and(&history_group(&mut hrng)) } else { f };
     if rng.below(2) == 0 {
         let x = names[rng.below(names.len())].to_ascii_uppercase();
         let not = if rng.below(4) == 0 { "not " } else { "" };
         return f.and(&Filter::parse(&format!("{not}under {x}")).unwrap());
     }
     f
+}
+
+/// MENGER-13: one group over [`HISTORY_VOCAB`] — a predicate, its `not`, or
+/// two of them joined by `or`.
+pub(super) fn history_group(rng: &mut Rng) -> Filter {
+    let pick = |rng: &mut Rng| {
+        let not = if rng.below(3) == 0 { "not " } else { "" };
+        format!("{not}{}", HISTORY_VOCAB[rng.below(HISTORY_VOCAB.len())])
+    };
+    let text = match rng.below(3) {
+        0 => format!("({} or {})", pick(rng), pick(rng)),
+        _ => pick(rng),
+    };
+    Filter::parse(&text).unwrap_or_else(|e| panic!("{text}: {e}"))
 }
 
 /// `tree` by the rule, from the rows alone: the rows at the address — the

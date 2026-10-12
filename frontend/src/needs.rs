@@ -59,10 +59,17 @@ pub(crate) fn saved_id() -> String {
 }
 
 /// What the panel asks with: the filter's wire text — `None` for a filter
-/// that admits nothing (asked of no one).
+/// that admits nothing (asked of no one). MENGER-13: a canceled ticket needs
+/// no one, nor does what its cancel canceled — `not status Canceled` is
+/// always beside the filter (its withdrawn inputs are no longer `asking`;
+/// this takes out a `needs-you` label on a canceled subtree too).
 pub(crate) fn asked(f: &Filter) -> Option<String> {
-    f.admits_nothing().is_none().then(|| wire_text(f))
+    let f = f.and(&Filter::parse(NOT_CANCELED).expect("parses"));
+    f.admits_nothing().is_none().then(|| wire_text(&f))
 }
+
+/// MENGER-13: what the panel never shows.
+pub(crate) const NOT_CANCELED: &str = "not status Canceled";
 
 /// Where an input is answered: its ticket's page, its frame scrolled to the
 /// input (COMP-14's `?anchor=`, the element with the input's id).
@@ -230,7 +237,7 @@ pub(crate) fn Panel() -> impl IntoView {
         let n = asked_n.get_value().wrapping_add(1);
         asked_n.set_value(n);
         spawn_local(async move {
-            let answer = client.list_all(None, None, None, None, Some(ROWS_MAX), Some(true), Some(t), None, None).await;
+            let answer = client.list_all(None, None, None, None, Some(ROWS_MAX), Some(true), Some(t), None, None, crate::session::tz()).await;
             if asked_n.try_get_value() != Some(n) {
                 return;
             }
@@ -432,6 +439,7 @@ mod tests {
             asking,
             labels: labels.iter().map(|l| l.to_string()).collect(),
             lineage: vec!["T-1".into(), "T".into()],
+            history: Vec::new(),
         }
     }
 
@@ -442,7 +450,7 @@ mod tests {
         let f = default_filter();
         // Canonical, an `or` group is parenthesized.
         assert_eq!(f.format(), "(asking or label needs-you)");
-        assert_eq!(asked(&f).as_deref(), Some("(asking or label needs-you)"));
+        assert_eq!(asked(&f).as_deref(), Some("(asking or label needs-you) and not status Canceled"), "MENGER-13: never a canceled ticket");
         assert_eq!(Filter::parse(&f.format()).unwrap(), f, "the canonical text reads back");
         assert!(f.matches(&facts(true, &[])));
         assert!(f.matches(&facts(false, &["needs-you"])));

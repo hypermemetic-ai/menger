@@ -157,8 +157,11 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, links,
 /// found }`; `input.displayOnly`), and section anchors in `menger:reveal`;
 /// MENGER-14's 1.8 hands every link clicked to the host (`menger:link`);
 /// MENGER-15's 1.9 hands it `z` (full screen) and every Esc, and a mockup's
-/// frames take `menger:emulate` (the page shim, `menger-page.js`).
-pub(crate) const SDK_VERSION: &str = "1.9.0";
+/// frames take `menger:emulate` (the page shim, `menger-page.js`); MENGER-13's
+/// 1.10 regenerates the typed client over the transition log — `history`,
+/// the `transition` and `history_end` events, `tz` on the filtered reads,
+/// `set_status`'s `restore_children`, `source` and `message`.
+pub(crate) const SDK_VERSION: &str = "1.10.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is

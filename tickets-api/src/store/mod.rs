@@ -764,6 +764,11 @@ pub enum Change {
     /// it, after every other event of the write. `epic` is its ticket's
     /// shortcode, what `watch { epic }` filters by; it does not cross the wire.
     InputChanged { epic: String, input: Input },
+    /// MENGER-13: a transition the write made — right after the event of the
+    /// change it records (`Created`, `StatusChanged`, `KindChanged`). `epic`
+    /// is its ticket's shortcode, what `watch { epic }` filters by; it does
+    /// not cross the wire.
+    Transition { epic: String, transition: crate::types::Transition },
     /// FILTER-4: every ticket whose cell the write moved — a birth, a status
     /// change and the blocker crossings it fans out to, a first commit or a
     /// last, SDLC-13: a kind changed — worked out once per write before it
@@ -808,6 +813,8 @@ impl Change {
             Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => "",
             // INPUT-3: its ticket's.
             Self::InputChanged { epic, .. } => epic,
+            // MENGER-13: its ticket's.
+            Self::Transition { epic, .. } => epic,
             // FILTER-4: one per write, its moves in any shortcode.
             Self::CellsMoved { .. } => "",
             // FILTER-13: one per write, each watch's events already in its epic.
@@ -1084,6 +1091,9 @@ pub enum StoreError {
     /// INPUT-3: the input's body no longer declares it — it takes no change
     /// until the body declares it again. Nothing changed.
     InputRemoved { ticket: String, input: String },
+    /// MENGER-13: the input is withdrawn — its ticket is canceled, and it
+    /// asks no one until the ticket is not. Nothing changed.
+    InputWithdrawn { ticket: String, input: String },
     /// FILTER-4: a `list` given both `at` and `after` — two answers to where
     /// its page starts.
     AtAndAfter,
@@ -1360,6 +1370,11 @@ impl std::fmt::Display for StoreError {
                 "{ticket}'s '{input}' was removed from its body: its history is kept, and it takes no change until \
                  the body declares it again (nothing changed)"
             ),
+            Self::InputWithdrawn { ticket, input } => write!(
+                f,
+                "{ticket}'s '{input}' is withdrawn: {ticket} is canceled, so it asks no one — it takes no change \
+                 until {ticket} is not canceled (nothing changed)"
+            ),
             Self::AtAndAfter => write!(
                 f,
                 "list: give `at` (a position among the matches) or `after` (a ticket id), not both — each says \
@@ -1624,6 +1639,10 @@ struct Cache {
     /// AUTH-7: an admin's edits of a role's grants ([`roles::RoleEdits`]) —
     /// read at open, moved by `set_role` alone.
     roles: roles::RoleEdits,
+    /// MENGER-13: the transition log and its kept indexes
+    /// ([`history::Log`]) — read at open, appended to by every write that
+    /// changes a status or a kind, in the same critical section as its rows.
+    log: history::Log,
     written: u64,
 }
 
@@ -1958,6 +1977,8 @@ impl Cache {
             members: members::Members::default(),
             // AUTH-7: and the edited roles.
             roles: roles::RoleEdits::new(),
+            // MENGER-13: and the transition log.
+            log: history::Log::began_at(None),
             written: 0,
         }
     }
@@ -2029,6 +2050,8 @@ impl Cache {
             members: members::Members::default(),
             // AUTH-7: and the edited roles.
             roles: roles::RoleEdits::new(),
+            // MENGER-13: and the transition log.
+            log: history::Log::began_at(None),
             written: 0,
         }
     }
@@ -2203,7 +2226,15 @@ impl Cache {
     /// WAVE-6: and, across the satisfied line, its placement and every one
     /// downstream that moves with it ([`placements::replace`]) — on one side
     /// of the line, no placement moves.
+    #[cfg(test)]
     fn status_change(&self, row: &Row, previous: Status) -> Derived {
+        self.status_change_asking(row, previous, None)
+    }
+
+    /// MENGER-13: [`Cache::status_change`] with `asking` — whether the ticket
+    /// asks as the write leaves it, when the write moves its inputs (a
+    /// cancel withdraws them, leaving `Canceled` restores them).
+    fn status_change_asking(&self, row: &Row, previous: Status, asking: Option<bool>) -> Derived {
         let rows = self.rows().with(row);
         let derived = if rollup::Rollups::crosses(previous, row.status) {
             let mut rollups = self.rollups.clone();
@@ -2213,7 +2244,7 @@ impl Cache {
             Derived::none()
         };
         let (ready, touched) = self.ready.status_changed_touching(rows, row, previous);
-        let (cells, tree) = self.recell(rows, row, false, &touched, None);
+        let (cells, tree) = self.recell(rows, row, false, &touched, asking);
         let mut derived = derived.readied(ready).celled(cells).treed(tree);
         if satisfied(previous) != satisfied(row.status) {
             derived.moved.placed = Some(Self::replace(rows, row, false));
@@ -2339,7 +2370,7 @@ impl Cache {
     /// - its placement — none for a doc, placed by the rule for anything
     ///   else ([`placements::replace`]) — and every one downstream that moves,
     ///   across the doc line or the satisfied line.
-    fn kind_change(&self, row: &Row, old: &Row) -> Derived {
+    fn kind_change(&self, row: &Row, old: &Row, asking: Option<bool>) -> Derived {
         let rows = self.rows().with(row);
         let mut rollups = self.rollups.clone();
         let derived = match rollups.kind_changed(rows, old, row) {
@@ -2347,7 +2378,7 @@ impl Cache {
             None => Derived::none(),
         };
         let (ready, touched) = self.ready.status_changed_touching(rows, row, old.status);
-        let (cells, tree) = self.recell(rows, row, false, &touched, None);
+        let (cells, tree) = self.recell(rows, row, false, &touched, asking);
         let mut derived = derived.readied(ready).celled(cells).treed(tree);
         if satisfied(old.status) != satisfied(row.status) || old.kind.has_lifecycle() != row.kind.has_lifecycle() {
             derived.moved.placed = Some(Self::replace(rows, row, false));
@@ -2759,45 +2790,10 @@ impl Store {
         search::migrate(&mut conn)?;
         // NOTE-2: a file without the notes table gains it, empty, here.
         notes::migrate(&mut conn)?;
-        // SCALE-28: the derived state is read from the file — each
-        // shortcode's run, the dangling forward references, the roll-ups,
-        // the children index — beside the rows, each carrying its stored
-        // `child_count`. A file that holds none (written before SCALE-28,
-        // or new), or holds it behind its tickets (a seed that stopped),
-        // has it built here, once, from the tickets, durably and in one
-        // transaction, before anything is handed out; the cache that build
-        // made is the one the store starts with.
-        // COMMENT-2: a file in form 6 gains form 7 — the comments table,
-        // empty — in place: nothing derived moved, so nothing is built again.
-        let mut found = stored::state(&conn)?;
-        if let stored::State::Older(form) = found {
-            if stored::upgrade(&mut conn, form)? {
-                found = stored::State::Current;
-            }
-        }
-        let cache = match found {
-            stored::State::Current => {
-                let (rows, unsatisfied) = db::load_rows_counted(&conn)?;
-                stored::load(&conn, rows, unsatisfied)?
-            }
-            found => stored::build(&mut conn, found)?,
-        };
-        // WAVE-6: every placement, from the rows — nothing stores them, so
-        // none can be stale after a restart.
-        let mut cache = cache;
-        cache.place_all();
-        // COMP-3: the registry, as stored.
-        cache.components = components::load(&conn)?;
-        // INPUT-3: the inputs and their histories, as stored.
-        cache.inputs = inputs::load(&conn)?;
-        // COMMENT-2: the comments, as stored.
-        cache.comments = comments::load(&conn)?;
-        // NOTE-2: the notes, as stored.
-        cache.notes = notes::load(&conn)?;
-        // IDENTITY-21: the members, as stored.
-        cache.members = members::load(&conn)?;
-        // AUTH-7: the edited roles, as stored.
-        cache.roles = roles::load(&conn)?;
+        // MENGER-13: and one without the transition log gains it, empty,
+        // with the moment it began — no ticket gets a history it never had.
+        history::migrate(&mut conn)?;
+        let cache = Self::load_cache(&mut conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
             Some(path) => Readers::open(path)?,
@@ -2835,6 +2831,55 @@ impl Store {
             return Err(StoreError::BodyTooLarge { id: id.map(str::to_string), bytes: body.len(), max: self.body_max });
         }
         Ok(())
+    }
+
+    /// The cache from the file `conn` holds, every migration made — the
+    /// derived state read (or built, once), the placements, and every
+    /// record beside the tickets. MENGER-13: also what a batch write whose
+    /// commit failed goes back to ([`Store::batch`]): the file is as it was.
+    fn load_cache(conn: &mut Connection) -> anyhow::Result<Cache> {
+        // SCALE-28: the derived state is read from the file — each
+        // shortcode's run, the dangling forward references, the roll-ups,
+        // the children index — beside the rows, each carrying its stored
+        // `child_count`. A file that holds none (written before SCALE-28,
+        // or new), or holds it behind its tickets (a seed that stopped),
+        // has it built here, once, from the tickets, durably and in one
+        // transaction, before anything is handed out; the cache that build
+        // made is the one the store starts with.
+        // COMMENT-2: a file in form 6 gains form 7 — the comments table,
+        // empty — in place: nothing derived moved, so nothing is built again.
+        let mut found = stored::state(conn)?;
+        if let stored::State::Older(form) = found {
+            if stored::upgrade(conn, form)? {
+                found = stored::State::Current;
+            }
+        }
+        let cache = match found {
+            stored::State::Current => {
+                let (rows, unsatisfied) = db::load_rows_counted(conn)?;
+                stored::load(conn, rows, unsatisfied)?
+            }
+            found => stored::build(conn, found)?,
+        };
+        // WAVE-6: every placement, from the rows — nothing stores them, so
+        // none can be stale after a restart.
+        let mut cache = cache;
+        cache.place_all();
+        // COMP-3: the registry, as stored.
+        cache.components = components::load(conn)?;
+        // INPUT-3: the inputs and their histories, as stored.
+        cache.inputs = inputs::load(conn)?;
+        // COMMENT-2: the comments, as stored.
+        cache.comments = comments::load(conn)?;
+        // NOTE-2: the notes, as stored.
+        cache.notes = notes::load(conn)?;
+        // IDENTITY-21: the members, as stored.
+        cache.members = members::load(conn)?;
+        // AUTH-7: the edited roles, as stored.
+        cache.roles = roles::load(conn)?;
+        // MENGER-13: the transition log and its kept indexes.
+        cache.log = history::load(conn, &cache.at)?;
+        Ok(cache)
     }
 
     /// SCALE-28: `menger --verify-derived` — the file at `path` opened
@@ -3074,7 +3119,14 @@ impl Store {
     /// some `blocked_by` already names ([`StoreError::DocAwaited`]) — so no
     /// ticket ever waits on a doc, which never completes.
     pub async fn create(&self, new: NewTicket) -> Result<Ticket, StoreError> {
-        self.create_from(new, None).await.map(|(ticket, _)| ticket)
+        self.create_by(new, Act::default()).await
+    }
+
+    /// MENGER-13: [`Store::create`] by `act` — the newborn's first status a
+    /// transition (from nothing), recorded in the birth's write and said
+    /// right after its `Created`.
+    pub async fn create_by(&self, new: NewTicket, act: Act) -> Result<Ticket, StoreError> {
+        self.create_from(new, None, act).await.map(|(ticket, _)| ticket)
     }
 
     /// NOTE-2: the note `id` made the ticket `new` — in one write: the
@@ -3086,13 +3138,18 @@ impl Store {
     /// refuses leaves the note open, and spends no id. The ticket's events
     /// are `create`'s; the note is returned with it.
     pub async fn upgrade_note(&self, id: u64, new: NewTicket) -> Result<(Ticket, crate::notes::Note), StoreError> {
-        let (ticket, note) = self.create_from(new, Some(id)).await?;
+        self.upgrade_note_by(id, new, Act::default()).await
+    }
+
+    /// MENGER-13: [`Store::upgrade_note`] by `act`.
+    pub async fn upgrade_note_by(&self, id: u64, new: NewTicket, act: Act) -> Result<(Ticket, crate::notes::Note), StoreError> {
+        let (ticket, note) = self.create_from(new, Some(id), act).await?;
         Ok((ticket, note.expect("a note was named, so one was marked")))
     }
 
     /// [`Store::create`], and — NOTE-2 — the note `from` (if any) marked as
     /// the ticket it became, in the same write.
-    async fn create_from(&self, new: NewTicket, from: Option<u64>) -> Result<(Ticket, Option<crate::notes::Note>), StoreError> {
+    async fn create_from(&self, new: NewTicket, from: Option<u64>, act: Act) -> Result<(Ticket, Option<crate::notes::Note>), StoreError> {
         let epic = new.epic.trim().to_ascii_uppercase();
         if epic.is_empty() || !epic.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(StoreError::InvalidEpic(new.epic));
@@ -3376,6 +3433,28 @@ impl Store {
             (ticket, touched, unlocks_added, parent_epic, derived, registered, asked, under)
         };
 
+        // MENGER-13: its first status, a transition from nothing — recorded
+        // with the birth, appended with its row, said after its `Created`.
+        let first = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            crate::types::Transition {
+                id: cache.log.next_id(),
+                ticket: ticket.id.clone(),
+                field: crate::types::TransitionField::Status,
+                from: None,
+                to: ticket.status.as_str().to_string(),
+                at_unix: ticket.created_unix,
+                actor: act.actor,
+                name: act.name,
+                source: act.source,
+                message: act.message,
+                cause: None,
+                cause_ticket: None,
+            }
+        };
+        let (logged, appended, said) = (first.clone(), first.clone(), first);
+        let born_key = OrderKey { epic: ticket.epic.clone(), seq: ticket.seq };
+
         // SCALE-14: the newborn is written whole — the one ticket a write
         // holds with its body, the caller's — and each blocker it touched
         // as its row, the body left as stored. The blockers ride out whole
@@ -3412,6 +3491,7 @@ impl Store {
             serial,
             move |tx| {
                 db::upsert(tx, &born)?;
+                history::record(tx, &logged)?;
                 if let Some(n) = &note_row {
                     notes::store(tx, n)?;
                 }
@@ -3434,6 +3514,7 @@ impl Store {
             },
             move |cache, _| {
                 let out = cache.created(newborn, touched.into_values(), moved);
+                cache.log.append(&appended, &born_key);
                 if let Some(n) = note_kept {
                     cache.notes.put(n);
                 }
@@ -3447,6 +3528,7 @@ impl Store {
                 let _ = tx.send(Change::Created {
                     ticket: ticket.clone(),
                 });
+                let _ = tx.send(Change::Transition { epic: ticket.epic.clone(), transition: said });
                 if let (Some(parent_id), Some(epic), Some(child_count)) =
                     (&ticket.parent, parent_epic, child_count)
                 {
@@ -3891,84 +3973,6 @@ impl Store {
         }
     }
 
-    /// Changes the status, write-through: durable in the database before
-    /// the cache is updated and subscribers are notified. A change into or
-    /// out of `Complete` moves `done` for the group the ticket is drawn in
-    /// and every group around it (MNG-10): `StatusChanged`, then one
-    /// `GroupChanged` per group, innermost first. Any other change moves
-    /// no count and broadcasts no group — AGS-23: unless the ticket is a
-    /// shortcode's root, whose status is its group's row
-    /// ([`Group::root_row`]): any change of it broadcasts that group.
-    ///
-    /// SDLC-11: a doc has no lifecycle — `set_status` on one is refused
-    /// ([`StoreError::DocHasNoLifecycle`]), whatever status is asked for —
-    /// and `Doc` is a doc's own status, refused for any other kind
-    /// ([`StoreError::DocStatusOnWork`]). Both before anything is written:
-    /// a doc stays in the state it was born in, and only a doc is in it.
-    pub async fn set_status(&self, id: &str, status: Status) -> Result<Change, StoreError> {
-        let serial = self.serial().await;
-        let (mut row, _) = self.row(id)?;
-        if !row.kind.has_lifecycle() {
-            return Err(StoreError::DocHasNoLifecycle { id: row.id });
-        }
-        if !Status::LIFECYCLE.contains(&status) {
-            return Err(StoreError::DocStatusOnWork { id: row.id, kind: row.kind });
-        }
-        let previous = row.status;
-        row.status = status;
-        row.updated_unix = chrono::Utc::now().timestamp();
-        // SCALE-28: the roll-ups it moves, stored with the row. FILTER-13:
-        // and what an open `watch { filter }` asking `under` sees of it.
-        let (derived, under) = {
-            let cache = self.tickets.read().expect("store lock poisoned");
-            let derived = cache.status_change(&row, previous);
-            let under = self.under_before(&cache, || lineage::Touched::of_moves(derived.announced().as_deref()));
-            (derived, under)
-        };
-        // FILTER-4: the cells it moves — its own and its fan-out's — said
-        // last.
-        let announced = derived.announced();
-        let Derived { stored, moved } = derived;
-        // WAVE-6: across the satisfied line, its own placement moves with it
-        // (its `status_changed` carries the new one), and the ones downstream
-        // that move are said last.
-        if let Some(placement) = moved.placement() {
-            row.placement = placement;
-        }
-        let placed = moved.placed.as_ref().and_then(Change::placed);
-        let commit = Self::row_commit(row);
-        let cache = Arc::clone(&self.tickets);
-
-        self.write(
-            serial,
-            move |tx| {
-                let out = commit(tx)?;
-                stored.write(tx)?;
-                Ok(out)
-            },
-            move |cache, (row, _)| cache.status_changed(row.clone(), previous, moved),
-            move |(row, body), groups, tx| {
-                let change = Change::StatusChanged {
-                    ticket: whole(row, body),
-                    previous,
-                };
-                let _ = tx.send(change.clone());
-                broadcast_groups(tx, groups);
-                if let Some(placed) = placed {
-                    let _ = tx.send(placed);
-                }
-                if let Some(moves) = announced {
-                    let _ = tx.send(Change::CellsMoved { moves });
-                }
-                if let Some(change) = under.and_then(|u| u.after(&cache)) {
-                    let _ = tx.send(change);
-                }
-                change
-            },
-        )
-        .await
-    }
-
     /// SDLC-13: changes a ticket's kind — the one write that does; a kind
     /// was fixed at birth until it — write-through, as `set_status` is, and
     /// everything kept by kind moves with it in the write's own [`Derived`]
@@ -3997,6 +4001,16 @@ impl Store {
     /// a root's group whenever its kind or status changed), the
     /// `PlacementsChanged`, the cell moves and what an `under` watch saw.
     pub async fn set_kind(&self, id: &str, kind: Kind, status: Option<Status>) -> Result<Change, StoreError> {
+        self.set_kind_by(id, kind, status, Act::default()).await
+    }
+
+    /// MENGER-13: [`Store::set_kind`] by `act` — the kind's change a
+    /// transition, and the status's (when it moves with it) another, caused
+    /// by the first; both recorded in the write and said after its
+    /// `KindChanged`. A status crossing into `Canceled` withdraws the
+    /// ticket's open inputs, and out of it restores them, as `set_status`
+    /// does; `set_kind` cancels no descendant (only `set_status` cascades).
+    pub async fn set_kind_by(&self, id: &str, kind: Kind, status: Option<Status>, act: Act) -> Result<Change, StoreError> {
         let serial = self.serial().await;
         let (mut row, written) = self.row(id)?;
         let old = row.clone();
@@ -4021,7 +4035,7 @@ impl Store {
                 previous,
             });
         }
-        let (derived, under) = {
+        let (derived, under, made, moved_inputs) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             if !kind.has_lifecycle() && (!row.blocked_by.is_empty() || !row.unlocks.is_empty()) {
                 let distinct = |ids: &[String]| {
@@ -4047,11 +4061,43 @@ impl Store {
             row.kind = kind;
             row.status = status;
             row.updated_unix = chrono::Utc::now().timestamp();
+            // MENGER-13: the kind's transition, then the status's, caused by
+            // it — and the inputs a crossing of `Canceled` moves.
+            let first = cache.log.next_id();
+            let transition = |id, field, from: &str, to: &str, cause: Option<u64>| crate::types::Transition {
+                id,
+                ticket: row.id.clone(),
+                field,
+                from: Some(from.to_string()),
+                to: to.to_string(),
+                at_unix: row.updated_unix,
+                actor: act.actor.clone(),
+                name: act.name.clone(),
+                source: act.source,
+                message: act.message.clone(),
+                cause_ticket: cause.map(|_: u64| row.id.clone()),
+                cause,
+            };
+            let mut made = Vec::new();
+            if kind != previous {
+                made.push(transition(first, crate::types::TransitionField::Kind, previous.as_str(), kind.as_str(), None));
+            }
+            if status != old.status {
+                let cause = made.first().map(|t| t.id);
+                let id = first + made.len() as u64;
+                made.push(transition(id, crate::types::TransitionField::Status, old.status.as_str(), status.as_str(), cause));
+            }
+            let reason = format!("{} is {} (by {})", row.id, status.as_str(), act.who());
+            let moved_inputs = match (old.status == Status::Canceled, status == Status::Canceled) {
+                (false, true) => cache.inputs.withdrawing(&row.id, &reason, row.updated_unix),
+                (true, false) => cache.inputs.restoring(&row.id, &reason, row.updated_unix),
+                _ => Vec::new(),
+            };
             // Everything kept by kind, and by status — worked out now, while
             // nothing has changed. FILTER-13: and what an open `watch { filter
             // }` asking `under` sees of it: the cells it moves, and — when it
             // re-roots a shortcode — every shortcode whose hosts that moves.
-            let derived = cache.kind_change(&row, &old);
+            let derived = cache.kind_change(&row, &old, cache.inputs.asking_after(&row.id, &moved_inputs));
             let under = self.under_before(&cache, || {
                 let mut t = lineage::Touched::of_moves(derived.announced().as_deref());
                 if let Some(after) = &derived.moved.rollups {
@@ -4059,7 +4105,7 @@ impl Store {
                 }
                 t
             });
-            (derived, under)
+            (derived, under, made, moved_inputs)
         };
         let announced = derived.announced();
         let Derived { stored, moved } = derived;
@@ -4070,25 +4116,50 @@ impl Store {
             row.placement = placement;
         }
         let placed = moved.placed.as_ref().and_then(Change::placed);
+        let key = OrderKey::of(&row);
+        let epic = row.epic.clone();
         let commit = Self::row_commit(row);
         let cache = Arc::clone(&self.tickets);
+        let (logged, appended) = (made.clone(), made);
+        let kept_inputs = moved_inputs.clone();
         self.write(
             serial,
             move |tx| {
                 let out = commit(tx)?;
                 stored.write(tx)?;
+                for t in &logged {
+                    history::record(tx, t)?;
+                }
+                for (input, entry) in &moved_inputs {
+                    inputs::record(tx, input, entry)?;
+                }
                 Ok(out)
             },
-            move |cache, (row, _)| cache.kind_changed(row.clone(), moved),
-            move |(row, body), groups, tx| {
+            move |cache, (row, _)| {
+                let groups = cache.kind_changed(row.clone(), moved);
+                for t in &appended {
+                    cache.log.append(t, &key);
+                }
+                for (input, _) in &kept_inputs {
+                    cache.inputs.put(input.clone());
+                }
+                (groups, appended, kept_inputs)
+            },
+            move |(row, body), (groups, made, kept_inputs), tx| {
                 let change = Change::KindChanged {
                     ticket: whole(row, body),
                     previous,
                 };
                 let _ = tx.send(change.clone());
+                for transition in made {
+                    let _ = tx.send(Change::Transition { epic: epic.clone(), transition });
+                }
                 broadcast_groups(tx, groups);
                 if let Some(placed) = placed {
                     let _ = tx.send(placed);
+                }
+                for (input, _) in kept_inputs {
+                    let _ = tx.send(Change::InputChanged { epic: epic.clone(), input });
                 }
                 if let Some(moves) = announced {
                     let _ = tx.send(Change::CellsMoved { moves });
@@ -4317,6 +4388,14 @@ impl Store {
             }
         };
         ticket.updated_unix = chrono::Utc::now().timestamp();
+        // MENGER-13: a canceled ticket asks no one — an input its new body
+        // would leave open is withdrawn as it is declared.
+        let withdrawn = if ticket.status == Status::Canceled {
+            let reason = format!("{} is canceled", ticket.id);
+            asked.withdraw_open(&reason, ticket.updated_unix)
+        } else {
+            Vec::new()
+        };
 
         let row = Row::from(&ticket);
         let body = changed.iter().any(|c| c == "body").then(|| ticket.body.clone());
@@ -4356,6 +4435,9 @@ impl Store {
                 components::store(tx, &registry_rows)?;
                 if let Some(list) = &input_rows {
                     inputs::store(tx, &row.id, list)?;
+                }
+                for (input, entry) in &withdrawn {
+                    inputs::record(tx, input, entry)?;
                 }
                 if let Some(cells) = &cells_stored {
                     cells.write(tx)?;
@@ -4492,6 +4574,7 @@ impl Store {
         };
         let moved = inputs::apply(&current, op, chrono::Utc::now().timestamp()).map_err(|refused| match refused {
             inputs::Refused::Removed => StoreError::InputRemoved { ticket, input },
+            inputs::Refused::Withdrawn => StoreError::InputWithdrawn { ticket, input },
             inputs::Refused::Closed => StoreError::InputClosed { ticket, input },
             inputs::Refused::Invalid(reason) => StoreError::InputInvalid { ticket, input, reason },
         })?;
@@ -5516,6 +5599,13 @@ pub use members::Members;
 // AUTH-7: an admin's edits of a role's grants.
 mod roles;
 pub use roles::RoleEdits;
+/// MENGER-13: the transition log — every status and kind change, who made
+/// it, from where, why and caused by what — and the kept indexes a history
+/// filter is answered from.
+mod history;
+pub use history::{zone, Act, Clock};
+/// MENGER-13: cancellation cascades and their undoing — one batch write.
+mod cascade;
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
 /// has commits)` interned as one cell; per shortcode and cell, a Roaring
@@ -5728,3 +5818,11 @@ mod tests_kinds;
 /// anchor kept through its ticket's writes, and the form 6 → 7 upgrade.
 #[cfg(test)]
 mod tests_comments;
+
+/// MENGER-13: the transition log (every write's transition, who, where
+/// from, why, caused by what; durable; `history`), cancellation cascades and
+/// their undoing (the rules, the inputs withdrawn and restored, one write's
+/// events, the derived state a scan), the windows (`Clock::bounds`, zones),
+/// the log's kept indexes against a scan, and `--verify-derived` on the log.
+#[cfg(test)]
+mod tests_history;
