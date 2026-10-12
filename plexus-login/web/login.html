@@ -7,10 +7,13 @@
 <meta name="referrer" content="same-origin">
 <title>Sign in · {{TITLE}}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- THEME-7: the app's site theme (its tokens as the app last painted them,
+     kept under {{APP}}.themes.site) is worn here too, and followed live when
+     another tab of the app changes it. -->
 <!-- IDENTITY-19: plexus-login's page. Self-contained (no app, no fonts, no
      scripts but the one below), so it can be handed to an IdP as its hosted
      login page later. The shell fills the {{…}} placeholders, escaped. -->
-<script>try{var t=localStorage.getItem("{{APP}}.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<script>try{var t=localStorage.getItem("{{APP}}.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}try{var s=localStorage.getItem("{{APP}}.themes.site");if(s)document.documentElement.style.cssText=s;addEventListener("storage",function(e){if(e.key==="{{APP}}.themes.site")document.documentElement.style.cssText=e.newValue||""})}catch(e){}</script>
 <style>
   /* Layout: one sheet in two panes — the instance on a tinted column (as
      the app's nav column), the way in beside it on the page; stacked on a

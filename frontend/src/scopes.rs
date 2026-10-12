@@ -22,12 +22,22 @@
 //! choices, outermost, kept in this browser ([`ReaderGroup`] on
 //! `#/settings`).
 //!
-//! **One repaint path** ([`repaint`]): a theme defined, a setting moved, a
-//! ticket opened or left, its frontmatter amended, the reader's choice and
-//! the light/dark toggle (src/theme.rs) all end there. It paints the three
-//! regions, then — only when what is painted moved — re-themes every frame
-//! (each from where it sits) and redraws the diagrams: in place, no reload.
-//! THEME-7 generalizes from here.
+//! **One repaint path** ([`repaint`], THEME-7): every cause ends there —
+//! a theme picked (settings, the palette's `theme <name>`, another tab's
+//! pick heard through `storage`), a theme defined or its ```theme block
+//! amended (`themes.watch`'s `theme_changed`, so an open tab follows an
+//! edit live), a setting moved, a project entered or left (a ticket opened,
+//! left or its frontmatter amended) and the light/dark toggle
+//! (src/theme.rs), which is only its special case. It paints the three
+//! regions, then — only when what is painted moved ([`paint_key`]: the
+//! mode, each region's theme, its tokens, its rules and fonts) — re-themes
+//! every frame from where it sits (`menger:theme`; the SDK's
+//! `on('theme')` tells a component that draws in JS to redraw) and redraws
+//! the diagrams: in place, no reload, no blank frame. Everything else the
+//! app draws — shell, nav, board, ticket page, menus, toasts, dialogs, the
+//! full-screen bar, a mockup's chrome, code — paints through the tokens
+//! (THEME-2's lint holds every colour to them), so writing them is the
+//! whole repaint.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -263,7 +273,9 @@ pub(crate) fn regions() -> Regions {
     themes::resolve(&levels(&held, open.as_ref()), &reader)
 }
 
-/// Mounted once (App): every change of what a level says repaints.
+/// Mounted once (App): every change of what a level says repaints — and
+/// (THEME-7) a reader's pick in another tab of this browser reaches this
+/// one through `storage`, so every open page follows it.
 pub(crate) fn install() {
     let (held, open, reader) = (HELD.with(Clone::clone), OPEN.with(Clone::clone), READER.with(Clone::clone));
     Effect::new(move |_| {
@@ -272,11 +284,44 @@ pub(crate) fn install() {
         reader.track();
         repaint();
     });
+    let cb = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::StorageEvent)>::new(move |ev: web_sys::StorageEvent| {
+        if ev.key().as_deref() == Some(READER_KEY) {
+            let next = load_reader();
+            READER.with(|r| {
+                if r.with_untracked(|r| *r != next) {
+                    r.set(next);
+                }
+            });
+        }
+    });
+    let _ = dom::window().add_event_listener_with_callback("storage", cb.as_ref().unchecked_ref());
+    cb.forget(); // lives as long as the app
 }
 
-/// THEME-8's one repaint path. Paints the three regions for the mode
-/// painted now; when anything moved, every frame takes its region's tokens
-/// and the diagrams are drawn again. Nothing here can throw.
+/// THEME-7: the reader picks `name` as their site theme (`None`: the
+/// site's) — from settings or the palette; kept, and painted at once.
+pub(crate) fn pick(name: Option<String>) {
+    let mut r = READER.with(|r| r.get_untracked());
+    r.site = name;
+    set_reader(r);
+}
+
+/// THEME-7: what a repaint paints, as one string — the mode, the site's
+/// tokens, the scoped rules, the fonts, each region's theme and the rules a
+/// frame wearing it is handed. Equal: nothing moved, nothing is done.
+pub(crate) fn paint_key(held: &Held, r: &Regions, scheme: Scheme, site_css: &str, scoped: &str, fonts: &str) -> String {
+    let rules: String = [&r.site.theme, &r.ticket.theme, &r.frame.theme]
+        .into_iter()
+        .filter(|n| n.as_str() != DEFAULT_THEME)
+        .map(|n| themes::rules_css(&held.theme(n), None))
+        .collect::<Vec<_>>()
+        .join("|");
+    format!("{}|{site_css}|{scoped}|{fonts}|{}|{}|{}|{rules}", scheme.as_str(), r.site.theme, r.ticket.theme, r.frame.theme)
+}
+
+/// THEME-7's one repaint path (THEME-8 began it). Paints the three regions
+/// for the mode painted now; when anything moved, every frame takes its
+/// region's tokens and the diagrams are drawn again. Nothing here can throw.
 pub(crate) fn repaint() {
     if !LOADED.with(Cell::get) {
         return;
@@ -291,7 +336,7 @@ pub(crate) fn repaint() {
     let site_css = if r.site.theme == DEFAULT_THEME { String::new() } else { declarations(&site, scheme) };
     let scoped = scoped_css(&held, &r, scheme);
     let fonts = fonts_css(&held, &r);
-    let key = format!("{site_css}|{scoped}|{fonts}|{}|{}|{}", r.site.theme, r.ticket.theme, r.frame.theme);
+    let key = paint_key(&held, &r, scheme, &site_css, &scoped, &fonts);
     if PAINTED.with(|p| p.borrow().as_deref() == Some(key.as_str())) {
         return;
     }
@@ -628,6 +673,35 @@ mod tests {
         let line = html.lines().find(|l| l.contains("<script>") && l.contains(SITE_KEY)).expect("the pre-paint script");
         assert!(line.contains(&format!("try{{var s=localStorage.getItem(\"{SITE_KEY}\");")), "{line}");
         assert!(line.contains("style.cssText=s}catch(e){}"), "{line}");
+    }
+
+    /// THEME-7: what a repaint compares — the mode moves it even when every
+    /// region wears default (the toggle re-themes frames and redraws
+    /// diagrams), and so does a theme's rule, its tokens unchanged (an
+    /// amended `::part` reaches every frame wearing it).
+    #[test]
+    fn a_repaint_moves_on_the_mode_the_tokens_and_the_rules() {
+        let mut h = held();
+        let r = themes::resolve(&Levels::default(), &Reader::default());
+        let key = |h: &Held, r: &Regions, s: Scheme| {
+            let site = if r.site.theme == DEFAULT_THEME { String::new() } else { declarations(&h.theme(&r.site.theme), s) };
+            paint_key(h, r, s, &site, &scoped_css(h, r, s), &fonts_css(h, r))
+        };
+        assert_ne!(key(&h, &r, Scheme::Light), key(&h, &r, Scheme::Dark), "default everywhere, the mode alone");
+        let r = themes::resolve(&Levels { site: Some("pantry".into()), ..Default::default() }, &Reader::default());
+        let before = key(&h, &r, Scheme::Light);
+        assert_eq!(before, key(&h, &r, Scheme::Light), "nothing moved");
+        let mut p = h.own("pantry").cloned().unwrap();
+        p.rules = vec!["m-ring::part(ring){outline:2px solid var(--accent);}".into()];
+        assert!(h.apply(&ThemesEvent::ThemeChanged { theme: p.clone() }));
+        assert_ne!(before, key(&h, &r, Scheme::Light), "a rule alone moves it");
+        let mid = key(&h, &r, Scheme::Light);
+        p.light.insert("--accent".into(), "#c2185b".into());
+        assert!(h.apply(&ThemesEvent::ThemeChanged { theme: p }));
+        assert_ne!(mid, key(&h, &r, Scheme::Light), "an amended token moves it");
+        // The reader's pick is a region's theme like any other.
+        let picked = themes::resolve(&Levels::default(), &Reader { site: Some("ocean".into()), takeovers_off: false });
+        assert_eq!(picked.site.theme, "ocean");
     }
 
     /// THEME-3: the watch's theme_changed and theme_removed move the copy; a

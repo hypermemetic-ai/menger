@@ -165,8 +165,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// 1.11 adds `update` and its events (`updated`, `blockers_changed`,
 /// `unlocks_removed`, `severity_changed`); MENGER-22's 1.12 highlights every
 /// code block in the frame (`highlight` in the init block: the vendored
-/// highlighter's URL and its rules), coloured by the `--code-*` tokens.
-pub(crate) const SDK_VERSION: &str = "1.12.0";
+/// highlighter's URL and its rules), coloured by the `--code-*` tokens;
+/// THEME-7's 1.13 adds `on('theme')` and `menger.theme` (`theme` in the
+/// init block and in `menger:theme`: the name the frame's region wears).
+pub(crate) const SDK_VERSION: &str = "1.13.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -269,6 +271,9 @@ impl Scheme {
 pub(crate) struct Shell<'a> {
     pub(crate) channel: &'a str,
     pub(crate) scheme: Scheme,
+    /// THEME-7: the theme its region wears (`default`: none) — the SDK's
+    /// `menger.theme`, so its first `menger:theme` moves nothing.
+    pub(crate) theme: &'a str,
     /// `(token, value)` — [`theme_tokens`] as painted.
     pub(crate) tokens: &'a [(String, String)],
     /// The vendored mermaid bundle, absolute (the frame's origin is opaque;
@@ -326,6 +331,7 @@ pub(crate) fn init_json(shell: &Shell) -> String {
         "channel": shell.channel,
         "version": SDK_VERSION,
         "scheme": shell.scheme.as_str(),
+        "theme": shell.theme,
         "mermaid": {
             "url": shell.mermaid_url,
             // The SDK sets `theme` per draw, from the scheme.
@@ -640,15 +646,25 @@ fn theme_message(frame: &web_sys::HtmlIFrameElement, channel: &str) -> JsValue {
     }
     set(&msg, "tokens", &t);
     // THEME-3: the rules of the theme the frame's region wears — its fonts
-    // and `::part`s — named where it sits (scopes::THEME_MARK).
+    // and `::part`s — named where it sits (scopes::THEME_MARK); THEME-7: and
+    // its name, the SDK's `menger.theme`.
+    let worn = worn_at(frame);
+    set(&msg, "css", &crate::scopes::rules_for(&worn).into());
+    set(&msg, "theme", &worn.into());
+    msg.into()
+}
+
+/// THEME-3/THEME-7: the theme the region around `el` wears, by the name it
+/// says where `el` sits (scopes::THEME_MARK); `default` where none is said.
+fn worn_at(el: &web_sys::Element) -> String {
     let worn = dom::window()
-        .get_computed_style(frame)
+        .get_computed_style(el)
         .ok()
         .flatten()
         .and_then(|s| s.get_property_value(crate::scopes::THEME_MARK).ok())
         .unwrap_or_default();
-    set(&msg, "css", &crate::scopes::rules_for(&worn).into());
-    msg.into()
+    let worn = worn.trim();
+    if worn.is_empty() { menger_tickets_api::themes::DEFAULT_THEME.to_string() } else { worn.to_string() }
 }
 
 fn post(frame: &web_sys::HtmlIFrameElement, msg: &JsValue) {
@@ -1357,6 +1373,7 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     let channel = next_channel();
     // THEME-8: the frame's first paint is its region's theme.
     let (scheme, tokens) = read_theme_at(Some(container));
+    let worn = worn_at(container);
     let mermaid_url = format!("{}{}", w.location().origin().unwrap_or_default(), mermaid::ASSET_URL);
     let highlight_url = format!("{}{}", w.location().origin().unwrap_or_default(), highlight::ASSET_URL);
     let components = registry::snapshot();
@@ -1370,6 +1387,7 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
         &Shell {
             channel: &channel,
             scheme,
+            theme: &worn,
             tokens: &tokens,
             mermaid_url: &mermaid_url,
             highlight_url: &highlight_url,
@@ -1531,7 +1549,7 @@ mod tests {
     fn the_csp_comes_first_and_closes_connections_and_forms() {
         assert_eq!(CSP, "connect-src 'none'; form-action 'none'");
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f9", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", highlight_url: "h", components: None, ticket: Some("A-1"), cite: None, emulate: None };
+        let shell = Shell { channel: "f9", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", components: None, ticket: Some("A-1"), cite: None, emulate: None };
         let doc = srcdoc("<script>fetch('https://x')</script><form action=\"https://x\"></form>", &shell);
         let head = "<!doctype html><html lang=\"en\" data-theme=\"light\"><head>";
         assert!(
@@ -1556,7 +1574,7 @@ mod tests {
     #[test]
     fn the_srcdoc_is_the_shell_then_the_body() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", highlight_url: "http://h:1/app/vendor/hl.js", components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", highlight_url: "http://h:1/app/vendor/hl.js", components: None, ticket: None, cite: None, emulate: None };
         let doc = srcdoc("<details><summary>s</summary><p>x</p></details>", &shell);
         assert!(doc.starts_with("<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta http-equiv=\"Content-Security-Policy\""), "{doc}");
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
@@ -1574,13 +1592,15 @@ mod tests {
     #[test]
     fn the_init_block_is_json_that_cannot_close_its_script() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f1", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", highlight_url: "http://h/hl.js", components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f1", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", highlight_url: "http://h/hl.js", components: None, ticket: None, cite: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["channel"], "f1");
         assert_eq!(v["version"], SDK_VERSION);
         assert_eq!(v["scheme"], "light");
+        assert_eq!(v["theme"], "default", "THEME-7: the theme its region wears");
+        assert_eq!(init_json(&Shell { theme: "pantry", ..shell })[..].contains(r#""theme":"pantry""#), true);
         assert_eq!(v["mermaid"]["url"], "http://h/</script><script>alert(1)//");
         // The app's strict mermaid posture rides along unchanged.
         assert_eq!(v["mermaid"]["config"]["securityLevel"], "strict");
@@ -1610,6 +1630,7 @@ mod tests {
         let shell = Shell {
             channel: "f3",
             scheme: Scheme::Light,
+            theme: "default",
             tokens: &tokens,
             mermaid_url: "u", highlight_url: "h",
             components: None,
@@ -1668,7 +1689,7 @@ mod tests {
             Component { name: "m-a".into(), source: source.into(), owner: Some("A-2".into()), references: vec!["A-3".into()], docs: None, preview: vec![] },
             Component { name: "m-b".into(), source: "<i>b</i>".into(), owner: None, references: vec!["m-a".into()], docs: None, preview: vec![] },
         ];
-        let shell = Shell { channel: "f2", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", highlight_url: "h", components: Some(&components), ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f2", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", components: Some(&components), ticket: None, cite: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1753,11 +1774,18 @@ mod tests {
     #[test]
     fn the_sdk_shell_is_versioned_served_and_inlinable() {
         assert!(SDK_JS.contains(&format!("var VERSION = \"{SDK_VERSION}\";")), "the script's VERSION");
+        // THEME-7 (1.13): `on('theme')` and `menger.theme`, told by
+        // `menger:theme`'s `theme` and the init block's.
+        assert!(SDK_JS.contains(r#"kind !== "change" && kind !== "theme""#), "on('theme') is an event");
+        assert!(SDK_JS.contains(r#"notify(null, "theme")"#) && SDK_JS.contains("if (key !== paintedKey)"), "told only when something moved");
+        assert!(SDK_JS.contains(r#"Object.defineProperty(api, "theme""#), "menger.theme");
+        assert!(SDK_JS.contains(r#"typeof init.theme === "string""#), "the first theme from the init block");
+        let dts = include_str!("../sdk/menger.d.ts");
+        assert!(dts.contains("on(kind: 'theme', listener: (theme: MengerTheme) => void): () => void;") && dts.contains("readonly theme: MengerTheme;"), "typed");
         assert!(
-            SDK_JS.contains(
-                "Object.freeze({ version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input })"
-            ),
-            "window.menger = {{ version, tickets, call, on, navigate, input }}"
+            SDK_JS.contains("var api = { version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input };")
+                && SDK_JS.contains("api = Object.freeze(api);"),
+            "window.menger = {{ version, tickets, call, on, navigate, input, theme }}, frozen"
         );
         // INPUT-4: `menger.input` is frozen too, with its writes (INPUT-9: clear).
         assert!(
@@ -1927,7 +1955,7 @@ mod tests {
     }
 
     fn page_shell(tokens: &[(String, String)], emulate: Option<Emulate>) -> Shell<'_> {
-        Shell { channel: "f5", scheme: Scheme::Dark, tokens, mermaid_url: "u", highlight_url: "h", components: None, ticket: Some("MENGER-16"), cite: None, emulate }
+        Shell { channel: "f5", scheme: Scheme::Dark, theme: "default", tokens, mermaid_url: "u", highlight_url: "h", components: None, ticket: Some("MENGER-16"), cite: None, emulate }
     }
 
     /// MENGER-15: a whole document renders as itself — its own head, styles

@@ -165,6 +165,21 @@ pub(crate) fn Toggle() -> impl IntoView {
         cb.forget(); // lives as long as the app
     }
 
+    // THEME-7: a choice made in another tab of this browser is this tab's
+    // too — every open page follows it (`storage` fires in the others).
+    {
+        let cb = Closure::<dyn FnMut(web_sys::StorageEvent)>::new(move |ev: web_sys::StorageEvent| {
+            if ev.key().as_deref() == Some(KEY) {
+                let next = Theme::parse(ev.new_value().as_deref());
+                if choice.get_untracked() != next {
+                    choice.set(next);
+                }
+            }
+        });
+        let _ = dom::window().add_event_listener_with_callback("storage", cb.as_ref().unchecked_ref());
+        cb.forget(); // lives as long as the app
+    }
+
     // One effect, in order: persist, stamp, and — only when what is
     // painted actually changed — redraw the diagrams against the newly
     // painted background. The first run (mount) stamps and redraws nothing.
@@ -174,9 +189,10 @@ pub(crate) fn Toggle() -> impl IntoView {
         save(t);
         apply(t);
         if prev.is_some_and(|p| p != mode) {
-            // THEME-8: the one repaint path — every region's tokens for the
-            // new mode, then (COMP-4) every framed body takes its region's
-            // (the frame cannot read the app's CSS) and the diagrams redraw.
+            // THEME-7: the one repaint path, light/dark its special case —
+            // every region's tokens for the new mode, then (COMP-4) every
+            // framed body takes its region's (the frame cannot read the
+            // app's CSS) and the diagrams redraw.
             scopes::repaint();
         }
         mode

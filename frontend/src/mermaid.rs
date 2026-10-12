@@ -118,7 +118,7 @@ fn draw(el: Element, src: String) {
     });
     let _ = el.set_attribute("data-gen", &gen.to_string());
     spawn_local(async move {
-        let result = render_svg(src).await;
+        let result = render_svg(src, &el).await;
         if el.get_attribute("data-gen").as_deref() != Some(gen.to_string().as_str()) {
             return; // superseded by a newer draw of this node
         }
@@ -146,9 +146,9 @@ fn paint_error(el: &Element, msg: &str) {
     }
 }
 
-async fn render_svg(src: String) -> Result<String, String> {
+async fn render_svg(src: String, at: &Element) -> Result<String, String> {
     let m = ensure_loaded().await?;
-    initialize(&m)?;
+    initialize(&m, at)?;
     let id = NEXT_ID.with(|n| {
         let v = n.get();
         n.set(v.wrapping_add(1));
@@ -228,9 +228,12 @@ fn inject_script() -> Promise {
 
 /// Configure for this render. Cheap, and re-reading the palette each time
 /// means a diagram rendered after a theme change picks the right side.
-fn initialize(m: &Object) -> Result<(), String> {
+/// THEME-7: the diagram colours are read where the diagram sits — its
+/// region's theme (a ticket view or a frame box wearing another theme than
+/// the site's), as a frame reads its tokens.
+fn initialize(m: &Object, at: &Element) -> Result<(), String> {
     let mut cfg = config_json(theme_for_background(&body_background()));
-    let style = body_style();
+    let style = crate::dom::window().get_computed_style(at).ok().flatten().or_else(body_style);
     with_diagram_tokens(&mut cfg, |token| style.as_ref().and_then(|s| s.get_property_value(token).ok()));
     let cfg = js_sys::JSON::parse(&cfg.to_string()).map_err(|e| js_message(&e))?;
     method(m, "initialize")?

@@ -188,6 +188,12 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger themes theme_for --id PANTRY-4
   ```
 
+  Every open page follows a theme change in place (THEME-7): one repaint
+  path in the app (`scopes::repaint`), `menger.on('theme')` in a frame for
+  a component that draws with colours in JS. A change that touches how
+  anything is painted is checked with the sweep test,
+  `scripts/theme-sweep.mjs`, on a throwaway server (README "On the fly").
+
   **Login** (IDENTITY-14) is off unless `--auth-provider` names a
   provider: `idp=…`, `auth0=…`, `oidc:<name>=…` or `nostr=…`. Each
   becomes an adapter that turns its credential into a Plexus identity at

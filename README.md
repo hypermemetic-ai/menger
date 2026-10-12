@@ -1716,11 +1716,75 @@ names — and the site's theme takes admin on `*`.
 the box its body sits in (`.mscope-frame`) — a region wearing its outer
 region's theme writes nothing and inherits. A frame reads its tokens where
 it sits, so it wears its region's. One repaint path (`src/scopes.rs`'s
-`repaint`) takes every cause — a theme defined, a setting moved, a ticket
-opened, left or amended, the reader's choice, the light/dark toggle — and
-re-themes every frame and redraws the diagrams in place; no reload. The
+`repaint`; THEME-7, below) takes every cause — a theme defined, a setting
+moved, a ticket opened, left or amended, the reader's choice, the
+light/dark toggle — and re-themes every frame and redraws the diagrams in
+place; no reload. The
 root says what each region wears (`data-theme-site`, `data-theme-ticket`,
 `data-theme-frame`: `pantry ticket`).
+
+### On the fly (THEME-7)
+
+Change the theme, or edit it, and every open menger page repaints in place:
+no reload, no blank frame, nothing left in the old colours.
+
+**One repaint path for every cause** (`src/scopes.rs`'s `repaint`): a
+reader's pick — `#/settings` → Themes, or the palette's **`theme <name>`**
+(`theme: pantry`, `theme` alone lists them; "the site's" puts the site's
+back), kept in this browser and reaching its other open tabs through
+`storage` —, an amended ` ```theme ` block or a setting moved (over
+`themes.watch`, so a theme ticket is its own live editor: every open page
+wearing it follows the amend), a project entered or left, and the
+light/dark toggle (also followed by the other tabs), which is only its
+special case. It writes each region's tokens; then, only when what is
+painted moved (the mode, a region's theme, its tokens, its rules or fonts),
+every frame takes its region's (`menger:theme`) and the diagrams redraw —
+the app's own in the colours where each diagram sits. Everything else the
+app draws paints through the tokens (THEME-2's lint), so writing them is the
+whole repaint. The sign-in page wears the site theme the app last painted
+(`menger.themes.site`) from its first paint and follows a change made in
+another tab. Whole-document bodies (MENGER-15) follow light/dark only.
+
+**In a frame, `menger.on('theme', cb)`** (SDK 1.13): `cb({ scheme, theme,
+tokens })` whenever what the frame is painted with moves — called once the
+new tokens are live on `:root`, never for a repaint that moved nothing.
+`menger.theme` is what it wears now. A component that draws with colours in
+JS (a canvas, a colour copied into an attribute) redraws there; one that
+paints through `var(--…)` needs nothing:
+
+```javascript
+return this.menger.on('theme', () => draw());   // tokens are already live on :root
+```
+
+**The sweep test** (`scripts/theme-sweep.mjs`, Playwright from
+`perf/node_modules`) proves it on a throwaway server. It seeds its own
+tickets under `SWEEP` (three themes as ` ```theme ` docs — `pantry`, a
+`garish` one setting every colour and face, `ocean` —, a framed body with
+code, a diagram and house components, a mockup, and THEME-8's table as
+tickets), opens every route at once — the board, a framed body, a mockup, a
+full-screen ticket, both wave boards, `#/components` and a docs card,
+`#/inputs`, `#/comments`, `#/settings`, the palette, the cheat sheet, a
+menu, MENGER-14's leave dialog and a toast — and switches default → pantry
+→ garish → garish dark → garish light → the site's → ocean → ocean's
+`--accent` amended → default, by the palette, the toggle, `themes set` and
+an amend. After each switch every element of every page, open shadow root
+and frame is scanned (colour, background, borders, outline, fill, stroke,
+font-family): none may hold a value the old theme painted that the new one
+does not; no page may reload and no frame be replaced; a component's
+`on('theme')` is heard once, after the tokens; the diagrams are redrawn in
+the new `--diagram-*`; a planted element in an old value is found (the
+control). `--rows` checks THEME-8's table region by region,
+`--signin-shell` the sign-in page:
+
+```sh
+cargo build && (cd frontend && trunk build --release)
+cp ~/.local/share/menger/tickets.db /tmp/sweep.db      # a copy; never prod's file
+PLEXUS_NO_REGISTRY=1 target/debug/menger --port 4510 --shell-port 4511 --rest-port 4512 --db-path /tmp/sweep.db &
+node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --seed --browsers chromium,firefox --rows
+```
+
+It refuses prod's and test's ports (4450–4458): it writes. Exit 0 when every
+check held; `report.json` and a screenshot per switch land in `--out`.
 
 ### A theme is a ticket (THEME-3)
 

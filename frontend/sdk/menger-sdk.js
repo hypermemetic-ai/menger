@@ -36,7 +36,17 @@
  *     `on('change', cb)` → `cb(event)` for every `watch`
  *     event the app hears (`amended`, `status_changed`,
  *     `component_changed`, `input_changed`, …), returning a function that
- *     stops it;
+ *     stops it; (1.13, THEME-7) `on('theme', cb)` → `cb({ scheme, theme,
+ *     tokens })` whenever what this frame is painted with moves — the
+ *     light/dark mode, the theme its region wears (a reader's pick, an
+ *     amended ```theme block, a project entered or left) or any token's
+ *     value — called once the new tokens are live on `:root` (a component
+ *     reading `var(--accent)` or `getComputedStyle` sees them), never for a
+ *     message that moved nothing; a component that draws with colours in
+ *     JS (a canvas, a colour copied into an attribute) redraws there. A
+ *     subscription made while a component's script runs ends with that
+ *     render, as `on('change')`'s does. `theme` (1.13, a getter) is what
+ *     the frame wears now, `{ scheme, theme, tokens }`, a fresh copy;
  *     `navigate(route)` (COMP-9) → the app goes to an app route
  *     (`#/ticket/…` — with `?component=`, or COMP-14's `?field=` /
  *     `?anchor=`, `#/components…`, `#/waves/…`; the host ignores any
@@ -161,8 +171,10 @@
  * from `window.parent` carrying its channel.
  *
  *   frame → host  menger:ready  { version }               once, at start
- *   host → frame  menger:theme  { scheme, tokens, css }   on ready, and on
- *                                                         every theme flip
+ *   host → frame  menger:theme  { scheme, tokens, css, theme }  on ready,
+ *                 and whenever the app repaints (THEME-7's one path: a mode
+ *                 flip, a theme picked, amended, entered or left); `theme`
+ *                 the name the frame's region wears (1.13), `css` its rules
  *   host → frame  menger:components { components }        on ready, and
  *                 whenever the app (re)fetches the registry — the whole
  *                 registry (`[{ name, source, owner, references }]`); what
@@ -234,7 +246,7 @@
  *                 such section — `height` 0).
  *
  * The init block (#menger-init, JSON) carries
- * `{ channel, version, scheme, mermaid: { url, config }, highlight: { url, unlabeled, detect, plain, aliases, min_relevance }, components, ticket, cite }`
+ * `{ channel, version, scheme, theme, mermaid: { url, config }, highlight: { url, unlabeled, detect, plain, aliases, min_relevance }, components, ticket, cite }`
  * — `components` the registry as the app held it (null: not yet), `ticket`
  * the ticket whose stored body this is (null: none), `cite` (1.7) the
  * section a cited window shows (`{ field }` or `{ anchor }`; null: a whole
@@ -245,7 +257,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.12.0";
+  var VERSION = "1.13.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -266,6 +278,8 @@
   }
   var channel = String(init.channel || "");
   var scheme = init.scheme === "dark" ? "dark" : "light";
+  // THEME-7: the theme this frame's region wears (its name), as painted.
+  var themeName = typeof init.theme === "string" && init.theme ? init.theme : "default";
   var mermaidInit = init.mermaid && init.mermaid.url ? init.mermaid : null;
   // MENGER-22: the highlighter and its rules (src/highlight.rs).
   var highlightInit = init.highlight && init.highlight.url ? init.highlight : null;
@@ -359,9 +373,11 @@
   var rendering = null;
 
   function on(kind, cb) {
-    if (kind !== "change") throw new TypeError("menger.on: no event '" + kind + "' — there is 'change'");
+    if (kind !== "change" && kind !== "theme") {
+      throw new TypeError("menger.on: no event '" + kind + "' — there are 'change' and 'theme'");
+    }
     if (typeof cb !== "function") throw new TypeError("menger.on: the listener must be a function");
-    var entry = { cb: cb };
+    var entry = { cb: cb, kind: kind };
     listeners.push(entry);
     if (rendering) rendering.subs.push(entry);
     return function off() {
@@ -370,12 +386,14 @@
     };
   }
 
-  function notify(event) {
+  function notify(event, kind) {
+    kind = kind || "change";
     var now = listeners.slice();
     for (var i = 0; i < now.length; i++) {
+      if (now[i].kind !== kind) continue;
       if (listeners.indexOf(now[i]) < 0) continue; // stopped by an earlier one
       try {
-        now[i].cb(event);
+        now[i].cb(kind === "theme" ? worn() : event);
       } catch (e) {
         logError(e);
       }
@@ -851,7 +869,10 @@
 
   // -- window.menger ------------------------------------------------------
 
-  var api = Object.freeze({ version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input });
+  var api = { version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input };
+  // THEME-7: what the frame wears now — a fresh copy each read.
+  Object.defineProperty(api, "theme", { enumerable: true, get: function () { return worn(); } });
+  api = Object.freeze(api);
   try {
     Object.defineProperty(window, "menger", { value: api, enumerable: true, writable: false, configurable: false });
   } catch (e) {
@@ -994,6 +1015,31 @@
     if (el.textContent !== css) el.textContent = css;
   }
 
+  // THEME-7: what the frame is painted with — the mode, the theme's name,
+  // its rules and every token — as one string: a menger:theme that leaves it
+  // as it was moves nothing and tells no `on('theme')` listener.
+  var paintedKey = null;
+  function paintedNow() {
+    var rule = themeRule(), key = scheme + "|" + themeName + "|";
+    var rules = doc.getElementById("menger-theme-rules");
+    key += (rules ? rules.textContent : "") + "|";
+    if (rule && rule.style) for (var i = 0; i < rule.style.length; i++) {
+      var n = rule.style[i];
+      key += n + ":" + rule.style.getPropertyValue(n) + ";";
+    }
+    return key;
+  }
+
+  // THEME-7: `{ scheme, theme, tokens }` — what the frame wears now.
+  function worn() {
+    var rule = themeRule(), tokens = {};
+    if (rule && rule.style) for (var i = 0; i < rule.style.length; i++) {
+      var n = rule.style[i];
+      if (TOKEN_NAME.test(n)) tokens[n] = rule.style.getPropertyValue(n).trim();
+    }
+    return { scheme: scheme, theme: themeName, tokens: tokens };
+  }
+
   function applyTheme(next, tokens) {
     var rule = themeRule();
     if (rule && rule.style) {
@@ -1029,8 +1075,17 @@
     var m = ev.data;
     if (!m || typeof m !== "object" || m.channel !== channel) return;
     if (m.type === "menger:theme") {
+      if (paintedKey === null) paintedKey = paintedNow(); // the srcdoc's own
+      if (typeof m.theme === "string" && m.theme) themeName = m.theme;
       applyTheme(m.scheme === "dark" ? "dark" : "light", m.tokens && typeof m.tokens === "object" ? m.tokens : {});
       if (typeof m.css === "string") themeRules(m.css);
+      // THEME-7: the components that draw with colours in JS redraw — once
+      // the new tokens are live, and only when something moved.
+      var key = paintedNow();
+      if (key !== paintedKey) {
+        paintedKey = key;
+        notify(null, "theme");
+      }
     } else if (m.type === "menger:result") {
       answered(m);
     } else if (m.type === "menger:submitted") {
