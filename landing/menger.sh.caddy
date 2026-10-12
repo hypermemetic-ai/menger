@@ -1,0 +1,39 @@
+# menger.sh — the landing page (MENGER-7), served by the edge.
+#
+# Deployed by hypermemetic-infra's Ansible edge role (SCAFFOLD-19), which
+# copies menger's landing/ (index.html, style.css, main.js, favicon.svg) to
+# /srv/menger.sh and this file into the edge's sites/ — replacing the inline
+# placeholder there. Not deployed by hand. The hosted app is app.menger.sh
+# (MENGER-8), a site of its own; nothing here proxies to it.
+#
+# The page makes no requests of its own: no fonts, scripts or styles from
+# elsewhere, no inline script or style (so the CSP needs no hash or
+# 'unsafe-inline'), and nothing to connect to.
+
+menger.sh {
+	encode zstd gzip
+	root * /srv/menger.sh
+	file_server
+
+	header {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+	}
+
+	# the page: always revalidated, so a deploy shows at once
+	@page path / /index.html
+	header @page Cache-Control "no-cache"
+
+	# its assets: names are not fingerprinted, so an hour, then revalidate
+	# in the background for a day
+	@assets path /style.css /main.js /favicon.svg
+	header @assets Cache-Control "public, max-age=3600, stale-while-revalidate=86400"
+}
+
+# If www.menger.sh is ever given a DNS record, add:
+#   www.menger.sh { redir https://menger.sh{uri} permanent }
