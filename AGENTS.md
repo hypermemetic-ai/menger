@@ -386,6 +386,20 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
   synapse -P 4455 menger tickets set_kind --id IDENTITY-1 --kind scope
   synapse -P 4455 menger tickets set_kind --id MNG-40 --kind gap --status Ready
   ```
+- **`tickets.update`** (MENGER-30) changes any part of a ticket in one
+  write — `--title`, `--body`, `--kind`, `--status`, `--parent`,
+  `--severity` (`none` clears it), `--block` / `--unblock` (repeated or
+  comma-separated) — all of it or none, each by its own write's rules
+  (`amend`, `set_kind`, `set_status`, `set_parent`, `create`'s for
+  blockers), a refusal naming every reason. It answers `updated { ticket,
+  changed }`; `watch` carries each aspect's own event. The way to add a
+  blocker after filing, or to change a severity:
+
+  ```sh
+  synapse -P 4455 menger tickets update --id THEME-4 --block THEME-7
+  synapse -P 4455 menger tickets update --id MENGER-30 --unblock MENGER-23 --block MENGER-29
+  synapse -P 4455 menger tickets update --id MENGER-40 --kind gap --status Ready --severity High
+  ```
 - Architecture (owner-pinned): a service-wide in-memory cache
   (`src/store.rs`) is the ONLY interface the application has to tickets.
   Reads hit the cache, never storage; reads are async-safe (no lock

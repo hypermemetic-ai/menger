@@ -1353,6 +1353,24 @@ pub enum TicketsEvent {
     /// ticket named it in `blocked_by` (yielded by `watch`). Carries the
     /// full updated ticket so a watch-only client stays coherent.
     UnlocksChanged { ticket: Ticket, added: String },
+    /// MENGER-30: an existing ticket's `unlocks` lost `removed`, which no
+    /// longer waits on it (`update { unblock }`; yielded by `watch`). The
+    /// full updated ticket, as `unlocks_changed`.
+    UnlocksRemoved { ticket: Ticket, removed: String },
+    /// MENGER-30: a ticket's `blocked_by` moved after birth (`update`;
+    /// yielded by `watch`) — `added` and `removed` as they moved. The whole
+    /// ticket rides along; each blocker's side follows, `unlocks_changed` or
+    /// `unlocks_removed`, then the placements it moved.
+    BlockersChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
+    /// MENGER-30: a ticket's severity moved (`update`; yielded by `watch`);
+    /// `previous` the one it had (`null`: none). The whole ticket rides along.
+    SeverityChanged { ticket: Ticket, previous: Option<Severity> },
+    /// MENGER-30: `update`'s answer — the ticket as the write left it, and
+    /// the aspects that moved, in this order: `title`, `body`, `kind`,
+    /// `status`, `parent`, `severity`, `blocked_by`. Empty when nothing
+    /// would change, which wrote nothing; `watch` never carries it (it
+    /// carries each aspect's own event).
+    Updated { ticket: Ticket, changed: Vec<String> },
     /// AGS-19: the ticket `id` gained the child `added` — a child was born
     /// naming it as `parent`, or was moved under it by `set_parent`
     /// (yielded by `watch`). SCALE-4: the parent's id and its new

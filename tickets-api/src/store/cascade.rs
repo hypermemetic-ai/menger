@@ -118,6 +118,55 @@ pub(super) struct Step {
     pub(super) inputs: Vec<(Input, crate::types::InputHistoryEntry)>,
 }
 
+/// MENGER-13: the steps a change of `row`'s status to `status` by `act`
+/// makes, from the cache as it stands — its own (the transition, none when
+/// the status is the one it has; the inputs a crossing of `Canceled`
+/// moves), then, into `Canceled`, each open descendant's; out of it, with
+/// `restore_children`, each one its cancel canceled. MENGER-30: shared by
+/// `set_status` and `update`.
+pub(super) fn status_steps(cache: &Cache, row: &Row, status: Status, act: &Act, restore_children: bool, now: i64) -> Vec<Step> {
+    let previous = row.status;
+    let canceling = previous != Status::Canceled && status == Status::Canceled;
+    let uncanceling = previous == Status::Canceled && status != Status::Canceled;
+    let mut next = cache.log.next_id();
+    let own = (previous != status).then(|| {
+        let t = status_transition(next, &row.id, previous, status, now, act, None);
+        next += 1;
+        t
+    });
+    let cause = own.as_ref().map(|t| (t.id, row.id.as_str()));
+    let who = act.who().to_string();
+    let mut steps = Vec::new();
+    let own_inputs = if canceling {
+        let reason = format!("{} was canceled by {who}", row.id);
+        cache.inputs.withdrawing(&row.id, &reason, now)
+    } else if uncanceling {
+        let reason = format!("{} is {} again (by {who})", row.id, status.as_str());
+        cache.inputs.restoring(&row.id, &reason, now)
+    } else {
+        Vec::new()
+    };
+    steps.push(Step { id: row.id.clone(), to: status, transition: own, inputs: own_inputs });
+    if canceling {
+        for t in to_cancel(cache, row) {
+            let message = format!("canceled because {} was canceled by {who}", row.id);
+            let tr = status_transition(next, &t.id, t.status, Status::Canceled, now, &system(message.clone()), cause);
+            next += 1;
+            let inputs = cache.inputs.withdrawing(&t.id, &message, now);
+            steps.push(Step { id: t.id.clone(), to: Status::Canceled, transition: Some(tr), inputs });
+        }
+    } else if uncanceling && restore_children {
+        for (t, from) in restorable(cache, row) {
+            let message = format!("restored to {} because {} was restored by {who}", from.as_str(), row.id);
+            let tr = status_transition(next, &t.id, Status::Canceled, from, now, &system(message.clone()), cause);
+            next += 1;
+            let inputs = cache.inputs.restoring(&t.id, &message, now);
+            steps.push(Step { id: t.id.clone(), to: from, transition: Some(tr), inputs });
+        }
+    }
+    steps
+}
+
 /// MENGER-13: what `history { id }` answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryAnswer {
@@ -190,57 +239,14 @@ impl Store {
     pub async fn set_status_by(&self, id: &str, status: Status, act: Act, restore_children: bool) -> Result<Change, StoreError> {
         let serial = self.serial().await;
         let (mut row, _) = self.row(id)?;
-        if !row.kind.has_lifecycle() {
-            return Err(StoreError::DocHasNoLifecycle { id: row.id });
-        }
-        if !Status::LIFECYCLE.contains(&status) {
-            return Err(StoreError::DocStatusOnWork { id: row.id, kind: row.kind });
-        }
+        rules::status_refusal(&row, status)?;
         let previous = row.status;
         let now = chrono::Utc::now().timestamp();
-        let canceling = previous != Status::Canceled && status == Status::Canceled;
-        let uncanceling = previous == Status::Canceled && status != Status::Canceled;
         // Worked out under the write-serial lock, from the cache as it
         // stands: the transitions, the other tickets, the inputs.
         let mut steps: Vec<Step> = {
             let cache = self.tickets.read().expect("store lock poisoned");
-            let mut next = cache.log.next_id();
-            let own = (previous != status).then(|| {
-                let t = status_transition(next, &row.id, previous, status, now, &act, None);
-                next += 1;
-                t
-            });
-            let cause = own.as_ref().map(|t| (t.id, row.id.as_str()));
-            let who = act.who().to_string();
-            let mut steps = Vec::new();
-            let own_inputs = if canceling {
-                let reason = format!("{} was canceled by {who}", row.id);
-                cache.inputs.withdrawing(&row.id, &reason, now)
-            } else if uncanceling {
-                let reason = format!("{} is {} again (by {who})", row.id, status.as_str());
-                cache.inputs.restoring(&row.id, &reason, now)
-            } else {
-                Vec::new()
-            };
-            steps.push(Step { id: row.id.clone(), to: status, transition: own, inputs: own_inputs });
-            if canceling {
-                for t in to_cancel(&cache, &row) {
-                    let message = format!("canceled because {} was canceled by {who}", row.id);
-                    let tr = status_transition(next, &t.id, t.status, Status::Canceled, now, &system(message.clone()), cause);
-                    next += 1;
-                    let inputs = cache.inputs.withdrawing(&t.id, &message, now);
-                    steps.push(Step { id: t.id.clone(), to: Status::Canceled, transition: Some(tr), inputs });
-                }
-            } else if uncanceling && restore_children {
-                for (t, from) in restorable(&cache, &row) {
-                    let message = format!("restored to {} because {} was restored by {who}", from.as_str(), row.id);
-                    let tr = status_transition(next, &t.id, Status::Canceled, from, now, &system(message.clone()), cause);
-                    next += 1;
-                    let inputs = cache.inputs.restoring(&t.id, &message, now);
-                    steps.push(Step { id: t.id.clone(), to: from, transition: Some(tr), inputs });
-                }
-            }
-            steps
+            status_steps(&cache, &row, status, &act, restore_children, now)
         };
         if steps.len() > 1 {
             return self.batch(serial, steps).await;
@@ -332,6 +338,26 @@ impl Store {
     /// `StatusChanged`. A commit that fails changes nothing: the cache is
     /// read back from the file, which is as it was.
     pub(super) async fn batch(&self, serial: OwnedMutexGuard<()>, steps: Vec<Step>) -> Result<Change, StoreError> {
+        self.in_one_write(serial, move |conn, cache, unders| {
+            let changes = Self::batch_steps(conn, cache, unders, steps)?;
+            let first = changes.first().cloned().expect("a batch has its own step");
+            Ok((first, changes))
+        })
+        .await
+    }
+
+    /// MENGER-13: a write made of steps that each work out their derived
+    /// change against the cache as the steps before it left it — `steps`,
+    /// run with the cache's write lock held from the first step to the
+    /// commit and the database's connection in hand, answering the write's
+    /// answer and its events. Committed, the events are broadcast in order;
+    /// failed, the cache is read back from the file, which is as it was.
+    /// MENGER-30: [`Store::batch`]'s, and `update`'s.
+    pub(super) async fn in_one_write<T: Send + 'static>(
+        &self,
+        serial: OwnedMutexGuard<()>,
+        steps: impl FnOnce(&mut Connection, &mut Cache, &lineage::UnderWatches) -> Result<(T, Vec<Change>), StoreError> + Send + 'static,
+    ) -> Result<T, StoreError> {
         let (db, tickets, tx) = (Arc::clone(&self.db), Arc::clone(&self.tickets), self.tx.clone());
         let (committing, unders) = (Arc::clone(&self.committing), Arc::clone(&self.unders));
         committing.fetch_add(1, Ordering::SeqCst);
@@ -340,15 +366,15 @@ impl Store {
             let mut cache = tickets.write().expect("store lock poisoned");
             let mut conn = db.lock().expect("db lock poisoned");
             let written = cache.written;
-            match Self::batch_steps(&mut conn, &mut cache, &unders, steps) {
-                Ok(changes) => {
+            match steps(&mut conn, &mut cache, &unders) {
+                Ok((answer, changes)) => {
                     cache.written += 1;
                     drop(cache);
                     drop(conn);
                     for c in &changes {
                         tx.send(c.clone());
                     }
-                    Ok(changes.into_iter().next().expect("a batch has its own step"))
+                    Ok(answer)
                 }
                 Err(e) => {
                     tracing::error!("MENGER-13: a batch write failed ({e}); the cache is read back from the file");
@@ -378,83 +404,126 @@ impl Store {
     ) -> Result<Vec<Change>, StoreError> {
         let txn = conn.transaction()?;
         let now = chrono::Utc::now().timestamp();
-        // The write's events as one write's are: every ticket's, then each
-        // group that moved (once, as the batch leaves it), then one
-        // `placements_changed` (each ticket once, as the batch leaves it),
-        // then the inputs, then — for `watch { filter }` — each step's cell
-        // and lineage moves, in the order made.
-        let mut tickets: Vec<Change> = Vec::new();
-        let mut groups: Vec<Group> = Vec::new();
-        let mut placements: Vec<(String, crate::types::PlacementChange)> = Vec::new();
-        let mut inputs_moved: Vec<Change> = Vec::new();
-        let mut filtered: Vec<Change> = Vec::new();
+        let mut out = Gathered::default();
         for step in steps {
-            let mut row = cache.get(&step.id).cloned().ok_or_else(|| StoreError::NotFound(step.id.clone()))?;
-            let previous = row.status;
-            row.status = step.to;
-            row.updated_unix = now;
-            let derived = cache.status_change_asking(&row, previous, cache.inputs.asking_after(&row.id, &step.inputs));
-            let under = lineage::under_before_with(unders, cache, || {
-                lineage::Touched::of_moves(derived.announced().as_deref())
-            });
-            let announced = derived.announced();
-            let Derived { stored, moved } = derived;
-            if let Some(placement) = moved.placement() {
-                row.placement = placement;
-            }
-            let placed = moved.placed.as_ref().and_then(Change::placed);
-            db::update_row(&txn, &row)?;
-            stored.write(&txn)?;
-            if let Some(t) = &step.transition {
-                history::record(&txn, t)?;
-            }
-            for (input, entry) in &step.inputs {
-                inputs::record(&txn, input, entry)?;
-            }
-            let body = db::body(&txn, &row.id)?.ok_or_else(|| missing(&row.id))?;
-            let key = OrderKey::of(&row);
-            let epic = row.epic.clone();
-            let moved_groups = cache.status_changed(row.clone(), previous, moved);
-            if let Some(t) = &step.transition {
-                cache.log.append(t, &key);
-            }
-            for (input, _) in &step.inputs {
-                cache.inputs.put(input.clone());
-            }
-            tickets.push(Change::StatusChanged { ticket: whole(row, body), previous });
-            if let Some(transition) = step.transition {
-                tickets.push(Change::Transition { epic: epic.clone(), transition });
-            }
-            for g in moved_groups {
-                match groups.iter_mut().find(|h| h.epic == g.epic) {
-                    Some(h) => *h = g,
-                    None => groups.push(g),
-                }
-            }
-            if let Some(Change::PlacementsChanged { changes }) = placed {
-                for (e, c) in changes {
-                    match placements.iter_mut().find(|(_, p)| p.id == c.id) {
-                        Some(p) => *p = (e, c),
-                        None => placements.push((e, c)),
-                    }
-                }
-            }
-            inputs_moved.extend(step.inputs.into_iter().map(|(input, _)| Change::InputChanged { epic: epic.clone(), input }));
-            if let Some(moves) = announced {
-                filtered.push(Change::CellsMoved { moves });
-            }
-            if let Some(change) = under.and_then(|u| u.after_in(cache)) {
-                filtered.push(change);
-            }
+            status_step(&txn, cache, unders, step, now, &mut out)?;
         }
         txn.commit()?;
-        let mut changes = tickets;
-        changes.extend(groups.into_iter().map(|group| Change::GroupChanged { group }));
-        if !placements.is_empty() {
-            changes.push(Change::PlacementsChanged { changes: placements });
+        Ok(out.finish())
+    }
+}
+
+/// MENGER-13: one status step of a batch — its row, derived state,
+/// transition and inputs into `txn` and the cache, worked out against the
+/// cache as the steps before it left it; its events into `out`. MENGER-30:
+/// `update`'s status change is these steps too.
+pub(super) fn status_step(
+    txn: &rusqlite::Transaction<'_>,
+    cache: &mut Cache,
+    unders: &lineage::UnderWatches,
+    step: Step,
+    now: i64,
+    out: &mut Gathered,
+) -> Result<(), StoreError> {
+    let mut row = cache.get(&step.id).cloned().ok_or_else(|| StoreError::NotFound(step.id.clone()))?;
+    let previous = row.status;
+    row.status = step.to;
+    row.updated_unix = now;
+    let derived = cache.status_change_asking(&row, previous, cache.inputs.asking_after(&row.id, &step.inputs));
+    let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()));
+    let announced = derived.announced();
+    let Derived { stored, moved } = derived;
+    if let Some(placement) = moved.placement() {
+        row.placement = placement;
+    }
+    let placed = moved.placed.as_ref().and_then(Change::placed);
+    db::update_row(txn, &row)?;
+    stored.write(txn)?;
+    if let Some(t) = &step.transition {
+        history::record(txn, t)?;
+    }
+    for (input, entry) in &step.inputs {
+        inputs::record(txn, input, entry)?;
+    }
+    let body = db::body(txn, &row.id)?.ok_or_else(|| missing(&row.id))?;
+    let key = OrderKey::of(&row);
+    let epic = row.epic.clone();
+    let moved_groups = cache.status_changed(row.clone(), previous, moved);
+    if let Some(t) = &step.transition {
+        cache.log.append(t, &key);
+    }
+    for (input, _) in &step.inputs {
+        cache.inputs.put(input.clone());
+    }
+    out.tickets.push(Change::StatusChanged { ticket: whole(row, body), previous });
+    if let Some(transition) = step.transition {
+        out.tickets.push(Change::Transition { epic: epic.clone(), transition });
+    }
+    out.groups(moved_groups);
+    out.placed(placed);
+    out.inputs.extend(step.inputs.into_iter().map(|(input, _)| Change::InputChanged { epic: epic.clone(), input }));
+    out.filtered(announced, under.and_then(|u| u.after_in(cache)));
+    Ok(())
+}
+
+/// MENGER-13: the events of a write made of several steps, as one write's
+/// are: every ticket's, in the order made; then each group that moved (once,
+/// as the write leaves it); then one `placements_changed` (each ticket once,
+/// as the write leaves it); then — MENGER-30 — the components a body moved;
+/// then the inputs; then, for `watch { filter }`, each step's cell and
+/// lineage moves, in the order made.
+#[derive(Default)]
+pub(super) struct Gathered {
+    pub(super) tickets: Vec<Change>,
+    groups: Vec<Group>,
+    placements: Vec<(String, crate::types::PlacementChange)>,
+    pub(super) components: Vec<Change>,
+    pub(super) inputs: Vec<Change>,
+    filtered: Vec<Change>,
+}
+
+impl Gathered {
+    /// Groups a step moved — each kept once, as the latest step left it.
+    pub(super) fn groups(&mut self, moved: Vec<Group>) {
+        for g in moved {
+            match self.groups.iter_mut().find(|h| h.epic == g.epic) {
+                Some(h) => *h = g,
+                None => self.groups.push(g),
+            }
         }
-        changes.extend(inputs_moved);
-        changes.extend(filtered);
-        Ok(changes)
+    }
+
+    /// A step's `placements_changed` — each ticket kept once, as the latest
+    /// step placed it.
+    pub(super) fn placed(&mut self, placed: Option<Change>) {
+        if let Some(Change::PlacementsChanged { changes }) = placed {
+            for (e, c) in changes {
+                match self.placements.iter_mut().find(|(_, p)| p.id == c.id) {
+                    Some(p) => *p = (e, c),
+                    None => self.placements.push((e, c)),
+                }
+            }
+        }
+    }
+
+    /// A step's cell moves and lineage moves, for `watch { filter }`.
+    pub(super) fn filtered(&mut self, cells: Option<std::sync::Arc<cells::Moves>>, under: Option<Change>) {
+        if let Some(moves) = cells {
+            self.filtered.push(Change::CellsMoved { moves });
+        }
+        self.filtered.extend(under);
+    }
+
+    /// The write's events, in the order they are sent.
+    pub(super) fn finish(self) -> Vec<Change> {
+        let mut changes = self.tickets;
+        changes.extend(self.groups.into_iter().map(|group| Change::GroupChanged { group }));
+        if !self.placements.is_empty() {
+            changes.push(Change::PlacementsChanged { changes: self.placements });
+        }
+        changes.extend(self.components);
+        changes.extend(self.inputs);
+        changes.extend(self.filtered);
+        changes
     }
 }

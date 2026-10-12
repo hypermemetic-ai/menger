@@ -160,8 +160,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, links,
 /// frames take `menger:emulate` (the page shim, `menger-page.js`); MENGER-13's
 /// 1.10 regenerates the typed client over the transition log — `history`,
 /// the `transition` and `history_end` events, `tz` on the filtered reads,
-/// `set_status`'s `restore_children`, `source` and `message`.
-pub(crate) const SDK_VERSION: &str = "1.10.0";
+/// `set_status`'s `restore_children`, `source` and `message`; MENGER-30's
+/// 1.11 adds `update` and its events (`updated`, `blockers_changed`,
+/// `unlocks_removed`, `severity_changed`).
+pub(crate) const SDK_VERSION: &str = "1.11.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is

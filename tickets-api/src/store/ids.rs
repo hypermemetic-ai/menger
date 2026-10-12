@@ -199,6 +199,37 @@ impl Ids {
         }
     }
 
+    /// MENGER-30: `t`'s `blocked_by` moved after birth (`update`) — of
+    /// `added` and `removed`, each that names no ticket is kept as a forward
+    /// reference from now on, or no longer. Worked out before the write
+    /// commits, moved by [`Self::reblocked`] after.
+    pub(super) fn reblock(&self, rows: Rows<'_>, t: &Row, added: &[String], removed: &[String]) -> Reblock {
+        let key = OrderKey::of(t);
+        let dangling = |ids: &[String]| -> Vec<RefKey> {
+            ids.iter().filter(|b| !rows.contains(b)).map(|b| (b.clone(), key.clone())).collect()
+        };
+        Reblock {
+            id: t.id.clone(),
+            named: dangling(added),
+            unnamed: dangling(removed),
+        }
+    }
+
+    /// …and once it has committed, the cache takes it.
+    pub(super) fn reblocked(&mut self, r: Reblock) {
+        for (id, key) in r.unnamed {
+            if let Some(waiting) = self.unborn.get_mut(&id) {
+                waiting.remove(&key);
+                if waiting.is_empty() {
+                    self.unborn.remove(&id);
+                }
+            }
+        }
+        for (id, key) in r.named {
+            self.unborn.entry(id).or_default().insert(key, r.id.clone());
+        }
+    }
+
     /// SCALE-28: from what is stored — at start, instead of [`Self::build`].
     pub(super) fn from_stored(runs: BTreeMap<String, RunRow>, refs: BTreeMap<RefKey, String>) -> Self {
         let mut unborn: HashMap<String, BTreeMap<OrderKey, String>> = HashMap::new();
@@ -290,5 +321,23 @@ impl Birth {
             into.refs_born.push(self.id.clone());
         }
         into.refs_named.extend(self.names.iter().cloned());
+    }
+}
+
+/// MENGER-30: what one `update` of a ticket's `blocked_by` does to the
+/// forward references ([`Ids::reblock`]) — the ones it makes and the ones it
+/// drops, each keyed by the id it names and the ticket's position.
+pub(super) struct Reblock {
+    id: String,
+    named: Vec<RefKey>,
+    unnamed: Vec<RefKey>,
+}
+
+impl Reblock {
+    /// The rows its transaction writes: a reference made or dropped — almost
+    /// never.
+    pub(super) fn store(&self, into: &mut Changes) {
+        into.refs_named.extend(self.named.iter().map(|k| (k.clone(), self.id.clone())));
+        into.refs_unnamed.extend(self.unnamed.iter().cloned());
     }
 }

@@ -225,6 +225,19 @@
         "commits",
         "id"
       ],
+      "update": [
+        "block",
+        "body",
+        "id",
+        "kind",
+        "message",
+        "parent",
+        "severity",
+        "source",
+        "status",
+        "title",
+        "unblock"
+      ],
       "watch": [
         "epic",
         "filter",

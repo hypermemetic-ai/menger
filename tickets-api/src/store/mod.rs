@@ -716,6 +716,17 @@ pub enum Change {
     /// created ticket named it in `blocked_by`. Carries the full updated
     /// ticket so watch-only clients stay coherent.
     UnlocksChanged { ticket: Ticket, added: String },
+    /// MENGER-30: an existing ticket's `unlocks` lost `removed`, which no
+    /// longer names it in `blocked_by` (`update { unblock }`). Carries the
+    /// full updated ticket, as `UnlocksChanged` does.
+    UnlocksRemoved { ticket: Ticket, removed: String },
+    /// MENGER-30: a ticket's `blocked_by` moved after birth (`update`) —
+    /// `added` and `removed` as they moved. Carries the full ticket; each
+    /// blocker's side follows as `UnlocksChanged` / `UnlocksRemoved`.
+    BlockersChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
+    /// MENGER-30: a ticket's severity moved (`update`); `previous` is the
+    /// one it had (`None`: none). Carries the full ticket.
+    SeverityChanged { ticket: Ticket, previous: Option<Severity> },
     /// AGS-19: the ticket `id` gained the child `added` — born naming it
     /// as `parent`, or moved under it. SCALE-4: the parent's id and new
     /// `child_count`, not the full parent (whose list of children made the
@@ -804,6 +815,9 @@ impl Change {
             | Self::CommitsUnlinked { ticket, .. }
             | Self::LabelsChanged { ticket, .. }
             | Self::UnlocksChanged { ticket, .. }
+            | Self::UnlocksRemoved { ticket, .. }
+            | Self::BlockersChanged { ticket, .. }
+            | Self::SeverityChanged { ticket, .. }
             | Self::ParentChanged { ticket, .. } => &ticket.epic,
             Self::ChildrenChanged { epic, .. } | Self::ChildRemoved { epic, .. } => epic,
             Self::GroupChanged { group } => &group.epic,
@@ -1125,6 +1139,18 @@ pub enum StoreError {
     NoteUpgraded { id: u64, ticket: String },
     /// NOTE-2: `list`'s `after` names no note.
     NoteCursor(u64),
+    /// MENGER-30: an `update`'s `block` / `unblock` named a blank id, or one
+    /// id in both — `why` says which. Nothing was written.
+    Blockers { id: String, why: String },
+    /// MENGER-30: `update { block }` would close a `blocked_by` cycle; `path`
+    /// is the chain from a new blocker back to `id`. Nothing was written.
+    BlockCycle { id: String, path: Vec<String> },
+    /// MENGER-30: what the caller refused before the store saw the call — an
+    /// unknown kind, status or severity — named with the store's refusals.
+    Invalid(String),
+    /// MENGER-30: an `update` refused for more than one reason — every one,
+    /// in the order the write would meet them. Nothing was written.
+    Refused { id: String, refusals: Vec<StoreError> },
 }
 
 impl StoreError {
@@ -1285,6 +1311,17 @@ impl std::fmt::Display for StoreError {
                 linked + adding
             ),
             Self::Labels { id, why } => write!(f, "{why} (nothing changed for '{id}')"),
+            Self::Blockers { id, why } => write!(f, "{why} (nothing changed for '{id}')"),
+            Self::BlockCycle { id, path } => write!(
+                f,
+                "'{id}' cannot wait on that: it would close a blocked_by cycle: {id} -> {} (nothing changed)",
+                path.join(" -> ")
+            ),
+            Self::Invalid(why) => write!(f, "{why}"),
+            Self::Refused { id, refusals } => {
+                let each: Vec<String> = refusals.iter().map(|r| r.to_string()).collect();
+                write!(f, "update of '{id}' refused, nothing written — {}", each.join("; "))
+            }
             Self::Db(msg) => write!(f, "database error: {msg}"),
             Self::SeedRefused { existing } => write!(
                 f,
@@ -3240,16 +3277,7 @@ impl Store {
             // SDLC-11: a doc never completes, so nothing may wait on one —
             // neither by naming a doc that exists, nor by having named, before
             // it was born, the id a doc would now take.
-            let docs: Vec<String> = new
-                .blocked_by
-                .iter()
-                .filter(|b| tickets.get(b).is_some_and(|bt| !bt.kind.has_lifecycle()))
-                .fold(Vec::new(), |mut seen, b| {
-                    if !seen.contains(b) {
-                        seen.push(b.clone());
-                    }
-                    seen
-                });
+            let docs = rules::docs_among(tickets, &new.blocked_by);
             if !docs.is_empty() {
                 return Err(StoreError::BlockedByDoc { id, docs });
             }
@@ -4015,20 +4043,7 @@ impl Store {
         let (mut row, written) = self.row(id)?;
         let old = row.clone();
         let previous = row.kind;
-        let status = if kind.has_lifecycle() {
-            match status {
-                Some(Status::Doc) => return Err(StoreError::DocStatusForWork { id: row.id, kind }),
-                Some(s) => s,
-                None if previous.has_lifecycle() => row.status,
-                None if kind == Kind::Scope => Status::Epic,
-                None => Status::Pending,
-            }
-        } else {
-            match status {
-                None | Some(Status::Doc) => Status::Doc,
-                Some(s) => return Err(StoreError::DocStatusForDoc { id: row.id, status: s }),
-            }
-        };
+        let status = rules::kind_status(&row.id, previous, row.status, kind, status)?;
         if kind == previous && status == row.status {
             return Ok(Change::KindChanged {
                 ticket: self.full_one(row, written).await?,
@@ -4037,62 +4052,13 @@ impl Store {
         }
         let (derived, under, made, moved_inputs) = {
             let cache = self.tickets.read().expect("store lock poisoned");
-            if !kind.has_lifecycle() && (!row.blocked_by.is_empty() || !row.unlocks.is_empty()) {
-                let distinct = |ids: &[String]| {
-                    ids.iter().fold(Vec::<String>::new(), |mut seen, i| {
-                        if !seen.contains(i) {
-                            seen.push(i.clone());
-                        }
-                        seen
-                    })
-                };
-                return Err(StoreError::DocInGraph {
-                    blocked_by: distinct(&row.blocked_by),
-                    unlocks: distinct(&row.unlocks),
-                    id: row.id,
-                });
-            }
-            if !kind.roots_a_shortcode() && cache.rollups.root(&row.epic) == Some(row.id.as_str()) {
-                return Err(StoreError::RootKind { id: row.id, epic: row.epic, kind });
-            }
-            if let (Some(path), true) = (&row.path, kind.has_lifecycle()) {
-                return Err(StoreError::PathKind { path: path.clone(), id: row.id, kind });
-            }
+            rules::kind_refusal(&cache, &row, &row.blocked_by, kind)?;
             row.kind = kind;
             row.status = status;
             row.updated_unix = chrono::Utc::now().timestamp();
             // MENGER-13: the kind's transition, then the status's, caused by
             // it — and the inputs a crossing of `Canceled` moves.
-            let first = cache.log.next_id();
-            let transition = |id, field, from: &str, to: &str, cause: Option<u64>| crate::types::Transition {
-                id,
-                ticket: row.id.clone(),
-                field,
-                from: Some(from.to_string()),
-                to: to.to_string(),
-                at_unix: row.updated_unix,
-                actor: act.actor.clone(),
-                name: act.name.clone(),
-                source: act.source,
-                message: act.message.clone(),
-                cause_ticket: cause.map(|_: u64| row.id.clone()),
-                cause,
-            };
-            let mut made = Vec::new();
-            if kind != previous {
-                made.push(transition(first, crate::types::TransitionField::Kind, previous.as_str(), kind.as_str(), None));
-            }
-            if status != old.status {
-                let cause = made.first().map(|t| t.id);
-                let id = first + made.len() as u64;
-                made.push(transition(id, crate::types::TransitionField::Status, old.status.as_str(), status.as_str(), cause));
-            }
-            let reason = format!("{} is {} (by {})", row.id, status.as_str(), act.who());
-            let moved_inputs = match (old.status == Status::Canceled, status == Status::Canceled) {
-                (false, true) => cache.inputs.withdrawing(&row.id, &reason, row.updated_unix),
-                (true, false) => cache.inputs.restoring(&row.id, &reason, row.updated_unix),
-                _ => Vec::new(),
-            };
+            let (made, moved_inputs) = update::kind_moves(&cache, &old, &row, &act);
             // Everything kept by kind, and by status — worked out now, while
             // nothing has changed. FILTER-13: and what an open `watch { filter
             // }` asking `under` sees of it: the cells it moves, and — when it
@@ -4219,13 +4185,7 @@ impl Store {
             let parent_ticket = tickets.get(&parent).expect("the parent exists");
             // MNG-14: only the shortcode's scope root may hang under
             // another shortcode; everything else stays inside its own.
-            let is_root = shortcode_root(&tickets, &child.epic).is_some_and(|r| r.id == child.id);
-            if !is_root && parent_ticket.epic != child.epic {
-                return Err(StoreError::ParentOutsideShortcode { id, parent });
-            }
-            if let Some(path) = find_parent_cycle(&tickets, &id, &parent) {
-                return Err(StoreError::ParentCycle { id, path });
-            }
+            rules::parent_refusal(&tickets, &child, &parent)?;
             let now = chrono::Utc::now().timestamp();
             let previous = child.parent.take();
             child.parent = Some(parent.clone());
@@ -5606,6 +5566,11 @@ mod history;
 pub use history::{zone, Act, Clock};
 /// MENGER-13: cancellation cascades and their undoing — one batch write.
 mod cascade;
+/// MENGER-30: the rules a write after birth is refused by, one place each.
+mod rules;
+/// MENGER-30: `update` — any part of a ticket in one write.
+mod update;
+pub use update::{Update, Updated};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
 /// has commits)` interned as one cell; per shortcode and cell, a Roaring
@@ -5826,3 +5791,9 @@ mod tests_comments;
 /// the log's kept indexes against a scan, and `--verify-derived` on the log.
 #[cfg(test)]
 mod tests_history;
+
+/// MENGER-30: `update` — every field alone and all at once, the no-op,
+/// every refusal writing nothing, blockers moving everything derived, and a
+/// random walk of updates leaving `--verify-derived` clean.
+#[cfg(test)]
+mod tests_update;
