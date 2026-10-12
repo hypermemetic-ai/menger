@@ -1704,7 +1704,9 @@ server.shutdown().await;                      // both stopped, ports released
 a port of 0 is a free one (bound before anything serves, so the reported
 port is held); the database's directory is made if missing; `env` titles
 the tab as `--env` does; `app` is an `AppSource` — `Dir(path)` or
-`Embedded`, defaulting to the embedded build when the binary carries one;
+`Embedded(table)` (plexus-shell's, re-exported as `menger::shell::AppSource`),
+defaulting to the embedded build when the binary carries one
+(`menger::shell::preferred_app()`);
 the socket admits the shell's own origins (127.0.0.1 and localhost at the
 shell's port) and `extra_origins` — `TAURI_ORIGINS` for a Tauri webview.
 Dropping a `LocalServer` stops it without waiting. `tests/local.rs` is the
@@ -1719,22 +1721,67 @@ so a dependent that turns the feature on gets the Leptos app with nothing
 on disk:
 
 ```toml
-menger = { version = "0.5", features = ["embedded-app"] }
+menger = { version = "0.6", features = ["embedded-app"] }
 ```
+
+## plexus-shell (SCAFFOLD-5)
+
+The serving half of all this is a crate of its own, `plexus-shell/` (a
+workspace member, published as `plexus-shell`), so any Plexus RPC app serves
+its frontend the way menger does. menger consumes it, and keeps no second
+copy:
+
+- **The shell.** `AppSource::{Dir(path), Embedded(table)}` is the build. The
+  table follows ACCESS-33: a request path is a key and never a path, and
+  there are size caps, a MIME table, and a reread on a new `index.html` for
+  `Dir`. `ShellConfig { app, title, mount, stamps, pages, root_fallback,
+  not_built, routes }` says what to serve. `router(cfg, ws_port)` builds
+  the router and `serve_on(listener, router, shutdown)` serves it, hardened
+  (IDENTITY-38's headers). The entrypoint and `pages` are stamped with
+  `{{WS_PORT}}`, `{{TITLE}}` and any `(placeholder, value)` in `stamps`.
+- **The embedding.** The app crate's `build.rs` calls
+  `plexus_shell::build::embed_dir_with_feature("frontend/dist",
+  "embedded-app")`, a build-dependency with `default-features = false,
+  features = ["build"]`. The table goes into the app's `OUT_DIR`. The app
+  takes it with `static APP: EmbeddedTable = plexus_shell::embedded_app!();`
+  and hands it to `AppSource::Embedded(APP)`. It has to be the app's own
+  build script, because `include_bytes!` resolves in the crate that
+  compiles it.
+- **`LocalServer`.** `plexus_shell::LocalServer::start(hub, LocalConfig {
+  ws_port, shell_port, extra_origins, shell })` serves any `DynamicHub`'s
+  WebSocket and the shell on loopback. Ports 0 are bound for real before
+  anything serves. It returns `ws_port`, `shell_port`, `shell_url`,
+  `ws_url` and `shutdown`. `TAURI_ORIGINS` lives here.
+
+menger's part stays in `src/shell.rs`: `/vanilla` and `/` falling back to
+it, the favicon, the tab title rule (MFE-23), the "not built" page's words,
+the embedded table, and the login routes, session check and host check
+layered around the crate's router. `menger::local` builds menger's hub and
+calls the crate. Its API is DIST-3's, unchanged, and menger-desktop builds
+on it as is. `plexus-shell/toy/` is the worked example: a hub with one
+activation and an embedded two-file app, started through `LocalServer`. Its
+test is in the workspace run.
 
 ## Publishing (DIST-3)
 
-`menger-tickets-api` and `menger` go to crates.io (after the plexus 0.6
-line they depend on — plexus-core, plexus-macros, plexus-client,
-plexus-auth-core, plexus-transport). Every sibling `path` dependency also
-names its `version`, which is what the published crates take; dev
-dependencies stay path-only and are dropped from the package.
+`plexus-shell`, `menger-tickets-api` and `menger` go to crates.io, in that
+order. The plexus 0.6 line they depend on goes first: plexus-core,
+plexus-macros, plexus-client, plexus-auth-core, plexus-transport. Every
+sibling `path` dependency also names its `version`, which is what the
+published crates take. Dev dependencies stay path-only and are dropped from
+the package.
 
 ```sh
 scripts/publish.sh stage     # trunk build --release, stage the package, list it; publishes nothing
-scripts/publish.sh dry-run   # + cargo publish --dry-run, both crates
-scripts/publish.sh publish   # + cargo publish: menger-tickets-api, then menger (clean tree only)
+scripts/publish.sh dry-run   # + cargo publish --dry-run of the crates not yet on crates.io, verified together
+scripts/publish.sh publish   # + cargo publish: plexus-shell, menger-tickets-api, then menger (clean tree only)
 ```
+
+A crate whose version crates.io already holds is skipped. The script reads
+the sparse index to tell; `menger-tickets-api` 0.5.0 is skipped today. The
+rest go to one multi-package `cargo publish`, which orders them and, in a
+dry run, verifies `menger` against the packaged `plexus-shell` before
+either is on crates.io.
 
 The script builds the app first and refuses to go on without
 `frontend/dist/index.html`. It publishes from a stage beside the repository,
@@ -1756,16 +1803,23 @@ its package (it still runs from a checkout, `spike/WAVE-2/run.sh`).
 src/
   main.rs              CLI args, transports, spawns the shell
   builder.rs           build_rpc() → Arc<DynamicHub> ("menger")
-  shell.rs             / (the Leptos app, degrading to the vanilla page when
-                       unbuilt), /vanilla (the embedded day-one page), /app/
-                       (the app's build, read into a table — ACCESS-33);
-                       nothing else. The table from dist on disk or, with
-                       `embedded-app`, from the binary (DIST-3)
+  shell.rs             menger's shell over plexus-shell: / (the Leptos app,
+                       degrading to the vanilla page when unbuilt), /vanilla
+                       (the embedded day-one page), the favicon, the tab
+                       title, the embedded table, and the login routes and
+                       checks around the crate's router (SCAFFOLD-5)
   local.rs             menger::local — LocalServer::start(LocalConfig), the
                        whole server without login or REST, as a library call
-                       (DIST-3)
+                       (DIST-3); plexus-shell's LocalServer over menger's hub
 build.rs               `embedded-app`: frontend/dist compiled into the binary
-                       (DIST-3); without it, an empty table
+                       by plexus-shell's build half (DIST-3); without it, an
+                       empty table
+plexus-shell/          the shell and LocalServer as a crate (SCAFFOLD-5):
+                       AppSource, the app's table (ACCESS-33), stamping,
+                       router/serve_on, the build-script embedding,
+                       LocalServer, TAURI_ORIGINS; published as plexus-shell
+  toy/                 its worked example: a one-activation hub and an
+                       embedded two-file app, tested (never published)
 tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        typed Plexus client it emits — ONE declaration, shared by
                        the server (default features: `server`) and the app
@@ -1869,7 +1923,7 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
   tests/sdk_manifest.rs  COMP-10's drift guard: the activation's methods and
                        parameters against frontend/sdk/generated/manifest.json
 scripts/sdk-codegen.sh the frames' typed SDK, generated (COMP-10; Docker)
-scripts/publish.sh     the app built, the package staged, menger-tickets-api and
+scripts/publish.sh     the app built, the package staged, plexus-shell, menger-tickets-api and
                        menger published to crates.io (DIST-3)
 scripts/shot.mjs       screenshots of the app once it is ready, signed in where
                        it must be; only looks (DEPLOY-7)

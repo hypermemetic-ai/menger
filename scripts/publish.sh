@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# DIST-3: publish menger to crates.io — `menger-tickets-api`, then `menger`
-# with the app's build inside it (the `embedded-app` feature embeds it).
+# DIST-3: publish menger to crates.io — `plexus-shell` (SCAFFOLD-5), then
+# `menger-tickets-api`, then `menger` with the app's build inside it (the
+# `embedded-app` feature embeds it). A crate whose version is already on
+# crates.io is skipped, saying so (menger-tickets-api is unchanged at 0.5.0).
 #
 #   scripts/publish.sh stage     build the app, stage the package, list it —
 #                                publishes nothing (a dirty tree is allowed:
 #                                it stages the working tree)
-#   scripts/publish.sh dry-run   stage, then `cargo publish --dry-run` both
-#   scripts/publish.sh publish   stage, then `cargo publish` both — for real;
+#   scripts/publish.sh dry-run   stage, then `cargo publish --dry-run` of the
+#                                unpublished crates, verified together
+#   scripts/publish.sh publish   stage, then `cargo publish` them — for real;
 #                                refuses a dirty tree
 #
 # 1. `trunk build --release` in frontend/ (README "Frontend" has the
@@ -22,10 +25,13 @@
 #    so the package carries what `include` names. The cost: the published
 #    crate has no .cargo_vcs_info.json (the commit is in this script's
 #    output instead).
-# 3. `cargo publish -p menger-tickets-api`, then `cargo publish -p menger
-#    --features embedded-app` — the feature only changes what cargo's
-#    verification builds, so the build it checks is the one with the app
-#    embedded from the packaged dist.
+# 3. One `cargo publish -p plexus-shell -p menger-tickets-api -p menger
+#    --features menger/embedded-app` over the crates not yet on crates.io.
+#    Cargo publishes them in dependency order and, in a dry run, verifies
+#    each against the others' packages, so menger's verification resolves a
+#    plexus-shell that is not on crates.io yet. The feature only changes what
+#    cargo's verification builds, so the build it checks is the one with the
+#    app embedded from the packaged dist.
 #
 # Publishing needs the plexus 0.6 line (plexus-core, plexus-macros,
 # plexus-client, plexus-auth-core, plexus-transport) on crates.io first
@@ -44,7 +50,7 @@ need() { command -v "$1" >/dev/null || die "needs $1 on PATH"; }
 mode=${1:-}
 case $mode in
   stage|dry-run|publish) ;;
-  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac
 need cargo; need trunk; need git
 
@@ -90,21 +96,51 @@ size=$(grep -vx -e 'Cargo.toml.orig' -e '.cargo_vcs_info.json' <<<"$list" | tar 
 say "menger's package: about $((size / 1024)) KiB compressed (crates.io takes up to 10 MiB)"
 (( size < 10 * 1024 * 1024 )) || die "too big for crates.io"
 
+shell_list=$(cargo package -p plexus-shell --list --no-verify --allow-dirty 2>/dev/null)
+if grep -E '^(toy|target)/' <<<"$shell_list" >/dev/null; then
+  die "plexus-shell's package carries files it should not: $(grep -E '^(toy|target)/' <<<"$shell_list" | head -3)"
+fi
+say "plexus-shell's package: $(wc -l <<<"$shell_list") files"
+
+# A crate version crates.io already holds is skipped (crates.io refuses a
+# second upload of a version). Its sparse index answers which it holds.
+version_of() { sed -n 's/^version = "\(.*\)"/\1/p' "$1/Cargo.toml" | head -1; }
+published() {
+  local name=$1 version=$2 path
+  case ${#name} in
+    1) path=1/$name ;;
+    2) path=2/$name ;;
+    3) path=3/${name:0:1}/$name ;;
+    *) path=${name:0:2}/${name:2:2}/$name ;;
+  esac
+  curl -sf "https://index.crates.io/$path" | grep -q "\"vers\":\"$version\""
+}
+need curl
+crates=()
+for pair in plexus-shell:plexus-shell menger-tickets-api:tickets-api menger:.; do
+  name=${pair%%:*}
+  version=$(version_of "$STAGE/${pair#*:}")
+  if published "$name" "$version"; then
+    say "$name $version is on crates.io already — skipped"
+  else
+    crates+=(-p "$name")
+  fi
+done
+(( ${#crates[@]} )) || die "every crate's version is on crates.io already — bump a version first"
+features=()
+[[ " ${crates[*]} " == *" menger "* ]] && features=(--features menger/embedded-app)
+
 case $mode in
   stage)
-    say "staged; nothing published (scripts/publish.sh publish publishes it)"
+    say "staged; nothing published (scripts/publish.sh publish publishes ${crates[*]})"
     ;;
   dry-run)
-    step "cargo publish --dry-run -p menger-tickets-api"
-    cargo publish --dry-run -p menger-tickets-api
-    step "cargo publish --dry-run -p menger --features embedded-app"
-    cargo publish --dry-run -p menger --features embedded-app
+    step "cargo publish --dry-run ${crates[*]} ${features[*]}"
+    cargo publish --dry-run "${crates[@]}" "${features[@]}"
     ;;
   publish)
-    step "cargo publish -p menger-tickets-api"
-    cargo publish -p menger-tickets-api
-    step "cargo publish -p menger --features embedded-app"
-    cargo publish -p menger --features embedded-app
-    say "published menger-tickets-api and menger from $commit"
+    step "cargo publish ${crates[*]} ${features[*]}"
+    cargo publish "${crates[@]}" "${features[@]}"
+    say "published ${crates[*]} from $commit"
     ;;
 esac
