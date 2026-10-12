@@ -1,8 +1,11 @@
-// menger.sh — MENGER-7. Progressive enhancement only: the page reads whole
-// without this file. It (1) points the Log in links at the app named by
-// <html data-app-url>, (2) animates the Menger carpet in the hero, (3)
-// reveals sections on scroll, (4) offers the visitor's OS first in the
-// Download section, (5) adds copy buttons to commands. No requests.
+// menger.sh — MENGER-7, MENGER-10. Progressive enhancement only: the page
+// reads whole without this file. It (1) points the Log in links at the app
+// named by <html data-app-url>, (2) animates the Menger carpet (principle 1),
+// (3) reveals sections on scroll, (4) offers the visitor's OS first in the
+// Download section, (5) adds copy buttons to commands, (6) plays the clips
+// beside the principles while they are on screen, (7) runs the tour's
+// chapters. Shared by the landing page and guide/. It requests nothing but
+// the page's own media, and only as it nears the screen.
 (function () {
   "use strict";
   var root = document.documentElement;
@@ -274,8 +277,11 @@
       b.type = "button"; b.className = "copy"; b.textContent = "Copy";
       b.setAttribute("aria-label", "Copy these commands");
       b.addEventListener("click", function () {
-        var text = pre.querySelector("code").textContent
-          .split("\n").filter(function (l) { return !/^\s*#/.test(l); })
+        // the commands only: no comments, no sample output
+        var code = pre.querySelector("code").cloneNode(true);
+        code.querySelectorAll(".o, .c").forEach(function (n) { n.remove(); });
+        var text = code.textContent
+          .split("\n").filter(function (l) { return l.trim() && !/^\s*#/.test(l); })
           .map(function (l) { return l.replace(/\s+#.*$/, ""); }).join("\n");
         navigator.clipboard.writeText(text).then(function () {
           b.textContent = "Copied";
@@ -285,4 +291,85 @@
       pre.appendChild(b);
     });
   }
+
+  // (6) the principles' clips ------------------------------------------------
+  // In the HTML each has controls and no poster (a poster is fetched at once,
+  // wherever the video is): here the poster is set as it nears the screen,
+  // and with motion allowed it plays, muted and looping, while on screen —
+  // without controls. Under reduced motion it keeps its controls and waits.
+  var clips = Array.prototype.slice.call(document.querySelectorAll("video[data-auto]"));
+  function near(el, fn, margin) {
+    if (!("IntersectionObserver" in window)) { fn(true); return; }
+    new IntersectionObserver(function (es) {
+      es.forEach(function (e) { fn(e.isIntersecting); });
+    }, { rootMargin: margin || "0px" }).observe(el);
+  }
+  function poster(v) {
+    var p = v.getAttribute("data-poster");
+    if (p && !v.getAttribute("poster")) v.setAttribute("poster", p);
+  }
+  function play(v) {
+    var p = v.play();
+    if (p && p.catch) p.catch(function () { v.controls = true; });
+  }
+  clips.forEach(function (v) {
+    near(v, function (on) { if (on) poster(v); }, "600px 0px");
+    if (reduce.matches) return;
+    v.controls = false;
+    near(v, function (on) {
+      v.inView = on;
+      if (on && !document.hidden) play(v); else v.pause();
+    }, "0px 0px -15% 0px");
+  });
+
+  // (7) the tour --------------------------------------------------------------
+  // The chapters are links to the clips (what a reader without JavaScript
+  // follows); here a chapter loads its clip into the stage. With motion
+  // allowed the stage plays while on screen and moves on to the next chapter
+  // when a clip ends, back to the first after the last.
+  var stageV = document.getElementById("tour-video");
+  var chapters = Array.prototype.slice.call(document.querySelectorAll(".chapters a[data-clip]"));
+  var title = document.getElementById("tour-title"), cap = document.getElementById("tour-cap");
+  var current = 0, tourOn = false;
+  function load(i, autoplay) {
+    var a = chapters[i], name = a.getAttribute("data-clip");
+    current = i;
+    chapters.forEach(function (c, j) { c.setAttribute("aria-current", j === i ? "true" : "false"); });
+    stageV.setAttribute("poster", "media/" + name + ".poster.webp");
+    stageV.setAttribute("width", a.getAttribute("data-w"));
+    stageV.setAttribute("height", a.getAttribute("data-h"));
+    stageV.querySelectorAll("source").forEach(function (src) {
+      src.src = /webm/.test(src.type) ? "media/" + name + ".webm" : "media/" + name + ".mp4";
+    });
+    stageV.load();
+    if (title) title.textContent = a.querySelector("b").textContent;
+    if (cap) cap.innerHTML = a.getAttribute("data-cap");
+    if (autoplay) play(stageV);
+  }
+  if (stageV && chapters.length) {
+    chapters.forEach(function (a, i) {
+      a.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        load(i, true); // a click is the reader's own: it plays, reduced motion or not
+      });
+    });
+    if (!reduce.matches) {
+      stageV.controls = false;
+      stageV.addEventListener("click", function () { if (stageV.paused) play(stageV); else stageV.pause(); });
+      stageV.addEventListener("ended", function () { load((current + 1) % chapters.length, tourOn); });
+      near(stageV, function (on) {
+        stageV.inView = on;
+        tourOn = on && !document.hidden;
+        if (tourOn) play(stageV); else stageV.pause();
+      }, "0px 0px -20% 0px");
+    }
+  }
+  // a hidden tab plays nothing; back in view, what is on screen resumes
+  document.addEventListener("visibilitychange", function () {
+    var all = clips.concat(stageV ? [stageV] : []);
+    if (document.hidden) { tourOn = false; all.forEach(function (v) { v.pause(); }); return; }
+    if (reduce.matches) return;
+    all.forEach(function (v) { if (v.inView) play(v); });
+    tourOn = !!(stageV && stageV.inView);
+  });
 })();

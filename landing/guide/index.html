@@ -1,0 +1,360 @@
+<!doctype html>
+<!-- menger.sh/guide — MENGER-10. The reference that MENGER-7 put on the
+     front page, now its own page: same style.css and main.js as the landing
+     page (one level up). The front page makes the case; this page is the
+     manual. Log in links follow <html data-app-url>, as on the front page. -->
+<html lang="en" data-app-url="https://app.menger.sh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The menger guide</title>
+<meta name="description" content="How to use menger: shortcodes and kinds, signing in, the board and the lifecycle, filters and keys, inputs, comments, the command line, the desktop app and running your own.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#fbfbf9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101014" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../style.css">
+<script src="../main.js" defer></script>
+</head>
+<body class="guide-page">
+<a class="skip" href="#main">Skip to the guide</a>
+
+<header class="top">
+  <div class="wrap top-row">
+    <a class="brand" href="../" aria-label="menger, the front page">
+      <svg class="mark" viewBox="0 0 27 27" aria-hidden="true" focusable="false"><path d="M0 0h27v3h-27zM0 3h3v3h-3zM6 3h6v3h-6zM15 3h6v3h-6zM24 3h3v3h-3zM0 6h27v3h-27zM0 9h9v3h-9zM18 9h9v3h-9zM0 12h3v3h-3zM6 12h3v3h-3zM18 12h3v3h-3zM24 12h3v3h-3zM0 15h9v3h-9zM18 15h9v3h-9zM0 18h27v3h-27zM0 21h3v3h-3zM6 21h6v3h-6zM15 21h6v3h-6zM24 21h3v3h-3zM0 24h27v3h-27z"/></svg>
+      <span>menger</span>
+    </a>
+    <nav class="top-nav" aria-label="Sections">
+      <a href="../#tour">Tour</a>
+      <a href="../#principles">Principles</a>
+      <a href="../#get">Get it</a>
+      <a href="./" aria-current="page">Guide</a>
+    </nav>
+    <a class="btn btn-primary btn-small" data-login href="https://app.menger.sh/login">Log in</a>
+  </div>
+</header>
+
+<main id="main">
+<div class="wrap guide">
+
+<header class="guide-head">
+  <p class="eyebrow">The guide</p>
+  <h1>How to use menger</h1>
+  <p class="lede">Everything the front page shows, in the order you meet it.
+    Nine parts; each stands on its own.</p>
+</header>
+
+<nav class="toc" aria-label="Parts of the guide">
+  <ol>
+    <li><a href="#what">What it is</a></li>
+    <li><a href="#sign-in">Signing in</a></li>
+    <li><a href="#board">The board and a ticket</a></li>
+    <li><a href="#find">Finding things</a></li>
+    <li><a href="#inputs">Inputs</a></li>
+    <li><a href="#comments">Comments and notes</a></li>
+    <li><a href="#cli">From the command line</a></li>
+    <li><a href="#download">Desktop app</a></li>
+    <li><a href="#self-host">Run your own</a></li>
+  </ol>
+</nav>
+
+<section class="step" id="what" aria-labelledby="what-h">
+  <p class="num" aria-hidden="true">1</p>
+  <h2 id="what-h">What it is</h2>
+  <p>menger tracks a plan as a tree of tickets. People write it; people and
+    agents carry it out. Every ticket lives in a <strong>shortcode</strong>:
+    <code>OFFLINE-6</code> is the sixth ticket of <code>OFFLINE</code>. A
+    shortcode starts with a root — a scope, or a doc — and shortcodes nest
+    under one another, so all of a team's work is one tree.</p>
+  <p>Every ticket has a <strong>kind</strong>:</p>
+  <ul class="kinds">
+    <li><span class="kind k-scope">scope</span> breaks into children: a branch of the plan.</li>
+    <li><span class="kind k-build">build</span> makes something that did not exist.</li>
+    <li><span class="kind k-execution">execution</span> carries out a procedure, like a rollout.</li>
+    <li><span class="kind k-gap">gap</span> a defect in what shipped.</li>
+    <li><span class="kind k-spike">spike</span> answers a question.</li>
+    <li><span class="kind k-doc">doc</span> not work: a finding, a manifest, a reference. It has no lifecycle.</li>
+  </ul>
+  <p><strong>A ticket's outputs are tickets.</strong> A spike's answer, a
+    report or a checkpoint is filed as a child of the ticket that produced it,
+    so the tree shows where every result came from. Bodies are markdown and
+    may hold diagrams, HTML and live components.</p>
+</section>
+
+<section class="step" id="sign-in" aria-labelledby="sign-in-h">
+  <p class="num" aria-hidden="true">2</p>
+  <h2 id="sign-in-h">Signing in</h2>
+  <ol class="steps">
+    <li><strong>Press <a data-login href="https://app.menger.sh/login">Log in</a>.</strong>
+      You land on menger's own sign-in page.</li>
+    <li><strong>Choose how.</strong> Type your email and receive a code, or
+      continue with Google, GitHub or Apple. A company email goes to your
+      company's single sign-on, found by its domain. If you have turned on an
+      authenticator app, it asks for that code too.</li>
+    <li><strong>The first time, wait for a role.</strong> Signing in proves who
+      you are; menger's members decide what you see. Until an admin grants you
+      a role you see nothing, and you are listed as waiting on the admin's
+      <code>#/members</code> page.</li>
+  </ol>
+  <table class="roles">
+    <caption>Roles, each held on a shortcode (and everything under it) or on everything</caption>
+    <thead><tr><th scope="col">Role</th><th scope="col">May</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">viewer</th><td>read under the scope, and comment</td></tr>
+      <tr><th scope="row">editor</th><td>also create and change tickets, and answer inputs</td></tr>
+      <tr><th scope="row">admin</th><td>also grant and revoke roles on the scope</td></tr>
+    </tbody>
+  </table>
+  <p class="note">A sign-in lasts 12 hours by default. Signing out ends the
+    session, and its open tabs stop answering.</p>
+</section>
+
+<section class="step" id="board" aria-labelledby="board-h">
+  <p class="num" aria-hidden="true">3</p>
+  <h2 id="board-h">The board and a ticket</h2>
+  <p>The app opens on the <strong>board</strong>: every ticket you can read,
+    one line each, beside the <strong>nav</strong> — the tree of shortcodes,
+    each with its done/total. Open a ticket for its page: status, kind,
+    parent, blockers, body, children and the commits that finished it. A
+    change made anywhere appears on your screen as it happens.</p>
+  <figure class="shot">
+    <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>a ticket page</span></div>
+    <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="../media/ticket.dark.1200.avif"><source type="image/avif" srcset="../media/ticket.light.1200.avif"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="../media/ticket.dark.1200.webp"><img src="../media/ticket.light.1200.webp" width="1200" height="750" alt="A ticket page: OFFLINE-6 In Review, its kind, parent and shortcode, the commit that finished it, the tickets it waits on and the ones it unlocks, and a diagram in its body." loading="lazy" decoding="async"></picture>
+  </figure>
+
+  <h3>The lifecycle</h3>
+  <ol class="lifecycle">
+    <li><span class="chip st-pending">Pending</span><span>Written down, not yet approved. Work does not start; a person promotes it.</span></li>
+    <li><span class="chip st-ready">Ready</span><span>Approved. It can start once everything it waits on is done.</span></li>
+    <li><span class="chip st-coding">Coding</span><span>Someone has started. Set the moment work begins, so nothing is claimed twice.</span></li>
+    <li><span class="chip st-in-review">In Review</span><span>Finished and committed; waiting to be merged.</span></li>
+    <li><span class="chip st-complete">Complete</span><span>Merged. Done.</span></li>
+  </ol>
+  <p class="beside">Beside the line:
+    <span class="chip st-superseded">Superseded</span> replaced by another ticket ·
+    <span class="chip st-canceled">Canceled</span> will not be done ·
+    <span class="chip st-blocked">Blocked</span> a marker ·
+    <span class="chip st-idea">Idea</span> parked ·
+    <span class="chip st-epic">Epic</span> a scope's status ·
+    <span class="chip st-doc">Doc</span> a doc's only status.</p>
+
+  <h3>What waits on what</h3>
+  <p>A ticket names the tickets it is <strong>blocked by</strong>. A blocker
+    is satisfied when it is Complete, Superseded or Canceled. The
+    <strong>ready set</strong> is every Ready ticket whose blockers are all
+    satisfied: what can start now. The <strong>wave board</strong>
+    (<code>#/waves/&lt;SHORTCODE&gt;</code>) lays a shortcode's work out in
+    order — wave 1 can start now, wave 2 once wave 1 lands — and moves the
+    cards as the work moves.</p>
+</section>
+
+<section class="step" id="find" aria-labelledby="find-h">
+  <p class="num" aria-hidden="true">4</p>
+  <h2 id="find-h">Finding things</h2>
+  <p><strong>Filters</strong> reach every view. The header's
+    <em>Filter</em> button (<kbd>F</kbd>) filters everything; each view —
+    board, wave board, nav, inputs — has its own (<kbd>f</kbd>). Pick
+    categories from the menu, or type the filter language:</p>
+  <figure class="shot">
+    <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>the board's filter menu</span></div>
+    <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="../media/filter.dark.1200.avif"><source type="image/avif" srcset="../media/filter.light.1200.avif"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="../media/filter.dark.1200.webp"><img src="../media/filter.light.1200.webp" width="1200" height="750" alt="The board's filter menu, open, with rea typed: it offers Ready, and Status: Ready with four tickets." loading="lazy" decoding="async"></picture>
+  </figure>
+  <ul class="filters">
+    <li><code>ready and kind build</code> <span>builds that can start</span></li>
+    <li><code>status in (Pending, Ready)</code> <span>not started</span></li>
+    <li><code>category in (active, review)</code> <span>in flight</span></li>
+    <li><code>not category done</code> <span>everything open</span></li>
+    <li><code>under OFFLINE-6</code> <span>a ticket and everything below it</span></li>
+    <li><code>ready and kind build and in SYNC</code> <span>combined</span></li>
+  </ul>
+  <p>A filter rides the page's address, so a link brings it back;
+    <em>Saved ▾</em> keeps one under a name for everyone. Right-click any tag —
+    a shortcode, a status, a kind — to filter by it.</p>
+  <p><strong>Search</strong> looks inside titles and bodies: every word
+    required, prefixes and typos forgiven, best match first. The
+    <strong>palette</strong> (<kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd>,
+    <kbd>⌘</kbd><kbd>K</kbd> on a Mac) jumps to a ticket by id or title and
+    shows matching passages below.</p>
+  <figure class="shot">
+    <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>the palette</span></div>
+    <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="../media/palette.dark.1200.avif"><source type="image/avif" srcset="../media/palette.light.1200.avif"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="../media/palette.dark.1200.webp"><img src="../media/palette.light.1200.webp" width="1200" height="750" alt="The palette over the board with photo typed: two tickets match by title, and two more match in their bodies, each with the passage that matched." loading="lazy" decoding="async"></picture>
+  </figure>
+
+  <h3>Keys</h3>
+  <table class="keys">
+    <caption>The whole app works from the keyboard; <kbd>?</kbd> shows this list in the app</caption>
+    <tbody>
+      <tr><th scope="row"><kbd>/</kbd> or <kbd>Ctrl</kbd>+<kbd>K</kbd></th><td>jump to a ticket (<kbd>⌘</kbd><kbd>K</kbd> on a Mac)</td></tr>
+      <tr><th scope="row"><kbd>j</kbd> / <kbd>↓</kbd></th><td>next row (nav tree, board)</td></tr>
+      <tr><th scope="row"><kbd>k</kbd> / <kbd>↑</kbd></th><td>previous row</td></tr>
+      <tr><th scope="row"><kbd>l</kbd> / <kbd>→</kbd></th><td>expand a group, or step into it</td></tr>
+      <tr><th scope="row"><kbd>h</kbd> / <kbd>←</kbd></th><td>collapse a group, or step out to it</td></tr>
+      <tr><th scope="row"><kbd>Home</kbd> / <kbd>End</kbd></th><td>first / last row</td></tr>
+      <tr><th scope="row"><kbd>Enter</kbd></th><td>open the focused ticket</td></tr>
+      <tr><th scope="row"><kbd>g</kbd> <kbd>h</kbd></th><td>go to the board</td></tr>
+      <tr><th scope="row"><kbd>f</kbd></th><td>filter this view</td></tr>
+      <tr><th scope="row"><kbd>F</kbd></th><td>filter every view</td></tr>
+      <tr><th scope="row"><kbd>/</kbd> <code>filter SC</code></th><td>the global filter becomes a shortcode's tree</td></tr>
+      <tr><th scope="row"><kbd>a</kbd></th><td>annotation mode: click anything to comment on it</td></tr>
+      <tr><th scope="row"><kbd>Shift</kbd>+<kbd>F10</kbd></th><td>the focused ticket's menu</td></tr>
+      <tr><th scope="row"><kbd>?</kbd></th><td>the list of keys</td></tr>
+      <tr><th scope="row"><kbd>Esc</kbd></th><td>close the palette or the list; leave annotation mode</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="step" id="inputs" aria-labelledby="inputs-h">
+  <p class="num" aria-hidden="true">5</p>
+  <h2 id="inputs-h">Inputs: questions asked inside a ticket</h2>
+  <p>A ticket can ask its owner something and keep the answer: a
+    <strong>decision</strong> (pick one), a <strong>multi</strong> (tick any)
+    or a <strong>text</strong> reply. You answer on the ticket's own page;
+    every answer is kept with its history. Agents ask; the owner answers.</p>
+  <figure class="shot">
+    <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>a decision in OFFLINE-7</span></div>
+    <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="../media/decision.dark.1200.avif"><source type="image/avif" srcset="../media/decision.light.1200.avif"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="../media/decision.dark.1200.webp"><img src="../media/decision.light.1200.webp" width="1200" height="750" alt="A decision inside a ticket: the question, three options each with its cost and benefit, the recommended one picked, and the Submit button." loading="lazy" decoding="async"></picture>
+  </figure>
+  <p>Whoever asked acts on the answer, then closes the input, which freezes
+    it: <em>DECIDED</em>. <code>#/inputs</code> lists everything waiting on
+    you across every ticket; once you have opened it, the header counts what
+    is still open. Answering needs the editor role.</p>
+</section>
+
+<section class="step" id="comments" aria-labelledby="comments-h">
+  <p class="num" aria-hidden="true">6</p>
+  <h2 id="comments-h">Comments and notes</h2>
+  <p><strong>Comments</strong> are a reader's notes on the app itself. Press
+    <kbd>a</kbd> (or <em>Annotate</em> in the header): every element is
+    outlined — inside ticket bodies too — and a click opens a comment box
+    right there. Numbered pins mark what has open comments, each with
+    <em>Resolve</em>. <code>#/comments</code> lists them all, each linking back
+    to its spot; a ticket's page counts its open ones.</p>
+  <figure class="shot">
+    <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>annotation mode</span></div>
+    <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="../media/annotate.dark.1200.avif"><source type="image/avif" srcset="../media/annotate.light.1200.avif"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="../media/annotate.dark.1200.webp"><img src="../media/annotate.light.1200.webp" width="1200" height="750" alt="Annotation mode on a ticket page: every element outlined, the title picked, and a comment box open beside it with a comment typed." loading="lazy" decoding="async"></picture>
+  </figure>
+  <p><strong>Notes</strong> are thoughts written down before they are
+    tickets: dated, untitled, on no shortcode. When one is ready, upgrade it
+    and it becomes a ticket, its text the body.</p>
+</section>
+
+<section class="step" id="cli" aria-labelledby="cli-h">
+  <p class="num" aria-hidden="true">7</p>
+  <h2 id="cli-h">From the command line</h2>
+  <p>Everything menger does is a Plexus RPC method — there is no side door,
+    so the app, scripts and agents make the same calls.
+    <a href="https://github.com/hypermemetic-ai/synapse">synapse</a> is the CLI
+    for any Plexus backend. Point it at your server's WebSocket port (4455 by
+    default). Parameters are flags; <code>&lt;method&gt; --help</code> lists
+    them.</p>
+<pre class="cmd"><code>synapse -P 4455 menger tickets health
+synapse -P 4455 menger tickets list --filter 'blocked' --summary true --limit 20
+synapse -P 4455 menger tickets ready_set --filter 'kind build' --summary true
+synapse -P 4455 menger tickets search --query 'outbox replay'
+synapse -P 4455 menger tickets get --id OFFLINE-6
+synapse -P 4455 menger tickets watch                     # every change, live</code></pre>
+<pre class="cmd"><code>synapse -P 4455 menger tickets create --epic HOME --kind scope --title 'Home'
+synapse -P 4455 menger tickets create --epic HOME --title 'Fix the gate' --kind build
+synapse -P 4455 menger tickets set_status --id HOME-2 --status Ready
+synapse -P 4455 menger tickets link_commits --id HOME-2 --commits 77df9a0</code></pre>
+<pre class="cmd"><code>synapse -P 4455 menger tickets inputs --state open
+synapse -P 4455 menger tickets answer --ticket OFFLINE-7 --input policy \
+  --value.type choice --value.option merge --rationale 'crews edit different fields'
+synapse -P 4455 menger comments list --state open
+synapse -P 4455 menger notes add --body 'the palette should remember its last query'
+synapse -P 4455 menger notes upgrade --id 1 --epic HOME</code></pre>
+  <p class="note">The first ticket of a shortcode must be a scope or a doc.
+    Global options (<code>-P</code>, <code>-j</code> for JSON) go before
+    <code>menger</code>.</p>
+</section>
+
+<section class="step" id="download" aria-labelledby="download-h">
+  <p class="num" aria-hidden="true">8</p>
+  <h2 id="download-h">Desktop app</h2>
+  <p>menger for the desktop starts with a choice: <strong>Local</strong> —
+    your tickets on this computer, a menger running inside the app, nothing
+    leaving the machine — or <strong>Remote</strong>, a menger server at an
+    address you give (such as <code>https://app.menger.sh</code>). Once
+    installed, <strong>it updates itself</strong>: it checks for a new version
+    when it starts, and asks before installing.</p>
+  <p class="actions dl-primary">
+    <a class="btn btn-primary" id="dl-main" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">Download menger</a>
+    <span class="dl-hint" id="dl-hint">Every build is on the latest release page.</span>
+  </p>
+  <div class="oses">
+    <article class="os" data-os="linux" aria-labelledby="os-linux">
+      <h3 id="os-linux">Linux</h3>
+      <ul>
+        <li><b>AppImage</b> — runs on most distributions: <code>chmod +x menger_*_amd64.AppImage</code>, then run it</li>
+        <li><b>.deb</b> — Debian, Ubuntu</li>
+        <li><b>.rpm</b> — Fedora, openSUSE</li>
+      </ul>
+      <a class="btn btn-ghost btn-small" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">Linux builds</a>
+    </article>
+    <article class="os" data-os="mac" aria-labelledby="os-mac">
+      <h3 id="os-mac">macOS</h3>
+      <ul>
+        <li><b>Apple Silicon</b> — <code>menger_*_aarch64.dmg</code></li>
+        <li><b>Intel</b> — <code>menger_*_x64.dmg</code></li>
+      </ul>
+      <p class="warn">First open: macOS says the developer cannot be verified.
+        Control-click the app, choose <em>Open</em>, then <em>Open</em> again
+        (or <em>System Settings → Privacy &amp; Security → Open Anyway</em>).</p>
+      <a class="btn btn-ghost btn-small" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">macOS builds</a>
+    </article>
+    <article class="os" data-os="windows" aria-labelledby="os-win">
+      <h3 id="os-win">Windows</h3>
+      <ul>
+        <li><b>Installer</b> — <code>menger_*_x64-setup.exe</code></li>
+        <li><b>MSI</b> — <code>menger_*_x64_en-US.msi</code>, for managed installs</li>
+      </ul>
+      <p class="warn">First run: SmartScreen says it protected your PC. Choose
+        <em>More info</em>, then <em>Run anyway</em>.</p>
+      <a class="btn btn-ghost btn-small" href="https://github.com/hypermemetic-ai/menger-desktop/releases/latest">Windows builds</a>
+    </article>
+  </div>
+  <p class="note">The builds are signed for the self-updater, not yet by
+    Apple or Microsoft — hence the warning on first open. Mobile apps are
+    coming.</p>
+</section>
+
+<section class="step" id="self-host" aria-labelledby="self-host-h">
+  <p class="num" aria-hidden="true">9</p>
+  <h2 id="self-host-h">Run your own</h2>
+  <p>menger is one binary with the web app built in and a SQLite file as its
+    system of record. With Rust installed:</p>
+<pre class="cmd"><code>cargo install menger --features embedded-app
+menger --db-path ~/menger/tickets.db
+# the app       http://127.0.0.1:4456/
+# WebSocket     ws://127.0.0.1:4455   (synapse -P 4455 …)
+# REST + SSE    http://127.0.0.1:4457 (--no-rest turns it off)</code></pre>
+  <p>Other ports: <code>--port</code> (WebSocket), <code>--shell-port</code>
+    (the app), <code>--rest-port</code>. Open the app in two windows, change a
+    status in one, and watch the other follow. With no
+    <code>--auth-provider</code> there is no login: everyone who can reach it
+    can use it. <code>menger --help</code> lists the sign-in flags
+    (<code>--auth-provider</code>, <code>--require-login</code>,
+    <code>--admin</code>, <code>--public-url</code>). Before a deploy,
+    <code>menger --verify-derived --db-path …</code> checks the file.</p>
+</section>
+
+</div>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-row">
+    <p class="foot-brand"><svg class="mark" viewBox="0 0 27 27" aria-hidden="true" focusable="false"><path d="M0 0h27v3h-27zM0 3h3v3h-3zM6 3h6v3h-6zM15 3h6v3h-6zM24 3h3v3h-3zM0 6h27v3h-27zM0 9h9v3h-9zM18 9h9v3h-9zM0 12h3v3h-3zM6 12h3v3h-3zM18 12h3v3h-3zM24 12h3v3h-3zM0 15h9v3h-9zM18 15h9v3h-9zM0 18h27v3h-27zM0 21h3v3h-3zM6 21h6v3h-6zM15 21h6v3h-6zM24 21h3v3h-3zM0 24h27v3h-27z"/></svg> menger — MIT licence</p>
+    <nav aria-label="Elsewhere">
+      <ul class="foot-links">
+        <li><a href="../">menger.sh</a></li>
+        <li><a href="https://github.com/hypermemetic-ai/menger">menger on GitHub</a></li>
+        <li><a href="https://github.com/hypermemetic-ai/menger-desktop">menger-desktop</a></li>
+        <li><a href="https://crates.io/crates/menger">crates.io</a></li>
+        <li><a data-login href="https://app.menger.sh/login">Log in</a></li>
+      </ul>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>
