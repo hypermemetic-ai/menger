@@ -22,21 +22,39 @@ use std::str::FromStr;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::WsClientBuilder;
-use menger_tickets_api::members::{scope_of, Role};
 use serde_json::{json, Value};
 
-/// The cookie the checkbox sets: this browser's sign-in goes to plexus-idp.
-pub const COOKIE: &str = "menger_dev_login";
+use crate::access::LoginAccess;
 
 /// One seeded user: `name=role@SCOPE[,role@SCOPE…]`, or `name=` for one
-/// with no grant at all (who waits for an admin).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DevUser {
+/// with no grant at all (who waits for an admin). Roles and scopes in the
+/// app's vocabulary ([`LoginAccess::Role`], [`LoginAccess::scope_of`]).
+pub struct DevUser<A: LoginAccess> {
     pub name: String,
-    pub grants: Vec<(Role, String)>,
+    pub grants: Vec<(A::Role, String)>,
 }
 
-impl FromStr for DevUser {
+impl<A: LoginAccess> Clone for DevUser<A> {
+    fn clone(&self) -> Self {
+        Self { name: self.name.clone(), grants: self.grants.clone() }
+    }
+}
+
+impl<A: LoginAccess> fmt::Debug for DevUser<A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DevUser").field("name", &self.name).field("grants", &self.grants).finish()
+    }
+}
+
+impl<A: LoginAccess> PartialEq for DevUser<A> {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.grants == other.grants
+    }
+}
+
+impl<A: LoginAccess> Eq for DevUser<A> {}
+
+impl<A: LoginAccess> FromStr for DevUser<A> {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (name, grants) = s.split_once('=').ok_or_else(|| format!("`{s}`: a dev user is name=role@SCOPE[,role@SCOPE…]"))?;
@@ -47,14 +65,14 @@ impl FromStr for DevUser {
             .filter(|g| !g.is_empty())
             .map(|g| {
                 let (role, scope) = g.split_once('@').ok_or_else(|| format!("`{g}`: a grant is role@SCOPE (e.g. viewer@IDENTITY, admin@*)"))?;
-                Ok((role.parse::<Role>()?, scope_of(scope)?))
+                Ok((role.parse::<A::Role>()?, A::scope_of(scope)?))
             })
             .collect::<Result<_, String>>()?;
         Ok(Self { name, grants })
     }
 }
 
-impl fmt::Display for DevUser {
+impl<A: LoginAccess> fmt::Display for DevUser<A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let g: Vec<String> = self.grants.iter().map(|(r, s)| format!("{r}@{s}")).collect();
         write!(f, "{}={}", self.name, g.join(","))
@@ -74,8 +92,7 @@ pub fn username(s: &str) -> Result<String, String> {
 }
 
 /// What the dev sign-in is configured with.
-#[derive(Debug, Clone)]
-pub struct DevLogin {
+pub struct DevLogin<A: LoginAccess> {
     /// The `--auth-provider` it signs in through (plexus-idp's name).
     pub provider: String,
     /// The password every dev user has.
@@ -83,12 +100,24 @@ pub struct DevLogin {
     /// plexus-idp's Plexus socket, where accounts are registered.
     pub idp_ws: String,
     /// The seeded roster, in the order the page lists it.
-    pub users: Vec<DevUser>,
+    pub users: Vec<DevUser<A>>,
 }
 
-impl DevLogin {
+impl<A: LoginAccess> Clone for DevLogin<A> {
+    fn clone(&self) -> Self {
+        Self { provider: self.provider.clone(), password: self.password.clone(), idp_ws: self.idp_ws.clone(), users: self.users.clone() }
+    }
+}
+
+impl<A: LoginAccess> fmt::Debug for DevLogin<A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DevLogin").field("provider", &self.provider).field("idp_ws", &self.idp_ws).field("users", &self.users).finish_non_exhaustive()
+    }
+}
+
+impl<A: LoginAccess> DevLogin<A> {
     /// The seeded user of that name.
-    pub fn user(&self, name: &str) -> Option<&DevUser> {
+    pub fn user(&self, name: &str) -> Option<&DevUser<A>> {
         self.users.iter().find(|u| u.name == name)
     }
 
@@ -126,7 +155,7 @@ impl DevLogin {
 }
 
 /// What a roster entry's grants read as on the page.
-pub fn describe(grants: &[(Role, String)]) -> String {
+pub fn describe<R: fmt::Display>(grants: &[(R, String)]) -> String {
     if grants.is_empty() {
         return "no access — waits for an admin".into();
     }
@@ -140,19 +169,22 @@ pub fn describe(grants: &[(Role, String)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::access::test_access::{TestAccess, TestRole};
+
+    type User = DevUser<TestAccess>;
 
     #[test]
     fn a_dev_user_names_its_grants() {
-        let u: DevUser = "Mixed=editor@ought, viewer@PLEXUS".parse().unwrap();
+        let u: User = "Mixed=editor@ought, viewer@PLEXUS".parse().unwrap();
         assert_eq!(u.name, "mixed");
-        assert_eq!(u.grants, vec![(Role::Editor, "OUGHT".into()), (Role::Viewer, "PLEXUS".into())]);
+        assert_eq!(u.grants, vec![(TestRole::Editor, "OUGHT".into()), (TestRole::Viewer, "PLEXUS".into())]);
         assert_eq!(u.to_string(), "mixed=editor@OUGHT,viewer@PLEXUS");
-        let nobody: DevUser = "nobody=".parse().unwrap();
+        let nobody: User = "nobody=".parse().unwrap();
         assert!(nobody.grants.is_empty());
         assert_eq!(describe(&nobody.grants), "no access — waits for an admin");
-        assert_eq!(describe(&"a=admin@*".parse::<DevUser>().unwrap().grants), "admin everywhere");
+        assert_eq!(describe(&"a=admin@*".parse::<User>().unwrap().grants), "admin everywhere");
         for bad in ["noequals", "a=owner@X", "a=viewer", "a b=viewer@X", "=viewer@X", "a=viewer@under X"] {
-            assert!(bad.parse::<DevUser>().is_err(), "{bad}");
+            assert!(bad.parse::<User>().is_err(), "{bad}");
         }
     }
 }

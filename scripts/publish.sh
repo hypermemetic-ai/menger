@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# DIST-3: publish menger to crates.io — `plexus-shell` (SCAFFOLD-5), then
-# `menger-tickets-api`, then `menger` with the app's build inside it (the
+# DIST-3: publish menger to crates.io — `plexus-shell` (SCAFFOLD-5),
+# `menger-tickets-api`, `plexus-login` (SCAFFOLD-9), then `menger` with the app's build inside it (the
 # `embedded-app` feature embeds it). A crate whose version is already on
-# crates.io is skipped, saying so (menger-tickets-api is unchanged at 0.5.0).
+# crates.io is skipped, saying so .
 #
 #   scripts/publish.sh stage     build the app, stage the package, list it —
 #                                publishes nothing (a dirty tree is allowed:
@@ -25,7 +25,7 @@
 #    so the package carries what `include` names. The cost: the published
 #    crate has no .cargo_vcs_info.json (the commit is in this script's
 #    output instead).
-# 3. One `cargo publish -p plexus-shell -p menger-tickets-api -p menger
+# 3. One `cargo publish -p plexus-shell -p menger-tickets-api -p plexus-login -p menger
 #    --features menger/embedded-app` over the crates not yet on crates.io.
 #    Cargo publishes them in dependency order and, in a dry run, verifies
 #    each against the others' packages, so menger's verification resolves a
@@ -117,7 +117,7 @@ published() {
 }
 need curl
 crates=()
-for pair in plexus-shell:plexus-shell menger-tickets-api:tickets-api menger:.; do
+for pair in plexus-shell:plexus-shell menger-tickets-api:tickets-api plexus-login:plexus-login menger:.; do
   name=${pair%%:*}
   version=$(version_of "$STAGE/${pair#*:}")
   if published "$name" "$version"; then

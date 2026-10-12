@@ -70,11 +70,11 @@ async fn start() -> u16 {
     let port = free_port().await;
     let providers: Vec<Provider> = vec!["key".parse().unwrap()];
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let sessions = Arc::new(Sessions::new(3600));
-    let access = Access::with_login(sessions.clone(), true, vec![principal(&BOSS)]).minting(sessions.clone());
+    let sessions = Arc::new(Sessions::new(3600, &menger::login_names()));
+    let access = Access::with_login(menger::session_table(&sessions), true, vec![principal(&BOSS)]).minting(menger::session_table(&sessions));
     let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), Vec::new(), access.clone()).await.unwrap();
     let carriers = login::boundary_at(&providers, &login::socket_urls(port, None)).unwrap();
-    let gate = Arc::new(Gate::new(sessions, carriers).noticing(access));
+    let gate = Arc::new(Gate::new(sessions, carriers).noticing(menger::MengerAccess(access)));
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
     tokio::spawn(async move {
         let _keep = dir;

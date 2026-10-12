@@ -1,12 +1,10 @@
 use clap::Parser;
 use menger::store::{SeedShape, SeedSpec, Store, Verdict};
-use menger::login::{self, LoginButton, Provider};
-use menger::sessions::{Gate, Sessions};
-use menger::web_login::{Login, LoginConfig};
+use menger::login::{LoginButton, Provider};
+use menger::wiring::{LoginOptions, Wiring};
 use menger_tickets_api::access::Access;
-use menger::auth_backend::{BrowserLogin, MengerAuth};
-use menger::{build_rpc_login, default_db_path, local, shell};
-use plexus_transport::{ProtectedResource, RestHttpConfig, RouteFn, TransportServer};
+use menger::{build_rpc_login, default_db_path, local, shell, MengerAccess};
+use plexus_transport::{RestHttpConfig, RouteFn, TransportServer};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -240,35 +238,39 @@ async fn main() -> anyhow::Result<()> {
     });
     // IDENTITY-14: the login boundary is settled before anything opens, so
     // a bad --auth-provider stops startup rather than serving without it.
-    if args.require_login {
-        if args.auth_provider.is_empty() {
-            anyhow::bail!("--require-login needs at least one --auth-provider to log in with");
-        }
-        if !args.no_rest && !args.stdio {
-            anyhow::bail!(
-                "--require-login closes the WebSocket, but the REST bridge cannot carry an \
-                 identity yet and would stay open: add --no-rest"
-            );
-        }
+    // SCAFFOLD-9: plexus-login wires it from the flags — the providers'
+    // adapters (IDENTITY-42: a key proof names this socket), the session
+    // table (IDENTITY-38: its cookie named for this shell, so prod and test
+    // on one host keep apart), the page, the gate and the auth backend.
+    let wiring = Wiring::new(LoginOptions {
+        providers: args.auth_provider.clone(),
+        buttons: args.login_button.clone(),
+        email: args.login_email.clone(),
+        password: args.login_password.clone(),
+        forgot: args.login_forgot.clone(),
+        public_url: args.public_url.clone(),
+        allowed_origins: args.allowed_origin.clone(),
+        session_ttl_secs: args.session_hours * 3600,
+        require: args.require_login,
+        page: !args.no_shell && !args.stdio,
+        title: shell::tab_title(args.env.as_deref()),
+        names: menger::login_names(),
+        ..LoginOptions::new(menger::login_access::BRANDING, args.port, args.shell_port)
+    })?;
+    if args.require_login && !args.no_rest && !args.stdio {
+        anyhow::bail!(
+            "--require-login closes the WebSocket, but the REST bridge cannot carry an \
+             identity yet and would stay open: add --no-rest"
+        );
     }
-    // IDENTITY-42: a key proof names the socket it was made for.
-    let sockets = login::socket_urls(args.port, args.public_url.as_deref());
-    let boundary = login::boundary_at(&args.auth_provider, &sockets)?;
-    // The agents' key proof is not a way in a person is offered.
-    let offers = args.auth_provider.iter().filter(|p| !p.is_key()).map(Provider::offer).collect();
-    // IDENTITY-19: sessions, the rule every method asks, and the page.
-    let login_on = !args.auth_provider.is_empty();
-    let public_url = args.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", args.shell_port));
-    // IDENTITY-38: the session cookie named for this shell, so prod and test
-    // on one host keep apart.
-    let sessions = Arc::new(Sessions::named(args.session_hours * 3600, &menger::sessions::cookie_name_for(&public_url)));
-    let access = if login_on {
-        // IDENTITY-42: session.login mints its tokens in the same table.
-        Access::with_login(sessions.clone(), args.require_login, args.admin.clone()).minting(sessions.clone())
+    // IDENTITY-19: the rule every method asks. IDENTITY-42: session.login
+    // mints its tokens in the login's own table.
+    let access = if wiring.login_on() {
+        let table = menger::session_table(wiring.sessions());
+        Access::with_login(table.clone(), args.require_login, args.admin.clone()).minting(table)
     } else {
         Access::open()
     };
-    let shell_origins = local::shell_origins(args.shell_port, Some(&public_url));
     // IDENTITY-35: the dev sign-in is the test environment's, never prod's.
     // IDENTITY-38: allowed only where named for it, `--env test` — not
     // refused only where named prod, so an unnamed server is not open.
@@ -287,40 +289,13 @@ async fn main() -> anyhow::Result<()> {
             })
         }
     };
-    let web_login = if login_on && !args.no_shell && !args.stdio {
-        Some(Arc::new(Login::new(
-            LoginConfig {
-                providers: args.auth_provider.iter().filter(|p| !p.is_key()).cloned().collect(),
-                buttons: args.login_button.clone(),
-                email: args.login_email.clone(),
-                password: args.login_password.clone(),
-                forgot: args.login_forgot.clone(),
-                public_url: public_url.clone(),
-                also: shell_origins.clone(),
-                require: args.require_login,
-                title: shell::tab_title(args.env.as_deref()),
-                dev,
-                access: Some(access.clone()),
-            },
-            sessions.clone(),
-        )?))
-    } else {
-        None
-    };
     // AUTH-7: the protocol's auth — the gate and the `auth` activation —
-    // over menger's sessions, login page and members. RFC 9728's metadata
+    // over menger's sessions, login page and members; RFC 9728's metadata
     // names the OIDC issuers a client can sign in at.
-    let resource = format!("http://127.0.0.1:{}", args.port);
-    let issuers: Vec<String> = args.auth_provider.iter().filter_map(|p| p.oidc().map(|(issuer, _, _)| issuer.to_string())).collect();
-    let protected = ProtectedResource::new(resource, issuers);
-    let backend = Arc::new(MengerAuth::new(
-        access.clone(),
-        MengerAuth::offered(&args.auth_provider),
-        web_login.as_ref().map(|_| BrowserLogin { sessions: sessions.clone(), public_url: public_url.clone() }),
-    ));
-    let metadata = (login_on && !args.stdio).then(|| protected.metadata_url());
-    let access_for_gate = access.clone();
-    let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, backend, metadata).await?;
+    let wired = wiring.finish(MengerAccess(access.clone()), dev)?;
+    let offers = wired.offered().map(menger::offer).collect();
+    let metadata = wired.metadata_url().filter(|_| !args.stdio);
+    let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata).await?;
 
     local::log_activations(&hub);
 
@@ -330,7 +305,7 @@ async fn main() -> anyhow::Result<()> {
     if args.stdio {
         builder = builder.with_stdio();
         tracing::info!("Starting stdio transport");
-        if boundary.is_some() {
+        if wired.gate.is_some() {
             tracing::warn!("--auth-provider is ignored over stdio: there is no upgrade to carry a credential");
         }
     } else {
@@ -338,23 +313,12 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("WebSocket: ws://127.0.0.1:{}", args.port);
         // IDENTITY-29: only menger's own pages may open the socket from a
         // browser, login or not; synapse sends no Origin and is unaffected.
-        let mut origins = shell_origins.clone();
-        origins.extend(args.allowed_origin.iter().cloned());
-        builder = builder.with_allowed_origins(origins);
-        if let Some(carriers) = boundary {
-            let gate = Gate::new(sessions.clone(), Some(carriers)).noticing(access_for_gate.clone());
-            // AUTH-6/AUTH-7: no credential → admitted into the anonymous
-            // view (only the auth door); a credential presented and refused
-            // → 401 with RFC 6750's challenge. Presented means a bearer, or
-            // the `access_token` cookie — not the browser's session cookie,
-            // so a stale one falls into the anonymous view, which the app
-            // reads (it signs in again), never a 401 it cannot.
-            builder = builder
-                .with_session_validator(Arc::new(gate))
-                .anonymous_view()
-                .credential_cookies(["access_token"])
-                .with_protected_resource(protected.clone());
-            let names: Vec<&str> = args.auth_provider.iter().map(|p| p.name()).collect();
+        // AUTH-6/AUTH-7, with login on: no credential → admitted into the
+        // anonymous view (only the auth door); a credential presented and
+        // refused → 401 with RFC 6750's challenge (plexus-login's `apply`).
+        builder = wired.apply(builder);
+        if wired.login_on() {
+            let names: Vec<&str> = wired.providers.iter().map(|p| p.name()).collect();
             tracing::info!("Login:     {} — anonymous callers see only the auth door", names.join(", "));
         }
         if !args.no_rest {
@@ -382,7 +346,7 @@ async fn main() -> anyhow::Result<()> {
                 // checkout's frontend/dist.
                 app: args.app_dist.map(shell::AppSource::Dir).unwrap_or_else(shell::preferred_app),
                 env: args.env.clone(),
-                login: web_login,
+                login: wired.login.clone(),
             };
             tokio::spawn(async move {
                 if let Err(e) = shell::serve(cfg).await {

@@ -1,0 +1,51 @@
+[package]
+name = "plexus-login"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Login for a Plexus RPC hub — provider specs (OIDC, WorkOS, Auth0, plexus-idp, nostr, agent keys), the login page and its routes, sessions, the WebSocket gate and the auth backend — generic over the app's access rules"
+repository = "https://github.com/hypermemetic-ai/menger"
+readme = "README.md"
+keywords = ["plexus", "login", "oidc", "workos", "auth"]
+categories = ["authentication", "web-programming::http-server"]
+# SCAFFOLD-3 (S1): menger's login lifted as it is (owner, 2026-10-11).
+# SCAFFOLD-9 (B5): named for whichever app takes it, wired in two calls,
+# published. A workspace member of menger; the seam to the app is one
+# trait, `LoginAccess` (src/access.rs); menger implements it over its
+# `Access`, `simple::SimpleAccess` is the ready-made one.
+#
+# What the package carries: the sources and the page (src/web_login.rs
+# include_str!s web/login.html). The tests and the example stay in the
+# repository.
+include = ["/src/**", "/web/login.html", "/README.md", "/LICENSE"]
+
+[dependencies]
+# The plexus 0.6 line, by sibling path in a checkout (menger's MFE-10) and
+# by version from crates.io once published.
+plexus-core = { path = "../../plexus-core", version = "0.6" }
+plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2", features = ["adapters"] }
+# SCAFFOLD-9: `Wired::apply` puts the gate, the anonymous view and the
+# protected resource on a TransportServerBuilder. Slim: no MCP, no REST.
+plexus-transport = { path = "../../plexus-transport", version = "0.5", default-features = false }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+url = "2"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+# The dev sign-in registers accounts at plexus-idp over its Plexus socket.
+jsonrpsee = { version = "0.26", features = ["ws-client"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures = "0.3"
+anyhow = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+jsonrpsee = { version = "0.26", features = ["ws-client", "server"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# tests/simple_login.rs: a fixture OIDC issuer mints the tokens plexus-idp
+# would (menger's tests/login_page.rs does the same).
+jsonwebtoken = "9"

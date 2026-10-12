@@ -292,8 +292,8 @@ fn now_needs(today: Today, method: &str) -> Today {
 #[tokio::test]
 async fn the_roles_are_what_identity_21_asked_method_by_method() {
     let dir = tmp();
-    let sessions = Arc::new(menger::sessions::Sessions::new(3600));
-    let access = menger_tickets_api::access::Access::with_login(sessions.clone(), true, Vec::new()).minting(sessions);
+    let sessions = Arc::new(menger::sessions::Sessions::new(3600, &menger::login_names()));
+    let access = menger_tickets_api::access::Access::with_login(menger::session_table(&sessions), true, Vec::new()).minting(menger::session_table(&sessions));
     let hub = menger::build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), Vec::new(), access).await.unwrap();
     let declared = hub.declared_roles();
     let viewer: BTreeSet<String> = declared["viewer"].iter().cloned().collect();

@@ -27,31 +27,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use base64::Engine as _;
 use plexus_auth_core::adapters::Carriers;
-use menger_tickets_api::access::Access;
 use plexus_core::plexus::{AuthContext, SessionValidator};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
-/// The session cookie's name when none is chosen ([`Sessions::new`]).
-/// A server names its own with [`cookie_name_for`] (IDENTITY-38).
-pub const COOKIE: &str = "menger_session";
-
-/// IDENTITY-38: the session cookie's name for a shell reached at
-/// `public_url`. Cookies ignore ports, so two menger on one host (prod on
-/// 127.0.0.1:4456, test on :4451) sharing one name would sign each other
-/// out and hand each other their ids: over http the name carries the
-/// port; over https it is `__Host-` (Secure, host-only, `Path=/`), which no
-/// other origin can set or shadow.
-pub fn cookie_name_for(public_url: &str) -> String {
-    match url::Url::parse(public_url) {
-        Ok(u) if u.scheme() == "https" => format!("__Host-{COOKIE}"),
-        Ok(u) => match u.port_or_known_default() {
-            Some(p) => format!("{COOKIE}_{p}"),
-            None => COOKIE.to_string(),
-        },
-        Err(_) => COOKIE.to_string(),
-    }
-}
+use crate::access::LoginAccess;
+use crate::names::LoginNames;
 
 /// IDENTITY-38: at most this many login transactions wait at once — each
 /// is one anonymous `GET /login/start` — and at most this many sessions
@@ -61,10 +42,6 @@ const MAX_LIVE: usize = 100_000;
 
 /// IDENTITY-42: what a session token `session.login` mints starts with.
 pub const TOKEN_PREFIX: &str = "mgs_";
-
-/// The marker a session-backed identity carries in its metadata, beside
-/// `expires_at`: the hash [`Sessions::alive`] is asked about.
-pub const SESSION_KEY: &str = "menger_session";
 
 pub fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -138,30 +115,61 @@ pub struct Sessions {
     /// AUTH-7: their codes, by the code's hash.
     codes: Mutex<HashMap<String, CliCode>>,
     ttl_secs: i64,
+    /// The session cookie's name (this shell's, IDENTITY-38).
     cookie: String,
+    /// The login transaction cookie's name (this shell's).
+    login_cookie: String,
+    names: LoginNames,
 }
 
 impl Sessions {
-    /// Sessions that last `ttl_secs` from sign-in, in the cookie [`COOKIE`].
-    pub fn new(ttl_secs: i64) -> Self {
-        Self::named(ttl_secs, COOKIE)
+    /// Sessions that last `ttl_secs` from sign-in, in cookies of the base
+    /// names `names` gives (no shell: nothing per shell).
+    pub fn new(ttl_secs: i64, names: &LoginNames) -> Self {
+        Self::build(ttl_secs, names, names.session_cookie.clone(), names.login_cookie.clone())
     }
 
-    /// Sessions in a cookie of this name ([`cookie_name_for`]).
-    pub fn named(ttl_secs: i64, cookie: &str) -> Self {
+    /// Sessions for a shell reached at `public_url`: its cookies named for it
+    /// ([`LoginNames::session_cookie_for`], IDENTITY-38), so two servers on
+    /// one host keep apart.
+    pub fn for_shell(ttl_secs: i64, names: &LoginNames, public_url: &str) -> Self {
+        Self::build(ttl_secs, names, names.session_cookie_for(public_url), names.login_cookie_for(public_url))
+    }
+
+    fn build(ttl_secs: i64, names: &LoginNames, cookie: String, login_cookie: String) -> Self {
         Self {
             live: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             cli: Mutex::new(HashMap::new()),
             codes: Mutex::new(HashMap::new()),
             ttl_secs,
-            cookie: cookie.to_string(),
+            cookie,
+            login_cookie,
+            names: names.clone(),
         }
     }
 
     /// The session cookie's name.
     pub fn cookie_name(&self) -> &str {
         &self.cookie
+    }
+
+    /// The login transaction cookie's name: binds a code-flow callback to
+    /// the browser that started it.
+    pub fn login_cookie_name(&self) -> &str {
+        &self.login_cookie
+    }
+
+    /// The metadata key a session-backed identity carries, beside
+    /// `expires_at`: the hash [`Sessions::alive`] is asked about. Its one
+    /// definition ([`LoginNames::session_key`]).
+    pub fn session_key(&self) -> &str {
+        &self.names.session_key
+    }
+
+    /// Every name this table writes.
+    pub fn names(&self) -> &LoginNames {
+        &self.names
     }
 
     /// Starts a session for an identity a provider proved: the cookie value
@@ -182,7 +190,7 @@ impl Sessions {
         let key = hash(&id);
         let expires = now() + ttl_secs;
         if let Some(meta) = ctx.metadata.as_object_mut() {
-            meta.insert(SESSION_KEY.into(), key.clone().into());
+            meta.insert(self.names.session_key.clone(), key.clone().into());
             meta.insert("expires_at".into(), expires.into());
         }
         let mut live = self.live.lock().unwrap();
@@ -205,7 +213,7 @@ impl Sessions {
     }
 
     /// IDENTITY-42: ends the session whose key (the hash its identity
-    /// carries as [`SESSION_KEY`]) this is; whether it stood.
+    /// carries under [`Sessions::session_key`]) this is; whether it stood.
     pub fn end_key(&self, key: &str) -> bool {
         self.live.lock().unwrap().remove(key).is_some_and(|s| s.expires > now())
     }
@@ -297,26 +305,6 @@ fn make_room<V>(map: &mut HashMap<String, V>, cap: usize, expires: impl Fn(&V) -
     }
 }
 
-/// The activations' view of the session table: is this connection's
-/// session still standing? (tickets-api's `SessionCheck`.)
-impl menger_tickets_api::access::SessionCheck for Sessions {
-    fn alive(&self, key: &str) -> bool {
-        Sessions::alive(self, key)
-    }
-}
-
-/// IDENTITY-42: `session.login` and `session.logout` mint and end sessions
-/// here (tickets-api's `SessionMint`).
-impl menger_tickets_api::access::SessionMint for Sessions {
-    fn mint(&self, ctx: AuthContext, ttl_secs: i64) -> (String, i64) {
-        Sessions::mint(self, ctx, ttl_secs)
-    }
-
-    fn end_key(&self, key: &str) -> bool {
-        Sessions::end_key(self, key)
-    }
-}
-
 /// A minted session token a value the transport offers carries: the bearer
 /// value itself, or the `access_token` cookie of a `Cookie` header.
 fn minted_token(value: &str) -> Option<&str> {
@@ -327,6 +315,10 @@ fn minted_token(value: &str) -> Option<&str> {
     cookie(v, "access_token").filter(|t| t.starts_with(TOKEN_PREFIX))
 }
 
+/// What the gate calls for every identity it admits (the app's
+/// [`LoginAccess::notice`]).
+type Notice = Arc<dyn Fn(&AuthContext) + Send + Sync>;
+
 /// The WebSocket upgrade's validator: a session cookie, else a minted
 /// session token, else a provider's own credential through the carriers.
 pub struct Gate {
@@ -334,19 +326,19 @@ pub struct Gate {
     carriers: Option<Arc<Carriers>>,
     /// AUTH-7: who signs in holding nothing is put on the waiting list here,
     /// as it opens the socket — the gate refuses its calls before any method
-    /// could notice it.
-    access: Option<Access>,
+    /// could notice it. SCAFFOLD-3: the app's [`LoginAccess::notice`].
+    notice: Option<Notice>,
 }
 
 impl Gate {
     pub fn new(sessions: Arc<Sessions>, carriers: Option<Arc<Carriers>>) -> Self {
-        Self { sessions, carriers, access: None }
+        Self { sessions, carriers, notice: None }
     }
 
     /// AUTH-7: a sign-in holding no grant waits for an admin
-    /// ([`Access::notice`]).
-    pub fn noticing(mut self, access: Access) -> Self {
-        self.access = Some(access);
+    /// ([`LoginAccess::notice`]).
+    pub fn noticing<A: LoginAccess>(mut self, access: A) -> Self {
+        self.notice = Some(Arc::new(move |ctx: &AuthContext| access.notice(ctx)));
         self
     }
 
@@ -371,8 +363,8 @@ impl Gate {
 impl SessionValidator for Gate {
     async fn validate(&self, value: &str) -> Option<AuthContext> {
         let ctx = self.identify(value).await?;
-        if let Some(a) = &self.access {
-            a.notice(&ctx);
+        if let Some(notice) = &self.notice {
+            notice(&ctx);
         }
         Some(ctx)
     }
@@ -383,7 +375,7 @@ impl SessionValidator for Gate {
         if ctx.expired() {
             return Err("your sign-in has expired: sign in again".into());
         }
-        match ctx.get_metadata_string(SESSION_KEY) {
+        match ctx.get_metadata_string(self.sessions.session_key()) {
             Some(key) if !self.sessions.alive(&key) => Err("you have signed out: sign in again".into()),
             _ => Ok(()),
         }
@@ -395,18 +387,22 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn names() -> LoginNames {
+        LoginNames::for_app("menger")
+    }
+
     fn alice() -> AuthContext {
         AuthContext::new("alice".into(), "sid".into(), vec![], json!({ "name": "alice" }))
     }
 
     #[test]
     fn a_session_stands_until_it_ends() {
-        let s = Sessions::new(3600);
+        let s = Sessions::new(3600, &names());
         let (id, expires) = s.create(alice());
         let ctx = s.get(&id).expect("signed in");
         assert_eq!(ctx.user_id, "alice");
         assert_eq!(ctx.metadata["expires_at"], expires);
-        let key = ctx.metadata[SESSION_KEY].as_str().unwrap().to_string();
+        let key = ctx.metadata["menger_session"].as_str().unwrap().to_string();
         assert!(s.alive(&key));
         assert_ne!(key, id, "the table keeps a hash, not the cookie");
         s.end(&id);
@@ -416,14 +412,14 @@ mod tests {
 
     #[test]
     fn an_expired_session_is_nobody() {
-        let s = Sessions::new(-1);
+        let s = Sessions::new(-1, &names());
         let (id, _) = s.create(alice());
         assert!(s.get(&id).is_none());
     }
 
     #[test]
     fn a_login_transaction_is_taken_once() {
-        let s = Sessions::new(3600);
+        let s = Sessions::new(3600, &names());
         let state = s.begin("auth0", "verifier".into(), "/".into());
         assert_eq!(s.finish(&state).unwrap().verifier, "verifier");
         assert!(s.finish(&state).is_none());
@@ -431,16 +427,18 @@ mod tests {
     }
 
     #[test]
-    fn each_shell_names_its_own_cookie() {
-        assert_eq!(cookie_name_for("http://127.0.0.1:4456"), "menger_session_4456");
-        assert_eq!(cookie_name_for("http://127.0.0.1:4451/"), "menger_session_4451");
-        assert_eq!(cookie_name_for("http://menger.localhost"), "menger_session_80");
-        assert_eq!(cookie_name_for("https://menger.example"), "__Host-menger_session");
+    fn a_table_names_its_cookies_for_its_shell() {
+        let s = Sessions::for_shell(3600, &names(), "http://127.0.0.1:4456");
+        assert_eq!((s.cookie_name(), s.login_cookie_name(), s.session_key()), ("menger_session_4456", "menger_login_4456", "menger_session"));
+        let s = Sessions::for_shell(3600, &LoginNames::for_app("toy"), "https://toy.example");
+        assert_eq!((s.cookie_name(), s.login_cookie_name(), s.session_key()), ("__Host-toy_session", "__Secure-toy_login", "toy_session"));
+        let (id, _) = s.create(alice());
+        assert!(s.get(&id).unwrap().metadata["toy_session"].is_string(), "stamped under the app's key");
     }
 
     #[test]
     fn waiting_logins_are_capped() {
-        let s = Sessions::new(3600);
+        let s = Sessions::new(3600, &names());
         let first = s.begin("auth0", "v".into(), "/".into());
         for _ in 0..MAX_PENDING + 50 {
             s.begin("auth0", "v".into(), "/".into());
@@ -451,7 +449,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_gate_reads_only_its_own_cookie() {
-        let s = Arc::new(Sessions::named(3600, "menger_session_4456"));
+        let s = Arc::new(Sessions::for_shell(3600, &names(), "http://127.0.0.1:4456"));
         let (id, _) = s.create(alice());
         let gate = Gate::new(s.clone(), None);
         assert!(gate.validate(&format!("menger_session_4451=x; menger_session_4456={id}")).await.is_some());
@@ -460,7 +458,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_minted_token_opens_as_a_bearer_or_the_access_token_cookie_until_it_ends() {
-        let s = Arc::new(Sessions::new(3600));
+        let s = Arc::new(Sessions::new(3600, &names()));
         let (token, expires) = s.mint(alice(), 60);
         assert!(token.starts_with("mgs_") && token.len() >= 47, "{token}");
         assert!(expires <= now() + 60);
@@ -469,7 +467,7 @@ mod tests {
         assert_eq!(ctx.user_id, "alice");
         assert!(gate.validate(&format!("theme=dark; access_token={token}")).await.is_some(), "cookie");
         assert!(gate.validate("mgs_forged").await.is_none());
-        let key = ctx.metadata[SESSION_KEY].as_str().unwrap().to_string();
+        let key = ctx.metadata["menger_session"].as_str().unwrap().to_string();
         assert!(s.end_key(&key));
         assert!(gate.validate(&token).await.is_none(), "ended");
         assert!(!s.end_key(&key), "once");
@@ -479,14 +477,14 @@ mod tests {
 
     #[test]
     fn a_loopback_sign_in_ends_in_one_code_for_its_state() {
-        let s = Sessions::new(3600);
+        let s = Sessions::new(3600, &names());
         let state = s.begin_cli("http://127.0.0.1:53817/cb".into());
         assert!(s.cli_waiting(&state));
         let (redirect, code) = s.finish_cli(&state, alice()).expect("waiting");
         assert_eq!(redirect, "http://127.0.0.1:53817/cb");
         assert!(!s.cli_waiting(&state) && s.finish_cli(&state, alice()).is_none(), "the state is taken once");
         assert!(s.take_code(&code, "s_other").is_none(), "bound to its state");
-        let s2 = Sessions::new(3600);
+        let s2 = Sessions::new(3600, &names());
         let st = s2.begin_cli("http://localhost:1/x".into());
         let (_, c) = s2.finish_cli(&st, alice()).unwrap();
         assert_eq!(s2.take_code(&c, &st).unwrap().user_id, "alice");
@@ -512,11 +510,11 @@ mod tests {
 
     #[tokio::test]
     async fn the_gate_takes_the_session_cookie_among_others() {
-        let s = Arc::new(Sessions::new(3600));
+        let s = Arc::new(Sessions::new(3600, &names()));
         let (id, _) = s.create(alice());
         let gate = Gate::new(s.clone(), None);
-        assert!(gate.validate(&format!("theme=dark; {COOKIE}={id}")).await.is_some());
-        assert!(gate.validate(&format!("{COOKIE}=forged")).await.is_none());
+        assert!(gate.validate(&format!("theme=dark; menger_session={id}")).await.is_some());
+        assert!(gate.validate("menger_session=forged").await.is_none());
         assert!(gate.validate(&id).await.is_none(), "a bare id is not a cookie");
     }
 }

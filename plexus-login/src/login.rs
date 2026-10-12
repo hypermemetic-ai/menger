@@ -30,9 +30,27 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use menger_tickets_api::{ProviderKind, ProviderOffer};
 use plexus_auth_core::adapters::{Carriers, ClaimMap, KeyProofAdapter, Nip98Adapter, OidcAdapter};
 use plexus_auth_core::identity::{Authenticator, AuthenticatorChain};
+
+/// How an offered provider proves a caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfferKind {
+    /// An OIDC token, in the `access_token` cookie or a bearer header.
+    Oidc,
+    /// A NIP-98 event for the WebSocket URL, in the `nostr` cookie.
+    Nostr,
+}
+
+/// A provider as a client may be told of it: its name and how to reach it,
+/// nothing secret ([`Provider::offer`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offer {
+    pub name: String,
+    pub kind: OfferKind,
+    pub issuer: Option<String>,
+    pub audience: Option<String>,
+}
 
 /// One provider menger admits callers through, as `--auth-provider` names
 /// it. IDENTITY-19: an OIDC provider may name the `client=<id>` menger is
@@ -146,16 +164,17 @@ impl Provider {
     }
 
     /// What `session.providers` says of it (IDENTITY-15): its name and how
-    /// to reach it, nothing secret.
-    pub fn offer(&self) -> ProviderOffer {
+    /// to reach it, nothing secret. (SCAFFOLD-3: the app maps it onto its
+    /// own wire type.)
+    pub fn offer(&self) -> Offer {
         match self.oidc() {
-            Some((issuer, audience, _)) => ProviderOffer {
+            Some((issuer, audience, _)) => Offer {
                 name: self.name().to_string(),
-                kind: ProviderKind::Oidc,
+                kind: OfferKind::Oidc,
                 issuer: Some(issuer.to_string()),
                 audience: Some(audience.to_string()),
             },
-            None => ProviderOffer { name: self.name().to_string(), kind: ProviderKind::Nostr, issuer: None, audience: None },
+            None => Offer { name: self.name().to_string(), kind: OfferKind::Nostr, issuer: None, audience: None },
         }
     }
 

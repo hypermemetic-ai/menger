@@ -159,10 +159,10 @@ async fn start(port: u16, providers: &[Provider], require_login: bool) {
 /// [`start`], with operator admins (`--admin`).
 async fn start_with(port: u16, providers: &[Provider], require_login: bool, admins: &[&str]) {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
-    let offers = providers.iter().map(Provider::offer).collect();
+    let offers = providers.iter().map(menger::offer).collect();
     // As main wires it (IDENTITY-19): sessions, the per-call rule, the gate.
-    let sessions = Arc::new(Sessions::new(3600));
-    let access = if providers.is_empty() { Access::open() } else { Access::with_login(sessions.clone(), require_login, admins.iter().map(|a| a.to_string()).collect()) };
+    let sessions = Arc::new(Sessions::new(3600, &menger::login_names()));
+    let access = if providers.is_empty() { Access::open() } else { Access::with_login(menger::session_table(&sessions), require_login, admins.iter().map(|a| a.to_string()).collect()) };
     let hub = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers, access.clone())
         .await
         .expect("open database");
@@ -173,7 +173,7 @@ async fn start_with(port: u16, providers: &[Provider], require_login: bool, admi
         let mut builder = TransportServer::builder(hub, conv).with_websocket(port);
         if let Some(carriers) = boundary {
             builder = builder
-                .with_session_validator(Arc::new(Gate::new(sessions, Some(carriers)).noticing(access)))
+                .with_session_validator(Arc::new(Gate::new(sessions, Some(carriers)).noticing(menger::MengerAccess(access))))
                 .anonymous_view()
                 .credential_cookies(["access_token"]);
         }

@@ -1663,6 +1663,7 @@ dependencies = [
  "plexus-auth-core",
  "plexus-client",
  "plexus-core",
+ "plexus-login",
  "plexus-shell",
  "plexus-transport",
  "rand 0.8.8",
@@ -1707,7 +1708,7 @@ dependencies = [
 
 [[package]]
 name = "menger-tickets-api"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1999,6 +2000,31 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "plexus-login"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64",
+ "futures",
+ "jsonrpsee",
+ "jsonwebtoken",
+ "plexus-auth-core",
+ "plexus-core",
+ "plexus-transport",
+ "rand 0.8.8",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

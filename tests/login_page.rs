@@ -19,12 +19,10 @@ use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{HeaderMap, HeaderValue, WsClient, WsClientBuilder};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use menger::auth_backend::{BrowserLogin, MengerAuth};
 use menger::build_rpc_login;
-use menger::login::{self, LoginButton, Provider};
-use menger::sessions::{Gate, Sessions};
+use menger::login::{LoginButton, Provider};
 use menger::shell::{self, ShellConfig};
-use menger::web_login::{Login, LoginConfig};
+use menger::wiring::{LoginOptions, Wiring};
 use menger_tickets_api::access::Access;
 use nostr::event::{EventBuilder, FinalizeEvent, Kind, Tag};
 use nostr::key::Keys;
@@ -213,7 +211,7 @@ struct Menger {
 impl Menger {
     /// IDENTITY-38: this shell's session cookie's name, as main names it.
     fn cookie(&self) -> String {
-        menger::sessions::cookie_name_for(&self.url(""))
+        menger::login_names().session_cookie_for(&self.url(""))
     }
     /// A `Cookie` header carrying session `id`.
     fn jar(&self, id: &str) -> String {
@@ -352,56 +350,39 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
     let password = None;
 
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let sessions = Arc::new(Sessions::named(3600, &menger::sessions::cookie_name_for(&public_url)));
-    let access = Access::with_login(sessions.clone(), true, Vec::new()).minting(sessions.clone());
-    let offers = providers.iter().map(Provider::offer).collect();
-    // AUTH-7: as main wires it — the protocol's auth over menger's backend,
-    // whose loopback sign-in goes through this shell's login page.
-    let backend = Arc::new(MengerAuth::new(
-        access.clone(),
-        MengerAuth::offered(&providers),
-        Some(BrowserLogin { sessions: sessions.clone(), public_url: public_url.clone() }),
-    ));
-    let hub = build_rpc_login(&dir.path().join("t.db"), None, Default::default(), offers, access.clone(), backend, None).await.unwrap();
-    let carriers = login::boundary(&providers).unwrap();
-    let origins = vec![public_url.clone(), format!("http://localhost:{shell_port}")];
-    // AUTH-7: as main wires it, the upgrade notices who signs in holding nothing.
-    let gate = Arc::new(Gate::new(sessions.clone(), carriers).noticing(access.clone()));
-    let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
-    let ws_origins = origins.clone();
-    tokio::spawn(async move {
-        TransportServer::builder(hub, conv)
-            .with_websocket(ws)
-            .with_allowed_origins(ws_origins)
-            .with_session_validator(gate)
-            // AUTH-6/AUTH-7: as main wires it — no credential is the
-            // anonymous view; only a bearer or the access_token cookie is a
-            // credential, so a stale session cookie is no one, never a 401.
-            .anonymous_view()
-            .credential_cookies(["access_token"])
-            .build().await.unwrap().serve().await.unwrap();
-    });
-    let login = Login::new(
-        LoginConfig {
-            providers,
-            buttons,
-            password,
-            forgot: Some("https://idp.example/reset".into()),
-            public_url,
-            also: origins,
-            require: true,
-            title: "menger",
-            email,
-            access: dev.as_ref().map(|_| access),
-            dev,
-        },
-        sessions,
-    )
+    // SCAFFOLD-9: as main wires it — plexus-login's `Wiring` from the flags,
+    // menger's rules over its session table.
+    let wiring = Wiring::new(LoginOptions {
+        providers,
+        buttons,
+        email,
+        password,
+        forgot: Some("https://idp.example/reset".into()),
+        require: true,
+        title: "menger",
+        names: menger::login_names(),
+        ..LoginOptions::new(menger::login_access::BRANDING, ws, shell_port)
+    })
     .unwrap();
+    assert_eq!(wiring.public_url(), public_url);
+    let table = menger::session_table(wiring.sessions());
+    let access = Access::with_login(table.clone(), true, Vec::new()).minting(table);
+    let wired = wiring.finish(menger::MengerAccess(access.clone()), dev).unwrap();
+    let offers = wired.offered().map(menger::offer).collect();
+    // AUTH-7: the protocol's auth over menger's backend, whose loopback
+    // sign-in goes through this shell's login page.
+    let hub = build_rpc_login(&dir.path().join("t.db"), None, Default::default(), offers, access, wired.backend.clone(), None).await.unwrap();
+    let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
+    // AUTH-6/AUTH-7: the gate (it notices who signs in holding nothing); no
+    // credential is the anonymous view; only a bearer or the access_token
+    // cookie is a credential, so a stale session cookie is no one, never a 401.
+    let server = wired.apply(TransportServer::builder(hub, conv).with_websocket(ws));
+    tokio::spawn(async move { server.build().await.unwrap().serve().await.unwrap() });
+    let login = wired.login.clone().expect("a page");
     let app_dist = dir.path().join("no-dist");
     tokio::spawn(async move {
         let _keep = dir;
-        shell::serve(ShellConfig { port: shell_port, ws_port: ws, app: shell::AppSource::Dir(app_dist), env: None, login: Some(Arc::new(login)) })
+        shell::serve(ShellConfig { port: shell_port, ws_port: ws, app: shell::AppSource::Dir(app_dist), env: None, login: Some(login) })
             .await
             .unwrap();
     });

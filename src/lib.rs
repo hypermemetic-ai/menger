@@ -13,13 +13,42 @@
 
 mod builder;
 
-/// AUTH-7: menger's half of the protocol's `auth` activation.
-pub mod auth_backend;
+/// SCAFFOLD-3: menger's side of plexus-login's seam — `MengerAccess`
+/// (the `LoginAccess` impl over `Access`), `SessionTable`, `offer`.
+pub mod login_access;
+pub use login_access::{login_names, offer, session_table, MengerAccess, SessionTable};
 
-pub mod dev_login;
-pub mod login;
-pub mod sessions;
-pub mod web_login;
+/// SCAFFOLD-3: the login lives in plexus-login; these keep its paths
+/// (`menger::login::Provider`, `menger::sessions::Gate`, …), its generic
+/// types named for menger's rules.
+pub use plexus_login::{login, sessions};
+
+/// AUTH-7: the protocol's `auth` activation's backend, over menger's rules.
+pub mod auth_backend {
+    pub use plexus_login::auth_backend::*;
+    pub type MengerAuth = plexus_login::auth_backend::LoginAuth<crate::MengerAccess>;
+}
+
+/// IDENTITY-35: the dev sign-in, in menger's roles.
+pub mod dev_login {
+    pub use plexus_login::dev_login::*;
+    pub type DevUser = plexus_login::dev_login::DevUser<crate::MengerAccess>;
+    pub type DevLogin = plexus_login::dev_login::DevLogin<crate::MengerAccess>;
+}
+
+/// IDENTITY-19: the login page and its routes, over menger's rules.
+pub mod web_login {
+    pub use plexus_login::web_login::*;
+    pub type Login = plexus_login::web_login::Login<crate::MengerAccess>;
+    pub type LoginConfig = plexus_login::web_login::LoginConfig<crate::MengerAccess>;
+}
+
+/// SCAFFOLD-9: the login wired in two calls (`main` runs on it), over
+/// menger's rules.
+pub mod wiring {
+    pub use plexus_login::wiring::*;
+    pub type Wired = plexus_login::wiring::Wired<crate::MengerAccess>;
+}
 
 pub mod shell;
 

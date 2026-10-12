@@ -7,14 +7,14 @@
 <meta name="referrer" content="same-origin">
 <title>Sign in · {{TITLE}}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<!-- IDENTITY-19: menger's login page. Self-contained (no app, no fonts, no
+<!-- IDENTITY-19: plexus-login's page. Self-contained (no app, no fonts, no
      scripts but the one below), so it can be handed to an IdP as its hosted
      login page later. The shell fills the {{…}} placeholders, escaped. -->
-<script>try{var t=localStorage.getItem("menger.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<script>try{var t=localStorage.getItem("{{APP}}.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <style>
   /* Layout: one sheet in two panes — the instance on a tinted column (as
      the app's nav column), the way in beside it on the page; stacked on a
-     phone. menger's own palette (frontend/index.html :root), no web fonts:
+     phone. The palette it was born with (the first app's :root), no web fonts:
      this page must stand alone. */
   :root {
     color-scheme: light;
@@ -174,7 +174,7 @@
 <body>
   <div class="sheet">
     <aside class="side">
-      <div class="brand"><span class="mark">m</span>{{TITLE}}</div>
+      <div class="brand"><span class="mark">{{MARK}}</span>{{TITLE}}</div>
       <p class="motto">A plan is a program whose leaves are prose.</p>
       <dl class="facts">{{FACTS}}</dl>
       {{DEV}}
@@ -193,7 +193,7 @@
     // plexus-idp, or back to the ordinary page.
     const dev = document.getElementById("dev-login");
     if (dev) dev.addEventListener("change", () => {
-      document.cookie = "menger_dev_login=" + (dev.checked ? "1; Max-Age=2592000" : "; Max-Age=0") + "; Path=/; SameSite=Lax";
+      document.cookie = "{{DEV_COOKIE}}=" + (dev.checked ? "1; Max-Age=2592000" : "; Max-Age=0") + "; Path=/; SameSite=Lax";
       location.reload();
     });
     // SSO asks for a work email first; nostr signs one NIP-98 event with the
@@ -253,10 +253,10 @@
           const body = await r.json().catch(() => ({}));
           if (r.ok && body.next) { location.href = body.next; return; }
           n.disabled = false;
-          say(body.error || "menger did not accept the signature (" + r.status + ").", true);
+          say(body.error || "{{APP}} did not accept the signature (" + r.status + ").", true);
         } catch (e) {
           n.disabled = false;
-          say("menger could not be reached: " + (e && e.message ? e.message : e), true);
+          say("{{APP}} could not be reached: " + (e && e.message ? e.message : e), true);
         }
       });
     }

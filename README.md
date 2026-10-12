@@ -1310,6 +1310,19 @@ root, else `*`).
 
 ### Login (IDENTITY-14)
 
+**The login is a crate of its own, [`plexus-login`](plexus-login/README.md)**
+(SCAFFOLD-3, SCAFFOLD-9): the provider specs, the login page and its
+routes, the sessions, the gate at the upgrade and the `auth` backend live
+there, generic over one trait, `LoginAccess`, which menger implements over
+its members and sessions (`src/login_access.rs`: `MengerAccess`). `main`
+wires it with `plexus_login::Wiring` from the flags below; any other Plexus
+app takes the same crate (its README has the dozen lines, with ready-made
+in-memory rules, `SimpleAccess`). menger's cookie and metadata names are
+`plexus_login::LoginNames::for_app("menger")` — `menger_session_<port>`,
+`menger_login_<port>`, `menger_dev_login` — the same as before the lift, so
+a signed-in browser stays signed in. What follows is menger's flags and
+behavior; the crate's README is the reference for the pieces.
+
 menger does not know identity providers; it knows **Plexus identities**.
 Each `--auth-provider` names a provider, and becomes that provider's
 **adapter** (plexus-auth-core's `adapters`, IDENTITY-13). The adapters sit
@@ -1396,7 +1409,7 @@ ports, so prod (`_4456`) and test (`_4451`) on 127.0.0.1 keep apart — and
 cookies; a provider's token reaches the socket as `Authorization: Bearer`.
 Every shell response refuses framing (`frame-ancestors 'none'`), and the
 page shows only its own words (no `?error=` text). The page is
-self-contained (`web/login.html`), so an IdP can host it later.
+self-contained (`plexus-login/web/login.html`), so an IdP can host it later.
 
 `--require-login` puts the whole app behind it. `/`, `/app/…` and `/vanilla`
 redirect to `/login?next=…`. AUTH-7: with any provider, the socket admits an
@@ -1767,8 +1780,8 @@ test is in the workspace run.
 
 ## Publishing (DIST-3)
 
-`plexus-shell`, `menger-tickets-api` and `menger` go to crates.io, in that
-order. The plexus 0.6 line they depend on goes first: plexus-core,
+`plexus-shell`, `menger-tickets-api`, `plexus-login` (SCAFFOLD-9) and
+`menger` go to crates.io, in that order. The plexus 0.6 line they depend on goes first: plexus-core,
 plexus-macros, plexus-client, plexus-auth-core, plexus-transport. Every
 sibling `path` dependency also names its `version`, which is what the
 published crates take. Dev dependencies stay path-only and are dropped from
@@ -1777,11 +1790,11 @@ the package.
 ```sh
 scripts/publish.sh stage     # trunk build --release, stage the package, list it; publishes nothing
 scripts/publish.sh dry-run   # + cargo publish --dry-run of the crates not yet on crates.io, verified together
-scripts/publish.sh publish   # + cargo publish: plexus-shell, menger-tickets-api, then menger (clean tree only)
+scripts/publish.sh publish   # + cargo publish: plexus-shell, menger-tickets-api, plexus-login, then menger (clean tree only)
 ```
 
 A crate whose version crates.io already holds is skipped. The script reads
-the sparse index to tell; `menger-tickets-api` 0.5.0 is skipped today. The
+the sparse index to tell; a version already published is skipped, never re-uploaded. The
 rest go to one multi-package `cargo publish`, which orders them and, in a
 dry run, verifies `menger` against the packaged `plexus-shell` before
 either is on crates.io.
