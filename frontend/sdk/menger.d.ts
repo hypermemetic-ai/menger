@@ -1,5 +1,5 @@
 /**
- * menger SDK 1.7 — the types of `window.menger` and of a component script's
+ * menger SDK 1.8 — the types of `window.menger` and of a component script's
  * `this`, inside every framed body (COMP-4, COMP-5, COMP-10, COMP-9,
  * INPUT-4, INPUT-9). 1.5 (COMMENT-3) changes nothing here: annotation mode
  * is the host's, spoken over the frame's own messages, and a component's
@@ -8,6 +8,9 @@
  * `<meta name="menger-base" content="markdown">` confines it to markdown.
  * 1.7 (COMP-14) adds `input.displayOnly` and the built-in `<m-cite>`, a
  * placeholder the host draws a cited window over (no script surface).
+ * 1.8 (MENGER-14) changes nothing here either: a link clicked in the body is
+ * handed to the host (`menger:link`), which follows it, asks before it
+ * leaves menger, or refuses it.
  *
  * Published by the app at /app/sdk/menger.d.ts, beside the SDK itself
  * (/app/sdk/menger-sdk.js) and the generated client's declarations
@@ -113,7 +116,7 @@ export interface MengerInput {
 
 /** `window.menger` — frozen; also `this.menger` in a component script. */
 export interface Menger {
-  /** "1.7.0". */
+  /** "1.8.0". */
   readonly version: string;
 
   /**

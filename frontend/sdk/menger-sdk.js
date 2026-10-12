@@ -1,6 +1,6 @@
 /* menger SDK (COMP-4 shell, COMP-5 components, COMP-10 typed client, COMP-9
  * badges, tooltips, docs cards, navigation, INPUT-4 and INPUT-9 the two
- * writes, COMMENT-3 annotation mode, COMP-14 cites) — the
+ * writes, COMMENT-3 annotation mode, COMP-14 cites, MENGER-14 links) — the
  * script every framed body runs first. Its types: menger.d.ts, published
  * beside it at /app/sdk/menger.d.ts.
  *
@@ -42,7 +42,10 @@
  *     `?anchor=`, `#/components…`, `#/waves/…`; the host ignores any
  *     other). A click on a link to `#/…` in the body navigates the same
  *     way, and a `{wave: ID}` reference clicked in a board note reveals
- *     the ticket's card on the board;
+ *     the ticket's card on the board; (1.8, MENGER-14) a click on any
+ *     other link — or Enter on a focused one, or a middle click — is the
+ *     host's: `menger:link { href }`, and the host navigates, asks before
+ *     a link that leaves menger, or refuses one it never follows;
  *     `input` (INPUT-4, frozen) — `ticket`, the ticket whose stored body
  *     this frame renders (null: none — an editor's preview, a help card),
  *     and `submit(id, value, rationale?)` → a Promise of the answer
@@ -166,6 +169,8 @@
  *   host → frame  menger:result { id, items } | { id, error }
  *   frame → host  menger:navigate { route, reveal? }      menger.navigate;
  *                 `reveal: { id, wave }` for a {wave: ID} clicked
+ *   frame → host  menger:link { href }                    a link clicked
+ *                 (1.8): its href as written — the host classifies it
  *   frame → host  menger:inspect { id, name, attrs }      a badge hovered
  *                 or focused (`attrs`: [[name, value], …])
  *   host → frame  menger:inspected { id, inspection }     its tooltip
@@ -228,7 +233,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.7.0";
+  var VERSION = "1.8.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -2009,26 +2014,35 @@
   if (Array.isArray(init.components)) sync(init.components);
 
   // -- links ------------------------------------------------------------------
-  // Every link opens a new top-level tab (<base target="_blank"> in the
-  // srcdoc; the sandbox's popups escape it). A link to an anchor in this
-  // body (a footnote) scrolls to it instead.
+  // MENGER-14 (1.8): every link in the body is the app's to follow. A click
+  // on one — or Enter on a focused one, which the browser turns into a
+  // click; or a middle click — is taken here and handed to the host as
+  // `menger:link { href }`, the href as written: the host reads it (never
+  // this script), navigates for a link inside menger, asks before one that
+  // leaves it, and refuses `javascript:`, `data:` and every scheme but http,
+  // https and mailto. A link to an anchor in this body (a footnote) scrolls
+  // to it here. A click the body's own handler prevented is the body's.
+  // (<base target="_blank"> stays in the srcdoc, so a link that is somehow
+  // not taken opens a new tab rather than replacing this frame.)
 
   // COMP-9: a link to an app route (`#/…`) — a card's "N references ↗",
   // or one a body writes — navigates the app instead; a {wave: ID}
   // reference asks the host to reveal the ticket's card on the board (where
   // there is one — else it goes to the ticket). Links inside a component's
   // shadow root count too.
-  doc.addEventListener("click", function (ev) {
-    if (ev.defaultPrevented) return;
+  function linkOf(ev) {
     var path = ev.composedPath ? ev.composedPath() : [ev.target];
-    var a = null;
     for (var i = 0; i < path.length; i++) {
       var n = path[i];
-      if (n && n.nodeType === 1 && n.localName === "a" && n.hasAttribute("href")) {
-        a = n;
-        break;
-      }
+      if (n && n.nodeType === 1 && n.localName === "a" && n.hasAttribute("href")) return n;
     }
+    return null;
+  }
+
+  function takeLink(ev) {
+    if (ev.defaultPrevented) return;
+    if (ev.type === "click" ? ev.button !== 0 : ev.button !== 1) return;
+    var a = linkOf(ev);
     if (!a) return;
     var href = a.getAttribute("href");
     if (a.classList.contains("wave-ref") && a.hasAttribute("data-wave-ref")) {
@@ -2044,14 +2058,23 @@
       navigate(href);
       return;
     }
-    if (href.charAt(0) !== "#") return;
-    var id = decodeURIComponent(href.slice(1));
-    var target = id && doc.getElementById(id);
-    if (target) {
+    if (href.charAt(0) === "#") {
+      var id = href.slice(1);
+      try {
+        id = decodeURIComponent(id);
+      } catch (e) {
+        /* as written */
+      }
+      var target = id && doc.getElementById(id);
       ev.preventDefault();
-      target.scrollIntoView({ block: "start" });
+      if (target) target.scrollIntoView({ block: "start" });
+      return;
     }
-  });
+    ev.preventDefault();
+    post("menger:link", { href: href });
+  }
+  doc.addEventListener("click", takeLink);
+  doc.addEventListener("auxclick", takeLink);
 
   // -- mermaid ----------------------------------------------------------------
   // The placeholders md.rs writes (`.mermaid[data-state=pending]`, the

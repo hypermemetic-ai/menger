@@ -319,7 +319,8 @@ fn row(c: Comment) -> impl IntoView {
                 <span class="cwhen" title=fmt_unix(c.at)>{fmt_relative(now_unix(), c.at)}</span>
                 <span class="cid">"#"{id}</span>
             </div>
-            <div class="cbody">{c.body.clone()}</div>
+            // MENGER-14: its bare URLs are links, followed by the app.
+            <div class="cbody" data-links="comment" data-ticket=c.anchor.ticket.clone()><crate::links::Linkified text=c.body.clone() /></div>
             {(!c.anchor.excerpt.is_empty()).then(|| view! { <div class="cexcerpt">"“"{c.anchor.excerpt.clone()}"”"</div> })}
             <div class="cacts">
                 <span class="croute">{c.anchor.route.clone()}</span>

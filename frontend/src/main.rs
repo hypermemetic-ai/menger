@@ -259,6 +259,7 @@ mod keys;
 mod kids;
 mod labels;
 mod lens;
+mod links;
 mod md;
 mod menu;
 mod nav;
@@ -1980,6 +1981,8 @@ fn App() -> impl IntoView {
     // COMP-9: an instance's shortcode / ticket attributes are checked
     // against the board's extents.
     frame::know(board);
+    // MENGER-14: a click on a link people wrote, in the app's own page.
+    links::install();
     board.drive();
     let dock = RwSignal::new(None::<Dock>);
     let conn = RwSignal::new(Conn::Connecting);
@@ -2289,6 +2292,8 @@ fn App() -> impl IntoView {
             <keys::Overlays overlay />
             // FILTER-6: Save as…, mounted once.
             <saved::SaveDialog />
+            // MENGER-14: "This link leaves menger", and the refusal notice.
+            <links::LeaveDialog />
         </div>
         // COMMENT-3: what annotation mode draws — outside #app, so nothing
         // of it is ever an element to annotate, nor moves a path's steps.

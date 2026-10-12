@@ -47,6 +47,14 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 # already in the tree, so this adds no weight.
 pulldown-cmark-escape = "0.11"
 
+# MENGER-14: a link people wrote is read the way the browser reads it
+# (WHATWG's parser), its IDN host decoded for the leave dialog, a mailto's
+# recipients percent-decoded — all three already in the tree (leptos's
+# server_fn links `url`, which brings the other two).
+url = "2"
+idna = "1"
+percent-encoding = "2"
+
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

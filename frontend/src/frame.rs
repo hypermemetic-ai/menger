@@ -13,8 +13,9 @@
 //!   'none'` — the frame opens no connection of its own and submits no form
 //!   (nor does the sandbox allow forms); its scripts, styles, images and
 //!   fonts load as before;
-//! - `<base target="_blank">` — a link opens a new top-level tab (the
-//!   sandbox's popups escape it);
+//! - `<base target="_blank">` — a link the SDK does not take (MENGER-14,
+//!   below: it takes every click) opens a new top-level tab (the sandbox's
+//!   popups escape it), never the frame itself;
 //! - `<style id="menger-theme">` — the app's theme tokens ([`THEME_TOKENS`],
 //!   read off the app's `:root` as painted now) and `color-scheme`, so the
 //!   first paint is in the app's theme;
@@ -115,6 +116,16 @@
 //! anchored elements are, for pins). Everything the mode draws over a frame
 //! the host draws (src/annotate.rs).
 //!
+//! MENGER-14: **links.** The SDK takes every click on a link in the body
+//! (and Enter on a focused one, which the browser makes a click; and a
+//! middle click) that is not an app route (`#/…`, `menger.navigate` as
+//! ever), an anchor in the body, or a click the body's own handler already
+//! prevented — and posts `menger:link { href }`, the `href` as written. The
+//! host classifies it ([`links::follow`]): an app route navigates, a link
+//! that leaves menger asks first (the leave dialog), `javascript:` and every
+//! other scheme but http(s) and mailto is refused with a notice. The sandbox
+//! and the CSP are unchanged — the click is handed over, nothing loosened.
+//!
 //! What decides — the srcdoc, the theme block, the init block, which
 //! messages count — is pure and pinned by native tests; the rest is DOM.
 
@@ -128,7 +139,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, mermaid, notes, registry, session};
+use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, links, mermaid, notes, registry, session};
 
 /// The SDK's version — `window.menger.version` inside every frame (pinned
 /// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
@@ -143,8 +154,9 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, mermai
 /// what markdown produced (`data-md`, md::MD_MARK); COMP-14's 1.7 adds the
 /// built-in `<m-cite>` (`menger:cite` / `menger:uncite` / `menger:cited`),
 /// a cited window's frame (`cite` in the init block; `menger:size { top,
-/// found }`; `input.displayOnly`), and section anchors in `menger:reveal`.
-pub(crate) const SDK_VERSION: &str = "1.7.0";
+/// found }`; `input.displayOnly`), and section anchors in `menger:reveal`;
+/// MENGER-14's 1.8 hands every link clicked to the host (`menger:link`).
+pub(crate) const SDK_VERSION: &str = "1.8.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -159,7 +171,8 @@ const SDK_JS: &str = include_str!("../sdk/menger-sdk.js");
 /// would hand the body the app's origin. IDENTITY-28: and no longer
 /// `allow-forms` — a body's form submits nowhere. Popups stay, and stay
 /// escaping (owner, 2026-10-10): a link in a body opens the real page in a
-/// new tab (`<base target="_blank">`), unsandboxed.
+/// new tab (`<base target="_blank">`), unsandboxed — since MENGER-14 once
+/// the app has asked (src/links.rs): the SDK hands the click over.
 pub(crate) const SANDBOX: &str = "allow-scripts allow-popups allow-popups-to-escape-sandbox";
 
 /// IDENTITY-28: the frame's Content-Security-Policy, the first element of
@@ -359,6 +372,9 @@ pub(crate) enum Msg {
     Cite,
     /// COMP-14: an `<m-cite>` left the body.
     Uncite,
+    /// MENGER-14: a link in the body was clicked — its `href` as written,
+    /// classified here (src/links.rs), never by the frame.
+    Link,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -378,6 +394,7 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:key" => Some(Msg::Key),
         "menger:cite" => Some(Msg::Cite),
         "menger:uncite" => Some(Msg::Uncite),
+        "menger:link" => Some(Msg::Link),
         "menger:size" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Size { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32, settled: settled.unwrap_or(false) })
@@ -869,6 +886,24 @@ fn on_message(ev: web_sys::MessageEvent) {
             let r = field("rect").map(read_rect).unwrap_or_default();
             let rect = cite::Rect { x: r.x, y: r.y, w: r.w, h: r.h };
             cite::asked(frame, channel, n as u32, reference, cite_field, rect);
+        }
+        Some(Msg::Link) => {
+            // MENGER-14: the frame hands over the string it was given; the
+            // host decides what it is. A trusted domain opens at once only
+            // inside a viewer's gesture on this very frame (IDENTITY-36's
+            // reading) — else, like any other, it asks.
+            let Some(href) = field("href").and_then(|v| v.as_string()) else { return };
+            let gesture = gesture::on_frame(&frame);
+            let ticket = frame.get_attribute("data-ticket").filter(|t| !t.is_empty());
+            let place = if frame.closest("#waves").ok().flatten().is_some() {
+                "board note"
+            } else if ticket.is_none() && frame.closest(".preview").ok().flatten().is_some() {
+                "draft"
+            } else {
+                "body"
+            };
+            let restore = frame.clone().dyn_into::<web_sys::HtmlElement>().ok();
+            links::follow(&href, links::From { ticket, place }, gesture, None, restore);
         }
         Some(Msg::Uncite) => {
             if let Some(n) = field("cite").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0) {
@@ -1406,6 +1441,8 @@ mod tests {
         // COMP-14: a placeholder's two.
         assert_eq!(parse_msg("menger:cite", None, None), Some(Msg::Cite));
         assert_eq!(parse_msg("menger:uncite", None, None), Some(Msg::Uncite));
+        // MENGER-14: a link clicked.
+        assert_eq!(parse_msg("menger:link", None, None), Some(Msg::Link));
         for outbound in [
             "menger:theme", "menger:result", "menger:components", "menger:change", "menger:inspected", "menger:reveal",
             "menger:submitted", "menger:cleared", "menger:annotate", "menger:probe", "menger:locate", "menger:cited",
@@ -1450,7 +1487,7 @@ mod tests {
             "menger:navigate", "menger:inspect", "menger:inspected", "menger:reveal", "menger:revealed", "menger:submit",
             "menger:submitted", "menger:clear", "menger:cleared", "menger:annotate", "menger:hover", "menger:pick",
             "menger:probe", "menger:probed", "menger:locate", "menger:located", "menger:key", "menger:cite",
-            "menger:uncite", "menger:cited",
+            "menger:uncite", "menger:cited", "menger:link",
         ] {
             assert!(SDK_JS.contains(&format!("\"{kind}\"")), "{kind}");
         }

@@ -738,6 +738,8 @@ pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
                     </div>
                 </div>
             </fieldset>
+            // MENGER-14: the sites links open without asking, revocable.
+            <crate::links::TrustGroup />
         </section>
     }
 }
