@@ -247,6 +247,14 @@
       "waves": [
         "epics",
         "kinds"
+      ],
+      "waves_to": [
+        "id",
+        "kinds"
+      ],
+      "waves_under": [
+        "id",
+        "kinds"
       ]
     }
   }

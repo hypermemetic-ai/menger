@@ -1120,6 +1120,23 @@ The order of work for a shortcode tree — the platform's, here — is one call
 synapse -P 4455 menger tickets waves --epics PLEXUS,MACRO,SYNAPSE,TRANSPORT,STARTER,HYPERFORGE,RETURNS,CONTEXT
 ```
 
+A ticket has two boards of its own (MENGER-31), each on the ticket menu
+(right-click a ticket anywhere, or Shift+F10 on the focused one) beside
+**Open**: **Wave board for <parent>** — `waves_under`, the parent's subtree
+(any depth, hosted shortcodes included, from the kept tree), at
+`#/waves/under/<PARENT>?at=<ID>` with the ticket scrolled to and outlined;
+absent for a root — and **Waves to <ticket>** — `waves_to`, the board whose
+final state is the ticket: its blockers transitively (and a scope's or an
+execution's open descendants and what they wait on), each where the store
+keeps it, done blockers `done` and not followed past, the ticket alone in
+the last wave, and a `wave_cycle { ids }` per `blocked_by` cycle, at
+`#/waves/to/<ID>`. Both are live as the shortcode board is.
+
+```sh
+synapse -P 4455 menger tickets waves_to --id MENGER-31
+synapse -P 4455 menger tickets waves_under --id MENGER-2 --kinds build,gap
+```
+
 A reader can **answer a ticket in place** (INPUT-1): a body declares
 **inputs**, and the server keeps every answer, with its history, in an
 **inputs store** beside the tickets — a click never rewrites a body

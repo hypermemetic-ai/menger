@@ -68,7 +68,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use leptos::prelude::*;
-use menger_tickets_api::{Placement, Severity, Status, TicketSummary, TicketsEvent};
+use menger_tickets_api::{Kind, Placement, Severity, Status, TicketSummary, TicketsEvent};
 use std::cmp::Ordering;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
@@ -1124,6 +1124,386 @@ fn card_view(p: Placed, on_board: Memo<HashSet<String>>) -> impl IntoView {
     }
 }
 
+// ---------------------------------------------------------------------
+// MENGER-31: boards scoped to one ticket
+
+/// A wave board of one ticket's (MENGER-31), from the ticket menu: its
+/// subtree's — `#/waves/under/<ID>`, "Wave board for <parent>" — or the one
+/// whose final state it is — `#/waves/to/<ID>`, "Waves to <ticket>". Each is
+/// one server read (`tickets.waves_under`, `tickets.waves_to`) over the kept
+/// graph; the columns, the layouts, the cards and the live moves are the
+/// shortcode board's. `?at=<ID>` (the menu's ticket) is scrolled to and
+/// highlighted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Scope {
+    Under(String),
+    To(String),
+}
+
+impl Scope {
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            Scope::Under(id) | Scope::To(id) => id,
+        }
+    }
+
+    /// The board's route, without a query.
+    pub(crate) fn href(&self) -> String {
+        match self {
+            Scope::Under(id) => format!("#/waves/under/{id}"),
+            Scope::To(id) => format!("#/waves/to/{id}"),
+        }
+    }
+
+    /// What `#/waves/<rest>` names, when it names a scoped board — `under/ID`
+    /// or `to/ID` (the id upper case: ids are).
+    pub(crate) fn parse(rest: &str) -> Option<Scope> {
+        let rest = rest.trim_end_matches('/');
+        let (kind, id) = rest.split_once('/')?;
+        let id = id.trim_end_matches('/');
+        if id.is_empty() || id.contains('/') {
+            return None;
+        }
+        let id = id.to_ascii_uppercase();
+        match kind.to_ascii_lowercase().as_str() {
+            "under" => Some(Scope::Under(id)),
+            "to" => Some(Scope::To(id)),
+            _ => None,
+        }
+    }
+
+    /// The layout is remembered per kind of scoped board.
+    fn layout_key(&self) -> String {
+        match self {
+            Scope::Under(_) => "menger.waves.@under".into(),
+            Scope::To(_) => "menger.waves.@to".into(),
+        }
+    }
+}
+
+/// A link to a scoped board, highlighting `at`.
+pub(crate) fn scoped_href(scope: &Scope, at: Option<&str>) -> String {
+    match at {
+        Some(at) => format!("{}?at={at}", scope.href()),
+        None => scope.href(),
+    }
+}
+
+/// `?at=<ID>` in a hash's query: the ticket a scoped board highlights.
+pub(crate) fn at_of(hash: &str) -> Option<String> {
+    let q = hash.split_once('?')?.1;
+    q.split('&').find_map(|kv| kv.strip_prefix("at=")).filter(|v| !v.is_empty()).map(|v| v.to_ascii_uppercase())
+}
+
+/// What a `watch` event does to a scoped board: apply it to the cards (as
+/// [`apply`]), and/or ask the read again — whenever what the set is made of
+/// may have moved: a lag; a held ticket's status (a done blocker is not
+/// followed past, an undone one is again), kind, `blocked_by`, `unlocks` or
+/// parent; a birth or a move under a held ticket or the board's own; and, on
+/// a `to` board, a held ticket's placement (the final ticket's wave is the
+/// rest's). `held`: every ticket of the last answer, shown or not.
+pub(crate) fn heard_scoped(ev: &TicketsEvent, scope: &Scope, held: &HashSet<String>) -> (bool, bool) {
+    let anchor = scope.id();
+    let mine = |id: &str| id == anchor || held.contains(id);
+    match ev {
+        TicketsEvent::Lagged { .. } => (false, true),
+        TicketsEvent::PlacementsChanged { changes } => {
+            let ask = matches!(scope, Scope::To(_)) && changes.iter().any(|c| held.contains(&c.id));
+            (true, ask)
+        }
+        TicketsEvent::StatusChanged { ticket, .. } | TicketsEvent::KindChanged { ticket, .. } => (true, mine(&ticket.id)),
+        TicketsEvent::Amended { ticket, .. } | TicketsEvent::UnlocksChanged { ticket, .. } => (false, mine(&ticket.id)),
+        TicketsEvent::Created { ticket } => {
+            let ask = ticket.parent.as_deref().is_some_and(mine) || ticket.unlocks.iter().any(|u| mine(u));
+            (false, ask)
+        }
+        TicketsEvent::ParentChanged { ticket, previous } => {
+            let ask = mine(&ticket.id) || ticket.parent.as_deref().is_some_and(mine) || previous.as_deref().is_some_and(mine);
+            (false, ask)
+        }
+        TicketsEvent::ChildRemoved { id, .. } => (false, mine(id)),
+        _ => (false, false),
+    }
+}
+
+/// [`apply`] on a `to` board: the final ticket's placement is the board's,
+/// not the store's — a `placements_changed` naming it leaves it be (the read
+/// asked behind it places it).
+pub(crate) fn apply_scoped(a: &mut Answer, ev: &TicketsEvent, scope: &Scope) -> bool {
+    match (scope, ev) {
+        (Scope::To(target), TicketsEvent::PlacementsChanged { changes }) => {
+            let changes: Vec<_> = changes.iter().filter(|c| c.id != *target).cloned().collect();
+            apply(a, &TicketsEvent::PlacementsChanged { changes })
+        }
+        _ => apply(a, ev),
+    }
+}
+
+/// What a scoped board shows of its answer: a subtree's board shows work
+/// (build, spike, gap — as a shortcode's opens on) and the highlighted
+/// ticket whatever its kind; a `to` board, all of it. The tally recounted.
+pub(crate) fn shown_scoped(a: &Answer, scope: &Scope, at: Option<&str>) -> Answer {
+    let keep = |c: &Card| match scope {
+        Scope::To(_) => true,
+        Scope::Under(_) => matches!(c.summary.kind, Kind::Build | Kind::Spike | Kind::Gap) || Some(c.summary.id.as_str()) == at,
+    };
+    let mut out = Answer { cards: a.cards.iter().filter(|c| keep(c)).cloned().collect(), ..Answer::default() };
+    retally(&mut out);
+    out
+}
+
+/// `waves_to`'s cycles, from its events (an answer's [`answer_of`] skips them).
+pub(crate) fn cycles_of(events: &[TicketsEvent]) -> Vec<Vec<String>> {
+    events
+        .iter()
+        .filter_map(|ev| match ev {
+            TicketsEvent::WaveCycle { ids } => Some(ids.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+struct ScopedCtx {
+    scope: StoredValue<Scope>,
+    answer: RwSignal<Option<Answer>>,
+    cycles: RwSignal<Vec<Vec<String>>>,
+    missing: RwSignal<bool>,
+    coalesce: StoredValue<Coalesce>,
+    holder: StoredValue<cache::Holder>,
+    last_error: RwSignal<Option<String>>,
+}
+
+fn ask_scoped(ctx: ScopedCtx) {
+    if ctx.coalesce.try_update_value(Coalesce::ask) == Some(true) {
+        spawn_local(fetch_scoped(ctx));
+    }
+}
+
+async fn fetch_scoped(ctx: ScopedCtx) {
+    loop {
+        let Some(scope) = ctx.scope.try_get_value() else { return };
+        let Some(client) = session::client() else {
+            ctx.coalesce.try_update_value(|c| *c = Coalesce::default());
+            return;
+        };
+        // Every kind is asked (the subtree board shows work; what it holds
+        // beside is what tells it when its set moved).
+        let all: Vec<String> = ["scope", "execution", "build", "gap", "spike"].map(String::from).to_vec();
+        let (name, got) = match &scope {
+            Scope::Under(id) => ("waves_under", client.waves_under_all(id.clone(), Some(all)).await),
+            Scope::To(id) => ("waves_to", client.waves_to_all(id.clone(), Some(all)).await),
+        };
+        match got {
+            Ok(events) => {
+                let gone = events.iter().any(|e| matches!(e, TicketsEvent::NotFound { .. }));
+                ctx.missing.try_set(gone);
+                let cycles = cycles_of(&events);
+                match answer_of(events) {
+                    Ok(a) => {
+                        ctx.cycles.try_set(cycles);
+                        let Some(holder) = ctx.holder.try_get_value() else { return };
+                        let ids: HashSet<String> = a.cards.iter().map(|c| c.summary.id.clone()).collect();
+                        holder.hold_page(a.cards.iter().map(|c| c.summary.clone()).collect());
+                        holder.retain(|id| ids.contains(id));
+                        ctx.answer.try_set(Some(a));
+                    }
+                    Err(message) => {
+                        ctx.last_error.try_set(Some(format!("{name}: {message}")));
+                    }
+                }
+            }
+            Err(e) => {
+                ctx.last_error.try_set(Some(format!("{name}: {}", session::describe(&e))));
+            }
+        }
+        if ctx.coalesce.try_update_value(Coalesce::answered) != Some(true) {
+            return;
+        }
+    }
+}
+
+/// `#/waves/under/<ID>` and `#/waves/to/<ID>` (MENGER-31): a board scoped to
+/// one ticket — its heading names it and links to it — the layouts a toggle
+/// apart; the global filter narrows it as it narrows every surface; the
+/// ticket `?at=` names is scrolled to and outlined.
+#[component]
+pub(crate) fn ScopedBoard(scope: Scope, socket: RwSignal<u32>, last_error: RwSignal<Option<String>>) -> impl IntoView {
+    let lens = lens::use_lens();
+    let sctree = lens.sctree();
+    let global = lens.effective(Level::Global);
+    let at: Option<String> = at_of(&dom::window().location().hash().unwrap_or_default());
+    let layout = RwSignal::new(Layout::parse(storage().and_then(|s| s.get_item(&scope.layout_key()).ok().flatten()).as_deref()));
+    {
+        let key = scope.layout_key();
+        Effect::new(move |prev: Option<Layout>| {
+            let now = layout.get();
+            if prev.is_some_and(|p| p != now) {
+                if let Some(s) = storage() {
+                    let _ = s.set_item(&key, now.as_str());
+                }
+            }
+            now
+        });
+    }
+    let done_open = RwSignal::new(false);
+    let ctx = ScopedCtx {
+        scope: StoredValue::new(scope.clone()),
+        answer: RwSignal::new(None),
+        cycles: RwSignal::new(Vec::new()),
+        missing: RwSignal::new(false),
+        coalesce: StoredValue::new(Coalesce::default()),
+        holder: StoredValue::new(cache::Holder::new()),
+        last_error,
+    };
+    Effect::new(move |_| {
+        if socket.get() == 0 {
+            return;
+        }
+        ask_scoped(ctx);
+    });
+    {
+        let scope = scope.clone();
+        session::listen(move |ev| {
+            let held = ctx.answer.try_with_untracked(|a| a.iter().flat_map(|a| a.cards.iter()).map(|c| c.summary.id.clone()).collect::<HashSet<String>>());
+            let Some(held) = held else { return };
+            let (apply_it, ask_it) = heard_scoped(ev, &scope, &held);
+            if apply_it {
+                let moved = ctx
+                    .answer
+                    .try_maybe_update(|a| {
+                        let moved = a.as_mut().is_some_and(|a| apply_scoped(a, ev, &scope));
+                        (moved, moved)
+                    })
+                    .unwrap_or(false);
+                if moved && ctx.coalesce.try_with_value(Coalesce::busy) == Some(true) {
+                    ask_scoped(ctx);
+                }
+            }
+            if ask_it {
+                ask_scoped(ctx);
+            }
+        });
+    }
+
+    let shown = {
+        let (scope, at) = (scope.clone(), at.clone());
+        Memo::new(move |_| {
+            ctx.answer.with(|a| {
+                a.as_ref().map(|a| {
+                    let mine = shown_scoped(a, &scope, at.as_deref());
+                    let g = global.get();
+                    sctree.with(|t| narrow(&mine, &(g, Clauses::default()), t.as_ref()))
+                })
+            })
+        })
+    };
+    let on_board = Memo::new(move |_| shown.with(|a| a.iter().flat_map(|a| a.cards.iter()).map(|c| c.summary.id.clone()).collect::<HashSet<String>>()));
+    let cols = Memo::new(move |_| {
+        let l = layout.get();
+        shown.with(|a| a.as_ref().map(|a| columns(&a.cards, l)).unwrap_or_default())
+    });
+    let lanes = Memo::new(move |_| cols.with(|cs| cs.iter().map(|c| c.lane.clone()).collect::<Vec<_>>()));
+
+    // `?at=`: once its card is drawn (the Done lane opened for it), scrolled
+    // into view and outlined — once; the outline stays while the card does.
+    let scrolled = StoredValue::new(false);
+    if let Some(at) = at.clone() {
+        Effect::new(move |_| {
+            let Some(done) = shown.with(|a| a.as_ref().map(|a| a.cards.iter().any(|c| c.summary.id == at && c.placement == Placement::Done))) else {
+                return;
+            };
+            if done && !done_open.get_untracked() {
+                done_open.set(true);
+            }
+            layout.track();
+            let at = at.clone();
+            request_animation_frame(move || {
+                let sel = format!("#waves .card[data-ticket-id=\"{at}\"]");
+                let Some(el) = dom::window().document().and_then(|d| d.query_selector(&sel).ok().flatten()) else { return };
+                let _ = el.class_list().add_1("at");
+                if !scrolled.get_value() {
+                    scrolled.set_value(true);
+                    let opts = web_sys::ScrollIntoViewOptions::new();
+                    opts.set_block(web_sys::ScrollLogicalPosition::Center);
+                    opts.set_inline(web_sys::ScrollLogicalPosition::Center);
+                    el.scroll_into_view_with_scroll_into_view_options(&opts);
+                }
+            });
+        });
+    }
+
+    let seg = move |l: Layout| {
+        view! {
+            <button
+                class="seg"
+                class:on=move || layout.get() == l
+                aria-pressed=move || (layout.get() == l).to_string()
+                on:click=move |_| layout.set(l)
+            >
+                {l.as_str()}
+            </button>
+        }
+    };
+    let id = scope.id().to_string();
+    let (kind, words) = match &scope {
+        Scope::Under(_) => ("under", "Wave board for "),
+        Scope::To(_) => ("to", "Waves to "),
+    };
+    let title = {
+        let id = id.clone();
+        move || cache::find(&id).map(|s| s.with(|t| t.title.clone())).unwrap_or_default()
+    };
+    {
+        // The heading's title: the ticket's row, held while the board is.
+        let holder = ctx.holder;
+        let id = id.clone();
+        if let Some(h) = holder.try_get_value() {
+            if !h.hold_id(&id) {
+                session::load_rows(vec![id], h);
+            }
+        }
+    }
+    let about = match &scope {
+        Scope::Under(_) => "it and every ticket under it — build, spike and gap",
+        Scope::To(_) => "everything that must happen first: its blockers, theirs, and a scope's open descendants — it alone in the last wave",
+    };
+    view! {
+        <section id="waves" class="scoped" data-scope=kind data-scope-id=id.clone() data-tag-level="global" data-layout=move || layout.get().as_str()>
+            <h2 class="scope-h">
+                {words}<a class="code" href=format!("#/ticket/{id}") data-ticket-id=id.clone()>{id.clone()}</a>
+                " "<span class="title">{title}</span>
+            </h2>
+            <p class="none about">{about}</p>
+            <div class="wbar">
+                <span class="layout" role="group" aria-label="layout">"[ "{seg(Layout::Waves)}" | "{seg(Layout::Stages)}" ]"</span>
+                <span class="tally">{move || shown.with(|a| a.as_ref().map(tally))}</span>
+            </div>
+            {move || ctx.missing.get().then(|| view! { <p class="none">"no such ticket"</p> })}
+            {move || {
+                let cycles = ctx.cycles.get();
+                (!cycles.is_empty()).then(|| view! {
+                    <p class="cycle" role="note">
+                        "blocked_by cycle — nothing on it can start: "
+                        {cycles.into_iter().map(|c| {
+                            let first = c[0].clone();
+                            view! { <span class="ring">{c.join(" → ")}" → "{first}</span>" " }
+                        }).collect_view()}
+                    </p>
+                })
+            }}
+            {move || ctx.answer.with(Option::is_none).then(|| view! { <p class="loading">"placing the work…"</p> })}
+            <div class="lanes">
+                <For
+                    each=move || lanes.get()
+                    key=Lane::slug
+                    children=move |lane: Lane| lane_view(lane, cols, on_board, done_open)
+                />
+            </div>
+        </section>
+    }
+}
+
 /// `#/waves`: every top-level shortcode, a link to its board.
 #[component]
 fn WaveIndex(tree: nav::Tree) -> impl IntoView {
@@ -1693,5 +2073,90 @@ mod tests {
         assert_eq!((n(Cat::Ready, "yes"), n(Cat::Blocked, "yes"), n(Cat::Commits, "yes")), (Some(1), Some(4), Some(1)));
         assert_eq!((n(Cat::MengerDocs, "yes"), n(Cat::MengerDocs, "no")), (Some(0), Some(9)), "no card is a menger doc");
         assert!(!k.contains_key(&Cat::Title));
+    }
+
+    // -----------------------------------------------------------------
+    // MENGER-31: boards scoped to one ticket
+
+    /// `#/waves/under/<ID>` and `#/waves/to/<ID>` are scoped boards (ids upper
+    /// case, a trailing slash and a query aside); a shortcode's stays one;
+    /// `?at=` is the ticket to highlight.
+    #[test]
+    fn scoped_routes_parse_and_print() {
+        assert_eq!(Scope::parse("under/menger-2"), Some(Scope::Under("MENGER-2".into())));
+        assert_eq!(Scope::parse("to/MENGER-31/"), Some(Scope::To("MENGER-31".into())));
+        assert_eq!(Scope::parse("TO/x-1"), Some(Scope::To("X-1".into())));
+        for not in ["PLEXUS", "under", "under/", "to/a/b", "over/X-1", ""] {
+            assert_eq!(Scope::parse(not), None, "{not}");
+        }
+        assert_eq!(crate::parse_route("#/waves/to/menger-31?at=x"), crate::Route::WavesOf(Scope::To("MENGER-31".into())));
+        assert_eq!(crate::parse_route("#/waves/under/MENGER-2"), crate::Route::WavesOf(Scope::Under("MENGER-2".into())));
+        assert_eq!(crate::parse_route("#/waves/PLEXUS"), crate::Route::Waves("PLEXUS".into()));
+        assert_eq!(crate::route_text(&crate::parse_route("#/waves/under/a-1?at=a-2")), "#/waves/under/A-1");
+        assert_eq!(scoped_href(&Scope::Under("A-1".into()), Some("A-2")), "#/waves/under/A-1?at=A-2");
+        assert_eq!(at_of("#/waves/under/A-1?g=ready&at=a-2"), Some("A-2".into()));
+        assert_eq!(at_of("#/waves/under/A-1"), None);
+        assert_eq!(at_of("#/waves/under/A-1?at="), None);
+    }
+
+    /// What a scoped board does with an event: a lag asks; a held ticket's
+    /// status or kind is applied and asks (what the set is made of may have
+    /// moved); its `blocked_by` (amend), a birth or a move under a held
+    /// ticket, ask; placements are applied — and on a `to` board ask (the
+    /// final ticket's wave is the rest's); anything about tickets it does not
+    /// hold asks nothing.
+    #[test]
+    fn a_scoped_board_hears_what_moves_its_set() {
+        let held: HashSet<String> = ["A-2", "A-3"].map(String::from).into();
+        let to = Scope::To("A-3".into());
+        let under = Scope::Under("A-1".into());
+        let status = |id: &str| TicketsEvent::StatusChanged { ticket: ticket(id), previous: Status::Pending };
+        assert_eq!(heard_scoped(&TicketsEvent::Lagged { missed: 1 }, &to, &held), (false, true));
+        assert_eq!(heard_scoped(&status("A-2"), &to, &held), (true, true));
+        assert_eq!(heard_scoped(&status("Z-9"), &to, &held), (true, false), "applied (it may be waited on), asks nothing");
+        let amended = TicketsEvent::Amended { ticket: ticket("A-2"), changed: vec!["blocked_by".into()] };
+        assert_eq!(heard_scoped(&amended, &to, &held), (false, true));
+        let mut born = ticket("A-9");
+        born.parent = Some("A-1".into());
+        assert_eq!(heard_scoped(&TicketsEvent::Created { ticket: born.clone() }, &under, &held), (false, true), "born under the board's own");
+        born.parent = Some("B-1".into());
+        assert_eq!(heard_scoped(&TicketsEvent::Created { ticket: born }, &under, &held), (false, false));
+        let moved = TicketsEvent::PlacementsChanged { changes: vec![change("A-2", Placement::Wave { n: 1 })] };
+        assert_eq!(heard_scoped(&moved, &to, &held), (true, true));
+        assert_eq!(heard_scoped(&moved, &under, &held), (true, false));
+    }
+
+    /// On a `to` board the final ticket's placement is the board's: a
+    /// `placements_changed` moves the rest and leaves it; on a subtree's
+    /// board it moves like any card.
+    #[test]
+    fn the_final_ticket_keeps_its_last_wave() {
+        let a = || answer(vec![card("A-2", Status::Ready, Placement::Wave { n: 1 }, &[]), card("A-3", Status::Pending, Placement::Wave { n: 2 }, &["A-2"])]);
+        let ev = TicketsEvent::PlacementsChanged { changes: vec![change("A-2", Placement::Done), change("A-3", Placement::Wave { n: 1 })] };
+        let mut to = a();
+        assert!(apply_scoped(&mut to, &ev, &Scope::To("A-3".into())));
+        assert_eq!(lanes(&to), [lane(Lane::Wave(2), &["A-3"]), lane(Lane::Done, &["A-2"])]);
+        let mut under = a();
+        assert!(apply_scoped(&mut under, &ev, &Scope::Under("A-1".into())));
+        assert_eq!(lanes(&under), [lane(Lane::Wave(1), &["A-3"]), lane(Lane::Done, &["A-2"])]);
+    }
+
+    /// A subtree's board shows work and the highlighted ticket whatever its
+    /// kind; a `to` board shows everything it was answered.
+    #[test]
+    fn a_subtree_board_shows_work_and_the_highlighted_ticket() {
+        let mut scope = card("A-2", Status::Epic, Placement::Wave { n: 1 }, &[]);
+        scope.summary.kind = Kind::Scope;
+        let mut exec = card("A-4", Status::Pending, Placement::Wave { n: 1 }, &[]);
+        exec.summary.kind = Kind::Execution;
+        let a = answer(vec![scope, card("A-3", Status::Ready, Placement::Wave { n: 1 }, &[]), exec]);
+        let ids = |a: &Answer| a.cards.iter().map(|c| c.summary.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&shown_scoped(&a, &Scope::Under("A-1".into()), None)), ["A-3"]);
+        assert_eq!(ids(&shown_scoped(&a, &Scope::Under("A-1".into()), Some("A-4"))), ["A-3", "A-4"]);
+        assert_eq!(shown_scoped(&a, &Scope::Under("A-1".into()), Some("A-4")).waves, vec![2]);
+        assert_eq!(ids(&shown_scoped(&a, &Scope::To("A-3".into()), None)), ["A-2", "A-3", "A-4"]);
+        let cyc = vec![TicketsEvent::WaveCycle { ids: vec!["A-2".into(), "A-3".into()] }, TicketsEvent::WaveCounts { waves: vec![], missing: 2, done: 0 }];
+        assert_eq!(cycles_of(&cyc), vec![vec!["A-2".to_string(), "A-3".to_string()]]);
+        assert!(answer_of(cyc).is_ok(), "a cycle is not an error");
     }
 }

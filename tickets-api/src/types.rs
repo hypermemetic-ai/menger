@@ -1480,6 +1480,11 @@ pub enum TicketsEvent {
         missing: u64,
         done: u64,
     },
+    /// MENGER-31: a `blocked_by` cycle among what a `waves_to` target waits
+    /// on (yielded after the `placed`, before the `wave_counts`, one per
+    /// cycle): its ids in the store's order. Every ticket on it — and the
+    /// target behind it — is `missing_blocker`: no status change ends it.
+    WaveCycle { ids: Vec<String> },
     /// WAVE-6: the kept placements one write moved (yielded by `watch`) —
     /// one event per write that moved any, after that write's other events,
     /// each change the ticket's id and its placement now: the ticket a

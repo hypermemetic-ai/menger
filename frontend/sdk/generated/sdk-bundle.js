@@ -251,6 +251,14 @@
       const stream = this.rpc.call("tickets.waves", { epics, kinds });
       yield* extractData(stream);
     }
+    async* wavesTo(id, kinds) {
+      const stream = this.rpc.call("tickets.waves_to", { id, kinds });
+      yield* extractData(stream);
+    }
+    async* wavesUnder(id, kinds) {
+      const stream = this.rpc.call("tickets.waves_under", { id, kinds });
+      yield* extractData(stream);
+    }
   }
   function createTicketsClient(rpc) {
     return new TicketsClientImpl(rpc);

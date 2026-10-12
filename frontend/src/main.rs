@@ -360,7 +360,11 @@ pub(crate) enum Route {
     /// WAVE-12: a query after it (`?sc=…&status=…`) is the board's filter —
     /// the board's to read, not the route's.
     Waves(String),
-    /// COMP-6: `#/components` (`None`) — every component; and
+    /// MENGER-31: `#/waves/under/<ID>` — the wave board of a ticket's subtree
+    /// — and `#/waves/to/<ID>` — the one whose final state is the ticket. A
+    /// query (`?at=<ID>`, the ticket to highlight) is the board's.
+    WavesOf(waves::Scope),
+    /// COMP-6:`#/components` (`None`) — every component; and
     /// `#/components/<tag>` — that one (its name folded to lowercase, as
     /// HTML folds a tag).
     Components(Option<String>),
@@ -384,6 +388,10 @@ fn parse_route(hash: &str) -> Route {
     let path = path.split_once('?').map_or(path, |(p, _)| p);
     match path.split_once('/') {
         Some(("ticket", id)) if !id.is_empty() => Route::Ticket(id.to_string()),
+        // MENGER-31: `#/waves/under/<ID>`, `#/waves/to/<ID>`.
+        Some(("waves", rest)) if waves::Scope::parse(rest).is_some() => {
+            Route::WavesOf(waves::Scope::parse(rest).expect("just parsed"))
+        }
         Some(("waves", sc)) => Route::Waves(sc.trim_end_matches('/').to_ascii_uppercase()),
         None if path == "waves" => Route::Waves(String::new()),
         Some(("components", tag)) => {
@@ -408,6 +416,7 @@ pub(crate) fn route_text(route: &Route) -> String {
         Route::Ticket(id) => format!("#/ticket/{id}"),
         Route::Waves(sc) if sc.is_empty() => "#/waves".to_string(),
         Route::Waves(sc) => format!("#/waves/{sc}"),
+        Route::WavesOf(scope) => scope.href(),
         Route::Components(None) => "#/components".to_string(),
         Route::Components(Some(tag)) => format!("#/components/{tag}"),
         Route::Inputs => "#/inputs".to_string(),
@@ -2134,7 +2143,7 @@ fn App() -> impl IntoView {
                     <a
                         class="hlink"
                         href="#/waves"
-                        aria-current=move || matches!(route.get(), Route::Waves(_)).then_some("page")
+                        aria-current=move || matches!(route.get(), Route::Waves(_) | Route::WavesOf(_)).then_some("page")
                     >
                         "waves"
                     </a>
@@ -2218,6 +2227,7 @@ fn App() -> impl IntoView {
                             Route::Board => "the live board (MFE-3)",
                             Route::Ticket(_) => "ticket (MFE-7)",
                             Route::Waves(_) => "the wave board (WAVE-5)",
+                            Route::WavesOf(_) => "a ticket's wave board (MENGER-31)",
                             Route::Components(_) => "components (COMP-6)",
                             Route::Inputs => "inputs (INPUT-6)",
                             Route::Settings => "settings (MFE-21)",
@@ -2282,6 +2292,7 @@ fn App() -> impl IntoView {
                         Route::Waves(shortcode) => {
                             view! { <waves::WaveBoard shortcode tree socket last_error /> }.into_any()
                         }
+                        Route::WavesOf(scope) => view! { <waves::ScopedBoard scope socket last_error /> }.into_any(),
                         Route::Components(only) => view! { <components::ComponentsPage only /> }.into_any(),
                         Route::Inputs => view! { <inputs_page::InputsPage /> }.into_any(),
                         Route::Settings => view! { <settings::SettingsPage test_link /> }.into_any(),

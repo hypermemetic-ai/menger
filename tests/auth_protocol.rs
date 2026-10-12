@@ -241,6 +241,9 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.facets", Today::Viewer, None),
     ("tickets.tree", Today::Viewer, None),
     ("tickets.waves", Today::Viewer, None),
+    // MENGER-31: a ticket's boards — reads, a viewer's.
+    ("tickets.waves_under", Today::Viewer, None),
+    ("tickets.waves_to", Today::Viewer, None),
     ("tickets.blockers", Today::Viewer, None),
     ("tickets.watch", Today::Viewer, None),
     // MENGER-13: a ticket's history is a read.
