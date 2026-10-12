@@ -1019,6 +1019,11 @@ pub enum StoreError {
     /// leave more than [`crate::labels::MAX_PER_TICKET`] — `why` says which.
     /// A call is all or nothing: nothing was written.
     Labels { id: String, why: String },
+    /// MENGER-15: a `create` or `amend` gave a body of `bytes` bytes, past
+    /// the store's cap, `max` ([`Store::body_max`]). `id` is the amended
+    /// ticket — `None` for a `create`, which stored nothing and allocated no
+    /// id. Nothing was written.
+    BodyTooLarge { id: Option<String>, bytes: usize, max: usize },
     /// The write could not be made durable; nothing was acknowledged.
     /// SCALE-14: or a read could not get a body from the database.
     Db(String),
@@ -1137,6 +1142,10 @@ impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound(id) => write!(f, "no ticket with id '{id}'"),
+            Self::BodyTooLarge { id, bytes, max } => {
+                let whose = id.as_deref().map_or_else(|| "the body".to_string(), |i| format!("{i}'s new body"));
+                write!(f, "{whose} is {bytes} bytes, past the {max}-byte cap on a ticket body (--max-body-bytes); nothing was written")
+            }
             Self::InvalidEpic(e) => write!(
                 f,
                 "invalid epic '{e}' (expected a short alphanumeric prefix like MNG)"
@@ -2661,7 +2670,17 @@ pub struct Store {
     /// broadcast — so the caller going away does not let the next write in
     /// before the cache holds this one.
     write_serial: Arc<AsyncMutex<()>>,
+    /// MENGER-15: the longest body `create` and `amend` store, in bytes
+    /// ([`BODY_MAX_DEFAULT`] unless [`Store::with_body_max`] said).
+    body_max: usize,
 }
+
+/// MENGER-15: the default cap on a ticket body — 8 MiB, room for a whole
+/// page with its media inlined. Bodies are never in the cache (SCALE-14):
+/// the cap bounds what one `get` reads and one write commits, not what the
+/// process holds. It sits under the WebSocket's own 10 MB request limit
+/// (jsonrpsee's default) with room for JSON's escaping.
+pub const BODY_MAX_DEFAULT: usize = 8 * 1024 * 1024;
 
 impl Default for Store {
     fn default() -> Self {
@@ -2793,7 +2812,29 @@ impl Store {
             committing: Arc::new(AtomicU64::new(0)),
             unders: Arc::default(),
             write_serial: Arc::new(AsyncMutex::new(())),
+            body_max: BODY_MAX_DEFAULT,
         })
+    }
+
+    /// MENGER-15: the store with its body cap at `max` bytes (main's
+    /// `--max-body-bytes`). Set before the store is shared.
+    pub fn with_body_max(mut self, max: usize) -> Self {
+        self.body_max = max;
+        self
+    }
+
+    /// MENGER-15: the longest body `create` and `amend` store, in bytes.
+    pub fn body_max(&self) -> usize {
+        self.body_max
+    }
+
+    /// MENGER-15: refuse a body past the cap — before anything is read,
+    /// locked or allocated.
+    fn check_body(&self, id: Option<&str>, body: &str) -> Result<(), StoreError> {
+        if body.len() > self.body_max {
+            return Err(StoreError::BodyTooLarge { id: id.map(str::to_string), bytes: body.len(), max: self.body_max });
+        }
+        Ok(())
     }
 
     /// SCALE-28: `menger --verify-derived` — the file at `path` opened
@@ -3056,6 +3097,7 @@ impl Store {
         if epic.is_empty() || !epic.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(StoreError::InvalidEpic(new.epic));
         }
+        self.check_body(None, &new.body)?;
         if !new.kind.has_lifecycle() && !new.blocked_by.is_empty() {
             return Err(StoreError::DocBlocked {
                 epic,
@@ -4216,6 +4258,9 @@ impl Store {
         let id = id.trim().to_ascii_uppercase();
         if title.as_deref().is_some_and(|t| t.trim().is_empty()) {
             return Err(StoreError::EmptyTitle { id });
+        }
+        if let Some(body) = &body {
+            self.check_body(Some(&id), body)?;
         }
         // COMP-3: what a new body defines and references, read from the body
         // in hand before the lock — and refused, if malformed, only once it

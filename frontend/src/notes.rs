@@ -38,9 +38,8 @@ use menger_tickets_api::{Placement, Ticket, TicketsEvent};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::frame::Frame;
 use crate::md::{self, WaveRef};
-use crate::{cache, dom, mermaid, session};
+use crate::{cache, dom, mermaid, present, session};
 
 /// Where a board keeps its annotation inside its root shortcode (WAVE-1
 /// decision 11, WAVE-10's reserved prefix).
@@ -193,7 +192,7 @@ pub(crate) fn body_view(raw: &str, refs: Option<Refs>) -> AnyView {
 /// COMP-4: a body, framed or not — the one renderer the ticket page, the
 /// board's notes and the editor's preview share. A body that holds HTML
 /// (`md::is_framed`, frontmatter split off first) renders in a sandboxed
-/// [`Frame`]: its frontmatter folded outside it as ever, its markup from
+/// [`crate::frame::Frame`]: its frontmatter folded outside it as ever, its markup from
 /// `md::render_body_framed` with each `{wave: ID}` placed here, by `refs`.
 /// While a body stays framed the frame persists, and each change of the
 /// body (an `amended`, a keystroke, a reference placed) re-renders inside it
@@ -203,18 +202,22 @@ pub(crate) fn body_view(raw: &str, refs: Option<Refs>) -> AnyView {
 /// ticket's inputs; `None` for a draft (the editor's preview), which answers
 /// nothing. IDENTITY-36: a frame reads only its ticket's shortcode and what
 /// it hosts — or, for a draft, `scope`'s (the ticket being edited, or the
-/// shortcode a first save creates in).
+/// shortcode a first save creates in). MENGER-15: a framed body sits in a
+/// [`present::Framed`] box — full screen, and its declared view (`view:`,
+/// `widths:` in its frontmatter); `title` is the ticket page's, which makes
+/// it the box `z`, `?view=full` and `view: full` open.
 #[component]
 pub(crate) fn BodyView(
     #[prop(into)] body: Signal<String>,
     refs: Option<Refs>,
     ticket: Option<String>,
     #[prop(optional)] scope: Option<String>,
+    #[prop(optional)] title: Option<Signal<String>>,
 ) -> impl IntoView {
     let framed = Memo::new(move |_| body.with(|b| md::is_framed(md::split_frontmatter(b).1)));
     move || {
         if framed.get() {
-            framed_view(body, refs, ticket.clone(), scope.clone())
+            framed_view(body, refs, ticket.clone(), scope.clone(), title)
         } else {
             body.with(|b| body_view(b, refs))
         }
@@ -223,18 +226,33 @@ pub(crate) fn BodyView(
 
 /// A framed body: the frontmatter fold, then the frame. Reads `body` only
 /// inside its own reactive children, so the caller's closure re-runs only
-/// when the body stops being framed.
-fn framed_view(body: Signal<String>, refs: Option<Refs>, ticket: Option<String>, scope: Option<String>) -> AnyView {
+/// when the body stops being framed. MENGER-15: a whole document is the
+/// frame's as written — not markdown, nothing placed in it.
+fn framed_view(body: Signal<String>, refs: Option<Refs>, ticket: Option<String>, scope: Option<String>, title: Option<Signal<String>>) -> AnyView {
     let fm = Memo::new(move |_| body.with(|b| md::split_frontmatter(b).0.map(str::to_string)));
     let html = Memo::new(move |_| {
         body.with(|b| {
             let src = md::split_frontmatter(b).1;
+            if md::is_page(src) {
+                return src.to_string();
+            }
             match refs {
                 Some(refs) => md::render_body_framed(src, &|id| refs.resolve(id)).html,
                 None => md::render_body_framed(src, &|_| None).html,
             }
         })
     });
+    let decl = Memo::new(move |_| {
+        body.with(|b| {
+            let (fm, src) = md::split_frontmatter(b);
+            present::declared(fm, src)
+        })
+    });
+    let scope = scope.unwrap_or_default();
+    let framed = match title {
+        Some(title) => view! { <present::Framed html decl ticket scope title /> }.into_any(),
+        None => view! { <present::Framed html decl ticket scope /> }.into_any(),
+    };
     view! {
         {move || fm.get().map(|f| view! {
             <details class="frontmatter">
@@ -242,7 +260,7 @@ fn framed_view(body: Signal<String>, refs: Option<Refs>, ticket: Option<String>,
                 <pre>{f}</pre>
             </details>
         })}
-        <Frame html ticket scope=scope.unwrap_or_default() />
+        {framed}
     }
     .into_any()
 }
@@ -257,10 +275,18 @@ fn ticket_of(events: Vec<TicketsEvent>) -> Result<Ticket, String> {
             }
             TicketsEvent::NotFound { id } => return Err(format!("{id}: not found")),
             TicketsEvent::Error { message } => return Err(message),
+            // MENGER-15: the body past the server's cap — said with the cap.
+            TicketsEvent::BodyTooLarge { bytes, max, .. } => return Err(too_large_words(bytes, max)),
             _ => {}
         }
     }
     Err("no answer".into())
+}
+
+/// MENGER-15: the body cap's refusal, as the editor says it.
+pub(crate) fn too_large_words(bytes: u64, max: u64) -> String {
+    let mb = |n: u64| n as f64 / (1024.0 * 1024.0);
+    format!("not saved: the body is {:.1} MB ({bytes} bytes), past the server's {:.1} MB cap on a ticket body ({max} bytes)", mb(bytes), mb(max))
 }
 
 /// WAVE-11: a body's editor — a markdown textarea beside a live preview

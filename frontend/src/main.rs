@@ -264,6 +264,7 @@ mod md;
 mod menu;
 mod nav;
 mod notes;
+mod present;
 
 mod mermaid;
 mod needs;
@@ -1431,7 +1432,7 @@ fn ticket_view(
         // its placement moves; a body with none renders as it always did.
         // COMP-4: a body that holds HTML renders in a sandboxed frame.
         Some(true) => view! {
-            <notes::BodyView body=Signal::derive(move || body_raw.get().unwrap_or_default()) refs=Some(refs) ticket=Some(body_ticket.clone()) />
+            <notes::BodyView body=Signal::derive(move || body_raw.get().unwrap_or_default()) refs=Some(refs) ticket=Some(body_ticket.clone()) title=Signal::derive(move || ticket.with(|t| t.title.clone())) />
         }
         .into_any(),
     };

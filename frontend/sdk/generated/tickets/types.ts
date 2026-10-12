@@ -858,6 +858,20 @@ export interface TicketsEventError {
   message: string;
 }
 
+/** MENGER-15: a `create` or `amend` refused for its body's size — the
+body was `bytes` bytes, past the server's cap, `max`
+(`--max-body-bytes`, 8 MiB by default); `id` the amended ticket
+(`None` for a `create`, which allocated no id). Typed, so a client can
+say so without reading `message`; `message` says it in words. Nothing
+was written. */
+export interface TicketsEventBodyTooLarge {
+  type: 'body_too_large';
+  bytes: number;
+  id: string | null;
+  max: number;
+  message: string;
+}
+
 /** FILTER-13: one row of `tree` — a parent's child, or a shortcode's top
 row, that matches the filter or holds a match below it: `matched`
 whether it matches itself, `below` how many matches are strictly
@@ -895,7 +909,7 @@ export interface TicketsEventSearched {
   words: SearchWord[];
 }
 
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventNode | TicketsEventHit | TicketsEventSearched;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched;
 
 export function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth { return e.type === 'health'; }
 export function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated { return e.type === 'created'; }
@@ -934,6 +948,7 @@ export function isTicketsEventDanglingBlocker(e: TicketsEvent): e is TicketsEven
 export function isTicketsEventMember(e: TicketsEvent): e is TicketsEventMember { return e.type === 'member'; }
 export function isTicketsEventNotFound(e: TicketsEvent): e is TicketsEventNotFound { return e.type === 'not_found'; }
 export function isTicketsEventError(e: TicketsEvent): e is TicketsEventError { return e.type === 'error'; }
+export function isTicketsEventBodyTooLarge(e: TicketsEvent): e is TicketsEventBodyTooLarge { return e.type === 'body_too_large'; }
 export function isTicketsEventNode(e: TicketsEvent): e is TicketsEventNode { return e.type === 'node'; }
 export function isTicketsEventHit(e: TicketsEvent): e is TicketsEventHit { return e.type === 'hit'; }
 export function isTicketsEventSearched(e: TicketsEvent): e is TicketsEventSearched { return e.type === 'searched'; }

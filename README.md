@@ -782,6 +782,91 @@ ask for. Either way the frame keeps its ground (the theme's ink and font,
 no margin), `box-sizing: border-box` on every element, the mermaid
 placeholders and the docs cards; nothing reaches a component's shadow root.
 
+**Full screen, mockups and whole pages** (MENGER-15;
+`frontend/src/present.rs`, `frontend/sdk/menger-page.js`). Every framed
+body sits under a slim bar whose **⤢ Full screen** (or `z` — from the
+ticket page, or inside a focused body) makes the same box, the same
+`<iframe>`, fill the viewport: the Fullscreen API when a gesture allows it,
+else a fixed overlay over the app. The sandbox and CSP are unchanged — it is
+the frame resized, not a new origin or window. Esc (or the bar's exit)
+leaves it; full, the bar names the ticket's id and title.
+`#/ticket/ID?view=full` opens a ticket straight into it, and entering or
+leaving rewrites that query in place.
+
+A body **declares how it is shown** in its frontmatter:
+
+```yaml
+---
+view: mockup            # inline (default) | full | mockup
+widths: 390, 768, 1440  # a mockup's devices — W, or WxH; at most 6
+---
+```
+
+`full` opens the ticket page full screen, with **← Back to the ticket** one
+click away; `mockup` draws the body as a website mockup. A whole document
+that should stay a plain HTML file can say it in its head instead —
+`<meta name="menger-view" content="mockup">`,
+`<meta name="menger-widths" content="390,768x1024,1440">` (the frontmatter
+wins). A **mockup** renders the body once per device, each a frame at the
+device's own viewport (`390` → 390 × 844, `768` → 768 × 1024, `1440` →
+1440 × 900; its media queries see that width) in device chrome, scaled to
+fit — all side by side at one common scale, or one at a time — with
+**Light / Dark** and **Reduced motion** toggles the framed page itself sees,
+live; full screen scales the devices to the screen.
+
+**A body that is a whole HTML document** — `<!doctype html` (then an
+element) or `<html` first, past comments — renders as itself: its own head,
+styles and scripts, inline media included, never markdown and never under
+the app's typography, theme tokens or SDK (`window.menger` is absent; it is
+a page). It is still the sandboxed frame, and IDENTITY-28's CSP is still the
+first element of its head (injected inside its `<head>`, ahead of anything
+the page holds), followed by the page shim. Inline it gets a viewport of
+its own (80vh) and scrolls inside it; its `#fragment` links scroll the page
+(a srcdoc document's base URL is the app's, so the browser would navigate
+the frame away), any other link takes MENGER-14's path (`menger:link`: the leave dialog first; full screen steps aside for it), and its `prefers-color-scheme`
+follows the app's painted mode.
+
+**What makes `prefers-color-scheme` follow inside the frame.** An iframe's
+`prefers-color-scheme` is the *embedder's* in Chromium, whatever the
+`<iframe>` element's `color-scheme` says (checked: Chromium 153 reports the
+browser's preference in both a `color-scheme: dark` and a `color-scheme:
+light` frame); Firefox follows the element's used `color-scheme` (Firefox
+155: a `color-scheme: dark` iframe matches dark in a light browser).
+Nothing anywhere sets `prefers-reduced-motion` per frame. So the host sets
+the `<iframe>`'s `color-scheme` (Firefox's native path) **and** the page
+shim, inlined before anything the page holds, answers the page's own
+queries as emulated: every `@media` rule naming `prefers-color-scheme` or
+`prefers-reduced-motion` (nested and `@import`ed ones too) has that feature
+rewritten to an always-true / always-false condition, reversibly; so is the
+`media` of every `<source>` (a `<picture>`'s dark variant), `<link>` and
+`<style>`; `matchMedia()` of such a query returns a live list whose
+`matches` follows the emulation and which fires `change` on a toggle (a
+page that reads it once and listens, like the landing's carpet, follows);
+the root carries `data-menger-scheme` / `data-menger-motion`, and its
+`color-scheme` when the page declared `light dark`. Toggles arrive as
+`menger:emulate { scheme, reduce }` — no reload. A cross-origin style sheet
+cannot be read and is left as the browser answers it.
+
+**A ticket body's size cap** (MENGER-15). `create` and `amend` refuse a body
+past `--max-body-bytes` (`MENGER_MAX_BODY_BYTES`; default 8 MiB, room for a
+page with its media inlined) with the typed `body_too_large { id, bytes,
+max, message }`, writing nothing; the app's editor says it with the cap.
+What it means for memory: bodies are not in the cache (SCALE-14 — rows are;
+a body is read from the database for the call that answers it), so a large
+body costs the process only while one `get` or one write carries it, and
+`list`, `watch`, `--summary` and the board carry no bodies at all (summary
+rows; `watch`'s whole-ticket events — `created`, `amended`, … — do carry the
+ticket, so one amend of an 8 MB body broadcasts 8 MB to each open watch).
+The search index keeps a body's text only (its `<script>`/`<style>` and
+attribute values but a few dropped), so inlined media cost it nothing.
+Transport limits sit around it: the WebSocket takes a request up to 10 MB
+(jsonrpsee's default — JSON escaping grows a body, so a cap much above
+~9 MB is refused there first, untyped); the REST bridge refuses a request
+past 2 MB (axum's default body limit) with `413`, so a large body is
+written over the WebSocket; and synapse cannot send one from the command
+line (a single argument is at most 128 KB on Linux, and synapse has no
+file or stdin parameter) — a script speaks the WebSocket instead.
+
 `window.menger` (1.4, frozen): `version`; **`tickets`** (COMP-10) — the
 `tickets` activation's typed client (below); **`call(method, params)`** → a
 Promise of the call's items (the stream's data events as the wire spells
@@ -1215,7 +1300,7 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
 | method | yields |
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
-| `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent?, path? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the six is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12) **or a doc** (SDLC-11): the first ticket of a prefix must be `kind: scope` or `kind: doc`, anything else is an in-band `error` naming the rule and nothing is allocated; a `doc` starts — and stays — in `Doc`, and a doc with a `blocked_by`, a `blocked_by` naming a doc, or a doc born as an id a `blocked_by` already names is an in-band `error` (SDLC-11); **`parent` defaults to the shortcode's scope root and must stay inside the shortcode** (MNG-14): omitted, a non-root hangs under its prefix's root; named, it must be in the same prefix, else an in-band `error` — the scope root itself is the exception, its parent (if any) is the shortcode it hangs under, a sub-shortcode; **`path`** (WAVE-10) gives the ticket a path address in its shortcode — only `_MENGER/…` with something after it, only on a `doc`, only with the shortcode's scope root as `parent` (the default); one another ticket of the shortcode holds is an in-band `error` naming it, as is each other refusal, and nothing is allocated; COMP-3: the body's ` ```component ` blocks register components — a block whose tag is not a component name, a name defined twice, or a name another ticket defines is an in-band `error` (the last naming that ticket) and nothing is allocated; COMP-8: so is a malformed `<docs>`, naming the problem |
+| `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent?, path? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the six is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12) **or a doc** (SDLC-11): the first ticket of a prefix must be `kind: scope` or `kind: doc`, anything else is an in-band `error` naming the rule and nothing is allocated; a `doc` starts — and stays — in `Doc`, and a doc with a `blocked_by`, a `blocked_by` naming a doc, or a doc born as an id a `blocked_by` already names is an in-band `error` (SDLC-11); **`parent` defaults to the shortcode's scope root and must stay inside the shortcode** (MNG-14): omitted, a non-root hangs under its prefix's root; named, it must be in the same prefix, else an in-band `error` — the scope root itself is the exception, its parent (if any) is the shortcode it hangs under, a sub-shortcode; **`path`** (WAVE-10) gives the ticket a path address in its shortcode — only `_MENGER/…` with something after it, only on a `doc`, only with the shortcode's scope root as `parent` (the default); one another ticket of the shortcode holds is an in-band `error` naming it, as is each other refusal, and nothing is allocated; COMP-3: the body's ` ```component ` blocks register components — a block whose tag is not a component name, a name defined twice, or a name another ticket defines is an in-band `error` (the last naming that ticket) and nothing is allocated; COMP-8: so is a malformed `<docs>`, naming the problem; MENGER-15: a body past the cap (`--max-body-bytes`, 8 MiB by default) is the typed `body_too_large { id: null, bytes, max, message }` and nothing is allocated |
 | `tickets.get { id }` | `ticket` or `not_found` — `id` is an `EPIC-N`, or (WAVE-10) a path address `SHORTCODE/path` (`PLEXUS/_MENGER/board`; the shortcode case-insensitive, the path exact), and `not_found` carries the id or address as given |
 | `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children — the one way to read them (SCALE-4), from an index the store keeps, so a page of a root's 163,530 children costs the page (1.3 ms at 10⁶ over REST, first page or deep) and its `remaining` is arithmetic; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page — `after` naming no ticket is one in-band `error` |
 | `tickets.ready_set { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete, Superseded or Canceled — never a doc), ordered (epic, seq), then one `page { next, remaining }` |
@@ -1223,7 +1308,7 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
 | `tickets.search { query, filter?, limit?, offset? }` | SEARCH-2: search inside tickets — one `hit { summary, title, snippet, corrected }` per ticket whose title or body's text holds every word of `query`, best first, then one `searched { matched, next, words }`. Each word also matches as a prefix; a misspelt one (unknown to the index, or rare in it) of four letters or more also matches the index's words one edit away (two from eight letters); `FILTER-23`, `set_status` and `"a phrase"` are phrases. Uncorrected matches first, then corrected; BM25 within, the title weighing 4 to the body's 1. `title` and `snippet` are `[{ text, hit }]` stretches, the matched words marked. `filter` as `find`'s; `limit` 20 by default, at most 100; `offset` skips matches — `next` is the next page's. A blank query is no hits and `matched: 0`. See "Search" below |
 | `tickets.set_status { id, status }` | `status_changed { ticket, previous }` — any of the nine, from any status (SDLC-7: the worker states `Coding` and `In Review` included); one outside them is an in-band `error` naming the nine; SDLC-11: on a doc, an in-band `error` (a doc has no lifecycle), and `Doc` on any other kind an in-band `error` too |
 | `tickets.set_kind { id, kind, status? }` | `kind_changed { ticket, previous }` (SDLC-13) — the one write that changes a kind; everything kept by kind moves in its write. To a `doc`: status `Doc` (a `status` other than `Doc` is an in-band `error`), refused while the ticket waits on a blocker or a ticket waits on it (each named); from a doc: `status` if given (never `Doc`), else `Epic` for a scope and `Pending` otherwise; between two kinds of work the status stays unless given (`Doc` an in-band `error`). A shortcode's root becoming a kind that roots nothing is an in-band `error` naming the shortcode (doc ↔ scope is allowed); so is a path holder (WAVE-10) becoming work, and an unknown kind or status; an id naming no ticket is `not_found`. A lower-seq ticket made a scope or a doc becomes its shortcode's root. The kind (and status) it has is no write and no broadcast, answering `previous` equal to its kind. `watch` carries `kind_changed` first, then the write's `group_changed` (a root's whenever its kind or status changed; every row a re-root moved), `placements_changed`, and — filtered — `entered` / `left` |
-| `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id. COMP-3: a new body moves the component registry (definitions, references, orphans); a malformed ` ```component ` block (COMP-8: or `<docs>`), or a name another ticket defines, is an in-band `error` and nothing is written, title included |
+| `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id. COMP-3: a new body moves the component registry (definitions, references, orphans); a malformed ` ```component ` block (COMP-8: or `<docs>`), or a name another ticket defines, is an in-band `error` and nothing is written, title included; MENGER-15: a body past the cap is the typed `body_too_large { id, bytes, max, message }` and nothing is written, title included |
 | `tickets.link_commits { id, commits }` | `commits_linked { ticket, added }` (SDLC-9) — appends every commit reference in `commits` the ticket does not already carry, in the order given; `added` is what was newly linked, in order. Every entry already linked, or `commits` empty, is no write and no broadcast and answers `added: []`. An entry that is not a commit reference is one in-band `error` naming every such entry, and nothing is written — a call is all or nothing; so is a link that would put more than 256 commits on the ticket. An id naming no ticket is `not_found`. Durable before it is acknowledged; `updated_unix` moves, nothing else does |
 | `tickets.unlink_commits { id, commits }` | `commits_unlinked { ticket, removed }` (SDLC-9) — every entry the ticket carries is removed; `removed` names them in the order given; none of them linked is no write, `removed: []`. The same grammar, the same all-or-nothing `error`, `not_found` |
 | `tickets.label { id, add?, remove? }` | `labels_changed { ticket, added, removed }` (MENGER-12) — each entry a label (letters, digits, `-`, ≤ 32, lower-cased), `add` added and `remove` taken off (a label in both is added), the ticket's labels kept sorted, each once, ≤ 16; `added` / `removed` are what moved, in the order given — both empty is no write and no broadcast. A bad entry or too many is one in-band `error`, nothing written; `not_found`. Durable before it is acknowledged; `updated_unix` and the ticket's cell (`label <name>`) move, nothing else; `watch` carries every `labels_changed` that moved something |

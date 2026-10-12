@@ -113,6 +113,11 @@
 //! off again; Esc closes what the mode has open (a pin's list, a comment
 //! box) and then leaves it. A body's frame that has focus posts the same
 //! keys to the app (`menger:key`, src/frame.rs).
+//!
+//! MENGER-15: **`z` is full screen** for the ticket page's framed body
+//! (src/present.rs) — on, and off again; from inside a focused body too (the
+//! SDK and the page shim post it). Esc leaves it, after annotation mode's
+//! own Esc.
 
 use std::cell::{Cell, RefCell};
 
@@ -122,7 +127,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::filter::Cat;
-use crate::{annotate, board, counts, dom, lens, navigate_to_ticket, session, st_class, tags};
+use crate::{annotate, board, counts, dom, lens, navigate_to_ticket, present, session, st_class, tags};
 use menger_tickets_api::{Marked, SearchWord, TicketSummary};
 use std::collections::{BTreeSet, HashSet};
 
@@ -175,8 +180,9 @@ pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
     ("F", "filter every view (the global filter)"),
     ("/ filter SC", "the global filter becomes a shortcode (its tree)"),
     ("a or A", "annotation mode: outline the page, click anything to comment on it"),
+    ("z", "on a ticket page: its framed body full screen, and back (from inside the body too)"),
     ("?", "this list"),
-    ("Esc", "close the palette or this list; leave annotation mode"),
+    ("Esc", "close the palette or this list; leave annotation mode; leave full screen"),
 ];
 
 // ---------------------------------------------------------------------
@@ -889,6 +895,12 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         ev.prevent_default();
         return;
     }
+    // MENGER-15: then Esc leaves full screen (the overlay; the browser's own
+    // full screen takes its Esc itself).
+    if key == "Escape" && present::escape() {
+        ev.prevent_default();
+        return;
+    }
     if cmd {
         // ⌘K / Ctrl+K was taken in the capture phase (MENGER-6); every
         // other chord stays the browser's (Ctrl+R, ⌘L, …).
@@ -912,6 +924,13 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         "a" | "A" => {
             ev.prevent_default();
             annotate::toggle();
+            return;
+        }
+        // MENGER-15: the ticket page's framed body, full screen and back.
+        "z" => {
+            if present::toggle_page() {
+                ev.prevent_default();
+            }
             return;
         }
         _ => {}
@@ -1964,6 +1983,7 @@ mod tests {
             "F",           // the global filter (FILTER-11)
             "/ filter SC", // the palette's filter (FILTER-22)
             "a or A",      // annotation mode (COMMENT-3)
+            "z",           // full screen (MENGER-15)
             "?",           // this list
             "Esc",         // close
         ] {

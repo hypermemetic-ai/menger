@@ -139,7 +139,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, links, mermaid, notes, registry, session};
+use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, links, md, mermaid, notes, present, registry, session};
 
 /// The SDK's version — `window.menger.version` inside every frame (pinned
 /// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
@@ -155,8 +155,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, links,
 /// built-in `<m-cite>` (`menger:cite` / `menger:uncite` / `menger:cited`),
 /// a cited window's frame (`cite` in the init block; `menger:size { top,
 /// found }`; `input.displayOnly`), and section anchors in `menger:reveal`;
-/// MENGER-14's 1.8 hands every link clicked to the host (`menger:link`).
-pub(crate) const SDK_VERSION: &str = "1.8.0";
+/// MENGER-14's 1.8 hands every link clicked to the host (`menger:link`);
+/// MENGER-15's 1.9 hands it `z` (full screen) and every Esc, and a mockup's
+/// frames take `menger:emulate` (the page shim, `menger-page.js`).
+pub(crate) const SDK_VERSION: &str = "1.9.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -165,6 +167,27 @@ pub(crate) const SDK_URL: &str = "/app/sdk/menger-sdk.js";
 
 /// The shell, inlined into every srcdoc.
 const SDK_JS: &str = include_str!("../sdk/menger-sdk.js");
+
+/// MENGER-15: the page shim (its header is its reference) — inlined first
+/// into a whole document's head, and after the SDK in a mockup's frames:
+/// `prefers-color-scheme` / `prefers-reduced-motion` as the host emulates
+/// them; in a page, its keys, its `#fragment` links, and `menger:ready`.
+const PAGE_JS: &str = include_str!("../sdk/menger-page.js");
+
+/// MENGER-15: what a frame's page is told the viewer prefers — each `None`
+/// for the browser's own. A whole document follows the app's painted mode
+/// (`scheme`) unless a mockup's toggles set both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct Emulate {
+    pub(crate) scheme: Option<Scheme>,
+    pub(crate) reduce: Option<bool>,
+}
+
+impl Emulate {
+    fn json(self) -> serde_json::Value {
+        serde_json::json!({ "scheme": self.scheme.map(Scheme::as_str), "reduce": self.reduce })
+    }
+}
 
 /// The frame's sandbox (COMP-1 decision 1, after lavish-axi's): scripts,
 /// and popups that escape the sandbox — never `allow-same-origin`, which
@@ -253,6 +276,10 @@ pub(crate) struct Shell<'a> {
     /// COMP-14: a cited window's frame — the section of the body it shows
     /// (the SDK hides the rest); `None` for every other frame.
     pub(crate) cite: Option<&'a cite::Section>,
+    /// MENGER-15: the preferences emulated — a mockup's (the page shim is
+    /// inlined), or a whole document's (always inlined); `None` in any
+    /// other frame, which gets no shim.
+    pub(crate) emulate: Option<Emulate>,
 }
 
 /// A token name the frame will take: `--` and lowercase ASCII words.
@@ -305,13 +332,108 @@ pub(crate) fn init_json(shell: &Shell) -> String {
             cite::Section::Field(n) => serde_json::json!({ "field": n }),
             cite::Section::Id(n) => serde_json::json!({ "anchor": n }),
         }),
+        // MENGER-15: what the page shim emulates (a mockup's frames).
+        "emulate": shell.emulate.map(Emulate::json),
     });
     init.to_string().replace('<', "\\u003c")
+}
+
+/// MENGER-15: a whole document's init block — its channel and what the
+/// shim emulates; nothing of the SDK's.
+pub(crate) fn page_init_json(shell: &Shell) -> String {
+    let init = serde_json::json!({
+        "channel": shell.channel,
+        "page": true,
+        "ticket": shell.ticket,
+        "emulate": shell.emulate.unwrap_or_default().json(),
+    });
+    init.to_string().replace('<', "\\u003c")
+}
+
+/// MENGER-15: where a whole document's head begins — past a byte-order
+/// mark, the doctype and comments, inside its `<html …>` tag and its
+/// `<head …>` tag where it has them: the point the CSP must come first at
+/// (IDENTITY-28). With no `<head>` written, the parser opens one for the
+/// first element there.
+pub(crate) fn head_at(doc: &str) -> usize {
+    let mut at = md::page_start(doc).unwrap_or(0);
+    // `<!doctype …>`, comments, and whitespace between them.
+    let skip = |mut at: usize| loop {
+        at += doc[at..].len() - doc[at..].trim_start().len();
+        let rest = &doc[at..];
+        if let Some(after) = rest.strip_prefix("<!--") {
+            match after.find("-->") {
+                Some(e) => at += 4 + e + 3,
+                None => return doc.len(),
+            }
+        } else if rest.get(..9).is_some_and(|d| d.eq_ignore_ascii_case("<!doctype")) {
+            match rest.find('>') {
+                Some(e) => at += e + 1,
+                None => return doc.len(),
+            }
+        } else {
+            return at;
+        }
+    };
+    // Past an open tag named `name` at `at`, if one is there.
+    let past = |at: usize, name: &str| -> Option<usize> {
+        let rest = &doc[at..];
+        let n = name.len() + 1;
+        let opens = rest.get(..n).is_some_and(|t| t.eq_ignore_ascii_case(&format!("<{name}")))
+            && rest.as_bytes().get(n).is_some_and(|c| c.is_ascii_whitespace() || *c == b'>' || *c == b'/');
+        if !opens {
+            return None;
+        }
+        // The tag's end: the first `>` outside a quoted attribute value.
+        let mut quote = None;
+        for (i, c) in rest.char_indices().skip(n) {
+            match (quote, c) {
+                (Some(q), c) if c == q => quote = None,
+                (Some(_), _) => {}
+                (None, '"' | '\'') => quote = Some(c),
+                (None, '>') => return Some(at + i + 1),
+                _ => {}
+            }
+        }
+        None
+    };
+    at = skip(at);
+    if let Some(after) = past(at, "html") {
+        at = skip(after);
+    }
+    if let Some(after) = past(at, "head") {
+        at = after;
+    }
+    at
+}
+
+/// MENGER-15: a whole document's srcdoc — the document itself, its own
+/// head, styles and scripts, with IDENTITY-28's CSP injected as the first
+/// element of its head, then the init block and the page shim, before
+/// anything the page holds. No SDK, no theme tokens, no base: the page
+/// renders as itself, under the same sandbox and CSP as every frame.
+pub(crate) fn page_srcdoc(doc: &str, shell: &Shell) -> String {
+    let at = head_at(doc);
+    let mut out = String::with_capacity(doc.len() + PAGE_JS.len() + 512);
+    out.push_str(&doc[..at]);
+    out.push_str("<meta http-equiv=\"Content-Security-Policy\" content=\"");
+    out.push_str(CSP);
+    out.push_str("\"><script type=\"application/json\" id=\"menger-init\">");
+    out.push_str(&page_init_json(shell));
+    out.push_str("</script><script id=\"menger-page\">");
+    out.push_str(PAGE_JS);
+    out.push_str("</script>");
+    out.push_str(&doc[at..]);
+    out
 }
 
 /// A framed body's whole document: the head that makes it menger's (see
 /// the module doc), then the body's markup as `render_body_framed` gave it.
 pub(crate) fn srcdoc(body_html: &str, shell: &Shell) -> String {
+    // MENGER-15: a whole document is its own page.
+    if md::is_page(body_html) {
+        return page_srcdoc(body_html, shell);
+    }
     let mut doc = String::with_capacity(body_html.len() + SDK_JS.len() + 2048);
     doc.push_str("<!doctype html><html lang=\"en\" data-theme=\"");
     doc.push_str(shell.scheme.as_str());
@@ -330,7 +452,14 @@ pub(crate) fn srcdoc(body_html: &str, shell: &Shell) -> String {
     doc.push_str(SDK_URL);
     doc.push_str("\">");
     doc.push_str(SDK_JS);
-    doc.push_str("</script></head><body>");
+    doc.push_str("</script>");
+    // MENGER-15: a mockup's frame emulates the viewer's preferences.
+    if shell.emulate.is_some() {
+        doc.push_str("<script id=\"menger-page\">");
+        doc.push_str(PAGE_JS);
+        doc.push_str("</script>");
+    }
+    doc.push_str("</head><body>");
     doc.push_str(body_html);
     doc.push_str("</body></html>");
     doc
@@ -464,6 +593,11 @@ fn read_theme() -> (Scheme, Vec<(String, String)>) {
         })
         .collect();
     (scheme, tokens)
+}
+
+/// MENGER-15: the app's painted mode — where a mockup's toggle starts.
+pub(crate) fn painted_scheme() -> Scheme {
+    read_theme().0
 }
 
 fn set(obj: &Object, key: &str, value: &JsValue) {
@@ -673,9 +807,48 @@ fn frames() -> Vec<web_sys::HtmlIFrameElement> {
 /// tokens (and redraws its diagrams). Called by the theme toggle beside
 /// `mermaid::rerender_all`. Nothing here can throw.
 pub(crate) fn retheme_all() {
+    let scheme = read_theme().0;
     for f in frames() {
         if let Some(channel) = f.get_attribute("data-channel") {
-            post(&f, &theme_message(&channel));
+            // MENGER-15: a whole document following the app is told its
+            // `prefers-color-scheme` moved; a mockup's keeps its toggles.
+            if f.has_attribute("data-follow") {
+                emulate(&f, Emulate { scheme: Some(scheme), reduce: None });
+            } else if !f.has_attribute("data-page") {
+                post(&f, &theme_message(&channel));
+            }
+        }
+    }
+}
+
+/// MENGER-15: tell `frame` what it emulates now — `menger:emulate` to its
+/// page shim, and the `<iframe>`'s own `color-scheme` (which is what
+/// Firefox's `prefers-color-scheme` inside it follows; Chromium's follows
+/// the embedder's whatever it says, hence the shim).
+pub(crate) fn emulate(frame: &web_sys::HtmlIFrameElement, e: Emulate) {
+    let style = web_sys::HtmlElement::style(frame);
+    match e.scheme {
+        Some(s) => {
+            let _ = style.set_property("color-scheme", s.as_str());
+        }
+        None => {
+            let _ = style.remove_property("color-scheme");
+        }
+    }
+    let Some(channel) = frame.get_attribute("data-channel") else { return };
+    let msg = message("menger:emulate", &channel);
+    set(&msg, "scheme", &e.scheme.map_or(JsValue::NULL, |s| s.as_str().into()));
+    set(&msg, "reduce", &e.reduce.map_or(JsValue::NULL, JsValue::from_bool));
+    post(frame, &msg.into());
+}
+
+/// MENGER-15: every frame in `container` (the one on screen and one still
+/// loading) emulates `e`.
+pub(crate) fn emulate_in(container: &web_sys::Element, e: Emulate) {
+    let Ok(list) = container.query_selector_all(&format!("iframe.{FRAME_CLASS}")) else { return };
+    for i in 0..list.length() {
+        if let Some(f) = list.get(i).and_then(|n| n.dyn_into::<web_sys::HtmlIFrameElement>().ok()) {
+            emulate(&f, e);
         }
     }
 }
@@ -725,6 +898,13 @@ fn on_message(ev: web_sys::MessageEvent) {
     }
     match parse_msg(&kind, field("height").and_then(|v| v.as_f64()), field("settled").and_then(|v| v.as_bool())) {
         Some(Msg::Ready) => {
+            // MENGER-15: a whole document reports no size — ready is shown.
+            if frame.has_attribute("data-page") {
+                if frame.get_attribute("data-state").as_deref() == Some("pending") {
+                    promote(&frame);
+                }
+                return;
+            }
             post(&frame, &theme_message(&channel));
             // COMMENT-3: a frame born in annotation mode is in it too.
             if annotate::is_on() {
@@ -769,7 +949,10 @@ fn on_message(ev: web_sys::MessageEvent) {
             answer_write(write, frame, channel, id, ticket, gesture, params, cited);
         }
         Some(Msg::Size { height, settled }) => {
-            let _ = web_sys::HtmlElement::style(&frame).set_property("height", &format!("{height}px"));
+            // MENGER-15: a device's frame keeps its device's height.
+            if !frame.has_attribute("data-fixed") {
+                let _ = web_sys::HtmlElement::style(&frame).set_property("height", &format!("{height}px"));
+            }
             // COMMENT-3: its elements may have moved under their pins.
             annotate::frame_changed(&channel);
             // A first frame shows at once; a re-render waits until drawn.
@@ -794,6 +977,8 @@ fn on_message(ev: web_sys::MessageEvent) {
             }
         }
         Some(Msg::Navigate) => {
+            // MENGER-15: an app route leaves full screen.
+            present::escape();
             let route = field("route").and_then(|v| v.as_string()).unwrap_or_default();
             let reveal = field("reveal").filter(|v| v.is_object());
             let on_board = frame.closest("#waves").ok().flatten().is_some();
@@ -860,6 +1045,16 @@ fn on_message(ev: web_sys::MessageEvent) {
                 // MENGER-6: the palette's chord, pressed inside the body.
                 if key == "palette" {
                     crate::keys::palette_from_frame();
+                } else if key == "z" {
+                    // MENGER-15: full screen, from inside the body.
+                    if crate::keys::no_overlay() {
+                        present::toggle_from(&frame);
+                    }
+                } else if key == "Escape" {
+                    // What annotation mode has open first, then full screen.
+                    if !annotate::escape() {
+                        present::escape();
+                    }
                 } else {
                     annotate::frame_key(&key);
                 }
@@ -894,6 +1089,9 @@ fn on_message(ev: web_sys::MessageEvent) {
             // reading) — else, like any other, it asks.
             let Some(href) = field("href").and_then(|v| v.as_string()) else { return };
             let gesture = gesture::on_frame(&frame);
+            // MENGER-15: the leave dialog (or the route) is the app's, drawn
+            // outside the full-screen box — which steps aside for it.
+            present::escape();
             let ticket = frame.get_attribute("data-ticket").filter(|t| !t.is_empty());
             let place = if frame.closest("#waves").ok().flatten().is_some() {
                 "board note"
@@ -1064,13 +1262,24 @@ fn install_listener() {
     anchor_changed(&w.location().hash().unwrap_or_default());
 }
 
+/// MENGER-15: how a frame is shown — what it emulates (a mockup's toggles;
+/// `None`: a whole document follows the app's painted mode, any other body
+/// emulates nothing), and whether its height is its container's (a
+/// device's screen) rather than its document's.
+#[derive(Clone, Copy, Debug, Default)]
+struct Look {
+    emulate: Option<Emulate>,
+    fixed: bool,
+}
+
 /// Load `body_html` into a new frame in `container`, beside the one on
 /// screen (if any), invisible until [`promote`]d — INPUT-4: stamped with
 /// `ticket`, the ticket whose stored body it is (none: no input to answer);
 /// IDENTITY-36: and with `scope`, the shortcode its reads are held to
-/// (none: it reads nothing but components).
-fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, scope: Option<&str>) {
-    load_frame(container, body_html, Stamp { data_ticket: ticket, init_ticket: ticket, scope, cite: None });
+/// (none: it reads nothing but components). MENGER-15: shown as `look`
+/// says.
+fn load(container: &web_sys::Element, body_html: &str, ticket: Option<&str>, scope: Option<&str>, look: Look) {
+    load_frame(container, body_html, Stamp { data_ticket: ticket, init_ticket: ticket, scope, cite: None, look });
 }
 
 /// What a new frame is stamped with — [`load`]'s, or (COMP-14) a cited
@@ -1084,6 +1293,8 @@ struct Stamp<'a> {
     scope: Option<&'a str>,
     /// COMP-14: the section shown, the window's key, its depth.
     cite: Option<(&'a cite::Section, &'a str, u32)>,
+    /// MENGER-15: how it is shown.
+    look: Look,
 }
 
 /// COMP-14: load a cited window's frame — `body_html`, the cited ticket's
@@ -1101,18 +1312,24 @@ pub(crate) fn load_cited(container: &web_sys::Element, body_html: &str, stamps: 
             init_ticket: stamps.init_ticket.as_deref(),
             scope: stamps.scope.as_deref(),
             cite: Some((section, key, stamps.depth)),
+            look: Look::default(),
         },
     );
 }
 
 fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
-    let Stamp { data_ticket, init_ticket, scope, cite } = stamp;
+    let Stamp { data_ticket, init_ticket, scope, cite, look } = stamp;
     let w = dom::window();
     let Some(doc) = w.document() else { return };
     let channel = next_channel();
     let (scheme, tokens) = read_theme();
     let mermaid_url = format!("{}{}", w.location().origin().unwrap_or_default(), mermaid::ASSET_URL);
     let components = registry::snapshot();
+    // MENGER-15: a whole document follows the app's mode unless a mockup
+    // says otherwise.
+    let page = md::is_page(body_html);
+    let follow = page && look.emulate.is_none();
+    let emulate = if follow { Some(Emulate { scheme: Some(scheme), reduce: None }) } else { look.emulate };
     let html = srcdoc(
         body_html,
         &Shell {
@@ -1123,6 +1340,7 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
             components: components.as_deref(),
             ticket: init_ticket,
             cite: cite.map(|(section, _, _)| section),
+            emulate,
         },
     );
     // A re-render still loading is superseded by this one.
@@ -1154,8 +1372,23 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
             refresh_reach(scope.to_string());
         }
     }
+    // MENGER-15: a whole document (no SDK: shown once its shim is ready,
+    // never sized to its document), one following the app's mode, one held
+    // to its device's screen.
+    if page {
+        let _ = el.set_attribute("data-page", "");
+    }
+    if follow {
+        let _ = el.set_attribute("data-follow", "");
+    }
+    if look.fixed || page {
+        let _ = el.set_attribute("data-fixed", "");
+    }
     let _ = el.set_attribute("title", if cite.is_some() { "cited section" } else { "ticket body" });
     let Ok(frame) = el.dyn_into::<web_sys::HtmlIFrameElement>() else { return };
+    if let Some(s) = emulate.and_then(|e| e.scheme) {
+        let _ = web_sys::HtmlElement::style(&frame).set_property("color-scheme", s.as_str());
+    }
     frame.set_srcdoc(&html);
     let _ = container.append_child(&frame);
     spawn_local(async move {
@@ -1175,17 +1408,24 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
 /// reads are held to `ticket`'s shortcode — or, with no ticket, to `scope`
 /// (an editor's draft: the shortcode of the ticket it edits; a help card:
 /// its component's owner's), and with neither it reads only components.
+/// MENGER-15: `html` may be a whole document (md::is_page), which renders
+/// as itself ([`page_srcdoc`]); a mockup's device passes `emulate` (its
+/// toggles, applied live) and `fixed` (the screen's height, not the
+/// document's).
 #[component]
 pub(crate) fn Frame(
     #[prop(into)] html: Signal<String>,
     ticket: Option<String>,
     #[prop(optional)] scope: Option<String>,
+    #[prop(optional)] emulate: Option<Signal<Emulate>>,
+    #[prop(optional)] fixed: bool,
 ) -> impl IntoView {
     let scope = bridge::scope_of(ticket.as_deref()).or_else(|| bridge::scope_of(scope.as_deref()));
     install_listener();
     // COMP-5: a frame defines the components — the app keeps the registry.
     registry::want();
     let host = NodeRef::<leptos::html::Div>::new();
+    let look = move || Look { emulate: emulate.map(|e| e.get_untracked()), fixed };
     // The newest body asked for: a debounced re-render loads only if it is
     // still the newest when its wait ends (and the frame still mounted).
     let asked = StoredValue::new(0u32);
@@ -1195,7 +1435,7 @@ pub(crate) fn Frame(
         let n = asked.with_value(|n| n.wrapping_add(1));
         asked.set_value(n);
         if el.query_selector(":scope > iframe").ok().flatten().is_none() {
-            load(&el, &body, ticket.as_deref(), scope.as_deref());
+            load(&el, &body, ticket.as_deref(), scope.as_deref(), look());
             return;
         }
         let ticket = ticket.clone();
@@ -1203,12 +1443,25 @@ pub(crate) fn Frame(
         spawn_local(async move {
             dom::sleep_ms(RERENDER_AFTER_MS).await;
             if asked.try_with_value(|v| *v == n) == Some(true) {
-                load(&el, &body, ticket.as_deref(), scope.as_deref());
+                load(&el, &body, ticket.as_deref(), scope.as_deref(), look());
             }
         });
     });
-    view! { <div class="mframe" node_ref=host></div> }
+    // MENGER-15: a mockup's toggles reach its frames live, no reload.
+    if let Some(e) = emulate {
+        Effect::new(move |prev: Option<Emulate>| {
+            let now = e.get();
+            if prev.is_some_and(|p| p != now) {
+                if let Some(el) = host.get_untracked() {
+                    emulate_in(&el, now);
+                }
+            }
+            now
+        });
+    }
+    view! { <div class="mframe" class:mframe-fixed=fixed node_ref=host></div> }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -1242,7 +1495,7 @@ mod tests {
     fn the_csp_comes_first_and_closes_connections_and_forms() {
         assert_eq!(CSP, "connect-src 'none'; form-action 'none'");
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f9", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: None, ticket: Some("A-1"), cite: None };
+        let shell = Shell { channel: "f9", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: None, ticket: Some("A-1"), cite: None, emulate: None };
         let doc = srcdoc("<script>fetch('https://x')</script><form action=\"https://x\"></form>", &shell);
         let head = "<!doctype html><html lang=\"en\" data-theme=\"light\"><head>";
         assert!(
@@ -1267,7 +1520,7 @@ mod tests {
     #[test]
     fn the_srcdoc_is_the_shell_then_the_body() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", components: None, ticket: None, cite: None };
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", components: None, ticket: None, cite: None, emulate: None };
         let doc = srcdoc("<details><summary>s</summary><p>x</p></details>", &shell);
         assert!(doc.starts_with("<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta http-equiv=\"Content-Security-Policy\""), "{doc}");
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
@@ -1285,7 +1538,7 @@ mod tests {
     #[test]
     fn the_init_block_is_json_that_cannot_close_its_script() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f1", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", components: None, ticket: None, cite: None };
+        let shell = Shell { channel: "f1", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", components: None, ticket: None, cite: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1322,6 +1575,7 @@ mod tests {
             components: None,
             ticket: Some("AUTH-10"),
             cite: Some(&field),
+            emulate: None,
         };
         let doc = srcdoc("<m-field data-field=\"findings\">x</m-field>", &shell);
         assert!(doc.starts_with(&format!(
@@ -1374,7 +1628,7 @@ mod tests {
             Component { name: "m-a".into(), source: source.into(), owner: Some("A-2".into()), references: vec!["A-3".into()], docs: None, preview: vec![] },
             Component { name: "m-b".into(), source: "<i>b</i>".into(), owner: None, references: vec!["m-a".into()], docs: None, preview: vec![] },
         ];
-        let shell = Shell { channel: "f2", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: Some(&components), ticket: None, cite: None };
+        let shell = Shell { channel: "f2", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: Some(&components), ticket: None, cite: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1628,5 +1882,88 @@ mod tests {
         let index = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("index.html")).unwrap();
         assert!(index.contains("<link data-trunk rel=\"copy-file\" href=\"sdk/menger.d.ts\" data-target-path=\"sdk\" />"));
         assert!(index.contains("<link data-trunk rel=\"copy-dir\" href=\"sdk/generated\" data-target-path=\"sdk/generated\" />"));
+    }
+
+    fn page_shell(tokens: &[(String, String)], emulate: Option<Emulate>) -> Shell<'_> {
+        Shell { channel: "f5", scheme: Scheme::Dark, tokens, mermaid_url: "u", components: None, ticket: Some("MENGER-16"), cite: None, emulate }
+    }
+
+    /// MENGER-15: a whole document renders as itself — its own head, styles
+    /// and scripts, no SDK, no theme tokens, no base — with IDENTITY-28's CSP
+    /// the first element of its head, then the init block and the page
+    /// shim, before anything the page holds; the rest byte for byte.
+    #[test]
+    fn a_whole_document_is_its_own_page_with_the_csp_first_in_its_head() {
+        let tokens = shell_tokens();
+        let page = "<!doctype html>\n<!-- a comment naming <head> -->\n<html lang=\"en\" data-x='a>b'>\n<head>\n<meta charset=\"utf-8\"><style>@media (prefers-color-scheme: dark){body{background:#000}}</style><script>window.x=1</script></head><body><h1>Hi</h1></body></html>";
+        let doc = srcdoc(page, &page_shell(&tokens, Some(Emulate { scheme: Some(Scheme::Dark), reduce: None })));
+        let csp = format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\">");
+        let head = "<!doctype html>\n<!-- a comment naming <head> -->\n<html lang=\"en\" data-x='a>b'>\n<head>";
+        assert!(doc.starts_with(&format!("{head}{csp}<script type=\"application/json\" id=\"menger-init\">")), "{}", &doc[..300]);
+        assert_eq!(doc.matches("Content-Security-Policy").count(), 1);
+        let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
+        assert!(at(&csp) < at("id=\"menger-page\"") && at("id=\"menger-page\"") < at("<meta charset"));
+        assert!(doc.ends_with(&page[head.len()..]), "the page follows, as written");
+        // Nothing of a framed body's shell.
+        for absent in ["id=\"menger-sdk\"", "id=\"menger-theme\"", "<base target", "--bg:"] {
+            assert!(!doc.contains(absent), "{absent}");
+        }
+        let init = &doc[at("id=\"menger-init\">") + "id=\"menger-init\">".len()..];
+        let init: serde_json::Value = serde_json::from_str(&init[..init.find("</script>").unwrap()]).unwrap();
+        assert_eq!(init, serde_json::json!({ "channel": "f5", "page": true, "ticket": "MENGER-16", "emulate": { "scheme": "dark", "reduce": null } }));
+        // The sandbox and the CSP are every frame's.
+        assert_eq!(SANDBOX, "allow-scripts allow-popups allow-popups-to-escape-sandbox");
+        assert_eq!(CSP, "connect-src 'none'; form-action 'none'");
+    }
+
+    /// MENGER-15: where the head begins — inside `<head>`; with none
+    /// written, inside `<html>`; with neither, past the doctype.
+    #[test]
+    fn the_head_is_found_past_doctype_comments_and_attributes() {
+        let cases = [
+            ("<!DOCTYPE html><HTML><HEAD><title>t</title>", "<!DOCTYPE html><HTML><HEAD>"),
+            ("\u{feff}  <html>\n  <body>x", "\u{feff}  <html>\n  "),
+            ("<!doctype html><title>t</title>", "<!doctype html>"),
+            ("<!doctype html><!-- <html> --> <html class=\"a\"> <!-- c --> <head data-x=\"<>\">x", "<!doctype html><!-- <html> --> <html class=\"a\"> <!-- c --> <head data-x=\"<>\">"),
+            ("<html><header>x", "<html>"),
+        ];
+        for (doc, before) in cases {
+            assert_eq!(&doc[..head_at(doc)], before, "{doc:?}");
+        }
+    }
+
+    /// MENGER-15: a mockup's frame of an ordinary body keeps the SDK and
+    /// gains the page shim after it; any other frame has no shim.
+    #[test]
+    fn a_mockups_frame_carries_the_page_shim() {
+        let tokens = shell_tokens();
+        let plain = srcdoc("<b>x</b>", &page_shell(&tokens, None));
+        assert!(!plain.contains("id=\"menger-page\""));
+        let mock = srcdoc("<b>x</b>", &page_shell(&tokens, Some(Emulate { scheme: Some(Scheme::Light), reduce: Some(true) })));
+        let at = |needle: &str| mock.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
+        assert!(at("id=\"menger-sdk\"") < at("id=\"menger-page\"") && at("id=\"menger-page\"") < at("<body>"));
+        assert!(mock.contains("\"emulate\":{\"reduce\":true,\"scheme\":\"light\"}"), "{}", &mock[..600]);
+    }
+
+    /// MENGER-15: the page shim answers both features, listens only to its
+    /// parent on its channel, and keeps a page's links in the page.
+    #[test]
+    fn the_page_shim_emulates_both_preferences() {
+        for needle in [
+            "prefers-color-scheme",
+            "prefers-reduced-motion",
+            "window.matchMedia = function",
+            "\"menger:emulate\"",
+            "ev.source !== host",
+            "m.channel !== channel",
+            "post(\"menger:ready\"",
+            "post(\"menger:key\"",
+            "post(\"menger:link\", { href: href })",
+            "post(\"menger:navigate\"",
+            "data-menger-scheme",
+        ] {
+            assert!(PAGE_JS.contains(needle), "{needle}");
+        }
+        assert!(!PAGE_JS.contains("</script"), "nothing in it closes its element");
     }
 }

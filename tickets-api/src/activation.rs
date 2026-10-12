@@ -442,6 +442,7 @@ impl Tickets {
                 body: body.unwrap_or_default(),
             }).await {
                 Ok(ticket) => yield TicketsEvent::Created { ticket },
+                Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
                 Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, reach.as_ref(), id)) },
             }
         }
@@ -833,6 +834,7 @@ impl Tickets {
             match store.amend(&id, title, body).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
                 Err(e) => yield TicketsEvent::Error { message: e.to_string() },
             }
         }
@@ -2344,6 +2346,7 @@ fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> Option<Ticke
         | TicketsEvent::Facet { .. }
         | TicketsEvent::WaveCounts { .. }
         | TicketsEvent::Error { .. }
+        | TicketsEvent::BodyTooLarge { .. }
         | TicketsEvent::Searched { .. } => None,
     };
     match id {
@@ -2425,6 +2428,17 @@ fn visible_components(store: &Store, reach: Option<&Lens>, components: Vec<crate
             c
         })
         .collect()
+}
+
+/// MENGER-15: a body past the cap, as the typed refusal (`body_too_large`)
+/// — any other error as the in-band `error` it always was.
+#[cfg(feature = "server")]
+fn too_large(e: StoreError) -> TicketsEvent {
+    let message = e.to_string();
+    match e {
+        StoreError::BodyTooLarge { id, bytes, max } => TicketsEvent::BodyTooLarge { id, bytes: bytes as u64, max: max as u64, message },
+        _ => TicketsEvent::Error { message },
+    }
 }
 
 /// IDENTITY-37: a refused `create`'s reason, naming only what the caller
@@ -2725,6 +2739,22 @@ mod tests {
     /// carries one `amended` per amend that changed something and none for
     /// the no-op or the refusals — so the next event after them is the next
     /// real change.
+    #[tokio::test]
+    async fn a_body_past_the_cap_is_the_typed_body_too_large() {
+        let hub = Tickets::new(Arc::new(Store::new().with_body_max(10)));
+        one(hub.create(None, Reach::everywhere(), "BIG".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+        let ev = one(hub.create(None, Reach::everywhere(), "BIG".into(), "page".into(), Some("doc".into()), None, None, Some("x".repeat(11)), None, None).await).await;
+        let wire = serde_json::to_value(&ev).unwrap();
+        assert_eq!((wire["type"].as_str(), wire["bytes"].as_u64(), wire["max"].as_u64()), (Some("body_too_large"), Some(11), Some(10)), "{wire}");
+        assert!(wire["id"].is_null() && wire["message"].as_str().unwrap().contains("past the 10-byte cap"), "{wire}");
+        let ev = one(hub.amend(None, Reach::everywhere(), "BIG-1".into(), None, Some("y".repeat(12))).await).await;
+        let wire = serde_json::to_value(&ev).unwrap();
+        assert_eq!((wire["type"].as_str(), wire["id"].as_str(), wire["bytes"].as_u64()), (Some("body_too_large"), Some("BIG-1"), Some(12)), "{wire}");
+        // At the cap, kept.
+        let ev = one(hub.amend(None, Reach::everywhere(), "BIG-1".into(), None, Some("z".repeat(10))).await).await;
+        assert!(matches!(ev, TicketsEvent::Amended { .. }), "{ev:?}");
+    }
+
     #[tokio::test]
     async fn amend_yields_amended_and_watch_carries_only_what_changed() {
         let hub = hub();

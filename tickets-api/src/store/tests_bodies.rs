@@ -419,3 +419,34 @@ async fn read_your_writes_under_a_hammer_of_amends() {
         STORED_VERSION_READS.load(Ordering::Relaxed) - stored_before
     );
 }
+
+/// MENGER-15: a body past the cap is refused, typed and naming the cap, on
+/// `create` (no id spent) and on `amend` (nothing written, the title
+/// either); a body at the cap is kept byte-exact. The default is 8 MiB.
+#[tokio::test]
+async fn a_body_past_the_cap_is_refused_naming_the_cap() {
+    assert_eq!(BODY_MAX_DEFAULT, 8 * 1024 * 1024);
+    assert_eq!(Store::new().body_max(), BODY_MAX_DEFAULT);
+    let dir = tempfile::tempdir().unwrap();
+    let store = on_disk(&dir).with_body_max(1000);
+    assert_eq!(store.body_max(), 1000);
+    store.create(new("CAP", Kind::Scope, None, &[], "")).await.unwrap();
+    let over = "x".repeat(1001);
+    match store.create(new("CAP", Kind::Doc, None, &[], &over)).await {
+        Err(e @ StoreError::BodyTooLarge { .. }) => {
+            assert!(matches!(e, StoreError::BodyTooLarge { id: None, bytes: 1001, max: 1000 }), "{e:?}");
+            assert!(e.to_string().contains("1001 bytes, past the 1000-byte cap"), "{e}");
+        }
+        other => panic!("refused, typed: {other:?}"),
+    }
+    let at = "y".repeat(1000);
+    let kept = store.create(new("CAP", Kind::Doc, None, &[], &at)).await.unwrap();
+    assert_eq!(kept.id, "CAP-2", "the refused create spent no id");
+    assert_eq!(stored_body(&dir, "CAP-2"), at);
+    match store.amend("cap-2", Some("a new title".into()), Some(over.clone())).await {
+        Err(StoreError::BodyTooLarge { id, bytes, max }) => assert_eq!((id.as_deref(), bytes, max), (Some("CAP-2"), 1001, 1000)),
+        other => panic!("refused, typed: {other:?}"),
+    }
+    let after = store.get("CAP-2").await.unwrap();
+    assert_eq!((after.title.as_str(), after.body.as_str()), (kept.title.as_str(), at.as_str()), "nothing written");
+}

@@ -514,6 +514,7 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::Lagged { .. }
         | E::NotFound { .. }
         | E::Error { .. }
+        | E::BodyTooLarge { .. }
         | E::Component { .. }
         | E::ComponentChanged { .. }
         | E::ComponentRemoved { .. } => Some(ev),
