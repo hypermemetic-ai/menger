@@ -587,7 +587,10 @@
   }
   /* THEME-8: a region wearing its own theme (src/scopes.rs) paints its own
      ground and ink; under one theme it is the page's as ever. */
-  #ticket-page, .mscope-frame { background: var(--bg); color: var(--ink); }
+  /* THEME-6: each region says its paper, ink and text again where its own tokens
+     are — a face, a size or an ink inherits as a value, resolved on body with the
+     site's, so a theme worn by the ticket view or a frame's box alone sets them too */
+  #ticket-page, .mscope-frame { background: var(--bg); color: var(--ink); font: var(--text-size)/var(--text-leading) var(--font-text); }
   /* The house code chip (`#nav .code`'s face, rule below) wherever the
      page names an id or a shortcode; the page's chips set their own mono
      face, and a linked one lights up like every other link. */

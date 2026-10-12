@@ -174,7 +174,9 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   component is, orphaned and adopted the same way, validated on write —
   tokens of the contract `tickets-api/src/tokens.toml` (THEME-2) in `:root`
   / `:root[data-theme="dark"]`, `@font-face`, `@import url("https://…")`,
-  `m-*::part(…)`, looks only; a refusal names the block's line), or with
+  `m-*::part(…)`, looks only — a component's skinnable parts are the
+  `<part name>`s its `<docs>` declares (THEME-5; a documented part its
+  template lacks is refused); a refusal names the block's line), or with
   `define` for admin and tests (the maps go through `-p`);
   the site or a shortcode adopts one with `set` (`--reach frame|ticket|site`,
   `--takeover off`; THEME-4: a hosted shortcode inherits its host's, and a
@@ -182,7 +184,8 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   is the spelling, there is no `tickets set_theme`), a ticket in its frontmatter (`theme:`, `reach:`,
   `takeover:`, `frame-theme:`, `frame-takeover:`); `theme_for` says who
   wears what and from which level; `watch` says `theme_changed` /
-  `theme_removed`. README "Themes and their scopes", "A theme is a ticket":
+  `theme_removed`. PANTRY is the worked example (THEME-6). README "Themes
+  and their scopes", "A theme is a ticket", "Parts to skin":
 
   ```sh
   synapse -P 4455 -p '{"name":"ocean","light":{"--accent":"#00796b"},"dark":{"--accent":"#4db6ac"}}' menger themes define

@@ -641,6 +641,19 @@ mod tests {
 
     /// The copy takes whole themes and settings; a setting that says
     /// nothing is gone.
+    /// THEME-6: a face, a size or an ink inherits as a value, resolved where
+    /// it is declared — on body, with the site's tokens. The ticket view
+    /// and a frame's box say them again where their own tokens are, so a
+    /// theme either wears alone (reach: ticket, frame-theme) sets its text too.
+    #[test]
+    fn the_ticket_view_resolves_its_own_text() {
+        let html = include_str!("../index.html");
+        let rule = html.lines().find(|l| l.trim_start().starts_with(&format!("{TICKET_SELECTOR}, .{FRAME_CLASS} {{"))).expect("the regions' rule");
+        for want in ["var(--font-text)", "var(--text-size)", "var(--text-leading)", "color: var(--ink)", "background: var(--bg)"] {
+            assert!(rule.contains(want), "{TICKET_SELECTOR} and .{FRAME_CLASS} must say {want} themselves: {rule}");
+        }
+    }
+
     #[test]
     fn the_copy_takes_themes_and_settings() {
         let mut h = held();

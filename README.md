@@ -1690,6 +1690,21 @@ theme back. The tracker's spelling is `themes set --scope PANTRY …` (THEME-8);
 the `tickets set_theme --epic` of THEME-4's first draft was not added beside
 it.
 
+**The worked example: PANTRY** (THEME-6). The pantry look — warm paper, one
+burnt-orange accent, Fraunces for what leads, Inter for what reads,
+JetBrains Mono for code, generous radii, code and diagram colours for both
+modes, a field's label skinned as a kicker (`m-field::part(label)`) — is
+one ` ```theme pantry ` block on a PANTRY doc, and PANTRY adopts it reaching
+the site (`themes set --scope PANTRY --theme pantry --reach site`): while a
+PANTRY ticket is open all of menger wears it. PANTRY's bodies are house
+components and load nothing from outside menger (the theme's fonts come
+from Google Fonts, THEME-1 `fonts`). Each region says its paper, ink and
+text face again where its own tokens are (`#ticket-page, .mscope-frame`),
+since a face, a size or an ink inherits as a value resolved on `body`: a
+theme worn by the ticket view or a frame's box alone sets its text too.
+A shortcode's own boards (`#/waves/PANTRY`) open no ticket and stay the
+site's (THEME-10).
+
 A ticket says it in its body's frontmatter, as MENGER-15's `view:`:
 
 ```yaml
@@ -1777,7 +1792,8 @@ return this.menger.on('theme', () => draw());   // tokens are already live on :r
 tickets under `SWEEP` (three themes as ` ```theme ` docs — `pantry`, a
 `garish` one setting every colour and face, `ocean` —, a framed body with
 code, a diagram and house components, a mockup, and THEME-8's table as
-tickets), opens every route at once — the board, a framed body, a mockup, a
+tickets; a `pantry` already owned elsewhere — PANTRY's own — is used as
+it is), opens every route at once — the board, a framed body, a mockup, a
 full-screen ticket, both wave boards, `#/components` and a docs card,
 `#/inputs`, `#/comments`, `#/settings`, the palette, the cheat sheet, a
 menu, MENGER-14's leave dialog and a toast — and switches default → pantry
@@ -1786,7 +1802,8 @@ menu, MENGER-14's leave dialog and a toast — and switches default → pantry
 an amend. After each switch every element of every page, open shadow root
 and frame is scanned (colour, background, borders, outline, fill, stroke,
 font-family): none may hold a value the old theme painted that the new one
-does not; no page may reload and no frame be replaced; a component's
+does not (compared as the browser reads them, so `#fff` in one theme and
+`#ffffff` in the other are one value — THEME-6); no page may reload and no frame be replaced; a component's
 `on('theme')` is heard once, after the tokens; the diagrams are redrawn in
 the new `--diagram-*`; a planted element in an old value is found (the
 control). `--rows` checks THEME-8's table region by region, `--project`

@@ -295,9 +295,14 @@ function scanDoc(arg) {
   };
   const sets = {};
   for (const r of Object.keys(stale)) {
+    // THEME-6: a value the new theme also paints is not stale, however it is
+    // written (`#fff` in one, `#ffffff` in the other): compared normalised.
+    // (only what is a colour, or a face, at all: an unparsable value would read back as the inherited one)
+    const keepC = new Set((stale[r].keep || []).filter((v) => CSS.supports('color', v)).map((v) => norm('color', v)));
+    const keepF = new Set((stale[r].keep || []).filter((v) => CSS.supports('font-family', v) && !CSS.supports('color', v)).map((v) => norm('font-family', v)));
     sets[r] = {
-      colours: new Set(stale[r].colours.map((v) => norm('color', v)).filter((v) => v && v !== 'rgba(0, 0, 0, 0)')),
-      faces: new Set(stale[r].faces.map((v) => norm('font-family', v))),
+      colours: new Set(stale[r].colours.map((v) => norm('color', v)).filter((v) => v && v !== 'rgba(0, 0, 0, 0)' && !keepC.has(v))),
+      faces: new Set(stale[r].faces.map((v) => norm('font-family', v)).filter((v) => !keepF.has(v))),
     };
   }
   probe.remove();
@@ -381,7 +386,7 @@ function staleOf(a, b) {
       if (FACES.some((f) => f.name === n)) faces.push(v);
       else if (COLOURS.some((c) => c.name === n)) colours.push(v);
     }
-    out[r] = { colours, faces };
+    out[r] = { colours, faces, keep: [...bVals].filter((v) => v && v !== 'auto') };
   }
   return out;
 }
