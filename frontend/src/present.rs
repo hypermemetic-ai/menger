@@ -339,6 +339,12 @@ fn activation() -> bool {
         .unwrap_or(false)
 }
 
+/// MENGER-34: whether the browser's own full screen is on — nothing of the
+/// app's outside the box (the ticket menu) is drawn over it.
+pub(crate) fn native() -> bool {
+    fullscreen_element().is_some()
+}
+
 fn fullscreen_element() -> Option<web_sys::Element> {
     let doc: JsValue = dom::window().document()?.into();
     Reflect::get(&doc, &JsValue::from_str("fullscreenElement")).ok()?.dyn_into::<web_sys::Element>().ok()

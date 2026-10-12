@@ -206,6 +206,17 @@ pub(crate) fn on_frame(frame: &web_sys::HtmlIFrameElement) -> bool {
     on_this_frame(&seen, &now)
 }
 
+/// MENGER-34: the weaker reading, for what writes nothing (the ticket menu
+/// a chip asks for): a gesture is live — the frame's own activation reaches
+/// the app as it propagates to ancestors — and focus is in this very frame,
+/// where a click or key in it puts it. A body's script, alone, has neither.
+pub(crate) fn live_in(frame: &web_sys::HtmlIFrameElement) -> bool {
+    let doc = dom::window().document();
+    host_active() == Some(true)
+        && doc.as_ref().is_some_and(|d| d.has_focus().unwrap_or(false))
+        && doc.and_then(|d| d.active_element()).is_some_and(|el| el.is_same_node(Some(frame)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
