@@ -104,10 +104,10 @@
 //!
 //! AGS-26: **the nav's cursor is the open ticket** (src/nav.rs). On a ticket
 //! page ↑/↓ (k/j) open the previous/next ticket in the nav from wherever focus
-//! is (a text field, a dialog, a menu aside), → moves focus from the nav into
-//! the page and ← back, and `f` filters the nav to the open ticket and its
-//! descendants; in the nav l/h open and close (the arrows no longer do). The
-//! board's j/k are as they were.
+//! is (a text field, a dialog, a menu aside), and `f` filters the nav to the
+//! open ticket and its descendants; in the nav l/h open and close. AGS-27: ←
+//! and → are not the app's — they neither open and close nor move focus
+//! between the nav and the page. The board's j/k are as they were.
 //!
 //! COMMENT-3: **`a` (or `A`) is annotation mode** (src/annotate.rs) — on, and
 //! off again; Esc closes what the mode has open (a pin's list, a comment
@@ -167,8 +167,6 @@ pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
     ("Tab", "into the nav tree, the board rows, and the controls"),
     ("j / ↓", "the next ticket in the nav, opened — from anywhere on a ticket page; the next row on the board"),
     ("k / ↑", "the previous ticket, opened; on the nav's first ticket, its `under` filter one parent wider"),
-    ("→", "from the nav into the page beside it"),
-    ("←", "from the page back to the open ticket in the nav"),
     ("l", "expand a group in the nav, or step into it"),
     ("h", "collapse a group in the nav, or step out to it"),
     ("Home / End", "first / last row (nav tree, board)"),
@@ -1970,8 +1968,6 @@ mod tests {
             "Tab",         // reaches the nav
             "j / ↓",       // move
             "k / ↑",
-            "→",           // into the page (AGS-26)
-            "←",           // back to the nav (AGS-26)
             "l",           // expand / into
             "h",           // collapse / out
             "Home / End",
