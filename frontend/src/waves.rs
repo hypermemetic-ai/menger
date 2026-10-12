@@ -565,6 +565,9 @@ pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&s
         has_commits: !s.commits.is_empty(),
         menger_doc: menger_tickets_api::is_menger_doc(s.path.as_deref()),
         lineage,
+        // MENGER-13: a card carries no history — a filter asking the log is
+        // answered by the server ([`narrow`]).
+        history: Vec::new(),
     }
 }
 
@@ -585,7 +588,8 @@ pub(crate) fn value_of(c: Cat, card: &Card, off: bool) -> Option<String> {
         Cat::MengerDocs => flag(menger_tickets_api::is_menger_doc(s.path.as_deref())),
         // MENGER-12: a card holds any number of labels — counted apart
         // ([`counts`]); Asking is not the board's.
-        Cat::Asking | Cat::Label => None,
+        // MENGER-13: nor is Changed recently, which the log answers.
+        Cat::Asking | Cat::Label | Cat::Changed => None,
         Cat::Wave => Some(match card.placement {
             Placement::Wave { n } => n.to_string(),
             Placement::MissingBlocker => "missing".into(),

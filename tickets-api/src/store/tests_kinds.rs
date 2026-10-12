@@ -12,6 +12,7 @@
 //! [`random_set_kind`], which holds each call to the rules written out here.
 
 use super::*;
+use super::tests::Changes;
 use std::collections::BTreeSet;
 
 fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> NewTicket {
@@ -38,7 +39,7 @@ fn group(store: &Store, epic: &str) -> Group {
 /// Every change waiting on `rx`, in the order sent.
 fn drained(rx: &mut broadcast::Receiver<Change>) -> Vec<Change> {
     let mut out = Vec::new();
-    while let Ok(change) = rx.try_recv() {
+    while let Ok(change) = rx.try_change() {
         out.push(change);
     }
     out

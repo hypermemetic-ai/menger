@@ -155,6 +155,14 @@ async fn health_create_list_watch_over_the_wire() {
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "created");
     assert_eq!(ev["ticket"]["id"], "WIRE-1");
+    // MENGER-13: its first status, a transition from nothing, right after.
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "transition");
+    assert_eq!(
+        (ev["transition"]["ticket"].as_str(), ev["transition"]["field"].as_str(), ev["transition"]["to"].as_str()),
+        (Some("WIRE-1"), Some("status"), Some("Pending"))
+    );
+    assert_eq!((ev["transition"]["from"].clone(), ev["transition"]["actor"].as_str(), ev["transition"]["source"].as_str()), (Value::Null, Some("anonymous"), Some("api")));
     // …and, after it, the new shortcode's row (MNG-10)
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
@@ -184,6 +192,9 @@ async fn health_create_list_watch_over_the_wire() {
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "status_changed");
     assert_eq!(ev["ticket"]["status"], "Ready");
+    // MENGER-13: the transition, right after it.
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!((ev["type"].as_str(), ev["transition"]["from"].as_str(), ev["transition"]["to"].as_str()), (Some("transition"), Some("Pending"), Some("Ready")));
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
     assert_eq!(ev["group"]["root_row"]["status"], "Ready");
@@ -234,7 +245,8 @@ fn apply(mirror: &mut std::collections::HashMap<String, Value>, ev: &Value) {
                 row["child_count"] = ev["child_count"].clone();
             }
         }
-        Some("group_changed") => {}
+        // MENGER-13: a transition says what its ticket's event said.
+        Some("group_changed") | Some("transition") => {}
         other => panic!("unexpected watch event {other:?}: {ev}"),
     }
 }
@@ -304,8 +316,9 @@ async fn ready_set_over_the_wire_is_watch_derivable() {
     // no parent and hangs under the root (MNG-14) — unlocks_changed(RS-1),
     // group_changed(RS, now 2 tickets; MNG-10), 2x status_changed, and
     // (AGS-23) after RS-1's, group_changed(RS): RS-1 roots RS, and its
-    // status is on the group's row.
-    for _ in 0..7 {
+    // status is on the group's row. MENGER-13: and a transition after the
+    // created and after each status_changed.
+    for _ in 0..10 {
         let ev = content(watch.next().await.unwrap().unwrap());
         apply(&mut mirror, &ev);
     }
@@ -433,8 +446,9 @@ async fn parent_children_and_the_parent_filter_over_the_wire() {
     assert_eq!(evs[0]["ticket"]["parent"], "PA-1");
 
     // The watcher saw the birth and the parent's update: SCALE-4, the
-    // parent's id and new count, and nothing else.
-    for _ in 0..2 {
+    // parent's id and new count, and nothing else (MENGER-13: but the
+    // birth's transition, right after it).
+    for _ in 0..3 {
         let ev = content(watch.next().await.unwrap().unwrap());
         if ev["type"] == "children_changed" {
             assert_eq!(ev, json!({"type": "children_changed", "id": "PA-1", "added": "PA-2", "child_count": 1}));
@@ -801,6 +815,8 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "status_changed");
     let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "transition", "MENGER-13: right after its status_changed");
+    let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
     assert_eq!(
         ev["group"],
@@ -813,6 +829,8 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     collect(call(&client, "tickets.set_status", json!({"id": "HUB-1", "status": "Ready"})).await).await;
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!((ev["type"].as_str(), ev["ticket"]["id"].as_str()), (Some("status_changed"), Some("HUB-1")));
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "transition", "MENGER-13: right after its status_changed");
     // AGS-23: HUB-1 roots HUB, and its status is on HUB's row: no count
     // moved, but the group did — once, its own.
     let ev = content(watch.next().await.unwrap().unwrap());
@@ -824,6 +842,8 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     collect(call(&client, "tickets.set_status", json!({"id": "DEEP-1", "status": "Complete"})).await).await;
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "status_changed");
+    let ev = content(watch.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "transition", "MENGER-13: right after its status_changed");
     let mut moved = Vec::new();
     for _ in 0..3 {
         let ev = content(watch.next().await.unwrap().unwrap());
@@ -836,6 +856,9 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     // HUB-1 flip and (AGS-23) the root row it moved, then HUB's own row.
     let ev = content(hub_only.next().await.unwrap().unwrap());
     assert_eq!((ev["type"].as_str(), ev["ticket"]["id"].as_str()), (Some("status_changed"), Some("HUB-1")));
+    // MENGER-13: HUB-1's transition is HUB's; DEEP-1's is not.
+    let ev = content(hub_only.next().await.unwrap().unwrap());
+    assert_eq!((ev["type"].as_str(), ev["transition"]["ticket"].as_str()), (Some("transition"), Some("HUB-1")));
     let ev = content(hub_only.next().await.unwrap().unwrap());
     assert_eq!((ev["type"].as_str(), ev["group"]["done"].as_u64()), (Some("group_changed"), Some(3)));
     let ev = content(hub_only.next().await.unwrap().unwrap());
@@ -1093,10 +1116,11 @@ async fn concurrent_reads_complete_under_mutation_stream() {
         // The watcher saw every acknowledged change, creates in seq order.
         // Each create after the root also moves the root's `child_count`
         // (MNG-14, SCALE-4), and every create moves LOAD's roll-up (MNG-10; a flip
-        // to Ready moves none), so: 2 + (MUTATIONS - 1) × (created,
-        // children_changed, group_changed, status_changed).
+        // to Ready moves none), and (MENGER-13) each birth and each flip is a
+        // transition, so: 3 + (MUTATIONS - 1) × (created, transition,
+        // children_changed, group_changed, status_changed, transition).
         let mut next_seq = 1u64;
-        for _ in 0..(4 * MUTATIONS - 2) {
+        for _ in 0..(6 * MUTATIONS - 3) {
             let ev = content(watch.next().await.unwrap().unwrap());
             match ev["type"].as_str().unwrap() {
                 "created" => {
@@ -1111,7 +1135,7 @@ async fn concurrent_reads_complete_under_mutation_stream() {
                     assert_eq!(ev["group"]["epic"], "LOAD");
                     assert_eq!(ev["group"]["total"], next_seq - 1, "follows its create");
                 }
-                "status_changed" => {}
+                "status_changed" | "transition" => {}
                 other => panic!("unexpected watch event {other}"),
             }
         }
@@ -1474,6 +1498,8 @@ async fn kept_placements_over_the_wire() {
     let ev = content(all.next().await.unwrap().unwrap());
     assert_eq!((ev["type"].as_str(), ev["ticket"]["placement"].clone()), (Some("status_changed"), json!({"type": "done"})));
     let ev = content(all.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "transition", "MENGER-13: right after its status_changed");
+    let ev = content(all.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
     let ev = content(all.next().await.unwrap().unwrap());
     assert_eq!(
@@ -1817,23 +1843,30 @@ async fn watch_filter_says_entered_and_left_last() {
     answer(&client, "tickets.create", json!({"epic": "OTH", "title": "another"})).await;
     answer(&client, "tickets.amend", marker(1)).await;
     let evs = until_marker(&mut filtered).await;
+    // MENGER-13: each birth's transition right after its `created`.
     assert_eq!(
         kinds(&evs),
-        ["created", "children_changed", "group_changed", "entered", "created", "children_changed", "group_changed", "entered", "amended"],
+        [
+            "created", "transition", "children_changed", "group_changed", "entered", "created", "transition",
+            "children_changed", "group_changed", "entered", "amended"
+        ],
         "{evs:#?}"
     );
-    assert_eq!(evs[3], json!({"type": "entered", "id": "WF-2", "epic": "WF", "seq": 2}));
-    assert_eq!(evs[7], json!({"type": "entered", "id": "OTH-2", "epic": "OTH", "seq": 2}));
+    assert_eq!(evs[4], json!({"type": "entered", "id": "WF-2", "epic": "WF", "seq": 2}));
+    assert_eq!(evs[9], json!({"type": "entered", "id": "OTH-2", "epic": "OTH", "seq": 2}));
     let plain_evs = until_marker(&mut plain).await;
-    assert_eq!(kinds(&plain_evs), ["created", "children_changed", "group_changed", "created", "children_changed", "group_changed", "amended"]);
+    assert_eq!(
+        kinds(&plain_evs),
+        ["created", "transition", "children_changed", "group_changed", "created", "transition", "children_changed", "group_changed", "amended"]
+    );
 
     // A status change out of it: `status_changed`, then `left`.
     answer(&client, "tickets.set_status", json!({"id": "WF-2", "status": "Ready"})).await;
     answer(&client, "tickets.amend", marker(2)).await;
     let evs = until_marker(&mut filtered).await;
-    assert_eq!(kinds(&evs), ["status_changed", "left", "amended"], "{evs:#?}");
-    assert_eq!(evs[1], json!({"type": "left", "id": "WF-2", "epic": "WF", "seq": 2}));
-    assert_eq!(kinds(&until_marker(&mut plain).await), ["status_changed", "amended"], "watch {{}} sends none of the three");
+    assert_eq!(kinds(&evs), ["status_changed", "transition", "left", "amended"], "{evs:#?}");
+    assert_eq!(evs[2], json!({"type": "left", "id": "WF-2", "epic": "WF", "seq": 2}));
+    assert_eq!(kinds(&until_marker(&mut plain).await), ["status_changed", "transition", "amended"], "watch {{}} sends none of the three");
 
     // `membership`: only the three; `epic`: only its shortcode's.
     let evs = next_events(&mut members, 3).await;
@@ -1844,7 +1877,7 @@ async fn watch_filter_says_entered_and_left_last() {
     evs.extend(until_marker(&mut in_wf).await);
     assert_eq!(
         kinds(&evs),
-        ["children_changed", "group_changed", "entered", "amended", "status_changed", "left", "amended"],
+        ["transition", "children_changed", "group_changed", "entered", "amended", "status_changed", "transition", "left", "amended"],
         "OTH's create and its entered are not WF's: {evs:#?}"
     );
 
@@ -1885,19 +1918,31 @@ async fn set_kind_over_the_wire() {
     assert_eq!(ev["ticket"]["placement"], json!({"type": "wave", "n": 1}));
     answer(&client, "tickets.amend", marker(1)).await;
     let evs = until_marker(&mut plain).await;
-    assert_eq!(kinds(&evs), ["kind_changed", "group_changed", "placements_changed", "amended"], "{evs:#?}");
-    assert_eq!(evs[0], ev, "the watch carries the answer");
+    // MENGER-13: the kind's transition, then the status's, which it caused.
     assert_eq!(
-        evs[1]["group"],
+        kinds(&evs),
+        ["kind_changed", "transition", "transition", "group_changed", "placements_changed", "amended"],
+        "{evs:#?}"
+    );
+    assert_eq!(evs[0], ev, "the watch carries the answer");
+    assert_eq!((evs[1]["transition"]["field"].as_str(), evs[1]["transition"]["from"].as_str(), evs[1]["transition"]["to"].as_str()), (Some("kind"), Some("doc"), Some("scope")));
+    assert_eq!((evs[2]["transition"]["field"].as_str(), evs[2]["transition"]["to"].as_str()), (Some("status"), Some("Epic")));
+    assert_eq!(evs[2]["transition"]["cause"], evs[1]["transition"]["id"], "the status moved because the kind did");
+    assert_eq!(
+        evs[3]["group"],
         json!({
             "epic": "IDW", "total": 3, "done": 0, "docs": 0, "root": "IDW-1",
             "root_row": {"title": "identity", "status": "Epic", "kind": "scope"}, "host": null
         })
     );
-    assert_eq!(evs[2]["changes"], json!([{"id": "IDW-1", "placement": {"type": "wave", "n": 1}}]));
+    assert_eq!(evs[4]["changes"], json!([{"id": "IDW-1", "placement": {"type": "wave", "n": 1}}]));
     let evs = until_marker(&mut scopes).await;
-    assert_eq!(kinds(&evs), ["kind_changed", "group_changed", "placements_changed", "entered", "amended"], "{evs:#?}");
-    assert_eq!(evs[3], json!({"type": "entered", "id": "IDW-1", "epic": "IDW", "seq": 1}));
+    assert_eq!(
+        kinds(&evs),
+        ["kind_changed", "transition", "transition", "group_changed", "placements_changed", "entered", "amended"],
+        "{evs:#?}"
+    );
+    assert_eq!(evs[5], json!({"type": "entered", "id": "IDW-1", "epic": "IDW", "seq": 1}));
 
     // A build made a complete gap: `done` moves, and what waited on it is
     // placed again.
@@ -1905,13 +1950,20 @@ async fn set_kind_over_the_wire() {
     assert_eq!((ev["ticket"]["kind"].as_str(), ev["ticket"]["status"].as_str()), (Some("gap"), Some("Complete")), "{ev}");
     answer(&client, "tickets.amend", marker(2)).await;
     let evs = until_marker(&mut plain).await;
-    assert_eq!(kinds(&evs), ["kind_changed", "group_changed", "placements_changed", "amended"], "{evs:#?}");
-    assert_eq!((evs[1]["group"]["total"].as_u64(), evs[1]["group"]["done"].as_u64()), (Some(3), Some(1)));
     assert_eq!(
-        evs[2]["changes"],
+        kinds(&evs),
+        ["kind_changed", "transition", "transition", "group_changed", "placements_changed", "amended"],
+        "{evs:#?}"
+    );
+    assert_eq!((evs[3]["group"]["total"].as_u64(), evs[3]["group"]["done"].as_u64()), (Some(3), Some(1)));
+    assert_eq!(
+        evs[4]["changes"],
         json!([{"id": "IDW-2", "placement": {"type": "done"}}, {"id": "IDW-3", "placement": {"type": "wave", "n": 1}}])
     );
-    assert_eq!(kinds(&until_marker(&mut scopes).await), ["kind_changed", "group_changed", "placements_changed", "amended"]);
+    assert_eq!(
+        kinds(&until_marker(&mut scopes).await),
+        ["kind_changed", "transition", "transition", "group_changed", "placements_changed", "amended"]
+    );
 
     // The refusals, each one in-band error naming what it refuses.
     for (params, says) in [

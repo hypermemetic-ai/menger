@@ -12,6 +12,7 @@
 #![allow(clippy::await_holding_lock)] // the held connection is the point
 
 use super::*;
+use super::tests::Changes;
 use std::future::Future;
 use std::time::{Duration, Instant};
 
@@ -74,7 +75,7 @@ async fn stored_when(store: &Store, id: &str, landed: impl Fn(&Ticket) -> bool) 
 async fn heard(store: &Store, rx: &mut broadcast::Receiver<Change>) -> Vec<Change> {
     drop(store.write_serial.lock().await);
     let mut out = Vec::new();
-    while let Ok(change) = rx.try_recv() {
+    while let Ok(change) = rx.try_change() {
         out.push(change);
     }
     out
@@ -299,8 +300,8 @@ async fn a_caller_that_stays_is_answered_after_all_three_and_a_failed_commit_cha
     let unplaced = Ticket { placement: None, ..t.clone() };
     assert_eq!(db::ticket(&store.db.lock().unwrap(), "ST-1").unwrap().as_ref(), Some(&unplaced), "durable when answered");
     assert!(store.row("ST-1").is_ok(), "in the cache when answered");
-    assert!(matches!(rx.try_recv(), Ok(Change::Created { ticket }) if ticket == t), "broadcast when answered");
-    assert!(matches!(rx.try_recv(), Ok(Change::GroupChanged { .. })), "all of it: the new shortcode's row");
+    assert!(matches!(rx.try_change(), Ok(Change::Created { ticket }) if ticket == t), "broadcast when answered");
+    assert!(matches!(rx.try_change(), Ok(Change::GroupChanged { .. })), "all of it: the new shortcode's row");
 
     // A commit that fails: the table is gone from under the writer.
     store.db.lock().unwrap().execute_batch("ALTER TABLE tickets RENAME TO gone").unwrap();
@@ -308,7 +309,7 @@ async fn a_caller_that_stays_is_answered_after_all_three_and_a_failed_commit_cha
     assert!(matches!(store.set_status("ST-1", Status::Ready).await, Err(StoreError::Db(_))));
     assert_eq!(store.row("ST-1").unwrap().0.status, Status::Pending, "the cache is untouched");
     assert_eq!(counts_agree(&store), before, "and the count given back");
-    while let Ok(change) = rx.try_recv() {
+    while let Ok(change) = rx.try_change() {
         panic!("a failed write said {change:?}");
     }
 }

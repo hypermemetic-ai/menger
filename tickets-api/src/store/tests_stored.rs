@@ -66,7 +66,7 @@ fn read_back(path: &Path) -> File {
 /// Acceptance 1: the stored derived state, read back from the file, is what
 /// each scan oracle computes from every ticket — and what the cache holds.
 #[track_caller]
-fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
+pub(super) fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
     let file = read_back(path);
     assert_eq!(file.state, State::Current, "after {after}");
     // The file's tickets are the cache's — so an oracle run over the store's

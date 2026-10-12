@@ -488,7 +488,7 @@ fn pump(client: Client, filter: &str, then: Option<futures::future::AbortHandle>
     }
     let filter = filter.to_string();
     let run = async move {
-        let mut stream = client.watch(None, Some(filter.clone()), Some(true));
+        let mut stream = client.watch(None, Some(filter.clone()), Some(true), tz());
         if let Some(then) = then {
             then.abort();
         }
@@ -672,6 +672,28 @@ pub(crate) fn client() -> Option<Client> {
         .map(TicketsClient::new)
 }
 
+/// MENGER-13: the viewer's time zone, as the browser names it (IANA:
+/// `Europe/Berlin`) — what every filtered read sends as `tz`, so a history
+/// filter's days (`today`, `yesterday`, `this week`, a date) are the
+/// viewer's. `None` where the browser names none (and natively, in tests):
+/// the server reads UTC.
+pub(crate) fn tz() -> Option<String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        thread_local! {
+            static ZONE: Option<String> = {
+                let options = js_sys::Intl::DateTimeFormat::new(&js_sys::Array::new(), &js_sys::Object::new()).resolved_options();
+                js_sys::Reflect::get(&options, &"timeZone".into()).ok().and_then(|z| z.as_string()).filter(|z| !z.is_empty())
+            };
+        }
+        ZONE.with(Clone::clone)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        None
+    }
+}
+
 /// COMMENT-3: the `comments` activation's typed client, over the same
 /// connection — `CommentsClient`, emitted from the activation's own `impl`
 /// (COMMENT-2) as `TicketsClient` is.
@@ -766,7 +788,7 @@ async fn session(
 
     // 1. `watch` first — subscribed eagerly, so a ticket born while the
     //    calls below are out arrives behind them (MNG-9 acceptance 5).
-    let mut live = client.watch(None, None, None);
+    let mut live = client.watch(None, None, None, None);
     // FILTER-12: the views' membership watches, on this connection — after
     // `watch`, before anything they count is asked (none while no filter is
     // set: nothing new at startup).
@@ -991,6 +1013,40 @@ async fn refetch_open_body(client: &Client, last_error: RwSignal<Option<String>>
     }
 }
 
+/// MENGER-13: what restoring `id` would put back — the descendants its
+/// latest cancel canceled and nothing has moved since (empty on any failure).
+pub(crate) async fn restorable(client: &Client, id: &str) -> Vec<String> {
+    match client.history_all(id.to_string()).await {
+        Ok(events) => events
+            .into_iter()
+            .find_map(|ev| match ev {
+                TicketsEvent::HistoryEnd { restorable, .. } => Some(restorable),
+                _ => None,
+            })
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// MENGER-13: the prompt — whether to restore, with `id`, the tickets its
+/// cancel canceled.
+fn confirm_restore(id: &str, restorable: &[String]) -> bool {
+    let shown: Vec<&str> = restorable.iter().take(8).map(String::as_str).collect();
+    let more = restorable.len().saturating_sub(shown.len());
+    let tail = if more > 0 { format!(" and {more} more") } else { String::new() };
+    let n = restorable.len();
+    let message = format!(
+        "{id}'s cancel also canceled {n} ticket{} below it ({}{tail}).\n\nRestore {} to the status{} {} had? \
+         (Cancel restores {id} alone.)",
+        if n == 1 { "" } else { "s" },
+        shown.join(", "),
+        if n == 1 { "it" } else { "them" },
+        if n == 1 { "" } else { "es" },
+        if n == 1 { "it" } else { "they" },
+    );
+    web_sys::window().and_then(|w| w.confirm_with_message(&message).ok()).unwrap_or(false)
+}
+
 /// The app's one mutation: `set_status`, fired from a row's select or the
 /// ticket menu (AGS-16) — one call path. The caller's control is left
 /// showing the user's choice while the call is in flight; the authoritative
@@ -1013,8 +1069,17 @@ pub(crate) fn request_set_status(
             on_failure();
             return;
         };
+        // MENGER-13: leaving `Canceled`, offer to put back what its cancel
+        // canceled — the store names them (`history`'s `history_end`).
+        let was = crate::cache::get(&id).and_then(|t| t.try_with_untracked(|t| t.status)).or_else(|| recent(&id).map(|t| t.status));
+        let restore = if was == Some(Status::Canceled) && chosen != Status::Canceled {
+            let restorable = restorable(&client, &id).await;
+            !restorable.is_empty() && confirm_restore(&id, &restorable)
+        } else {
+            false
+        };
         let failure = match client
-            .set_status_all(id.clone(), chosen.as_str().to_string())
+            .set_status_all(id.clone(), chosen.as_str().to_string(), Some(restore), Some("app".into()), None)
             .await
         {
             Ok(events) => first_refusal(&events),
@@ -1164,7 +1229,7 @@ pub(crate) fn load_children(
             return; // the page is gone
         };
         match client
-            .list_all(None, None, Some(id.clone()), after, Some(KIDS_LIMIT), Some(true), filter.clone(), None, None)
+            .list_all(None, None, Some(id.clone()), after, Some(KIDS_LIMIT), Some(true), filter.clone(), None, None, crate::session::tz())
             .await
         {
             Ok(events) => {
@@ -1219,7 +1284,7 @@ pub(crate) async fn member(ids: Vec<String>, filter: String) -> Result<Vec<(Stri
     let client = client().ok_or_else(|| "not connected".to_string())?;
     let mut out = Vec::with_capacity(ids.len());
     for part in ids.chunks(MEMBER_MAX) {
-        for ev in client.member_all(part.to_vec(), filter.clone()).await.map_err(|e| describe(&e))? {
+        for ev in client.member_all(part.to_vec(), filter.clone(), crate::session::tz()).await.map_err(|e| describe(&e))? {
             match ev {
                 TicketsEvent::Member { id, matched } => out.push((id, matched)),
                 TicketsEvent::Error { message } => return Err(message),
@@ -1235,7 +1300,7 @@ pub(crate) async fn member(ids: Vec<String>, filter: String) -> Result<Vec<(Stri
 /// take. `Err`: the call failed (the socket).
 pub(crate) async fn find_under(query: String, limit: u32, filter: Option<String>) -> Result<Result<(Vec<TicketSummary>, u64), String>, String> {
     let client = client().ok_or_else(|| "not connected".to_string())?;
-    let events = client.find_all(query, None, Some(limit), filter).await.map_err(|e| describe(&e))?;
+    let events = client.find_all(query, None, Some(limit), filter, crate::session::tz()).await.map_err(|e| describe(&e))?;
     let mut rows = Vec::new();
     let mut remaining = 0;
     for ev in events {
@@ -1270,7 +1335,7 @@ pub(crate) async fn search_under(
     filter: Option<String>,
 ) -> Result<Result<(Vec<Hit>, u64, Vec<SearchWord>), String>, String> {
     let client = client().ok_or_else(|| "not connected".to_string())?;
-    let events = client.search_all(query, filter, Some(limit), None).await.map_err(|e| describe(&e))?;
+    let events = client.search_all(query, filter, Some(limit), None, crate::session::tz()).await.map_err(|e| describe(&e))?;
     let (mut hits, mut matched, mut words) = (Vec::new(), 0, Vec::new());
     for ev in events {
         match ev {
@@ -1288,7 +1353,7 @@ pub(crate) async fn search_under(
 /// connection, or the server's words.
 pub(crate) async fn inputs_under(filter: String) -> Result<Vec<TicketsEvent>, String> {
     let client = client().ok_or_else(|| "not connected".to_string())?;
-    let events = client.inputs_all(None, None, None, Some(filter)).await.map_err(|e| describe(&e))?;
+    let events = client.inputs_all(None, None, None, Some(filter), crate::session::tz()).await.map_err(|e| describe(&e))?;
     if let Some(message) = events.iter().find_map(|ev| match ev {
         TicketsEvent::Error { message } => Some(message.clone()),
         _ => None,
@@ -1304,7 +1369,7 @@ pub(crate) async fn children_matching(parent: String, filter: String) -> Result<
     let client = client().ok_or_else(|| "not connected".to_string())?;
     let mut remaining = None;
     for ev in client
-        .list_all(None, None, Some(parent), None, Some(0), Some(true), Some(filter), None, None)
+        .list_all(None, None, Some(parent), None, Some(0), Some(true), Some(filter), None, None, crate::session::tz())
         .await
         .map_err(|e| describe(&e))?
     {

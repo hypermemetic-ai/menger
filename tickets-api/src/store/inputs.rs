@@ -90,10 +90,22 @@ fn frozen(history: &[InputHistoryEntry]) -> bool {
         .is_some_and(|e| e.action == InputAction::Closed)
 }
 
+/// MENGER-13: whether `history` leaves the input withdrawn: its last
+/// `withdrawn` or `restored` is a `withdrawn`.
+pub(crate) fn withdrawn(history: &[InputHistoryEntry]) -> bool {
+    history
+        .iter()
+        .rev()
+        .find(|e| matches!(e.action, InputAction::Withdrawn | InputAction::Restored))
+        .is_some_and(|e| e.action == InputAction::Withdrawn)
+}
+
 /// The state an input is in — `declared`: its body declares it.
 pub(crate) fn state_of(declared: bool, history: &[InputHistoryEntry]) -> InputState {
     if !declared {
         InputState::Removed
+    } else if withdrawn(history) {
+        InputState::Withdrawn
     } else if frozen(history) {
         InputState::Closed
     } else if answer_of(history).is_some() {
@@ -125,6 +137,9 @@ pub(crate) enum Op {
 pub(crate) enum Refused {
     /// Its body no longer declares it.
     Removed,
+    /// MENGER-13: its ticket is canceled — it asks no one until the ticket
+    /// is not.
+    Withdrawn,
     /// It is closed: an answer and a clear wait for `reopen_input`.
     Closed,
     /// The value does not answer it — why ([`markup::check`]).
@@ -136,6 +151,9 @@ pub(crate) enum Refused {
 pub(crate) fn apply(input: &Input, op: Op, now: i64) -> Result<Option<(Input, InputHistoryEntry)>, Refused> {
     if input.state == InputState::Removed {
         return Err(Refused::Removed);
+    }
+    if input.state == InputState::Withdrawn {
+        return Err(Refused::Withdrawn);
     }
     let closed = input.state == InputState::Closed;
     let entry = |action, value, rationale, source| InputHistoryEntry {
@@ -164,6 +182,44 @@ pub(crate) fn apply(input: &Input, op: Op, now: i64) -> Result<Option<(Input, In
     next.answer = answer_of(&next.history);
     next.state = state_of(true, &next.history);
     Ok(Some((next, entry)))
+}
+
+/// MENGER-13: `input` with one system entry more — `withdrawn` or
+/// `restored`, `reason` its rationale — and the state its history now says.
+fn system_entry(input: &Input, action: InputAction, reason: &str, now: i64) -> (Input, InputHistoryEntry) {
+    let entry = InputHistoryEntry {
+        action,
+        value: None,
+        rationale: Some(reason.to_string()),
+        source: AnswerSource::System,
+        at_unix: now,
+    };
+    let mut next = input.clone();
+    next.history.push(entry.clone());
+    next.answer = answer_of(&next.history);
+    next.state = state_of(input.state != InputState::Removed, &next.history);
+    (next, entry)
+}
+
+impl Plan {
+    /// MENGER-13: a body written while its ticket is canceled — every input
+    /// the plan leaves `open` withdrawn instead, `reason` its rationale (a
+    /// canceled ticket asks no one): the entries to record, by input id.
+    pub(crate) fn withdraw_open(&mut self, reason: &str, now: i64) -> Vec<(Input, InputHistoryEntry)> {
+        let mut out = Vec::new();
+        let Some(list) = self.list.as_mut() else { return out };
+        for input in list.iter_mut().filter(|i| i.state == InputState::Open) {
+            let (next, entry) = system_entry(input, InputAction::Withdrawn, reason, now);
+            if let Some(c) = self.changed.iter_mut().find(|c| c.id == next.id) {
+                *c = next.clone();
+            } else {
+                self.changed.push(next.clone());
+            }
+            *input = next.clone();
+            out.push((next, entry));
+        }
+        out
+    }
 }
 
 /// One write's change to a ticket's inputs, worked out before it commits.
@@ -209,6 +265,21 @@ impl Inputs {
             .iter()
             .map(|i| if i.id == input.id { input } else { i })
             .any(|i| i.state == InputState::Open)
+    }
+
+    /// MENGER-13: whether `ticket` is asking once each of `moved` (its own,
+    /// as a write leaves them) stands in its list — `None` when the write
+    /// moves none of its inputs.
+    pub(crate) fn asking_after(&self, ticket: &str, moved: &[(Input, InputHistoryEntry)]) -> Option<bool> {
+        if moved.is_empty() {
+            return None;
+        }
+        Some(
+            self.of(ticket)
+                .iter()
+                .map(|i| moved.iter().map(|(m, _)| m).find(|m| m.id == i.id).unwrap_or(i))
+                .any(|i| i.state == InputState::Open),
+        )
     }
 
     /// One input.
@@ -293,6 +364,30 @@ impl Inputs {
             return Plan::default();
         }
         Plan { list: Some(list), changed }
+    }
+
+    /// MENGER-13: what canceling `ticket` does to its inputs — each `open`
+    /// one withdrawn, `reason` its rationale, by the system: the input as it
+    /// leaves it and the history entry that records it, in the ticket's
+    /// order. An answered or closed input asks no one, and stays as it is.
+    /// Nothing changes here.
+    pub(crate) fn withdrawing(&self, ticket: &str, reason: &str, now: i64) -> Vec<(Input, InputHistoryEntry)> {
+        self.of(ticket)
+            .iter()
+            .filter(|i| i.state == InputState::Open)
+            .map(|i| system_entry(i, InputAction::Withdrawn, reason, now))
+            .collect()
+    }
+
+    /// MENGER-13: what `ticket` leaving `Canceled` does to its inputs — each
+    /// its history leaves withdrawn (declared or removed since) restored,
+    /// back to what its history says. Nothing changes here.
+    pub(crate) fn restoring(&self, ticket: &str, reason: &str, now: i64) -> Vec<(Input, InputHistoryEntry)> {
+        self.of(ticket)
+            .iter()
+            .filter(|i| withdrawn(&i.history))
+            .map(|i| system_entry(i, InputAction::Restored, reason, now))
+            .collect()
     }
 
     /// The cache's half of a committed [`Plan`]: `ticket`'s inputs are

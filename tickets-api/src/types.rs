@@ -930,6 +930,11 @@ impl FromStr for InputKind {
 /// its body no longer declares it, and its history is kept. The state is
 /// what the history says (the last answer or clear, the last close or
 /// reopen) while the body declares the input, and `removed` when it does not.
+///
+/// MENGER-13: `withdrawn` — its ticket was canceled while it waited (open):
+/// nobody is asked any more, it takes no answer, and its history is kept;
+/// the ticket leaving `Canceled` restores it. "Has an input in state `open`"
+/// is therefore "is asking someone", with no case for a canceled ticket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum InputState {
@@ -937,10 +942,12 @@ pub enum InputState {
     Answered,
     Closed,
     Removed,
+    Withdrawn,
 }
 
 impl InputState {
-    pub const ALL: [InputState; 4] = [InputState::Open, InputState::Answered, InputState::Closed, InputState::Removed];
+    pub const ALL: [InputState; 5] =
+        [InputState::Open, InputState::Answered, InputState::Closed, InputState::Removed, InputState::Withdrawn];
 
     /// The wire spelling.
     pub const fn as_str(self) -> &'static str {
@@ -949,6 +956,7 @@ impl InputState {
             InputState::Answered => "answered",
             InputState::Closed => "closed",
             InputState::Removed => "removed",
+            InputState::Withdrawn => "withdrawn",
         }
     }
 }
@@ -967,7 +975,8 @@ impl FromStr for InputState {
             "answered" => Ok(Self::Answered),
             "closed" => Ok(Self::Closed),
             "removed" => Ok(Self::Removed),
-            other => Err(format!("unknown input state '{other}' (expected open, answered, closed, or removed)")),
+            "withdrawn" => Ok(Self::Withdrawn),
+            other => Err(format!("unknown input state '{other}' (expected open, answered, closed, removed, or withdrawn)")),
         }
     }
 }
@@ -981,6 +990,10 @@ pub enum AnswerSource {
     App,
     #[default]
     Api,
+    /// MENGER-13: the store itself — an input withdrawn because its ticket
+    /// was canceled, or restored when it was not any more. Never a caller's
+    /// to say: `answer` and `clear_answer` refuse it.
+    System,
 }
 
 impl AnswerSource {
@@ -989,6 +1002,7 @@ impl AnswerSource {
         match self {
             AnswerSource::App => "app",
             AnswerSource::Api => "api",
+            AnswerSource::System => "system",
         }
     }
 }
@@ -1005,6 +1019,7 @@ impl FromStr for AnswerSource {
         match s.trim().to_ascii_lowercase().as_str() {
             "app" => Ok(Self::App),
             "api" => Ok(Self::Api),
+            "system" => Ok(Self::System),
             other => Err(format!("unknown answer source '{other}' (expected app or api)")),
         }
     }
@@ -1068,6 +1083,12 @@ pub enum InputAction {
     Cleared,
     Closed,
     Reopened,
+    /// MENGER-13: its ticket was canceled while it was open — it waits on
+    /// no one now (`withdrawn`); the rationale says why.
+    Withdrawn,
+    /// MENGER-13: its ticket left `Canceled` — it is what its history says
+    /// again.
+    Restored,
 }
 
 impl InputAction {
@@ -1078,6 +1099,8 @@ impl InputAction {
             InputAction::Cleared => "cleared",
             InputAction::Closed => "closed",
             InputAction::Reopened => "reopened",
+            InputAction::Withdrawn => "withdrawn",
+            InputAction::Restored => "restored",
         }
     }
 }
@@ -1090,6 +1113,8 @@ impl FromStr for InputAction {
             "cleared" => Ok(Self::Cleared),
             "closed" => Ok(Self::Closed),
             "reopened" => Ok(Self::Reopened),
+            "withdrawn" => Ok(Self::Withdrawn),
+            "restored" => Ok(Self::Restored),
             other => Err(format!("unknown input action '{other}'")),
         }
     }
@@ -1131,6 +1156,123 @@ pub struct Input {
     pub state: InputState,
     pub answer: Option<Answer>,
     pub history: Vec<InputHistoryEntry>,
+}
+
+/// MENGER-13: which of a ticket's fields a transition moved — its status, or
+/// its kind (SDLC-13's `set_kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionField {
+    Status,
+    Kind,
+}
+
+impl TransitionField {
+    /// The wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TransitionField::Status => "status",
+            TransitionField::Kind => "kind",
+        }
+    }
+}
+
+impl FromStr for TransitionField {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "status" => Ok(Self::Status),
+            "kind" => Ok(Self::Kind),
+            other => Err(format!("unknown transition field '{other}' (expected status or kind)")),
+        }
+    }
+}
+
+/// MENGER-13: where a transition came from — `app` (a viewer in the app,
+/// which says so), `api` (synapse, an agent, a script: the default),
+/// `pipeline` (the merge, which says so), `cascade` (the store itself: a
+/// cancellation carried down a canceled ticket's subtree, or undone).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionSource {
+    App,
+    #[default]
+    Api,
+    Pipeline,
+    Cascade,
+}
+
+impl TransitionSource {
+    /// The four, in the order above.
+    pub const ALL: [TransitionSource; 4] =
+        [TransitionSource::App, TransitionSource::Api, TransitionSource::Pipeline, TransitionSource::Cascade];
+
+    /// The wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TransitionSource::App => "app",
+            TransitionSource::Api => "api",
+            TransitionSource::Pipeline => "pipeline",
+            TransitionSource::Cascade => "cascade",
+        }
+    }
+}
+
+impl fmt::Display for TransitionSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Case-insensitive; `synapse` is `api`.
+impl FromStr for TransitionSource {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "app" => Ok(Self::App),
+            "api" | "synapse" => Ok(Self::Api),
+            "pipeline" | "merge" => Ok(Self::Pipeline),
+            "cascade" => Ok(Self::Cascade),
+            other => Err(format!("unknown source '{other}' (expected app, api, pipeline or cascade)")),
+        }
+    }
+}
+
+/// MENGER-13: who a transition's actor is when no one signed in made it:
+/// the store's own cascades and restores.
+pub const SYSTEM_ACTOR: &str = "system";
+
+/// MENGER-13: the actor of a transition made with login off — nobody signed
+/// in to name (its `source` still says where it came from).
+pub const ANONYMOUS_ACTOR: &str = "anonymous";
+
+/// MENGER-13: one **transition** — a change of one ticket's status or kind,
+/// as the store keeps it, append-only: `id` (the log's own, from 1, in the
+/// order written), the `ticket`, the `field` it moved, `from` → `to` (the
+/// wire spellings: `In Review`, `build`; `from` is `null` at a ticket's
+/// birth), when (`at_unix`), who (`actor`: the caller's principal, `system`
+/// for the store's own, `anonymous` with login off; `name` the caller's
+/// display name, when it has one), where it came from (`source`), why
+/// (`message`, always given for `system`) and what caused it (`cause`: the
+/// transition a cascade carried down, or undid; `null` for a call's own).
+/// The log starts when a file gains it (MENGER-13): a ticket written before
+/// has no history before then.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Transition {
+    pub id: u64,
+    pub ticket: String,
+    pub field: TransitionField,
+    pub from: Option<String>,
+    pub to: String,
+    pub at_unix: i64,
+    pub actor: String,
+    pub name: Option<String>,
+    pub source: TransitionSource,
+    pub message: Option<String>,
+    pub cause: Option<u64>,
+    /// The ticket `cause` is a transition of — the canceled (or restored)
+    /// ticket a cascade carried down from; `null` without a cause.
+    pub cause_ticket: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -1417,6 +1559,20 @@ pub enum TicketsEvent {
         next: Option<u32>,
         words: Vec<SearchWord>,
     },
+    /// MENGER-13: one transition (yielded per transition by `history`: the
+    /// ticket's own, oldest first, then those they caused in other tickets;
+    /// and by `watch`, right after the event of the write that made it — a
+    /// `created`, `status_changed` or `kind_changed` — so a cascade is its
+    /// cause's events, then each canceled ticket's `status_changed` and
+    /// `transition`, in the store's order).
+    Transition { transition: Transition },
+    /// MENGER-13: the last event of `history` — when the log began
+    /// (`began_unix`: nothing before it has a history; `null` for a log no
+    /// file began), and, for a canceled ticket, `restorable`: the tickets its
+    /// latest cancel canceled and nothing has moved since, which `set_status
+    /// { restore_children: true }` would put back, in the store's order
+    /// (empty otherwise).
+    HistoryEnd { began_unix: Option<i64>, restorable: Vec<String> },
 }
 
 #[cfg(test)]

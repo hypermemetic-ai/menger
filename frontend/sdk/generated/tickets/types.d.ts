@@ -10,7 +10,7 @@ export interface Answer {
 /** INPUT-3: who made a change to an input (INPUT-1's language) — `app`, a
 viewer's click, which the host says on its `answer`; `api`, everything
 else (synapse, an agent). The only "who" until CONTEXT adds identity. */
-export type AnswerSource = "app" | "api";
+export type AnswerSource = never;
 /** COMP-8: one declared attribute — `<attr name="board" type="shortcode"
 required>The shortcode to count.</attr>`. `name` is lowercased (HTML
 folds attribute names); `kind` is the `type` (`string` when omitted);
@@ -191,7 +191,7 @@ export interface Input {
 /** INPUT-3: what one entry of an input's history did — an answer recorded
 (`answered`), the answer cleared (`cleared`), the input frozen
 (`closed`) or unfrozen (`reopened`). */
-export type InputAction = "answered" | "cleared" | "closed" | "reopened";
+export type InputAction = never;
 /** INPUT-3: one change an input went through, oldest first — the action,
 the value and rationale of an `answered` (`null` for the others), who
 made it and when (unix seconds). Every change is kept, a removed input's
@@ -222,8 +222,13 @@ for an answer; `answered` — it holds one, which may change; `closed` —
 frozen, with or without an answer (DECIDED, for a decision); `removed` —
 its body no longer declares it, and its history is kept. The state is
 what the history says (the last answer or clear, the last close or
-reopen) while the body declares the input, and `removed` when it does not. */
-export type InputState = "open" | "answered" | "closed" | "removed";
+reopen) while the body declares the input, and `removed` when it does not.
+
+MENGER-13: `withdrawn` — its ticket was canceled while it waited (open):
+nobody is asked any more, it takes no answer, and its history is kept;
+the ticket leaving `Canceled` restores it. "Has an input in state `open`"
+is therefore "is asking someone", with no case for a canceled ticket. */
+export type InputState = "open" | "answered" | "closed" | "removed" | "withdrawn";
 export interface InputValueChoice {
     type: 'choice';
     option: string;
@@ -825,7 +830,28 @@ export interface TicketsEventSearched {
     next: number | null;
     words: SearchWord[];
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched;
+/** MENGER-13: one transition (yielded per transition by `history`: the
+ticket's own, oldest first, then those they caused in other tickets;
+and by `watch`, right after the event of the write that made it — a
+`created`, `status_changed` or `kind_changed` — so a cascade is its
+cause's events, then each canceled ticket's `status_changed` and
+`transition`, in the store's order). */
+export interface TicketsEventTransition {
+    type: 'transition';
+    transition: Transition;
+}
+/** MENGER-13: the last event of `history` — when the log began
+(`began_unix`: nothing before it has a history; `null` for a log no
+file began), and, for a canceled ticket, `restorable`: the tickets its
+latest cancel canceled and nothing has moved since, which `set_status
+{ restore_children: true }` would put back, in the store's order
+(empty otherwise). */
+export interface TicketsEventHistoryEnd {
+    type: 'history_end';
+    beganUnix: number | null;
+    restorable: string[];
+}
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -867,3 +893,40 @@ export declare function isTicketsEventBodyTooLarge(e: TicketsEvent): e is Ticket
 export declare function isTicketsEventNode(e: TicketsEvent): e is TicketsEventNode;
 export declare function isTicketsEventHit(e: TicketsEvent): e is TicketsEventHit;
 export declare function isTicketsEventSearched(e: TicketsEvent): e is TicketsEventSearched;
+export declare function isTicketsEventTransition(e: TicketsEvent): e is TicketsEventTransition;
+export declare function isTicketsEventHistoryEnd(e: TicketsEvent): e is TicketsEventHistoryEnd;
+/** MENGER-13: one **transition** — a change of one ticket's status or kind,
+as the store keeps it, append-only: `id` (the log's own, from 1, in the
+order written), the `ticket`, the `field` it moved, `from` → `to` (the
+wire spellings: `In Review`, `build`; `from` is `null` at a ticket's
+birth), when (`at_unix`), who (`actor`: the caller's principal, `system`
+for the store's own, `anonymous` with login off; `name` the caller's
+display name, when it has one), where it came from (`source`), why
+(`message`, always given for `system`) and what caused it (`cause`: the
+transition a cascade carried down, or undid; `null` for a call's own).
+The log starts when a file gains it (MENGER-13): a ticket written before
+has no history before then. */
+export interface Transition {
+    actor: string;
+    atUnix: number;
+    cause?: number | null;
+    /** The ticket `cause` is a transition of — the canceled (or restored)
+  ticket a cascade carried down from; `null` without a cause. */
+    causeTicket?: string | null;
+    field: TransitionField;
+    from?: string | null;
+    id: number;
+    message?: string | null;
+    name?: string | null;
+    source: TransitionSource;
+    ticket: string;
+    to: string;
+}
+/** MENGER-13: which of a ticket's fields a transition moved — its status, or
+its kind (SDLC-13's `set_kind`). */
+export type TransitionField = "status" | "kind";
+/** MENGER-13: where a transition came from — `app` (a viewer in the app,
+which says so), `api` (synapse, an agent, a script: the default),
+`pipeline` (the merge, which says so), `cascade` (the store itself: a
+cancellation carried down a canceled ticket's subtree, or undone). */
+export type TransitionSource = "app" | "api" | "pipeline" | "cascade";

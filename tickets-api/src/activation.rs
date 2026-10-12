@@ -27,6 +27,11 @@ use crate::store::{
 };
 #[cfg(feature = "server")]
 use crate::store::{TreePage, TreeQuery};
+// MENGER-13: the transition log.
+#[cfg(feature = "server")]
+use crate::store::{Act, Clock};
+#[cfg(feature = "server")]
+use crate::types::TransitionSource;
 #[cfg(feature = "server")]
 use crate::types::{AnswerSource, InputState};
 // FILTER-15: the reads that take the lens.
@@ -126,6 +131,13 @@ fn walk_events(store: Arc<Store>, mut walk: Walk) -> impl Stream<Item = TicketsE
     }
 }
 
+/// MENGER-13: how often a `watch` whose filter has a relative window (`within
+/// 1h`, `today`, …) reads it again, so a ticket that ages out of the window
+/// is said `left` within this long — shorter than the shortest window
+/// (`within 1m`).
+#[cfg(feature = "server")]
+const AGE_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// SCALE-6: how many rows `find` answers when no `limit` is asked for —
 /// the 50 the jump palette shows (AGS-18), so a keystroke's answer is a
 /// page, not the store.
@@ -197,6 +209,9 @@ fn wire_event(change: Change) -> Option<TicketsEvent> {
         // INPUT-3: its ticket's shortcode filtered `watch { epic }` on the
         // way here; the wire carries the input.
         Change::InputChanged { input, .. } => TicketsEvent::InputChanged { input },
+        // MENGER-13: its ticket's shortcode filtered `watch { epic }` on the
+        // way here; the wire carries the transition.
+        Change::Transition { transition, .. } => TicketsEvent::Transition { transition },
         Change::CellsMoved { .. } => return None,
         // FILTER-13: each `watch { filter }` asking `under` takes its own.
         Change::UnderMoved { .. } => return None,
@@ -274,7 +289,7 @@ fn input_event(written: Result<InputWrite, StoreError>, ticket: String) -> Ticke
     roles(
         viewer = [
             "health", "get", "list", "ready_set", "find", "search", "member", "groups", "components",
-            "inputs", "extents", "counts", "facets", "tree", "waves", "blockers", "watch"
+            "inputs", "extents", "counts", "facets", "tree", "waves", "blockers", "watch", "history"
         ],
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
@@ -431,7 +446,15 @@ impl Tickets {
                     return;
                 }
             };
-            match store.create(NewTicket {
+            // MENGER-13: its first status is a transition, the caller's.
+            let act = match act_of(&caller, None, None) {
+                Ok(a) => a,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            match store.create_by(NewTicket {
                 epic,
                 title,
                 kind,
@@ -440,7 +463,7 @@ impl Tickets {
                 parent,
                 path,
                 body: body.unwrap_or_default(),
-            }).await {
+            }, act).await {
                 Ok(ticket) => yield TicketsEvent::Created { ticket },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
                 Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, reach.as_ref(), id)) },
@@ -528,11 +551,13 @@ impl Tickets {
             summary = "Yield summary rows (every field but the body) instead of full tickets (optional)",
             filter = "A filter, e.g. 'ready and kind build and in SCALE' (FILTER-3's language; optional): ANDed with epic, status and parent; the page event then carries first",
             at = "Start at this position among the matches, 0-based, instead of after a cursor (optional; not with after); the page event carries first",
-            keep = "With a filter: this ticket id is listed and counted as a match whatever the filter says of it, e.g. the open ticket (optional; one inside epic, status and parent)"
+            keep = "With a filter: this ticket id is listed and counted as a match whatever the filter says of it, e.g. the open ticket (optional; one inside epic, status and parent)",
+            tz = "The time zone a history filter's days are read in (today, yesterday, this week, a date): an IANA name, e.g. Europe/Berlin, UTC, or an offset, e.g. +02:00 (optional; default UTC)"
         ),
         values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled", "Doc"]),
         example(note = "a shortcode's tickets, summary rows, 20 at a time", params = r#"{"epic": "MENGER", "summary": true, "limit": 20}"#),
-        example(note = "the ready build work in SCALE", params = r#"{"filter": "ready and kind build and in SCALE", "summary": true}"#)
+        example(note = "the ready build work in SCALE", params = r#"{"filter": "ready and kind build and in SCALE", "summary": true}"#),
+        example(note = "in review, and got there in the last 12 hours", params = r#"{"filter": "status \"In Review\" and entered \"In Review\" within 12h", "summary": true}"#)
     )]
     pub async fn list(
         &self, auth: Option<&AuthContext>, reach: Reach,
@@ -545,6 +570,7 @@ impl Tickets {
         filter: Option<String>,
         at: Option<u64>,
         keep: Option<String>,
+        tz: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -582,6 +608,13 @@ impl Tickets {
                     Ok(lens) => lens,
                     Err(e) => {
                         yield TicketsEvent::Error { message: e.to_string() };
+                        return;
+                    }
+                };
+                let lens = match clock_of(&caller, tz.as_deref()) {
+                    Ok(clock) => lens.with_clock(clock),
+                    Err(message) => {
+                        yield TicketsEvent::Error { message };
                         return;
                     }
                 };
@@ -627,32 +660,53 @@ impl Tickets {
     /// lifecycle — `set_status` on one is an in-band `Error`, whatever the
     /// status — and `Doc` is a doc's own: setting it on any other kind is an
     /// in-band `Error` too. Neither writes anything.
+    ///
+    /// MENGER-13: the change is a transition — the caller's (`anonymous`
+    /// with login off), from `source` (`api` unless the call says `app` or
+    /// `pipeline`), with its `message` — kept in the log and said on `watch`
+    /// right after the `StatusChanged`. Into `Canceled`, the ticket's open
+    /// inputs are withdrawn and every descendant still open work is
+    /// canceled in the same write, each a transition of `system`'s naming
+    /// the cause. Out of `Canceled`, its withdrawn inputs come back; with
+    /// `restore_children`, so do the descendants its cancel canceled (and
+    /// nothing has moved since), to the statuses they had.
     #[plexus_macros::method(
         group = "write",
         target = "id",
-        description = "Set a ticket's status (not a doc's: a doc has no lifecycle)",
+        description = "Set a ticket's status (not a doc's: a doc has no lifecycle); Canceled cancels its open descendants in the same write, and leaving Canceled may restore them (restore_children)",
         params(
             id = "Ticket id, e.g. MNG-2",
-            status = "New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled (case-insensitive; `active` is Coding; never Doc, a doc's own)"
+            status = "New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled (case-insensitive; `active` is Coding; never Doc, a doc's own)",
+            restore_children = "Leaving Canceled: also put back, to the statuses they had, the descendants its cancel canceled and nothing has moved since (optional, default false; history's history_end names them)",
+            source = "Where the change comes from: app | api | pipeline (optional, default api) — kept in the transition",
+            message = "Why, kept in the transition (optional)"
         ),
-        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled"]),
+        values(status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled"], source = ["app", "api", "pipeline"]),
         example(note = "start work on MENGER-40", params = r#"{"id": "MENGER-40", "status": "Coding"}"#),
-        example(note = "hand it to review", params = r#"{"id": "MENGER-40", "status": "In Review"}"#)
+        example(note = "hand it to review", params = r#"{"id": "MENGER-40", "status": "In Review"}"#),
+        example(note = "cancel a scope and everything open under it", params = r#"{"id": "MENGER-7", "status": "Canceled", "message": "folded into MENGER-9"}"#),
+        example(note = "undo it, children too", params = r#"{"id": "MENGER-7", "status": "Pending", "restore_children": true}"#)
     )]
     pub async fn set_status(
         &self, auth: Option<&AuthContext>, reach: Reach,
         id: String,
         status: String,
+        restore_children: Option<bool>,
+        source: Option<String>,
+        message: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
-            if let Err(message) = admitted {
-                yield TicketsEvent::Error { message };
-                return;
-            }
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
             let status = match status.parse::<Status>() {
                 Ok(s) => s,
                 Err(e) => {
@@ -660,7 +714,14 @@ impl Tickets {
                     return;
                 }
             };
-            match store.set_status(&id, status).await {
+            let act = match act_of(&caller, source.as_deref(), message) {
+                Ok(a) => a,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            match store.set_status_by(&id, status, act, restore_children.unwrap_or(false)).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
                 Err(e) => yield TicketsEvent::Error { message: e.to_string() },
@@ -693,9 +754,11 @@ impl Tickets {
         params(
             id = "Ticket id, e.g. IDENTITY-1",
             kind = "New kind: scope | execution | build | gap | spike | doc (case-insensitive)",
-            status = "Its status with the new kind (optional): Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled — or Doc, the only one a doc takes; omitted, a doc becomes Doc, a doc becoming work becomes Epic (a scope) or Pending, and work keeps its own"
+            status = "Its status with the new kind (optional): Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled — or Doc, the only one a doc takes; omitted, a doc becomes Doc, a doc becoming work becomes Epic (a scope) or Pending, and work keeps its own",
+            source = "Where the change comes from: app | api | pipeline (optional, default api) — kept in the transitions",
+            message = "Why, kept in the transitions (optional)"
         ),
-        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled", "Doc"]),
+        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled", "Doc"], source = ["app", "api", "pipeline"]),
         example(note = "make a ticket a scope", params = r#"{"id": "IDENTITY-1", "kind": "scope"}"#),
         example(note = "make it a gap, ready to start", params = r#"{"id": "MENGER-40", "kind": "gap", "status": "Ready"}"#)
     )]
@@ -704,16 +767,29 @@ impl Tickets {
         id: String,
         kind: String,
         status: Option<String>,
+        source: Option<String>,
+        message: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
-            if let Err(message) = admitted {
-                yield TicketsEvent::Error { message };
-                return;
-            }
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            // MENGER-13: the kind's change (and the status's) is the caller's.
+            let act = match act_of(&caller, source.as_deref(), message) {
+                Ok(a) => a,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
             let kind = match kind.parse::<Kind>() {
                 Ok(k) => k,
                 Err(e) => {
@@ -729,7 +805,7 @@ impl Tickets {
                     return;
                 }
             };
-            match store.set_kind(&id, kind, status).await {
+            match store.set_kind_by(&id, kind, status, act).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
                 Err(e) => yield TicketsEvent::Error { message: e.to_string() },
@@ -995,7 +1071,8 @@ impl Tickets {
             after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
             limit = "At most this many tickets; the page event carries the next cursor (optional)",
             summary = "Yield summary rows (every field but the body) instead of full tickets (optional)",
-            filter = "A filter, e.g. 'kind build and in SCALE' (FILTER-3's language; optional): the ready set and the filter"
+            filter = "A filter, e.g. 'kind build and in SCALE' (FILTER-3's language; optional): the ready set and the filter",
+            tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         ),
         example(note = "what can start now in SCALE", params = r#"{"filter": "kind build and in SCALE", "summary": true}"#)
     )]
@@ -1006,6 +1083,7 @@ impl Tickets {
         limit: Option<u32>,
         summary: Option<bool>,
         filter: Option<String>,
+        tz: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -1024,6 +1102,13 @@ impl Tickets {
                     return;
                 }
             };
+            let clock = match clock_of(&caller, tz.as_deref()) {
+                Ok(c) => c,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
             // FILTER-15: from the cells.
             match narrowing(filter.as_deref()).and_then(|f| f.map(|f| ready_and(&f, epic.clone())).transpose()) {
                 Err(e) => {
@@ -1031,6 +1116,7 @@ impl Tickets {
                     return;
                 }
                 Ok(Some(q)) => {
+                    let q = Filtered { lens: q.lens.with_clock(clock), ..q };
                     if summary.unwrap_or(false) {
                         for ev in page_events(store.ready_filtered_page(&q, after.as_deref(), limit)) {
                             yield ev;
@@ -1086,7 +1172,8 @@ impl Tickets {
             query = "Substring of the ticket id or title, case-insensitive (ASCII), trimmed; empty matches every ticket",
             after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
             limit = "At most this many tickets (default 50); the page event carries the next cursor (optional)",
-            filter = "A filter, e.g. 'not category done' (FILTER-3's language; optional): only the matches it admits"
+            filter = "A filter, e.g. 'not category done' (FILTER-3's language; optional): only the matches it admits",
+            tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         ),
         example(note = "jump to a ticket by part of its title", params = r#"{"query": "watch", "filter": "not category done"}"#)
     )]
@@ -1096,6 +1183,7 @@ impl Tickets {
         after: Option<String>,
         limit: Option<u32>,
         filter: Option<String>,
+        tz: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -1115,7 +1203,7 @@ impl Tickets {
                 }
             };
             let limit = Some(limit.unwrap_or(FIND_LIMIT));
-            let page = match narrowing_lens(filter.as_deref()) {
+            let page = match zoned_lens(&caller, filter.as_deref(), tz.as_deref()) {
                 Err(e) => Err(e),
                 // FILTER-15: the candidates the cells admit.
                 Ok(Some(lens)) => store.find_filtered(&query, &lens, after.as_deref(), limit),
@@ -1149,7 +1237,8 @@ impl Tickets {
             query = "Words to find, e.g. 'plcement wave' — each also as a prefix; a misspelt one also as the words a typo away; FILTER-23 or \"a phrase\" as a phrase",
             filter = "A filter, e.g. 'not category done' (FILTER-3's language; optional): only the matches it admits",
             limit = "At most this many hits (default 20, at most 100) (optional)",
-            offset = "Skip this many matches — the searched event's next (optional)"
+            offset = "Skip this many matches — the searched event's next (optional)",
+            tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         ),
         example(note = "tickets that mention placement waves (typos too)", params = r#"{"query": "plcement wave"}"#),
         example(note = "the five best open matches", params = r#"{"query": "set_status", "filter": "not category done", "limit": 5}"#)
@@ -1160,6 +1249,7 @@ impl Tickets {
         filter: Option<String>,
         limit: Option<u32>,
         offset: Option<u32>,
+        tz: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -1180,7 +1270,7 @@ impl Tickets {
                     return;
                 }
             };
-            let lens = match narrowing_lens(filter.as_deref()) {
+            let lens = match zoned_lens(&caller, filter.as_deref(), tz.as_deref()) {
                 Ok(lens) => lens,
                 Err(e) => {
                     yield TicketsEvent::Error { message: e.to_string() };
@@ -1220,10 +1310,11 @@ impl Tickets {
         description = "Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids",
         params(
             ids = "Ticket ids (or SHORTCODE/path addresses), e.g. [\"FILTER-4\", \"FILTER-5\"]; at most 1000",
-            filter = "A filter, e.g. 'status Ready' (FILTER-3's language; empty: every ticket)"
+            filter = "A filter, e.g. 'status Ready' (FILTER-3's language; empty: every ticket)",
+            tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         )
     )]
-    pub async fn member(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<String>, filter: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn member(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<String>, filter: String, tz: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -1247,7 +1338,7 @@ impl Tickets {
                 };
                 return;
             }
-            let lens = match narrowing_lens(Some(&filter)) {
+            let lens = match zoned_lens(&caller, Some(&filter), tz.as_deref()) {
                 Ok(lens) => lens.unwrap_or_else(Lens::all),
                 Err(e) => {
                     yield TicketsEvent::Error { message: e.to_string() };
@@ -1379,10 +1470,11 @@ impl Tickets {
         params(
             ticket = "Only this ticket's inputs, e.g. INPUT-9 (optional)",
             epic = "Only inputs of tickets in this shortcode (optional)",
-            state = "Only inputs in this state: open | answered | closed | removed (optional)",
-            filter = "A filter on the input's ticket, e.g. 'kind build' (FILTER-3's language; optional): only inputs of tickets it admits"
+            state = "Only inputs in this state: open | answered | closed | removed | withdrawn (optional; withdrawn: its ticket is canceled)",
+            filter = "A filter on the input's ticket, e.g. 'kind build' (FILTER-3's language; optional): only inputs of tickets it admits",
+            tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         ),
-        values(state = ["open", "answered", "closed", "removed"]),
+        values(state = ["open", "answered", "closed", "removed", "withdrawn"]),
         example(note = "everything waiting on the owner", params = r#"{"state": "open"}"#),
         example(note = "one ticket's inputs, answers and history", params = r#"{"ticket": "RETURNS-13"}"#)
     )]
@@ -1392,6 +1484,7 @@ impl Tickets {
         epic: Option<String>,
         state: Option<String>,
         filter: Option<String>,
+        tz: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -1425,7 +1518,7 @@ impl Tickets {
                 }
             };
             // FILTER-15: of the tickets the filter admits, by the cells.
-            let answer = match narrowing_lens(filter.as_deref()) {
+            let answer = match zoned_lens(&caller, filter.as_deref(), tz.as_deref()) {
                 Err(e) => Err(e),
                 Ok(Some(lens)) => store.inputs_filtered(ticket.as_deref(), epic.as_deref(), state, &lens),
                 Ok(None) => store.inputs(ticket.as_deref(), epic.as_deref(), state),
@@ -1489,7 +1582,7 @@ impl Tickets {
                 yield TicketsEvent::Error { message };
                 return;
             }
-            let source = match source.as_deref().map(str::parse::<AnswerSource>) {
+            let source = match source.as_deref().map(str::parse::<AnswerSource>).map(|r| r.and_then(caller_source)) {
                 None => AnswerSource::Api,
                 Some(Ok(s)) => s,
                 Some(Err(e)) => {
@@ -1533,7 +1626,7 @@ impl Tickets {
                 yield TicketsEvent::Error { message };
                 return;
             }
-            let source = match source.as_deref().map(str::parse::<AnswerSource>) {
+            let source = match source.as_deref().map(str::parse::<AnswerSource>).map(|r| r.and_then(caller_source)) {
                 None => AnswerSource::Api,
                 Some(Ok(s)) => s,
                 Some(Err(e)) => {
@@ -1653,10 +1746,11 @@ impl Tickets {
         description = "Each shortcode's number of tickets matching a filter, in shortcode order — the filtered extents (every ticket without one)",
         params(
             filter = "A filter, e.g. 'ready and kind build' (FILTER-3's language; optional: every ticket)",
-            keep = "This ticket id is counted as a match whatever the filter says of it, e.g. the open ticket (optional)"
+            keep = "This ticket id is counted as a match whatever the filter says of it, e.g. the open ticket (optional)",
+            tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         )
     )]
-    pub async fn counts(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<String>, keep: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn counts(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<String>, keep: Option<String>, tz: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -1674,8 +1768,16 @@ impl Tickets {
                     return;
                 }
             };
+            let clock = match clock_of(&caller, tz.as_deref()) {
+                Ok(c) => c,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
             match filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())) {
                 Ok(lens) => {
+                    let lens = lens.with_clock(clock);
                     let keep = kept(&store, &caller, keep.as_deref());
                     for (epic, held) in store.counts_keeping(&lens, keep.as_deref()) {
                         yield TicketsEvent::Count { epic, held };
@@ -1704,10 +1806,11 @@ impl Tickets {
         description = "Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, menger doc, in), the matches of base and filter without filter's own groups for that field, by value",
         params(
             filter = "The filter whose menus are counted (optional): its own groups for a field are set aside for that field's counts",
-            base = "A filter that always applies, e.g. the global one (optional): never set aside"
+            base = "A filter that always applies, e.g. the global one (optional): never set aside",
+            tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         )
     )]
-    pub async fn facets(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<String>, base: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    pub async fn facets(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<String>, base: Option<String>, tz: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
         stream! {
@@ -1735,9 +1838,11 @@ impl Tickets {
             let read = |text: Option<String>| -> Result<crate::filter::Filter, String> {
                 text.as_deref().map_or_else(|| Ok(Default::default()), |t| crate::filter::Filter::parse(t).map_err(|e| e.to_string()))
             };
-            let answer = read(filter)
-                .and_then(|f| Ok((f, read(base)?)))
-                .and_then(|(f, b)| store.facets(&f, &b).map_err(|e| e.to_string()));
+            let answer = clock_of(&caller, tz.as_deref()).and_then(|clock| {
+                read(filter)
+                    .and_then(|f| Ok((f, read(base)?)))
+                    .and_then(|(f, b)| store.facets_at(&f, &b, &clock).map_err(|e| e.to_string()))
+            });
             match answer {
                 Ok(facets) => {
                     for (field, value, held) in facets {
@@ -1792,7 +1897,8 @@ impl Tickets {
             after = "Cursor: start strictly after this ticket id (optional)",
             limit = "At most this many rows; the page event carries the next cursor (optional)",
             matches_only = "Only matches (optional, default false): a ticket that does not match is not a row, and the matches below it are answered in its place, at the nearest ancestor that matches or at the top of the shortcode; then the hosted shortcodes drawn there",
-            keep = "With matches_only: this ticket id is drawn as if it matched — where a match would be, its nearest matches under it — e.g. the open ticket (optional; its node still says matched false)"
+            keep = "With matches_only: this ticket id is drawn as if it matched — where a match would be, its nearest matches under it — e.g. the open ticket (optional; its node still says matched false)",
+            tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         ),
         example(note = "FILTER's top level, under a filter", params = r#"{"epic": "FILTER", "filter": "status Ready"}"#)
     )]
@@ -1805,6 +1911,7 @@ impl Tickets {
         limit: Option<u32>,
         matches_only: Option<bool>,
         keep: Option<String>,
+        tz: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
@@ -1827,6 +1934,13 @@ impl Tickets {
                 Ok(lens) => lens,
                 Err(e) => {
                     yield TicketsEvent::Error { message: e.to_string() };
+                    return;
+                }
+            };
+            let lens = match clock_of(&caller, tz.as_deref()) {
+                Ok(clock) => lens.with_clock(clock),
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
                     return;
                 }
             };
@@ -1953,7 +2067,7 @@ impl Tickets {
                 }
             };
             if caller.require(&[id.as_str()], &store).is_err() {
-                yield TicketsEvent::NotFound { id: id };
+                yield TicketsEvent::NotFound { id };
                 return;
             }
             let reach = match view_lens(&caller) {
@@ -1972,6 +2086,65 @@ impl Tickets {
                             BlockerRef::Dangling(id) => TicketsEvent::DanglingBlocker { id },
                         };
                     }
+                }
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            }
+        }
+    }
+
+    /// MENGER-13: a ticket's history — every change of its status and its
+    /// kind since the log began, as the store keeps them. Yields one
+    /// `Transition` per transition of the ticket's, oldest first — `from` →
+    /// `to`, when, who (`actor`: a principal, `system`, or `anonymous` with
+    /// login off; `name`), from where (`source`: app, api, pipeline,
+    /// cascade), why (`message`) and what caused it (`cause`, a transition
+    /// id) — then one per transition those caused in other tickets (a
+    /// cancel's cascade, a restore's), in the order written, then exactly one
+    /// `HistoryEnd { began_unix, restorable }`: when the log began (nothing
+    /// before it has a history), and for a canceled ticket the descendants
+    /// `set_status { restore_children: true }` would put back. `NotFound` for
+    /// an id that names no ticket (or one out of the caller's reach). From
+    /// the cache; `watch` carries each new `Transition`.
+    #[plexus_macros::method(
+        group = "read",
+        description = "A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then history_end (when the log began; what a restore would put back)",
+        params(id = "Ticket id, e.g. MENGER-7"),
+        example(note = "who moved MENGER-7, and what its cancel canceled", params = r#"{"id": "MENGER-7"}"#)
+    )]
+    pub async fn history(&self, auth: Option<&AuthContext>, reach: Reach, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        let admitted = self.access.admit(auth, &reach);
+        stream! {
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            if caller.require(&[id.as_str()], &store).is_err() {
+                yield TicketsEvent::NotFound { id };
+                return;
+            }
+            let reach = match view_lens(&caller) {
+                Ok(r) => r,
+                Err(message) => {
+                    yield TicketsEvent::Error { message };
+                    return;
+                }
+            };
+            match store.history(&id) {
+                Ok(h) => {
+                    for transition in h.own {
+                        yield TicketsEvent::Transition { transition };
+                    }
+                    // IDENTITY-21: what it caused, where the caller can see.
+                    for transition in h.caused.into_iter().filter(|t| sees_id(&store, reach.as_ref(), &t.ticket)) {
+                        yield TicketsEvent::Transition { transition };
+                    }
+                    let restorable = h.restorable.into_iter().filter(|t| sees_id(&store, reach.as_ref(), t)).collect();
+                    yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable };
                 }
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
                 Err(e) => yield TicketsEvent::Error { message: e.to_string() },
@@ -2056,15 +2229,18 @@ impl Tickets {
         params(
             epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)",
             filter = "A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256",
-            membership = "Send only Entered, Left, Recount and Lagged (optional; default false)"
+            membership = "Send only Entered, Left, Recount and Lagged (optional; default false)",
+            tz = "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)"
         ),
-        example(note = "follow active and in-review work", params = r#"{"filter": "category in (active, review)"}"#)
+        example(note = "follow active and in-review work", params = r#"{"filter": "category in (active, review)"}"#),
+        example(note = "what entered Coding in the last hour — and what ages out of it", params = r#"{"filter": "entered Coding within 1h", "membership": true}"#)
     )]
     pub async fn watch(
         &self, auth: Option<&AuthContext>, reach: Reach,
         epic: Option<String>,
         filter: Option<String>,
         membership: Option<bool>,
+        tz: Option<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let membership = membership.unwrap_or(false);
         let epic = epic.map(|e| e.to_ascii_uppercase());
@@ -2074,16 +2250,18 @@ impl Tickets {
         let asked = filter;
         let opened = access.admit(who.as_ref(), &reach).and_then(|caller| {
             let filter = caller.scoped(asked.as_deref())?;
-            Ok((filter, Sight::of(&self.store, &caller)?))
+            // MENGER-13: how its filter reads time.
+            let clock = clock_of(&caller, tz.as_deref())?;
+            Ok((filter, Sight::of(&self.store, &caller)?, clock))
         });
-        let (filter, sight, refused) = match opened {
-            Ok((filter, sight)) => (filter, Some(sight), None),
-            Err(e) => (None, None, Some(e)),
+        let (filter, sight, clock, refused) = match opened {
+            Ok((filter, sight, clock)) => (filter, Some(sight), clock, None),
+            Err(e) => (None, None, Clock::default(), Some(e)),
         };
         // FILTER-4: a filtered watch reads the filtered channel, which
         // carries every change and each write's cell moves after them.
         let filtered = (filter.is_some() || membership).then(|| {
-            (self.store.subscribe_filtered(), watcher_for(&self.store, filter.as_deref(), epic.as_deref()))
+            (self.store.subscribe_filtered(), watcher_for(&self.store, filter.as_deref(), epic.as_deref(), &clock))
         });
         let store = Arc::clone(&self.store);
         let plain = filtered.is_none().then(|| self.store.subscribe());
@@ -2109,7 +2287,22 @@ impl Tickets {
                     }
                 };
                 loop {
-                    let next = rx.recv().await;
+                    // MENGER-13: a filter with a relative window is read
+                    // again as time passes, between writes.
+                    let next = if watcher.relative() {
+                        tokio::select! {
+                            r = rx.recv() => Some(r),
+                            _ = tokio::time::sleep(AGE_EVERY) => None,
+                        }
+                    } else {
+                        Some(rx.recv().await)
+                    };
+                    let Some(next) = next else {
+                        for m in watcher.tick(&store, epic.as_deref()) {
+                            yield membership_event(m);
+                        }
+                        continue;
+                    };
                     match sight.again(&access, who.as_ref(), &reach, &store) {
                         Err(message) => {
                             yield TicketsEvent::Error { message };
@@ -2118,7 +2311,7 @@ impl Tickets {
                         Ok(None) => {}
                         Ok(Some((caller, gone))) => {
                             // The filter again, under the reach as it stands.
-                            let rebuilt = caller.scoped(asked.as_deref()).and_then(|f| watcher_for(&store, f.as_deref(), epic.as_deref()));
+                            let rebuilt = caller.scoped(asked.as_deref()).and_then(|f| watcher_for(&store, f.as_deref(), epic.as_deref(), &clock));
                             match rebuilt {
                                 Ok(w) => watcher = w,
                                 Err(message) => {
@@ -2200,11 +2393,60 @@ impl Tickets {
 }
 
 /// FILTER-4: a filtered watch's watcher — `text` (already ANDed with the
-/// caller's reach) compiled, in `epic` alone when one is asked.
+/// caller's reach) compiled, in `epic` alone when one is asked. MENGER-13:
+/// its history read by `clock`.
 #[cfg(feature = "server")]
-fn watcher_for(store: &Store, text: Option<&str>, epic: Option<&str>) -> Result<crate::store::Watcher, String> {
+fn watcher_for(store: &Store, text: Option<&str>, epic: Option<&str>, clock: &Clock) -> Result<crate::store::Watcher, String> {
     let lens = text.map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())).map_err(|e| e.to_string())?;
-    Ok(store.watcher_in(lens, epic))
+    Ok(store.watcher_in(lens.with_clock(clock.clone()), epic))
+}
+
+/// MENGER-13: how a read's filter reads time — in `tz` (an IANA name, UTC,
+/// or an offset; none: UTC), now, with `me` the caller's principal
+/// (`anonymous` with login off). A zone the server cannot read is refused.
+#[cfg(feature = "server")]
+fn clock_of(caller: &Caller, tz: Option<&str>) -> Result<Clock, String> {
+    let me = caller.principal.clone().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string());
+    Clock { me, ..Clock::default() }.zoned(tz)
+}
+
+/// MENGER-13: an answer's or a clear's `source`, as a caller may say it —
+/// `app` or `api`; `system` is the store's own (a withdrawal, a restore).
+#[cfg(feature = "server")]
+fn caller_source(s: AnswerSource) -> Result<AnswerSource, String> {
+    match s {
+        AnswerSource::System => Err("unknown answer source 'system' (expected app or api: system is the store's own)".into()),
+        s => Ok(s),
+    }
+}
+
+/// FILTER-15's [`narrowing_lens`], MENGER-13: its history read by the
+/// caller's clock in `tz`.
+#[cfg(feature = "server")]
+fn zoned_lens(caller: &Caller, filter: Option<&str>, tz: Option<&str>) -> Result<Option<Lens>, StoreError> {
+    let clock = clock_of(caller, tz).map_err(StoreError::Filter)?;
+    Ok(narrowing_lens(filter)?.map(|l| l.with_clock(clock)))
+}
+
+/// MENGER-13: who a write acts as — the caller's principal and name
+/// (`anonymous` with login off), from `source` (`app`, `api` — the default
+/// —, `pipeline`; never `cascade`, the store's own), saying `message`.
+#[cfg(feature = "server")]
+fn act_of(caller: &Caller, source: Option<&str>, message: Option<String>) -> Result<Act, String> {
+    let source = match source.map(str::parse::<TransitionSource>) {
+        None => TransitionSource::Api,
+        Some(Ok(TransitionSource::Cascade)) => {
+            return Err("source: `cascade` is the store's own — a call is app, api or pipeline".into());
+        }
+        Some(Ok(s)) => s,
+        Some(Err(e)) => return Err(e),
+    };
+    Ok(Act {
+        actor: caller.principal.clone().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string()),
+        name: caller.name.clone(),
+        source,
+        message: message.map(|m| m.trim().to_string()).filter(|m| !m.is_empty()),
+    })
 }
 
 /// IDENTITY-37: what an open `watch` relays, as the caller's grants stand
@@ -2327,6 +2569,8 @@ fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> Option<Ticke
             });
         }
         TicketsEvent::InputChanged { input } | TicketsEvent::Input { input } => Some(input.ticket.clone()),
+        // MENGER-13: a transition is its ticket's.
+        TicketsEvent::Transition { transition } => Some(transition.ticket.clone()),
         TicketsEvent::PlacementsChanged { changes } => {
             let kept: Vec<_> = changes.iter().filter(|c| sees(&c.id)).cloned().collect();
             return (!kept.is_empty()).then_some(TicketsEvent::PlacementsChanged { changes: kept });
@@ -2347,7 +2591,8 @@ fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> Option<Ticke
         | TicketsEvent::WaveCounts { .. }
         | TicketsEvent::Error { .. }
         | TicketsEvent::BodyTooLarge { .. }
-        | TicketsEvent::Searched { .. } => None,
+        | TicketsEvent::Searched { .. }
+        | TicketsEvent::HistoryEnd { .. } => None,
     };
     match id {
         Some(id) if !sees(&id) => None,
@@ -2496,6 +2741,12 @@ mod tests {
         Tickets::new(Arc::new(Store::new()))
     }
 
+    /// MENGER-13: a watch as the tests before the transition log read it —
+    /// each `transition` (right after its ticket's event) set aside.
+    fn untransitioned(s: impl Stream<Item = TicketsEvent> + Send + 'static) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        s.filter(|e| futures::future::ready(!matches!(e, TicketsEvent::Transition { .. })))
+    }
+
     async fn one(s: impl Stream<Item = TicketsEvent> + Send + 'static) -> TicketsEvent {
         Box::pin(s).next().await.expect("event")
     }
@@ -2592,12 +2843,12 @@ mod tests {
         }
         one(hub.create(None, Reach::everywhere(), "DOCS".into(), "work".into(), None, None, None, None, None, None).await).await; // DOCS-2
         for status in ["Ready", "Complete", "Doc", "active"] {
-            match one(hub.set_status(None, Reach::everywhere(), "DOCS-1".into(), status.into()).await).await {
+            match one(hub.set_status(None, Reach::everywhere(), "DOCS-1".into(), status.into(), None, None, None).await).await {
                 TicketsEvent::Error { message } => assert!(message.contains("a doc has no lifecycle"), "{message}"),
                 other => panic!("{status}: expected Error, got {other:?}"),
             }
         }
-        match one(hub.set_status(None, Reach::everywhere(), "DOCS-2".into(), "doc".into()).await).await {
+        match one(hub.set_status(None, Reach::everywhere(), "DOCS-2".into(), "doc".into(), None, None, None).await).await {
             TicketsEvent::Error { message } => assert!(message.contains("Doc is a doc's own status"), "{message}"),
             other => panic!("expected Error, got {other:?}"),
         }
@@ -2611,7 +2862,7 @@ mod tests {
             TicketsEvent::Error { message } => assert!(message.contains("'DOCS-1' is a doc"), "{message}"),
             other => panic!("expected Error, got {other:?}"),
         }
-        match one(hub.list(None, Reach::everywhere(), None, Some("Doc".into()), None, None, None, Some(true), None, None, None).await).await {
+        match one(hub.list(None, Reach::everywhere(), None, Some("Doc".into()), None, None, None, Some(true), None, None, None, None).await).await {
             TicketsEvent::Summary { summary } => assert_eq!((summary.id.as_str(), summary.status), ("DOCS-1", Status::Doc)),
             other => panic!("expected Summary, got {other:?}"),
         }
@@ -2640,10 +2891,10 @@ mod tests {
         let hub = hub();
         one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
         one(hub.create(None, Reach::everywhere(), "MNG".into(), "b".into(), None, None, None, None, None, None).await).await;
-        one(hub.set_status(None, Reach::everywhere(), "MNG-1".into(), "Ready".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "MNG-1".into(), "Ready".into(), None, None, None).await).await;
 
         let (ids, page) =
-            ids_and_page(hub.list(None, Reach::everywhere(), None, Some("Ready".into()), None, None, None, None, None, None, None).await).await;
+            ids_and_page(hub.list(None, Reach::everywhere(), None, Some("Ready".into()), None, None, None, None, None, None, None, None).await).await;
         assert_eq!(ids, vec!["MNG-1"]);
         assert_eq!(page, Some((None, 0)), "one match, nothing beyond it");
     }
@@ -2652,7 +2903,7 @@ mod tests {
     async fn set_status_reports_previous() {
         let hub = hub();
         one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        match one(hub.set_status(None, Reach::everywhere(), "MNG-1".into(), "ready".into()).await).await {
+        match one(hub.set_status(None, Reach::everywhere(), "MNG-1".into(), "ready".into(), None, None, None).await).await {
             TicketsEvent::StatusChanged { ticket, previous } => {
                 assert_eq!(ticket.status, Status::Ready);
                 assert_eq!(previous, Status::Pending);
@@ -2671,20 +2922,20 @@ mod tests {
         let hub = hub();
         one(hub.create(None, Reach::everywhere(), "IDN".into(), "identity".into(), Some("doc".into()), None, None, None, None, None).await).await;
         one(hub.create(None, Reach::everywhere(), "IDN".into(), "a".into(), None, None, None, None, None, None).await).await;
-        match one(hub.set_kind(None, Reach::everywhere(), "IDN-1".into(), "Scope".into(), None).await).await {
+        match one(hub.set_kind(None, Reach::everywhere(), "IDN-1".into(), "Scope".into(), None, None, None).await).await {
             TicketsEvent::KindChanged { ticket, previous } => {
                 assert_eq!((ticket.kind, ticket.status, previous), (Kind::Scope, Status::Epic, Kind::Doc));
             }
             other => panic!("expected KindChanged, got {other:?}"),
         }
-        match one(hub.set_kind(None, Reach::everywhere(), "IDN-2".into(), "gap".into(), Some("active".into())).await).await {
+        match one(hub.set_kind(None, Reach::everywhere(), "IDN-2".into(), "gap".into(), Some("active".into()), None, None).await).await {
             TicketsEvent::KindChanged { ticket, previous } => {
                 assert_eq!((ticket.kind, ticket.status, previous), (Kind::Gap, Status::Coding, Kind::Build));
             }
             other => panic!("expected KindChanged, got {other:?}"),
         }
         assert!(matches!(
-            one(hub.set_kind(None, Reach::everywhere(), "IDN-9".into(), "gap".into(), None).await).await,
+            one(hub.set_kind(None, Reach::everywhere(), "IDN-9".into(), "gap".into(), None, None, None).await).await,
             TicketsEvent::NotFound { id } if id == "IDN-9"
         ));
         for (id, kind, status, says) in [
@@ -2694,7 +2945,7 @@ mod tests {
             ("IDN-2", "doc", Some("Ready"), "a doc's status is Doc"),
             ("IDN-2", "spike", Some("Doc"), "Doc is a doc's own status"),
         ] {
-            match one(hub.set_kind(None, Reach::everywhere(), id.into(), kind.into(), status.map(Into::into)).await).await {
+            match one(hub.set_kind(None, Reach::everywhere(), id.into(), kind.into(), status.map(Into::into), None, None).await).await {
                 TicketsEvent::Error { message } => assert!(message.contains(says), "{kind} {status:?}: {message}"),
                 other => panic!("{kind} {status:?}: expected Error, got {other:?}"),
             }
@@ -2717,7 +2968,7 @@ mod tests {
             ("WK-3", "active", Status::Coding, Status::Pending),
             ("WK-3", "In Review", Status::InReview, Status::Coding),
         ] {
-            match one(hub.set_status(None, Reach::everywhere(), id.into(), spelling.into()).await).await {
+            match one(hub.set_status(None, Reach::everywhere(), id.into(), spelling.into(), None, None, None).await).await {
                 TicketsEvent::StatusChanged { ticket, previous: was } => {
                     assert_eq!((ticket.id.as_str(), ticket.status, was), (id, want, previous), "{spelling}");
                 }
@@ -2727,9 +2978,9 @@ mod tests {
         let wire = serde_json::to_value(one(hub.get(None, Reach::everywhere(), "WK-3".into()).await).await).unwrap();
         assert_eq!(wire["ticket"]["status"], "In Review");
 
-        let (ids, _) = ids_and_page(hub.list(None, Reach::everywhere(), None, Some("coding".into()), None, None, None, None, None, None, None).await).await;
+        let (ids, _) = ids_and_page(hub.list(None, Reach::everywhere(), None, Some("coding".into()), None, None, None, None, None, None, None, None).await).await;
         assert_eq!(ids, ["WK-2"]);
-        let (ids, _) = ids_and_page(hub.list(None, Reach::everywhere(), None, Some("In Review".into()), None, None, None, None, None, None, None).await).await;
+        let (ids, _) = ids_and_page(hub.list(None, Reach::everywhere(), None, Some("In Review".into()), None, None, None, None, None, None, None, None).await).await;
         assert_eq!(ids, ["WK-3"]);
     }
 
@@ -2759,7 +3010,7 @@ mod tests {
     async fn amend_yields_amended_and_watch_carries_only_what_changed() {
         let hub = hub();
         one(hub.create(None, Reach::everywhere(), "AM".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
 
         let ev = one(hub.amend(None, Reach::everywhere(), "am-1".into(), None, Some("the body, now".into())).await).await;
         let wire = serde_json::to_value(&ev).unwrap();
@@ -2809,7 +3060,7 @@ mod tests {
     async fn link_commits_yields_commits_linked_and_watch_carries_only_what_changed() {
         let hub = hub();
         one(hub.create(None, Reach::everywhere(), "LC".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
         let commits = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
 
         let ev = one(hub.link_commits(None, Reach::everywhere(), "lc-1".into(), commits(&["77df9a0", "plexus-macros@4F7114A"])).await).await;
@@ -2825,9 +3076,9 @@ mod tests {
         assert_eq!(wire["ticket"]["commits"], three);
         let got = serde_json::to_value(one(hub.get(None, Reach::everywhere(), "LC-1".into()).await).await).unwrap();
         assert_eq!(got["ticket"]["commits"], three, "get shows them, in link order");
-        let (rows, _) = ids_and_page(hub.list(None, Reach::everywhere(), None, None, None, None, None, Some(true), None, None, None).await).await;
+        let (rows, _) = ids_and_page(hub.list(None, Reach::everywhere(), None, None, None, None, None, Some(true), None, None, None, None).await).await;
         assert_eq!(rows, ["LC-1"]);
-        let evs: Vec<TicketsEvent> = Box::pin(hub.list(None, Reach::everywhere(), None, None, None, None, None, Some(true), None, None, None).await).collect().await;
+        let evs: Vec<TicketsEvent> = Box::pin(hub.list(None, Reach::everywhere(), None, None, None, None, None, Some(true), None, None, None, None).await).collect().await;
         assert_eq!(serde_json::to_value(&evs[0]).unwrap()["summary"]["commits"], three, "and the summary row");
 
         for (i, added) in [&["77df9a0"], &["0bb28b2"]].into_iter().enumerate() {
@@ -2881,12 +3132,20 @@ mod tests {
     #[tokio::test]
     async fn watch_sees_creations_and_status_changes() {
         let hub = hub();
-        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
 
         one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
         match watch.next().await.expect("change") {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "MNG-1"),
             other => panic!("expected Created, got {other:?}"),
+        }
+        // MENGER-13: its first status, a transition from nothing, right after.
+        match watch.next().await.expect("change") {
+            TicketsEvent::Transition { transition } => {
+                assert_eq!((transition.ticket.as_str(), transition.from.as_deref(), transition.to.as_str()), ("MNG-1", None, "Pending"));
+                assert_eq!((transition.actor.as_str(), transition.source), ("anonymous", crate::types::TransitionSource::Api));
+            }
+            other => panic!("expected Transition, got {other:?}"),
         }
         // MNG-10: a new shortcode's row appears after the ticket that made it.
         match watch.next().await.expect("change") {
@@ -2894,10 +3153,16 @@ mod tests {
             other => panic!("expected GroupChanged, got {other:?}"),
         }
 
-        one(hub.set_status(None, Reach::everywhere(), "MNG-1".into(), "Ready".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "MNG-1".into(), "Ready".into(), None, None, None).await).await;
         match watch.next().await.expect("change") {
             TicketsEvent::StatusChanged { previous, .. } => assert_eq!(previous, Status::Pending),
             other => panic!("expected StatusChanged, got {other:?}"),
+        }
+        match watch.next().await.expect("change") {
+            TicketsEvent::Transition { transition } => {
+                assert_eq!((transition.from.as_deref(), transition.to.as_str(), transition.cause), (Some("Pending"), "Ready", None));
+            }
+            other => panic!("expected Transition, got {other:?}"),
         }
     }
 
@@ -2927,8 +3192,8 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(&groups[0]).unwrap()["host"], serde_json::Value::Null, "null, not missing");
 
-        let mut plx = Box::pin(hub.watch(None, Reach::everywhere(), Some("plx".into()), None, None).await);
-        one(hub.set_status(None, Reach::everywhere(), "SUB-2".into(), "Complete".into()).await).await;
+        let mut plx = Box::pin(hub.watch(None, Reach::everywhere(), Some("plx".into()), None, None, None).await);
+        one(hub.set_status(None, Reach::everywhere(), "SUB-2".into(), "Complete".into(), None, None, None).await).await;
         match plx.next().await.expect("change") {
             TicketsEvent::GroupChanged { group } => {
                 assert_eq!((group.epic.as_str(), group.total, group.done), ("PLX", 3, 1))
@@ -3010,13 +3275,13 @@ mod tests {
             .create(None, Reach::everywhere(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
             .await)
         .await;
-        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Ready".into()).await).await;
-        one(hub.set_status(None, Reach::everywhere(), "DAG-2".into(), "Ready".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Ready".into(), None, None, None).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "DAG-2".into(), "Ready".into(), None, None, None).await).await;
 
-        assert_eq!(ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None).await).await, vec!["DAG-1"]);
+        assert_eq!(ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None, None).await).await, vec!["DAG-1"]);
 
-        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Complete".into()).await).await;
-        assert_eq!(ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None).await).await, vec!["DAG-2"]);
+        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Complete".into(), None, None, None).await).await;
+        assert_eq!(ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None, None).await).await, vec!["DAG-2"]);
     }
 
     #[tokio::test]
@@ -3028,16 +3293,16 @@ mod tests {
             .await)
         .await;
         one(hub.create(None, Reach::everywhere(), "TWO".into(), "c".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        one(hub.set_status(None, Reach::everywhere(), "ONE-1".into(), "Superseded".into()).await).await;
-        one(hub.set_status(None, Reach::everywhere(), "ONE-2".into(), "Ready".into()).await).await;
-        one(hub.set_status(None, Reach::everywhere(), "TWO-1".into(), "Ready".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "ONE-1".into(), "Superseded".into(), None, None, None).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "ONE-2".into(), "Ready".into(), None, None, None).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "TWO-1".into(), "Ready".into(), None, None, None).await).await;
 
         assert_eq!(
-            ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None).await).await,
+            ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None, None).await).await,
             vec!["ONE-2", "TWO-1"]
         );
         assert_eq!(
-            ticket_ids(hub.ready_set(None, Reach::everywhere(), Some("one".into()), None, None, None, None).await).await,
+            ticket_ids(hub.ready_set(None, Reach::everywhere(), Some("one".into()), None, None, None, None, None).await).await,
             vec!["ONE-2"]
         );
     }
@@ -3049,9 +3314,9 @@ mod tests {
             .create(None, Reach::everywhere(), "DAG".into(), "c".into(), Some("scope".into()), None, Some(vec!["DAG-99".into()]), None, None, None)
             .await)
         .await;
-        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Ready".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Ready".into(), None, None, None).await).await;
 
-        assert!(ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None).await).await.is_empty());
+        assert!(ticket_ids(hub.ready_set(None, Reach::everywhere(), None, None, None, None, None, None).await).await.is_empty());
 
         let evs: Vec<_> = Box::pin(hub.blockers(None, Reach::everywhere(), "DAG-1".into()).await).collect().await;
         assert_eq!(evs.len(), 1);
@@ -3077,7 +3342,7 @@ mod tests {
             )
             .await)
         .await;
-        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Complete".into()).await).await;
+        one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Complete".into(), None, None, None).await).await;
 
         let evs: Vec<_> = Box::pin(hub.blockers(None, Reach::everywhere(), "DAG-3".into()).await).collect().await;
         assert_eq!(evs.len(), 3);
@@ -3110,7 +3375,7 @@ mod tests {
     async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
         let hub = hub();
         one(hub.create(None, Reach::everywhere(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
+        let mut watch = Box::pin(untransitioned(hub.watch(None, Reach::everywhere(), None, None, None, None).await));
 
         one(hub
             .create(None, Reach::everywhere(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
@@ -3157,7 +3422,7 @@ mod tests {
     async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
         let hub = hub();
         one(hub.create(None, Reach::everywhere(), "FAM".into(), "P".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
+        let mut watch = Box::pin(untransitioned(hub.watch(None, Reach::everywhere(), None, None, None, None).await));
 
         match one(
             hub.create(None, Reach::everywhere(), 
@@ -3212,7 +3477,7 @@ mod tests {
             other => panic!("expected Ticket, got {other:?}"),
         }
         assert_eq!(
-            ticket_ids(hub.list(None, Reach::everywhere(), None, None, Some("FAM-1".into()), None, None, None, None, None, None).await).await,
+            ticket_ids(hub.list(None, Reach::everywhere(), None, None, Some("FAM-1".into()), None, None, None, None, None, None, None).await).await,
             vec!["FAM-2"]
         );
         match one(hub.get(None, Reach::everywhere(), "FAM-2".into()).await).await {
@@ -3277,14 +3542,14 @@ mod tests {
 
         // MNG-14: "unrelated" (LP-2) named no parent and hangs under the root.
         assert_eq!(
-            ticket_ids(hub.list(None, Reach::everywhere(), None, None, Some("LP-1".into()), None, None, None, None, None, None).await).await,
+            ticket_ids(hub.list(None, Reach::everywhere(), None, None, Some("LP-1".into()), None, None, None, None, None, None, None).await).await,
             vec!["LP-2", "LP-3", "ZZ-1"]
         );
-        assert!(ticket_ids(hub.list(None, Reach::everywhere(), None, None, Some("LP-2".into()), None, None, None, None, None, None).await)
+        assert!(ticket_ids(hub.list(None, Reach::everywhere(), None, None, Some("LP-2".into()), None, None, None, None, None, None, None).await)
             .await
             .is_empty());
         assert_eq!(
-            ticket_ids(hub.list(None, Reach::everywhere(), None, None, None, None, None, None, None, None, None).await).await.len(),
+            ticket_ids(hub.list(None, Reach::everywhere(), None, None, None, None, None, None, None, None, None, None).await).await.len(),
             4,
             "unfiltered list is unchanged"
         );
@@ -3309,7 +3574,7 @@ mod tests {
             .await)
         .await;
 
-        let evs: Vec<_> = Box::pin(hub.list(None, Reach::everywhere(), None, None, None, None, None, Some(true), None, None, None).await)
+        let evs: Vec<_> = Box::pin(hub.list(None, Reach::everywhere(), None, None, None, None, None, Some(true), None, None, None, None).await)
             .collect()
             .await;
         assert_eq!(evs.len(), 2, "one row, one page: {evs:?}");
@@ -3325,7 +3590,7 @@ mod tests {
         assert!(summary.get("children").is_none(), "SCALE-4: no list of children: {summary}");
 
         // The full ticket still carries it, unchanged.
-        let evs: Vec<_> = Box::pin(hub.list(None, Reach::everywhere(), None, None, None, None, None, None, None, None, None).await)
+        let evs: Vec<_> = Box::pin(hub.list(None, Reach::everywhere(), None, None, None, None, None, None, None, None, None, None).await)
             .collect()
             .await;
         let row = serde_json::to_value(&evs[0]).unwrap();
@@ -3341,10 +3606,10 @@ mod tests {
         one(hub.create(None, Reach::everywhere(), "CUR".into(), "a".into(), None, None, None, None, None, None).await).await;
 
         for evs in [
-            Box::pin(hub.list(None, Reach::everywhere(), None, None, None, Some("ZZZ-9".into()), None, None, None, None, None).await)
+            Box::pin(hub.list(None, Reach::everywhere(), None, None, None, Some("ZZZ-9".into()), None, None, None, None, None, None).await)
                 .collect::<Vec<_>>()
                 .await,
-            Box::pin(hub.ready_set(None, Reach::everywhere(), None, Some("ZZZ-9".into()), None, None, None).await)
+            Box::pin(hub.ready_set(None, Reach::everywhere(), None, Some("ZZZ-9".into()), None, None, None, None).await)
                 .collect::<Vec<_>>()
                 .await,
         ] {
@@ -3369,10 +3634,10 @@ mod tests {
         }
         one(hub.create(None, Reach::everywhere(), "RS".into(), "still pending".into(), None, None, None, None, None, None).await).await;
         for id in ["RS-1", "RS-2", "RS-3"] {
-            one(hub.set_status(None, Reach::everywhere(), id.into(), "Ready".into()).await).await;
+            one(hub.set_status(None, Reach::everywhere(), id.into(), "Ready".into(), None, None, None).await).await;
         }
 
-        let (ids, page) = ids_and_page(hub.ready_set(None, Reach::everywhere(), None, None, Some(2), Some(true), None).await).await;
+        let (ids, page) = ids_and_page(hub.ready_set(None, Reach::everywhere(), None, None, Some(2), Some(true), None, None).await).await;
         assert_eq!(ids, vec!["RS-1", "RS-2"]);
         assert_eq!(
             page,
@@ -3381,7 +3646,7 @@ mod tests {
         );
 
         let (ids, page) =
-            ids_and_page(hub.ready_set(None, Reach::everywhere(), None, Some("RS-2".into()), Some(2), Some(true), None).await).await;
+            ids_and_page(hub.ready_set(None, Reach::everywhere(), None, Some("RS-2".into()), Some(2), Some(true), None, None).await).await;
         assert_eq!(ids, vec!["RS-3"]);
         assert_eq!(page, Some((None, 0)));
     }
@@ -3401,26 +3666,26 @@ mod tests {
         }
         one(hub.create(None, Reach::everywhere(), "OTH".into(), "The Ticket Page".into(), Some("scope".into()), None, None, None, None, None).await).await;
 
-        let evs: Vec<TicketsEvent> = Box::pin(hub.find(None, Reach::everywhere(), "".into(), None, None, None).await).collect().await;
+        let evs: Vec<TicketsEvent> = Box::pin(hub.find(None, Reach::everywhere(), "".into(), None, None, None, None).await).collect().await;
         assert_eq!(evs.len(), 51, "50 rows and the page");
         let row = serde_json::to_value(&evs[0]).unwrap();
         assert_eq!((row["type"].as_str(), row["summary"]["id"].as_str()), (Some("summary"), Some("FND-1")));
         assert!(row["summary"].get("body").is_none(), "a summary carries no body: {row}");
-        let (ids, page) = ids_and_page(hub.find(None, Reach::everywhere(), "".into(), None, None, None).await).await;
+        let (ids, page) = ids_and_page(hub.find(None, Reach::everywhere(), "".into(), None, None, None, None).await).await;
         assert_eq!(ids.len(), 50, "the palette's 50 when no limit is asked");
         assert_eq!(page, Some((Some("FND-50".into()), 11)));
 
-        let (ids, page) = ids_and_page(hub.find(None, Reach::everywhere(), "  fnd-5 ".into(), None, None, None).await).await;
+        let (ids, page) = ids_and_page(hub.find(None, Reach::everywhere(), "  fnd-5 ".into(), None, None, None, None).await).await;
         let expected: Vec<String> =
             std::iter::once(5).chain(50..=59).map(|n| format!("FND-{n}")).collect();
         assert_eq!(ids, expected, "trimmed, case-folded, in (epic, seq) order");
         assert_eq!(page, Some((None, 0)));
 
         let (ids, page) =
-            ids_and_page(hub.find(None, Reach::everywhere(), "ticket page".into(), Some("fnd-3".into()), Some(1), None).await).await;
+            ids_and_page(hub.find(None, Reach::everywhere(), "ticket page".into(), Some("fnd-3".into()), Some(1), None, None).await).await;
         assert_eq!((ids, page), (vec!["OTH-1".to_string()], Some((None, 0))));
 
-        let evs: Vec<TicketsEvent> = Box::pin(hub.find(None, Reach::everywhere(), "row".into(), Some("ZZZ-9".into()), None, None).await)
+        let evs: Vec<TicketsEvent> = Box::pin(hub.find(None, Reach::everywhere(), "row".into(), Some("ZZZ-9".into()), None, None, None).await)
             .collect()
             .await;
         match evs.as_slice() {
@@ -3518,7 +3783,7 @@ mod tests {
     #[tokio::test]
     async fn watch_epic_filter_drops_other_epics() {
         let hub = hub();
-        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), Some("mng".into()), None, None).await);
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), Some("mng".into()), None, None, None).await);
 
         one(hub.create(None, Reach::everywhere(), "OTHER".into(), "x".into(), Some("scope".into()), None, None, None, None, None).await).await;
         one(hub.create(None, Reach::everywhere(), "MNG".into(), "y".into(), Some("scope".into()), None, None, None, None, None).await).await;
@@ -3537,15 +3802,17 @@ mod tests {
             TicketsEvent::ChildrenChanged { id, added, .. } => format!("children {id} +{added}"),
             TicketsEvent::GroupChanged { group } => format!("group {} {}", group.epic, group.total),
             TicketsEvent::Lagged { missed } => format!("lagged {missed}"),
+            TicketsEvent::Transition { transition } => format!("transition {}", transition.ticket),
             other => format!("{other:?}"),
         }
     }
 
     /// SCALE-5 criterion 1, against the store's real channel (capacity 256,
     /// untouched): a `watch` subscribed and then left unread while 200
-    /// creates broadcast 600 changes — each create is `created`, the root's
-    /// `children_changed`, the shortcode's `group_changed` — reads exactly
-    /// one `lagged { missed: 344 }` (600 - 256, the count the channel
+    /// creates broadcast 800 changes — each create is `created`, its
+    /// `transition` (MENGER-13), the root's `children_changed`, the
+    /// shortcode's `group_changed` — reads exactly
+    /// one `lagged { missed: 544 }` (800 - 256, the count the channel
     /// reports), then precisely the newest 256 changes in acknowledgment
     /// order, none twice, then later changes as usual. A `watch { epic }`
     /// on another shortcode is told too, and then hears only its own.
@@ -3555,8 +3822,8 @@ mod tests {
         const HELD: u64 = 256; // Store::with_connection's broadcast capacity
         let hub = hub();
         one(hub.create(None, Reach::everywhere(), "LAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
-        let mut other = Box::pin(hub.watch(None, Reach::everywhere(), Some("other".into()), None, None).await);
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
+        let mut other = Box::pin(hub.watch(None, Reach::everywhere(), Some("other".into()), None, None, None).await);
 
         let mut broadcast: Vec<String> = Vec::new();
         for k in 2..=CREATES + 1 {
@@ -3565,11 +3832,13 @@ mod tests {
                 ev => panic!("expected Created, got {ev:?}"),
             }
             broadcast.push(format!("created LAG-{k}"));
+            // MENGER-13: its first status's transition, right after it.
+            broadcast.push(format!("transition LAG-{k}"));
             broadcast.push(format!("children LAG-1 +LAG-{k}"));
             broadcast.push(format!("group LAG {k}"));
         }
         let missed = broadcast.len() as u64 - HELD;
-        assert_eq!(missed, 344);
+        assert_eq!(missed, 544);
 
         // The filtered subscriber is told as well; the 256 LAG changes still
         // held are then read and filtered out, and nothing else is ready.
@@ -3605,7 +3874,7 @@ mod tests {
         one(hub.create(None, Reach::everywhere(), "SP".into(), "a".into(), None, None, None, None, None, None).await).await; // SP-2 → SP-1
         one(hub.create(None, Reach::everywhere(), "SP".into(), "b".into(), None, None, None, None, None, None).await).await; // SP-3 → SP-1
         one(hub.create(None, Reach::everywhere(), "OT".into(), "other".into(), Some("scope".into()), None, None, None, None, None).await).await;
-        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None).await);
+        let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
 
         match one(hub.set_parent(None, Reach::everywhere(), "sp-3".into(), "sp-2".into()).await).await {
             TicketsEvent::ParentChanged { ticket, previous } => {
@@ -3718,7 +3987,7 @@ mod tests {
         };
         let status = |id: &str, s: &str| {
             let (id, s, hub) = (id.to_string(), s.to_string(), hub.clone());
-            async move { one(hub.set_status(None, Reach::everywhere(), id, s).await).await }
+            async move { one(hub.set_status(None, Reach::everywhere(), id, s, None, None, None).await).await }
         };
         for epic in ["WA", "WB", "ELSE"] {
             create(epic, Some("scope"), &[]).await; // X-1, each shortcode's root

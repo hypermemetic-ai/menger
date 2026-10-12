@@ -171,6 +171,10 @@ pub enum Field {
     /// `text "…"`: its id or title contains the text — find's rule
     /// (SCALE-6): trimmed, ASCII case folded; a blank text matches all.
     Text(String),
+    /// MENGER-13: `entered <status>`, `left <status>`, `changed` — with an
+    /// optional window and `by` — over the transition log: some transition
+    /// of the ticket's did that, in the window, by that actor ([`History`]).
+    History(History),
 }
 
 impl Field {
@@ -190,11 +194,13 @@ impl Field {
             Field::In(_) => "in",
             Field::Under(_) => "under",
             Field::Text(_) => "text",
+            Field::History(h) => h.event.name(),
         }
     }
 
     /// The value as a filter names it, unquoted (`In Review`, `none`,
-    /// `SCALE`); `None` for a flag.
+    /// `SCALE`); `None` for a flag. MENGER-13: a history predicate's is what
+    /// follows its name, as written canonically (`Coding within 12h`).
     pub fn value(&self) -> Option<String> {
         Some(match self {
             Field::Status(s) => s.as_str().into(),
@@ -203,6 +209,14 @@ impl Field {
             Field::Severity(s) => severity_name(*s).into(),
             Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking => return None,
             Field::In(x) | Field::Under(x) | Field::Text(x) | Field::Label(x) => x.clone(),
+            Field::History(h) => {
+                let full = h.format();
+                let tail = full[h.event.name().len()..].trim_start().to_string();
+                if tail.is_empty() {
+                    return None;
+                }
+                tail
+            }
         })
     }
 
@@ -240,7 +254,7 @@ impl Field {
             Field::HasCommits => c.commits,
             Field::MengerDoc => c.menger,
             Field::Asking => c.asking,
-            Field::In(_) | Field::Under(_) | Field::Text(_) | Field::Label(_) => return None,
+            Field::In(_) | Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) => return None,
         })
     }
 
@@ -253,6 +267,10 @@ impl Field {
             Field::Under(x) => f.lineage.iter().any(|l| l.eq_ignore_ascii_case(x)),
             Field::Text(t) => text_matches(t, &f.id, &f.title),
             Field::Label(l) => f.labels.iter().any(|x| x.eq_ignore_ascii_case(l)),
+            Field::History(h) => {
+                let key = h.format();
+                f.history.contains(&key)
+            }
             _ => false,
         }
     }
@@ -289,6 +307,7 @@ impl Predicate {
                 format!("{head}{}", self.field.name())
             }
             Field::Text(t) => format!("{head}text \"{t}\""),
+            Field::History(h) => format!("{head}{}", h.format()),
             f => format!("{head}{} {}", f.name(), quoted(&f.value().unwrap_or_default())),
         }
     }
@@ -548,6 +567,10 @@ pub struct Facts {
     /// What `under` finds it under: its own id, its ancestors' ids, its
     /// shortcode and the shortcodes hosting it.
     pub lineage: Vec<String>,
+    /// MENGER-13: the history predicates that hold for it, each as its
+    /// canonical text ([`History::format`]) — what the transition log says
+    /// of it, at the moment and in the zone the filter is read in.
+    pub history: Vec<String>,
 }
 
 impl Facts {
@@ -572,7 +595,7 @@ impl Filter {
         let filter_text = sections.next().unwrap_or("");
         let mut bad = Vec::new();
         let mut groups = Vec::new();
-        for chunk in parts(split_top(filter_text, " and ")) {
+        for chunk in parts(split_and(filter_text)) {
             match parse_group(chunk) {
                 Ok(g) => groups.push(g),
                 Err(why) => bad.push(BadChunk { text: chunk.into(), why }),
@@ -675,7 +698,7 @@ impl FromStr for Filter {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 24] = [
+const NAMES: [&str; 28] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -684,6 +707,9 @@ const NAMES: [&str; 24] = [
     "severity",
     "past cap",
     "archived",
+    // MENGER-13: the history predicates.
+    "entered",
+    "changed",
     "blocked",
     "session",
     "asking",
@@ -697,9 +723,11 @@ const NAMES: [&str; 24] = [
     "depth",
     "kind",
     "text",
+    "left",
     "tag",
     "age",
     "in",
+    "by",
 ];
 
 const TEXT_ALONE: &str = "`text` is tested on rows, so it stands alone as a top-level `and` group — never \
@@ -708,8 +736,8 @@ const MIXED: &str = "`or` and `and` do not mix inside one pair of parentheses: a
 const NESTED: &str = "groups do not nest: parentheses hold predicates, not groups";
 const LIST_NESTED: &str = "a list `field in (…)` is a group of its own, never inside parentheses or `or`";
 const NOT_UNDERSTOOD: &str = "not understood: a predicate is `status`, `category`, `kind`, `severity`, `blocked`, \
-                              `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under` or `text`, or a \
-                              quoted text";
+                              `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under`, `text`, \
+                              `entered`, `left`, `changed` or `by`, or a quoted text";
 const QUOTES: &str = "a quoted value is quoted whole — one `\"` before it and one after, none inside";
 
 /// `raw` cut at `sep` (ASCII case-insensitive) where it stands outside
@@ -744,6 +772,37 @@ fn split_top<'a>(raw: &'a str, sep: &str) -> Vec<&'a str> {
     }
     out.push(&raw[start..]);
     out
+}
+
+/// MENGER-13: `raw` cut at ` and ` as [`split_top`] cuts it — except the
+/// ` and ` of a history window's `between <moment> and <moment>`, which
+/// joins its two moments rather than two groups: a piece that ends in
+/// `between <moment>` keeps the next piece.
+fn split_and(raw: &str) -> Vec<&str> {
+    let pieces = split_top(raw, " and ");
+    let mut out: Vec<&str> = Vec::with_capacity(pieces.len());
+    let offset = |p: &str| p.as_ptr() as usize - raw.as_ptr() as usize;
+    let mut i = 0;
+    while i < pieces.len() {
+        let start = offset(pieces[i]);
+        let mut end = start + pieces[i].len();
+        while i + 1 < pieces.len() && ends_in_between(&raw[start..end]) {
+            i += 1;
+            end = offset(pieces[i]) + pieces[i].len();
+        }
+        out.push(&raw[start..end]);
+        i += 1;
+    }
+    out
+}
+
+/// Whether `s` ends `between <moment>` — a window waiting for its second
+/// moment (a date, or a date and a time written apart).
+fn ends_in_between(s: &str) -> bool {
+    let words: Vec<&str> = s.split_ascii_whitespace().collect();
+    let n = words.len();
+    (n >= 2 && words[n - 2].eq_ignore_ascii_case("between"))
+        || (n >= 3 && words[n - 3].eq_ignore_ascii_case("between") && clock_time(words[n - 1]).is_some())
 }
 
 /// The pieces trimmed, the empty ones dropped (manifest's `trimAll`).
@@ -921,6 +980,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
                 false => Err(format!("`under` takes an id or a shortcode, as `under SCALE-13` — not `{v}`")),
             }
         }
+        // MENGER-13: the transition log.
+        "entered" | "left" | "changed" | "by" => read_history(name, tail).map(Field::History),
         "created" | "written" | "age" => Err(format!(
             "`{name}` is refused: it needs an index of its own (FILTER-3 §6.9, open question 6)"
         )),
@@ -1000,12 +1061,12 @@ fn parse_group(s: &str) -> Result<Group, String> {
     if let Some(inner) = wrapped(s) {
         let ors = parts(split_top(inner, " or "));
         if ors.len() > 1 {
-            if ors.iter().any(|o| parts(split_top(o, " and ")).len() > 1) {
+            if ors.iter().any(|o| parts(split_and(o)).len() > 1) {
                 return Err(MIXED.into());
             }
             return group(Conj::Any, members(&ors));
         }
-        return group(Conj::All, members(&parts(split_top(inner, " and "))));
+        return group(Conj::All, members(&parts(split_and(inner))));
     }
     if let Some(list) = list_group(s) {
         return list;
@@ -1015,6 +1076,402 @@ fn parse_group(s: &str) -> Result<Group, String> {
         return group(Conj::Any, members(&ors));
     }
     group(Conj::All, vec![(s, parse_predicate(s))])
+}
+
+// ---------------------------------------------------------------------
+// MENGER-13: history — predicates over the transition log
+//
+// `entered <status> [window] [by who]`, `left <status> [window] [by who]`,
+// `changed [window] [by who]`, and `by who [window]` (which is `changed …
+// by who`). A window is `within <n>{m,h,d,w}` (minutes, hours, days,
+// weeks), `today`, `yesterday`, `this week` (from Monday), `since <moment>`,
+// `before <moment>` or `between <moment> and <moment>`; a moment is a date,
+// `2026-10-10`, or a date and a time, `2026-10-10T08:00` — both in the
+// zone the filter is read in (the viewer's in the app; UTC unless a call
+// says `tz`). No window: ever, since the log began. Who: `me` (the caller),
+// `system` (the store's own cascades), or a principal as the log names it.
+//
+// The language only reads and writes them; whether one holds for a ticket
+// is the store's to say ([`Facts::history`]), from the log.
+
+/// What a history predicate asks happened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// A transition into this status.
+    Entered(Status),
+    /// A transition out of this status.
+    Left(Status),
+    /// Any transition — of the status or of the kind (SDLC-13), a birth's
+    /// included.
+    Changed,
+}
+
+impl Event {
+    /// The predicate's name: `entered`, `left`, `changed`.
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Event::Entered(_) => "entered",
+            Event::Left(_) => "left",
+            Event::Changed => "changed",
+        }
+    }
+}
+
+/// A unit of a `within` window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unit {
+    Minute,
+    Hour,
+    Day,
+    Week,
+}
+
+impl Unit {
+    /// Its length in seconds.
+    pub const fn seconds(self) -> i64 {
+        match self {
+            Unit::Minute => 60,
+            Unit::Hour => 3_600,
+            Unit::Day => 86_400,
+            Unit::Week => 604_800,
+        }
+    }
+
+    /// The letter a filter writes it with.
+    pub const fn letter(self) -> char {
+        match self {
+            Unit::Minute => 'm',
+            Unit::Hour => 'h',
+            Unit::Day => 'd',
+            Unit::Week => 'w',
+        }
+    }
+
+    fn read(s: &str) -> Option<Unit> {
+        Some(match s.to_ascii_lowercase().as_str() {
+            "m" | "min" | "mins" | "minute" | "minutes" => Unit::Minute,
+            "h" | "hr" | "hrs" | "hour" | "hours" => Unit::Hour,
+            "d" | "day" | "days" => Unit::Day,
+            "w" | "wk" | "wks" | "week" | "weeks" => Unit::Week,
+            _ => return None,
+        })
+    }
+}
+
+/// A moment a window names: a calendar date, and a time of day to the
+/// minute when one is given — read in the filter's zone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Moment {
+    pub year: i16,
+    pub month: u8,
+    pub day: u8,
+    /// `(hour, minute)`; `None`: the date alone (its start, as `since` and
+    /// `before` read it; its whole day, as the end of a `between`).
+    pub time: Option<(u8, u8)>,
+}
+
+impl Moment {
+    /// `2026-10-10`, or `2026-10-10T08:00`.
+    pub fn format(&self) -> String {
+        let date = format!("{:04}-{:02}-{:02}", self.year, self.month, self.day);
+        match self.time {
+            None => date,
+            Some((h, m)) => format!("{date}T{h:02}:{m:02}"),
+        }
+    }
+
+    /// A date (`YYYY-MM-DD`), or a date and a time joined by `T`.
+    fn read(s: &str) -> Option<Moment> {
+        let (date, time) = match s.split_once(['T', 't']) {
+            Some((d, t)) => (d, Some(clock_time(t)?)),
+            None => (s, None),
+        };
+        let mut it = date.split('-');
+        let (y, m, d) = (it.next()?, it.next()?, it.next()?);
+        if it.next().is_some() || y.len() != 4 || m.len() != 2 || d.len() != 2 {
+            return None;
+        }
+        let (year, month, day): (i16, u8, u8) = (y.parse().ok()?, m.parse().ok()?, d.parse().ok()?);
+        let days = match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+            2 => 28,
+            _ => return None,
+        };
+        (year >= 1970 && (1..=days).contains(&day)).then_some(Moment { year, month, day, time })
+    }
+}
+
+/// `HH:MM`, a time of day.
+fn clock_time(s: &str) -> Option<(u8, u8)> {
+    let (h, m) = s.split_once(':')?;
+    if h.len() != 2 || m.len() != 2 {
+        return None;
+    }
+    let (h, m): (u8, u8) = (h.parse().ok()?, m.parse().ok()?);
+    (h < 24 && m < 60).then_some((h, m))
+}
+
+/// When a history predicate looks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Window {
+    /// The last `n` units, up to now.
+    Within(u32, Unit),
+    /// Since this day's start, in the filter's zone.
+    Today,
+    /// The day before today, whole.
+    Yesterday,
+    /// Since this week's Monday's start.
+    ThisWeek,
+    /// From this moment on (a date: its start).
+    Since(Moment),
+    /// Before this moment (a date: before its start).
+    Before(Moment),
+    /// From the first moment (a date: its start) to the second (a date: its
+    /// end; a time: that instant, excluded).
+    Between(Moment, Moment),
+}
+
+impl Window {
+    /// The window as a filter writes it.
+    pub fn format(&self) -> String {
+        match self {
+            Window::Within(n, u) => format!("within {n}{}", u.letter()),
+            Window::Today => "today".into(),
+            Window::Yesterday => "yesterday".into(),
+            Window::ThisWeek => "this week".into(),
+            Window::Since(m) => format!("since {}", m.format()),
+            Window::Before(m) => format!("before {}", m.format()),
+            Window::Between(a, b) => format!("between {} and {}", a.format(), b.format()),
+        }
+    }
+
+    /// Whether the window moves with the clock — what a `watch` reads it
+    /// again for as time passes. `since`, `before` and `between` name fixed
+    /// moments.
+    pub const fn relative(&self) -> bool {
+        matches!(self, Window::Within(..) | Window::Today | Window::Yesterday | Window::ThisWeek)
+    }
+
+    /// Whether the window names a calendar day or a moment — read in a zone
+    /// (`within` is the same everywhere).
+    pub const fn zoned(&self) -> bool {
+        !matches!(self, Window::Within(..))
+    }
+}
+
+/// Who made a transition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Who {
+    /// The caller — the principal the call is made as (`anonymous` with
+    /// login off).
+    Me,
+    /// The store itself: a cascade, or its undoing.
+    System,
+    /// A principal, as the log names it (`idp:…`, `key:…`, `anonymous`).
+    Principal(String),
+}
+
+impl Who {
+    fn format(&self) -> String {
+        match self {
+            Who::Me => "me".into(),
+            Who::System => "system".into(),
+            Who::Principal(p) => quoted(p),
+        }
+    }
+
+    fn read(s: &str) -> Who {
+        match s.to_ascii_lowercase().as_str() {
+            "me" => Who::Me,
+            "system" => Who::System,
+            _ => Who::Principal(s.to_string()),
+        }
+    }
+}
+
+/// MENGER-13: one history predicate — an event, the window it looks in, and
+/// who made it. It holds for a ticket when some transition of the ticket's
+/// is that event, in the window, by that actor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct History {
+    pub event: Event,
+    pub window: Option<Window>,
+    pub by: Option<Who>,
+}
+
+impl History {
+    /// The predicate as a filter writes it — canonical, and the key the
+    /// store's truths are named by ([`Facts::history`]): `entered "In
+    /// Review" within 12h`, `changed today by system`.
+    pub fn format(&self) -> String {
+        let mut out = match &self.event {
+            Event::Entered(s) => format!("entered {}", quoted(s.as_str())),
+            Event::Left(s) => format!("left {}", quoted(s.as_str())),
+            Event::Changed => "changed".to_string(),
+        };
+        if let Some(w) = &self.window {
+            out.push(' ');
+            out.push_str(&w.format());
+        }
+        if let Some(b) = &self.by {
+            out.push_str(" by ");
+            out.push_str(&b.format());
+        }
+        out
+    }
+
+    /// Whether its window moves with the clock.
+    pub fn relative(&self) -> bool {
+        self.window.as_ref().is_some_and(Window::relative)
+    }
+}
+
+/// `s`'s words, a `"…"` one word whatever it holds (its quotes off).
+fn words(s: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut rest = s.trim();
+    while !rest.is_empty() {
+        if let Some(inner) = rest.strip_prefix('"') {
+            let end = inner.find('"').ok_or_else(|| QUOTES.to_string())?;
+            out.push(inner[..end].to_string());
+            rest = inner[end + 1..].trim_start();
+            continue;
+        }
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let word = &rest[..end];
+        if word.contains('"') {
+            return Err(QUOTES.into());
+        }
+        out.push(word.to_string());
+        rest = rest[end..].trim_start();
+    }
+    Ok(out)
+}
+
+const HISTORY_HELP: &str = "a history predicate is `entered <status>`, `left <status>`, `changed` or `by <who>`, then \
+                            optionally a window — `within 12h` (m, h, d, w), `today`, `yesterday`, `this week`, \
+                            `since 2026-10-10`, `before …`, `between … and …` — and `by me`, `by system` or `by \
+                            <principal>`";
+
+/// One history predicate's words after its name ([`History`]), strictly:
+/// every word read, or why not.
+fn read_history(name: &str, tail: &str) -> Result<History, String> {
+    let w = words(tail)?;
+    let mut i = 0;
+    let status = |w: &[String], i: &mut usize| -> Result<Status, String> {
+        let one = w.get(*i).ok_or_else(|| format!("`{name}` names a status, as `{name} Coding`"))?;
+        if let Ok(s) = one.parse::<Status>() {
+            *i += 1;
+            return Ok(s);
+        }
+        if let Some(two) = w.get(*i + 1).map(|t| format!("{one} {t}")) {
+            if let Ok(s) = two.parse::<Status>() {
+                *i += 2;
+                return Ok(s);
+            }
+        }
+        Err(format!(
+            "unknown status `{one}` — the statuses are {}",
+            Status::ALL.map(Status::as_str).join(", ")
+        ))
+    };
+    let (event, mut by) = match name {
+        "entered" => (Event::Entered(status(&w, &mut i)?), None),
+        "left" => (Event::Left(status(&w, &mut i)?), None),
+        "changed" => (Event::Changed, None),
+        _ => {
+            let who = w.first().ok_or("`by` names who: `me`, `system` or a principal")?;
+            i = 1;
+            (Event::Changed, Some(Who::read(who)))
+        }
+    };
+    let window = read_window(&w, &mut i)?;
+    if by.is_none() && w.get(i).is_some_and(|t| t.eq_ignore_ascii_case("by")) {
+        let who = w.get(i + 1).ok_or("`by` names who: `me`, `system` or a principal")?;
+        by = Some(Who::read(who));
+        i += 2;
+    }
+    if let Some(extra) = w.get(i) {
+        return Err(format!("`{extra}` is not understood here — {HISTORY_HELP}"));
+    }
+    Ok(History { event, window, by })
+}
+
+/// A window at `w[*i]`, if one starts there.
+fn read_window(w: &[String], i: &mut usize) -> Result<Option<Window>, String> {
+    let Some(head) = w.get(*i) else { return Ok(None) };
+    let moment = |w: &[String], i: &mut usize, what: &str| -> Result<Moment, String> {
+        let raw = w.get(*i).ok_or_else(|| format!("`{what}` names a date, as `{what} 2026-10-10`"))?;
+        // A date and a time written apart: `2026-10-10 08:00`.
+        if let Some(t) = w.get(*i + 1).filter(|t| clock_time(t).is_some() && !raw.contains(['T', 't'])) {
+            if let Some(m) = Moment::read(&format!("{raw}T{t}")) {
+                *i += 2;
+                return Ok(m);
+            }
+        }
+        let m = Moment::read(raw)
+            .ok_or_else(|| format!("`{raw}` is not a date — a date is `2026-10-10`, a moment `2026-10-10T08:00`"))?;
+        *i += 1;
+        Ok(m)
+    };
+    let window = match head.to_ascii_lowercase().as_str() {
+        "within" => {
+            *i += 1;
+            let raw = w.get(*i).ok_or("`within` takes a length, as `within 12h`")?;
+            let digits = raw.bytes().take_while(u8::is_ascii_digit).count();
+            let (n, unit) = match &raw[digits..] {
+                "" => {
+                    let u = w.get(*i + 1).and_then(|u| Unit::read(u));
+                    *i += 1;
+                    (&raw[..digits], u)
+                }
+                u => (&raw[..digits], Unit::read(u)),
+            };
+            let n: u32 = n.parse().ok().filter(|n| (1..=100_000).contains(n)).ok_or_else(|| {
+                format!("`within` takes a length of 1 or more, as `within 12h` — not `{raw}`")
+            })?;
+            let unit = unit.ok_or_else(|| format!("`within {raw}` needs a unit: m, h, d or w"))?;
+            *i += 1;
+            Window::Within(n, unit)
+        }
+        "today" => {
+            *i += 1;
+            Window::Today
+        }
+        "yesterday" => {
+            *i += 1;
+            Window::Yesterday
+        }
+        "this" => {
+            if !w.get(*i + 1).is_some_and(|t| t.eq_ignore_ascii_case("week")) {
+                return Err("`this` is `this week`".into());
+            }
+            *i += 2;
+            Window::ThisWeek
+        }
+        "since" => {
+            *i += 1;
+            Window::Since(moment(w, i, "since")?)
+        }
+        "before" => {
+            *i += 1;
+            Window::Before(moment(w, i, "before")?)
+        }
+        "between" => {
+            *i += 1;
+            let a = moment(w, i, "between")?;
+            if !w.get(*i).is_some_and(|t| t.eq_ignore_ascii_case("and")) {
+                return Err("`between` is `between <date> and <date>`".into());
+            }
+            *i += 1;
+            let b = moment(w, i, "between … and")?;
+            Window::Between(a, b)
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(window))
 }
 
 // ---------------------------------------------------------------------
@@ -1178,6 +1635,8 @@ enum Dim {
     /// MENGER-12: whether it holds this label — a free truth, as an
     /// `under` name: a ticket holds any set of labels.
     Label(String),
+    /// MENGER-13: a history predicate's truth — free, as the log is.
+    History(String),
 }
 
 fn dims(field: &Field) -> Vec<Dim> {
@@ -1189,13 +1648,14 @@ fn dims(field: &Field) -> Vec<Dim> {
         Field::HasCommits => vec![Dim::Commits],
         Field::Asking => vec![Dim::Asking],
         Field::In(_) => vec![Dim::Epic],
-        Field::Under(_) | Field::Text(_) | Field::Label(_) => var(field).into_iter().collect(),
+        Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_) => var(field).into_iter().collect(),
     }
 }
 
-/// The free truth an `under` or a `text` predicate reads — `under`'s name
-/// upper-cased, a text trimmed and folded as find folds it; `None` for a
-/// blank text, which is always true.
+/// The free truth an `under`, a `text` or (MENGER-13) a history predicate
+/// reads — `under`'s name upper-cased, a text trimmed and folded as find
+/// folds it, a history predicate's canonical text; `None` for a blank
+/// text, which is always true.
 fn var(field: &Field) -> Option<Dim> {
     match field {
         Field::Under(x) => Some(Dim::Under(x.to_ascii_uppercase())),
@@ -1204,6 +1664,7 @@ fn var(field: &Field) -> Option<Dim> {
             let key = t.trim().to_ascii_lowercase();
             (!key.is_empty()).then_some(Dim::Text(key))
         }
+        Field::History(h) => Some(Dim::History(h.format())),
         _ => None,
     }
 }
@@ -1269,7 +1730,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
                     epics.push(e);
                 }
             }
-            f @ (Field::Under(_) | Field::Text(_) | Field::Label(_)) => {
+            f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_)) => {
                 if let Some(v) = var(f).filter(|v| !vars.contains(v)) {
                     vars.push(v);
                 }
@@ -1304,7 +1765,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
                         Field::In(e) => {
                             Lit::Epic(epics.iter().position(|x| x.eq_ignore_ascii_case(e)).unwrap_or(usize::MAX))
                         }
-                        f @ (Field::Under(_) | Field::Text(_) | Field::Label(_)) => match var(f) {
+                        f @ (Field::Under(_) | Field::Text(_) | Field::Label(_) | Field::History(_)) => match var(f) {
                             Some(v) => Lit::Var(vars.iter().position(|x| *x == v).unwrap_or(usize::MAX)),
                             None => Lit::Always,
                         },

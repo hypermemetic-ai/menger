@@ -10,6 +10,7 @@
 use super::stored::{self, State};
 use super::tests_children::children;
 use super::*;
+use super::tests::Changes;
 
 fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> NewTicket {
     NewTicket {
@@ -47,7 +48,7 @@ fn ids<T: AsRef<str>>(v: impl IntoIterator<Item = T>) -> Vec<String> {
 /// Every `GroupChanged` waiting on `rx`, in the order sent.
 fn group_changes(rx: &mut broadcast::Receiver<Change>) -> Vec<Group> {
     let mut out = Vec::new();
-    while let Ok(change) = rx.try_recv() {
+    while let Ok(change) = rx.try_change() {
         if let Change::GroupChanged { group } = change {
             out.push(group);
         }
@@ -160,7 +161,7 @@ async fn set_status_on_a_doc_is_refused_whatever_the_status() {
         assert!(err.to_string().contains("a doc has no lifecycle"), "{err}");
     }
     assert_eq!(store.get("D-2").await.unwrap(), before, "nothing changed");
-    assert!(rx.try_recv().is_err(), "nothing was broadcast");
+    assert!(rx.try_change().is_err(), "nothing was broadcast");
 }
 
 /// `set_status … Doc` on any other kind is refused: `Doc` is a doc's own.
@@ -184,7 +185,7 @@ async fn doc_is_no_other_kinds_status() {
         assert!(err.to_string().contains("Doc is a doc's own status"), "{err}");
         assert_eq!(store.get(id).await.unwrap(), before, "{id}: nothing changed");
     }
-    assert!(rx.try_recv().is_err(), "nothing was broadcast");
+    assert!(rx.try_change().is_err(), "nothing was broadcast");
     assert!(store.list(None, Some(Status::Doc), None).await.unwrap().is_empty());
     for status in Status::LIFECYCLE {
         store.set_status("W-3", status).await.unwrap();
@@ -317,7 +318,7 @@ async fn everything_else_works_for_a_doc() {
     let store = Store::new();
     let mut rx = store.subscribe();
     store.create(doc("E", None)).await.unwrap(); // E-1
-    match rx.try_recv().unwrap() {
+    match rx.try_change().unwrap() {
         Change::Created { ticket } => assert_eq!((ticket.id.as_str(), ticket.status), ("E-1", Status::Doc)),
         other => panic!("expected Created, got {other:?}"),
     }
@@ -325,7 +326,7 @@ async fn everything_else_works_for_a_doc() {
     store.create(work("E", Some("E-2"))).await.unwrap(); // E-3, work under a doc
     let kinds: Vec<&str> = ["created", "children_changed"].to_vec();
     let mut seen: Vec<&str> = Vec::new();
-    while let Ok(change) = rx.try_recv() {
+    while let Ok(change) = rx.try_change() {
         seen.push(match change {
             Change::Created { .. } => "created",
             Change::ChildrenChanged { .. } => "children_changed",
@@ -344,7 +345,7 @@ async fn everything_else_works_for_a_doc() {
         }
         other => panic!("expected Amended, got {other:?}"),
     }
-    assert!(matches!(rx.try_recv().unwrap(), Change::Amended { .. }));
+    assert!(matches!(rx.try_change().unwrap(), Change::Amended { .. }));
     assert_eq!(store.get("E-2").await.unwrap().body, "## Findings\n\nnone");
 
     match store.link_commits("E-2", vec!["77df9a0".into()]).await.unwrap() {
@@ -353,7 +354,7 @@ async fn everything_else_works_for_a_doc() {
         }
         other => panic!("expected CommitsLinked, got {other:?}"),
     }
-    assert!(matches!(rx.try_recv().unwrap(), Change::CommitsLinked { .. }));
+    assert!(matches!(rx.try_change().unwrap(), Change::CommitsLinked { .. }));
     match store.unlink_commits("E-2", vec!["77df9a0".into()]).await.unwrap() {
         Change::CommitsUnlinked { ticket, removed } => assert_eq!((ticket.commits.len(), removed.len()), (0, 1)),
         other => panic!("expected CommitsUnlinked, got {other:?}"),

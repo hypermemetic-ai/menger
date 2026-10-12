@@ -15,6 +15,7 @@ use super::cells::Key;
 use super::tests_cells::scanned;
 use super::tests_ready::{random_write, rows, Rng, Tally};
 use super::*;
+use crate::filter::{Field, Filter};
 
 /// One page's answer: the ids, `next`, `remaining`, `first`.
 pub(super) type Answer = (Vec<String>, Option<String>, u64, Option<u64>);
@@ -115,6 +116,50 @@ pub(super) struct Plain {
     /// met already or the row itself), its shortcode, and the shortcodes
     /// hosting it (each shortcode's host as the roll-ups settle it, MNG-14).
     pub(super) lineage: Vec<Vec<String>>,
+    /// MENGER-13: each row's history truths — which of [`HISTORY_VOCAB`]
+    /// hold for it, by its own transitions read whole (`history`) and the
+    /// predicates' rule ([`holds_by_rule`]), never the log's indexes.
+    pub(super) history: Vec<Vec<String>>,
+}
+
+/// MENGER-13: the history predicates the random filters draw on — windows
+/// that move only by hours, so a walk's reads agree with the rule however
+/// long it runs.
+pub(super) const HISTORY_VOCAB: [&str; 9] = [
+    "entered Canceled",
+    "entered Ready within 1h",
+    "left Pending",
+    "changed within 1d by system",
+    "entered Complete by anonymous",
+    "changed by system",
+    "left Canceled within 1w",
+    "entered \"In Review\" within 12h",
+    "changed within 1h",
+];
+
+/// MENGER-13: whether `pred` holds for a ticket whose own transitions are
+/// `own`, read at `clock` — the predicate's rule, transition by transition:
+/// some transition of the ticket's is its event, inside its window, by its
+/// actor.
+pub(super) fn holds_by_rule(pred: &crate::filter::History, own: &[crate::types::Transition], clock: &Clock) -> bool {
+    use crate::filter::{Event, Who};
+    use crate::types::TransitionField;
+    let Some((lo, hi)) = clock.bounds(pred.window.as_ref()) else { return false };
+    own.iter().any(|t| {
+        let event = match &pred.event {
+            Event::Entered(s) => t.field == TransitionField::Status && t.to == s.as_str(),
+            Event::Left(s) => t.field == TransitionField::Status && t.from.as_deref() == Some(s.as_str()),
+            Event::Changed => true,
+        };
+        let when = lo.is_none_or(|l| t.at_unix >= l) && hi.is_none_or(|h| t.at_unix < h);
+        let who = match &pred.by {
+            None => true,
+            Some(Who::Me) => t.actor == clock.me,
+            Some(Who::System) => t.actor == crate::types::SYSTEM_ACTOR,
+            Some(Who::Principal(p)) => t.actor == *p,
+        };
+        event && when && who
+    })
 }
 
 impl Plain {
@@ -155,7 +200,23 @@ impl Plain {
                 l
             })
             .collect();
-        Self { rows, cells, at, lineage }
+        // MENGER-13: each row's truths, from its own transitions.
+        let clock = Clock::default();
+        let vocab: Vec<crate::filter::History> = HISTORY_VOCAB
+            .iter()
+            .map(|p| match Filter::parse(p).expect("a history predicate").groups[0].preds[0].field.clone() {
+                Field::History(h) => h,
+                other => panic!("{p} is no history predicate: {other:?}"),
+            })
+            .collect();
+        let history = rows
+            .iter()
+            .map(|t| {
+                let own = store.history(&t.id).map(|h| h.own).unwrap_or_default();
+                vocab.iter().filter(|h| holds_by_rule(h, &own, &clock)).map(crate::filter::History::format).collect()
+            })
+            .collect();
+        Self { rows, cells, at, lineage, history }
     }
 
     /// FILTER-13: what the reference evaluator reads of row `t` (cell `k`) —
@@ -174,6 +235,7 @@ impl Plain {
             has_commits: !t.commits.is_empty(),
             menger_doc: t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/")),
             lineage: self.at.get(&t.id).map_or_else(|| vec![t.id.clone(), t.epic.clone()], |i| self.lineage[*i].clone()),
+            history: self.at.get(&t.id).map(|i| self.history[*i].clone()).unwrap_or_default(),
         }
     }
 

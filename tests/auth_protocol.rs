@@ -243,6 +243,8 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.waves", Today::Viewer, None),
     ("tickets.blockers", Today::Viewer, None),
     ("tickets.watch", Today::Viewer, None),
+    // MENGER-13: a ticket's history is a read.
+    ("tickets.history", Today::Viewer, None),
     ("tickets.create", Today::Editor, None),
     ("tickets.set_status", Today::Editor, Some("id")),
     ("tickets.set_kind", Today::Editor, Some("id")),
@@ -579,7 +581,7 @@ async fn login_off_menger_is_as_it_was() {
     let set_status = tickets["methods"].as_array().unwrap().iter().find(|m| m["name"] == "set_status").unwrap();
     let mut props: Vec<&String> = set_status["params"]["properties"].as_object().unwrap().keys().collect();
     props.sort();
-    assert_eq!(props, ["id", "status"]);
+    assert_eq!(props, ["id", "message", "restore_children", "source", "status"]);
     assert_eq!(set_status["params"]["required"], json!(["id", "status"]));
     // Additive only: the grant and target the protocol adds.
     assert_eq!((set_status["grant"].as_str(), set_status["target"].as_str()), (Some("tickets.set_status"), Some("id")));

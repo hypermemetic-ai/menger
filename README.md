@@ -1306,7 +1306,8 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
 | `tickets.ready_set { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete, Superseded or Canceled — never a doc), ordered (epic, seq), then one `page { next, remaining }` |
 | `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
 | `tickets.search { query, filter?, limit?, offset? }` | SEARCH-2: search inside tickets — one `hit { summary, title, snippet, corrected }` per ticket whose title or body's text holds every word of `query`, best first, then one `searched { matched, next, words }`. Each word also matches as a prefix; a misspelt one (unknown to the index, or rare in it) of four letters or more also matches the index's words one edit away (two from eight letters); `FILTER-23`, `set_status` and `"a phrase"` are phrases. Uncorrected matches first, then corrected; BM25 within, the title weighing 4 to the body's 1. `title` and `snippet` are `[{ text, hit }]` stretches, the matched words marked. `filter` as `find`'s; `limit` 20 by default, at most 100; `offset` skips matches — `next` is the next page's. A blank query is no hits and `matched: 0`. See "Search" below |
-| `tickets.set_status { id, status }` | `status_changed { ticket, previous }` — any of the nine, from any status (SDLC-7: the worker states `Coding` and `In Review` included); one outside them is an in-band `error` naming the nine; SDLC-11: on a doc, an in-band `error` (a doc has no lifecycle), and `Doc` on any other kind an in-band `error` too |
+| `tickets.set_status { id, status restore_children?, source?, message? }` | `status_changed { ticket, previous }` — any of the nine, from any status (SDLC-7: the worker states `Coding` and `In Review` included); one outside them is an in-band `error` naming the nine; SDLC-11: on a doc, an in-band `error` (a doc has no lifecycle), and `Doc` on any other kind an in-band `error` too; MENGER-13: a transition (the caller's, from `source` — `app` / `api` / `pipeline` —, with `message`), said on `watch` as `transition` right after the `status_changed`; into `Canceled` it cancels every open descendant in the same write and withdraws the open inputs, out of it restores the inputs and, with `restore_children`, what its cancel canceled — see "History and cancellation" |
+| `tickets.history { id }` | MENGER-13: one `transition { transition }` per change of the ticket's status or kind, oldest first, then one per transition those caused in other tickets, then `history_end { began_unix, restorable }`; `not_found` for an id naming no ticket |
 | `tickets.set_kind { id, kind, status? }` | `kind_changed { ticket, previous }` (SDLC-13) — the one write that changes a kind; everything kept by kind moves in its write. To a `doc`: status `Doc` (a `status` other than `Doc` is an in-band `error`), refused while the ticket waits on a blocker or a ticket waits on it (each named); from a doc: `status` if given (never `Doc`), else `Epic` for a scope and `Pending` otherwise; between two kinds of work the status stays unless given (`Doc` an in-band `error`). A shortcode's root becoming a kind that roots nothing is an in-band `error` naming the shortcode (doc ↔ scope is allowed); so is a path holder (WAVE-10) becoming work, and an unknown kind or status; an id naming no ticket is `not_found`. A lower-seq ticket made a scope or a doc becomes its shortcode's root. The kind (and status) it has is no write and no broadcast, answering `previous` equal to its kind. `watch` carries `kind_changed` first, then the write's `group_changed` (a root's whenever its kind or status changed; every row a re-root moved), `placements_changed`, and — filtered — `entered` / `left` |
 | `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id. COMP-3: a new body moves the component registry (definitions, references, orphans); a malformed ` ```component ` block (COMP-8: or `<docs>`), or a name another ticket defines, is an in-band `error` and nothing is written, title included; MENGER-15: a body past the cap is the typed `body_too_large { id, bytes, max, message }` and nothing is written, title included |
 | `tickets.link_commits { id, commits }` | `commits_linked { ticket, added }` (SDLC-9) — appends every commit reference in `commits` the ticket does not already carry, in the order given; `added` is what was newly linked, in order. Every entry already linked, or `commits` empty, is no write and no broadcast and answers `added: []`. An entry that is not a commit reference is one in-band `error` naming every such entry, and nothing is written — a call is all or nothing; so is a link that would put more than 256 commits on the ticket. An id naming no ticket is `not_found`. Durable before it is acknowledged; `updated_unix` moves, nothing else does |
@@ -1315,7 +1316,7 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
 | `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's row is written, and it leaves the old parent's children and joins the new one's (SCALE-4: neither parent's row is rewritten — SCALE-28 stores each one's new `child_count` on it, in the move's transaction; `watch` carries `children_changed` and `child_removed` with each parent's new `child_count`); the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
 | `tickets.groups {}` | one `group { group: { epic, total, done, docs, root, root_row, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only; SDLC-11: the work only — `docs` counts the docs, and a row of docs alone is drawn), `root` is the lowest-seq `scope` (or `doc`), `root_row` the root's `{ title, status, kind }` (AGS-23: the nav draws the shortcode as the root's row; `null` with no root), `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
 | `tickets.components {}` | one `component { component: { name, source, owner, references, docs, preview } }` per component, in name order, then the stream's own `done` (COMP-3) — `source` the ` ```component name ` block's content, `owner` the defining ticket (`null`: an orphan), `references` the tickets whose bodies use `<name`, in the store's order, then the components whose sources do, by name; COMP-8: `docs` the source's `<docs>` parsed (`{ summary, attrs, slots, examples, help }`, `null` without one), `preview` the opening line's attributes (`[[name, value], …]`). From the cache; `watch` keeps it current with `component_changed` / `component_removed` |
-| `tickets.inputs { ticket?, epic?, state? }` | one `input { input: { ticket, id, kind, question, options, recommendation, state, answer, history } }` per input of `ticket` (every ticket's without one) whose ticket is in the shortcode `epic` and which is in `state` (`open` / `answered` / `closed` / `removed`), then the stream's own `done` (INPUT-3) — in the store's order of tickets, each ticket's inputs in its body's order and the removed after; `kind` `choice` / `multi` / `text`; `options` `[{ value, label, recommended }]`; `question` and `recommendation` `null` without one; `answer` `{ value, rationale, source, at_unix }` or `null`; `history` every change, oldest first. A ticket that is none is `not_found`; a state outside the four an in-band `error`. From the cache; `watch` keeps it current with `input_changed` |
+| `tickets.inputs { ticket?, epic?, state? }` | one `input { input: { ticket, id, kind, question, options, recommendation, state, answer, history } }` per input of `ticket` (every ticket's without one) whose ticket is in the shortcode `epic` and which is in `state` (`open` / `answered` / `closed` / `removed` / MENGER-13 `withdrawn`), then the stream's own `done` (INPUT-3) — in the store's order of tickets, each ticket's inputs in its body's order and the removed after; `kind` `choice` / `multi` / `text`; `options` `[{ value, label, recommended }]`; `question` and `recommendation` `null` without one; `answer` `{ value, rationale, source, at_unix }` or `null`; `history` every change, oldest first. A ticket that is none is `not_found`; a state outside the four an in-band `error`. From the cache; `watch` keeps it current with `input_changed` |
 | `tickets.answer { ticket, input, value, rationale?, source? }` | `input_changed { input }` (INPUT-3) — records `value` (typed, above) against the input, checked against its kind and the options its body declares, with `rationale` (blank: none), `source` (`app` / `api`, default `api`) and the time; every call is one history entry. One in-band `error`, nothing written: the ticket declares no such input (naming those it does), the value does not answer it (naming why), it is closed, or it was removed; `not_found` for a ticket that is none. The body and the ticket's row are untouched |
 | `tickets.clear_answer { ticket, input, source? }` | `input_changed { input }` — the answer cleared, `open` again, the clear in its history with its `source` (`app` / `api`, default `api`; INPUT-9: the host says `app` for a frame's `menger.input.clear`); `input { input }` when it held none (nothing written); in-band `error` when closed, removed or not declared, or for a source outside the two (INPUT-3) |
 | `tickets.close_input { ticket, input }` | `input_changed { input }` — frozen, with or without an answer (a decision's DECIDED); `input { input }` when closed already; in-band `error` when removed or not declared (INPUT-3) |
@@ -1458,6 +1459,100 @@ marked "moved" and pinned to its ticket's heading. `#/comments` lists every
 comment, filtered by the route's query (`?ticket=&under=&state=&author=&text=`),
 each linking back to its page and element (`…?comment=<id>`); a ticket page's
 side panel counts its open ones. All of it is live through `comments.watch`.
+
+### History and cancellation (MENGER-13)
+
+**Every change of a ticket's status or kind is a transition**, kept by the
+store, write-through, append-only, in the `transitions` table: its ticket,
+the field (`status` / `kind`), `from` → `to` (`from` null at birth), when,
+who (`actor`: the caller's principal; `system` for the store's own;
+`anonymous` with login off — `name` the caller's display name), from where
+(`source`: `app`, `api` — synapse and agents, the default —, `pipeline`, or
+`cascade`), why (`message`) and what caused it (`cause`, a transition id,
+with `cause_ticket`). `create` records the first status, `set_status` each
+change (the same status again records nothing), `set_kind` the kind's change
+and — when the status moves with it — the status's, caused by the first.
+`set_status` and `set_kind` take `source` and `message`; the app says `app`,
+the merge should say `pipeline`. A file gains the table, empty, on its first
+open, with the moment it began: nothing before then has a history, and the
+app's History section says so. It is no derived state: the stored form is
+unchanged (10).
+
+```sh
+synapse -P 4455 menger tickets history --id MENGER-7
+synapse -P 4455 menger tickets set_status --id MENGER-7 --status Canceled --message "folded into MENGER-9"
+synapse -P 4455 menger tickets set_status --id MENGER-7 --status Pending --restore-children true
+```
+
+**Cancellation cascades.** `set_status … Canceled` cancels, in the same
+write, every descendant still open work — its whole subtree (hosted
+shortcodes too) but what is `Complete`, `Superseded` or `Canceled` already;
+a doc keeps `Doc`. Each is a transition of `system`'s, from `cascade`, its
+message naming the cause and who ("canceled because MENGER-7 was canceled by
+Ada"), its `cause` the cancel. The canceled tickets' open inputs become
+**`withdrawn`** (history kept, the reason in it): out of `inputs { state:
+open }`, out of `asking`, so out of Needs you, and refused an answer until the
+ticket is not canceled. A body written while canceled declares its new inputs
+withdrawn. **Undo**: leaving `Canceled` restores the ticket's withdrawn
+inputs; with `restore_children`, the descendants its latest cancel canceled
+and nothing has moved since go back to the statuses they had (each
+`system`'s, caused by the restore) — one canceled on its own, by another
+cancel, or moved since stays. `history`'s `history_end.restorable` names
+them; the app asks before it restores them. Only `set_status` cascades.
+
+A write that moves other tickets beside its own is **one write**: every
+step's row, derived state, transition and inputs in one transaction; each
+step's derived change is worked out against the cache the steps before it
+left, so the batch holds the cache's write lock from its first step to its
+commit (no reader sees a step the file does not hold), and a failed commit
+reads the cache back from the file. Its events are one write's: every
+ticket's `status_changed` and `transition`, then each group that moved
+(once), one `placements_changed`, the `input_changed`s.
+
+**In the app**: the ticket page's History section (when, from → to, who,
+source, message, the causing ticket as a link; what its changes caused;
+when history began). In the nav a canceled ticket is drawn closed with its
+count ("3 hidden"); its descendants are not shown under it unless the reader
+opens it there (for this view only) or the open ticket is below it. `under
+X` still finds them everywhere. The board draws done-with rows (complete,
+superseded, canceled) quieter. Needs you never shows a canceled ticket
+(`not status Canceled` beside its filter).
+
+**Filtering by history.** The language has four more predicates, answered
+from the log's kept indexes (each status's entries and exits, every
+transition, each actor's — sorted by time, so a window is a range, never a
+scan of tickets), composable with every other:
+
+| predicate | holds when some transition of the ticket's … |
+|---|---|
+| `entered <status> [window] [by who]` | went into the status |
+| `left <status> [window] [by who]` | went out of it |
+| `changed [window] [by who]` | is any change (a birth, a kind) |
+| `by <who> [window]` | is anyone's (`changed … by who`) |
+
+A window is `within <n>{m,h,d,w}`, `today`, `yesterday`, `this week` (from
+Monday), `since <date>`, `before <date>` or `between <date> and <date>` (a
+date `2026-10-10`, or a moment `2026-10-10T08:00`; a date ends a `between`
+whole); none is "ever, since the log began". Who is `me`, `system`, or a
+principal. Days are the viewer's: every filtered read takes `tz` (an IANA
+name, `UTC`, or an offset like `+02:00`), the app sends the browser's, and
+synapse reads UTC unless `--tz` is given. A `watch` whose filter has a
+relative window reads it again every 15 s, saying `left` (or `entered`) for
+what time moved. The filter menu's **Changed recently** offers the presets;
+the palette's `filter …` takes any of it.
+
+```sh
+synapse -P 4455 menger tickets list --filter 'status "In Review" and entered "In Review" within 12h' --summary true
+synapse -P 4455 menger tickets list --filter 'entered Coding yesterday' --tz Europe/Berlin --summary true
+synapse -P 4455 menger tickets counts --filter 'changed within 1h and under SCAFFOLD-1'
+synapse -P 4455 menger tickets list --filter 'entered Complete this week and kind build' --summary true
+synapse -P 4455 menger tickets list --filter 'entered Canceled within 1d by system' --summary true
+```
+
+`--verify-derived` holds the log to the tickets: each ticket's latest status
+and kind transition ends where the ticket is, each starts where the one
+before ended, each `cause` is an earlier transition, a cascade has one, the
+system's has a message.
 
 ### Notes (NOTE-2)
 
@@ -1773,7 +1868,7 @@ activation — every method answers everyone, as before; schemas only gain
 
 | role | its grants (declared with `roles(...)` on each activation) |
 |---|---|
-| `viewer` | the reads: `tickets.{health, get, list, ready_set, find, search, member, groups, components, inputs, extents, counts, facets, tree, waves, blockers, watch}`, `comments.{add, list, watch}` |
+| `viewer` | the reads: `tickets.{health, get, list, ready_set, find, search, member, groups, components, inputs, extents, counts, facets, tree, waves, blockers, watch, history}`, `comments.{add, list, watch}` |
 | `editor` | viewer's, and the writes: `tickets.{create, set_status, set_kind, set_parent, amend, link_commits, unlink_commits, label, answer, clear_answer, close_input, reopen_input}`, `comments.{resolve, reopen}` |
 | `admin` | every grant (built in): `members.{list, grant, revoke, requests}`, `auth.{roles, role_set, grant, revoke, waiting}` |
 | any signed-in caller | `session.*`, `members.mine`, `auth.{whoami, logout, requires}` |
@@ -2071,6 +2166,11 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
     placements.rs      the placements kept on the rows: the re-placement pass
                        a birth or a status change across the satisfied line
                        runs before it commits, and the pass at open (WAVE-6)
+    history.rs         the transition log (MENGER-13): its table, the kept
+                       indexes a history filter is a range of, the windows
+                       in a zone (Clock), `--verify-derived`'s look at it
+    cascade.rs         cancellation cascades and restores, as one batch write;
+                       `history`; `set_status`'s path
     stored.rs          the derived state as stored beside the tickets — its
                        tables, what a write's transaction writes to them, the
                        read at start, the build on first open, and
@@ -2177,7 +2277,8 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        menger.navigate's routes (COMP-9), src/cite.rs
                        <m-cite>'s windows (COMP-14), src/inputs.rs
                        the app's copy of the inputs and src/inputs_page.rs
-                       #/inputs (INPUT-6)
+                       #/inputs (INPUT-6), src/history.rs a ticket's
+                       History section (MENGER-13)
 spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)
 diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub
                        (WS :4458); the `mermaid` activation and the client it

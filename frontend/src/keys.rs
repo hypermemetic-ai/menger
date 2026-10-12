@@ -2004,6 +2004,13 @@ mod tests {
         assert_eq!(filter_text_command("filter demand"), None);
         assert_eq!(filter_text_command("filter"), None);
         assert_eq!(filter_text_command("asking"), None);
+        // MENGER-13: the history predicates, as the language reads them.
+        assert_eq!(filter_text_command("filter entered Coding within 1h").as_deref(), Some("entered Coding within 1h"));
+        assert_eq!(
+            filter_text_command("filter status \"In Review\" and entered in review within 12 hours").as_deref(),
+            Some("status \"In Review\" and entered \"In Review\" within 12h")
+        );
+        assert_eq!(filter_text_command("filter changed today by system").as_deref(), Some("changed today by system"));
         assert_eq!(filter_command("  Filter   DEMAND "), Some("DEMAND".into()));
         assert_eq!(filter_command("FILTER plexus_2"), Some("PLEXUS_2".into()));
         for not in ["", "filter", "filter ", "filters demand", "filter demand now", "filter de$mand", "demand", "find demand"] {

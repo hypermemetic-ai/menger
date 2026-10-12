@@ -252,6 +252,7 @@ mod filter;
 mod flat;
 mod frame;
 mod gesture;
+mod history;
 mod inputs;
 mod inputs_page;
 mod inspect;
@@ -445,7 +446,7 @@ pub(crate) fn navigate_to_ticket(id: &str) {
 
 /// Unix seconds, human-readable: "2026-09-05T12:34:56Z (1788690896)".
 /// js_sys::Date so no chrono rides into the wasm.
-fn fmt_unix(unix: i64) -> String {
+pub(crate) fn fmt_unix(unix: i64) -> String {
     let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(unix as f64 * 1000.0));
     let iso: String = date.to_iso_string().into();
     let iso = iso
@@ -459,7 +460,7 @@ fn fmt_unix(unix: i64) -> String {
 /// the ticket page does not tick: "3h ago" is still true a minute later,
 /// and the exact time rides in the element's `title` regardless. A stamp
 /// re-renders (and so re-reads the clock) only when its ticket changes.
-fn now_unix() -> i64 {
+pub(crate) fn now_unix() -> i64 {
     (js_sys::Date::now() / 1000.0) as i64
 }
 
@@ -888,6 +889,9 @@ fn Board(
                         view! {
                             <tr
                                 data-ticket-id=row_id.clone()
+                                // MENGER-13: done with — complete, superseded or canceled
+                                // (a canceled subtree with it) — drawn as done.
+                                class:done=move || ticket.with(|t| matches!(t.status, Status::Complete | Status::Superseded | Status::Canceled))
                                 tabindex="-1"
                                 aria-rowindex=move || board.pos_of(&index_id).map(|i| i + 2)
                                 on:click=move |ev| {
@@ -1442,6 +1446,8 @@ fn ticket_view(
     // (`set_kind`), so whether this is a doc is followed.
     let header_id = ticket.with_untracked(|t| t.id.clone());
     let me = header_id.clone();
+    // MENGER-13: its history, under its children.
+    let history_id = header_id.clone();
     // COMMENT-3: the open comments on this ticket, live — `None` until the
     // app holds the comments (the page asks for them).
     let comments_id = header_id.clone();
@@ -1471,6 +1477,7 @@ fn ticket_view(
                 {more_view}
                 {hidden_view}
             </section>
+            <history::HistoryView ticket=history_id />
         </article>
         <aside class="props">
             <dl class="meta">

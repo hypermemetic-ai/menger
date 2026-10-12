@@ -85,7 +85,8 @@ pub(crate) fn cat_of_field(field: &str) -> Option<Cat> {
 /// server's own canonical one).
 pub(crate) fn counts_of(facets: impl IntoIterator<Item = (String, String, u64)>, codes: impl IntoIterator<Item = String>) -> Counts {
     let mut out: Counts = HashMap::new();
-    for c in Cat::SERVER {
+    // MENGER-13: Changed recently is no facet: its presets go uncounted.
+    for c in Cat::SERVER.into_iter().filter(|c| *c != Cat::Changed) {
         let m = out.entry(c).or_default();
         for v in c.fixed() {
             m.insert(v.to_string(), 0);
@@ -104,7 +105,7 @@ pub(crate) fn counts_of(facets: impl IntoIterator<Item = (String, String, u64)>,
 /// no counts show).
 async fn ask_facets(filter: Option<String>, base: Option<String>, tree: Option<ScTree>) -> Option<Counts> {
     let client = session::client()?;
-    let events = client.facets_all(filter, base).await.ok()?;
+    let events = client.facets_all(filter, base, crate::session::tz()).await.ok()?;
     let mut facets = Vec::new();
     for ev in events {
         match ev {
@@ -238,7 +239,7 @@ impl LiveCounts {
         let n = self.asked.get_value().wrapping_add(1);
         self.asked.set_value(n);
         spawn_local(async move {
-            let Ok(events) = client.counts_all(Some(text), None).await else { return };
+            let Ok(events) = client.counts_all(Some(text), None, crate::session::tz()).await else { return };
             let mut runs = Vec::new();
             for ev in events {
                 match ev {

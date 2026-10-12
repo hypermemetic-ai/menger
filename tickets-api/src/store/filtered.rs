@@ -31,11 +31,20 @@ pub struct Lens {
     named: Vec<String>,
     /// FILTER-13: what `under` names, upper case, each once.
     unders: Vec<String>,
+    /// MENGER-13: the history predicates it asks, each once — answered from
+    /// the transition log's kept indexes ([`super::history::Log::holds`]),
+    /// at the moment and in the zone `clock` says.
+    history: Vec<crate::filter::History>,
+    clock: super::history::Clock,
     judge: Arc<Judge>,
 }
 
-/// A lens's judge: a shortcode, a cell, and the lineage's names that hold.
-type Judge = dyn Fn(&str, Key, &[&str]) -> bool + Send + Sync;
+/// A lens's judge: a shortcode, a cell, the lineage's names that hold, and
+/// (MENGER-13) the history predicates that hold, by their canonical text.
+type Judge = dyn Fn(&str, Key, &[&str], &[&str]) -> bool + Send + Sync;
+
+/// MENGER-13: at most this many distinct history predicates one filter asks.
+pub const HISTORY_MAX: usize = 16;
 
 impl Lens {
     /// A lens over `named` shortcodes that admits what `judge` admits. The
@@ -46,8 +55,39 @@ impl Lens {
             text,
             named,
             unders: Vec::new(),
-            judge: Arc::new(move |e, k, _| judge(e, k)),
+            history: Vec::new(),
+            clock: Default::default(),
+            judge: Arc::new(move |e, k, _, _| judge(e, k)),
         }
+    }
+
+    /// MENGER-13: this lens reading time by `clock` — its zone, its moment
+    /// (a test's, or now), who `me` is.
+    pub fn with_clock(mut self, clock: super::history::Clock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// MENGER-13: how it reads time.
+    pub fn clock(&self) -> &super::history::Clock {
+        &self.clock
+    }
+
+    /// MENGER-13: the history predicates it asks.
+    pub(super) fn history(&self) -> &[crate::filter::History] {
+        &self.history
+    }
+
+    /// MENGER-13: whether it asks the transition log.
+    pub fn has_history(&self) -> bool {
+        !self.history.is_empty()
+    }
+
+    /// MENGER-13: whether what it admits moves as time passes — a history
+    /// predicate whose window is relative (`within`, `today`, `yesterday`,
+    /// `this week`): a `watch` reads it again on a clock.
+    pub fn relative(&self) -> bool {
+        self.history.iter().any(crate::filter::History::relative)
     }
 
     /// The empty filter: every ticket.
@@ -90,12 +130,29 @@ impl Lens {
                 unders.len()
             )));
         }
+        // MENGER-13: its history predicates, each once.
+        let mut history: Vec<crate::filter::History> = Vec::new();
+        for p in preds() {
+            if let Field::History(h) = &p.field {
+                if !history.iter().any(|x| x.format() == h.format()) {
+                    history.push(h.clone());
+                }
+            }
+        }
+        if history.len() > HISTORY_MAX {
+            return Err(StoreError::Filter(format!(
+                "a filter asks at most {HISTORY_MAX} history predicates; this one asks {}",
+                history.len()
+            )));
+        }
         let judged = filter.clone();
         Ok(Self {
             text: filter.format(),
             named: named.into_iter().collect(),
             unders: unders.into_iter().collect(),
-            judge: Arc::new(move |epic, key, lineage| judged.matches(&facts(epic, key, lineage))),
+            history,
+            clock: Default::default(),
+            judge: Arc::new(move |epic, key, lineage, holds| judged.matches(&facts(epic, key, lineage, holds))),
         })
     }
 
@@ -113,7 +170,13 @@ impl Lens {
     /// whose lineage holds `lineage` (the shortcodes hosting `epic`, and the
     /// `under` names it is under).
     pub(super) fn judge(&self, epic: &str, key: Key, lineage: &[&str]) -> bool {
-        (self.judge)(epic, key, lineage)
+        (self.judge)(epic, key, lineage, &[])
+    }
+
+    /// MENGER-13: [`Lens::judge`] with the history predicates `holds` names
+    /// holding — a ticket's own truths, which no cell carries.
+    pub(super) fn judge_holding(&self, epic: &str, key: Key, lineage: &[&str], holds: &[&str]) -> bool {
+        (self.judge)(epic, key, lineage, holds)
     }
 
     /// The filter's text.
@@ -130,8 +193,9 @@ impl Lens {
     /// the lineage holds nothing a judge reads.
     pub(super) fn admit(&self, keys: &[Key], status: Option<Status>) -> Admit {
         debug_assert!(self.unders.is_empty(), "a lens with `under` is compiled with its lineage");
+        debug_assert!(self.history.is_empty(), "a lens with history is compiled with the log");
         Admit::compile(keys, self.named.iter().cloned(), |e, k| {
-            status.is_none_or(|s| k.status() == s) && (self.judge)(e, k, &[])
+            status.is_none_or(|s| k.status() == s) && (self.judge)(e, k, &[], &[])
         })
     }
 }
@@ -140,7 +204,8 @@ impl Lens {
 /// ticket's id and title — which only `text` reads, and it is not compiled.
 /// FILTER-13: the lineage `under` reads is what the compile hands it: the
 /// shortcode, the shortcodes hosting it, and the `under` names that hold.
-fn facts(epic: &str, key: Key, lineage: &[&str]) -> Facts {
+/// MENGER-13: and the history predicates that hold, by their text.
+fn facts(epic: &str, key: Key, lineage: &[&str], holds: &[&str]) -> Facts {
     Facts {
         id: String::new(),
         epic: epic.to_string(),
@@ -154,6 +219,7 @@ fn facts(epic: &str, key: Key, lineage: &[&str]) -> Facts {
         asking: key.asking(),
         labels: key.labels().labels().to_vec(),
         lineage: lineage.iter().map(|l| l.to_string()).collect(),
+        history: holds.iter().map(|h| h.to_string()).collect(),
     }
 }
 
@@ -283,8 +349,10 @@ pub struct Watcher {
     admit: Admit,
     /// FILTER-13: a filter that asks `under` — each write works out this
     /// watch's membership itself ([`super::lineage::UnderMoves`]), and its
-    /// `admit` is not read.
+    /// `admit` is not read. MENGER-13: and one that asks the log.
     under: Option<Arc<super::lineage::UnderWatch>>,
+    /// MENGER-13: the moment its relative windows were last read at.
+    read_at: i64,
 }
 
 /// The matches of `q` under the read lock: the admitted bitmaps, and — for
@@ -354,6 +422,17 @@ impl Store {
     /// the fields leave is compiled once, and its admitted bitmaps' lengths
     /// are tallied for every field that left it.
     pub fn facets(&self, filter: &Filter, base: &Filter) -> Result<Vec<(String, String, u64)>, StoreError> {
+        self.facets_at(filter, base, &Default::default())
+    }
+
+    /// MENGER-13: [`Store::facets`] with a history filter's time read by
+    /// `clock`.
+    pub fn facets_at(
+        &self,
+        filter: &Filter,
+        base: &Filter,
+        clock: &super::history::Clock,
+    ) -> Result<Vec<(String, String, u64)>, StoreError> {
         refuse(filter)?;
         refuse(base)?;
         // Each field's filter, and the fields that share one.
@@ -376,7 +455,7 @@ impl Store {
         // labels the admitted cells hold, not a closed list.
         let mut labels: BTreeMap<String, u64> = BTreeMap::new();
         for (rest, fields) in &distinct {
-            let both = Lens::of(&base.and(rest))?;
+            let both = Lens::of(&base.and(rest))?.with_clock(clock.clone());
             let compiled = Compiled::new(&cache, &both, None);
             let mut by_epic: Vec<(&str, u64)> = Vec::new();
             for (epic, _) in cache.cells.shortcodes() {
@@ -505,23 +584,96 @@ impl Store {
     /// is asked) — which a filter asking `under` registers with the store, so
     /// each write works out its membership.
     pub fn watcher_in(&self, lens: Lens, epic: Option<&str>) -> Watcher {
-        if !lens.unders().is_empty() {
+        // MENGER-13: a filter asking the log is a ticket's own truth as well
+        // as its cell's — each write works it out, as it does `under`'s.
+        if !lens.unders().is_empty() || lens.has_history() {
+            let read_at = lens.clock().now();
             let under = self.unders.open(lens.clone(), epic.map(str::to_string));
             return Watcher {
                 lens,
                 admit: Admit::compile(&[], std::iter::empty(), |_, _| false),
                 under: Some(under),
+                read_at,
             };
         }
         let admit = {
             let cache = self.tickets.read().expect("store lock poisoned");
             lens.admit(cache.cells.keys(), None)
         };
-        Watcher { lens, admit, under: None }
+        Watcher { lens, admit, under: None, read_at: 0 }
+    }
+
+    /// MENGER-13: what time did to a `watch { filter }` whose filter has a
+    /// relative window, since `then` — each ticket whose history truths
+    /// differ between `then` and `now`, judged both ways against the store
+    /// as it stands: `Entered` / `Left` for those it moved, in the store's
+    /// order (in `epic` alone when one is asked); past [`RECOUNT_OVER`], one
+    /// `Recount` per shortcode they are in. A write between the two moments
+    /// was said by the write itself; a ticket it moved is only said again
+    /// here when time moved it too.
+    pub fn aged(&self, lens: &Lens, then: i64, now: i64, epic: Option<&str>) -> Vec<Membership> {
+        if !lens.relative() || now <= then {
+            return Vec::new();
+        }
+        let at = |t: i64| {
+            let mut clock = lens.clock().clone();
+            clock.fixed = Some(t);
+            lens.clone().with_clock(clock)
+        };
+        let (before, after) = (at(then), at(now));
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let (b, a) = (Compiled::new(&cache, &before, None), Compiled::new(&cache, &after, None));
+        let mut candidates: BTreeMap<String, roaring::RoaringBitmap> = b.history_candidates();
+        for (e, bm) in a.history_candidates() {
+            *candidates.entry(e).or_default() |= bm;
+        }
+        let mut moved: Vec<(String, u32, bool)> = Vec::new();
+        for (e, cand) in candidates {
+            if epic.is_some_and(|x| x != e) {
+                continue;
+            }
+            for seq in cand {
+                let Some(t) = cache.order.get(&OrderKey { epic: e.clone(), seq }) else { continue };
+                let (was, is) = (b.matches_row(t), a.matches_row(t));
+                if was != is {
+                    moved.push((e.clone(), seq, is));
+                }
+            }
+        }
+        if moved.len() > RECOUNT_OVER {
+            let mut epics: Vec<&String> = moved.iter().map(|(e, _, _)| e).collect();
+            epics.dedup();
+            return epics.into_iter().map(|e| Membership::Recount { epic: e.clone(), held: a.matches_in(e).len() }).collect();
+        }
+        moved
+            .into_iter()
+            .map(|(epic, seq, now)| {
+                let id = cache.order.get(&OrderKey { epic: epic.clone(), seq }).map_or_else(|| format!("{epic}-{seq}"), |t| t.id.clone());
+                if now {
+                    Membership::Entered { id, epic, seq }
+                } else {
+                    Membership::Left { id, epic, seq }
+                }
+            })
+            .collect()
     }
 }
 
 impl Watcher {
+    /// MENGER-13: whether this watch's filter moves with the clock — the
+    /// stream reads it again ([`Watcher::tick`]) on a timer.
+    pub fn relative(&self) -> bool {
+        self.lens.relative()
+    }
+
+    /// MENGER-13: what time did to this watch's filter since it was last
+    /// read — [`Store::aged`] from then to now; the moment read is now.
+    pub fn tick(&mut self, store: &Store, epic: Option<&str>) -> Vec<Membership> {
+        let now = self.lens.clock().now();
+        let out = store.aged(&self.lens, self.read_at, now, epic);
+        self.read_at = now;
+        out
+    }
     /// FILTER-13: this watch's events in a write's [`super::UnderMoves`] —
     /// none for a filter without `under`, whose membership its cell moves say.
     pub fn under_membership(&self, moves: &super::UnderMoves) -> Vec<Membership> {

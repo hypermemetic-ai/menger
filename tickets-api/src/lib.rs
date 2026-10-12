@@ -19,7 +19,7 @@
 //!
 //! let transport = WsTransport::connect("ws://127.0.0.1:4455", "menger").await?;
 //! let client = TicketsClient::new(&transport);
-//! let mut page = client.list(None, None, None, None, Some(500), Some(true), None, None, None);
+//! let mut page = client.list(None, None, None, None, Some(500), Some(true), None, None, None, None);
 //! # let _ = &mut page;
 //! # Ok(())
 //! # }
@@ -56,6 +56,8 @@ pub use types::{
     InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, SlotDoc, Kind, Marked, Placement,
     PlacementChange, RootRow, SearchWord, Severity, Status, Ticket, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
 };
+// MENGER-13: the transition log's vocabulary.
+pub use types::{Transition, TransitionField, TransitionSource, ANONYMOUS_ACTOR, SYSTEM_ACTOR};
 
 /// IDENTITY-19: the rule every method asks first — who a call acts as, or
 /// why it is refused. Server-only.

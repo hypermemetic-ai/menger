@@ -424,6 +424,7 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             tallies,
             holders,
             indexed,
+            transitions,
         }) => {
             // SEARCH-2: and the search index, when the file has one.
             let search = match indexed {
@@ -441,6 +442,14 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             );
             if indexed.is_none() {
                 println!("{}: no search index yet (SEARCH-2) — the next open builds it", db_path.display());
+            }
+            // MENGER-13: the transition log, when the file has one.
+            match transitions {
+                Some(n) => println!(
+                    "{}: the transition log's {n} transitions agree with the tickets and with each other (MENGER-13)",
+                    db_path.display()
+                ),
+                None => println!("{}: no transition log yet (MENGER-13) — the next open begins it", db_path.display()),
             }
             0
         }

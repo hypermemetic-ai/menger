@@ -15,6 +15,7 @@
 
 use super::waves::{Waves, DEFAULT_KINDS};
 use super::*;
+use super::tests::Changes;
 use crate::types::{Placement, PlacementChange};
 use std::collections::BTreeSet;
 
@@ -58,7 +59,7 @@ fn kept(store: &Store, id: &str) -> Option<Placement> {
 /// Every change `watch` was told of so far.
 fn drain(rx: &mut broadcast::Receiver<Change>) -> Vec<Change> {
     let mut out = Vec::new();
-    while let Ok(c) = rx.try_recv() {
+    while let Ok(c) = rx.try_change() {
         out.push(c);
     }
     out

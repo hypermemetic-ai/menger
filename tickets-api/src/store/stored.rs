@@ -1356,6 +1356,9 @@ pub enum Verdict {
         /// SEARCH-2: the tickets the search index holds — `None` when the
         /// file has no index yet (the next open makes it).
         indexed: Option<usize>,
+        /// MENGER-13: the transitions the log holds — `None` when the file
+        /// has no log yet (the next open begins it).
+        transitions: Option<usize>,
     },
     /// Where they differ, one line each, naming the structure and the key.
     Differs(Vec<String>),
@@ -1432,6 +1435,14 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
             Some(indexed)
         }
     };
+    // MENGER-13: the transition log, against the tickets and itself.
+    let transitions = match super::history::check(&tx, &scanned)? {
+        None => None,
+        Some((n, differs)) => {
+            out.extend(differs);
+            Some(n)
+        }
+    };
     tx.commit()?;
     if !out.is_empty() {
         return Ok(Verdict::Differs(out));
@@ -1449,6 +1460,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         tallies: want.tree.tallies.len(),
         holders: want.tree.holders.len(),
         indexed,
+        transitions,
     })
 }
 
