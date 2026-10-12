@@ -177,6 +177,11 @@ impl SignInPage {
     #[allow(clippy::result_large_err)]
     fn posted(&self, headers: &HeaderMap, peer: &Peer, csrf: &str) -> Result<(Req, String), Response> {
         let r = self.req(headers, peer);
+        if !r.foreign && self.csrf_state(r.flow_id.as_deref(), csrf) == Csrf::Expired {
+            let id = r.flow_id.clone().expect("an expired token names its flow");
+            tracing::info!("a sign-in page past its token's life was drawn again");
+            return Err(self.expired_page(&id));
+        }
         if r.foreign || !self.csrf_ok(r.flow_id.as_deref(), csrf) {
             tracing::warn!(foreign = r.foreign, "a sign-in form was refused: another origin, or no CSRF token of this browser's");
             return Err(forbidden());
@@ -534,6 +539,11 @@ impl SignInPage {
 
     #[allow(clippy::result_large_err)]
     fn account_post(&self, headers: &HeaderMap, peer: &Peer, csrf: &str) -> Result<(Req, String, AccountHolder), Response> {
+        // An account page left open past its token's life: the page again.
+        let r = self.req(headers, peer);
+        if !r.foreign && self.csrf_state(r.flow_id.as_deref(), csrf) == Csrf::Expired {
+            return Err((StatusCode::SEE_OTHER, [(header::LOCATION, "/login/account".to_string()), (header::CACHE_CONTROL, "no-store".into())]).into_response());
+        }
         let (r, id) = self.posted(headers, peer, csrf)?;
         Ok((r, id, self.holder(headers)?))
     }

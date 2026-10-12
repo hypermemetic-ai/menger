@@ -85,9 +85,11 @@ pub struct Limits {
     /// Wrong guesses allowed for one sent code in its flow; then that flow
     /// needs a new code (AUTH-25 N4).
     pub code_tries_per_flow: u32,
-    /// Guesses (codes, passwords, TOTP codes) from one client, at each
-    /// level.
-    pub try_per_client: Tiered<Backoff>,
+    /// Guesses (codes, passwords, TOTP codes) from one client's own network
+    /// (/64, /32) — never a wider level (AUTH-26 R1: a wide guess tier would
+    /// refuse a whole provider the right code). An emailed code's guesses
+    /// are bounded per send already, and sends are tiered.
+    pub try_per_client: Backoff,
     /// Passwords tried for one username from one neighbourhood.
     pub try_per_user_network: Backoff,
     /// TOTP codes tried for one user (reached only past the first factor).
@@ -101,6 +103,9 @@ pub struct Limits {
     pub table_cap: usize,
     /// How long a network that signed an address in stays its owner's.
     pub known_network_secs: i64,
+    /// How long a form's CSRF token lasts (a page older than this is
+    /// drawn again with a fresh one).
+    pub form_token_secs: i64,
     /// IPv4 prefixes of the three levels.
     pub ipv4_prefixes: [u8; 3],
     /// IPv6 prefixes of the three levels.
@@ -120,13 +125,14 @@ impl Default for Limits {
             send_per_client: [rate(20, 600), rate(100, 600), rate(500, 600)],
             sso_per_client: [rate(60, 600), rate(300, 600), rate(1500, 600)],
             code_tries_per_flow: 5,
-            try_per_client: [backoff(30, 3600), backoff(150, 3600), backoff(600, 3600)],
+            try_per_client: backoff(30, 3600),
             try_per_user_network: Backoff { free: 5, base: 30, cap: 900, window: 3600 },
             totp_per_user: Backoff { free: 5, base: 30, cap: 900, window: 3600 },
             flows_per_client: [rate(60, 600), rate(600, 600), rate(3000, 600)],
             flows_total: 200_000,
             table_cap: 100_000,
             known_network_secs: 90 * DAY,
+            form_token_secs: 900,
             ipv4_prefixes: [32, 24, 16],
             ipv6_prefixes: [64, 48, 32],
         }
@@ -228,7 +234,9 @@ impl Table {
         }
         let top = per_agg.into_iter().max_by_key(|&(_, n)| n).map(|(a, _)| a).unwrap_or(0);
         // Unlocked from the top neighbourhood, then unlocked anywhere, then
-        // the top neighbourhood's locks, then anything: oldest first.
+        // the top neighbourhood's locks, then anything — **newest first**
+        // (AUTH-26 R3): a flood is the newest, and an owner's remembered
+        // network (older) is the last to go.
         for pass in 0..4 {
             if map.len() <= target {
                 return;
@@ -243,7 +251,7 @@ impl Table {
                 })
                 .map(|(k, e)| (*k, e.last()))
                 .collect();
-            victims.sort_unstable_by_key(|&(_, last)| last);
+            victims.sort_unstable_by_key(|&(_, last)| std::cmp::Reverse(last));
             for (k, _) in victims.into_iter().take(map.len() - target) {
                 map.remove(&k);
             }
@@ -343,11 +351,11 @@ const SEND_ADDR_NET_DAY: usize = 1;
 const SEND_ADDR_FOREIGN: usize = 2;
 const SEND_CLIENT: usize = 3; // 3, 4, 5
 const SSO_CLIENT: usize = 6; // 6, 7, 8
-const TRY_CLIENT: usize = 9; // 9, 10, 11
-const TRY_USER_NET: usize = 12;
-const TOTP_USER: usize = 13;
-const FLOW_CLIENT: usize = 14; // 14, 15, 16
-const KNOWN: usize = 17;
+const TRY_CLIENT: usize = 9;
+const TRY_USER_NET: usize = 10;
+const TOTP_USER: usize = 11;
+const FLOW_CLIENT: usize = 12; // 12, 13, 14
+const KNOWN: usize = 15;
 
 /// Every throttle the sign-in page keeps. See the module docs.
 pub struct Throttles {
@@ -368,7 +376,7 @@ impl Throttles {
         ];
         tables.extend(limits.send_per_client.iter().map(|r| Table::rate(*r, c)));
         tables.extend(limits.sso_per_client.iter().map(|r| Table::rate(*r, c)));
-        tables.extend(limits.try_per_client.iter().map(|b| Table::backoff(*b, c)));
+        tables.push(Table::backoff(limits.try_per_client, c));
         tables.push(Table::backoff(limits.try_per_user_network, c));
         tables.push(Table::backoff(limits.totp_per_user, c));
         tables.extend(limits.flows_per_client.iter().map(|r| Table::rate(*r, c)));
@@ -447,6 +455,11 @@ impl Throttles {
         [0, 1, 2].map(|l| (base + l, self.key(kind, &net.levels[l])))
     }
 
+    /// The guess table's key for a client: its own network only.
+    fn own_try(&self, net: &Net) -> (usize, [u8; 32]) {
+        (TRY_CLIENT, self.key("try", net.own()))
+    }
+
     /// Whether `ip`'s neighbourhood has signed `address` in before: the
     /// owner's network, whose sends no stranger can use up.
     pub fn known(&self, address: &str, ip: Option<IpAddr>) -> bool {
@@ -494,7 +507,7 @@ impl Throttles {
     /// is its flow's: [`Limits::code_tries_per_flow`]).
     pub fn reserve_code(&self, ip: Option<IpAddr>) -> Result<Reservation, i64> {
         let net = self.net(ip);
-        let slots = self.reserve_all(&self.tiers(TRY_CLIENT, "try", &net), net.agg)?;
+        let slots = self.reserve_all(&[self.own_try(&net)], net.agg)?;
         Ok(Reservation { slots, forgive: Vec::new() })
     }
 
@@ -502,8 +515,7 @@ impl Throttles {
     pub fn reserve_password(&self, user: &str, ip: Option<IpAddr>) -> Result<Reservation, i64> {
         let net = self.net(ip);
         let un = self.key("user-net", &format!("{user}\u{0}{}", net.neighbourhood()));
-        let mut wanted = vec![(TRY_USER_NET, un)];
-        wanted.extend(self.tiers(TRY_CLIENT, "try", &net));
+        let wanted = vec![(TRY_USER_NET, un), self.own_try(&net)];
         let slots = self.reserve_all(&wanted, net.agg)?;
         Ok(Reservation { slots, forgive: vec![(TRY_USER_NET, un)] })
     }
@@ -512,8 +524,7 @@ impl Throttles {
     pub fn reserve_totp(&self, user: &str, ip: Option<IpAddr>) -> Result<Reservation, i64> {
         let net = self.net(ip);
         let u = self.key("user", user);
-        let mut wanted = vec![(TOTP_USER, u)];
-        wanted.extend(self.tiers(TRY_CLIENT, "try", &net));
+        let wanted = vec![(TOTP_USER, u), self.own_try(&net)];
         let slots = self.reserve_all(&wanted, net.agg)?;
         Ok(Reservation { slots, forgive: vec![(TOTP_USER, u)] })
     }
@@ -636,6 +647,42 @@ mod tests {
         assert!(t.largest_table() <= 10_000);
         assert!(t.flow(ip("192.0.2.200")).allowed(), "a new visitor is served");
         assert!(t.send("someone@example.com", ip("198.51.100.7")).allowed());
+    }
+
+    #[test]
+    fn churn_cannot_push_out_an_owner_s_remembered_network() {
+        // AUTH-26 R3, its probe: an owner signs in, then a flood of
+        // sign-ins of the attacker's own addresses from spread networks.
+        let t = Throttles::new(Limits { table_cap: 64, ..Limits::default() });
+        t.signed_in("owner@x", ip("203.0.113.5"));
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        for i in 0..150u32 {
+            t.signed_in(&format!("a{i}@evil"), ip(&format!("10.{}.{}.1", i % 200, i / 200)));
+        }
+        assert!(t.known("owner@x", ip("203.0.113.9")), "the owner's network is remembered");
+    }
+
+    #[test]
+    fn guesses_count_at_the_client_s_own_network_only() {
+        // AUTH-26 R1: 20 clients of one /16 spend their guesses; a bystander
+        // elsewhere in that /16 can still guess (once).
+        let t = Throttles::new(Limits::default());
+        for i in 0..20u32 {
+            for _ in 0..40 {
+                if let Ok(r) = t.reserve_code(ip(&format!("10.7.{i}.1"))) {
+                    t.settle(r, Outcome::Wrong);
+                }
+            }
+        }
+        assert!(t.reserve_code(ip("10.7.200.5")).is_ok());
+        for i in 0..20u32 {
+            for _ in 0..40 {
+                if let Ok(r) = t.reserve_code(ip(&format!("2001:db8:{i:x}::1"))) {
+                    t.settle(r, Outcome::Wrong);
+                }
+            }
+        }
+        assert!(t.reserve_code(ip("2001:db8:ff00:1::7")).is_ok());
     }
 
     #[test]

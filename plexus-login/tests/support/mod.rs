@@ -90,11 +90,12 @@ pub fn totp_now(secret_b32: &str) -> String {
     plexus_login::crypto::totp(&plexus_login::crypto::unbase32(secret_b32).unwrap(), now())
 }
 
-/// A code that is never the current one.
+/// A code that is none of the codes valid around now (±2 steps).
 pub fn wrong_totp(secret_b32: &str) -> String {
-    let right = totp_now(secret_b32);
-    let n: u32 = right.parse().unwrap();
-    format!("{:06}", (n + 500_000) % 1_000_000)
+    let secret = plexus_login::crypto::unbase32(secret_b32).unwrap();
+    let near: Vec<String> = (-2..=2).map(|d| plexus_login::crypto::totp(&secret, now() + d * 30)).collect();
+    let n: u32 = near[2].parse().unwrap();
+    (1..).map(|k| format!("{:06}", (n + 500_000 + k) % 1_000_000)).find(|c| !near.contains(c)).unwrap()
 }
 
 // ── the log ─────────────────────────────────────────────────────────────

@@ -67,7 +67,8 @@ use crate::throttle::{Limits, Throttles, Verdict};
 
 /// How long a sign-in flow lasts.
 const FLOW_SECS: i64 = 900;
-/// How long a form's CSRF token lasts.
+/// How long a form's CSRF token lasts by default
+/// ([`Limits::form_token_secs`]).
 pub const TOKEN_SECS: i64 = 900;
 /// How long an enrolled factor waits to be confirmed before it is deleted.
 const ENROLL_SECS: i64 = 600;
@@ -185,8 +186,10 @@ enum Step {
     Code { ticket: Ticket, kind: CodeKind, subject: Option<String> },
     Choose { ticket: Ticket, choices: Vec<Choice> },
     /// A flow id a flow was started from: it starts no other (one page's
-    /// token, one flow — AUTH-25's note on the social form).
-    Spent,
+    /// token, one flow — AUTH-25's note on the social form). It names the
+    /// flow it started, so a double submit lands on that flow's step
+    /// (AUTH-26 R6).
+    Spent { successor: String },
 }
 
 struct OAuth {
@@ -323,6 +326,14 @@ pub struct SignInPage {
     me: Weak<SignInPage>,
 }
 
+/// What a form's CSRF token is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Csrf {
+    Fresh,
+    Expired,
+    Bad,
+}
+
 /// The parts of a request every handler reads.
 struct Req {
     flow_id: Option<String>,
@@ -432,10 +443,23 @@ impl SignInPage {
     }
 
     fn csrf_ok(&self, flow_id: Option<&str>, token: &str) -> bool {
-        let (Some(id), Some((at, _))) = (flow_id, token.split_once('.')) else { return false };
-        let Ok(at) = at.parse::<i64>() else { return false };
-        let age = now() - at;
-        (0..=TOKEN_SECS).contains(&age) && constant_eq(self.csrf_at(id, at).as_bytes(), token.as_bytes())
+        self.csrf_state(flow_id, token) == Csrf::Fresh
+    }
+
+    /// A token checked: this browser's and fresh; this browser's but past its
+    /// age (AUTH-26 R6: a page left open answers with a fresh page, not 403);
+    /// or not this browser's at all.
+    fn csrf_state(&self, flow_id: Option<&str>, token: &str) -> Csrf {
+        let (Some(id), Some((at, _))) = (flow_id, token.split_once('.')) else { return Csrf::Bad };
+        let Ok(at) = at.parse::<i64>() else { return Csrf::Bad };
+        if !constant_eq(self.csrf_at(id, at).as_bytes(), token.as_bytes()) {
+            return Csrf::Bad;
+        }
+        if (0..=self.cfg.limits.form_token_secs).contains(&(now() - at)) {
+            Csrf::Fresh
+        } else {
+            Csrf::Expired
+        }
     }
 
     fn key(id: &str) -> String {
@@ -454,11 +478,10 @@ impl SignInPage {
     fn fresh_flow(&self, old: Option<&str>, next: String, r: &Req) -> Result<(String, HeaderValue), Response> {
         let restart_id = old.map(str::to_string).unwrap_or_else(random_token);
         // One page's token starts one flow (AUTH-25): a spent id starts none.
-        if old.is_some_and(|o| self.with_flow(o, |f| matches!(f.step, Step::Spent)).unwrap_or(false)) {
-            let fresh = random_token();
-            let mut resp = self.restart(&fresh, &next, "That page was already used. Start again.", StatusCode::BAD_REQUEST);
-            resp.headers_mut().append(header::SET_COOKIE, self.flow_cookie_header(&fresh));
-            return Err(resp);
+        // A double submit lands on the flow it started (AUTH-26 R6).
+        let successor = old.and_then(|o| self.with_flow(o, |f| if let Step::Spent { successor } = &f.step { Some(successor.clone()) } else { None }).flatten());
+        if let Some(succ) = successor {
+            return Err(self.land_on(&succ, &next));
         }
         if let Verdict::Wait(w) = self.throttles.flow(r.info.ip) {
             tracing::info!("sign-in flows throttled for a client");
@@ -468,13 +491,50 @@ impl SignInPage {
         let mut flows = self.flows.lock().unwrap();
         if let Some(o) = old {
             flows.forget(&Self::key(o));
-            flows.insert(Self::key(o), Flow { step: Step::Spent, next: String::new(), oauth: None, expires: now() + TOKEN_SECS, agg, seq: 0, backend: None });
         }
         let id = random_token();
+        if let Some(o) = old {
+            flows.insert(Self::key(o), Flow { step: Step::Spent { successor: id.clone() }, next: String::new(), oauth: None, expires: now() + self.cfg.limits.form_token_secs, agg, seq: 0, backend: None });
+        }
         flows.insert(Self::key(&id), Flow { step: Step::Idle, next, oauth: None, expires: now() + FLOW_SECS, agg, seq: 0, backend: Some(self.backend()) });
         drop(flows);
         let set = self.flow_cookie_header(&id);
         Ok((id, set))
+    }
+
+    /// The page for the step flow `id` is at, handed to this browser with
+    /// its cookie: a double submit of a form shows the step the first one
+    /// reached (the code entry, once a code went), else the page again.
+    fn land_on(&self, id: &str, next: &str) -> Response {
+        let email = self.with_flow(id, |f| if let Step::CodeSent { email, .. } = &f.step { Some(email.clone()) } else { None }).flatten();
+        let mut resp = match email {
+            Some(e) => self.email_code_page(id, &e, None, StatusCode::OK),
+            None => {
+                let fresh = random_token();
+                let mut r = self.restart(&fresh, next, "That page was already used. Start again.", StatusCode::OK);
+                r.headers_mut().append(header::SET_COOKIE, self.flow_cookie_header(&fresh));
+                return r;
+            }
+        };
+        resp.headers_mut().append(header::SET_COOKIE, self.flow_cookie_header(id));
+        resp
+    }
+
+    /// The step flow `id` is at, drawn again with a fresh token and a
+    /// notice (AUTH-26 R6: a page left open past its token's life).
+    fn expired_page(&self, id: &str) -> Response {
+        const NOTICE: &str = "That page expired. Try again.";
+        let step = self.with_flow(id, |f| match &f.step {
+            Step::CodeSent { email, .. } => (Some(email.clone()), None, f.next.clone()),
+            Step::Code { kind, .. } => (None, Some(*kind), f.next.clone()),
+            _ => (None, None, f.next.clone()),
+        });
+        match step {
+            Some((Some(email), _, _)) => self.email_code_page(id, &email, Some(NOTICE), StatusCode::OK),
+            Some((None, Some(kind), _)) => self.continue_page(id, kind, None, Some(NOTICE), StatusCode::OK),
+            Some((None, None, next)) => self.restart(id, &next, NOTICE, StatusCode::OK),
+            None => self.restart(id, "/", NOTICE, StatusCode::OK),
+        }
     }
 
     fn end_flow(&self, id: &str) {
@@ -959,6 +1019,8 @@ mod tests {
         assert!(!p.csrf_ok(Some(&"b".repeat(43)), &token), "another flow's");
         let old = p.csrf_at(&id, now() - TOKEN_SECS - 1);
         assert!(!p.csrf_ok(Some(&id), &old), "expired");
+        assert_eq!(p.csrf_state(Some(&id), &old), Csrf::Expired, "but this browser's: a fresh page, not 403");
+        assert_eq!(p.csrf_state(Some(&"b".repeat(43)), &old), Csrf::Bad);
         assert!(!p.csrf_ok(Some(&id), "garbage"));
     }
 

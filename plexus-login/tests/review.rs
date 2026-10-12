@@ -28,6 +28,14 @@
 //! | N8 | a 401/403 refunded the guess | `signin::routes::tests`, `throttle::tests` |
 //! | N9 | the proxy check read only --public-url; `none` silenced the warning | `wiring::tests`, `none_still_warns_when_a_forwarded_header_arrives` |
 //! | social token | one page's token drove a flood | `one_page_s_token_starts_one_flow` |
+//!
+//! AUTH-26, the third review:
+//!
+//! | # | finding | test |
+//! | --- | --- | --- |
+//! | R1 | wide guess tiers refused a whole /16 or v6 /32 the right code | `a_slash_16_of_wrong_guesses_cannot_stop_a_bystander_s_right_code`, `throttle::tests` |
+//! | R3 | eviction of all-locked tables spared the flood | `throttle::tests::churn_cannot_push_out_an_owner_s_remembered_network` |
+//! | R6 | a stale page answered 403; a double submit answered "already used" | `a_page_left_open_is_drawn_again_not_refused`, `a_double_submitted_email_form_shows_the_code_step` |
 
 mod support;
 
@@ -415,8 +423,8 @@ async fn one_page_s_token_starts_one_flow() {
     // The same page's cookie and token, replayed.
     b.jar.lock().unwrap().insert(original.0.clone(), original.1.clone());
     let again = b.post("/login/social", &[("csrf", &token), ("provider", "google")]).await;
-    assert_eq!(again.status, 400, "{}", again.body);
-    assert!(again.body.contains("already used"));
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert!(again.body.contains("already used"), "no second flow — a fresh page instead (AUTH-26 R6)");
 }
 
 #[tokio::test]
@@ -429,4 +437,91 @@ async fn none_still_warns_when_a_forwarded_header_arrives() {
     let csrf = b.csrf().await;
     b.post("/login/email", &[("csrf", &csrf), ("email", "n@example.test")]).await;
     assert!(log_text().contains("X-Forwarded-For arrives from a peer that is not a trusted proxy"));
+}
+
+// ── AUTH-26 ────────────────────────────────────────────────────────────
+
+/// One client: sends and wrong guesses until its sends run out.
+async fn spend(a: &App, xff: String, sends: usize, tag: &str) {
+    let mut b = Browser::new(a);
+    b.xff = Some(xff);
+    for s in 0..sends {
+        let csrf = b.csrf().await;
+        let sent = b.post("/login/email", &[("csrf", &csrf), ("email", &format!("{tag}-{s}@junk.example"))]).await;
+        if sent.status != 200 {
+            continue;
+        }
+        for g in 0..5 {
+            b.post("/login/code", &[("csrf", &sent.csrf()), ("code", &format!("90000{g}"))]).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_slash_16_of_wrong_guesses_cannot_stop_a_bystander_s_right_code() {
+    let under = Under::memory();
+    let a = app_with(under.clone(), Tweaks { trusted: vec!["127.0.0.1/32"], ..Tweaks::default() }).await;
+    // IPv4: 20 clients in 20 /24s of 10.7/16, 6 sends × 5 wrong each = 600.
+    for i in 0..20 {
+        spend(&a, format!("10.7.{i}.1"), 6, &format!("v4c{i}")).await;
+    }
+    let mut bystander = Browser::new(&a);
+    bystander.xff = Some("10.7.200.5".into());
+    let r = bystander.sign_in_by_email(&under, "bystander4@example.test", "/app/b").await;
+    assert_eq!((r.status, r.location.as_deref()), (303, Some("/app/b")), "{}", r.body);
+    // IPv6: 20 /64s in 4 /48s of 2001:db8::/32.
+    for i in 0..20u32 {
+        spend(&a, format!("2001:db8:{:x}:{:x}::1", i % 4, i), 6, &format!("v6c{i}")).await;
+    }
+    let mut bystander = Browser::new(&a);
+    bystander.xff = Some("2001:db8:ff00:1::7".into());
+    let r = bystander.sign_in_by_email(&under, "bystander6@example.test", "/app/b").await;
+    assert_eq!((r.status, r.location.as_deref()), (303, Some("/app/b")), "{}", r.body);
+}
+
+#[tokio::test]
+async fn a_page_left_open_is_drawn_again_not_refused() {
+    let under = Under::memory();
+    let limits = Limits { form_token_secs: 1, ..Limits::default() };
+    let a = app_with(under.clone(), Tweaks { limits, ..Tweaks::default() }).await;
+    let b = Browser::new(&a);
+    let csrf = b.csrf().await;
+    let sent = b.post("/login/email", &[("csrf", &csrf), ("email", "slow@example.test")]).await;
+    let code = under.code_for("slow@example.test").await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    let again = b.post("/login/code", &[("csrf", &sent.csrf()), ("code", &code)]).await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert!(again.body.contains("That page expired") && again.body.contains("Check your email"), "the same step, drawn again");
+    let r = b.post("/login/code", &[("csrf", &again.csrf()), ("code", &code)]).await;
+    assert_eq!(r.status, 303, "the fresh page's form works: {}", r.body);
+    // A stale first page, too.
+    let c = Browser::new(&a);
+    let csrf = c.csrf().await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    let r = c.post("/login/email", &[("csrf", &csrf), ("email", "later@example.test")]).await;
+    assert_eq!(r.status, 200);
+    assert!(r.body.contains("That page expired"));
+    // A forged token is still refused.
+    assert_eq!(c.post("/login/email", &[("csrf", "1.forged"), ("email", "x@example.test")]).await.status, 403);
+}
+
+#[tokio::test]
+async fn a_double_submitted_email_form_shows_the_code_step() {
+    let under = Under::memory();
+    let a = app(under.clone()).await;
+    let b = Browser::new(&a);
+    let page = b.get("/login").await;
+    let token = page.csrf();
+    let original = b.jar.lock().unwrap().iter().find(|(k, _)| k.starts_with("toy_flow")).map(|(k, v)| (k.clone(), v.clone())).unwrap();
+    let first = b.post("/login/email", &[("csrf", &token), ("email", "twice@example.test")]).await;
+    assert_eq!(first.status, 200);
+    // The browser sends the same form again, with the page's own cookie.
+    b.jar.lock().unwrap().insert(original.0.clone(), original.1.clone());
+    let second = b.post("/login/email", &[("csrf", &token), ("email", "twice@example.test")]).await;
+    assert_eq!(second.status, 200, "{}", second.body);
+    assert!(second.body.contains("Check your email") && !second.body.contains("already used"), "{}", second.body);
+    let code = under.code_for("twice@example.test").await;
+    // Either response's form now works.
+    let r = b.post("/login/code", &[("csrf", &first.csrf()), ("code", &code)]).await;
+    assert_eq!(r.status, 303, "{}", r.body);
 }
