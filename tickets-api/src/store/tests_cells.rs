@@ -381,7 +381,7 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
             .iter()
             .map(|text| {
                 let lens = Lens::parse(text).unwrap();
-                let q = Filtered { lens: lens.clone(), epic: None, status: None, parent: None };
+                let q = Filtered { lens: lens.clone(), epic: None, status: None, parent: None, keep: None };
                 let page = store.filtered_page(&q, None, Some(3), Some(50)).unwrap();
                 (store.counts(&lens), page.tickets.into_iter().map(|t| t.id).collect())
             })

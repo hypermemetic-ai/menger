@@ -1053,6 +1053,7 @@ impl Store {
                             epic: None,
                             status: None,
                             parent: None,
+                            keep: None,
                         };
                         let admits = view(&cache, &lensed);
                         let mut page: Vec<(i64, Row, bool)> = Vec::new();

@@ -234,6 +234,23 @@
 //! - **A deep link** opens through the drawn rows only: `member` says which
 //!   of its chain match, one call.
 //!
+//! FILTER-24: **the open ticket is always drawn** (owner, 2026-10-11: "I
+//! need menger to always show the entered ticket no matter what. even if
+//! it's through a filter."). Under the lens the nav asks every list with
+//! `tree { …, keep: <the open ticket> }`, and the server answers as if that
+//! ticket matched: it is a row where a match would be — under its nearest
+//! drawn ancestor, or at the top of its shortcode — with its own matches
+//! under it, and `matched: false`, which draws it marked outside the filter
+//! ([`Face::outside`]). So:
+//!
+//! - **Its shortcode is drawn** whatever its matches, and every shortcode
+//!   hosting it ([`kept_codes`]); a root that is the open ticket is its
+//!   ticket row, not a heading.
+//! - **The route moving** re-asks the lists on the old ticket's chain and the
+//!   new one's ([`chain_moved`]) — each list asks with the ticket open when
+//!   it asks ([`KEPT`]).
+//! - **A deep link** opens down to the open ticket itself: it is drawn.
+//!
 //! FILTER-20: **a flat view beside the tree.** The header's `Tree | Flat`
 //! chooses what the nav draws under its bar, and the choice is kept with the
 //! nav's other state (`menger.nav.view`). Flat is every ticket the nav's
@@ -540,6 +557,8 @@ pub(crate) struct Face {
     pub(crate) badge: Option<String>,
     /// It opens onto something the lens shows: matches under it.
     pub(crate) opens: bool,
+    /// FILTER-24: the open ticket, drawn though the filter excludes it.
+    pub(crate) outside: bool,
 }
 
 /// A row `tree` answered, as it is drawn: a match as today, badged with the
@@ -547,7 +566,25 @@ pub(crate) struct Face {
 /// row the lens draws is a match (`tree { matches_only }`); one that is not
 /// would be dimmed.
 pub(crate) fn face_of(m: Mark) -> Face {
-    Face { heading: false, dim: !m.matched, badge: (m.below > 0).then(|| m.below.to_string()), opens: m.below > 0 }
+    Face { heading: false, dim: !m.matched, badge: (m.below > 0).then(|| m.below.to_string()), opens: m.below > 0, outside: false }
+}
+
+/// FILTER-24: a ticket row as it is drawn when it is the open ticket — kept
+/// in the tree whatever the filter, and marked outside it when it does not
+/// match.
+pub(crate) fn kept_face(m: Mark) -> Face {
+    Face { outside: !m.matched, ..face_of(m) }
+}
+
+/// FILTER-24: where the open ticket sits for a shortcode's row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Holds {
+    /// Not in it.
+    No,
+    /// In it, or in a shortcode it hosts: the row is drawn, and opens.
+    Under,
+    /// It is the shortcode's root.
+    Root,
 }
 
 /// A shortcode's row under the lens — `n` its matches summed along the
@@ -559,11 +596,28 @@ pub(crate) fn face_of(m: Mark) -> Face {
 /// doc, which most filters do not ask for). Dimmed when nothing in it
 /// matches (drawn only on the hidden line's say-so), opening when anything
 /// under it does.
-pub(crate) fn shortcode_face(n: usize, root: Option<Mark>) -> Face {
-    match root {
-        Some(m) if n > 0 => Face { heading: !m.matched, dim: false, badge: None, opens: m.below > 0 },
-        _ => Face { heading: true, dim: n == 0, badge: None, opens: n > 0 },
+///
+/// FILTER-24: a shortcode holding the open ticket is drawn and opens, its
+/// matches or none; one whose root is the open ticket is that ticket's row
+/// (marked outside the filter unless the root matches).
+pub(crate) fn shortcode_face(n: usize, root: Option<Mark>, holds: Holds) -> Face {
+    match (root, holds) {
+        (Some(m), _) if n > 0 && m.matched => Face { heading: false, dim: false, badge: None, opens: m.below > 0, outside: false },
+        (_, Holds::Root) => Face { heading: false, dim: true, badge: None, opens: n > 0, outside: true },
+        (Some(m), _) if n > 0 => Face { heading: true, dim: false, badge: None, opens: m.below > 0, outside: false },
+        (_, Holds::Under) => Face { heading: true, dim: n == 0, badge: None, opens: true, outside: false },
+        _ => Face { heading: true, dim: n == 0, badge: None, opens: n > 0, outside: false },
     }
+}
+
+/// FILTER-24: the shortcodes whose rows lead to the open ticket `id` — its
+/// own, and every one hosting it — drawn whatever their matches.
+pub(crate) fn kept_codes(tree: &ScTree, id: &str) -> BTreeSet<String> {
+    let Some((epic, _)) = key(id) else { return BTreeSet::new() };
+    let mut out = BTreeSet::from([epic.to_string()]);
+    // `hosting` names each host ticket, then its shortcode.
+    out.extend(tree.hosting(epic).into_iter().skip(1).step_by(2));
+    out
 }
 
 /// Each shortcode's matches summed along the hosts (MNG-14's hosting, as the
@@ -574,9 +628,10 @@ pub(crate) fn summed(tree: &ScTree, held: impl Fn(&str) -> usize) -> BTreeMap<St
     tree.known().iter().map(|e| (e.clone(), tree.subtree(e).iter().map(|s| held(s)).sum())).collect()
 }
 
-/// How many shortcodes the filter hides: those with no match.
-pub(crate) fn hidden_count(sums: &BTreeMap<String, usize>) -> usize {
-    sums.values().filter(|n| **n == 0).count()
+/// How many shortcodes the filter hides: those with no match — FILTER-24:
+/// but those leading to the open ticket (`kept`), which are drawn.
+pub(crate) fn hidden_count(sums: &BTreeMap<String, usize>, kept: &BTreeSet<String>) -> usize {
+    sums.iter().filter(|(e, n)| **n == 0 && !kept.contains(*e)).count()
 }
 
 /// The nav's last line under the lens.
@@ -597,12 +652,13 @@ fn node_code(n: &Node) -> Option<&str> {
 
 /// Which shortcode rows the lens draws: those with a match — every one when
 /// `all` (the hidden line toggled on: the rest dimmed). A ticket row is not
-/// the counts' to hide.
-pub(crate) fn shown(nodes: Vec<Node>, sums: &BTreeMap<String, usize>, all: bool) -> Vec<Node> {
+/// the counts' to hide. FILTER-24: nor a shortcode leading to the open
+/// ticket (`kept`).
+pub(crate) fn shown(nodes: Vec<Node>, sums: &BTreeMap<String, usize>, all: bool, kept: &BTreeSet<String>) -> Vec<Node> {
     if all {
         return nodes;
     }
-    nodes.into_iter().filter(|n| node_code(n).is_none_or(|e| sums.get(e).is_some_and(|c| *c > 0))).collect()
+    nodes.into_iter().filter(|n| node_code(n).is_none_or(|e| kept.contains(e) || sums.get(e).is_some_and(|c| *c > 0))).collect()
 }
 
 /// Whether an open list is on a ticket's chain — `chain` the ticket and its
@@ -1249,6 +1305,10 @@ thread_local! {
     /// The deep link being revealed; a newer navigation supersedes it.
     static REVEAL_GEN: Cell<u32> = const { Cell::new(0) };
 
+    /// FILTER-24: the open ticket, while the nav is under the lens — what
+    /// every list asks `tree` to keep.
+    static KEPT: RefCell<Option<String>> = const { RefCell::new(None) };
+
     /// The tree's row that has focus, while one does — what [`keep_focus`]
     /// gives focus back to.
     static TREE_FOCUS: RefCell<Option<web_sys::HtmlElement>> = const { RefCell::new(None) };
@@ -1447,7 +1507,7 @@ async fn ask_page(source: &Source, after: Option<String>, limit: usize) -> Asked
         Source::Parent(p) => (None, Some(p.clone())),
         Source::Epic(e) => (Some(e.clone()), None),
     };
-    match client.list_all(epic, None, parent, after, Some(limit as u32), Some(true), None, None).await {
+    match client.list_all(epic, None, parent, after, Some(limit as u32), Some(true), None, None, None).await {
         Ok(events) => {
             let mut rows = Vec::new();
             let mut remaining = None;
@@ -1479,7 +1539,8 @@ async fn ask_tree(source: &Source, filter: &str, after: Option<String>, limit: u
         Source::Parent(p) => (None, Some(p.clone())),
         Source::Epic(e) => (Some(e.clone()), None),
     };
-    match client.tree_all(parent, epic, filter.to_string(), after, Some(limit as u32), Some(true)).await {
+    let keep = KEPT.with(|k| k.borrow().clone());
+    match client.tree_all(parent, epic, filter.to_string(), after, Some(limit as u32), Some(true), keep).await {
         Ok(events) => {
             let mut rows = Vec::new();
             let mut marks = Vec::new();
@@ -1514,7 +1575,7 @@ async fn ask_tree(source: &Source, filter: &str, after: Option<String>, limit: u
 /// the shortcode matches), or no answer came.
 async fn ask_root(epic: &str, root: &str, filter: &str) -> Option<Mark> {
     let client = session::client()?;
-    let events = client.tree_all(None, Some(epic.to_string()), filter.to_string(), None, Some(1), None).await.ok()?;
+    let events = client.tree_all(None, Some(epic.to_string()), filter.to_string(), None, Some(1), None, None).await.ok()?;
     events.into_iter().find_map(|ev| match ev {
         TicketsEvent::Node { summary, matched, below } if summary.id == root => Some(Mark { matched, below }),
         _ => None,
@@ -1873,10 +1934,15 @@ struct Under {
     marks: RwSignal<HashMap<String, Mark>>,
     /// The server did not take the filter: its words (the stream ended).
     refused: RwSignal<Option<String>>,
+    /// FILTER-24: the open ticket while the nav is under the lens — kept in
+    /// the tree whatever the filter says of it.
+    kept: Memo<Option<String>>,
+    /// FILTER-24: the shortcodes leading to it ([`kept_codes`]).
+    kept_codes: Memo<BTreeSet<String>>,
 }
 
 impl Under {
-    fn new(lens: Lens) -> Self {
+    fn new(lens: Lens, route: RwSignal<Route>) -> Self {
         let eff = lens.effective(Level::Nav);
         let on = Memo::new(move |_| eff.with(|f| !f.groups.is_empty()));
         let text = Memo::new(move |_| eff.with(|f| (!f.groups.is_empty() && f.admits_nothing().is_none()).then(|| wire_text(f))));
@@ -1902,7 +1968,39 @@ impl Under {
             }
             now
         });
-        Under { on, text, sums, show_hidden: RwSignal::new(false), marks, refused }
+        let kept = Memo::new(move |_| {
+            if !on.get() {
+                return None;
+            }
+            route.with(|r| match r {
+                Route::Ticket(id) => Some(id.clone()),
+                _ => None,
+            })
+        });
+        let kept_codes = Memo::new(move |_| {
+            let Some(id) = kept.get() else { return BTreeSet::new() };
+            let own = || key(&id).map(|(e, _)| BTreeSet::from([e.to_string()])).unwrap_or_default();
+            sctree.with(|t| t.as_ref().map(|t| kept_codes(t, &id))).unwrap_or_else(own)
+        });
+        Under { on, text, sums, show_hidden: RwSignal::new(false), marks, refused, kept, kept_codes }
+    }
+
+    /// FILTER-24: how shortcode `epic`'s row stands to the open ticket
+    /// (tracked) — `root` the row's root, when it has one.
+    fn holds(self, epic: &str, root: Option<&str>) -> Holds {
+        if root.is_some() && self.kept.with(|k| k.as_deref() == root) {
+            return Holds::Root;
+        }
+        if self.kept_codes.with(|c| c.contains(epic)) {
+            Holds::Under
+        } else {
+            Holds::No
+        }
+    }
+
+    /// FILTER-24: whether `id` is the open ticket, kept (tracked).
+    fn is_kept(self, id: &str) -> bool {
+        self.kept.with(|k| k.as_deref() == Some(id))
     }
 
     /// Shortcode `epic`'s matches (tracked) — `None` while off or uncounted.
@@ -2049,11 +2147,14 @@ async fn drawn_chain(ctx: Ctx, filter: &str, leaf: &str, steps: Vec<(Node, Optio
         .groups
         .with_untracked(|m| m.iter().flat_map(|m| m.values()).filter_map(|g| g.root.clone().map(|r| (r, g.epic.clone()))).collect());
     let every = ctx.under.show_hidden.get_untracked();
-    let has = |epic: &str| every || ctx.under.sums.with_untracked(|s| s.as_ref().and_then(|s| s.get(epic)).is_some_and(|n| *n > 0));
+    // FILTER-24: the shortcodes leading to the open ticket are drawn, and so
+    // is the open ticket itself — kept whatever the filter.
+    let kept = ctx.under.kept_codes.get_untracked();
+    let has = |epic: &str| every || kept.contains(epic) || ctx.under.sums.with_untracked(|s| s.as_ref().and_then(|s| s.get(epic)).is_some_and(|n| *n > 0));
     let drawn: Vec<bool> = chain
         .iter()
         .map(|n| match n {
-            Node::Ticket(id) => matched.contains(id) || roots.get(id).is_some_and(|e| has(e)),
+            Node::Ticket(id) => id == leaf || matched.contains(id) || roots.get(id).is_some_and(|e| has(e)),
             Node::Group(epic) | Node::Root(_, epic) => has(epic),
         })
         .collect();
@@ -2093,7 +2194,25 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
     // matches, what `tree` says of each row; and the membership watch that
     // keeps the open lists live (shared with the counts' own: one stream).
     let lens = use_lens();
-    let under = Under::new(lens);
+    let under = Under::new(lens, route);
+    // FILTER-24: the open ticket is kept in every list's answer; when it
+    // moves, the lists on the old one's chain and the new one's ask again —
+    // but for a ticket the tree already said matches (keeping it moved
+    // nothing).
+    Effect::new(move |prev: Option<Option<String>>| {
+        let now = under.kept.get();
+        KEPT.with(|k| *k.borrow_mut() = now.clone());
+        let matched = |id: &str| under.marks.with_untracked(|m| m.get(id).is_some_and(|m| m.matched));
+        if let Some(Some(old)) = prev.filter(|p| *p != now) {
+            if !matched(&old) {
+                chain_moved(old);
+            }
+        }
+        if let Some(new) = now.clone().filter(|n| !matched(n)) {
+            chain_moved(new);
+        }
+        now
+    });
     session::follow_membership(move || under.text.get(), move |ev| under.heard(ev));
     // FILTER-21: menger's own documents are no toggle here — the nav's
     // filter leaves them out by default (`not menger doc`, src/lens.rs).
@@ -2127,12 +2246,16 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
             return all;
         }
         let every = under.show_hidden.get();
-        under.sums.with(|s| s.as_ref().map(|s| shown(all, s, every)).unwrap_or_default())
+        let kept = under.kept_codes.get();
+        under.sums.with(|s| s.as_ref().map(|s| shown(all, s, every, &kept)).unwrap_or_default())
     });
     let top_last = Memo::new(move |_| top_nodes.with(|n| n.last().map(|n| n.key().to_string())));
     // FILTER-14: the last line under the lens — how many shortcodes the
     // filter hides, toggling them in (dimmed).
-    let hidden_n = Memo::new(move |_| under.sums.with(|s| s.as_ref().map(hidden_count)));
+    let hidden_n = Memo::new(move |_| {
+        let kept = under.kept_codes.get();
+        under.sums.with(|s| s.as_ref().map(|s| hidden_count(s, &kept)))
+    });
     let show_hidden = under.show_hidden;
     let lens_line = move || {
         if !under.on.get() {
@@ -2388,9 +2511,12 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
                 return None;
             }
             Some(match &node {
+                // FILTER-24: the open ticket, marked outside the filter when
+                // it does not match.
+                Node::Ticket(id) if under.is_kept(id) => under.mark(id).map(kept_face).unwrap_or_default(),
                 Node::Ticket(id) => under.mark(id).map(face_of).unwrap_or_default(),
-                Node::Root(id, epic) => shortcode_face(under.count(epic).unwrap_or(0), under.mark(id)),
-                Node::Group(epic) => shortcode_face(under.count(epic).unwrap_or(0), None),
+                Node::Root(id, epic) => shortcode_face(under.count(epic).unwrap_or(0), under.mark(id), under.holds(epic, Some(id))),
+                Node::Group(epic) => shortcode_face(under.count(epic).unwrap_or(0), None, under.holds(epic, None)),
             })
         })
     };
@@ -2895,7 +3021,7 @@ fn list_view(
     // drawn in its place in the list, if it has matches (or the hidden line
     // says to draw every shortcode).
     let only = lensed.is_some();
-    let drawn_here = move |epic: &str| under.show_hidden.get() || under.count(epic).is_some_and(|n| n > 0);
+    let drawn_here = move |epic: &str| under.show_hidden.get() || under.holds(epic, None) != Holds::No || under.count(epic).is_some_and(|n| n > 0);
     let slots = Memo::new(move |_| {
         let (lo, hi) = range.get();
         let hosted = tree.hosted_roots.get();
@@ -2927,7 +3053,8 @@ fn list_view(
                 return nodes;
             }
             let every = under.show_hidden.get();
-            under.sums.with(|s| s.as_ref().map(|s| shown(nodes, s, every)).unwrap_or_default())
+            let kept = under.kept_codes.get();
+            under.sums.with(|s| s.as_ref().map(|s| shown(nodes, s, every, &kept)).unwrap_or_default())
         }),
         None => Memo::new(|_| Vec::new()),
     };
@@ -3165,7 +3292,9 @@ fn leaf_row(
             class:sel=move || sel.get()
             // FILTER-14: a row that only holds matches, dimmed.
             class:dim=move || face.with(|f| f.as_ref().is_some_and(|f| f.dim))
-            data-lens=move || face.with(|f| f.as_ref().map(|f| if f.dim { "holder" } else { "match" }))
+            // FILTER-24: the open ticket, drawn though the filter excludes it.
+            class:outside=move || face.with(|f| f.as_ref().is_some_and(|f| f.outside))
+            data-lens=move || face.with(|f| f.as_ref().map(|f| if f.outside { "outside" } else if f.dim { "holder" } else { "match" }))
             role="treeitem"
             tabindex="-1"
             aria-selected=move || sel.get().to_string()
@@ -3218,6 +3347,12 @@ fn leaf_row(
             </span>
             <span class="code" data-tag=crate::tags::Tag::ticket(&id).attr()>{id.clone()}</span>
             <span class="label">{move || ticket.with(|t| t.title.clone())}</span>
+            // FILTER-24: why a ticket the filter excludes is here.
+            {move || {
+                face.with(|f| f.as_ref().is_some_and(|f| f.outside)).then(|| {
+                    view! { <span class="outside-mark" title="outside the nav's filter — shown because it is the open ticket">"outside"</span> }
+                })
+            }}
             // FILTER-14: the matches under the row, as its badge (a
             // shortcode's row has its tally instead).
             {move || {
@@ -3241,7 +3376,7 @@ fn leaf_row(
 #[cfg(test)]
 mod tests {
     use super::{
-        art, chunks, climb, drawn_steps, face, face_of, hidden_count, hidden_line, kind_glyph, last_drawn, migrate_expanded, offset_of,
+        art, chunks, climb, drawn_steps, face, face_of, hidden_count, kept_codes, kept_face, Holds, hidden_line, kind_glyph, last_drawn, migrate_expanded, offset_of,
         on_chain, rollup_label, root_has_kids, shortcode_face, shortcode_node, shown, span, summed, Ask, Climb, Face, Geom, List, Mark,
         Node, Source, CHUNK, PAGE, WHOLE,
     };
@@ -3728,20 +3863,20 @@ mod tests {
         let g = demo();
         let nodes: Vec<Node> = ["ALPHA", "DOCS", "PRE", "SUP"].iter().map(|e| shortcode_node(&g[*e])).collect();
         let keys = |v: Vec<Node>| v.iter().map(|n| n.key().to_string()).collect::<Vec<_>>();
-        assert_eq!(keys(shown(nodes.clone(), &s, false)), ["ALPHA-1", "SUP-1"], "DOCS and PRE hidden; SUP holds SUB's match");
-        assert_eq!(keys(shown(nodes.clone(), &s, true)), ["ALPHA-1", "DOCS-1", "PRE", "SUP-1"], "toggled: every one");
-        assert_eq!(hidden_count(&s), 2, "DOCS, PRE");
+        assert_eq!(keys(shown(nodes.clone(), &s, false, &BTreeSet::new())), ["ALPHA-1", "SUP-1"], "DOCS and PRE hidden; SUP holds SUB's match");
+        assert_eq!(keys(shown(nodes.clone(), &s, true, &BTreeSet::new())), ["ALPHA-1", "DOCS-1", "PRE", "SUP-1"], "toggled: every one");
+        assert_eq!(hidden_count(&s, &BTreeSet::new()), 2, "DOCS, PRE");
         assert_eq!(hidden_line(2), "2 shortcodes hidden by the filter");
         assert_eq!(hidden_line(1), "1 shortcode hidden by the filter");
         assert_eq!(hidden_line(0), "0 shortcodes hidden by the filter");
         // A hidden one drawn on the line's say-so is a dimmed heading and
         // opens onto nothing.
-        assert_eq!(shortcode_face(s["DOCS"], None), Face { heading: true, dim: true, badge: None, opens: false });
-        assert_eq!(shortcode_face(s["PRE"], None), Face { heading: true, dim: true, badge: None, opens: false });
+        assert_eq!(shortcode_face(s["DOCS"], None, Holds::No), Face { heading: true, dim: true, badge: None, opens: false, outside: false });
+        assert_eq!(shortcode_face(s["PRE"], None, Holds::No), Face { heading: true, dim: true, badge: None, opens: false, outside: false });
         // One with matches is drawn and opens.
-        assert_eq!(shortcode_face(s["SUP"], None), Face { heading: true, dim: false, badge: None, opens: true });
+        assert_eq!(shortcode_face(s["SUP"], None, Holds::No), Face { heading: true, dim: false, badge: None, opens: true, outside: false });
         // A ticket node is not a shortcode's: never hidden by the counts.
-        assert_eq!(keys(shown(vec![Node::Ticket("X-2".into())], &s, false)), ["X-2"]);
+        assert_eq!(keys(shown(vec![Node::Ticket("X-2".into())], &s, false, &BTreeSet::new())), ["X-2"]);
     }
 
     /// FILTER-23: no holder is drawn — every ticket row the lens draws is a
@@ -3753,19 +3888,53 @@ mod tests {
     #[test]
     fn a_root_that_does_not_match_is_a_heading_and_every_ticket_row_a_match() {
         let both = face_of(Mark { matched: true, below: 12 });
-        assert_eq!(both, Face { heading: false, dim: false, badge: Some("12".into()), opens: true });
+        assert_eq!(both, Face { heading: false, dim: false, badge: Some("12".into()), opens: true, outside: false });
         let leaf = face_of(Mark { matched: true, below: 0 });
-        assert_eq!(leaf, Face { heading: false, dim: false, badge: None, opens: false });
+        assert_eq!(leaf, Face { heading: false, dim: false, badge: None, opens: false, outside: false });
         // The ticket's first example: FILTER-1 is a scope, the filter `kind
         // build` — FILTER is a heading with its builds under it.
-        assert_eq!(shortcode_face(2, Some(Mark { matched: false, below: 2 })), Face { heading: true, dim: false, badge: None, opens: true });
+        assert_eq!(shortcode_face(2, Some(Mark { matched: false, below: 2 }), Holds::No), Face { heading: true, dim: false, badge: None, opens: true, outside: false });
         // The second: RETURNS-1 matches `status Pending` — its own row, its
         // matches nested under it.
-        assert_eq!(shortcode_face(2, Some(Mark { matched: true, below: 1 })), Face { heading: false, dim: false, badge: None, opens: true });
+        assert_eq!(shortcode_face(2, Some(Mark { matched: true, below: 1 }), Holds::No), Face { heading: false, dim: false, badge: None, opens: true, outside: false });
         // A root that is the shortcode's only match: its row, a leaf.
-        assert_eq!(shortcode_face(1, Some(Mark { matched: true, below: 0 })), Face { heading: false, dim: false, badge: None, opens: false });
+        assert_eq!(shortcode_face(1, Some(Mark { matched: true, below: 0 }), Holds::No), Face { heading: false, dim: false, badge: None, opens: false, outside: false });
         // Without its word, a heading that opens onto the matches.
-        assert_eq!(shortcode_face(4, None), Face { heading: true, dim: false, badge: None, opens: true });
+        assert_eq!(shortcode_face(4, None, Holds::No), Face { heading: true, dim: false, badge: None, opens: true, outside: false });
+    }
+
+    /// FILTER-24: the open ticket is drawn whatever the filter. The
+    /// shortcodes leading to it — its own and those hosting it — are drawn
+    /// with no match and open, and are not counted on the hidden line; its
+    /// row is marked outside the filter when it does not match (as a match it
+    /// is a match's row); a root that is the open ticket is its ticket row,
+    /// not a heading.
+    #[test]
+    fn the_open_ticket_and_the_shortcodes_leading_to_it_are_drawn() {
+        let t = ScTree::of(&demo());
+        assert_eq!(kept_codes(&t, "SUB-3"), BTreeSet::from(["SUB".to_string(), "SUP".to_string()]), "SUB is hosted at SUP-4");
+        assert_eq!(kept_codes(&t, "PRE-2"), BTreeSet::from(["PRE".to_string()]));
+        assert_eq!(kept_codes(&t, "not an id"), BTreeSet::new());
+        let (t, m) = sums_of(&[("ALPHA", 2)]);
+        let s = summed(&t, |e| m.held(e));
+        let g = demo();
+        let nodes: Vec<Node> = ["ALPHA", "DOCS", "PRE", "SUP"].iter().map(|e| shortcode_node(&g[*e])).collect();
+        let keys = |v: Vec<Node>| v.iter().map(|n| n.key().to_string()).collect::<Vec<_>>();
+        let kept = kept_codes(&t, "SUB-3");
+        assert_eq!(keys(shown(nodes.clone(), &s, false, &kept)), ["ALPHA-1", "SUP-1"], "SUP leads to SUB-3");
+        assert_eq!(hidden_count(&s, &kept), 2, "DOCS, PRE — not SUP or SUB");
+        assert_eq!(hidden_count(&s, &BTreeSet::new()), 4);
+        // Leading to it with no match: a dimmed heading that opens.
+        assert_eq!(shortcode_face(0, None, Holds::Under), Face { heading: true, dim: true, badge: None, opens: true, outside: false });
+        // With matches, as without it.
+        assert_eq!(shortcode_face(2, Some(Mark { matched: false, below: 2 }), Holds::Under), shortcode_face(2, Some(Mark { matched: false, below: 2 }), Holds::No));
+        // Its root is the open ticket: its row, marked — unless it matches.
+        assert_eq!(shortcode_face(0, None, Holds::Root), Face { heading: false, dim: true, badge: None, opens: false, outside: true });
+        assert_eq!(shortcode_face(3, Some(Mark { matched: false, below: 3 }), Holds::Root), Face { heading: false, dim: true, badge: None, opens: true, outside: true });
+        assert_eq!(shortcode_face(3, Some(Mark { matched: true, below: 2 }), Holds::Root), shortcode_face(3, Some(Mark { matched: true, below: 2 }), Holds::No));
+        // The open ticket's row: marked outside when it does not match.
+        assert_eq!(kept_face(Mark { matched: false, below: 1 }), Face { heading: false, dim: true, badge: Some("1".into()), opens: true, outside: true });
+        assert_eq!(kept_face(Mark { matched: true, below: 0 }), face_of(Mark { matched: true, below: 0 }));
     }
 
     /// FILTER-23: an open list under the lens draws a hosted shortcode in its
@@ -3799,7 +3968,7 @@ mod tests {
         let nodes: Vec<Node> = ["ALPHA", "PRE", "SUP"].iter().map(|e| shortcode_node(&g[*e])).collect();
         let keys = |m: &Matches| {
             let s = summed(&t, |e| m.held(e));
-            shown(nodes.clone(), &s, false).iter().map(|n| n.key().to_string()).collect::<Vec<_>>()
+            shown(nodes.clone(), &s, false, &BTreeSet::new()).iter().map(|n| n.key().to_string()).collect::<Vec<_>>()
         };
         assert_eq!(keys(&m), ["ALPHA-1", "SUP-1"]);
         m.left("ALPHA");

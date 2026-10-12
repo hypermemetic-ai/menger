@@ -2056,6 +2056,65 @@ async fn tree_matches_only_over_the_wire() {
     assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("error")), "one address: {evs:?}");
 }
 
+/// FILTER-24 over the real protocol: `keep` — the nav's open ticket, drawn
+/// whatever the filter. `tree { matches_only, keep }` draws it where a match
+/// would be, its matches and a shortcode hosted at it under it, and says it
+/// does not match; `list { filter, keep }` pages it in its place and counts
+/// it; `counts { filter, keep }` counts it. A match, a root, a ticket that is
+/// none: as without it.
+#[tokio::test]
+async fn keep_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let mk = |epic: &str, kind: &str, parent: Option<&str>| json!({"epic": epic, "title": format!("a {kind}"), "kind": kind, "parent": parent});
+    answer(&client, "tickets.create", mk("TK", "scope", None)).await; // TK-1
+    answer(&client, "tickets.create", mk("TK", "execution", Some("TK-1"))).await; // TK-2
+    answer(&client, "tickets.create", mk("TK", "build", Some("TK-2"))).await; // TK-3
+    answer(&client, "tickets.create", mk("TK", "build", Some("TK-1"))).await; // TK-4
+    answer(&client, "tickets.create", mk("TL", "scope", Some("TK-2"))).await; // TL-1, hosted at TK-2
+    answer(&client, "tickets.create", mk("TL", "build", Some("TL-1"))).await; // TL-2
+
+    let nodes = |evs: &[Value]| -> Vec<(String, bool, u64)> {
+        evs.iter()
+            .map(|e| (e["summary"]["id"].as_str().unwrap().to_string(), e["matched"].as_bool().unwrap(), e["below"].as_u64().unwrap()))
+            .collect()
+    };
+    let row = |id: &str, m: bool, b: u64| (id.to_string(), m, b);
+    let tree = |extra: Value| {
+        let mut p = json!({"epic": "TK", "filter": "kind build", "matches_only": true});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        p
+    };
+    let (rows, _) = paged(call(&client, "tickets.tree", tree(json!({}))).await).await;
+    assert_eq!(nodes(&rows), [row("TK-3", true, 0), row("TK-4", true, 0), row("TL-1", false, 1)], "without keep");
+    let (rows, page) = paged(call(&client, "tickets.tree", tree(json!({"keep": "TK-2"}))).await).await;
+    assert_eq!(nodes(&rows), [row("TK-2", false, 2), row("TK-4", true, 0)], "TK-2 in TK-3's place");
+    assert_eq!(page, json!({"type": "page", "next": null, "remaining": 0}));
+    let (rows, _) = paged(call(&client, "tickets.tree", json!({"parent": "TK-2", "filter": "kind build", "matches_only": true, "keep": "tk-2"})).await).await;
+    assert_eq!(nodes(&rows), [row("TK-3", true, 0), row("TL-1", false, 1)], "its build and TL's row under it");
+    for keep in ["TK-3", "TK-1", "NONE-1", ""] {
+        let (rows, _) = paged(call(&client, "tickets.tree", tree(json!({"keep": keep}))).await).await;
+        assert_eq!(nodes(&rows), [row("TK-3", true, 0), row("TK-4", true, 0), row("TL-1", false, 1)], "keep {keep:?}");
+    }
+
+    let ids = |evs: &[Value]| evs.iter().map(|e| e["summary"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let (rows, page) = paged(call(&client, "tickets.list", json!({"filter": "kind build", "keep": "TK-2", "summary": true})).await).await;
+    assert_eq!(ids(&rows), ["TK-2", "TK-3", "TK-4", "TL-2"]);
+    assert_eq!((page["first"].clone(), page["remaining"].clone()), (json!(0), json!(0)));
+    let (rows, page) = paged(call(&client, "tickets.list", json!({"filter": "kind build", "keep": "TK-2", "summary": true, "after": "TK-2", "limit": 0})).await).await;
+    assert_eq!((rows.len(), page["first"].clone()), (0, json!(1)), "TK-2 sits at 0");
+    let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": "kind build", "keep": "TK-2", "summary": true, "at": 1, "limit": 1})).await).await;
+    assert_eq!(ids(&rows), ["TK-3"]);
+    let (rows, _) = paged(call(&client, "tickets.list", json!({"filter": "kind build", "keep": "TK-2", "epic": "TL", "summary": true})).await).await;
+    assert_eq!(ids(&rows), ["TL-2"], "outside the sugar: not kept");
+
+    let counts = |evs: Vec<Value>| evs.into_iter().map(|e| (e["epic"].as_str().unwrap().to_string(), e["held"].as_u64().unwrap())).collect::<Vec<_>>();
+    assert_eq!(counts(collect(call(&client, "tickets.counts", json!({"filter": "kind build"})).await).await), [("TK".to_string(), 2), ("TL".to_string(), 1)]);
+    assert_eq!(counts(collect(call(&client, "tickets.counts", json!({"filter": "kind build", "keep": "TK-2"})).await).await), [("TK".to_string(), 3), ("TL".to_string(), 1)]);
+    assert_eq!(counts(collect(call(&client, "tickets.counts", json!({"filter": "kind build", "keep": "TK-3"})).await).await), [("TK".to_string(), 2), ("TL".to_string(), 1)], "a match once");
+    assert_eq!(counts(collect(call(&client, "tickets.counts", json!({"filter": "kind doc", "keep": "TL-1"})).await).await), [("TL".to_string(), 1)], "a shortcode with no match");
+}
+
 /// Acceptance 4: completing a blocker, under `watch { filter: "ready" }`, is
 /// `status_changed` and then one `entered` per ticket it unblocked, in the
 /// store's order.

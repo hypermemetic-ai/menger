@@ -1162,7 +1162,7 @@ pub(crate) fn load_children(
             return; // the page is gone
         };
         match client
-            .list_all(None, None, Some(id.clone()), after, Some(KIDS_LIMIT), Some(true), filter.clone(), None)
+            .list_all(None, None, Some(id.clone()), after, Some(KIDS_LIMIT), Some(true), filter.clone(), None, None)
             .await
         {
             Ok(events) => {
@@ -1302,7 +1302,7 @@ pub(crate) async fn children_matching(parent: String, filter: String) -> Result<
     let client = client().ok_or_else(|| "not connected".to_string())?;
     let mut remaining = None;
     for ev in client
-        .list_all(None, None, Some(parent), None, Some(0), Some(true), Some(filter), None)
+        .list_all(None, None, Some(parent), None, Some(0), Some(true), Some(filter), None, None)
         .await
         .map_err(|e| describe(&e))?
     {

@@ -1281,6 +1281,13 @@
   #nav .nbar .fclash { margin-top: .3rem; }
   #nav .tag.roll.lensed { color: var(--accent); font-weight: 600; }
   #nav .row.dim .code, #nav .row.dim .label, #nav .row.dim .toggle.kind, #nav .row.dim .tag:not(.roll) { opacity: .5; }
+  /* FILTER-24: the open ticket, drawn though the nav's filter excludes it —
+     dimmed as a row outside the filter is, and saying so. */
+  #nav .row.outside .label { font-style: italic; }
+  #nav .outside-mark {
+    flex: none; font-size: 10px; line-height: 1.4; padding: 0 5px; border-radius: 8px;
+    color: var(--muted); border: 1px dashed var(--chip-line);
+  }
   #nav .below {
     flex: none; font-size: 10px; line-height: 1.4; padding: 0 5px; border-radius: 8px; font-variant-numeric: tabular-nums;
     color: var(--accent); background: var(--chip-bg); border: 1px solid var(--chip-line);

@@ -64,6 +64,7 @@ pub fn ready_and(filter: &Filter, epic: Option<String>) -> Result<Filtered, Stor
         epic,
         status: None,
         parent: None,
+        keep: None,
     })
 }
 
@@ -74,6 +75,7 @@ fn everywhere(lens: &Lens) -> Filtered {
         epic: None,
         status: None,
         parent: None,
+        keep: None,
     }
 }
 
@@ -246,5 +248,13 @@ impl Store {
         ids.iter()
             .map(|id| locate(&cache, id).is_some_and(|k| view.contains(&k.epic, k.seq)))
             .collect()
+    }
+
+    /// FILTER-24: the id of the ticket `id` names, as `member` takes it (a
+    /// path address, or an id in any case) — `None` when it names none.
+    pub fn ticket_id(&self, id: &str) -> Option<String> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let key = locate(&cache, id)?;
+        cache.order.get(key).map(|t| t.id.clone())
     }
 }

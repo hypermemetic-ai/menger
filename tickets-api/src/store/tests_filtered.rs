@@ -250,7 +250,23 @@ impl Plain {
 /// The store's answer.
 #[allow(clippy::too_many_arguments)]
 fn answered(store: &Store, lens: &Lens, epic: Option<&str>, status: Option<Status>, parent: Option<&str>, after: Option<&str>, at: Option<u64>, limit: Option<u32>) -> Result<Answer, String> {
-    let q = Filtered { lens: lens.clone(), epic: epic.map(String::from), status, parent: parent.map(String::from) };
+    answered_keeping(store, lens, epic, status, parent, after, at, limit, None)
+}
+
+/// FILTER-24: the store's answer with `keep`.
+#[allow(clippy::too_many_arguments)]
+fn answered_keeping(
+    store: &Store,
+    lens: &Lens,
+    epic: Option<&str>,
+    status: Option<Status>,
+    parent: Option<&str>,
+    after: Option<&str>,
+    at: Option<u64>,
+    limit: Option<u32>,
+    keep: Option<&str>,
+) -> Result<Answer, String> {
+    let q = Filtered { lens: lens.clone(), epic: epic.map(String::from), status, parent: parent.map(String::from), keep: keep.map(String::from) };
     store.filtered_page(&q, after, at, limit).map(answer).map_err(|e| e.to_string())
 }
 
@@ -298,6 +314,21 @@ pub(super) fn assert_lens_is_a_scan(store: &Store, plain: &Plain, lens: &Lens, j
         let want = plain.page(judge, a.0, a.1, a.2, None, Some(at), limit);
         let got = answered(store, lens, a.0, a.1, a.2, None, Some(at), limit);
         assert_eq!(got, want, "{what}: {a:?} at {at} limit {limit:?}");
+        // FILTER-24: and keeping a ticket — a match whatever the filter
+        // says of it, inside the sugar — by a generator of its own, so the
+        // reads above see what they saw before it.
+        let mut krng = Rng(rng.0 ^ 0xF1_17E2_0024);
+        if let Some(keep) = pick(&mut krng) {
+            let kept: RowJudge<'_> = &|t: &Row, k: Key| judge(t, k) || t.id == keep;
+            let at = krng.below(total as usize + 2) as u64;
+            let want = plain.page(kept, a.0, a.1, a.2, after.as_deref(), None, limit);
+            let got = answered_keeping(store, lens, a.0, a.1, a.2, after.as_deref(), None, limit, Some(&keep));
+            assert_eq!(got, want, "{what}: {a:?} keeping {keep} after {after:?} limit {limit:?}");
+            let want = plain.page(kept, a.0, a.1, a.2, None, Some(at), limit);
+            let got = answered_keeping(store, lens, a.0, a.1, a.2, None, Some(at), limit, Some(&keep));
+            assert_eq!(got, want, "{what}: {a:?} keeping {keep} at {at} limit {limit:?}");
+            assert_eq!(store.counts_keeping(lens, Some(&keep)), plain.counts(kept), "{what}: counts keeping {keep}");
+        }
     }
     if let Some(id) = ids.first() {
         let both = answered(store, lens, None, None, None, Some(id), Some(0), None).unwrap_err();

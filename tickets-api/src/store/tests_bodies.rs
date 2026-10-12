@@ -196,12 +196,13 @@ async fn a_walk_holds_a_page_of_bodies_and_answers_what_one_page_would() {
         Select::Ready { epic: None },
         // FILTER-4: a filtered walk — every ticket, then a status by a lens
         // with the old parameters beside it.
-        Select::Filtered(Filtered { lens: Lens::all(), epic: None, status: None, parent: None }),
+        Select::Filtered(Filtered { lens: Lens::all(), epic: None, status: None, parent: None, keep: None }),
         Select::Filtered(Filtered {
             lens: Lens::new("ready-or-blocked".into(), vec![], |_, k| matches!(k.status(), Status::Ready | Status::Blocked)),
             epic: Some(epic.to_ascii_lowercase()),
             status: None,
             parent: Some(root.clone()),
+            keep: None,
         }),
     ];
     for select in &selects {

@@ -784,6 +784,19 @@ impl<'a> View<'a> {
         View { by_epic }
     }
 
+    /// FILTER-24: the same, with the ticket at `seq` of `epic` a match too —
+    /// one bitmap of its own beside the shortcode's (disjoint: added only
+    /// when no bitmap holds it).
+    pub(super) fn keeping(mut self, epic: &'a str, seq: u32) -> View<'a> {
+        let one = std::borrow::Cow::Owned(RoaringBitmap::from_iter([seq]));
+        match self.by_epic.binary_search_by(|(e, _)| (*e).cmp(epic)) {
+            Ok(i) if self.by_epic[i].1.iter().any(|b| b.contains(seq)) => {}
+            Ok(i) => self.by_epic[i].1.push(one),
+            Err(i) => self.by_epic.insert(i, (epic, vec![one])),
+        }
+        self
+    }
+
     /// Each shortcode with a match, and how many.
     pub(super) fn counts(&self) -> impl Iterator<Item = (&'a str, u64)> + '_ {
         self.by_epic

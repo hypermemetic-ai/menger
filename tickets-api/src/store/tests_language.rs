@@ -305,7 +305,7 @@ async fn ready_is_the_ready_set() {
     for (epic, held) in store.counts(&lens) {
         assert_eq!(held, store.ready_page(Some(&epic), None, Some(0)).unwrap().remaining, "{epic}");
     }
-    let q = Filtered { lens, epic: None, status: None, parent: None };
+    let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
     let (mut after, mut walked) = (None::<String>, 0);
     loop {
         let filtered = store.filtered_page(&q, after.as_deref(), None, Some(150)).unwrap();

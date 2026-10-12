@@ -80,6 +80,9 @@ pub(super) struct Compiled<'c> {
     /// atoms admit, as one bitmap — built once per read, however many lists
     /// of that shortcode a walk reads.
     admitted: RefCell<HashMap<(u64, String), Rc<RoaringBitmap>>>,
+    /// FILTER-24: `tree`'s `keep` — a ticket the filter does not admit,
+    /// answered as if it did ([`Compiled::keep`]).
+    kept: Option<&'c Row>,
 }
 
 /// The ticket an `under` name names, and its entry in the children index —
@@ -221,6 +224,7 @@ impl<'c> Compiled<'c> {
             hosts,
             admits: RefCell::new(HashMap::new()),
             admitted: RefCell::new(HashMap::new()),
+            kept: None,
         }
     }
 
@@ -587,12 +591,17 @@ impl<'c> Compiled<'c> {
 /// FILTER-13: what `tree` asks — a parent's children, or a shortcode's top
 /// level — under a filter. FILTER-23: `matches_only`, the nav that draws
 /// only matches — no ticket that only holds them ([`Store::tree_page`]).
+///
+/// FILTER-24: `keep` — with `matches_only`, a ticket drawn as if it matched
+/// (the nav's open ticket, whatever the filter): placed where a match would
+/// be, its nearest matches answered under it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TreeQuery {
     pub parent: Option<String>,
     pub epic: Option<String>,
     pub lens: Lens,
     pub matches_only: bool,
+    pub keep: Option<String>,
 }
 
 /// FILTER-13: one row `tree` answers: the ticket, whether it matches, and
@@ -664,6 +673,12 @@ impl Store {
     /// match, then the shortcodes drawn at its top. A cursor that is one of
     /// the shortcodes' roots is a place among them; any other, a place
     /// among the matches.
+    ///
+    /// FILTER-24: `keep`, with `matches_only` — a ticket that does not match
+    /// is answered as if it did ([`Compiled::keep`]): a row where a match
+    /// would be, with its own node (`matched: false`), and its nearest
+    /// matches answered under it rather than here. Every other answer is
+    /// the one without it.
     pub fn tree_page(&self, q: &TreeQuery, after: Option<&str>, limit: Option<u32>) -> Result<TreePage, StoreError> {
         let up = |s: Option<&str>| s.map(|s| s.trim().to_ascii_uppercase());
         let (parent, epic) = (up(q.parent.as_deref()), up(q.epic.as_deref()));
@@ -673,7 +688,10 @@ impl Store {
             None => None,
             Some(id) => Some(cache.at.get(id).cloned().ok_or_else(|| StoreError::CursorNotFound(id.to_string()))?),
         };
-        let c = Compiled::new(&cache, &q.lens, None);
+        let mut c = Compiled::new(&cache, &q.lens, None);
+        if let Some(id) = q.keep.as_deref().filter(|_| q.matches_only) {
+            c.keep(id);
+        }
         let rowed = match (parent.as_deref(), epic.as_deref(), q.matches_only) {
             (Some(p), None, false) => c.children_rows(p),
             (None, Some(e), false) => c.top_rows(e),
@@ -805,6 +823,7 @@ impl<'c> Compiled<'c> {
         if !cut && !prow.is_some_and(|r| tree::on_cycle(rows, &r.id, r.parent.as_deref())) {
             let by = self.nearest_fast(p, held, &hosted);
             let mut rowed = Rowed { by_epic: by.into_iter().collect(), alone: true, ..Rowed::default() };
+            self.splice_kept(&mut rowed, Place::Ticket(p));
             self.place_tail(&mut rowed, placed, |at| matches!(at, Place::Ticket(id) if id == p));
             return rowed;
         }
@@ -834,6 +853,7 @@ impl<'c> Compiled<'c> {
             }
         }
         let mut rowed = Rowed { by_epic: by.into_iter().filter(|(_, b)| !b.is_empty()).collect(), known, alone: true, ..Rowed::default() };
+        self.splice_kept(&mut rowed, Place::Ticket(p));
         self.place_tail(&mut rowed, placed, |at| matches!(at, Place::Ticket(id) if id == p));
         rowed
     }
@@ -928,10 +948,88 @@ impl<'c> Compiled<'c> {
                 if !m.is_empty() {
                     rowed.by_epic.push((name, m));
                 }
+                self.splice_kept(&mut rowed, Place::Top(name));
                 self.place_tail(&mut rowed, &placed, |at| at == Place::Top(name));
                 rowed
             }
         }
+    }
+
+    /// FILTER-24: keep `id` — answered as if it matched — when it names a
+    /// ticket that does not match, is no shortcode's root (a root is its
+    /// shortcode's row already) and is on no hand-edited cycle.
+    pub(super) fn keep(&mut self, id: &str) {
+        let cache = self.cache;
+        let Some(k) = filtered::keep_row(cache, id) else { return };
+        if cache.rollups.root(&k.epic) == Some(k.id.as_str())
+            || tree::on_cycle(cache.rows(), &k.id, k.parent.as_deref())
+            || self.matches_alone(k)
+        {
+            return;
+        }
+        self.kept = Some(k);
+    }
+
+    /// FILTER-24: whether `t` is the kept ticket.
+    fn is_kept(&self, t: &Row) -> bool {
+        self.kept.is_some_and(|k| k.id == t.id)
+    }
+
+    /// FILTER-24: the rows answered at `here`, with the kept ticket where a
+    /// match would be. At a ticket: when it is the kept one's ancestor with
+    /// nothing between them that matches or roots a hosted shortcode (what
+    /// the walk down from here stops at), the kept row is added in the
+    /// store's order and its nearest matches — answered here in its place
+    /// until now — are taken out: they are its own rows. At the top of a
+    /// shortcode with no root (every match of it, flat): added when it is of
+    /// that shortcode.
+    fn splice_kept(&self, rowed: &mut Rowed<'c>, here: Place<'_>) {
+        let Some(k) = self.kept else { return };
+        match here {
+            Place::Top(e) => {
+                if k.epic != e {
+                    return;
+                }
+            }
+            Place::Ticket(p) => {
+                let cache = self.cache;
+                let mut cur = k;
+                let mut seen: HashSet<&str> = HashSet::from([k.id.as_str()]);
+                loop {
+                    // A parent that names no ticket (a hand edit) has
+                    // children all the same.
+                    let Some(up) = cur.parent.as_deref() else { return };
+                    if up == p {
+                        break;
+                    }
+                    let Some(t) = cache.get(up) else { return };
+                    if !seen.insert(t.id.as_str()) {
+                        return;
+                    }
+                    // What the walk down from `p` stops at: a match, or a
+                    // hosted shortcode's root (its shortcode's row).
+                    let hosted = cache.rollups.host(&t.epic).is_some() && cache.rollups.root(&t.epic) == Some(t.id.as_str());
+                    if hosted || self.matches_alone(t) {
+                        return;
+                    }
+                    cur = t;
+                }
+                let mine = self.nearest_rows(&k.id, &[]);
+                for (e, q) in &mine.by_epic {
+                    if let Some((_, b)) = rowed.by_epic.iter_mut().find(|(x, _)| x == e) {
+                        *b -= q;
+                    }
+                }
+                rowed.by_epic.retain(|(_, b)| !b.is_empty());
+            }
+        }
+        match rowed.by_epic.binary_search_by(|(e, _)| (*e).cmp(k.epic.as_str())) {
+            Ok(i) => {
+                rowed.by_epic[i].1.insert(k.seq);
+            }
+            Err(i) => rowed.by_epic.insert(i, (k.epic.as_str(), RoaringBitmap::from_iter([k.seq]))),
+        }
+        rowed.known.insert((k.epic.as_str(), k.seq), self.node_alone(k));
     }
 
     /// FILTER-23: the hosted shortcodes' roots, by shortcode — each its
@@ -969,7 +1067,7 @@ impl<'c> Compiled<'c> {
                 if !seen.insert(t.id.as_str()) {
                     break None;
                 }
-                if cache.rollups.root(&t.epic) == Some(t.id.as_str()) || self.matches_alone(t) {
+                if cache.rollups.root(&t.epic) == Some(t.id.as_str()) || self.is_kept(t) || self.matches_alone(t) {
                     break Some(Place::Ticket(t.id.as_str()));
                 }
                 match t.parent.as_deref() {

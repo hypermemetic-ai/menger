@@ -236,7 +236,7 @@ impl LiveCounts {
         let n = self.asked.get_value().wrapping_add(1);
         self.asked.set_value(n);
         spawn_local(async move {
-            let Ok(events) = client.counts_all(Some(text)).await else { return };
+            let Ok(events) = client.counts_all(Some(text), None).await else { return };
             let mut runs = Vec::new();
             for ev in events {
                 match ev {
