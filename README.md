@@ -144,6 +144,29 @@ and its source in place; the rest of the page is unaffected.
 `RUST_LOG=menger=debug` logs one line per served asset, which is how to
 see that a diagram-free page never pulls the bundle.
 
+Code (MENGER-22) is always highlighted: every fenced or `<pre><code
+class="language-x">` block — in a plain body, a framed body and `m-code`, a
+comment, a board note, a component's docs card and its source on
+`#/components`. The highlighter is highlight.js 11.11.1 (BSD-3-Clause),
+**vendored** the same way at `frontend/vendor/highlight/` (its README: the
+bundle's makeup, checksums, upgrade steps) and served at
+`/app/vendor/highlight-11.11.1.min.js`, fetched the first time a page — or a
+frame, from `highlight.url` in its init block — holds a code block
+(`frontend/src/highlight.rs`; the frame SDK's `mountCode`). A block's
+`language-x` names its language (rust, typescript, javascript, json, toml,
+yaml, bash, sql, html, css, markdown, haskell, python, diff — and every other
+language in the bundle); `text` or `plain` stays plain; a fence with no
+language is guessed from those fourteen (`highlight::UNLABELED`, MENGER-22's
+open decision `unlabeled`; a guess scoring under 2 stays plain). The colours
+are the `--code-*` tokens (`keyword`, `string`, `comment`, `number`,
+`title`, `type`, `meta`, `builtin`, `attr`, `variable`), mapped from the
+`hljs-*` classes by index.html's rules and the SDK's base — no vendor
+stylesheet — so a THEME-8 theme, a region's scope or the light/dark toggle
+recolours code with no parse again. An unknown language, a bundle that will
+not load or a highlighter that throws leaves the block as written; an
+amended or still-streaming body is highlighted as it lands. Whole-document
+bodies (MENGER-15) are their own pages and are left as they are.
+
 Data plane (MFE-1 pins: REST for calls, SSE for `watch`; the view layer
 owns no routing):
 

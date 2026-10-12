@@ -140,7 +140,7 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::spawn_local;
 
-use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, links, md, mermaid, notes, present, registry, session};
+use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, inspect, links, md, mermaid, notes, present, registry, session};
 
 /// The SDK's version — `window.menger.version` inside every frame (pinned
 /// equal to the script's own `VERSION` by a native test). COMP-5's 1.0:
@@ -163,8 +163,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, inspect, links,
 /// the `transition` and `history_end` events, `tz` on the filtered reads,
 /// `set_status`'s `restore_children`, `source` and `message`; MENGER-30's
 /// 1.11 adds `update` and its events (`updated`, `blockers_changed`,
-/// `unlocks_removed`, `severity_changed`).
-pub(crate) const SDK_VERSION: &str = "1.11.0";
+/// `unlocks_removed`, `severity_changed`); MENGER-22's 1.12 highlights every
+/// code block in the frame (`highlight` in the init block: the vendored
+/// highlighter's URL and its rules), coloured by the `--code-*` tokens.
+pub(crate) const SDK_VERSION: &str = "1.12.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -272,6 +274,8 @@ pub(crate) struct Shell<'a> {
     /// The vendored mermaid bundle, absolute (the frame's origin is opaque;
     /// a classic script loads across origins).
     pub(crate) mermaid_url: &'a str,
+    /// MENGER-22: the vendored highlighter, absolute, the same way.
+    pub(crate) highlight_url: &'a str,
     /// COMP-5: the component registry as the app holds it now — `None`
     /// before the app has fetched it (the frame is handed it once it has).
     pub(crate) components: Option<&'a [Component]>,
@@ -327,6 +331,9 @@ pub(crate) fn init_json(shell: &Shell) -> String {
             // The SDK sets `theme` per draw, from the scheme.
             "config": mermaid::config_json("default"),
         },
+        // MENGER-22: the highlighter — its URL and the rules a block is
+        // highlighted by (src/highlight.rs, the app's own).
+        "highlight": highlight::init_json(shell.highlight_url),
         // COMP-5: the SDK defines each before the body is parsed, so a
         // component's first paint is its own.
         "components": shell.components,
@@ -1339,6 +1346,7 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     // THEME-8: the frame's first paint is its region's theme.
     let (scheme, tokens) = read_theme_at(Some(container));
     let mermaid_url = format!("{}{}", w.location().origin().unwrap_or_default(), mermaid::ASSET_URL);
+    let highlight_url = format!("{}{}", w.location().origin().unwrap_or_default(), highlight::ASSET_URL);
     let components = registry::snapshot();
     // MENGER-15: a whole document follows the app's mode unless a mockup
     // says otherwise.
@@ -1352,6 +1360,7 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
             scheme,
             tokens: &tokens,
             mermaid_url: &mermaid_url,
+            highlight_url: &highlight_url,
             components: components.as_deref(),
             ticket: init_ticket,
             cite: cite.map(|(section, _, _)| section),
@@ -1510,7 +1519,7 @@ mod tests {
     fn the_csp_comes_first_and_closes_connections_and_forms() {
         assert_eq!(CSP, "connect-src 'none'; form-action 'none'");
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f9", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: None, ticket: Some("A-1"), cite: None, emulate: None };
+        let shell = Shell { channel: "f9", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", highlight_url: "h", components: None, ticket: Some("A-1"), cite: None, emulate: None };
         let doc = srcdoc("<script>fetch('https://x')</script><form action=\"https://x\"></form>", &shell);
         let head = "<!doctype html><html lang=\"en\" data-theme=\"light\"><head>";
         assert!(
@@ -1535,7 +1544,7 @@ mod tests {
     #[test]
     fn the_srcdoc_is_the_shell_then_the_body() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", highlight_url: "http://h:1/app/vendor/hl.js", components: None, ticket: None, cite: None, emulate: None };
         let doc = srcdoc("<details><summary>s</summary><p>x</p></details>", &shell);
         assert!(doc.starts_with("<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta http-equiv=\"Content-Security-Policy\""), "{doc}");
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
@@ -1553,7 +1562,7 @@ mod tests {
     #[test]
     fn the_init_block_is_json_that_cannot_close_its_script() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f1", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f1", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", highlight_url: "http://h/hl.js", components: None, ticket: None, cite: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1564,6 +1573,10 @@ mod tests {
         // The app's strict mermaid posture rides along unchanged.
         assert_eq!(v["mermaid"]["config"]["securityLevel"], "strict");
         assert_eq!(v["mermaid"]["config"]["htmlLabels"], false);
+        // MENGER-22: the highlighter's URL and its rules, the app's own.
+        assert_eq!(v["highlight"]["url"], "http://h/hl.js");
+        assert_eq!(v["highlight"]["unlabeled"], highlight::UNLABELED.as_str());
+        assert_eq!(v["highlight"]["plain"], serde_json::json!(["text", "plain", "plaintext"]));
         // COMP-5: no registry held yet is `null` — the SDK waits for one.
         assert!(v["components"].is_null());
         // INPUT-4: no ticket's body — `menger.input.ticket` is null.
@@ -1586,7 +1599,7 @@ mod tests {
             channel: "f3",
             scheme: Scheme::Light,
             tokens: &tokens,
-            mermaid_url: "u",
+            mermaid_url: "u", highlight_url: "h",
             components: None,
             ticket: Some("AUTH-10"),
             cite: Some(&field),
@@ -1643,7 +1656,7 @@ mod tests {
             Component { name: "m-a".into(), source: source.into(), owner: Some("A-2".into()), references: vec!["A-3".into()], docs: None, preview: vec![] },
             Component { name: "m-b".into(), source: "<i>b</i>".into(), owner: None, references: vec!["m-a".into()], docs: None, preview: vec![] },
         ];
-        let shell = Shell { channel: "f2", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", components: Some(&components), ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f2", scheme: Scheme::Light, tokens: &tokens, mermaid_url: "u", highlight_url: "h", components: Some(&components), ticket: None, cite: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1822,7 +1835,9 @@ mod tests {
         assert!(SDK_JS.contains("base.textContent = \"@layer menger-base{\\n\" + BASE_CSS + \"\\n}"), "the base is a layer");
         let every = SDK_JS.split("var EVERY = \"").nth(1).and_then(|r| r.split('"').next()).expect("EVERY");
         assert_eq!(every, ":root:not(:has(meta[name=menger-base][content=markdown i])) ");
-        let owned = [".mermaid", ".menger-card", ".wave-ref", "a.wave-ref"];
+        // MENGER-22: and the highlighter's spans (`.hljs-*`), which only the
+        // SDK's own pass writes.
+        let owned = [".mermaid", ".menger-card", ".wave-ref", "a.wave-ref", ".hljs"];
         let tags_of = |compound: &str| -> Vec<String> {
             let named = compound.trim_end_matches("[data-md]");
             let named = named.strip_prefix(":is(").and_then(|n| n.strip_suffix(')')).unwrap_or(named);
@@ -1900,7 +1915,7 @@ mod tests {
     }
 
     fn page_shell(tokens: &[(String, String)], emulate: Option<Emulate>) -> Shell<'_> {
-        Shell { channel: "f5", scheme: Scheme::Dark, tokens, mermaid_url: "u", components: None, ticket: Some("MENGER-16"), cite: None, emulate }
+        Shell { channel: "f5", scheme: Scheme::Dark, tokens, mermaid_url: "u", highlight_url: "h", components: None, ticket: Some("MENGER-16"), cite: None, emulate }
     }
 
     /// MENGER-15: a whole document renders as itself — its own head, styles

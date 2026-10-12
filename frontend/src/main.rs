@@ -252,6 +252,7 @@ mod filter;
 mod flat;
 mod frame;
 mod gesture;
+mod highlight;
 mod history;
 mod inputs;
 mod inputs_page;

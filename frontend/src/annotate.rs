@@ -1002,7 +1002,7 @@ fn list_view(a: Annot, key: String, ids: Vec<u64>, moved: bool) -> AnyView {
                                         <span class="cid">"#"{id}</span>
                                         {moved.then(|| view! { <span class="annot-moved">"moved"</span> })}
                                     </div>
-                                    <div class="annot-body" data-links="comment" data-ticket=c.anchor.ticket.clone()><crate::links::Linkified text=c.body.clone() /></div>
+                                    <div class="annot-body" data-links="comment" data-ticket=c.anchor.ticket.clone()><crate::highlight::CommentText text=c.body.clone() /></div>
                                     <div class="annot-acts">
                                         {move || err.get().map(|e| view! { <span class="annot-err">{e}</span> })}
                                         <button

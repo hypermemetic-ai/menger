@@ -208,7 +208,8 @@ pub(crate) fn card_html(card: &Card, help: &dyn Fn(&str) -> String) -> String {
     if in_body {
         out.push_str("<details class=\"mc-source\"><summary>");
         esc(&mut out, &source_label(source));
-        out.push_str("</summary><pre><code>");
+        // MENGER-22: a definition's source is HTML, highlighted as such.
+        out.push_str("</summary><pre><code class=\"language-html\">");
         esc(&mut out, source);
         out.push_str("</code></pre></details>\n");
     }
@@ -286,7 +287,7 @@ mod tests {
         assert!(html.contains("<tr><td><code>default</code></td><td>The rest.</td></tr>"));
         assert!(html.contains("<figure class=\"mc-example\"><div class=\"mc-live\"><m-wave-summary board=\"RETURNS\"></m-wave-summary></div><pre><code>&lt;m-wave-summary board=&quot;RETURNS&quot;&gt;&lt;/m-wave-summary&gt;</code></pre></figure>"), "{html}");
         assert!(html.contains("<div class=\"mc-help\"><p>[Longer *help*.]</p></div>"));
-        assert!(html.contains("<details class=\"mc-source\"><summary>source · 2 lines</summary><pre><code>&lt;template&gt;x&lt;/template&gt;"));
+        assert!(html.contains("<details class=\"mc-source\"><summary>source · 2 lines</summary><pre><code class=\"language-html\">&lt;template&gt;x&lt;/template&gt;"));
         assert!(at("mc-head") < at("mc-preview") && at("mc-preview") < at("mc-attrs") && at("mc-attrs") < at("mc-slots"));
         assert!(at("mc-slots") < at("mc-example") && at("mc-example") < at("mc-help") && at("mc-help") < at("mc-source"));
         assert!(html.ends_with("</section>\n"));

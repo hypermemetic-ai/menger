@@ -139,6 +139,12 @@ fn row_view(row: Row) -> impl IntoView {
     let count = count_label(referrers.len());
     let refs = referrers.into_iter().map(referrer_view).collect_view();
     let fold = source_label(&source);
+    let src_code = NodeRef::<leptos::html::Code>::new();
+    src_code.on_load(|el: web_sys::HtmlElement| {
+        if let Some(pre) = el.parent_element() {
+            crate::highlight::mount(&pre.parent_element().unwrap_or(pre));
+        }
+    });
     view! {
         <tr class="comp" class:orphaned=owner.is_none() data-component=name.clone()>
             <td class="c-name"><a class="tag" href=href>{format!("<{name}>")}</a>{summary}</td>
@@ -149,7 +155,9 @@ fn row_view(row: Row) -> impl IntoView {
             <td colspan="3">
                 <details open=open>
                     <summary>{fold}</summary>
-                    <pre><code>{source}</code></pre>
+                    // MENGER-22: a component's source is HTML (its template,
+                    // style and script), highlighted as such.
+                    <pre><code class="language-html" node_ref=src_code>{source}</code></pre>
                 </details>
             </td>
         </tr>

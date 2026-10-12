@@ -144,6 +144,11 @@
  *     component's shadow root);
  *   - mermaid placeholders (md.rs) drawn here, with the vendored bundle,
  *     in the theme's mermaid palette, redrawn on a flip;
+ *   - (1.12, MENGER-22) every code block highlighted, with the vendored
+ *     highlighter (`highlight.url`), by the app's rules (src/highlight.rs:
+ *     a block's `language-x`, `text`/`plain` plain, an unlabeled fence as
+ *     `highlight.unlabeled` says), coloured by the `--code-*` tokens — a
+ *     flip or a theme recolours it with no parse again;
  *   - the document's height, reported to the host (ResizeObserver), which
  *     sizes the frame to it: a frame never scrolls inside.
  *
@@ -229,7 +234,7 @@
  *                 such section — `height` 0).
  *
  * The init block (#menger-init, JSON) carries
- * `{ channel, version, scheme, mermaid: { url, config }, components, ticket, cite }`
+ * `{ channel, version, scheme, mermaid: { url, config }, highlight: { url, unlabeled, detect, plain, aliases, min_relevance }, components, ticket, cite }`
  * — `components` the registry as the app held it (null: not yet), `ticket`
  * the ticket whose stored body this is (null: none), `cite` (1.7) the
  * section a cited window shows (`{ field }` or `{ anchor }`; null: a whole
@@ -240,7 +245,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.11.0";
+  var VERSION = "1.12.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -262,6 +267,8 @@
   var channel = String(init.channel || "");
   var scheme = init.scheme === "dark" ? "dark" : "light";
   var mermaidInit = init.mermaid && init.mermaid.url ? init.mermaid : null;
+  // MENGER-22: the highlighter and its rules (src/highlight.rs).
+  var highlightInit = init.highlight && init.highlight.url ? init.highlight : null;
   // COMP-14: a cited window's frame shows one section, display only.
   var citeTarget = null;
   if (init.cite && typeof init.cite === "object") {
@@ -900,6 +907,22 @@
     ":where(.mermaid[data-state=done] svg){display:block;max-width:100%;height:auto;margin:0 auto}",
     ":where(.mermaid[data-state=error]){border-color:var(--err-fg)}",
     ":where(.mermaid .mermaid-error){color:var(--err-fg);margin:0 0 .6rem;white-space:pre-wrap;font-size:.85rem}",
+    // MENGER-22: highlighted code — highlight.js's classes in the --code-*
+    // tokens (index.html's rules, word for word, at zero specificity).
+    ":where(.hljs-keyword,.hljs-selector-tag,.hljs-doctag,.hljs-section){color:var(--code-keyword)}",
+    ":where(.hljs-string,.hljs-regexp,.hljs-symbol,.hljs-char){color:var(--code-string)}",
+    ":where(.hljs-comment,.hljs-quote){color:var(--code-comment);font-style:italic}",
+    ":where(.hljs-number,.hljs-literal){color:var(--code-number)}",
+    ":where(.hljs-title,.hljs-name){color:var(--code-title)}",
+    ":where(.hljs-type,.hljs-title.class_,.hljs-title.class_.inherited__){color:var(--code-type)}",
+    ":where(.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string){color:var(--code-meta)}",
+    ":where(.hljs-built_in){color:var(--code-builtin)}",
+    ":where(.hljs-attr,.hljs-attribute,.hljs-property,.hljs-selector-class,.hljs-selector-id,.hljs-selector-attr,.hljs-selector-pseudo){color:var(--code-attr)}",
+    ":where(.hljs-variable,.hljs-template-variable,.hljs-params){color:var(--code-variable)}",
+    ":where(.hljs-addition){color:var(--live)}",
+    ":where(.hljs-deletion){color:var(--err-fg)}",
+    ":where(.hljs-emphasis){font-style:italic}",
+    ":where(.hljs-strong){font-weight:600}",
     ":where(.wave-ref){font-family:var(--mono);font-size:.85em;white-space:nowrap;text-decoration:none;" +
       "border:1px solid var(--chip-line);background:var(--chip-bg);color:var(--chip-fg);border-radius:6px;padding:0 5px}",
     ":where(a.wave-ref){color:var(--accent)}",
@@ -2186,6 +2209,94 @@
     for (var i = 0; i < nodes.length; i++) draw(nodes[i], nodes[i].getAttribute("data-src"));
   }
 
+  // -- code -------------------------------------------------------------------
+  // MENGER-22: every `<pre><code>` that is not a mermaid placeholder's,
+  // highlighted with the app's vendored highlighter, loaded the first time
+  // the frame holds one, by the app's rules (src/highlight.rs `ask`). A
+  // block is claimed (`data-hl`) before its pass; one the highlighter does
+  // not know, or a bundle that will not load, stays plain — nothing thrown.
+
+  var hlLoading = null;
+
+  function loadHighlighter() {
+    if (window.hljs && typeof window.hljs.highlight === "function") return Promise.resolve(window.hljs);
+    if (hlLoading) return hlLoading;
+    hlLoading = new Promise(function (resolve, reject) {
+      var s = doc.createElement("script");
+      s.src = highlightInit.url;
+      s.onload = function () {
+        if (window.hljs && typeof window.hljs.highlight === "function") resolve(window.hljs);
+        else reject(new Error(highlightInit.url + " loaded but defined no `hljs` global"));
+      };
+      s.onerror = function () {
+        hlLoading = null;
+        reject(new Error("could not load the highlighter from " + highlightInit.url));
+      };
+      head.appendChild(s);
+    });
+    return hlLoading;
+  }
+
+  // What a block asks for: a language, "detect", or null (plain).
+  function askCode(code) {
+    var plain = highlightInit.plain || [];
+    var aliases = highlightInit.aliases || {};
+    var cls = (code.getAttribute("class") || "").split(/\s+/);
+    for (var i = 0; i < cls.length; i++) {
+      var m = /^(?:language|lang)-(.*)$/.exec(cls[i]);
+      if (!m) continue;
+      var lang = m[1].toLowerCase();
+      if (!lang || plain.indexOf(lang) >= 0) return null;
+      return Object.prototype.hasOwnProperty.call(aliases, lang) ? aliases[lang] : lang;
+    }
+    return highlightInit.unlabeled === "detect" ? "detect" : null;
+  }
+
+  function paintCode(h, code, lang) {
+    var text = code.textContent || "";
+    var out;
+    if (lang === "detect") {
+      out = h.highlightAuto(text, highlightInit.detect || []);
+      if (!out || (out.relevance || 0) < (highlightInit.min_relevance || 0)) return "plain";
+    } else {
+      if (!h.getLanguage(lang)) return "plain";
+      out = h.highlight(text, { language: lang, ignoreIllegals: true });
+    }
+    code.innerHTML = out.value;
+    code.classList.add("hljs");
+    return out.language || "on";
+  }
+
+  function mountCode() {
+    if (!highlightInit) return Promise.resolve();
+    var nodes = doc.querySelectorAll("pre > code:not([data-hl])");
+    var blocks = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var code = nodes[i];
+      if (code.closest(".mermaid")) continue;
+      var lang = askCode(code);
+      code.setAttribute("data-hl", lang ? "pending" : "plain");
+      if (lang) blocks.push([code, lang]);
+    }
+    if (!blocks.length) return Promise.resolve();
+    return loadHighlighter().then(
+      function (h) {
+        for (var j = 0; j < blocks.length; j++) {
+          var done = "plain";
+          try {
+            done = paintCode(h, blocks[j][0], blocks[j][1]);
+          } catch (e) {
+            done = "plain";
+          }
+          blocks[j][0].setAttribute("data-hl", done);
+        }
+      },
+      function () {
+        for (var j = 0; j < blocks.length; j++) blocks[j][0].setAttribute("data-hl", "plain");
+      }
+    );
+  }
+
   // -- height -----------------------------------------------------------------
 
   var lastHeight = -1;
@@ -2252,9 +2363,9 @@
       });
     }
     report(true);
-    // Settled: diagrams drawn, the registry in hand, and what the
-    // components asked for meanwhile answered.
-    Promise.all([mountDiagrams(), whenKnown()]).then(whenIdle).then(settle, settle);
+    // Settled: diagrams drawn, code highlighted (MENGER-22), the registry
+    // in hand, and what the components asked for meanwhile answered.
+    Promise.all([mountDiagrams(), mountCode(), whenKnown()]).then(whenIdle).then(settle, settle);
     setTimeout(settle, SETTLE_MS);
   }
 

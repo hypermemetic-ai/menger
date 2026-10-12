@@ -16,6 +16,9 @@
      file only. Deliberately NOT a <script> here: src/mermaid.rs injects one
      the first time a rendered body holds a mermaid fence. -->
 <link data-trunk rel="copy-file" href="vendor/mermaid/mermaid-11.17.2.min.js" data-target-path="vendor" />
+<!-- MENGER-22: the vendored highlighter, the same way: a served file only;
+     src/highlight.rs injects a <script> the first time a page holds code. -->
+<link data-trunk rel="copy-file" href="vendor/highlight/highlight-11.11.1.min.js" data-target-path="vendor" />
 <!-- COMP-4: the SDK shell a framed body runs (src/frame.rs inlines it into
      each frame's srcdoc); served at /app/sdk/ as the app's published copy. -->
 <link data-trunk rel="copy-file" href="sdk/menger-sdk.js" data-target-path="sdk" />
@@ -74,6 +77,15 @@
     /* COMMENT-3: annotation mode — every element's outline, and the hovered
        one's (with its label). Frames receive both (src/frame.rs). */
     --annot: rgba(0, 102, 204, .32); --annot-hi: #0066cc;
+    /* MENGER-22: code — highlight.js's classes, coloured from these (no
+       vendor stylesheet; the rules are below): keyword, string, comment,
+       number, title, type, meta, and built-ins, attributes and variables.
+       Each clears 4.5:1 on --panel in both themes (light 4.54–11.53, dark
+       5.80–11.61). THEME-8 themes may set them like any other token. */
+    --code-keyword: #cf222e; --code-string: #0a3069; --code-comment: #656d76;
+    --code-number: #0550ae; --code-title: #8250df; --code-type: #953800;
+    --code-meta: #116329; --code-builtin: #6639ba; --code-attr: #0550ae;
+    --code-variable: #953800;
     /* AGS-16: the drop shadow under floating chrome (the ticket menu, the
        copy toast) — manifest's menu shadow, 20% black. */
     --shadow: #0003;
@@ -141,6 +153,10 @@
       --annot: rgba(138, 180, 248, .32); --annot-hi: #8ab4f8;
       --shadow: #0008;
     --scrim: rgba(0, 0, 0, .55);
+      --code-keyword: #ff7b72; --code-string: #a5d6ff; --code-comment: #8b949e;
+      --code-number: #79c0ff; --code-title: #d2a8ff; --code-type: #ffa657;
+      --code-meta: #7ee787; --code-builtin: #e3b341; --code-attr: #79c0ff;
+      --code-variable: #ffa657;
     }
     :root:not([data-theme="light"]) .st-pending    { --st-bg: #3a3115; --st-fg: #e8cf7a; }
     :root:not([data-theme="light"]) .st-ready      { --st-bg: #1b2e46; --st-fg: #a3c6ee; }
@@ -168,6 +184,10 @@
     --annot: rgba(138, 180, 248, .32); --annot-hi: #8ab4f8;
     --shadow: #0008;
     --scrim: rgba(0, 0, 0, .55);
+    --code-keyword: #ff7b72; --code-string: #a5d6ff; --code-comment: #8b949e;
+    --code-number: #79c0ff; --code-title: #d2a8ff; --code-type: #ffa657;
+    --code-meta: #7ee787; --code-builtin: #e3b341; --code-attr: #79c0ff;
+    --code-variable: #ffa657;
   }
   :root[data-theme="dark"] .st-pending    { --st-bg: #3a3115; --st-fg: #e8cf7a; }
   :root[data-theme="dark"] .st-ready      { --st-bg: #1b2e46; --st-fg: #a3c6ee; }
@@ -406,6 +426,29 @@
   #ticket-page aside.props section.dag.empty { display: none; }
   #ticket-page aside.props section.dag h3 { margin-top: .5rem; }
   #ticket-page #notfound, #ticket-page .loading { order: 4; }
+  /* MENGER-22: highlighted code (src/highlight.rs) — highlight.js's classes
+     in the --code-* tokens; diffs in the house's live and error inks. A
+     theme or the toggle recolours them with no parse again. A comment's
+     fences (src/highlight.rs CommentText) are blocks like a body's. */
+  .hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-section { color: var(--code-keyword); }
+  .hljs-string, .hljs-regexp, .hljs-symbol, .hljs-char { color: var(--code-string); }
+  .hljs-comment, .hljs-quote { color: var(--code-comment); font-style: italic; }
+  .hljs-number, .hljs-literal { color: var(--code-number); }
+  .hljs-title, .hljs-name { color: var(--code-title); }
+  .hljs-type, .hljs-title.class_, .hljs-title.class_.inherited__ { color: var(--code-type); }
+  .hljs-meta, .hljs-meta .hljs-keyword, .hljs-meta .hljs-string { color: var(--code-meta); }
+  .hljs-built_in { color: var(--code-builtin); }
+  .hljs-attr, .hljs-attribute, .hljs-property, .hljs-selector-class, .hljs-selector-id,
+  .hljs-selector-attr, .hljs-selector-pseudo { color: var(--code-attr); }
+  .hljs-variable, .hljs-template-variable, .hljs-params { color: var(--code-variable); }
+  .hljs-addition { color: var(--live); }
+  .hljs-deletion { color: var(--err-fg); }
+  .hljs-emphasis { font-style: italic; }
+  .hljs-strong { font-weight: 600; }
+  .ctext pre.ccode {
+    font-family: var(--mono); font-size: 12.5px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 4px; padding: .45rem .65rem; margin: .35rem 0; overflow-x: auto; white-space: pre;
+  }
   /* THEME-8: a region wearing its own theme (src/scopes.rs) paints its own
      ground and ink; under one theme it is the page's as ever. */
   #ticket-page, .mscope-frame { background: var(--bg); color: var(--ink); }

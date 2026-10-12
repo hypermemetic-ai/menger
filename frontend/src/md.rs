@@ -1091,6 +1091,24 @@ mod tests {
         assert!(!r.html.contains("class=\"mermaid\""), "{}", r.html);
     }
 
+    /// MENGER-22: a labeled fence carries its language class — in the app's
+    /// body, the framed body and the help — which is what the highlighter
+    /// reads; `text` and `plain` carry theirs and stay plain; an unlabeled
+    /// fence carries none and is the open decision's (`highlight::UNLABELED`).
+    #[test]
+    fn a_fence_carries_its_language_for_the_highlighter() {
+        use crate::highlight::{ask, Ask};
+        let src = "```rust\nfn main() {}\n```\n\n```ts\nlet a = 1;\n```\n\n```json\n{\"a\": 1}\n```\n\n```text\nas written\n```\n\n```plain\nas written\n```\n\n```\nno label\n```\n";
+        for html in [render_body(src).html, render_body_framed(src, &|_| None).html, render_help(src)] {
+            for (lang, asked) in [("rust", Ask::Language("rust".into())), ("ts", Ask::Language("ts".into())), ("json", Ask::Language("json".into())), ("text", Ask::Plain), ("plain", Ask::Plain)] {
+                let at = html.find(&format!("class=\"language-{lang}\"")).unwrap_or_else(|| panic!("{lang}: {html}"));
+                assert!(html[..at].ends_with("<code ") || html[..at].ends_with("<code data-md "), "{lang}: {html}");
+                assert_eq!(ask(Some(&format!("language-{lang}"))), asked);
+            }
+            assert!(html.contains("<code>no label\n</code>") || html.contains("<code data-md>no label\n</code>"), "{html}");
+        }
+    }
+
     #[test]
     fn a_mention_of_mermaid_is_not_a_fence() {
         let r = render_body("Use `mermaid` here.\n\n```text\nmermaid\n```\n");

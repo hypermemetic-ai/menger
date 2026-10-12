@@ -106,6 +106,17 @@ pub const TOKENS: &[Token] = &[
     t("--annot-hi", "#0066cc", "#8ab4f8"),
     t("--mono", MONO, MONO),
     t("--sans", SANS, SANS),
+    // MENGER-22: code, highlighted — highlight.js's classes, coloured by these.
+    t("--code-keyword", "#cf222e", "#ff7b72"),
+    t("--code-string", "#0a3069", "#a5d6ff"),
+    t("--code-comment", "#656d76", "#8b949e"),
+    t("--code-number", "#0550ae", "#79c0ff"),
+    t("--code-title", "#8250df", "#d2a8ff"),
+    t("--code-type", "#953800", "#ffa657"),
+    t("--code-meta", "#116329", "#7ee787"),
+    t("--code-builtin", "#6639ba", "#e3b341"),
+    t("--code-attr", "#0550ae", "#79c0ff"),
+    t("--code-variable", "#953800", "#ffa657"),
 ];
 
 /// The token `name` names — with or without its leading `--`, any ASCII
