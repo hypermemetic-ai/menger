@@ -637,10 +637,6 @@
     outline: 2px solid var(--accent); outline-offset: -2px;
   }
   #nav .row:focus { border-radius: 2px; }
-  /* AGS-26: → from the nav puts focus in the page beside it — the same ring,
-     inside the page's edge. A click in the page does not draw it. */
-  #app .content:focus { outline: none; }
-  #app .content:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   /* FILTER-20: the nav's view — `Tree | Flat` in its header — and the flat
      list: the tree's leaf rows, one line each (the window's arithmetic needs
      every row one pitch tall), and spacers and pending stretches standing for
