@@ -169,11 +169,18 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   ```
 
   **Themes** (THEME-8) are the `themes` activation: a theme is a name and
-  token overrides for light and dark (`define`; the maps go through `-p`);
+  token overrides for light and dark — written as a ticket's ` ```theme
+  name [extends=parent] ` block (THEME-3: owned by that ticket as a
+  component is, orphaned and adopted the same way, validated on write —
+  tokens of the contract `tickets-api/src/tokens.toml` (THEME-2) in `:root`
+  / `:root[data-theme="dark"]`, `@font-face`, `@import url("https://…")`,
+  `m-*::part(…)`, looks only; a refusal names the block's line), or with
+  `define` for admin and tests (the maps go through `-p`);
   the site or a shortcode adopts one with `set` (`--reach frame|ticket|site`,
   `--takeover off`), a ticket in its frontmatter (`theme:`, `reach:`,
   `takeover:`, `frame-theme:`, `frame-takeover:`); `theme_for` says who
-  wears what and from which level. README "Themes and their scopes":
+  wears what and from which level; `watch` says `theme_changed` /
+  `theme_removed`. README "Themes and their scopes", "A theme is a ticket":
 
   ```sh
   synapse -P 4455 -p '{"name":"ocean","light":{"--accent":"#00796b"},"dark":{"--accent":"#4db6ac"}}' menger themes define

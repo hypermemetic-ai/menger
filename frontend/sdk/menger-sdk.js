@@ -161,7 +161,7 @@
  * from `window.parent` carrying its channel.
  *
  *   frame → host  menger:ready  { version }               once, at start
- *   host → frame  menger:theme  { scheme, tokens }        on ready, and on
+ *   host → frame  menger:theme  { scheme, tokens, css }   on ready, and on
  *                                                         every theme flip
  *   host → frame  menger:components { components }        on ready, and
  *                 whenever the app (re)fetches the registry — the whole
@@ -980,6 +980,20 @@
     return sheet && sheet.cssRules[0];
   }
 
+  // THEME-3: the rules of the theme this frame wears — its font imports and
+  // @font-face rules and its m-*::part(…) skins (validated by the server:
+  // looks only) — in a stylesheet of their own, replaced whole.
+  function themeRules(css) {
+    var el = doc.getElementById("menger-theme-rules");
+    if (!el) {
+      if (!css) return;
+      el = doc.createElement("style");
+      el.id = "menger-theme-rules";
+      doc.head.appendChild(el);
+    }
+    if (el.textContent !== css) el.textContent = css;
+  }
+
   function applyTheme(next, tokens) {
     var rule = themeRule();
     if (rule && rule.style) {
@@ -1016,6 +1030,7 @@
     if (!m || typeof m !== "object" || m.channel !== channel) return;
     if (m.type === "menger:theme") {
       applyTheme(m.scheme === "dark" ? "dark" : "light", m.tokens && typeof m.tokens === "object" ? m.tokens : {});
+      if (typeof m.css === "string") themeRules(m.css);
     } else if (m.type === "menger:result") {
       answered(m);
     } else if (m.type === "menger:submitted") {

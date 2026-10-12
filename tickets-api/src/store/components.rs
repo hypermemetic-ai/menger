@@ -111,6 +111,9 @@ pub(crate) struct Uses {
     pub(crate) defines: BTreeMap<String, Def>,
     /// Each name the body references as a tag.
     pub(crate) references: BTreeSet<String>,
+    /// THEME-3: its ` ```theme ` blocks and the themes its frontmatter names
+    /// ([`super::theme_registry`]), whose change rides with this registry's.
+    pub(crate) themes: super::theme_registry::BodyThemes,
 }
 
 impl Uses {
@@ -130,6 +133,9 @@ pub(crate) enum Problem {
     /// says what ([`component_docs::parse`]). The definition is still read,
     /// without docs, for a build that skips rather than refuses.
     Docs { name: String, problem: String },
+    /// THEME-3: a ` ```theme ` block that is not a theme — `error` names
+    /// its line ([`crate::theme_block`]).
+    Theme { name: String, error: String },
 }
 
 /// The frontmatter split off as the app splits it (`frontend/src/md.rs`,
@@ -156,6 +162,10 @@ fn rendered(body: &str) -> &str {
 pub(crate) fn read(body: &str) -> (Uses, Vec<Problem>) {
     let mut uses = Uses::default();
     let mut problems = Vec::new();
+    match super::theme_registry::read(body) {
+        Ok(themes) => uses.themes = themes,
+        Err((name, e)) => problems.push(Problem::Theme { name, error: e.to_string() }),
+    }
     if !body.contains('<') && !body.contains("component") {
         return (uses, problems);
     }
@@ -319,11 +329,18 @@ pub(crate) struct Owned {
     pub(crate) owner: String,
 }
 
+/// A write's moves: the components' and, THEME-3, the themes' beside them.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Moves {
+    /// Each name whose entry moves, in name order — `None`: it goes.
+    pub(crate) components: Vec<(String, Option<Entry>)>,
+    pub(crate) themes: super::theme_registry::Moves,
+}
+
 /// One write's change to the registry, worked out before it commits.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Plan {
-    /// Each name whose entry moves, in name order — `None`: it goes.
-    pub(crate) moves: Vec<(String, Option<Entry>)>,
+    pub(crate) moves: Moves,
     /// Each component the write registered or moved, as it leaves it.
     pub(crate) changed: Vec<Component>,
     /// Each component that left the registry.
@@ -556,15 +573,16 @@ impl<'r> Work<'r> {
                 (None, Some(b)) if b.is_component() => plan.removed.push(name.clone()),
                 _ => {}
             }
-            plan.moves.push((name, after));
+            plan.moves.components.push((name, after));
         }
         plan
     }
 }
 
 /// Writes a plan's moves inside the caller's transaction.
-pub(crate) fn store(conn: &Connection, moves: &[(String, Option<Entry>)]) -> rusqlite::Result<()> {
-    for (name, entry) in moves {
+pub(crate) fn store(conn: &Connection, moves: &Moves) -> rusqlite::Result<()> {
+    super::theme_registry::store(conn, &moves.themes)?;
+    for (name, entry) in &moves.components {
         match entry {
             Some(e) => {
                 conn.prepare_cached(
@@ -682,6 +700,8 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
                         "COMP-3 migration: {id}'s '{name}' has a malformed <docs> ({problem}) — registered \
                          without docs"
                     ),
+                    // THEME-3's own migration reads the theme blocks.
+                    Problem::Theme { .. } => {}
                 }
             }
             uses.defines.retain(|name, _| match registry.owner(name) {
@@ -695,11 +715,11 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
                 _ => true,
             });
             let plan = registry.plan(&id, &uses).expect("every name another ticket owns was dropped");
-            registry.take(plan.moves);
+            registry.take(plan.moves.components);
         }
     }
     let rows: Vec<(String, Option<Entry>)> = registry.names.iter().map(|(n, e)| (n.clone(), Some(e.clone()))).collect();
-    store(&tx, &rows)?;
+    store(&tx, &Moves { components: rows, ..Moves::default() })?;
     let tickets: u64 = tx.query_row("SELECT count(*) FROM tickets", [], |r| r.get(0))?;
     tx.commit()?;
     let (owned, orphans, waiting) = registry.census();

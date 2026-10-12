@@ -639,6 +639,15 @@ fn theme_message(frame: &web_sys::HtmlIFrameElement, channel: &str) -> JsValue {
         set(&t, &name, &value.into());
     }
     set(&msg, "tokens", &t);
+    // THEME-3: the rules of the theme the frame's region wears — its fonts
+    // and `::part`s — named where it sits (scopes::THEME_MARK).
+    let worn = dom::window()
+        .get_computed_style(frame)
+        .ok()
+        .flatten()
+        .and_then(|s| s.get_property_value(crate::scopes::THEME_MARK).ok())
+        .unwrap_or_default();
+    set(&msg, "css", &crate::scopes::rules_for(&worn).into());
     msg.into()
 }
 

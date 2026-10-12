@@ -157,7 +157,77 @@ async fn themes_over_the_wire_define_set_theme_for_and_watch() {
 
     // The watch heard every write, in order.
     let heard = watch_until(&mut watch, "setting").await;
-    assert_eq!(types(&heard), ["theme", "theme", "setting"]);
+    assert_eq!(types(&heard), ["theme_changed", "theme_changed", "setting"]);
     let heard = watch_until(&mut watch, "setting").await;
     assert_eq!(heard[0]["setting"]["scope"], "PANTRY");
+}
+
+/// THEME-3 criterion 1: define (a block on create), amend, orphan and adopt
+/// over the real protocol; every validation error in-band, named by its
+/// line, with nothing written; `watch` carrying theme_changed and
+/// theme_removed.
+#[tokio::test]
+async fn a_theme_is_a_tickets_block_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let mut watch = call(&client, "themes.watch", json!({})).await;
+    let block = |name: &str, css: &str| format!("```theme {name}\n{css}\n```\n");
+    let pantry = block("pantry extends=default", ":root { --accent: #d4572a; }\n:root[data-theme=\"dark\"] { --accent: #f08a5d; }\n@import url(\"https://fonts.googleapis.com/css2?family=Fraunces\");\nm-code::part(frame) { border-radius: 14px; }");
+    let created = one(&client, "tickets.create", json!({"epic": "PANTRY", "title": "the pantry theme", "kind": "doc", "body": pantry})).await;
+    assert_eq!(created["type"], "created", "{created}");
+    let th = one(&client, "themes.get", json!({"name": "pantry"})).await;
+    assert_eq!(th["theme"]["owner"], "PANTRY-1", "{th}");
+    assert_eq!(th["theme"]["orphan"], false);
+    assert_eq!(th["theme"]["light"]["--accent"], "#d4572a");
+    assert_eq!(th["theme"]["dark"]["--accent"], "#f08a5d");
+    assert_eq!(th["theme"]["imports"], json!(["https://fonts.googleapis.com/css2?family=Fraunces"]));
+    assert_eq!(th["theme"]["rules"], json!(["m-code::part(frame){border-radius:14px;}"]));
+    let heard = watch_until(&mut watch, "theme_changed").await;
+    assert_eq!(heard[0]["theme"]["owner"], "PANTRY-1");
+
+    // Amend: the block moves the theme.
+    let amended = one(&client, "tickets.amend", json!({"id": "PANTRY-1", "body": block("pantry", ":root { --accent: #b2401c; }")})).await;
+    assert_eq!(amended["type"], "amended", "{amended}");
+    assert_eq!(watch_until(&mut watch, "theme_changed").await[0]["theme"]["light"]["--accent"], "#b2401c");
+
+    // Every validation error, in-band, naming the line; nothing written.
+    for (css, want) in [
+        (":root {\n  --nope: 1px;\n}", "```theme pantry: line 2: `--nope` is not a token of the contract"),
+        ("body { color: red; }", "```theme pantry: line 1: `body`: a theme's rules are :root"),
+        (":root { color: red; }", "```theme pantry: line 1: `color` in :root: a theme sets tokens there"),
+        ("@import url(\"http://x.example/a.css\");", "```theme pantry: line 1: `@import"),
+        ("@font-face { font-family: x; src: url(http://x.example/a.woff2); }", "only https URLs"),
+        ("m-code::part(frame) { -moz-binding: url(https://x.example/x.xml); }", "behaviour, not looks"),
+    ] {
+        for (method, params) in [
+            ("tickets.amend", json!({"id": "PANTRY-1", "body": block("pantry", css)})),
+            ("tickets.update", json!({"id": "PANTRY-1", "body": block("pantry", css)})),
+            ("tickets.create", json!({"epic": "PANTRY", "title": "x", "body": block("pantry", css)})),
+        ] {
+            let e = one(&client, method, params).await;
+            assert_eq!(e["type"], "error", "{method} {css}: {e}");
+            assert!(e["message"].as_str().unwrap().contains(want), "{method} {css}: {e}");
+        }
+    }
+    let got = one(&client, "tickets.get", json!({"id": "PANTRY-1"})).await;
+    assert!(got["ticket"]["body"].as_str().unwrap().contains("#b2401c"), "nothing written: {got}");
+    assert_eq!(one(&client, "themes.get", json!({"name": "pantry"})).await["theme"]["light"]["--accent"], "#b2401c");
+    // One owner: another ticket's block naming it is refused, naming the owner.
+    one(&client, "tickets.create", json!({"epic": "PANTRY", "title": "a user", "body": "---\ntheme: pantry\n---\nwears it"})).await;
+    let e = one(&client, "tickets.amend", json!({"id": "PANTRY-2", "body": block("pantry", ":root{}")})).await;
+    assert!(e["message"].as_str().unwrap().contains("defined by PANTRY-1's block"), "{e}");
+
+    // Orphan: the block goes; PANTRY-2's frontmatter keeps it.
+    one(&client, "tickets.amend", json!({"id": "PANTRY-1", "body": "no block"})).await;
+    let orphan = watch_until(&mut watch, "theme_changed").await;
+    assert_eq!((orphan[0]["theme"]["orphan"].clone(), orphan[0]["theme"].get("owner").cloned()), (json!(true), None), "{orphan:?}");
+    // Adopt: another ticket's block takes it.
+    one(&client, "tickets.amend", json!({"id": "PANTRY-2", "body": format!("---\ntheme: pantry\n---\n{}", block("pantry", ":root { --accent: #123456; }"))})).await;
+    let adopted = watch_until(&mut watch, "theme_changed").await;
+    assert_eq!(adopted[0]["theme"]["owner"], "PANTRY-2");
+    // Orphaned again with nothing using it: removed in that write.
+    one(&client, "tickets.amend", json!({"id": "PANTRY-2", "body": "neither"})).await;
+    let gone = watch_until(&mut watch, "theme_removed").await;
+    assert_eq!(gone.last().unwrap(), &json!({"type": "theme_removed", "name": "pantry"}));
+    assert_eq!(one(&client, "themes.get", json!({"name": "pantry"})).await["type"], "error");
 }

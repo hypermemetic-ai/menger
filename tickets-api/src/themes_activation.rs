@@ -72,6 +72,11 @@ fn refused(e: StoreError) -> ThemesEvent {
     )
 )]
 impl Themes {
+    /// THEME-3: the authoring path is a ticket's ` ```theme name
+    /// [extends=parent] ` block (`tickets.create` / `amend` / `update`
+    /// register it, owned by that ticket); `define` stays for admin and
+    /// tests — an ownerless theme, refused for a name a block owns.
+    ///
     /// Defines the theme `name` — its token overrides for `light` and for
     /// `dark`, each a map from a token (`--accent`, or `accent`) to its
     /// value, replacing whatever it overrode before (THEME-8: a theme is a
@@ -273,7 +278,7 @@ impl Themes {
     #[plexus_macros::method(
         group = "read",
         streaming,
-        description = "Subscribe to themes: theme (defined) and setting (site or shortcode), until disconnect; lagged { missed } where a slow subscriber lost changes"
+        description = "Subscribe to themes: theme_changed (defined, a ```theme block written, orphaned or adopted), theme_removed (an unused orphan gone) and setting (site or shortcode), until disconnect; lagged { missed } where a slow subscriber lost changes"
     )]
     pub async fn watch(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = ThemesEvent> + Send + 'static {
         let mut rx = self.store.subscribe_themes();
@@ -285,7 +290,8 @@ impl Themes {
             }
             loop {
                 match rx.recv().await {
-                    Ok(ThemeChange::Defined(theme)) => yield ThemesEvent::Theme { theme },
+                    Ok(ThemeChange::Changed(theme)) => yield ThemesEvent::ThemeChanged { theme },
+                    Ok(ThemeChange::Removed(name)) => yield ThemesEvent::ThemeRemoved { name },
                     Ok(ThemeChange::Set(setting)) => yield ThemesEvent::Setting { setting },
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => yield ThemesEvent::Lagged { missed },
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,

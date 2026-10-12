@@ -1722,6 +1722,61 @@ re-themes every frame and redraws the diagrams in place; no reload. The
 root says what each region wears (`data-theme-site`, `data-theme-ticket`,
 `data-theme-frame`: `pantry ticket`).
 
+### A theme is a ticket (THEME-3)
+
+A theme is written in a ticket's body, as a block — usually a doc under the
+project it dresses — and the registry keeps it the way it keeps components
+(COMP-3):
+
+````markdown
+```theme pantry extends=default
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:wght@400;600&display=swap");
+:root { --accent: #d4572a; --font-display: "Fraunces", serif; --radius: 6px; }
+:root[data-theme="dark"] { --accent: #f08a5d; }
+@font-face { font-family: "Plex"; src: url(https://example.org/plex.woff2) format("woff2"); }
+m-ring::part(ring) { outline: 1px solid var(--accent); }
+```
+````
+
+- **What a block may say** — looks only (THEME-1, `skins`): tokens of the
+  contract in `:root` (light; a token that is not a colour holds in dark
+  too) and `:root[data-theme="dark"]`; `@font-face` (`font-family`, `src`,
+  `font-weight`, `font-style`, `font-display`, `font-stretch`,
+  `unicode-range`); `@import url("https://…")` (a font's stylesheet); and
+  `m-name::part(part)` rules (with `:hover`, `:focus`, `:focus-visible` or
+  `:active`), never `behavior`, `-moz-binding`, `content`,
+  `pointer-events`, `expression(` or `javascript:`. **Fonts come from any
+  host** (THEME-1, `fonts`: owner, any URL) — over https only; the frame's
+  CSP (`connect-src 'none'`) leaves styles and fonts free, and the bundles
+  menger serves itself (mermaid, the highlighter) still name no CDN.
+- **Validated on write** (`tickets.create`, `amend`, `update`): anything
+  else is one in-band `error` naming the block and its line — ```` ```theme
+  pantry: line 2: `--nope` is not a token of the contract ```` — and
+  nothing is written, the title included; so is a second block of one
+  name, `default`, or an `extends` that goes round (named:
+  `pantry → deep → sea → pantry`).
+- **One owner, orphans, adoption.** The ticket whose body holds the block
+  owns the theme; another ticket's block naming it is refused, naming the
+  owner, and so is `themes.define` over it. When the block goes the theme
+  is an orphan — kept, read-only, while a ticket's frontmatter, a setting
+  or a live theme's `extends` uses it, and removed by the write that leaves
+  it unused. A block naming an orphan (or a theme `define` made) adopts it.
+- **`extends`** chains to `default`: a theme states only what differs.
+  `themes.get` / `list` answer what each says itself (with `owner`,
+  `orphan`, `extends`, `rules`, `imports`); the app paints it flattened.
+- **`watch`** says `theme_changed` (defined, a block written, orphaned or
+  adopted) and `theme_removed`.
+- **The swatch sheet.** In its owning ticket the block renders (the body
+  frames) as a sheet: the theme beside `default`, light and dark — paper
+  and ink, a title in the display face, a link, every status chip, every
+  kind glyph, a highlighted code block and a decision, the theme's
+  `::part`s scoped to its panels — and every token of the contract, both
+  themes, both modes. A block the server would refuse shows the refusal.
+- **Painted**: a region wearing a theme also names it (`--menger-theme`),
+  so a frame is handed its theme's rules with its tokens (`menger:theme`'s
+  `css`); the app's own document takes the fonts of every theme a region
+  wears (`<style id="menger-theme-fonts">`).
+
 ### The token contract (THEME-2)
 
 Everything menger draws takes its colours, faces, sizes, radii and timings

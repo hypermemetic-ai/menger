@@ -113,6 +113,10 @@ pub mod tokens;
 /// who wears what ([`themes::resolve`]). Wasm-safe: the app resolves with it.
 pub mod themes;
 pub use themes::{Theme, ThemesEvent};
+/// THEME-3: a theme is a ticket's ` ```theme ` block — read and validated
+/// here, wasm-safe: the server refuses a write whose block is not a theme,
+/// the app renders the block as its swatch sheet.
+pub mod theme_block;
 /// THEME-8: the `themes` activation, declared once: the server's [`Themes`]
 /// and the browser's [`ThemesClient`].
 pub mod themes_activation;

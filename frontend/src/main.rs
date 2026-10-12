@@ -273,6 +273,7 @@ mod needs;
 mod registry;
 mod saved;
 mod scopes;
+mod swatches;
 mod session;
 mod settings;
 mod signin;

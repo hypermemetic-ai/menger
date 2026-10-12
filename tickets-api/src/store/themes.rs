@@ -34,7 +34,12 @@ const TABLES: &str = "
             name    TEXT PRIMARY KEY,
             light   TEXT NOT NULL,
             dark    TEXT NOT NULL,
-            updated INTEGER NOT NULL
+            updated INTEGER NOT NULL,
+            owner   TEXT,
+            orphan  INTEGER NOT NULL DEFAULT 0,
+            extends TEXT,
+            rules   TEXT NOT NULL DEFAULT '[]',
+            imports TEXT NOT NULL DEFAULT '[]'
         );
         CREATE TABLE IF NOT EXISTS theme_settings (
             scope    TEXT PRIMARY KEY,
@@ -62,22 +67,27 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<()> {
 /// A themes write, as `themes.watch` relays it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThemeChange {
-    Defined(Theme),
+    /// A theme as it is now: defined, its block written, orphaned or adopted.
+    Changed(Theme),
+    /// THEME-3: an orphan nothing uses left the registry.
+    Removed(String),
     Set(ThemeSetting),
 }
 
 /// The themes as the cache holds them, and their channel.
 #[derive(Debug, Clone)]
 pub(crate) struct Themes {
-    by_name: BTreeMap<String, Theme>,
+    pub(super) by_name: BTreeMap<String, Theme>,
     /// By scope: `site`, or a shortcode (upper case).
-    settings: BTreeMap<String, ThemeSetting>,
-    tx: broadcast::Sender<ThemeChange>,
+    pub(super) settings: BTreeMap<String, ThemeSetting>,
+    /// THEME-3: each theme a ticket's frontmatter names — the tickets.
+    pub(super) refs: BTreeMap<String, std::collections::BTreeSet<String>>,
+    pub(super) tx: broadcast::Sender<ThemeChange>,
 }
 
 impl Default for Themes {
     fn default() -> Self {
-        Self { by_name: BTreeMap::new(), settings: BTreeMap::new(), tx: broadcast::channel(super::BROADCAST_CAPACITY).0 }
+        Self { by_name: BTreeMap::new(), settings: BTreeMap::new(), refs: BTreeMap::new(), tx: broadcast::channel(super::BROADCAST_CAPACITY).0 }
     }
 }
 
@@ -100,13 +110,25 @@ fn json_map(s: &str) -> BTreeMap<String, String> {
 /// Every theme and setting as stored — what a start reads. Kept beside the
 /// channel the cache already has.
 pub(super) fn load(conn: &Connection, into: &mut Themes) -> rusqlite::Result<()> {
-    let mut stmt = conn.prepare("SELECT name, light, dark, updated FROM themes ORDER BY name")?;
+    let mut stmt = conn.prepare("SELECT name, light, dark, updated, owner, orphan, extends, rules, imports FROM themes ORDER BY name")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let name: String = r.get(0)?;
-        let theme = Theme { name: name.clone(), light: json_map(&r.get::<_, String>(1)?), dark: json_map(&r.get::<_, String>(2)?), updated_unix: r.get(3)? };
+        let list = |i: usize| -> rusqlite::Result<Vec<String>> { Ok(serde_json::from_str(&r.get::<_, String>(i)?).unwrap_or_default()) };
+        let theme = Theme {
+            name: name.clone(),
+            light: json_map(&r.get::<_, String>(1)?),
+            dark: json_map(&r.get::<_, String>(2)?),
+            updated_unix: r.get(3)?,
+            owner: r.get(4)?,
+            orphan: r.get::<_, i64>(5)? != 0,
+            extends: r.get(6)?,
+            rules: list(7)?,
+            imports: list(8)?,
+        };
         into.by_name.insert(name, theme);
     }
+    super::theme_registry::load_refs(conn, into)?;
     let mut stmt = conn.prepare("SELECT scope, theme, reach, takeover FROM theme_settings ORDER BY scope")?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
@@ -122,12 +144,14 @@ pub(super) fn load(conn: &Connection, into: &mut Themes) -> rusqlite::Result<()>
     Ok(())
 }
 
-fn store_theme(conn: &Connection, t: &Theme) -> rusqlite::Result<()> {
+pub(super) fn store_theme(conn: &Connection, t: &Theme) -> rusqlite::Result<()> {
+    let list = |v: &Vec<String>| serde_json::to_string(v).expect("a list of strings serializes");
     conn.prepare_cached(
-        "INSERT INTO themes (name, light, dark, updated) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT (name) DO UPDATE SET light = excluded.light, dark = excluded.dark, updated = excluded.updated",
+        "INSERT INTO themes (name, light, dark, updated, owner, orphan, extends, rules, imports) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT (name) DO UPDATE SET light = excluded.light, dark = excluded.dark, updated = excluded.updated,
+                 owner = excluded.owner, orphan = excluded.orphan, extends = excluded.extends, rules = excluded.rules, imports = excluded.imports",
     )?
-    .execute(params![t.name, map_json(&t.light), map_json(&t.dark), t.updated_unix])?;
+    .execute(params![t.name, map_json(&t.light), map_json(&t.dark), t.updated_unix, t.owner, t.orphan as i64, t.extends, list(&t.rules), list(&t.imports)])?;
     Ok(())
 }
 
@@ -165,8 +189,12 @@ impl Store {
                 return Err(StoreError::Invalid(why.join("; ")));
             }
         };
-        let theme = Theme { name, light, dark, updated_unix: chrono::Utc::now().timestamp() };
+        let theme = Theme { name, light, dark, updated_unix: chrono::Utc::now().timestamp(), ..Theme::default() };
         let serial = self.serial().await;
+        // THEME-3: a theme a ticket's block defines is that block's to change.
+        if let Some(owner) = self.tickets.read().expect("store lock poisoned").themes.by_name.get(&theme.name).and_then(|t| t.owner.clone()) {
+            return Err(StoreError::Invalid(format!("the theme `{}` is defined by {owner}'s ```theme block: change it there", theme.name)));
+        }
         let (stored, kept) = (theme.clone(), theme.clone());
         self.write(
             serial,
@@ -176,7 +204,7 @@ impl Store {
                 cache.themes.tx.clone()
             },
             move |(), tx, _| {
-                let _ = tx.send(ThemeChange::Defined(theme.clone()));
+                let _ = tx.send(ThemeChange::Changed(theme.clone()));
                 theme
             },
         )
@@ -236,17 +264,36 @@ impl Store {
                 return Err(StoreError::Invalid(format!("no shortcode {}: a theme is set on `site` or on a shortcode that holds a ticket", setting.scope)));
             }
         }
-        let (stored, kept) = (setting.clone(), setting.clone());
+        // THEME-3: an orphan only this scope's old setting kept goes with it.
+        let gone = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let mut named = super::theme_registry::set_names(&cache.themes);
+            if let Some(old) = cache.themes.settings.get(&setting.scope).and_then(|s| s.theme.clone()) {
+                if !cache.themes.settings.iter().any(|(k, s)| *k != setting.scope && s.theme.as_deref() == Some(old.as_str())) {
+                    named.remove(&old);
+                }
+            }
+            named.extend(setting.theme.clone());
+            let tickets: std::collections::BTreeSet<String> = cache.themes.refs.keys().cloned().collect();
+            super::theme_registry::unused(&cache.themes.by_name, &tickets, &named)
+        };
+        let moves = super::theme_registry::Moves { themes: gone.into_iter().map(|n| (n, None)).collect(), refs: None };
+        let (stored, kept, rows) = (setting.clone(), setting.clone(), moves.clone());
         self.write(
             serial,
-            move |tx| Ok(store_setting(tx, &stored)?),
+            move |tx| {
+                store_setting(tx, &stored)?;
+                Ok(super::theme_registry::store(tx, &rows)?)
+            },
             move |cache, _| {
                 if kept.said().is_silent() {
                     cache.themes.settings.remove(&kept.scope);
                 } else {
                     cache.themes.settings.insert(kept.scope.clone(), kept);
                 }
-                cache.themes.tx.clone()
+                let tx = cache.themes.tx.clone();
+                super::theme_registry::take(&mut cache.themes, moves);
+                tx
             },
             move |(), tx, _| {
                 let _ = tx.send(ThemeChange::Set(setting.clone()));

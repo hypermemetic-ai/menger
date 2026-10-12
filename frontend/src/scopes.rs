@@ -45,6 +45,8 @@ use crate::{dom, frame, mermaid, session};
 
 /// The `<style>` the ticket view's and the frame's tokens are written in.
 const STYLE_ID: &str = "menger-scopes";
+/// THEME-3: the `<style>` the worn themes' fonts are written in.
+const FONTS_ID: &str = "menger-theme-fonts";
 /// The ticket view's element (TicketPage's).
 pub(crate) const TICKET_SELECTOR: &str = "#ticket-page";
 /// The class of the box a ticket's body — its frame — sits in.
@@ -68,11 +70,12 @@ impl Held {
     /// Apply a `list` or `watch` event; whether the copy moved.
     pub(crate) fn apply(&mut self, ev: &ThemesEvent) -> bool {
         match ev {
-            ThemesEvent::Theme { theme } => {
+            ThemesEvent::Theme { theme } | ThemesEvent::ThemeChanged { theme } => {
                 let moved = self.themes.get(&theme.name) != Some(theme);
                 self.themes.insert(theme.name.clone(), theme.clone());
                 moved
             }
+            ThemesEvent::ThemeRemoved { name } => self.themes.remove(name).is_some(),
             ThemesEvent::Setting { setting } => {
                 let silent = setting.said().is_silent();
                 let was = self.settings.get(&setting.scope).cloned();
@@ -97,10 +100,19 @@ impl Held {
         std::iter::once(DEFAULT_THEME.to_string()).chain(self.themes.keys().filter(|n| *n != DEFAULT_THEME).cloned()).collect()
     }
 
-    /// The theme `name` — `default` (nothing overridden) when it is, or is
-    /// not one the app holds.
+    /// The theme `name` as it paints — THEME-3: its own overrides over its
+    /// parent's, up its `extends` to `default` ([`themes::flatten`]);
+    /// `default` (nothing overridden) when it is, or is not one the app holds.
     pub(crate) fn theme(&self, name: &str) -> Theme {
-        self.themes.get(name).cloned().unwrap_or_else(Theme::default_theme)
+        if !self.themes.contains_key(name) {
+            return Theme::default_theme();
+        }
+        themes::flatten(name, |n| self.themes.get(n))
+    }
+
+    /// THEME-3: the theme `name`'s own block as the app holds it (not flattened).
+    pub(crate) fn own(&self, name: &str) -> Option<&Theme> {
+        self.themes.get(name)
     }
 }
 
@@ -129,14 +141,49 @@ pub(crate) fn levels(held: &Held, open: Option<&Open>) -> Levels {
     }
 }
 
-/// What a region wearing `theme` writes, in `scheme`: every token.
+/// THEME-3: the custom property a region names the theme it wears with, so
+/// a frame reads it where it sits (as it reads its tokens) and is handed
+/// that theme's rules — its fonts and `::part`s (src/frame.rs).
+pub(crate) const THEME_MARK: &str = "--menger-theme";
+
+/// What a region wearing `theme` writes, in `scheme`: every token, then
+/// the theme's name ([`THEME_MARK`]).
 pub(crate) fn declarations(theme: &Theme, scheme: Scheme) -> String {
     theme
         .painted(scheme == Scheme::Dark)
         .into_iter()
         .map(|(name, value)| format!("{name}:{value}"))
+        .chain(std::iter::once(format!("{THEME_MARK}:{}", theme.name)))
         .collect::<Vec<_>>()
         .join(";")
+}
+
+/// THEME-3: the CSS a frame wearing `name` takes — its imports, `@font-face`s
+/// and `::part` rules, its parents' first; empty for `default` or a theme
+/// the app does not hold.
+pub(crate) fn rules_for(name: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() || name == DEFAULT_THEME {
+        return String::new();
+    }
+    let held = HELD.with(|h| h.get_untracked());
+    themes::rules_css(&held.theme(name), None)
+}
+
+/// THEME-3: the app's own document takes the fonts of every theme a region
+/// wears (their imports and `@font-face`s; a `::part` rule reaches only a
+/// frame's components) — `<style id="menger-theme-fonts">`.
+pub(crate) fn fonts_css(held: &Held, r: &Regions) -> String {
+    let mut worn: Vec<&str> = vec![&r.site.theme, &r.ticket.theme, &r.frame.theme];
+    worn.dedup();
+    let mut imports: Vec<String> = Vec::new();
+    let mut faces: Vec<String> = Vec::new();
+    for name in worn.into_iter().filter(|n| *n != DEFAULT_THEME) {
+        let t = held.theme(name);
+        imports.extend(t.imports.iter().filter(|u| !imports.contains(u)).cloned().collect::<Vec<_>>());
+        faces.extend(t.rules.iter().filter(|r| r.starts_with("@font-face") && !faces.contains(r)).cloned().collect::<Vec<_>>());
+    }
+    imports.iter().map(|u| format!("@import url(\"{u}\");")).chain(faces).collect()
 }
 
 /// The scoped rules: the ticket view's, when it wears other than the site;
@@ -243,7 +290,8 @@ pub(crate) fn repaint() {
     let site = held.theme(&r.site.theme);
     let site_css = if r.site.theme == DEFAULT_THEME { String::new() } else { declarations(&site, scheme) };
     let scoped = scoped_css(&held, &r, scheme);
-    let key = format!("{site_css}|{scoped}|{}|{}|{}", r.site.theme, r.ticket.theme, r.frame.theme);
+    let fonts = fonts_css(&held, &r);
+    let key = format!("{site_css}|{scoped}|{fonts}|{}|{}|{}", r.site.theme, r.ticket.theme, r.frame.theme);
     if PAINTED.with(|p| p.borrow().as_deref() == Some(key.as_str())) {
         return;
     }
@@ -251,7 +299,7 @@ pub(crate) fn repaint() {
     // The site: its tokens on the root's own style (nothing for default).
     if let Some(el) = root.dyn_ref::<web_sys::HtmlElement>() {
         let style = el.style();
-        for name in frame::theme_tokens() {
+        for name in frame::theme_tokens().chain(std::iter::once(THEME_MARK)) {
             let _ = style.remove_property(name);
         }
         for decl in site_css.split(';').filter(|d| !d.is_empty()) {
@@ -272,6 +320,16 @@ pub(crate) fn repaint() {
     });
     if let Some(style) = style {
         style.set_text_content(Some(&scoped));
+    }
+    // THEME-3: the fonts the worn themes bring, in the app's own document.
+    let fonts_el = doc.get_element_by_id(FONTS_ID).or_else(|| {
+        let el = doc.create_element("style").ok()?;
+        el.set_id(FONTS_ID);
+        doc.head()?.append_child(&el).ok()?;
+        Some(el)
+    });
+    if let Some(el) = fonts_el {
+        el.set_text_content(Some(&fonts));
     }
     // What each region wears, said on the root (for a reader's tools, and
     // the headless checks).
@@ -546,7 +604,10 @@ mod tests {
         let css = scoped_css(&h, &r, Scheme::Dark);
         assert!(css.contains("#ticket-page{--bg:#101014;") && css.contains("--accent:#8ab4f8"), "pantry sets accent for light only: {css}");
         assert!(css.contains(".mscope-frame{--bg:#101014"), "{css}");
-        assert_eq!(declarations(&h.theme("ocean"), Scheme::Light).matches(';').count() + 1, themes::TOKENS.len());
+        // Every token, then THEME-3's mark naming the theme.
+        let decl = declarations(&h.theme("ocean"), Scheme::Light);
+        assert_eq!(decl.matches(';').count() + 1, themes::TOKENS.len() + 1);
+        assert!(decl.ends_with(";--menger-theme:ocean"), "{decl}");
     }
 
     /// The reader's record round-trips; anything unreadable is no choice.
@@ -568,4 +629,32 @@ mod tests {
         assert!(line.contains(&format!("try{{var s=localStorage.getItem(\"{SITE_KEY}\");")), "{line}");
         assert!(line.contains("style.cssText=s}catch(e){}"), "{line}");
     }
+
+    /// THEME-3: the watch's theme_changed and theme_removed move the copy; a
+    /// theme paints flattened over what it extends; the worn themes' fonts
+    /// reach the app's document, their ::parts do not.
+    #[test]
+    fn blocks_arrive_flattened_and_bring_their_fonts() {
+        let mut h = Held::default();
+        let mut base = theme("base", "#111111");
+        base.light.insert("--ink".into(), "#222222".into());
+        base.rules = vec!["@font-face{font-family:\"Fraunces\";src:url(https://x.example/f.woff2);}".into(), "m-code::part(frame){border-radius:14px;}".into()];
+        base.imports = vec!["https://fonts.example/a.css".into()];
+        let mut top = theme("top", "#333333");
+        top.extends = Some("base".into());
+        assert!(h.apply(&ThemesEvent::ThemeChanged { theme: base }));
+        assert!(h.apply(&ThemesEvent::ThemeChanged { theme: top.clone() }));
+        assert!(!h.apply(&ThemesEvent::ThemeChanged { theme: top }), "the same theme again moves nothing");
+        let flat = h.theme("top");
+        assert_eq!(flat.light.get("--accent").map(String::as_str), Some("#333333"));
+        assert_eq!(flat.light.get("--ink").map(String::as_str), Some("#222222"), "from base");
+        let r = themes::resolve(&Levels { site: Some("top".into()), ..Default::default() }, &Reader::default());
+        let fonts = fonts_css(&h, &r);
+        assert_eq!(fonts, "@import url(\"https://fonts.example/a.css\");@font-face{font-family:\"Fraunces\";src:url(https://x.example/f.woff2);}");
+        assert!(themes::rules_css(&h.theme("top"), None).contains("m-code::part(frame)"), "a frame takes the parts");
+        assert!(h.apply(&ThemesEvent::ThemeRemoved { name: "base".into() }));
+        assert!(!h.theme("top").light.contains_key("--ink"), "its parent gone, the chain ends at default");
+        assert!(!h.apply(&ThemesEvent::ThemeRemoved { name: "base".into() }));
+    }
+
 }

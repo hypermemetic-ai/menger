@@ -169,3 +169,44 @@ fn the_wire_spells_them_snake_case() {
     assert_eq!(json["frame"]["level"], "site");
     assert!(json["frame"].get("from").is_none());
 }
+
+/// THEME-3: `extends` — a theme states only what differs; the rest is its
+/// parent's, up the chain to `default`; a non-colour said for light holds
+/// in dark over a farther theme's dark; rules and imports parent-first; a
+/// missing parent or a cycle ends the chain.
+#[test]
+fn a_theme_flattens_up_its_extends_to_default() {
+    let th = |name: &str, extends: Option<&str>, light: &[(&str, &str)], dark: &[(&str, &str)], rules: &[&str]| Theme {
+        name: name.into(),
+        extends: extends.map(str::to_string),
+        light: light.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        dark: dark.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        rules: rules.iter().map(|r| r.to_string()).collect(),
+        imports: vec![format!("https://x.example/{name}.css")],
+        ..Theme::default()
+    };
+    let all = [
+        th("base", None, &[("--accent", "#111"), ("--ink", "#222")], &[("--sans", "Base"), ("--accent", "#999")], &["m-a::part(x){color:red;}"]),
+        th("mid", Some("base"), &[("--sans", "Mid")], &[], &[]),
+        th("top", Some("mid"), &[("--accent", "#333")], &[], &["m-b::part(y){color:blue;}"]),
+        th("loop1", Some("loop2"), &[("--ink", "#1")], &[], &[]),
+        th("loop2", Some("loop1"), &[("--ink", "#2")], &[], &[]),
+        th("lost", Some("nowhere"), &[("--ink", "#3")], &[], &[]),
+    ];
+    let get = |n: &str| all.iter().find(|t| t.name == n);
+    let top = flatten("top", get);
+    assert_eq!(top.light.get("--accent").map(String::as_str), Some("#333"));
+    assert_eq!(top.light.get("--ink").map(String::as_str), Some("#222"));
+    assert_eq!(top.dark.get("--accent").map(String::as_str), Some("#999"), "a colour's dark stays the parent's");
+    assert!(top.dark.get("--sans").is_none(), "mid's face for light holds in dark over base's dark face");
+    assert_eq!(top.value(token("--sans").unwrap(), true), "Mid");
+    assert_eq!(top.rules, ["m-a::part(x){color:red;}", "m-b::part(y){color:blue;}"]);
+    assert_eq!(top.imports.len(), 3);
+    assert_eq!(flatten("loop1", get).light.get("--ink").map(String::as_str), Some("#1"), "a cycle ends the chain");
+    assert_eq!(flatten("lost", get).light.get("--ink").map(String::as_str), Some("#3"));
+    assert!(flatten("unknown", get).light.is_empty());
+    let css = rules_css(&top, Some(".sheet"));
+    assert!(css.starts_with("@import url(\"https://x.example/base.css\");"), "{css}");
+    assert!(css.contains(".sheet m-a::part(x){color:red;}"), "{css}");
+    assert!(rules_css(&top, None).contains("m-b::part(y){color:blue;}"));
+}

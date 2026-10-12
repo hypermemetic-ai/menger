@@ -94,7 +94,7 @@ async fn the_site_and_a_shortcode_say_what_they_adopt() {
     store.define_theme("mint", map(&[("--accent", "#2a7")]), BTreeMap::new()).await.unwrap();
     assert!(matches!(rx.recv().await.unwrap(), ThemeChange::Set(_)));
     assert!(matches!(rx.recv().await.unwrap(), ThemeChange::Set(_)));
-    assert!(matches!(rx.recv().await.unwrap(), ThemeChange::Defined(t) if t.name == "mint"));
+    assert!(matches!(rx.recv().await.unwrap(), ThemeChange::Changed(t) if t.name == "mint"));
 }
 
 /// THEME-8's table, every row, through the store: the site theme kept, the

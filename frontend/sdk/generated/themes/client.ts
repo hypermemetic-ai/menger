@@ -19,7 +19,7 @@ export interface ThemesClient {
   set(scope: string, reach?: string | null, takeover?: string | null, theme?: string | null): AsyncGenerator<ThemesEvent>;
   /** Who wears what for a ticket: each region's theme (site, ticket view, frame) and the level it came from */
   themeFor(id: string): AsyncGenerator<ThemesEvent>;
-  /** Subscribe to themes: theme (defined) and setting (site or shortcode), until disconnect; lagged { missed } where a slow subscriber lost changes */
+  /** Subscribe to themes: theme_changed (defined, a ```theme block written, orphaned or adopted), theme_removed (an unused orphan gone) and setting (site or shortcode), until disconnect; lagged { missed } where a slow subscriber lost changes */
   watch(): AsyncGenerator<ThemesEvent>;
 }
 

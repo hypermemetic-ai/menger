@@ -170,7 +170,10 @@ impl ThemeLevel {
 }
 
 /// A theme as the server keeps it: its name and its overrides, by token
-/// name (`--accent`), for light and for dark.
+/// name (`--accent`), for light and for dark — what it says itself; the
+/// rest comes from the theme it `extends` ([`flatten`]). THEME-3: a theme
+/// is a ticket's ` ```theme ` block ([`crate::theme_block`]), owned as a
+/// component is (COMP-3's rules).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Theme {
     pub name: String,
@@ -178,6 +181,24 @@ pub struct Theme {
     pub dark: BTreeMap<String, String>,
     /// When it was last defined, unix seconds (0 for `default`).
     pub updated_unix: i64,
+    /// THEME-3: the theme it states its differences from (`None`: `default`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<String>,
+    /// THEME-3: the ticket whose body's block defines it — `None` for one
+    /// `themes.define` made, or an orphan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// THEME-3: its block is gone from its owner's body; it is kept,
+    /// read-only, while something uses it (a setting, a ticket's
+    /// frontmatter, a live theme extending it), and a block naming it adopts it.
+    #[serde(default)]
+    pub orphan: bool,
+    /// THEME-3: its `@font-face` and `m-*::part(…)` rules, as validated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<String>,
+    /// THEME-3: the https stylesheets it imports (a font's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<String>,
 }
 
 impl Theme {
@@ -207,6 +228,60 @@ impl Theme {
     pub fn painted(&self, dark: bool) -> Vec<(&'static str, String)> {
         TOKENS.iter().map(|t| (t.name, self.value(t, dark))).collect()
     }
+}
+
+/// THEME-3: `name` as it paints — its own overrides over its parent's,
+/// up the `extends` chain to `default` (a parent that is not held, or a
+/// cycle, ends the chain there); its rules and imports the parent's first.
+/// `lookup` answers a theme by name.
+pub fn flatten<'a>(name: &str, lookup: impl Fn(&str) -> Option<&'a Theme>) -> Theme {
+    let mut chain: Vec<&Theme> = Vec::new();
+    let mut at = Some(name.to_string());
+    while let Some(n) = at.take() {
+        if n == DEFAULT_THEME || chain.iter().any(|t| t.name == n) {
+            break;
+        }
+        let Some(t) = lookup(&n) else { break };
+        chain.push(t);
+        at = t.extends.clone();
+    }
+    let Some(own) = chain.first() else {
+        return Theme { name: name.to_string(), ..Theme::default() };
+    };
+    let mut out = Theme { name: own.name.clone(), updated_unix: own.updated_unix, extends: own.extends.clone(), owner: own.owner.clone(), orphan: own.orphan, ..Theme::default() };
+    for t in chain.iter().rev() {
+        // A non-colour said for light holds in dark: a nearer theme saying
+        // it for light only drops what a farther one said for dark.
+        for (k, v) in &t.light {
+            if token(k).is_some_and(|tk| !tk.is_colour()) && !t.dark.contains_key(k) {
+                out.dark.remove(k);
+            }
+            out.light.insert(k.clone(), v.clone());
+        }
+        out.dark.extend(t.dark.iter().map(|(k, v)| (k.clone(), v.clone())));
+        out.rules.extend(t.rules.iter().cloned());
+        out.imports.extend(t.imports.iter().filter(|u| !out.imports.contains(u)).cloned().collect::<Vec<_>>());
+    }
+    out
+}
+
+/// THEME-3: the CSS a theme's rules and imports make — imports first (CSS
+/// takes them nowhere else), then its `@font-face`s, then its `::part`
+/// rules, each `::part` rule scoped under `scope` when one is given (a
+/// swatch sheet's panel).
+pub fn rules_css(theme: &Theme, scope: Option<&str>) -> String {
+    let mut css: String = theme.imports.iter().map(|u| format!("@import url(\"{u}\");")).collect();
+    for r in &theme.rules {
+        match scope.filter(|_| !r.starts_with('@')) {
+            Some(sc) => {
+                let (sel, decls) = r.split_at(r.find('{').unwrap_or(0));
+                let scoped: Vec<String> = sel.split(',').map(|s| format!("{sc} {s}")).collect();
+                css.push_str(&format!("{}{decls}", scoped.join(",")));
+            }
+            None => css.push_str(r),
+        }
+    }
+    css
 }
 
 /// `define`'s maps, checked: each key a token of [`TOKENS`] (written
@@ -423,9 +498,14 @@ pub fn declared_in(fm: &str) -> Declared {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)] // `regions`, once per `theme_for`: not worth a box on the wire's type
 pub enum ThemesEvent {
-    /// A theme, as it is now (`define`, `get`, `list`; `watch` when one is
-    /// defined).
+    /// A theme, as it is now (`define`, `get`, `list`).
     Theme { theme: Theme },
+    /// THEME-3 (`watch`): a theme defined, its block written or amended,
+    /// orphaned or adopted — as it is now.
+    ThemeChanged { theme: Theme },
+    /// THEME-3 (`watch`): a theme left the registry — an orphan nothing
+    /// uses any more.
+    ThemeRemoved { name: String },
     /// What the site or a shortcode says, as it is now (`set`, `list`;
     /// `watch` when it moves). Saying nothing — no theme, takeover on — is
     /// the setting cleared.
