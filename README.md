@@ -1654,11 +1654,10 @@ root, else `*`).
 
 ### Themes and their scopes (THEME-8)
 
-A **theme** is a name and a map of token overrides over the app's tokens
-(index.html's `:root`, the list in `tickets-api/src/themes.rs`'s `TOKENS`),
-one map for light and one for dark; `default` overrides nothing. A token set
-for light only holds in dark when the token has one value in both (a face);
-a colour set for light only leaves dark's default. `themes` is the
+A **theme** is a name and a map of token overrides over the token
+contract (below), one map for light and one for dark; `default` overrides
+nothing. A token that is not a colour (a face, a size, a radius) set for
+light holds in dark too; a colour set for light only leaves dark's default. `themes` is the
 activation beside `tickets`; themes and settings are kept behind the cache,
 in `themes` and `theme_settings` tables a file gains, empty, on open.
 
@@ -1722,6 +1721,50 @@ opened, left or amended, the reader's choice, the light/dark toggle — and
 re-themes every frame and redraws the diagrams in place; no reload. The
 root says what each region wears (`data-theme-site`, `data-theme-ticket`,
 `data-theme-frame`: `pantry ticket`).
+
+### The token contract (THEME-2)
+
+Everything menger draws takes its colours, faces, sizes, radii and timings
+from one named set of tokens, and nowhere else. **The contract is one file,
+`tickets-api/src/tokens.toml`**: a table per group, a line per token — its
+light value, its dark value (only a colour says a different one) and what
+it paints:
+
+```toml
+[colour.accent]
+"--accent" = ['#0066cc', '#8ab4f8', "links, ids, the selected row's bar, focus"]
+```
+
+| group | tokens |
+| -- | -- |
+| `colour.paper`, `.ink`, `.line`, `.chip`, `.accent`, `.signal` | `--bg --panel --card --hover --row-sel --sel --scrim --shadow`, `--ink --muted`, `--line --tree-line`, `--chip-*`, `--accent --annot --annot-hi`, `--live --err-*` |
+| `colour.status` | `--st-<status>-bg` / `-fg` for every status (`.st-<status>` reads its pair) |
+| `colour.kind`, `colour.code` | `--kind-*` (AGS-13's glyphs), `--code-*` (MENGER-22's highlighting) |
+| `colour.diagram` | `--diagram-node --diagram-border --diagram-line --diagram-text` — `auto` (mermaid's own palette for the mode) unless a theme names a colour, which the app and every frame set into mermaid's `themeVariables` |
+| `type.face`, `.scale`, `.weight` | `--mono --sans --font-text` (the app's text) `--font-display` (a ticket's title); `--text-size --text-leading --text-scale` (every other size is `calc(N * var(--text-scale))`); `--weight-normal/-medium/-strong/-bold` |
+| `space` | `--space` — density, multiplying the page's gutters |
+| `shape.radius`, `.border` | `--radius-xs … --radius-2xl`, `--radius-bubble --radius-device --radius-phone --radius-pill`; `--border` (every hairline's width) |
+| `motion` | `--motion-fast --motion-flash --ease` |
+
+Everything else is produced from it: `themes::TOKENS` reads it (a theme
+naming anything else is refused; a frame receives exactly these), and
+index.html's `:root` blocks — light, and dark twice (the media query and
+the toggle's attribute) — are generated between `/* tokens:begin */` and
+`/* tokens:end */`. **Edit the contract, never the blocks**:
+`MENGER_BLESS=1 cargo test index_htmls_token_blocks` in `frontend/`
+rewrites them, and the gate fails while they differ.
+
+**The lint** (`frontend/src/tokens_lint.rs`, in the gate) fails on a colour
+(`#hex`, `rgb()`/`hsl()`, a named colour), a face (a family named in
+`font-family:` or `font:`) or a radius (a length in `border-radius`; `0`
+and a percentage are shapes) written anywhere but the contract: index.html's
+stylesheet, the frame SDK (`sdk/menger-sdk.js`) and `frontend/src`. Test
+modules are exempt; a line that parses a colour the browser computed says
+`tokens-lint:` at its end. The default theme is the contract's values:
+today's look, pixel for pixel (THEME-2's screenshot diff of the board, ticket
+pages, framed bodies and the house components, light and dark). House
+components (ART-9's, DESIGN's) paint with the same tokens — no private
+palette.
 
 ### Login (IDENTITY-14)
 

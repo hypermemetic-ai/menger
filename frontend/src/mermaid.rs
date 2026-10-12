@@ -229,7 +229,9 @@ fn inject_script() -> Promise {
 /// Configure for this render. Cheap, and re-reading the palette each time
 /// means a diagram rendered after a theme change picks the right side.
 fn initialize(m: &Object) -> Result<(), String> {
-    let cfg = config_json(theme_for_background(&body_background()));
+    let mut cfg = config_json(theme_for_background(&body_background()));
+    let style = body_style();
+    with_diagram_tokens(&mut cfg, |token| style.as_ref().and_then(|s| s.get_property_value(token).ok()));
     let cfg = js_sys::JSON::parse(&cfg.to_string()).map_err(|e| js_message(&e))?;
     method(m, "initialize")?
         .call1(m, &cfg)
@@ -286,15 +288,31 @@ pub fn config_json(theme: &str) -> serde_json::Value {
     })
 }
 
+/// The body's computed style.
+fn body_style() -> Option<web_sys::CssStyleDeclaration> {
+    let window = crate::dom::window();
+    window.document().and_then(|d| d.body()).and_then(|b| window.get_computed_style(&b).ok().flatten())
+}
+
 /// The page's computed body background, e.g. `rgb(16, 16, 20)`.
 fn body_background() -> String {
-    let window = crate::dom::window();
-    window
-        .document()
-        .and_then(|d| d.body())
-        .and_then(|b| window.get_computed_style(&b).ok().flatten())
-        .and_then(|s| s.get_property_value("background-color").ok())
-        .unwrap_or_default()
+    body_style().and_then(|s| s.get_property_value("background-color").ok()).unwrap_or_default()
+}
+
+/// THEME-2: a diagram drawn in the theme's colours — each `colour.diagram`
+/// token that names a colour (not its default `auto`) set into mermaid's
+/// `themeVariables` ([`menger_tickets_api::tokens::DIAGRAM`]); with none,
+/// the config is as it was, mermaid's own palette for the mode.
+pub fn with_diagram_tokens(cfg: &mut serde_json::Value, read: impl Fn(&str) -> Option<String>) {
+    for (token, keys) in menger_tickets_api::tokens::DIAGRAM {
+        let Some(v) = read(token).map(|v| v.trim().to_string()) else { continue };
+        if v.is_empty() || v == "auto" || !menger_tickets_api::themes::value_ok(&v) {
+            continue;
+        }
+        for k in *keys {
+            cfg["themeVariables"][*k] = serde_json::Value::String(v.clone());
+        }
+    }
 }
 
 /// Pick mermaid's built-in theme from the palette actually painted behind
@@ -312,8 +330,8 @@ pub fn theme_for_background(css_color: &str) -> &'static str {
 fn luminance(css: &str) -> Option<f64> {
     let css = css.trim();
     let inner = css
-        .strip_prefix("rgba(")
-        .or_else(|| css.strip_prefix("rgb("))?
+        .strip_prefix("rgba(") // tokens-lint: parses a computed colour
+        .or_else(|| css.strip_prefix("rgb("))? // tokens-lint: parses a computed colour
         .strip_suffix(')')?;
     let parts: Vec<f64> = inner
         .split([',', '/', ' '])
@@ -408,6 +426,20 @@ mod tests {
     /// startOnLoad, errors suppressed (ours paint), and the keys a
     /// directive must not touch listed in `secure` — mermaid's own
     /// defaults included, since setting `secure` replaces them.
+    /// THEME-2: `auto` (the default) leaves mermaid's palette; a colour
+    /// sets every variable its token names.
+    #[test]
+    fn diagram_tokens_set_theme_variables_only_when_a_theme_names_a_colour() {
+        let mut c = config_json("default");
+        with_diagram_tokens(&mut c, |_| Some("auto".into()));
+        assert_eq!(c, config_json("default"));
+        with_diagram_tokens(&mut c, |t| (t == "--diagram-border").then(|| " #d4572a ".into()));
+        assert_eq!(c["themeVariables"]["primaryBorderColor"], "#d4572a");
+        assert_eq!(c["themeVariables"]["nodeBorder"], "#d4572a");
+        assert_eq!(c["themeVariables"]["fontFamily"], "inherit");
+        assert!(c["themeVariables"].get("primaryColor").is_none());
+    }
+
     #[test]
     fn config_is_strict_and_directive_proof() {
         let c = config_json("dark");

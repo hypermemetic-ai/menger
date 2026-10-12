@@ -1,0 +1,167 @@
+# THEME-2: the token contract — every token menger draws with, in one place.
+#
+# Each line is a token: its name, then [light, dark, what it paints]. The
+# table it sits under is its group. Everything else comes from this file:
+#
+#   - `themes::TOKENS` (tickets-api/src/themes.rs) reads it, so the server
+#     refuses a theme naming anything else and a frame receives exactly these;
+#   - frontend/index.html's `:root` blocks (light, and dark twice: the media
+#     query and the toggle's attribute) are generated from it between the
+#     `tokens:begin` / `tokens:end` markers — a native test in the app fails
+#     when they differ, and `MENGER_BLESS=1 cargo test` in frontend/ rewrites
+#     them;
+#   - a lint (frontend/src/tokens_lint.rs) fails the gate on a colour, a face
+#     or a radius written anywhere else in the app's CSS, the frame SDK or
+#     frontend/src.
+#
+# A colour token says a value for light and for dark. Every other group says
+# one value (light and dark the same): a theme that sets it for light has set
+# it for dark too. Values are literal TOML strings ('…': no escapes), and
+# nothing that could end a declaration (< > { } ; \ or a line break).
+#
+# The default theme is these values: today's look (DESIGN-1's language;
+# AGS-15's palette, AGS-17's dark set, MENGER-22's code colours).
+
+# -- colour -----------------------------------------------------------------
+
+[colour.paper]
+"--bg" = ['#fbfbf9', '#101014', 'the page']
+"--panel" = ['#f4f3ee', '#17171d', 'nav column, meta card, code blocks, frames']
+"--card" = ['#fff', '#1e1e26', 'a neutral tag or control face']
+"--hover" = ['#ecebe4', '#1f1f28', 'row hover (nav and board)']
+"--row-sel" = ['#cfe2f7', '#1f2d44', 'the selected nav row']
+"--sel" = ['#e7eef7', '#1b2431', 'the list-"on" tint']
+"--scrim" = ['rgba(31, 35, 40, .34)', 'rgba(0, 0, 0, .55)', 'the dimmed page behind an overlay']
+"--shadow" = ['#0003', '#0008', 'the lift under floating chrome']
+
+[colour.ink]
+"--ink" = ['#1f2328', '#d8d8e0', 'body text']
+"--muted" = ['#8a8f98', '#7a7a88', 'labels, hints, secondary text']
+
+[colour.line]
+"--line" = ['#e3e1d8', '#26262e', 'hairlines']
+"--tree-line" = ['#c4c2b6', '#3a3a46', "the tree's connector glyphs"]
+
+[colour.chip]
+"--chip-bg" = ['#eef2f6', '#1e2430', 'the code chip (a shortcode or id) and roll-ups']
+"--chip-fg" = ['#5b6b7b', '#aab7c8', "the chip's text"]
+"--chip-line" = ['#dde3ea', '#2c3442', "the chip's edge"]
+
+[colour.accent]
+"--accent" = ['#0066cc', '#8ab4f8', "links, ids, the selected row's bar, focus"]
+"--annot" = ['rgba(0, 102, 204, .32)', 'rgba(138, 180, 248, .32)', "annotation mode: every element's outline"]
+"--annot-hi" = ['#0066cc', '#8ab4f8', 'annotation mode: the hovered element']
+
+[colour.signal]
+"--live" = ['#256b1a', '#5dbb63', 'liveness, success']
+"--err-bg" = ['#fdecec', '#2b1517', 'a failure: its ground']
+"--err-fg" = ['#a23', '#e89393', 'a failure: its text']
+"--err-line" = ['#f3c5c5', '#5a2626', 'a failure: its edge']
+
+# The status table (AGS-15, SDLC-7, SDLC-11, SDLC-15): one chip per status,
+# ground and text, each pair over 4.5:1 in both modes. `.st-<status>` reads
+# its pair; Blocked's weight and the struck-through statuses stay in the
+# stylesheet (they are not colours).
+[colour.status]
+"--st-pending-bg" = ['#f3e8c8', '#3a3115', 'Pending']
+"--st-pending-fg" = ['#7a5d00', '#e8cf7a', 'Pending']
+"--st-ready-bg" = ['#e3ecf7', '#1b2e46', 'Ready']
+"--st-ready-fg" = ['#2b5b8c', '#a3c6ee', 'Ready']
+"--st-coding-bg" = ['#fde0c5', '#3d2614', 'Coding']
+"--st-coding-fg" = ['#8f3f00', '#f4b37c', 'Coding']
+"--st-in-review-bg" = ['#cdeef4', '#10343b', 'In Review']
+"--st-in-review-fg" = ['#0b5b6b', '#85d2df', 'In Review']
+"--st-blocked-bg" = ['#fdecec', '#3d1a1c', 'Blocked']
+"--st-blocked-fg" = ['#a23', '#f09a9a', 'Blocked']
+"--st-complete-bg" = ['#cfe9c9', '#16341f', 'Complete']
+"--st-complete-fg" = ['#256b1a', '#8fd39a', 'Complete']
+"--st-idea-bg" = ['#efe9e0', '#2b2721', 'Idea']
+"--st-idea-fg" = ['#72644c', '#c9b99a', 'Idea']
+"--st-epic-bg" = ['#e6dcf5', '#2e2143', 'Epic']
+"--st-epic-fg" = ['#5b3a8c', '#cdb4f2', 'Epic']
+"--st-superseded-bg" = ['#f3d9d9', '#3b2224', 'Superseded']
+"--st-superseded-fg" = ['#aa2222', '#dea3a3', 'Superseded']
+"--st-canceled-bg" = ['#ecebe7', '#2c2b28', 'Canceled']
+"--st-canceled-fg" = ['#5f5d57', '#b9b6ae', 'Canceled']
+"--st-doc-bg" = ['#e8e8ec', '#26262c', 'Doc']
+"--st-doc-fg" = ['#4a4a55', '#b8b8c4', 'Doc']
+
+# AGS-13's kind glyphs: scope gold, build blue, execution green, gap red,
+# spike purple — each readable on --panel.
+[colour.kind]
+"--kind-scope" = ['#7a5d00', '#e3c56a', 'scope']
+"--kind-build" = ['#0066cc', '#8ab4f8', 'build']
+"--kind-execution" = ['#256b1a', '#5dbb63', 'execution']
+"--kind-gap" = ['#a23', '#e89393', 'gap']
+"--kind-spike" = ['#5b3a8c', '#c7abf2', 'spike']
+
+# MENGER-22: highlight.js's classes, coloured from these; each over 4.5:1 on
+# --panel in both modes.
+[colour.code]
+"--code-keyword" = ['#cf222e', '#ff7b72', 'keywords']
+"--code-string" = ['#0a3069', '#a5d6ff', 'strings']
+"--code-comment" = ['#656d76', '#8b949e', 'comments']
+"--code-number" = ['#0550ae', '#79c0ff', 'numbers, literals']
+"--code-title" = ['#8250df', '#d2a8ff', 'function and class names']
+"--code-type" = ['#953800', '#ffa657', 'types']
+"--code-meta" = ['#116329', '#7ee787', 'meta, preprocessor']
+"--code-builtin" = ['#6639ba', '#e3b341', 'built-ins']
+"--code-attr" = ['#0550ae', '#79c0ff', 'attributes, properties']
+"--code-variable" = ['#953800', '#ffa657', 'variables, template']
+
+# A diagram (mermaid) is drawn in mermaid's own palette for the mode
+# (`auto`); a theme that names a colour here draws it in that one instead.
+[colour.diagram]
+"--diagram-node" = ['auto', 'auto', "a node's fill (mermaid primaryColor)"]
+"--diagram-border" = ['auto', 'auto', "a node's edge (mermaid primaryBorderColor)"]
+"--diagram-line" = ['auto', 'auto', 'edges and arrows (mermaid lineColor)']
+"--diagram-text" = ['auto', 'auto', 'labels (mermaid primaryTextColor)']
+
+# -- type -------------------------------------------------------------------
+
+[type.face]
+"--mono" = ['ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', 'code, ids, the app body']
+"--sans" = ['-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', 'prose in bodies, labels']
+"--font-text" = ['ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', "the app's text (the shell, nav and board)"]
+"--font-display" = ['-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', "a ticket's title"]
+
+[type.scale]
+"--text-size" = ['14px', '14px', "the app's body size"]
+"--text-leading" = ['1.5', '1.5', "the app's line height"]
+"--text-scale" = ['1', '1', 'every other size, multiplied']
+
+[type.weight]
+"--weight-normal" = ['400', '400', 'regular']
+"--weight-medium" = ['500', '500', 'table heads, quiet emphasis']
+"--weight-strong" = ['600', '600', 'titles, labels, Blocked']
+"--weight-bold" = ['700', '700', 'numbers that lead']
+
+# -- space ------------------------------------------------------------------
+
+[space]
+"--space" = ['1', '1', "density: the page's gutters, multiplied"]
+
+# -- shape ------------------------------------------------------------------
+
+[shape.radius]
+"--radius-xs" = ['2px', '2px', 'hairline marks']
+"--radius-sm" = ['3px', '3px', 'inline code, small chips']
+"--radius" = ['4px', '4px', 'controls, code blocks']
+"--radius-md" = ['5px', '5px', 'tags, pills']
+"--radius-lg" = ['6px', '6px', 'cards, menus, banners']
+"--radius-xl" = ['8px', '8px', 'panels, groups']
+"--radius-2xl" = ['10px', '10px', 'a page card']
+"--radius-bubble" = ['11px', '11px', 'a comment marker']
+"--radius-device" = ['14px', '14px', "a mockup's device"]
+"--radius-phone" = ['26px', '26px', "a mockup's phone"]
+"--radius-pill" = ['999px', '999px', "a pill's ends (the house components' badges and bars)"]
+
+[shape.border]
+"--border" = ['1px', '1px', 'the width of every hairline']
+
+# -- motion -----------------------------------------------------------------
+
+[motion]
+"--motion-fast" = ['.12s', '.12s', 'a hover or a badge appearing']
+"--motion-flash" = ['1.8s', '1.8s', 'a flash that points at something']
+"--ease" = ['ease-out', 'ease-out', 'the easing of both']

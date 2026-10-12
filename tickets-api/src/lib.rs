@@ -104,6 +104,10 @@ pub use notes_activation::NotesClient;
 #[cfg(feature = "server")]
 pub use notes_activation::Notes;
 
+/// THEME-2: the token contract — every token menger draws with, its group
+/// and its defaults, read from `tokens.toml` ([`tokens::TOKENS`]), and
+/// index.html's `:root` blocks as it says them ([`tokens::root_css`]).
+pub mod tokens;
 /// THEME-8: the themes vocabulary — [`Theme`], the levels that adopt one,
 /// the tokens a theme may set ([`themes::TOKENS`]) and the rule that decides
 /// who wears what ([`themes::resolve`]). Wasm-safe: the app resolves with it.

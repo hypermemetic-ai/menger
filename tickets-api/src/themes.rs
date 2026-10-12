@@ -56,75 +56,7 @@ pub const NAME_MAX: usize = 40;
 /// The longest token value a theme keeps, in bytes.
 pub const VALUE_MAX: usize = 200;
 
-/// One token of the contract: its name and its default in light and dark.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Token {
-    pub name: &'static str,
-    pub light: &'static str,
-    pub dark: &'static str,
-}
-
-const fn t(name: &'static str, light: &'static str, dark: &'static str) -> Token {
-    Token { name, light, dark }
-}
-
-const MONO: &str = r#"ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace"#;
-const SANS: &str = r#"-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif"#;
-
-/// THEME-8: the tokens a theme may set — every token of index.html's
-/// `:root` (its light block, its dark blocks: a native test in the app holds
-/// the two equal), each with its default in light and dark. The one list:
-/// the server refuses a theme naming anything else, a frame receives
-/// exactly these (frame.rs), and a region is painted with them.
-pub const TOKENS: &[Token] = &[
-    t("--bg", "#fbfbf9", "#101014"),
-    t("--panel", "#f4f3ee", "#17171d"),
-    t("--card", "#fff", "#1e1e26"),
-    t("--ink", "#1f2328", "#d8d8e0"),
-    t("--muted", "#8a8f98", "#7a7a88"),
-    t("--line", "#e3e1d8", "#26262e"),
-    t("--accent", "#0066cc", "#8ab4f8"),
-    t("--hover", "#ecebe4", "#1f1f28"),
-    t("--row-sel", "#cfe2f7", "#1f2d44"),
-    t("--sel", "#e7eef7", "#1b2431"),
-    t("--chip-bg", "#eef2f6", "#1e2430"),
-    t("--chip-fg", "#5b6b7b", "#aab7c8"),
-    t("--chip-line", "#dde3ea", "#2c3442"),
-    t("--tree-line", "#c4c2b6", "#3a3a46"),
-    t("--live", "#256b1a", "#5dbb63"),
-    t("--err-bg", "#fdecec", "#2b1517"),
-    t("--err-fg", "#a23", "#e89393"),
-    t("--err-line", "#f3c5c5", "#5a2626"),
-    t("--scrim", "rgba(31, 35, 40, .34)", "rgba(0, 0, 0, .55)"),
-    t("--shadow", "#0003", "#0008"),
-    t("--kind-scope", "#7a5d00", "#e3c56a"),
-    t("--kind-build", "#0066cc", "#8ab4f8"),
-    t("--kind-execution", "#256b1a", "#5dbb63"),
-    t("--kind-gap", "#a23", "#e89393"),
-    t("--kind-spike", "#5b3a8c", "#c7abf2"),
-    t("--annot", "rgba(0, 102, 204, .32)", "rgba(138, 180, 248, .32)"),
-    t("--annot-hi", "#0066cc", "#8ab4f8"),
-    t("--mono", MONO, MONO),
-    t("--sans", SANS, SANS),
-    // MENGER-22: code, highlighted — highlight.js's classes, coloured by these.
-    t("--code-keyword", "#cf222e", "#ff7b72"),
-    t("--code-string", "#0a3069", "#a5d6ff"),
-    t("--code-comment", "#656d76", "#8b949e"),
-    t("--code-number", "#0550ae", "#79c0ff"),
-    t("--code-title", "#8250df", "#d2a8ff"),
-    t("--code-type", "#953800", "#ffa657"),
-    t("--code-meta", "#116329", "#7ee787"),
-    t("--code-builtin", "#6639ba", "#e3b341"),
-    t("--code-attr", "#0550ae", "#79c0ff"),
-    t("--code-variable", "#953800", "#ffa657"),
-];
-
-/// The token `name` names — with or without its leading `--`, any ASCII
-/// case — or `None` when it is not one of [`TOKENS`].
-pub fn token(name: &str) -> Option<&'static Token> {
-    let n = name.trim().trim_start_matches("--").to_ascii_lowercase();
-    TOKENS.iter().find(|t| t.name[2..] == n)
-}
+pub use crate::tokens::{token, Token, TOKENS};
 
 /// A value a token may take: not blank, at most [`VALUE_MAX`] bytes, and
 /// nothing that could end its declaration, rule or `<style>` early.
@@ -255,14 +187,15 @@ impl Theme {
     }
 
     /// What `token` paints under this theme in `dark` or light: the mode's
-    /// override; in dark, else the light override when the token has one
-    /// default for both (a face); else the token's default.
+    /// override; in dark, else the light override when the token is not a
+    /// colour (THEME-2: a face, a size, a radius holds in both modes); else
+    /// the token's default.
     pub fn value(&self, token: &Token, dark: bool) -> String {
         let own = if dark { &self.dark } else { &self.light };
         if let Some(v) = own.get(token.name) {
             return v.clone();
         }
-        if dark && token.light == token.dark {
+        if dark && !token.is_colour() {
             if let Some(v) = self.light.get(token.name) {
                 return v.clone();
             }

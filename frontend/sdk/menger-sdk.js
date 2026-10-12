@@ -885,28 +885,28 @@
     "*,*::before,*::after{box-sizing:border-box}",
     ":where(html){overflow:hidden;height:auto;background:transparent}",
     ":where(body){margin:0;padding:0;display:flow-root;overflow-x:auto;background:transparent;" +
-      "color:var(--ink);font:14px/1.6 var(--sans)}",
-    ":where(" + EVERY + "h1,h1[data-md]){font-size:1.1rem;margin:1.1rem 0 .4rem}",
-    ":where(" + EVERY + ":is(h2,h3,h4),:is(h2,h3,h4)[data-md]){font-size:1rem;margin:1.1rem 0 .4rem}",
-    ":where(" + EVERY + "code,code[data-md]," + CARD_CODE + "){font-family:var(--mono);font-size:.92em;background:var(--panel);" +
-      "border:1px solid var(--line);border-radius:3px;padding:0 .25rem}",
-    ":where(" + EVERY + "pre,pre[data-md]," + CARD_PRE + "){font-family:var(--mono);background:var(--panel);border:1px solid var(--line);" +
-      "border-radius:4px;padding:.6rem .8rem;overflow-x:auto}",
+      "color:var(--ink);font:calc(14px * var(--text-scale))/1.6 var(--sans)}",
+    ":where(" + EVERY + "h1,h1[data-md]){font-size:calc(1.1rem * var(--text-scale));margin:1.1rem 0 .4rem}",
+    ":where(" + EVERY + ":is(h2,h3,h4),:is(h2,h3,h4)[data-md]){font-size:calc(1rem * var(--text-scale));margin:1.1rem 0 .4rem}",
+    ":where(" + EVERY + "code,code[data-md]," + CARD_CODE + "){font-family:var(--mono);font-size:calc(.92em * var(--text-scale));background:var(--panel);" +
+      "border:var(--border) solid var(--line);border-radius:var(--radius-sm);padding:0 .25rem}",
+    ":where(" + EVERY + "pre,pre[data-md]," + CARD_PRE + "){font-family:var(--mono);background:var(--panel);border:var(--border) solid var(--line);" +
+      "border-radius:var(--radius);padding:.6rem .8rem;overflow-x:auto}",
     ":where(" + EVERY + "pre code,pre[data-md]>code[data-md]," + CARD_PRE + ">code){font-family:var(--mono);border:0;padding:0;background:none;font-size:inherit}",
     ":where(" + EVERY + "a,a[data-md],.menger-card .mc-refs){color:var(--accent)}",
     ":where(" + EVERY + "blockquote,blockquote[data-md]){border-left:3px solid var(--line);margin:.5rem 0;padding:0 .8rem;color:var(--muted)}",
     ":where(" + EVERY + "table,table[data-md]," + CARD_TABLE + "){border-collapse:collapse}",
-    ":where(" + EVERY + ":is(th,td),:is(th,td)[data-md]," + CARD_TABLE + " :is(th,td)){border:1px solid var(--line);padding:.25rem .5rem;text-align:left}",
+    ":where(" + EVERY + ":is(th,td),:is(th,td)[data-md]," + CARD_TABLE + " :is(th,td)){border:var(--border) solid var(--line);padding:.25rem .5rem;text-align:left}",
     ":where(" + EVERY + ":is(img,video),img[data-md]){max-width:100%}",
     ":where(" + EVERY + "details>summary,.menger-card .mc-source>summary){cursor:pointer}",
-    ":where(.mermaid){background:var(--panel);border:1px solid var(--line);border-radius:4px;" +
+    ":where(.mermaid){background:var(--panel);border:var(--border) solid var(--line);border-radius:var(--radius);" +
       "padding:.6rem .8rem;margin:.5rem 0;overflow-x:auto}",
     ":where(.mermaid pre){margin:0;padding:0;background:none;border:0;font-family:var(--mono);overflow-x:auto}",
     ":where(.mermaid pre code){font-family:var(--mono);font-size:inherit}",
     ":where(.mermaid[data-state=rendering] pre){color:var(--muted)}",
     ":where(.mermaid[data-state=done] svg){display:block;max-width:100%;height:auto;margin:0 auto}",
     ":where(.mermaid[data-state=error]){border-color:var(--err-fg)}",
-    ":where(.mermaid .mermaid-error){color:var(--err-fg);margin:0 0 .6rem;white-space:pre-wrap;font-size:.85rem}",
+    ":where(.mermaid .mermaid-error){color:var(--err-fg);margin:0 0 .6rem;white-space:pre-wrap;font-size:calc(.85rem * var(--text-scale))}",
     // MENGER-22: highlighted code — highlight.js's classes in the --code-*
     // tokens (index.html's rules, word for word, at zero specificity).
     ":where(.hljs-keyword,.hljs-selector-tag,.hljs-doctag,.hljs-section){color:var(--code-keyword)}",
@@ -922,36 +922,36 @@
     ":where(.hljs-addition){color:var(--live)}",
     ":where(.hljs-deletion){color:var(--err-fg)}",
     ":where(.hljs-emphasis){font-style:italic}",
-    ":where(.hljs-strong){font-weight:600}",
-    ":where(.wave-ref){font-family:var(--mono);font-size:.85em;white-space:nowrap;text-decoration:none;" +
-      "border:1px solid var(--chip-line);background:var(--chip-bg);color:var(--chip-fg);border-radius:6px;padding:0 5px}",
+    ":where(.hljs-strong){font-weight:var(--weight-strong)}",
+    ":where(.wave-ref){font-family:var(--mono);font-size:calc(.85em * var(--text-scale));white-space:nowrap;text-decoration:none;" +
+      "border:var(--border) solid var(--chip-line);background:var(--chip-bg);color:var(--chip-fg);border-radius:var(--radius-lg);padding:0 5px}",
     ":where(a.wave-ref){color:var(--accent)}",
     ":where(.wave-ref.missing){color:var(--err-fg)}",
     // COMP-9: a definition's docs card (src/card.rs builds it).
-    ":where(.menger-card){border:1px solid var(--line);border-radius:6px;background:var(--card);padding:.6rem .8rem;margin:.75rem 0}",
+    ":where(.menger-card){border:var(--border) solid var(--line);border-radius:var(--radius-lg);background:var(--card);padding:.6rem .8rem;margin:.75rem 0}",
     ":where(.menger-card .mc-head){display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}",
-    ":where(.menger-card .mc-tag){font-weight:600}",
+    ":where(.menger-card .mc-tag){font-weight:var(--weight-strong)}",
     ":where(.menger-card .mc-none){color:var(--muted);font-style:italic}",
-    ":where(.menger-card .mc-refs){margin-left:auto;font:12px/1.5 var(--mono);text-decoration:none}",
-    ":where(.menger-card .mc-label){font:11px/1.5 var(--mono);text-transform:uppercase;letter-spacing:.06em;" +
+    ":where(.menger-card .mc-refs){margin-left:auto;font:calc(12px * var(--text-scale))/1.5 var(--mono);text-decoration:none}",
+    ":where(.menger-card .mc-label){font:calc(11px * var(--text-scale))/1.5 var(--mono);text-transform:uppercase;letter-spacing:.06em;" +
       "color:var(--muted);margin:.75rem 0 .25rem}",
-    ":where(.menger-card .mc-preview){border:1px dashed var(--line);border-radius:4px;padding:.15rem .6rem .5rem;margin:.6rem 0}",
+    ":where(.menger-card .mc-preview){border:var(--border) dashed var(--line);border-radius:var(--radius);padding:.15rem .6rem .5rem;margin:.6rem 0}",
     ":where(.menger-card .mc-preview .mc-label){margin-top:.2rem}",
-    ":where(.menger-card table){width:100%;font-size:13px}",
-    ":where(.menger-card .mc-req){color:var(--accent);font:12px/1.5 var(--mono)}",
+    ":where(.menger-card table){width:100%;font-size:calc(13px * var(--text-scale))}",
+    ":where(.menger-card .mc-req){color:var(--accent);font:calc(12px * var(--text-scale))/1.5 var(--mono)}",
     ":where(.menger-card .mc-example){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:.6rem;" +
       "align-items:start;margin:.35rem 0}",
     ":where(.menger-card .mc-example .mc-live){padding:.3rem 0}",
-    ":where(.menger-card .mc-example pre){margin:0;font-size:12px;white-space:pre-wrap}",
+    ":where(.menger-card .mc-example pre){margin:0;font-size:calc(12px * var(--text-scale));white-space:pre-wrap}",
     ":where(.menger-card .mc-help){margin-top:.6rem}",
-    ":where(.menger-card .mc-error){color:var(--err-fg);background:var(--err-bg);border:1px solid var(--err-line);" +
-      "border-radius:4px;padding:.25rem .5rem;font-size:13px}",
+    ":where(.menger-card .mc-error){color:var(--err-fg);background:var(--err-bg);border:var(--border) solid var(--err-line);" +
+      "border-radius:var(--radius);padding:.25rem .5rem;font-size:calc(13px * var(--text-scale))}",
     ":where(.menger-card .mc-source){margin-top:.6rem}",
-    ":where(.menger-card .mc-source>summary){font:12px/1.5 var(--mono);color:var(--muted)}",
+    ":where(.menger-card .mc-source>summary){font:calc(12px * var(--text-scale))/1.5 var(--mono);color:var(--muted)}",
   ].join("\n");
   // The SDK's flash on a revealed card: outside the layer, as it always was.
   var FLASH_CSS =
-    ".menger-flash{animation:menger-flash 1.8s ease-out}\n" +
+    ".menger-flash{animation:menger-flash var(--motion-flash) var(--ease)}\n" +
     "@keyframes menger-flash{0%,35%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 3px transparent}}";
 
   var base = doc.createElement("style");
@@ -991,10 +991,23 @@
       }
     }
     doc.documentElement.setAttribute("data-theme", next);
-    if (next !== scheme) {
+    // THEME-2: a diagram is drawn again when the mode flips, or when a
+    // diagram colour moved (a theme naming --diagram-*).
+    var colours = diagramKey();
+    if (drawnColours === null) drawnColours = colours; // the srcdoc's own: drawn with them
+    if (next !== scheme || colours !== drawnColours) {
       scheme = next;
+      drawnColours = colours;
       redrawDiagrams();
     }
+  }
+
+  var drawnColours = null;
+  function diagramKey() {
+    var table = (mermaidInit && mermaidInit.diagram) || {};
+    var cs = window.getComputedStyle(doc.documentElement), key = "";
+    for (var token in table) key += token + ":" + (cs.getPropertyValue(token) || "").trim() + ";";
+    return key;
   }
 
   window.addEventListener("message", function (ev) {
@@ -1089,8 +1102,8 @@
   }
 
   var NOTICE_CSS =
-    ".menger-notice{font:12px/1.5 var(--mono);color:var(--err-fg);background:var(--err-bg);" +
-    "border:1px solid var(--err-line);border-radius:3px;padding:0 .35em}" +
+    ".menger-notice{font:calc(12px * var(--text-scale))/1.5 var(--mono);color:var(--err-fg);background:var(--err-bg);" +
+    "border:var(--border) solid var(--err-line);border-radius:var(--radius-sm);padding:0 .35em}" +
     "pre.menger-notice{white-space:pre-wrap;margin:.25em 0;padding:.25em .5em}";
 
   function notice(root, tagName, text) {
@@ -1345,31 +1358,31 @@
   var BADGE_CSS =
     ".menger-badge{display:none}.menger-badge.on{display:inline}" +
     ".menger-badge{position:absolute;z-index:2147483646;transform:translateY(-100%);opacity:0;pointer-events:none;" +
-    "font:10px/1.5 var(--mono);padding:0 5px;border-radius:4px 4px 4px 0;background:var(--accent);color:var(--bg);" +
-    "white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none;transition:opacity .12s;outline-offset:1px}" +
-    ".menger-badge.inside{transform:none;border-radius:0 0 4px 0}" +
+    "font:calc(10px * var(--text-scale))/1.5 var(--mono);padding:0 5px;border-radius:var(--radius) var(--radius) var(--radius) 0;background:var(--accent);color:var(--bg);" +
+    "white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none;transition:opacity var(--motion-fast);outline-offset:1px}" +
+    ".menger-badge.inside{transform:none;border-radius:0 0 var(--radius) 0}" +
     ".menger-badge.flagged{background:var(--err-fg)}" +
     ":host(:hover) .menger-badge,:host(:focus-within) .menger-badge,.menger-badge:focus-visible," +
     ".menger-badge.open{opacity:1;pointer-events:auto}";
 
   var TIP_CSS =
     ":host{all:initial}" +
-    ".tip{display:block;box-sizing:border-box;font:12.5px/1.5 var(--sans);color:var(--ink);background:var(--card);" +
-    "border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 24px var(--shadow);padding:.45rem .65rem;" +
+    ".tip{display:block;box-sizing:border-box;font:calc(12.5px * var(--text-scale))/1.5 var(--sans);color:var(--ink);background:var(--card);" +
+    "border:var(--border) solid var(--line);border-radius:var(--radius-lg);box-shadow:0 8px 24px var(--shadow);padding:.45rem .65rem;" +
     "min-width:14rem;max-width:28rem}" +
     ".t-head{display:flex;gap:.5rem;align-items:baseline}" +
-    ".t-name{font:600 12.5px/1.5 var(--mono)}" +
-    ".t-owner{font:11px/1.5 var(--mono);color:var(--muted)}" +
+    ".t-name{font:var(--weight-strong) calc(12.5px * var(--text-scale))/1.5 var(--mono)}" +
+    ".t-owner{font:calc(11px * var(--text-scale))/1.5 var(--mono);color:var(--muted)}" +
     ".t-summary{margin:.2rem 0 .35rem}" +
     ".t-none{margin:.2rem 0 .35rem;color:var(--muted);font-style:italic}" +
-    "table{border-collapse:collapse;width:100%;font-size:12px}" +
+    "table{border-collapse:collapse;width:100%;font-size:calc(12px * var(--text-scale))}" +
     "td{padding:1px 8px 1px 0;vertical-align:top}" +
     "td.n,td.v{font-family:var(--mono)}" +
-    "td.k{font:11px/1.6 var(--mono);color:var(--muted)}" +
+    "td.k{font:calc(11px * var(--text-scale))/1.6 var(--mono);color:var(--muted)}" +
     "td.w{color:var(--muted)}" +
     "tr.missing td,tr.unfit td.v,tr.unfit td.w,tr.missing td.w{color:var(--err-fg)}" +
     "tr.fits td.w{color:var(--accent)}" +
-    ".t-links{display:flex;gap:.9rem;margin-top:.4rem;font:12px/1.5 var(--mono)}" +
+    ".t-links{display:flex;gap:.9rem;margin-top:.4rem;font:calc(12px * var(--text-scale))/1.5 var(--mono)}" +
     ".t-links a{color:var(--accent);cursor:pointer;text-decoration:none}" +
     ".t-links a:hover,.t-links a:focus-visible{text-decoration:underline}";
 
@@ -1612,7 +1625,7 @@
   // (src/anchor.rs); this side reads the DOM, outlines, and keeps clicks.
 
   var ANNOT_CSS =
-    "*{outline:1px dashed var(--annot)!important;outline-offset:-1px!important;cursor:crosshair!important}" +
+    "*{outline:var(--border) dashed var(--annot)!important;outline-offset:-1px!important;cursor:crosshair!important}" +
     "[data-menger-tip]{outline:0!important;cursor:auto!important}";
   var annotStyle = null;
   var hovered = null;
@@ -2162,6 +2175,20 @@
     el.insertBefore(p, el.firstChild);
   }
 
+  // THEME-2: a theme's diagram colours — each `colour.diagram` token the
+  // frame wears that names a colour (not `auto`, mermaid's own palette) set
+  // into themeVariables, by the app's table (init.mermaid.diagram).
+  function diagramColours(config) {
+    var table = mermaidInit.diagram || {};
+    var cs = window.getComputedStyle(doc.documentElement);
+    for (var token in table) {
+      var v = (cs.getPropertyValue(token) || "").trim();
+      if (!v || v === "auto" || /[<>{};\\]/.test(v)) continue;
+      config.themeVariables = config.themeVariables || {};
+      for (var i = 0; i < table[token].length; i++) config.themeVariables[table[token][i]] = v;
+    }
+  }
+
   function draw(el, src) {
     var gen = String(++nextGen);
     el.setAttribute("data-gen", gen);
@@ -2170,6 +2197,7 @@
         .then(function (m) {
           var config = JSON.parse(JSON.stringify(mermaidInit.config || {}));
           config.theme = scheme === "dark" ? "dark" : "default";
+          diagramColours(config);
           m.initialize(config);
           return m.render("menger-mermaid-" + nextId++, src);
         })

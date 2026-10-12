@@ -330,6 +330,9 @@ pub(crate) fn init_json(shell: &Shell) -> String {
             "url": shell.mermaid_url,
             // The SDK sets `theme` per draw, from the scheme.
             "config": mermaid::config_json("default"),
+            // THEME-2: and the theme's diagram colours, read from the
+            // frame's tokens per draw — each token and the variables it sets.
+            "diagram": menger_tickets_api::tokens::DIAGRAM.iter().map(|(t, k)| (t.to_string(), serde_json::json!(k))).collect::<serde_json::Map<_, _>>(),
         },
         // MENGER-22: the highlighter — its URL and the rules a block is
         // highlighted by (src/highlight.rs, the app's own).
@@ -1868,7 +1871,7 @@ mod tests {
         // in either mode; the body's own only by default.
         let at = SDK_JS.find(":where(\" + EVERY + \"code,code[data-md],").expect("the code rule");
         let rule = &SDK_JS[at..at + SDK_JS[at..].find("}\"").unwrap()];
-        assert!(rule.contains("border:1px solid var(--line)"), "{rule}");
+        assert!(rule.contains("border:var(--border) solid var(--line)"), "{rule}");
         let html = crate::md::render_body_framed("<meta name=\"menger-base\" content=\"markdown\">\n\nA `code` and <code class=\"x\">own</code>.\n", &|_| None).html;
         assert!(html.contains("<code data-md>code</code>") && html.contains("<code class=\"x\">own</code>"), "{html}");
         // The opt-out is documented where the protocol is.
