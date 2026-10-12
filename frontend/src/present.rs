@@ -565,22 +565,36 @@ fn prefers_reduced_motion() -> bool {
         .is_some_and(|m| m.matches())
 }
 
-/// Keep `size` the stage's inner size, as it changes.
+/// Keep `size` the stage's inner size, as it changes. MENGER-20: the stage
+/// leaving the page (its ticket closed) is one more change, seen after
+/// `size` has been disposed with its box — then the observer lets go of the
+/// stage instead of reading the dead signal, which panicked on every ticket
+/// left.
 fn observe(el: web_sys::HtmlDivElement, size: RwSignal<(f64, f64)>) {
+    // false once the box is gone
     let measure = {
         let el = el.clone();
         move || {
+            let Some(was) = size.try_get_untracked() else { return false };
             let w = f64::from(el.client_width());
             let h = f64::from(el.client_height());
-            if size.get_untracked() != (w, h) {
+            if was != (w, h) {
                 size.set((w, h));
             }
+            true
         }
     };
     measure();
     let Ok(ctor) = Reflect::get(&dom::window(), &JsValue::from_str("ResizeObserver")) else { return };
     let Ok(ctor) = ctor.dyn_into::<Function>() else { return };
-    let cb = Closure::<dyn FnMut()>::new(measure);
+    // A ResizeObserver's callback is given the observer itself.
+    let cb = Closure::<dyn FnMut(JsValue, JsValue)>::new(move |_entries: JsValue, ro: JsValue| {
+        if !measure() {
+            if let Ok(disconnect) = Reflect::get(&ro, &JsValue::from_str("disconnect")).and_then(|f| f.dyn_into::<Function>()) {
+                let _ = disconnect.call0(&ro);
+            }
+        }
+    });
     let Ok(ro) = Reflect::construct(&ctor, &js_sys::Array::of1(cb.as_ref())) else { return };
     cb.forget();
     if let Ok(observe) = Reflect::get(&ro, &JsValue::from_str("observe")).and_then(|f| f.dyn_into::<Function>()) {
