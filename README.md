@@ -690,8 +690,8 @@ renders as before.
 renders in a sandboxed frame (no `allow-same-origin`, no `allow-forms`;
 IDENTITY-28: under a CSP, `connect-src 'none'; form-action 'none'`, so a
 body opens no connection of its own and submits no form — scripts, styles,
-images and fonts load from anywhere, and links still open the real page in
-a new tab) under menger's SDK
+images and fonts load from anywhere, and a link opens the real page in a
+new tab once the app has asked — MENGER-14, "Links" below) under menger's SDK
 (`frontend/sdk/menger-sdk.js`, whose header is the protocol's reference),
 and every component in the registry is a custom element there. A custom
 element cannot be redefined, so each name's class delegates to its current
@@ -855,6 +855,29 @@ source, open.
   unframed note. COMP-14: a ticket route may name a section instead —
   `#/ticket/<id>?field=<name>` or `?anchor=<id>` — which the frame showing
   that ticket scrolls to and flashes.
+
+**Links** (MENGER-14). Every link people write — a markdown link, a bare
+`http(s)://` URL (autolinked by md.rs, as GitHub does), an `<a href>` in an
+HTML body, a URL in a comment — is followed by the app, never by the
+browser on its own. In a framed body the SDK (1.8) takes the click (Enter on
+a focused link, a middle click) and posts `menger:link { href }` — the href
+as written — over the frame's channel; the sandbox and the CSP are
+unchanged. In the app's own page one delegated listener takes links in
+`.md` and `[data-links]`. The host classifies (`frontend/src/links.rs`, the
+`url` crate — WHATWG's parser): `#/…`, or this origin's app path, navigates
+in the app; another path of this origin (`/vanilla`) opens in a new tab;
+`http(s)` anywhere else and `mailto:` get **"This link leaves menger"** —
+the ticket it came from, the full URL with its registrable domain
+emphasised (the Public Suffix List, vendored at `frontend/vendor/psl/`), an
+IDN host decoded and as punycode, a `user@` before the host called out, and
+Open (a new tab, `noopener,noreferrer`) / Cancel; Enter opens, Esc cancels,
+Tab stays inside, focus returns. "Don't ask again for <domain>" (web links
+only) is kept in this browser per signed-in user (localStorage
+`menger.links`) and listed, revocable, in `#/settings` → Links; a trusted
+domain opens at once only inside a viewer's gesture on the frame it came
+from. `javascript:`, `data:`, `file:`, `vbscript:` and every other scheme
+are refused with a short notice. The vanilla page (`/vanilla`) links only to
+the app's own tickets, so it has nothing to ask about.
 
 **Cites** (COMP-14). A body can show a **live window into a section of
 another ticket** — cited, never copied:
@@ -1994,6 +2017,9 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        the header's n of N (FILTER-12), src/saved.rs saved
                        filters — Saved ▾, Save as…, VIEW-1 (FILTER-6),
                        src/notes.rs its annotation and the body editor (WAVE-11),
+                       src/links.rs links people wrote — classified, the
+                       leave dialog, "don't ask again" (MENGER-14;
+                       vendor/psl/ the Public Suffix List),
                        src/frame.rs framed bodies and their messages (COMP-4,
                        COMP-5), sdk/menger-sdk.js the SDK every frame runs,
                        sdk/menger.d.ts its types, sdk/bridge.ts the bridge

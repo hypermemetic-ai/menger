@@ -1380,6 +1380,45 @@
   #save-as .sacts button:hover { border-color: var(--accent); color: var(--accent); }
   #save-as .sacts button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
   #save-as .sacts button:disabled { opacity: .5; cursor: default; }
+  /* MENGER-14: "This link leaves menger" — Save as…'s dialog, the URL in
+     full with its registrable domain marked; the refusal notice. */
+  #leave { width: 34rem; padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .6rem; }
+  #leave h2 { font-size: .95rem; margin: 0; }
+  #leave p { margin: 0; font-size: .85rem; }
+  #leave .lfrom { color: var(--muted); font-size: .8rem; }
+  #leave .lfrom .code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); text-decoration: none; }
+  #leave .ldomain { color: var(--ink); font-weight: 700; overflow-wrap: anywhere; }
+  #leave .lurl code {
+    display: block; font-family: var(--mono); font-size: 12px; line-height: 1.5; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: .4rem .6rem;
+    overflow-wrap: anywhere; word-break: break-all; max-height: 9.5em; overflow: auto;
+  }
+  #leave .lurl mark { background: none; color: var(--ink); font-weight: 700; text-decoration: underline; text-underline-offset: 2px; }
+  #leave .lwarn {
+    font-size: .8rem; color: var(--err-fg); background: var(--err-bg); border: 1px solid var(--err-line);
+    border-radius: 6px; padding: .35rem .6rem; overflow-wrap: anywhere;
+  }
+  #leave .lwarn code { font-family: var(--mono); font-size: 11.5px; }
+  #leave .ltrust { display: flex; align-items: center; gap: .3rem; font-size: .8rem; color: var(--muted); cursor: pointer; }
+  #leave .ltrust strong { color: var(--ink); font-weight: 600; }
+  #leave .sacts { display: flex; gap: .5rem; justify-content: flex-end; flex-wrap: wrap; }
+  #leave .sacts button {
+    font: inherit; font-size: .8rem; cursor: pointer; background: var(--panel); border: 1px solid var(--line);
+    color: var(--ink); border-radius: 4px; padding: .15rem .65rem;
+  }
+  #leave .sacts button:hover { border-color: var(--accent); color: var(--accent); }
+  #leave .sacts button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  #leave .sacts button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .lnotice {
+    position: fixed; z-index: 45; bottom: 1rem; left: 50%; transform: translateX(-50%); max-width: calc(100% - 2rem);
+    display: flex; align-items: center; gap: .6rem; font-size: .82rem;
+    background: var(--err-bg); color: var(--err-fg); border: 1px solid var(--err-line); border-radius: 6px;
+    padding: .4rem .7rem; box-shadow: 0 6px 20px var(--shadow);
+  }
+  .lnotice button { background: none; border: 0; color: inherit; font: inherit; font-size: 1rem; cursor: pointer; padding: 0 .2rem; }
+  #settings-links .ltrusted { list-style: none; margin: .3rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .2rem; }
+  #settings-links .ltrusted li { display: flex; align-items: center; gap: .6rem; font-size: .85rem; }
+  .cbody a.ulink, .annot-body a.ulink { color: var(--accent); overflow-wrap: anywhere; }
   /* COMMENT-3: annotation mode. Every element of the app outlined (a frame's
      body is outlined by its SDK), the crosshair; the header's Annotate
      button pressed. Nothing here applies with the mode off. */

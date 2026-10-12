@@ -69,7 +69,7 @@
 //! base styles those and nothing the body wrote as HTML.
 
 use menger_tickets_api::{component_docs, html_runs};
-use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 use pulldown_cmark_escape::{escape_href, escape_html};
 
 use crate::card;
@@ -687,7 +687,7 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
 
     let mut html = String::new();
     match resolve {
-        None => push_marked(&mut html, events, framed),
+        None => push_marked(&mut html, autolink(events).into_iter(), framed),
         Some(resolve) => {
             // WAVE-11: the prose, each run of text taken whole (the parser
             // may split one), its references swapped — never inside code,
@@ -719,10 +719,88 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
             if let Some(t) = text.take() {
                 substitute(t, resolve, &mut out);
             }
-            push_marked(&mut html, out.into_iter(), framed);
+            push_marked(&mut html, autolink(out.into_iter()).into_iter(), framed);
         }
     }
     Rendered { html, diagrams }
+}
+
+/// MENGER-14: a bare `http://` or `https://` URL in prose is a link
+/// (GitHub's autolink — [`crate::links::bare_urls`] finds them), emitted as
+/// the parser's own `Autolink` events, so push_html escapes it as it escapes
+/// every link, and in a frame it is marked as markdown's. Never inside code,
+/// a link or an image's text — nor, in a frame, inside an `<a>` or `<code>`
+/// the body wrote as HTML. Each run of text is taken whole (the parser may
+/// split one at an entity); text renders the same, merged or not.
+fn autolink<'a>(events: impl Iterator<Item = Event<'a>>) -> Vec<Event<'a>> {
+    let mut out: Vec<Event<'a>> = Vec::new();
+    let mut text: Option<String> = None;
+    let (mut code, mut link, mut image, mut html) = (0u32, 0u32, 0u32, 0u32);
+    for ev in events {
+        if let Event::Text(t) = &ev {
+            if code == 0 && link == 0 && image == 0 && html == 0 {
+                text.get_or_insert_with(String::new).push_str(t);
+                continue;
+            }
+        }
+        if let Some(t) = text.take() {
+            linkify(t, &mut out);
+        }
+        match &ev {
+            Event::Start(Tag::CodeBlock(_)) => code += 1,
+            Event::End(TagEnd::CodeBlock) => code = code.saturating_sub(1),
+            Event::Start(Tag::Link { .. }) => link += 1,
+            Event::End(TagEnd::Link) => link = link.saturating_sub(1),
+            Event::Start(Tag::Image { .. }) => image += 1,
+            Event::End(TagEnd::Image) => image = image.saturating_sub(1),
+            Event::Html(h) | Event::InlineHtml(h) => html = html_depth(html, h),
+            _ => {}
+        }
+        out.push(ev);
+    }
+    if let Some(t) = text.take() {
+        linkify(t, &mut out);
+    }
+    out
+}
+
+/// `t` as text, its bare URLs as links.
+fn linkify(t: String, out: &mut Vec<Event<'_>>) {
+    if crate::links::bare_urls(&t).is_empty() {
+        out.push(Event::Text(t.into()));
+        return;
+    }
+    for piece in crate::links::pieces(&t) {
+        match piece {
+            crate::links::Piece::Text(s) => out.push(Event::Text(s.into())),
+            crate::links::Piece::Link(u) if dest_allowed(&u, false) => {
+                out.push(Event::Start(Tag::Link {
+                    link_type: LinkType::Autolink,
+                    dest_url: u.clone().into(),
+                    title: CowStr::Borrowed(""),
+                    id: CowStr::Borrowed(""),
+                }));
+                out.push(Event::Text(u.into()));
+                out.push(Event::End(TagEnd::Link));
+            }
+            crate::links::Piece::Link(u) => out.push(Event::Text(u.into())),
+        }
+    }
+}
+
+/// How deep inside an `<a>` or `<code>` the body wrote as HTML the text
+/// after `h` stands (`depth` before it).
+fn html_depth(depth: u32, h: &str) -> u32 {
+    let lower = h.to_ascii_lowercase();
+    let count = |pat: &str| {
+        lower
+            .match_indices(pat)
+            .filter(|(i, _)| lower[i + pat.len()..].chars().next().is_none_or(|c| c == '>' || c.is_whitespace() || c == '/'))
+            .count() as u32
+    };
+    let opened = count("<a") + count("<code");
+    let closed = count("</a") + count("</code");
+    (depth + opened).saturating_sub(closed)
 }
 
 /// COMP-12: the attribute that marks, in a frame, an element markdown
@@ -1470,5 +1548,34 @@ A candidate language, drawn below.
             ["RETURNS-6", "CONTEXT-4"]
         );
         assert!(wave_ids("nothing here").is_empty());
+    }
+
+    /// MENGER-14: a bare URL in prose is a link, escaped as every link is;
+    /// never in code, a link's text, or (framed) an `<a>` or `<code>` the
+    /// body wrote.
+    #[test]
+    fn bare_urls_in_prose_are_links() {
+        let r = render_body("See https://example.com/x. And `https://code.example`, [t](https://a.example), <https://b.example>, https://e.example/?a=1&b=2 and https://q.example/\"x\" or https://l.example/<b>.");
+        assert_eq!(
+            r.html,
+            "<p>See <a href=\"https://example.com/x\">https://example.com/x</a>. And <code>https://code.example</code>, <a href=\"https://a.example\">t</a>, <a href=\"https://b.example\">https://b.example</a>, <a href=\"https://e.example/?a=1&amp;b=2\">https://e.example/?a=1&amp;b=2</a> and <a href=\"https://q.example/\">https://q.example/</a>\"x\" or <a href=\"https://l.example/\">https://l.example/</a>&lt;b&gt;.</p>\n"
+        );
+        // Only http(s) is found bare; nothing else becomes a link.
+        let r = render_body("javascript:alert(1) data:text/html,x file:///etc ftp://x.example");
+        assert!(!r.html.contains("<a"), "{}", r.html);
+        // In code blocks, never.
+        assert!(!render_body("```\nhttps://x.example\n```\n").html.contains("<a"));
+        // Framed: the body's own anchors and code are left as written; the
+        // prose's URL is a link, marked as markdown's.
+        let f = render_body_framed(
+            "<p><a href=\"https://x.example\">https://x.example</a> and <code>https://z.example</code></p>\n\nthen https://y.example and <a href=\"https://w.example\">https://w.example</a> <code>https://v.example</code> https://u.example",
+            &|_| None,
+        );
+        assert_eq!(f.html.matches("href=").count(), 4, "{}", f.html);
+        assert!(f.html.contains("<a data-md href=\"https://y.example\">https://y.example</a>"), "{}", f.html);
+        assert!(f.html.contains("<a data-md href=\"https://u.example\">https://u.example</a>"), "{}", f.html);
+        assert!(f.html.contains("<code>https://v.example</code>") && f.html.contains("<code>https://z.example</code>"), "{}", f.html);
+        // An IDN host is linked as written; the browser opens its punycode.
+        assert!(render_body("https://\u{0430}pple.com").html.contains("href=\"https://%D0%B0pple.com\""), "{}", render_body("https://\u{0430}pple.com").html);
     }
 }
