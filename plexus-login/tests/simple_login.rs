@@ -60,7 +60,7 @@ const JWK_2: &str = r#"{"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "idp-
 const ALICE_SUB: &str = "c952acd3-60aa-4534-b2e3-83634591fee1";
 const ADMIN_SUB: &str = "0b6d1c0e-3f0a-4d55-9d1e-6f0c2a7b9e01";
 
-const BRANDING: Branding = Branding { app: "toy", version: "0.0.1", mark: "t" };
+const BRANDING: Branding = Branding { app: "toy", version: "0.0.1", mark: "t", motto: "" };
 
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64

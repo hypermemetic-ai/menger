@@ -124,6 +124,16 @@
   .sso { display: none; }
   .sso.open { display: grid; }
   .note { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
+  /* AUTH-22: the self-hosted WorkOS steps — a code, a QR code, a factor list. */
+  input.code { font: 600 20px var(--mono); letter-spacing: .3em; text-align: center; height: 44px; }
+  .qr { display: grid; place-items: center; padding: 10px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+  .qr img { width: 180px; height: 180px; image-rendering: pixelated; }
+  .secret { font: 13px var(--mono); overflow-wrap: anywhere; user-select: all; }
+  .factors { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+  .factors li { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  a.alt { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 9px 12px; border-radius: 6px; background: var(--card); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+  a.alt:hover { background: var(--hover); text-decoration: none; }
+  a.alt svg { width: 17px; height: 17px; flex: none; }
 
   /* IDENTITY-35: the roster, drawn as the app's nav rows. */
   .roster { border: 1px solid var(--line); border-radius: 8px; background: var(--card); overflow: hidden; }
@@ -175,7 +185,7 @@
   <div class="sheet">
     <aside class="side">
       <div class="brand"><span class="mark">{{MARK}}</span>{{TITLE}}</div>
-      <p class="motto">A plan is a program whose leaves are prose.</p>
+      {{MOTTO}}
       <dl class="facts">{{FACTS}}</dl>
       {{DEV}}
       <p class="foot">Don't have access? Sign in, then send an admin the id you are shown.</p>

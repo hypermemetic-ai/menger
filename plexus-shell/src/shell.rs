@@ -152,7 +152,11 @@ pub async fn serve_on(
     if let Ok(addr) = listener.local_addr() {
         tracing::info!("Shell:     http://{addr}/");
     }
-    axum::serve(listener, router.layer(axum::middleware::from_fn(harden))).with_graceful_shutdown(shutdown).await
+    // AUTH-22: with the peer's address, which a sign-in page's throttles
+    // read (`ConnectInfo<SocketAddr>`).
+    axum::serve(listener, router.layer(axum::middleware::from_fn(harden)).into_make_service_with_connect_info::<std::net::SocketAddr>())
+        .with_graceful_shutdown(shutdown)
+        .await
 }
 
 /// Every answer the shell gives refuses to be framed, is read as the type

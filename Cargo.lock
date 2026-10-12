@@ -2004,13 +2004,14 @@ dependencies = [
 
 [[package]]
 name = "plexus-login"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "axum",
  "base64",
  "futures",
+ "ipnet",
  "jsonrpsee",
  "jsonwebtoken",
  "plexus-auth-core",
@@ -2020,6 +2021,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha1 0.10.7",
  "sha2",
  "tokio",
  "tracing",

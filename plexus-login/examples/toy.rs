@@ -27,7 +27,7 @@ use plexus_login::{Branding, LoginAccess, LoginOptions, Wiring};
 use plexus_transport::TransportServer;
 use serde_json::{json, Value};
 
-const BRANDING: Branding = Branding { app: "toy", version: "0.0.1", mark: "t" };
+const BRANDING: Branding = Branding { app: "toy", version: "0.0.1", mark: "t", motto: "" };
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -188,7 +188,9 @@ async fn router(cfg: ShellConfig) -> Router {
                 .route("/logout", axum::routing::post(w::logout))
                 // AUTH-7: a loopback sign-in's way back to its client.
                 .route("/auth/cli", get(w::cli).post(w::cli_confirm))
-                .with_state(login.clone()),
+                .with_state(login.clone())
+                // AUTH-22: our own sign-in page's steps, with an identity backend.
+                .merge(login.signin_routes()),
         );
         // DNS rebinding: a page on another name resolving here gets nothing.
         let hosts = Arc::new(allowed_hosts(cfg.port, &login));

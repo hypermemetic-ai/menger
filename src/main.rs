@@ -207,6 +207,29 @@ struct Args {
     #[arg(long = "dev-user", env = "MENGER_DEV_USERS", value_name = "SPEC", value_delimiter = ';')]
     dev_user: Vec<menger::dev_login::DevUser>,
 
+    /// AUTH-22: our own sign-in page over an identity backend, chosen by
+    /// configuration: `workos:<client_…>[,social=google+github+apple][,sso=off][,key=@<file>]`
+    /// (WorkOS's User Management API, no AuthKit screen; the API key from
+    /// MENGER_WORKOS_API_KEY or the file `key=@` names, never the flag),
+    /// `plexus-idp:<issuer>,<audience>` (passwords; local only), or `memory`
+    /// (tests and development) — those two only with `--env test`. Its tokens are admitted at the socket through
+    /// its provider, as any --auth-provider's. Changing it needs a restart.
+    #[arg(long, env = "MENGER_IDENTITY", value_name = "SPEC")]
+    identity: Option<plexus_login::backends::IdentitySpec>,
+
+    /// AUTH-22: a proxy (CIDR or address, repeatable) whose X-Forwarded-For
+    /// is believed for the client's IP — the edge in front of the shell —
+    /// or `none`: people connect directly. AUTH-24 #2: with --identity and a
+    /// --public-url off loopback, one of the two is required. In the env
+    /// var, separated by `;`.
+    #[arg(long = "trusted-proxy", env = "MENGER_TRUSTED_PROXIES", value_name = "CIDR|none", value_delimiter = ';')]
+    trusted_proxy: Vec<String>,
+
+    /// AUTH-22: another origin a sign-in may send the browser back to
+    /// (repeatable); the shell's own always may.
+    #[arg(long = "return-origin", env = "MENGER_RETURN_ORIGINS", value_name = "ORIGIN", value_delimiter = ';')]
+    return_origin: Vec<String>,
+
     /// IDENTITY-19: how long a sign-in lasts.
     #[arg(long, env = "MENGER_SESSION_HOURS", default_value = "12", value_name = "HOURS")]
     session_hours: i64,
@@ -255,6 +278,12 @@ async fn main() -> anyhow::Result<()> {
         page: !args.no_shell && !args.stdio,
         title: shell::tab_title(args.env.as_deref()),
         names: menger::login_names(),
+        identity: args.identity.as_ref().map(|s| s.build(menger::login_access::BRANDING.app)).transpose()?,
+        trusted_proxies: plexus_login::client_ip::TrustedProxies::parse(&args.trusted_proxy).map_err(anyhow::Error::msg)?,
+        return_origins: args.return_origin.clone(),
+        // AUTH-24 #8: `memory` and `plexus-idp` sign people in only where
+        // the dev sign-in may (IDENTITY-38: `--env test`).
+        allow_development_backends: dev_login_allowed(args.env.as_deref()),
         ..LoginOptions::new(menger::login_access::BRANDING, args.port, args.shell_port)
     })?;
     if args.require_login && !args.no_rest && !args.stdio {
@@ -320,6 +349,9 @@ async fn main() -> anyhow::Result<()> {
         if wired.login_on() {
             let names: Vec<&str> = wired.providers.iter().map(|p| p.name()).collect();
             tracing::info!("Login:     {} — anonymous callers see only the auth door", names.join(", "));
+        }
+        if let Some(spec) = &args.identity {
+            tracing::info!("Sign-in:   our own page over {spec}");
         }
         if !args.no_rest {
             let route_hub = hub.clone();

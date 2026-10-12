@@ -95,7 +95,7 @@ plexus-auth-core = { path = "../plexus-auth-core", version = "0.2", features = [
 # gate, the auth backend, the wiring — its own crate (a workspace member,
 # published before menger); menger implements its `LoginAccess` over
 # `Access` (src/login_access.rs) and `main` runs on its `Wiring`.
-plexus-login = { path = "plexus-login", version = "0.1" }
+plexus-login = { path = "plexus-login", version = "0.2" }
 # IDENTITY-19: the login page — the shell asks the provider itself (discovery,
 # token endpoint), keeps sessions keyed by a random id (hashed), and runs the
 # code flow with PKCE. All already in the lock through plexus-auth-core.

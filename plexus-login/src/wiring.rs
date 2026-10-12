@@ -33,6 +33,9 @@ use plexus_core::plexus::Activation;
 use plexus_transport::{ProtectedResource, TransportServerBuilder};
 
 use crate::access::{Branding, LoginAccess};
+use crate::client_ip::TrustedProxies;
+use crate::identity::IdentityBackend;
+use crate::throttle::Limits;
 use crate::auth_backend::{BrowserLogin, LoginAuth};
 use crate::dev_login::DevLogin;
 use crate::login::{self, LoginButton, Provider};
@@ -42,7 +45,7 @@ use crate::web_login::{self, origin_of, Login, LoginConfig};
 
 /// What the login is configured with — menger's login flags, as data.
 /// [`LoginOptions::new`] fills the defaults; set what the app's flags say.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LoginOptions {
     /// `--auth-provider`s. None: login off.
     pub providers: Vec<Provider>,
@@ -81,6 +84,38 @@ pub struct LoginOptions {
     /// The cookie names and the session metadata key; default
     /// [`LoginNames::for_app`] of the branding's name.
     pub names: LoginNames,
+    /// AUTH-22: the identity backend behind our own sign-in page
+    /// (`--identity`, [`crate::backends::from_spec`]). Its gate provider
+    /// (an OIDC adapter for its tokens as a bearer) joins `providers`.
+    pub identity: Option<Arc<dyn IdentityBackend>>,
+    /// AUTH-22: `--trusted-proxy` CIDRs: whose `X-Forwarded-For` is
+    /// believed for the client's IP (throttles, the backend's risk checks).
+    pub trusted_proxies: TrustedProxies,
+    /// AUTH-22: `--return-origin`s: more origins a sign-in may send the
+    /// browser back to (the shell's own always may).
+    pub return_origins: Vec<String>,
+    /// AUTH-22: the sign-in's throttles.
+    pub limits: Limits,
+    /// AUTH-24 #8: whether a development backend (`memory`, `plexus-idp`)
+    /// may sign people in here — the app decides where (menger: only
+    /// `--env test`, as the dev sign-in).
+    pub allow_development_backends: bool,
+    /// AUTH-25 N9: whether the shell listens on loopback only (menger's
+    /// does). With no `public_url`, a shell listening elsewhere is reachable
+    /// through whatever is in front of it, so it must name its proxy too.
+    pub shell_loopback: bool,
+}
+
+impl std::fmt::Debug for LoginOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginOptions")
+            .field("providers", &self.providers)
+            .field("identity", &self.identity.as_ref().map(|b| b.name().to_string()))
+            .field("public_url", &self.public_url)
+            .field("trusted_proxies", &self.trusted_proxies)
+            .field("require", &self.require)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LoginOptions {
@@ -104,6 +139,12 @@ impl LoginOptions {
             title: branding.app,
             branding,
             names: LoginNames::for_app(branding.app),
+            identity: None,
+            trusted_proxies: TrustedProxies::default(),
+            return_origins: Vec::new(),
+            limits: Limits::default(),
+            allow_development_backends: false,
+            shell_loopback: true,
         }
     }
 
@@ -135,8 +176,36 @@ impl Wiring {
     /// not https off loopback) and `--require-login` (it needs a provider),
     /// and makes the session table, its cookies named for this shell
     /// (IDENTITY-38).
-    pub fn new(opts: LoginOptions) -> anyhow::Result<Self> {
-        if opts.require && opts.providers.is_empty() {
+    pub fn new(mut opts: LoginOptions) -> anyhow::Result<Self> {
+        // AUTH-22: the identity backend's tokens are admitted at the gate
+        // through its provider-neutral OIDC adapter, as any provider's.
+        if let Some(p) = opts.identity.as_ref().and_then(|b| b.gate_provider()) {
+            if !opts.providers.iter().any(|q| q.name() == p.name()) {
+                opts.providers.push(p);
+            }
+        }
+        if let Some(b) = &opts.identity {
+            if b.for_development() && !opts.allow_development_backends {
+                anyhow::bail!(
+                    "--identity {}: a development backend (it signs anyone in, or trusts a local issuer); allowed only where the app allows it (menger: --env test)",
+                    b.name()
+                );
+            }
+        }
+        // AUTH-24 #2: off loopback, a proxy in front makes every visitor one
+        // client. Say which it is, or do not start.
+        let public = opts.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", opts.shell_port));
+        let exposed = match &opts.public_url {
+            Some(p) => !is_loopback_url(p),
+            None => !opts.shell_loopback,
+        };
+        if opts.identity.is_some() && !opts.trusted_proxies.configured() && exposed {
+            anyhow::bail!(
+                "the sign-in page at {public} needs --trusted-proxy: the edge in front of it (its address or network, e.g. the Docker network's subnet), \
+                 or `none` when people connect to it directly — without it, every visitor behind a proxy is one client to the throttles"
+            );
+        }
+        if opts.require && opts.providers.is_empty() && opts.identity.is_none() {
             anyhow::bail!("--require-login needs at least one --auth-provider to log in with");
         }
         let public_url = opts.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", opts.shell_port));
@@ -155,7 +224,7 @@ impl Wiring {
 
     /// Whether login is on (any provider).
     pub fn login_on(&self) -> bool {
-        !self.opts.providers.is_empty()
+        !self.opts.providers.is_empty() || self.opts.identity.is_some()
     }
 
     /// Where people reach the shell.
@@ -181,7 +250,7 @@ impl Wiring {
     /// page, so with no page it is unused.
     pub fn finish<A: LoginAccess>(self, access: A, dev: Option<DevLogin<A>>) -> anyhow::Result<Wired<A>> {
         let Self { opts, sessions, carriers, public_url, shell_origins } = self;
-        let login_on = !opts.providers.is_empty();
+        let login_on = !opts.providers.is_empty() || opts.identity.is_some();
         let login = if login_on && opts.page {
             Some(Arc::new(Login::new(
                 LoginConfig {
@@ -198,6 +267,10 @@ impl Wiring {
                     branding: opts.branding,
                     dev,
                     access: Some(access.clone()),
+                    identity: opts.identity.clone(),
+                    trusted_proxies: opts.trusted_proxies.clone(),
+                    return_origins: opts.return_origins.clone(),
+                    limits: opts.limits,
                 },
                 sessions.clone(),
             )?))
@@ -213,7 +286,9 @@ impl Wiring {
             opts.branding.app,
         ));
         // AUTH-7: the gate notices who signs in holding nothing.
-        let gate = carriers.map(|c| Arc::new(Gate::new(sessions.clone(), Some(c)).noticing(access.clone())));
+        // AUTH-22: with only an identity backend (no provider of its own,
+        // e.g. `memory`), the gate still reads the session cookie.
+        let gate = (carriers.is_some() || login_on).then(|| Arc::new(Gate::new(sessions.clone(), carriers).noticing(access.clone())));
         // RFC 9728's metadata names the OIDC issuers a client can sign in at.
         let issuers: Vec<String> = opts.providers.iter().filter_map(|p| p.oidc().map(|(issuer, _, _)| issuer.to_string())).collect();
         let protected = ProtectedResource::new(format!("http://127.0.0.1:{}", opts.ws_port), issuers);
@@ -221,7 +296,7 @@ impl Wiring {
         // the socket from a browser; a client sends no Origin.
         let mut origins = shell_origins;
         origins.extend(opts.allowed_origins.iter().cloned());
-        Ok(Wired { sessions, login, backend, gate, protected, origins, public_url, providers: opts.providers, access })
+        Ok(Wired { sessions, login, backend, gate, protected, origins, public_url, providers: opts.providers, access, identity: opts.identity })
     }
 }
 
@@ -245,12 +320,28 @@ pub struct Wired<A: LoginAccess> {
     pub providers: Vec<Provider>,
     /// The app's rules.
     pub access: A,
+    /// AUTH-22: the identity backend behind our own page, when there is one.
+    pub identity: Option<Arc<dyn IdentityBackend>>,
 }
 
 impl<A: LoginAccess> Wired<A> {
     /// Whether login is on (any provider).
     pub fn login_on(&self) -> bool {
-        !self.providers.is_empty()
+        !self.providers.is_empty() || self.identity.is_some()
+    }
+
+    /// AUTH-22: puts another identity backend behind the running sign-in
+    /// page ([`crate::signin::SignInPage::swap`]). The gate's providers are
+    /// fixed at startup: a new backend's bearer tokens are admitted after a
+    /// restart (its browser sessions at once).
+    pub fn swap_identity(&self, backend: Arc<dyn IdentityBackend>) -> bool {
+        match self.login.as_ref().and_then(|l| l.signin()) {
+            Some(p) => {
+                p.swap(backend);
+                true
+            }
+            None => false,
+        }
     }
 
     /// The providers a person is offered (`session.providers`, the page):
@@ -291,6 +382,16 @@ impl<A: LoginAccess> Wired<A> {
     }
 }
 
+/// Whether a URL's host is this machine (127.0.0.0/8, ::1, localhost).
+fn is_loopback_url(url: &str) -> bool {
+    match url::Url::parse(url).ok().and_then(|u| u.host().map(|h| h.to_owned())) {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost") || d.to_ascii_lowercase().ends_with(".localhost"),
+        None => false,
+    }
+}
+
 /// The origins a shell on `shell_port` is reached at: `127.0.0.1`,
 /// `localhost`, and `public_url`'s.
 pub fn shell_origins(shell_port: u16, public_url: &str) -> Vec<String> {
@@ -307,7 +408,7 @@ mod tests {
     use super::*;
     use crate::access::test_access::TestAccess;
 
-    const BRAND: Branding = Branding { app: "toy", version: "0.0.1", mark: "t" };
+    const BRAND: Branding = Branding { app: "toy", version: "0.0.1", mark: "t", motto: "" };
 
     #[test]
     fn no_provider_is_login_off_and_nothing_refused() {
@@ -339,6 +440,31 @@ mod tests {
         assert!(LoginOptions::new(BRAND, 1, 2).with_providers(["ldap=x"]).is_err());
         let off_loopback = LoginOptions::new(BRAND, 1, 2).with_providers(["idp=http://idp.example,plexus:toy"]).unwrap();
         assert!(Wiring::new(off_loopback).is_err());
+    }
+
+    #[test]
+    fn a_page_off_loopback_must_name_its_proxy_and_development_backends_are_refused() {
+        use crate::backends::memory::{Memory, MemoryOptions};
+        let mem: Arc<dyn IdentityBackend> = Arc::new(Memory::new(MemoryOptions::default()));
+        let opts = |public: &str, proxies: &[&str], dev: bool| LoginOptions {
+            identity: Some(mem.clone()),
+            public_url: Some(public.into()),
+            trusted_proxies: TrustedProxies::parse(proxies.iter().copied()).unwrap(),
+            allow_development_backends: dev,
+            ..LoginOptions::new(BRAND, 1, 2)
+        };
+        let e = Wiring::new(opts("http://127.0.0.1:2", &[], false)).err().unwrap().to_string();
+        assert!(e.contains("development backend"), "{e}");
+        assert!(Wiring::new(opts("http://127.0.0.1:2", &[], true)).is_ok(), "loopback: the peer is the client");
+        let e = Wiring::new(opts("https://toy.example", &[], true)).err().unwrap().to_string();
+        assert!(e.contains("--trusted-proxy"), "{e}");
+        assert!(Wiring::new(opts("https://toy.example", &["172.18.0.0/16"], true)).is_ok());
+        assert!(Wiring::new(opts("https://toy.example", &["none"], true)).is_ok(), "direct, said so");
+        // AUTH-25 N9: no public URL, but the shell listens off loopback.
+        let off = LoginOptions { identity: Some(mem.clone()), allow_development_backends: true, shell_loopback: false, ..LoginOptions::new(BRAND, 1, 2) };
+        assert!(Wiring::new(off).err().unwrap().to_string().contains("--trusted-proxy"));
+        let on = LoginOptions { identity: Some(mem.clone()), allow_development_backends: true, ..LoginOptions::new(BRAND, 1, 2) };
+        assert!(Wiring::new(on).is_ok(), "a loopback shell with no public URL");
     }
 
     #[test]
