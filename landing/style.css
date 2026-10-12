@@ -165,8 +165,22 @@ p { margin: 0 0 1rem; }
     radial-gradient(60% 50% at 85% 10%, var(--glow-a), transparent 70%),
     radial-gradient(50% 50% at 5% 40%, var(--glow-b), transparent 70%);
 }
-.hero-copy { max-width: 46rem; margin: 0 auto 2rem; text-align: center; }
-.hero-copy .actions { justify-content: center; }
+/* the hero: the words beside the carpet (owner, 2026-10-12: the animation up
+   top), the product right beneath; on a phone the carpet comes first, small */
+.hero-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.6rem; align-items: center; margin-bottom: 2.6rem; }
+.hero-copy { max-width: 40rem; }
+@media (min-width: 900px) {
+  .hero-grid { grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 3.5rem; margin-bottom: 3.4rem; }
+}
+@media (max-width: 899px) {
+  .hero-grid .sponge { order: -1; max-width: 190px; }
+  .hero-grid .sponge .cap-text { display: none; }
+  .hero-grid .sponge figcaption { margin-top: .5rem; }
+  .hero-copy { margin: 0 auto; text-align: center; }
+  .hero-copy .actions { justify-content: center; }
+  .hero-copy .lede { margin-left: auto; margin-right: auto; }
+}
+@media (min-width: 900px) { .hero-copy .lede { margin-left: 0; } }
 @media (min-width: 900px) { .hero { padding: 3.6rem 0 4rem; } }
 .eyebrow { font-size: .85rem; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: .8rem; }
 .hero h1 { font-size: clamp(2.1rem, 5.4vw, 3.6rem); margin: 0 0 1.1rem; letter-spacing: -.025em; }
@@ -289,6 +303,7 @@ pre.cmd .o { color: var(--num-c); }
 .legend { display: flex; flex-wrap: wrap; justify-content: center; gap: .35rem; }
 .legend b { display: inline-block; min-width: 3ch; text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
 @media (max-width: 899px) { .sponge { max-width: 300px; } }
+.p-tree-shot { max-width: 420px; justify-self: center; }
 
 /* get it */
 .get-card { display: flex; flex-direction: column; align-items: flex-start; }

@@ -221,10 +221,11 @@ capture() {
 }
 
 # ── encode ───────────────────────────────────────────────────────────────
-# Each still is shown at most 600 CSS px wide, except the hero (board), up to
-# 1200: so every still is AVIF at 1200 px (2× its slot), the hero at 2400 px
-# too, and WebP at 1200 px for browsers without AVIF.
-#   raw/stills/<name>.<theme>.png → <name>.<theme>.1200.{avif,webp} (+ board.<theme>.2400.avif)
+# Every still at 1200 and 2400 px, AVIF and WebP, so a 2× screen gets 2×
+# pixels at any slot up to 1200 CSS px (the hero), and at quality high enough
+# that the app's small UI text stays crisp (owner, 2026-10-12: "the
+# screenshot is also blurry"). The browser picks by srcset/sizes.
+#   raw/stills/<name>.<theme>.png → <name>.<theme>.{1200,2400}.{avif,webp}
 # Clips: H.264 (every browser) and VP9 WebM, muted; the poster is the last
 # frame (the change made), WebP.
 #   raw/clips/<clip>.mp4 → <clip>.{mp4,webm} + <clip>.poster.webp
@@ -236,18 +237,17 @@ encode() {
   for f in "$WORK"/raw/stills/*.png; do
     base=$(basename "$f" .png)
     for w in 1200 2400; do
-      [[ $w == 2400 && $base != "$HERO".* ]] && continue
       ffmpeg -loglevel error -y -i "$f" -vf "scale=$w:-2:flags=lanczos" "$WORK/tmp.png"
-      avif "$WORK/tmp.png" 52 "$OUT/$base.$w.avif"
-      [[ $w == 1200 ]] && cwebp -quiet -q 72 -m 6 "$WORK/tmp.png" -o "$OUT/$base.$w.webp"
+      avif "$WORK/tmp.png" 80 "$OUT/$base.$w.avif"
+      cwebp -quiet -q 90 -m 6 "$WORK/tmp.png" -o "$OUT/$base.$w.webp"
     done
   done
   # the nav tree alone, cropped from the board (its first 360 × 480 CSS px), for "a plan is a tree"
   local theme
   for theme in light dark; do
     ffmpeg -loglevel error -y -i "$WORK/raw/stills/board.$theme.png" -vf "crop=720:960:0:0" "$WORK/tmp.png"
-    avif "$WORK/tmp.png" 52 "$OUT/nav.$theme.720.avif"
-    cwebp -quiet -q 78 -m 6 "$WORK/tmp.png" -o "$OUT/nav.$theme.720.webp"
+    avif "$WORK/tmp.png" 80 "$OUT/nav.$theme.720.avif"
+    cwebp -quiet -q 90 -m 6 "$WORK/tmp.png" -o "$OUT/nav.$theme.720.webp"
   done
   local clip
   for clip in "$WORK"/raw/clips/*.mp4; do

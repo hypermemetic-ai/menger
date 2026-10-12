@@ -44,6 +44,7 @@
 <!-- 1 · the hero: who it is for, the promise, the action, the product -->
 <section class="hero" id="top" aria-labelledby="hero-title">
   <div class="wrap">
+    <div class="hero-grid">
     <div class="hero-copy">
       <p class="eyebrow">For software teams of people and AI agents</p>
       <h1 id="hero-title">One live plan for everyone doing the work.</h1>
@@ -56,9 +57,35 @@
       </div>
       <p class="aside"><a href="#tour">Watch the 60-second tour ↓</a> · Open source, MIT licence</p>
     </div>
+    <!-- The carpet (owner, 2026-10-12: "I want the initial animation up
+         top"): a scope divides into work, and the work moves through its
+         lifecycle — serial in the smallest block, parallel above it. -->
+    <figure class="sponge" aria-labelledby="sponge-cap">
+      <div class="sponge-stage">
+        <div class="sponge-tilt">
+          <!-- Without JavaScript (and before it runs): the Menger carpet,
+               level 2, as on the favicon. main.js replaces it with the
+               animated one, or a still one under reduced motion. -->
+          <svg class="carpet" id="carpet" viewBox="-0.5 -0.5 28 28" role="img" aria-label="The Menger carpet: a square divided into nine, its centre removed, again and again.">
+            <path class="carpet-still" d="M0 0h27v3h-27zM0 3h3v3h-3zM6 3h6v3h-6zM15 3h6v3h-6zM24 3h3v3h-3zM0 6h27v3h-27zM0 9h9v3h-9zM18 9h9v3h-9zM0 12h3v3h-3zM6 12h3v3h-3zM18 12h3v3h-3zM24 12h3v3h-3zM0 15h9v3h-9zM18 15h9v3h-9zM0 18h27v3h-27zM0 21h3v3h-3zM6 21h6v3h-6zM15 21h6v3h-6zM24 21h3v3h-3zM0 24h27v3h-27z"/>
+          </svg>
+        </div>
+      </div>
+      <figcaption id="sponge-cap">
+        <span class="cap-text">One scope divides into 8, then 64, then 512 pieces of work, and the work moves through its lifecycle.</span>
+        <span class="legend" aria-hidden="true">
+          <span class="chip st-pending">Pending <b data-count="0"></b></span>
+          <span class="chip st-ready">Ready <b data-count="1"></b></span>
+          <span class="chip st-coding">Coding <b data-count="2"></b></span>
+          <span class="chip st-in-review">In Review <b data-count="3"></b></span>
+          <span class="chip st-complete">Complete <b data-count="4"></b></span>
+        </span>
+      </figcaption>
+    </figure>
+    </div>
     <figure class="shot shot-hero">
       <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>menger — the board</span></div>
-      <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="media/board.dark.1200.avif 1200w, media/board.dark.2400.avif 2400w" sizes="(min-width: 1184px) 1120px, calc(100vw - 32px)"><source type="image/avif" srcset="media/board.light.1200.avif 1200w, media/board.light.2400.avif 2400w" sizes="(min-width: 1184px) 1120px, calc(100vw - 32px)"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="media/board.dark.1200.webp"><img src="media/board.light.1200.webp" width="1200" height="750" alt="The menger app: on the left, the nav — the plan as a tree, OFFLINE and SYNC with their tickets and statuses; on the right, the board — every ticket with its kind, status and what blocks it." fetchpriority="high" decoding="async"></picture>
+      <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="media/board.dark.1200.avif 1200w, media/board.dark.2400.avif 2400w" sizes="(min-width: 1184px) 1120px, calc(100vw - 32px)"><source type="image/avif" srcset="media/board.light.1200.avif 1200w, media/board.light.2400.avif 2400w" sizes="(min-width: 1184px) 1120px, calc(100vw - 32px)"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="media/board.dark.1200.webp 1200w, media/board.dark.2400.webp 2400w" sizes="(min-width: 1184px) 1120px, calc(100vw - 32px)"><img src="media/board.light.1200.webp" srcset="media/board.light.1200.webp 1200w, media/board.light.2400.webp 2400w" sizes="(min-width: 1184px) 1120px, calc(100vw - 32px)" width="1200" height="750" alt="The menger app: on the left, the nav — the plan as a tree, OFFLINE and SYNC with their tickets and statuses; on the right, the board — every ticket with its kind, status and what blocks it." fetchpriority="high" decoding="async"></picture>
       <figcaption>The real app, with a sample project: a mobile team shipping offline mode.</figcaption>
     </figure>
   </div>
@@ -96,12 +123,12 @@
         <p>Start with a scope: the goal. Break it into builds, spikes, fixes and rollouts, and say what waits on what.</p>
       </li>
       <li class="reveal">
-        <figure class="shot shot-small"><picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="media/waves.dark.1200.avif"><source type="image/avif" srcset="media/waves.light.1200.avif"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="media/waves.dark.1200.webp"><img src="media/waves.light.1200.webp" width="1200" height="750" alt="The wave board for OFFLINE: wave 1 holds the work that can start now, wave 2 what follows it, and a done column." loading="lazy" decoding="async"></picture></figure>
+        <figure class="shot shot-small"><picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="media/waves.dark.1200.avif 1200w, media/waves.dark.2400.avif 2400w" sizes="(min-width: 860px) 340px, calc(100vw - 32px)"><source type="image/avif" srcset="media/waves.light.1200.avif 1200w, media/waves.light.2400.avif 2400w" sizes="(min-width: 860px) 340px, calc(100vw - 32px)"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="media/waves.dark.1200.webp 1200w, media/waves.dark.2400.webp 2400w" sizes="(min-width: 860px) 340px, calc(100vw - 32px)"><img src="media/waves.light.1200.webp" srcset="media/waves.light.1200.webp 1200w, media/waves.light.2400.webp 2400w" sizes="(min-width: 860px) 340px, calc(100vw - 32px)" width="1200" height="750" alt="The wave board for OFFLINE: wave 1 holds the work that can start now, wave 2 what follows it, and a done column." loading="lazy" decoding="async"></picture></figure>
         <h3><span class="n" aria-hidden="true">2</span> Promote what's ready.</h3>
         <p>You move a ticket to Ready. Whoever starts it — a teammate or an agent — marks it Coding, so nothing is picked up twice. The wave board shows what can start now.</p>
       </li>
       <li class="reveal">
-        <figure class="shot shot-small"><picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="media/ticket.dark.1200.avif"><source type="image/avif" srcset="media/ticket.light.1200.avif"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="media/ticket.dark.1200.webp"><img src="media/ticket.light.1200.webp" width="1200" height="750" alt="A ticket page: OFFLINE-6, In Review, the commit that finished it, what it waits on and what it unlocks, and a sequence diagram in its body." loading="lazy" decoding="async"></picture></figure>
+        <figure class="shot shot-small"><picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="media/ticket.dark.1200.avif 1200w, media/ticket.dark.2400.avif 2400w" sizes="(min-width: 860px) 340px, calc(100vw - 32px)"><source type="image/avif" srcset="media/ticket.light.1200.avif 1200w, media/ticket.light.2400.avif 2400w" sizes="(min-width: 860px) 340px, calc(100vw - 32px)"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="media/ticket.dark.1200.webp 1200w, media/ticket.dark.2400.webp 2400w" sizes="(min-width: 860px) 340px, calc(100vw - 32px)"><img src="media/ticket.light.1200.webp" srcset="media/ticket.light.1200.webp 1200w, media/ticket.light.2400.webp 2400w" sizes="(min-width: 860px) 340px, calc(100vw - 32px)" width="1200" height="750" alt="A ticket page: OFFLINE-6, In Review, the commit that finished it, what it waits on and what it unlocks, and a sequence diagram in its body." loading="lazy" decoding="async"></picture></figure>
         <h3><span class="n" aria-hidden="true">3</span> Watch it land.</h3>
         <p>Each commit links to the ticket it finishes. Review and merge move it to Complete, and every board and page shows it at once.</p>
       </li>
@@ -158,27 +185,10 @@
         <p>Scopes break into work, and work breaks down until each piece fits one person or one agent. What a piece produces — a spike's answer, a benchmark, a report — is filed beneath it, so every result shows where it came from.</p>
         <a class="more" href="guide/#what">Learn more about tickets and kinds →</a>
       </div>
-      <figure class="sponge p-visual" aria-labelledby="sponge-cap">
-        <div class="sponge-stage">
-          <div class="sponge-tilt">
-            <!-- Without JavaScript (and before it runs): the Menger carpet,
-                 level 2, as on the favicon. main.js replaces it with the
-                 animated one, or a still one under reduced motion. -->
-            <svg class="carpet" id="carpet" viewBox="-0.5 -0.5 28 28" role="img" aria-label="The Menger carpet: a square divided into nine, its centre removed, again and again.">
-              <path class="carpet-still" d="M0 0h27v3h-27zM0 3h3v3h-3zM6 3h6v3h-6zM15 3h6v3h-6zM24 3h3v3h-3zM0 6h27v3h-27zM0 9h9v3h-9zM18 9h9v3h-9zM0 12h3v3h-3zM6 12h3v3h-3zM18 12h3v3h-3zM24 12h3v3h-3zM0 15h9v3h-9zM18 15h9v3h-9zM0 18h27v3h-27zM0 21h3v3h-3zM6 21h6v3h-6zM15 21h6v3h-6zM24 21h3v3h-3zM0 24h27v3h-27z"/>
-            </svg>
-          </div>
-        </div>
-        <figcaption id="sponge-cap">
-          <span class="cap-text">One scope divides into 8, then 64, then 512 pieces of work, and the work moves through its lifecycle.</span>
-          <span class="legend" aria-hidden="true">
-            <span class="chip st-pending">Pending <b data-count="0"></b></span>
-            <span class="chip st-ready">Ready <b data-count="1"></b></span>
-            <span class="chip st-coding">Coding <b data-count="2"></b></span>
-            <span class="chip st-in-review">In Review <b data-count="3"></b></span>
-            <span class="chip st-complete">Complete <b data-count="4"></b></span>
-          </span>
-        </figcaption>
+      <figure class="shot p-visual p-tree-shot">
+        <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>the nav</span></div>
+        <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="media/nav.dark.720.avif"><source type="image/avif" srcset="media/nav.light.720.avif"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="media/nav.dark.720.webp"><img src="media/nav.light.720.webp" width="720" height="960" alt="The nav: the OFFLINE scope with its builds, spikes and gaps beneath it, its findings doc under the spike that produced it, and the SYNC scope nested inside." loading="lazy" decoding="async"></picture>
+        <figcaption>The OFFLINE plan as a tree: the work under the goal, the spike's findings filed beneath the spike, SYNC nested inside.</figcaption>
       </figure>
     </article>
 
