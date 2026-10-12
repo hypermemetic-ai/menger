@@ -13,7 +13,7 @@
 #           loopback, started from code
 [package]
 name = "plexus-shell"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "Serve a Plexus RPC app's frontend build (from disk or embedded in the binary) beside its hub, and start the whole server as a library call"
