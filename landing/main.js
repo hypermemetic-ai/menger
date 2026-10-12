@@ -107,8 +107,9 @@
   }
 
   // one cycle: a scope (level 0) divides into 8, 64, 512 leaves; the leaves
-  // are Pending, then the work moves them, front to back, through Ready,
-  // Coding and In Review to Complete; held a moment, the cycle begins again
+  // are Pending, then the work moves them through Ready, Coding and In
+  // Review to Complete — serial at the smallest level, parallel above it,
+  // ever more at once (work(), below); held a moment, the cycle begins again
   var leafRects = null;
   function cycle() {
     clear();
@@ -131,28 +132,48 @@
       }, 1300);
     }, 1100);
   }
+  // The work. The 512 leaves are 64 chains of 8: a level-2 block's leaves
+  // are worked one after another — serial at the smallest level — while the
+  // chains run side by side, parallel at every level above. Every level-1
+  // block starts a chain before any starts a second, the starts come ever
+  // faster and each step is ever quicker, so the concurrency accelerates.
+  // Leaves are sorted by rank (b1·64 + b2·8 + b3): chain b1·8 + b2 is the
+  // leaves at 8·(b1·8 + b2) … +7. A chain's place is its first unfinished
+  // leaf, so a paused cycle resumes where it stopped.
+  var STEP_SLOW = 240, STEP_FAST = 40, START_GAP = 700, GAP_MIN = 25, GAP_SHRINK = 0.8;
   function work() {
     phase = "work"; setCounts();
-    var front = 0, total = leaves.length;
+    var total = leaves.length * 4, steps = 0;
+    leaves.forEach(function (l) { steps += l.state; });
+    var order = [];
+    for (var b2 = 0; b2 < 8; b2++) for (var b1 = 0; b1 < 8; b1++) {
+      var at = (b1 * 8 + b2) * 8;
+      if (leaves[at + 7].state < 4) order.push({ at: at });
+    }
+    var now = Date.now(), gap = START_GAP;
+    order.forEach(function (c, i) { c.next = now; now += gap; gap = Math.max(GAP_MIN, gap * GAP_SHRINK); });
     tick = setInterval(function () {
-      front = Math.min(total, front + 6);
-      var moved = 0;
-      for (var i = 0; i < front && moved < 9; i++) {
-        var l = leaves[i];
-        if (l.state < 4 && Math.random() < 0.22) {
-          l.state++;
-          leafRects[i].setAttribute("class", "sq s-" + l.state);
-          moved++;
-        }
-      }
-      setCounts();
-      if (front === total && leaves.every(function (x) { return x.state === 4; })) {
+      var t = Date.now(), moved = false;
+      var left = 1 - steps / total;
+      var step = STEP_FAST + (STEP_SLOW - STEP_FAST) * left * left;
+      order.forEach(function (c) {
+        if (t < c.next) return;
+        var j = c.at;
+        while (j < c.at + 8 && leaves[j].state === 4) j++;
+        if (j === c.at + 8) return;
+        leaves[j].state++;
+        leafRects[j].setAttribute("class", "sq s-" + leaves[j].state);
+        steps++; moved = true;
+        c.next = t + step * (0.7 + Math.random() * 0.6);
+      });
+      if (moved) setCounts();
+      if (steps >= total) {
         clearInterval(tick); tick = null;
         phase = "done";
         later(function () { svg.classList.add("fade"); svg.classList.add("gone"); }, 2600);
         later(function () { svg.classList.remove("gone"); cycle(); }, 3400);
       }
-    }, 110);
+    }, 25);
   }
 
   // reduced motion: one still frame — the carpet mid-work, every state shown
