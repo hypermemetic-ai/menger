@@ -10,7 +10,7 @@
 <!-- IDENTITY-19: menger's login page. Self-contained (no app, no fonts, no
      scripts but the one below), so it can be handed to an IdP as its hosted
      login page later. The shell fills the {{…}} placeholders, escaped. -->
-<script>try{var t=localStorage.getItem("menger.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<script>try{var t=localStorage.getItem("{{APP}}.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <style>
   /* Layout: one sheet in two panes — the instance on a tinted column (as
      the app's nav column), the way in beside it on the page; stacked on a
@@ -174,7 +174,7 @@
 <body>
   <div class="sheet">
     <aside class="side">
-      <div class="brand"><span class="mark">m</span>{{TITLE}}</div>
+      <div class="brand"><span class="mark">{{MARK}}</span>{{TITLE}}</div>
       <p class="motto">A plan is a program whose leaves are prose.</p>
       <dl class="facts">{{FACTS}}</dl>
       {{DEV}}
@@ -253,10 +253,10 @@
           const body = await r.json().catch(() => ({}));
           if (r.ok && body.next) { location.href = body.next; return; }
           n.disabled = false;
-          say(body.error || "menger did not accept the signature (" + r.status + ").", true);
+          say(body.error || "{{APP}} did not accept the signature (" + r.status + ").", true);
         } catch (e) {
           n.disabled = false;
-          say("menger could not be reached: " + (e && e.message ? e.message : e), true);
+          say("{{APP}} could not be reached: " + (e && e.message ? e.message : e), true);
         }
       });
     }

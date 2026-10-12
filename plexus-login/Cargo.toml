@@ -1,0 +1,36 @@
+[package]
+name = "plexus-login"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Login for a Plexus RPC hub — provider specs, the login page and its routes, sessions, the WebSocket gate and the auth backend — generic over the app's access rules"
+repository = "https://github.com/hypermemetic-ai/menger"
+# SCAFFOLD-3 (S1): menger's login lifted as it is (owner, 2026-10-11) — a
+# workspace member of menger for now; SCAFFOLD-9 (B5) publishes it. The seam
+# to the app is one trait, `LoginAccess` (src/access.rs); menger implements
+# it over its `Access`.
+
+[dependencies]
+plexus-core = { path = "../../plexus-core", version = "0.6" }
+plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2", features = ["adapters"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+url = "2"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+# The dev sign-in registers accounts at plexus-idp over its Plexus socket.
+jsonrpsee = { version = "0.26", features = ["ws-client"] }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures = "0.3"
+anyhow = "1"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+# examples/toy.rs: a second hub on the crate, served over the transport.
+plexus-transport = { path = "../../plexus-transport", version = "0.5", default-features = false }
+jsonrpsee = { version = "0.26", features = ["ws-client", "server"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

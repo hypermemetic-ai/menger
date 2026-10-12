@@ -35,9 +35,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use menger_tickets_api::access::Access;
-use menger_tickets_api::members::Role;
-
+use crate::access::{Branding, LoginAccess};
 use crate::dev_login::{self, DevLogin};
 use crate::login::{LoginButton, Provider};
 use crate::sessions::{self, Sessions};
@@ -54,7 +52,7 @@ fn txn_cookie(session: &str) -> String {
 }
 
 /// What the shell's login is configured with (main's flags).
-pub struct LoginConfig {
+pub struct LoginConfig<A: LoginAccess> {
     pub providers: Vec<Provider>,
     pub buttons: Vec<LoginButton>,
     /// The provider the password form goes to; `None`: the first OIDC one
@@ -71,6 +69,8 @@ pub struct LoginConfig {
     /// Whether anonymous visitors are sent to the page.
     pub require: bool,
     pub title: &'static str,
+    /// SCAFFOLD-3: the app's name, version and mark, as the page says them.
+    pub branding: Branding,
     /// IDENTITY-30: the email field's provider (`--login-email
     /// workos:authkit`): the address goes to it as `login_hint`, so an SSO
     /// domain goes straight to its company's IdP and anyone else finishes on
@@ -79,8 +79,9 @@ pub struct LoginConfig {
     pub email: Option<LoginButton>,
     /// IDENTITY-35: the dev sign-in (test only), and the rule its grants
     /// are written through.
-    pub dev: Option<DevLogin>,
-    pub access: Option<Access>,
+    pub dev: Option<DevLogin<A>>,
+    /// The app's access rules (SCAFFOLD-3: [`LoginAccess`]).
+    pub access: Option<A>,
 }
 
 /// The email field's button, as `/login/start?button=` names it.
@@ -93,7 +94,7 @@ struct Discovery {
 }
 
 /// The login service. See the module docs.
-pub struct Login {
+pub struct Login<A: LoginAccess> {
     sessions: Arc<Sessions>,
     providers: HashMap<String, (Provider, Arc<dyn Authenticator>)>,
     password: Option<String>,
@@ -107,12 +108,13 @@ pub struct Login {
     discovery: Mutex<HashMap<String, Discovery>>,
     pub require: bool,
     title: &'static str,
-    dev: Option<DevLogin>,
-    access: Option<Access>,
+    branding: Branding,
+    dev: Option<DevLogin<A>>,
+    access: Option<A>,
 }
 
-impl Login {
-    pub fn new(cfg: LoginConfig, sessions: Arc<Sessions>) -> anyhow::Result<Self> {
+impl<A: LoginAccess> Login<A> {
+    pub fn new(cfg: LoginConfig<A>, sessions: Arc<Sessions>) -> anyhow::Result<Self> {
         let public_url = cfg.public_url.trim_end_matches('/').to_string();
         let mut providers = HashMap::new();
         let mut nostr = None;
@@ -184,6 +186,7 @@ impl Login {
             discovery: Mutex::new(HashMap::new()),
             require: cfg.require,
             title: cfg.title,
+            branding: cfg.branding,
             dev: cfg.dev,
             access: cfg.access,
         })
@@ -441,7 +444,7 @@ impl Login {
                 names.join(", ")
             }
         };
-        [("instance", self.title.to_string()), ("version", env!("CARGO_PKG_VERSION").to_string()), ("sign-in", via)]
+        [("instance", self.title.to_string()), ("version", self.branding.version.to_string()), ("sign-in", via)]
             .iter()
             .map(|(k, v)| format!("<dt>{k}</dt><dd>{}</dd>", esc(v)))
             .collect()
@@ -457,11 +460,13 @@ impl Login {
       <p class="sub">to continue to {}</p>"#, esc(self.title))
         };
         include_str!("../web/login.html")
+            .replace("{{APP}}", self.branding.app)
+            .replace("{{MARK}}", self.branding.mark)
             .replace("{{DEV}}", &toggle.unwrap_or_default())
             .replace("{{HEADING}}", &heading)
             .replace("{{FACTS}}", &self.facts(dev))
             .replace("{{TITLE}}", self.title)
-            .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
+            .replace("{{VERSION}}", self.branding.version)
             .replace(
                 "{{ERROR}}",
                 &error.map(|e| format!(r#"<p class="error" role="alert">{}</p>"#, esc(e))).unwrap_or_default(),
@@ -493,7 +498,7 @@ fn cli_next(state: &str) -> String {
     format!("/auth/cli?state={}", url::form_urlencoded::byte_serialize(state.as_bytes()).collect::<String>())
 }
 
-pub async fn page(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<PageQuery>) -> Response {
+pub async fn page<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Query(q): Query<PageQuery>) -> Response {
     let next = match (q.cli.as_deref(), q.state.as_deref()) {
         (Some(_), Some(state)) if login.sessions.cli_waiting(state) => cli_next(state),
         _ => safe_next(q.next.as_deref()),
@@ -512,10 +517,10 @@ pub struct PasswordForm {
     next: Option<String>,
 }
 
-pub async fn password(State(login): State<Arc<Login>>, headers: HeaderMap, Form(f): Form<PasswordForm>) -> Response {
+pub async fn password<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Form(f): Form<PasswordForm>) -> Response {
     let next = safe_next(f.next.as_deref());
     if login.foreign(&headers) {
-        return (StatusCode::FORBIDDEN, "Forbidden: sign in from menger's own page").into_response();
+        return (StatusCode::FORBIDDEN, format!("Forbidden: sign in from {}'s own page", login.branding.app)).into_response();
     }
     let Some(name) = login.password.clone() else {
         return page_response(&login, &next, Some("Passwords are not taken here."), StatusCode::NOT_FOUND);
@@ -535,7 +540,7 @@ pub struct StartQuery {
     signup: Option<String>,
 }
 
-pub async fn start(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<StartQuery>) -> Response {
+pub async fn start<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Query(q): Query<StartQuery>) -> Response {
     let next = safe_next(q.next.as_deref());
     // IDENTITY-35: with the checkbox ticked, every way in is plexus-idp.
     if login.dev_on(&headers) {
@@ -549,7 +554,7 @@ pub async fn start(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q)
 
 /// Out to a button's provider: the authorization code flow with PKCE, the
 /// state bound to this browser by the transaction cookie.
-async fn begin(login: &Login, b: &LoginButton, login_hint: Option<&str>, sign_up: bool, next: String) -> Response {
+async fn begin<A: LoginAccess>(login: &Login<A>, b: &LoginButton, login_hint: Option<&str>, sign_up: bool, next: String) -> Response {
     let login = login;
     let (provider, _) = &login.providers[&b.provider];
     let (issuer, audience, client) = provider.oidc().expect("checked at start");
@@ -608,7 +613,7 @@ pub struct CallbackQuery {
     error_description: Option<String>,
 }
 
-pub async fn callback(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<CallbackQuery>) -> Response {
+pub async fn callback<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Query(q): Query<CallbackQuery>) -> Response {
     let fail = |why: &str| page_response(&login, "/", Some(why), StatusCode::UNAUTHORIZED);
     // IDENTITY-38: the provider's words go to the log, not the page — a
     // link can carry any `error_description` to this URL.
@@ -691,11 +696,11 @@ pub struct NextQuery {
     next: Option<String>,
 }
 
-pub async fn nostr(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<NextQuery>) -> Response {
+pub async fn nostr<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Query(q): Query<NextQuery>) -> Response {
     let next = safe_next(q.next.as_deref());
     if login.foreign(&headers) {
         tracing::warn!("nostr sign-in refused: a POST from another page's origin {:?}", headers.get(header::ORIGIN));
-        return (StatusCode::FORBIDDEN, "Forbidden: sign in from menger's own page").into_response();
+        return (StatusCode::FORBIDDEN, format!("Forbidden: sign in from {}'s own page", login.branding.app)).into_response();
     }
     let Some(adapter) = &login.nostr else {
         return (StatusCode::NOT_FOUND, "nostr is not offered here").into_response();
@@ -724,7 +729,7 @@ pub async fn nostr(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q)
     match outcome {
         Ok(a) if json => login.hand_over(a.into_auth_context(), axum::Json(json!({ "next": next })).into_response()),
         Ok(a) => login.sign_in(a.into_auth_context(), &next),
-        Err(e) if json => (StatusCode::UNAUTHORIZED, axum::Json(json!({ "error": nostr_refusal(&e) }))).into_response(),
+        Err(e) if json => (StatusCode::UNAUTHORIZED, axum::Json(json!({ "error": nostr_refusal(&e, login.branding.app) }))).into_response(),
         Err(_) => (StatusCode::UNAUTHORIZED, "the nostr event was not accepted").into_response(),
     }
 }
@@ -740,7 +745,7 @@ pub struct NostrTrace {
 /// waiting on the extension, the extension refusing — into the log, so a
 /// failing signer can be read without the person's screen. Only from the
 /// shell's own pages; short, printable, and logged, nothing more.
-pub async fn nostr_trace(State(login): State<Arc<Login>>, headers: HeaderMap, axum::Json(t): axum::Json<NostrTrace>) -> Response {
+pub async fn nostr_trace<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, axum::Json(t): axum::Json<NostrTrace>) -> Response {
     if login.foreign(&headers) || headers.get(header::ORIGIN).is_none() {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -775,10 +780,10 @@ fn nip98_detail(token: &str) -> String {
 }
 
 /// Why a NIP-98 event was refused, for the person who signed it.
-fn nostr_refusal(e: &plexus_auth_core::identity::AuthnRejection) -> String {
+fn nostr_refusal(e: &plexus_auth_core::identity::AuthnRejection, app: &str) -> String {
     use plexus_auth_core::identity::AuthnRejection as R;
     match e {
-        R::Expired => "The signature is too old: menger takes one signed within a minute. Press the button again and approve it promptly.".into(),
+        R::Expired => format!("The signature is too old: {app} takes one signed within a minute. Press the button again and approve it promptly."),
         R::Malformed(m) if m.contains("already used") => "That signature was already used. Press the button again.".into(),
         other => format!("Your nostr key's signature was not accepted ({other})."),
     }
@@ -799,10 +804,10 @@ pub struct DevForm {
 /// IDENTITY-35: `POST /login/dev` — a seeded user, any username (registered
 /// at plexus-idp if new, with the role asked for), or a plexus-idp account
 /// by its password. Always a real password grant, verified.
-pub async fn dev(State(login): State<Arc<Login>>, headers: HeaderMap, Form(f): Form<DevForm>) -> Response {
+pub async fn dev<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Form(f): Form<DevForm>) -> Response {
     let next = safe_next(f.next.as_deref());
     if login.foreign(&headers) {
-        return (StatusCode::FORBIDDEN, "Forbidden: sign in from menger's own page").into_response();
+        return (StatusCode::FORBIDDEN, format!("Forbidden: sign in from {}'s own page", login.branding.app)).into_response();
     }
     let (Some(d), Some(access)) = (login.dev.clone(), login.access.clone()) else {
         return page_response(&login, &next, Some("The dev sign-in is not offered here."), StatusCode::NOT_FOUND);
@@ -823,13 +828,13 @@ pub async fn dev(State(login): State<Arc<Login>>, headers: HeaderMap, Form(f): F
         Err(e) => return refuse(&e, StatusCode::BAD_REQUEST),
     };
     let roster = d.user(&name).is_some();
-    let grants: Vec<(Role, String)> = match d.user(&name) {
+    let grants: Vec<(A::Role, String)> = match d.user(&name) {
         Some(u) => u.grants.clone(),
         None => match f.role.as_deref().map(str::trim).filter(|r| !r.is_empty() && *r != "none") {
             None => Vec::new(),
             Some(r) => {
                 let scope = f.scope.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("*");
-                match (r.parse::<Role>(), menger_tickets_api::members::scope_of(scope)) {
+                match (r.parse::<A::Role>(), A::scope_of(scope)) {
                     (Ok(r), Ok(s)) => vec![(r, s)],
                     (Err(e), _) | (_, Err(e)) => return refuse(&e, StatusCode::BAD_REQUEST),
                 }
@@ -868,8 +873,8 @@ pub async fn dev(State(login): State<Arc<Login>>, headers: HeaderMap, Form(f): F
 }
 
 /// The dev sign-in's panel: the roster, anyone, an account's own password.
-fn dev_panel(d: &DevLogin, next_e: &str) -> String {
-    let chips = |grants: &[(Role, String)]| -> String {
+fn dev_panel<A: LoginAccess>(d: &DevLogin<A>, next_e: &str) -> String {
+    let chips = |grants: &[(A::Role, String)]| -> String {
         if grants.is_empty() {
             return r#"<span class="grant none">no access</span>"#.into();
         }
@@ -932,7 +937,7 @@ fn dev_panel(d: &DevLogin, next_e: &str) -> String {
     )
 }
 
-pub async fn logout(State(login): State<Arc<Login>>, headers: HeaderMap) -> Response {
+pub async fn logout<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap) -> Response {
     if login.foreign(&headers) {
         return (StatusCode::FORBIDDEN, "Forbidden").into_response();
     }
@@ -957,7 +962,7 @@ pub async fn logout(State(login): State<Arc<Login>>, headers: HeaderMap) -> Resp
     r
 }
 
-pub async fn me(State(login): State<Arc<Login>>, headers: HeaderMap) -> Response {
+pub async fn me<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap) -> Response {
     match login.session(&headers) {
         Some(ctx) => {
             let principal = ctx.principal().map(|p| p.to_string()).unwrap_or_else(|| ctx.user_id.clone());
@@ -985,7 +990,7 @@ pub struct CliQuery {
 /// AUTH-7: the browser back to the client that asked (`auth.login
 /// {browser}`), with a one-time code for this state; or, signed out, to the
 /// page; or the words saying the sign-in is gone.
-fn cli_finish(login: &Login, ctx: AuthContext, state: &str) -> Response {
+fn cli_finish<A: LoginAccess>(login: &Login<A>, ctx: AuthContext, state: &str) -> Response {
     let Some((redirect, code)) = login.sessions.finish_cli(state, ctx) else {
         return page_response(login, "/", Some("That sign-in has expired or was used: run it again."), StatusCode::BAD_REQUEST);
     };
@@ -996,7 +1001,7 @@ fn cli_finish(login: &Login, ctx: AuthContext, state: &str) -> Response {
     (StatusCode::SEE_OTHER, [(header::LOCATION, to.to_string()), (header::CACHE_CONTROL, "no-store".to_string())]).into_response()
 }
 
-pub async fn cli(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): Query<CliQuery>) -> Response {
+pub async fn cli<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Query(q): Query<CliQuery>) -> Response {
     let state = q.state.unwrap_or_default();
     if !login.sessions.cli_waiting(&state) {
         return page_response(&login, "/", Some("That sign-in has expired or was used: run it again."), StatusCode::BAD_REQUEST);
@@ -1013,11 +1018,12 @@ pub async fn cli(State(login): State<Arc<Login>>, headers: HeaderMap, Query(q): 
     }
     let who = esc(&ctx.get_metadata_string("name").unwrap_or_else(|| ctx.principal().map(|p| p.to_string()).unwrap_or_default()));
     let state_e = esc(&state);
+    let app = esc(login.branding.app);
     let html = login.fill(
         None,
         None,
         Some(format!(
-            r#"<p class="hint">A program on this computer asks to sign in to menger as <strong>{who}</strong>.</p>
+            r#"<p class="hint">A program on this computer asks to sign in to {app} as <strong>{who}</strong>.</p>
       <form method="post" action="/auth/cli"><input type="hidden" name="state" value="{state_e}"><button type="submit" id="cli-continue">Continue as {who}</button></form>"#
         )),
         String::new(),
@@ -1033,9 +1039,9 @@ pub struct CliForm {
     state: String,
 }
 
-pub async fn cli_confirm(State(login): State<Arc<Login>>, headers: HeaderMap, Form(f): Form<CliForm>) -> Response {
+pub async fn cli_confirm<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Form(f): Form<CliForm>) -> Response {
     if login.foreign(&headers) {
-        return (StatusCode::FORBIDDEN, "Forbidden: continue from menger's own page").into_response();
+        return (StatusCode::FORBIDDEN, format!("Forbidden: continue from {}'s own page", login.branding.app)).into_response();
     }
     match login.session(&headers) {
         Some(ctx) => cli_finish(&login, ctx, &f.state),
@@ -1043,9 +1049,26 @@ pub async fn cli_confirm(State(login): State<Arc<Login>>, headers: HeaderMap, Fo
     }
 }
 
+/// SCAFFOLD-3: every route of the module docs' table, over `login` — what
+/// a shell merges beside its own pages.
+pub fn router<A: LoginAccess>(login: Arc<Login<A>>) -> axum::Router {
+    use axum::routing::{get, post};
+    axum::Router::new()
+        .route("/login", get(page::<A>).post(password::<A>))
+        .route("/login/start", get(start::<A>))
+        .route("/login/callback", get(callback::<A>))
+        .route("/login/nostr", post(nostr::<A>))
+        .route("/login/nostr/trace", post(nostr_trace::<A>))
+        .route("/login/me", get(me::<A>))
+        .route("/login/dev", post(dev::<A>))
+        .route("/logout", post(logout::<A>))
+        .route("/auth/cli", get(cli::<A>).post(cli_confirm::<A>))
+        .with_state(login)
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 
-fn page_response(login: &Login, next: &str, error: Option<&str>, status: StatusCode) -> Response {
+fn page_response<A: LoginAccess>(login: &Login<A>, next: &str, error: Option<&str>, status: StatusCode) -> Response {
     (
         status,
         [(header::CACHE_CONTROL, "no-store"), (header::X_FRAME_OPTIONS, "DENY")],

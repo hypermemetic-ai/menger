@@ -1663,6 +1663,7 @@ dependencies = [
  "plexus-auth-core",
  "plexus-client",
  "plexus-core",
+ "plexus-login",
  "plexus-transport",
  "rand 0.8.8",
  "reqwest",
@@ -1998,6 +1999,30 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "plexus-login"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64",
+ "futures",
+ "jsonrpsee",
+ "plexus-auth-core",
+ "plexus-core",
+ "plexus-transport",
+ "rand 0.8.8",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

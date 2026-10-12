@@ -15,14 +15,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use menger_tickets_api::access::{Access, SESSION_KEY};
 use plexus_core::plexus::{
-    AuthBackend, AuthContext, AuthFailure, LoginAnswer, LoginFlow, Provider as AuthProvider, ProviderKind, Session as AuthSession,
+    AuthBackend, AuthContext, AuthFailure, LoginAnswer, LoginFlow, Provider as AuthProvider, ProviderKind,
     SignupAnswer, Waiting as AuthWaiting,
 };
 
+use crate::access::LoginAccess;
 use crate::login::Provider;
-use crate::sessions::{loopback_redirect, Sessions};
+use crate::sessions::{loopback_redirect, Sessions, SESSION_KEY};
 
 /// The loopback flow's half: the session table its states and codes live
 /// in, and where the login page is reached.
@@ -33,19 +33,20 @@ pub struct BrowserLogin {
     pub public_url: String,
 }
 
-/// menger's [`AuthBackend`]. See the module docs.
-pub struct MengerAuth {
-    access: Access,
+/// The [`AuthBackend`] over the app's rules (menger's: `MengerAuth`). See
+/// the module docs.
+pub struct LoginAuth<A: LoginAccess> {
+    access: A,
     providers: Vec<AuthProvider>,
     browser: Option<BrowserLogin>,
 }
 
-impl MengerAuth {
+impl<A: LoginAccess> LoginAuth<A> {
     /// A backend over `access` (its sessions, waiting list and minting),
     /// offering `providers`; `browser` when there is a login page to sign
     /// a person in through.
-    pub fn new(access: Access, providers: Vec<AuthProvider>, browser: Option<BrowserLogin>) -> Self {
-        Self { access, providers, browser }
+    pub fn new(access: impl Into<A>, providers: Vec<AuthProvider>, browser: Option<BrowserLogin>) -> Self {
+        Self { access: access.into(), providers, browser }
     }
 
     /// `auth.providers` from `--auth-provider`s: `key` an agent's, every
@@ -62,16 +63,8 @@ impl MengerAuth {
     }
 }
 
-fn session(m: menger_tickets_api::access::Minted) -> AuthSession {
-    AuthSession { token: m.token, principal: m.principal, agent: m.agent, name: m.name, expires_at: m.expires_at, ceiling: m.scope }
-}
-
-fn waiting(w: menger_tickets_api::access::Waiting) -> AuthWaiting {
-    AuthWaiting { principal: w.principal, name: w.name, provider: w.provider, since: w.since }
-}
-
 #[async_trait]
-impl AuthBackend for MengerAuth {
+impl<A: LoginAccess> AuthBackend for LoginAuth<A> {
     fn providers(&self) -> Vec<AuthProvider> {
         self.providers.clone()
     }
@@ -96,13 +89,13 @@ impl AuthBackend for MengerAuth {
                     .take_code(code.trim(), state.trim())
                     .ok_or_else(|| AuthFailure::new("that code is unknown, used, expired or not this sign-in's: sign in again"))?;
                 let secs = b.sessions.ttl_secs().max(1) as u64;
-                self.access.mint_for(ctx, secs).map(|m| LoginAnswer::Session(session(m))).map_err(AuthFailure::new)
+                self.access.mint_for(ctx, secs).map(LoginAnswer::Session).map_err(AuthFailure::new)
             }
             LoginFlow::Password { .. } => Err(AuthFailure::new(
                 "this menger takes passwords on its login page (/login?password); from a client, sign in with auth.login {browser}",
             )),
             LoginFlow::Session { ttl_secs, ceiling } => {
-                self.access.mint(caller, ttl_secs, ceiling).map(|m| LoginAnswer::Session(session(m))).map_err(AuthFailure::new)
+                self.access.mint(caller, ttl_secs, ceiling).map(LoginAnswer::Session).map_err(AuthFailure::new)
             }
         }
     }
@@ -118,11 +111,11 @@ impl AuthBackend for MengerAuth {
 
     async fn ask_access(&self, caller: &AuthContext, _via: Option<String>) -> Result<AuthWaiting, AuthFailure> {
         self.access.alive(caller).map_err(AuthFailure::new)?;
-        self.access.ask_access(caller).map(waiting).map_err(AuthFailure::new)
+        self.access.ask_access(caller).map_err(AuthFailure::new)
     }
 
     fn waiting(&self) -> Vec<AuthWaiting> {
-        self.access.waiting().into_iter().map(waiting).collect()
+        self.access.waiting()
     }
 
     async fn logout(&self, caller: &AuthContext) -> Result<(), AuthFailure> {

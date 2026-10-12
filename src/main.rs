@@ -255,7 +255,7 @@ async fn main() -> anyhow::Result<()> {
     let sockets = login::socket_urls(args.port, args.public_url.as_deref());
     let boundary = login::boundary_at(&args.auth_provider, &sockets)?;
     // The agents' key proof is not a way in a person is offered.
-    let offers = args.auth_provider.iter().filter(|p| !p.is_key()).map(Provider::offer).collect();
+    let offers = args.auth_provider.iter().filter(|p| !p.is_key()).map(menger::offer).collect();
     // IDENTITY-19: sessions, the rule every method asks, and the page.
     let login_on = !args.auth_provider.is_empty();
     let public_url = args.public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{}", args.shell_port));
@@ -264,7 +264,8 @@ async fn main() -> anyhow::Result<()> {
     let sessions = Arc::new(Sessions::named(args.session_hours * 3600, &menger::sessions::cookie_name_for(&public_url)));
     let access = if login_on {
         // IDENTITY-42: session.login mints its tokens in the same table.
-        Access::with_login(sessions.clone(), args.require_login, args.admin.clone()).minting(sessions.clone())
+        let table = menger::session_table(&sessions);
+        Access::with_login(table.clone(), args.require_login, args.admin.clone()).minting(table)
     } else {
         Access::open()
     };
@@ -299,8 +300,9 @@ async fn main() -> anyhow::Result<()> {
                 also: shell_origins.clone(),
                 require: args.require_login,
                 title: shell::tab_title(args.env.as_deref()),
+                branding: menger::login_access::BRANDING,
                 dev,
-                access: Some(access.clone()),
+                access: Some(access.clone().into()),
             },
             sessions.clone(),
         )?))
@@ -342,7 +344,7 @@ async fn main() -> anyhow::Result<()> {
         origins.extend(args.allowed_origin.iter().cloned());
         builder = builder.with_allowed_origins(origins);
         if let Some(carriers) = boundary {
-            let gate = Gate::new(sessions.clone(), Some(carriers)).noticing(access_for_gate.clone());
+            let gate = Gate::new(sessions.clone(), Some(carriers)).noticing(menger::MengerAccess(access_for_gate.clone()));
             // AUTH-6/AUTH-7: no credential → admitted into the anonymous
             // view (only the auth door); a credential presented and refused
             // → 401 with RFC 6750's challenge. Presented means a bearer, or

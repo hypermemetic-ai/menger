@@ -353,8 +353,8 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
 
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let sessions = Arc::new(Sessions::named(3600, &menger::sessions::cookie_name_for(&public_url)));
-    let access = Access::with_login(sessions.clone(), true, Vec::new()).minting(sessions.clone());
-    let offers = providers.iter().map(Provider::offer).collect();
+    let access = Access::with_login(menger::session_table(&sessions), true, Vec::new()).minting(menger::session_table(&sessions));
+    let offers = providers.iter().map(menger::offer).collect();
     // AUTH-7: as main wires it — the protocol's auth over menger's backend,
     // whose loopback sign-in goes through this shell's login page.
     let backend = Arc::new(MengerAuth::new(
@@ -366,7 +366,7 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
     let carriers = login::boundary(&providers).unwrap();
     let origins = vec![public_url.clone(), format!("http://localhost:{shell_port}")];
     // AUTH-7: as main wires it, the upgrade notices who signs in holding nothing.
-    let gate = Arc::new(Gate::new(sessions.clone(), carriers).noticing(access.clone()));
+    let gate = Arc::new(Gate::new(sessions.clone(), carriers).noticing(menger::MengerAccess(access.clone())));
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
     let ws_origins = origins.clone();
     tokio::spawn(async move {
@@ -391,8 +391,9 @@ async fn start_full(with_workos: bool, dev: Option<menger::dev_login::DevLogin>)
             also: origins,
             require: true,
             title: "menger",
+            branding: menger::login_access::BRANDING,
             email,
-            access: dev.as_ref().map(|_| access),
+            access: dev.as_ref().map(|_| access.into()),
             dev,
         },
         sessions,

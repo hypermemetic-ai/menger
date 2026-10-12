@@ -27,10 +27,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use base64::Engine as _;
 use plexus_auth_core::adapters::Carriers;
-use menger_tickets_api::access::Access;
 use plexus_core::plexus::{AuthContext, SessionValidator};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
+
+use crate::access::LoginAccess;
 
 /// The session cookie's name when none is chosen ([`Sessions::new`]).
 /// A server names its own with [`cookie_name_for`] (IDENTITY-38).
@@ -297,26 +298,6 @@ fn make_room<V>(map: &mut HashMap<String, V>, cap: usize, expires: impl Fn(&V) -
     }
 }
 
-/// The activations' view of the session table: is this connection's
-/// session still standing? (tickets-api's `SessionCheck`.)
-impl menger_tickets_api::access::SessionCheck for Sessions {
-    fn alive(&self, key: &str) -> bool {
-        Sessions::alive(self, key)
-    }
-}
-
-/// IDENTITY-42: `session.login` and `session.logout` mint and end sessions
-/// here (tickets-api's `SessionMint`).
-impl menger_tickets_api::access::SessionMint for Sessions {
-    fn mint(&self, ctx: AuthContext, ttl_secs: i64) -> (String, i64) {
-        Sessions::mint(self, ctx, ttl_secs)
-    }
-
-    fn end_key(&self, key: &str) -> bool {
-        Sessions::end_key(self, key)
-    }
-}
-
 /// A minted session token a value the transport offers carries: the bearer
 /// value itself, or the `access_token` cookie of a `Cookie` header.
 fn minted_token(value: &str) -> Option<&str> {
@@ -334,19 +315,19 @@ pub struct Gate {
     carriers: Option<Arc<Carriers>>,
     /// AUTH-7: who signs in holding nothing is put on the waiting list here,
     /// as it opens the socket — the gate refuses its calls before any method
-    /// could notice it.
-    access: Option<Access>,
+    /// could notice it. SCAFFOLD-3: the app's [`LoginAccess::notice`].
+    notice: Option<Arc<dyn Fn(&AuthContext) + Send + Sync>>,
 }
 
 impl Gate {
     pub fn new(sessions: Arc<Sessions>, carriers: Option<Arc<Carriers>>) -> Self {
-        Self { sessions, carriers, access: None }
+        Self { sessions, carriers, notice: None }
     }
 
     /// AUTH-7: a sign-in holding no grant waits for an admin
-    /// ([`Access::notice`]).
-    pub fn noticing(mut self, access: Access) -> Self {
-        self.access = Some(access);
+    /// ([`LoginAccess::notice`]).
+    pub fn noticing<A: LoginAccess>(mut self, access: A) -> Self {
+        self.notice = Some(Arc::new(move |ctx: &AuthContext| access.notice(ctx)));
         self
     }
 
@@ -371,8 +352,8 @@ impl Gate {
 impl SessionValidator for Gate {
     async fn validate(&self, value: &str) -> Option<AuthContext> {
         let ctx = self.identify(value).await?;
-        if let Some(a) = &self.access {
-            a.notice(&ctx);
+        if let Some(notice) = &self.notice {
+            notice(&ctx);
         }
         Some(ctx)
     }
