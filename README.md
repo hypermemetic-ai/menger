@@ -484,6 +484,15 @@ tag inside a ticket (a row, a card, a heading) opens the ticket's one menu
 (ACT-4), these items first in its filter group.
 The palette takes `filter <shortcode>`: the global filter becomes it.
 
+**Any chip sets the global filter** (FILTER-25): on a surface with a filter
+of its own (the nav, the board, the wave board) the menu also offers
+**Filter everywhere: …** for each clause — the global filter becomes exactly
+it. **Alt+click** on any tag sets the global filter to its first clause at
+once (a ticket id: its shortcode), without navigating; a plain click is
+unchanged. A ticket chip in a framed body does both: its menu says **Filter
+everywhere: …**, and an Alt+click reaches the app as `menger:filter-everywhere
+{ id }` (SDK 1.17).
+
 ```sh
 synapse -P 4455 menger tickets get --id VIEW-1                          # the list
 synapse -P 4455 menger tickets get --id VIEW/_MENGER/view/open-builds   # one filter

@@ -17,6 +17,8 @@
 //! the chip's filter items (a status, kind, severity or label chip) · the ticket's
 //! (FILTER-22) — or, over a selection, its shortcodes' and `under` each
 //! ─────────
+//! Filter everywhere: … (FILTER-25) — the same clauses, the global filter     (off it)
+//! ─────────
 //! Nav ▸                                                                              (in the nav)
 //! ─────────
 //! Delete… / Delete N…                                                               (admin)
@@ -30,6 +32,12 @@
 //!   off: the server admits every call then).
 //! - **A submenu's marks** ([`options`]): one ticket marks its value; a
 //!   selection marks each value with how many already hold it.
+//! - **Filter everywhere** (FILTER-25): where the filter items build a
+//!   surface's own filter (the nav, the board, the wave board), a group of
+//!   **Filter everywhere: …** follows them — each of their clauses, the
+//!   global filter. Where they build the global filter already (the ticket
+//!   page), nothing doubles; on a framed chip (whose items build the global
+//!   filter) the Filter items are said **Filter everywhere: …**.
 
 use menger_tickets_api::labels::NEEDS_YOU;
 use menger_tickets_api::{Kind, Severity, Status, TicketSummary};
@@ -64,6 +72,11 @@ pub(crate) struct Facts<'a> {
     pub(crate) nav: bool,
     /// The shortcodes' tree, for a shortcode's filter clause.
     pub(crate) tree: Option<&'a ScTree>,
+    /// FILTER-25: the filter items build the global filter already (the
+    /// ticket page, a framed chip) — no Filter everywhere group.
+    pub(crate) global: bool,
+    /// FILTER-25: opened on a chip in a framed body (MENGER-34).
+    pub(crate) framed: bool,
 }
 
 impl Facts<'_> {
@@ -249,7 +262,29 @@ pub(crate) fn entries(f: &Facts) -> Vec<Entry> {
         Some(id) => filters.extend(tags::items(&Tag::ticket(id), f.tree).into_iter().map(Entry::Filter)),
         None => filters.extend(tags::many_items(f.ids, f.tree).into_iter().map(Entry::Filter)),
     }
+    if f.framed {
+        filters = filters
+            .into_iter()
+            .map(|e| match e {
+                Entry::Filter(it) => Entry::Filter(tags::as_everywhere(vec![it]).remove(0)),
+                e => e,
+            })
+            .collect();
+    }
     groups.push(filters);
+
+    // FILTER-25: the same clauses, the global filter — off it.
+    let mut everywhere: Vec<Entry> = Vec::new();
+    if !f.global {
+        if let Some(chip @ (Tag::Status(_) | Tag::Kind(_) | Tag::Severity(_) | Tag::Label(_))) = f.chip {
+            everywhere.extend(tags::everywhere(chip, f.tree).into_iter().map(Entry::Filter));
+        }
+        match one {
+            Some(id) => everywhere.extend(tags::everywhere(&Tag::ticket(id), f.tree).into_iter().map(Entry::Filter)),
+            None => everywhere.extend(tags::many_everywhere(f.ids, f.tree).into_iter().map(Entry::Filter)),
+        }
+    }
+    groups.push(everywhere);
 
     if f.nav {
         groups.push(vec![Entry::Sub(Sub::Nav)]);
@@ -609,7 +644,7 @@ mod tests {
     const ALL: Grants = Grants { write: true, delete: true };
 
     fn facts<'a>(ids: &'a [String], rows: &'a [TicketSummary], grants: Grants) -> Facts<'a> {
-        Facts { ids, rows, shortcode: None, chip: None, grants, nav: false, tree: None }
+        Facts { ids, rows, shortcode: None, chip: None, grants, nav: false, tree: None, global: true, framed: false }
     }
 
     /// Each entry as the menu says it.
@@ -854,6 +889,48 @@ mod tests {
         assert_eq!(lone.words(), "Delete C-1?");
         assert_eq!(deleted_words(&ids(&["C-1"])), "deleted C-1");
         assert_eq!(delete_words(3), "Delete 3…");
+    }
+
+    /// FILTER-25: off the global filter (a nav or board row) the menu offers
+    /// it too, each of its clauses; on the ticket page nothing doubles; a
+    /// framed chip says its Filter items as Filter everywhere.
+    #[test]
+    fn off_the_global_filter_the_menu_offers_it_too() {
+        // On a nav or board row (the surface's own filter), the filter group,
+        // then Filter everywhere for each of its clauses.
+        let (i, rows) = (ids(&["DEMAND-1"]), vec![row("DEMAND-1", Status::Ready, Kind::Build)]);
+        let on_nav = Facts { global: false, ..facts(&i, &rows, Grants::default()) };
+        let s = said(&entries(&on_nav));
+        let at = s.iter().position(|w| w == "Filter DEMAND").unwrap();
+        assert_eq!(
+            &s[at..],
+            [
+                "Filter DEMAND", "Filter under DEMAND-1", "Add DEMAND to the filter", "Build a filter from DEMAND…", "—",
+                "Filter everywhere: DEMAND", "Filter everywhere: under DEMAND-1",
+            ]
+        );
+        // A status chip: its own first, in both groups.
+        let chip = Tag::status(Status::Ready);
+        let s = said(&entries(&Facts { chip: Some(&chip), ..on_nav }));
+        let at = s.iter().position(|w| w == "Filter everywhere: status Ready").unwrap();
+        assert_eq!(&s[at..], ["Filter everywhere: status Ready", "Filter everywhere: DEMAND", "Filter everywhere: under DEMAND-1"]);
+        // A selection: its shortcodes, `under` each.
+        let many = ids(&["DEMAND-1", "MNG-2"]);
+        let s = said(&entries(&Facts { global: false, ..facts(&many, &[], Grants::default()) }));
+        assert_eq!(&s[s.len() - 2..], ["Filter everywhere: DEMAND, MNG", "Filter everywhere: under each of 2"]);
+        // On the ticket page the Filter items are the global filter's: nothing
+        // doubles.
+        let page = said(&entries(&facts(&i, &rows, Grants::default())));
+        assert!(!page.iter().any(|w| w.contains("everywhere")), "{page:?}");
+        // A framed chip (the global filter, MENGER-34): its Filter items said
+        // as Filter everywhere, once each.
+        let framed = said(&entries(&Facts { framed: true, ..facts(&i, &rows, Grants::default()) }));
+        let at = framed.iter().position(|w| w == "Filter everywhere: DEMAND").unwrap();
+        assert_eq!(
+            &framed[at..],
+            ["Filter everywhere: DEMAND", "Filter everywhere: under DEMAND-1", "Add DEMAND to the filter", "Build a filter from DEMAND…"]
+        );
+        assert_eq!(framed.iter().filter(|w| w.starts_with("Filter everywhere")).count(), 2);
     }
 
     /// A picker never offers one of the tickets acted on; commits split as

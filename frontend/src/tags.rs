@@ -33,6 +33,24 @@
 //! - **The palette** takes `filter <shortcode>` (src/keys.rs): the global
 //!   filter becomes that shortcode's clause — the Filter item's ([`run`]).
 //!
+//! - **Filter everywhere** (FILTER-25; owner, 2026-10-13: *"I need to be
+//!   able to click a chip and set the global filter"*): where a tag sits on
+//!   a surface with a filter of its own (the nav, the board, the wave
+//!   board), its menu — this one, or the one menu's filter group — also
+//!   offers **Filter everywhere: …** for each clause ([`everywhere`],
+//!   [`many_everywhere`]), ruled off after the surface's items: the global
+//!   filter becomes exactly that clause. On the ticket page the Filter items
+//!   already build the global filter, so nothing doubles; a framed chip's
+//!   menu (whose level is the global filter) names them **Filter
+//!   everywhere: …** ([`as_everywhere`]).
+//! - **Alt+click** (FILTER-25's decision `click`: Alt+click, plus the
+//!   menu): on any tag the app draws, the global filter becomes its first
+//!   clause at once ([`alt_pick`]) — one capture-phase `click` listener on
+//!   the document, which takes the click (no navigation, no download of a
+//!   link); a plain click is unchanged. A ticket chip in a framed body does
+//!   the same through the SDK (1.17: `menger:filter-everywhere { id }`,
+//!   src/frame.rs → [`filter_everywhere`]).
+//!
 //! Everything that decides — a tag read from its attribute, its clauses,
 //! the menu's items, what each does to a level's filter — is a pure function
 //! here, pinned by native tests.
@@ -225,6 +243,9 @@ pub(crate) enum Act {
     Add,
     /// The filter becomes the clause, and the menu opens on its category.
     Build,
+    /// FILTER-25: the *global* filter becomes exactly the clause, at once —
+    /// whatever surface the tag sits on.
+    Everywhere,
 }
 
 impl Act {
@@ -233,6 +254,7 @@ impl Act {
             Act::Filter => "filter",
             Act::Add => "add",
             Act::Build => "build",
+            Act::Everywhere => "everywhere",
         }
     }
 }
@@ -275,6 +297,12 @@ fn items_of(offers: Vec<Offer>) -> Vec<Item> {
 /// Filter DEMAND, MNG · Filter under each of 3 · Add DEMAND, MNG to the filter · Build a filter from DEMAND, MNG…
 /// ```
 pub(crate) fn many_items(ids: &[String], tree: Option<&ScTree>) -> Vec<Item> {
+    items_of(many_offers(ids, tree))
+}
+
+/// A selection's clauses: the shortcodes its tickets share (each one's tree,
+/// as one clause), then `under` each of them.
+fn many_offers(ids: &[String], tree: Option<&ScTree>) -> Vec<Offer> {
     let mut codes: Vec<String> = Vec::new();
     for id in ids {
         if let Some(sc) = epic_of(id).and_then(|sc| Cat::Shortcode.token(sc)) {
@@ -294,13 +322,58 @@ pub(crate) fn many_items(ids: &[String], tree: Option<&ScTree>) -> Vec<Item> {
         let n = under.len();
         offers.push(Offer { clause: TagClause::UnderAny(under), name: format!("under each of {n}"), value: format!("{n} tickets") });
     }
-    items_of(offers)
+    offers
+}
+
+/// FILTER-25: **Filter everywhere: …** for each clause a tag gives — the
+/// global filter becomes exactly it, whatever surface the tag sits on:
+///
+/// ```text
+/// Filter everywhere: DEMAND · Filter everywhere: under DEMAND-1
+/// ```
+pub(crate) fn everywhere(tag: &Tag, tree: Option<&ScTree>) -> Vec<Item> {
+    everywhere_of(offers(tag, tree))
+}
+
+/// FILTER-25: a selection's **Filter everywhere: …** — its shortcodes, and
+/// `under` each of them.
+pub(crate) fn many_everywhere(ids: &[String], tree: Option<&ScTree>) -> Vec<Item> {
+    everywhere_of(many_offers(ids, tree))
+}
+
+fn everywhere_of(offers: Vec<Offer>) -> Vec<Item> {
+    offers.into_iter().map(|o| Item { act: Act::Everywhere, words: format!("Filter everywhere: {}", o.name), clause: o.clause }).collect()
+}
+
+/// FILTER-25: a menu whose filter is already the global one, said as such —
+/// each **Filter …** becomes **Filter everywhere: …** (what it does is
+/// unchanged: the global filter becomes the clause); Add and Build stay. A
+/// framed chip's menu: the reader is in a body, on no surface of the app's.
+pub(crate) fn as_everywhere(items: Vec<Item>) -> Vec<Item> {
+    items
+        .into_iter()
+        .map(|it| match it.act {
+            Act::Filter => Item {
+                act: Act::Everywhere,
+                words: it.words.strip_prefix("Filter ").map(|w| format!("Filter everywhere: {w}")).unwrap_or(it.words),
+                clause: it.clause,
+            },
+            _ => it,
+        })
+        .collect()
+}
+
+/// FILTER-25: what an Alt+click on a tag sets the global filter to — its
+/// first clause, its menu's first item's: a ticket id's shortcode, a
+/// shortcode's tree, a status's, a kind's, a severity's, a label's.
+pub(crate) fn alt_pick(tag: &Tag, tree: Option<&ScTree>) -> Option<TagClause> {
+    offers(tag, tree).into_iter().next().map(|o| o.clause)
 }
 
 /// What an item makes of a level's state `k`.
 pub(crate) fn apply(act: Act, clause: &TagClause, k: &Kept) -> Kept {
     match act {
-        Act::Filter | Act::Build => only(clause, k),
+        Act::Filter | Act::Build | Act::Everywhere => only(clause, k),
         Act::Add => joined(clause, k),
     }
 }
@@ -335,9 +408,20 @@ pub(crate) fn joined(clause: &TagClause, k: &Kept) -> Kept {
     next
 }
 
-/// An item chosen at `level`: the level's filter made, and — Build — its
-/// menu opened on the clause's category.
+/// The level an item chosen at `level` builds: its own — FILTER-25's
+/// Filter everywhere, the global filter's.
+pub(crate) fn level_of(act: Act, level: Level) -> Level {
+    match act {
+        Act::Everywhere => Level::Global,
+        _ => level,
+    }
+}
+
+/// An item chosen at `level`: the level's filter made (Filter everywhere:
+/// the global filter's), and — Build — its menu opened on the clause's
+/// category.
 pub(crate) fn run(lens: Lens, level: Level, act: Act, clause: &TagClause) {
+    let level = level_of(act, level);
     lens.edit(level, |k| *k = apply(act, clause, k));
     if act == Act::Build {
         if let Some(c) = clause.cat() {
@@ -353,6 +437,36 @@ pub(crate) fn filter_globally(lens: Lens, code: &str) {
     if let Some(o) = offers(&Tag::shortcode(code), tree.as_ref()).into_iter().next() {
         run(lens, Level::Global, Act::Filter, &o.clause);
     }
+}
+
+/// FILTER-25: the global filter becomes `tag`'s first clause — an
+/// Alt+click on it, in the app or in a framed body.
+pub(crate) fn alt_filter(lens: Lens, tag: &Tag) {
+    let tree = lens.sctree().get_untracked();
+    if let Some(clause) = alt_pick(tag, tree.as_ref()) {
+        run(lens, Level::Global, Act::Everywhere, &clause);
+    }
+}
+
+thread_local! {
+    /// FILTER-25: the lens, for the frame bridge's Alt+click — set when the
+    /// tag menu mounts (a window message has no reactive owner to find it).
+    static LENS: std::cell::Cell<Option<Lens>> = const { std::cell::Cell::new(None) };
+}
+
+/// FILTER-25: a ticket chip Alt+clicked in a framed body (src/frame.rs has
+/// checked `id`'s form): as on an app chip.
+pub(crate) fn filter_everywhere(id: &str) {
+    if let Some(lens) = LENS.with(std::cell::Cell::get) {
+        alt_filter(lens, &Tag::ticket(id));
+    }
+}
+
+/// FILTER-25: the tag an Alt+click on `el` names, wherever the app drew it
+/// (its surface need not have a filter: the global filter is the one set).
+fn alt_tag(el: &web_sys::Element) -> Option<Tag> {
+    let host = el.closest("[data-tag]").ok().flatten()?;
+    Tag::parse(&host.get_attribute("data-tag")?)
 }
 
 // ---------------------------------------------------------------------
@@ -390,8 +504,29 @@ fn close(open: RwSignal<Option<Open>>) {
 /// The document-level listeners, for the app's lifetime: open on a
 /// right-click over a tag; close on Escape, a mousedown outside the menu, a
 /// scroll, or a route change — as the ticket menu does.
-fn install_listeners(open: RwSignal<Option<Open>>) {
+fn install_listeners(open: RwSignal<Option<Open>>, lens: Lens) {
     let Some(doc) = dom::window().document() else { return };
+    // FILTER-25: Alt+click on a tag — capture, so the row, the link or the
+    // chip's own handler never sees it (no navigation; an Alt+click on a
+    // link would download it otherwise). Any other click passes untouched.
+    let on_click = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
+        if !ev.alt_key() || ev.ctrl_key() || ev.meta_key() || ev.shift_key() || ev.button() != 0 {
+            return;
+        }
+        let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+        // A menu's own chip, an editor's field: not a tag to filter by.
+        if el.closest(&format!("#{MENU_ID}, #tmenu, input, textarea, select, [contenteditable]")).ok().flatten().is_some() {
+            return;
+        }
+        let Some(tag) = alt_tag(&el) else { return };
+        ev.prevent_default();
+        ev.stop_immediate_propagation();
+        close(open);
+        alt_filter(lens, &tag);
+    });
+    let _ = doc.add_event_listener_with_callback_and_bool("click", on_click.as_ref().unchecked_ref(), true);
+    on_click.forget();
+
     let on_context = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
         let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
         // ACT-4: inside a ticket the one menu answers, with these items.
@@ -442,7 +577,9 @@ fn install_listeners(open: RwSignal<Option<Open>>) {
 #[component]
 pub(crate) fn TagMenu() -> impl IntoView {
     let open = RwSignal::new(None::<Open>);
-    install_listeners(open);
+    let lens = lens::use_lens();
+    LENS.with(|l| l.set(Some(lens)));
+    install_listeners(open, lens);
     move || open.get().map(|o| menu_view(o, open))
 }
 
@@ -464,7 +601,13 @@ fn menu_view(o: Open, open: RwSignal<Option<Open>>) -> impl IntoView {
     let lens = lens::use_lens();
     let Open { tag, level, x, y } = o;
     let tree = lens.sctree().get_untracked();
-    let items = items(&tag, tree.as_ref());
+    let mut items = items(&tag, tree.as_ref());
+    // FILTER-25: on a surface with a filter of its own, the global filter
+    // too — ruled off after the surface's items.
+    let rule_at = (level != Level::Global).then_some(items.len());
+    if rule_at.is_some() {
+        items.extend(everywhere(&tag, tree.as_ref()));
+    }
     let root = NodeRef::<leptos::html::Div>::new();
     Effect::new(move |_| {
         let Some(el) = root.get() else { return };
@@ -504,10 +647,13 @@ fn menu_view(o: Open, open: RwSignal<Option<Open>>) -> impl IntoView {
             </div>
             {items
                 .into_iter()
-                .map(|it| {
+                .enumerate()
+                .map(|(n, it)| {
                     let text = it.clause.group().map(|g| g.format());
                     let Item { act, clause, words } = it;
+                    let rule = (rule_at == Some(n)).then(|| view! { <div class="rule" role="separator"></div> });
                     view! {
+                        {rule}
                         <button
                             class="item"
                             role="menuitem"
@@ -735,6 +881,79 @@ mod tests {
         assert_eq!(Filter::parse(&under).unwrap().format(), under, "it reads back");
         assert_eq!(it[1].clause.cat(), None);
         assert!(many_items(&[], None).is_empty());
+    }
+
+    /// FILTER-25: Filter everywhere — each clause a tag gives, the global
+    /// filter's, whatever surface the menu opened on.
+    #[test]
+    fn the_global_filter_from_any_surface() {
+        // FILTER-25: the ticket's example, on a nav row's DEMAND-1 chip — the
+        // nav's items, then the global filter's, one per clause.
+        let t = demand();
+        let ev = |tag: &Tag| everywhere(tag, Some(&t)).into_iter().map(|i| i.words).collect::<Vec<_>>();
+        assert_eq!(ev(&Tag::ticket("DEMAND-1")), ["Filter everywhere: DEMAND", "Filter everywhere: under DEMAND-1"]);
+        assert_eq!(ev(&Tag::status(Status::Pending)), ["Filter everywhere: status Pending"]);
+        assert_eq!(ev(&Tag::shortcode("SUB")), ["Filter everywhere: SUB"]);
+        assert_eq!(ev(&Tag::Label("needs-you".into())), ["Filter everywhere: label needs-you"]);
+        let it = everywhere(&Tag::ticket("DEMAND-1"), Some(&t));
+        assert!(it.iter().all(|i| i.act == Act::Everywhere));
+        assert_eq!(Act::Everywhere.name(), "everywhere");
+        // The same clauses as the surface's Filter items.
+        let here: Vec<_> = items(&Tag::ticket("DEMAND-1"), Some(&t)).into_iter().filter(|i| i.act == Act::Filter).map(|i| i.clause).collect();
+        assert_eq!(it.iter().map(|i| i.clause.clone()).collect::<Vec<_>>(), here);
+        // The global filter becomes exactly the clause — whatever level the
+        // menu opened at.
+        for level in [Level::Nav, Level::Board, Level::Waves, Level::Global] {
+            assert_eq!(level_of(Act::Everywhere, level), Level::Global, "{level:?}");
+        }
+        assert_eq!(level_of(Act::Filter, Level::Nav), Level::Nav);
+        assert_eq!(level_of(Act::Build, Level::Board), Level::Board);
+        let k = kept("kind build and ready · flat");
+        assert_eq!(text(&apply(Act::Everywhere, &it[1].clause, &k)), "under DEMAND-1 · flat");
+        assert_eq!(apply(Act::Everywhere, &it[0].clause, &k), only(&it[0].clause, &k));
+        // A selection: its shortcodes, and `under` each.
+        let ids = strs(&["DEMAND-4", "MNG-2"]);
+        assert_eq!(
+            many_everywhere(&ids, Some(&t)).into_iter().map(|i| i.words).collect::<Vec<_>>(),
+            ["Filter everywhere: DEMAND, MNG", "Filter everywhere: under each of 2"]
+        );
+    }
+
+    /// FILTER-25: Alt+click picks a tag's first clause — a ticket id's
+    /// shortcode (its tree), a shortcode's, a value chip's category's.
+    #[test]
+    fn alt_click_picks_the_first_clause() {
+        let t = demand();
+        let sc = |v: &[&str]| Some(TagClause::Of(Cat::Shortcode, Clause { op: Op::Is, values: strs(v) }));
+        assert_eq!(alt_pick(&Tag::ticket("DEMAND-1"), Some(&t)), sc(&["DEMAND", "SUB"]));
+        assert_eq!(alt_pick(&Tag::ticket("SUB-4"), Some(&t)), sc(&["SUB"]));
+        assert_eq!(alt_pick(&Tag::shortcode("DEMAND"), Some(&t)), sc(&["DEMAND", "SUB"]));
+        assert_eq!(alt_pick(&Tag::ticket("MNG-9"), None), sc(&["MNG"]), "groups not known yet: the code alone");
+        assert_eq!(
+            alt_pick(&Tag::status(Status::InReview), None),
+            Some(TagClause::Of(Cat::Status, Clause { op: Op::Is, values: strs(&["In Review"]) }))
+        );
+        assert_eq!(alt_pick(&Tag::kind(Kind::Spike), None).and_then(|c| c.group()).map(|g| g.format()).as_deref(), Some("kind spike"));
+        // The first item of its menu, always.
+        for tag in [Tag::ticket("DEMAND-1"), Tag::severity(Severity::High), Tag::Label("stale".into())] {
+            assert_eq!(alt_pick(&tag, Some(&t)), items(&tag, Some(&t)).first().map(|i| i.clause.clone()), "{tag:?}");
+        }
+        // The global filter becomes exactly it.
+        let pick = alt_pick(&Tag::ticket("DEMAND-1"), Some(&t)).unwrap();
+        assert_eq!(text(&apply(Act::Everywhere, &pick, &kept("status Ready"))), "in (DEMAND, SUB)");
+    }
+
+    /// FILTER-25: a menu that builds the global filter already says its
+    /// Filter items as Filter everywhere (a framed chip's); Add and Build stay.
+    #[test]
+    fn a_global_menu_says_everywhere() {
+        let t = demand();
+        let it = as_everywhere(items(&Tag::ticket("DEMAND-1"), Some(&t)));
+        assert_eq!(
+            it.iter().map(|i| i.words.as_str()).collect::<Vec<_>>(),
+            ["Filter everywhere: DEMAND", "Filter everywhere: under DEMAND-1", "Add DEMAND to the filter", "Build a filter from DEMAND…"]
+        );
+        assert_eq!(it.iter().map(|i| i.act).collect::<Vec<_>>(), [Act::Everywhere, Act::Everywhere, Act::Add, Act::Build]);
     }
 
     /// The level a tag's surface names: the board, the nav, the wave board —
