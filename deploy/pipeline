@@ -12,9 +12,21 @@
 #                                           automatic rollback on failure
 #   deploy/pipeline rollback ENV [--restore BACKUP]
 #   deploy/pipeline smoke ENV               the smoke checks, on their own
-#   deploy/pipeline status                  what each env runs, and how it is
+#   deploy/pipeline status                  what each env runs, and how it is;
+#                                           the last deployment record of each
 #   deploy/pipeline releases                every release: tested? where?
 #   deploy/pipeline logs ENV [journalctl args…]
+#   deploy/pipeline backfill                deployments.log → menger's deployments
+#                                           (idempotent: a record kept is not kept twice)
+#
+# DEPLOY-12: deploy test, sync, promote and rollback each tell menger what they
+# did — a deployment record (deploy/record → deployments.record): `started`
+# before it begins, then `succeeded`, `failed` or `rolled_back`. Every record
+# goes through the outbox, oldest first; one the tracker does not take waits
+# there for the next run. A record never fails a deploy, nor holds one up
+# longer than a bounded send. Where:
+#   MENGER_DEPLOY_TRACKER_PORT (4455) · MENGER_DEPLOY_TRACKER_HOST · MENGER_DEPLOY_TRACKER_TOKEN
+#   MENGER_DEPLOY_OUTBOX (~/.local/share/menger-deploy/outbox) · MENGER_DEPLOY_RECORD_TIMEOUT (10 s a send)
 set -euo pipefail
 
 # ── where things are ────────────────────────────────────────────────────────
@@ -29,13 +41,21 @@ CONFIG=$HOME/.config/menger
 UNITS=$HOME/.config/systemd/user
 BACKUPS=$HOME/.local/share/menger/backups
 KEEP_RELEASES=10
+RECORD=$REPO/deploy/record
+TRACKER_PORT=${MENGER_DEPLOY_TRACKER_PORT:-4455}
+TRACKER_HOST=${MENGER_DEPLOY_TRACKER_HOST:-}
+TRACKER_TOKEN=${MENGER_DEPLOY_TRACKER_TOKEN:-}
+OUTBOX=${MENGER_DEPLOY_OUTBOX:-$HOME_DIR/outbox}
+SENT=$HOME_DIR/sent
+SEND_TIMEOUT=${MENGER_DEPLOY_RECORD_TIMEOUT:-10}
+RUN="" RUN_AT="" # this run's id and when it began (begin_run): its records and its log line carry the id
 
 say()  { printf '%s\n' "$*" >&2; }
 die()  { say "pipeline: $*"; exit 1; }
 step() { say "── $*"; }
-record() { # env action release result
+record() { # env action release result — one line of deployments.log, a run's ending with its id
   mkdir -p "$HOME_DIR"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$1" "$2" "$3" "$4" >> "$LOG"
+  printf '%s\t%s\t%s\t%s\t%s%s\n' "$(date -u +%FT%TZ)" "$1" "$2" "$3" "$4" "${RUN:+$'\t'$RUN}" >> "$LOG"
 }
 need() { command -v "$1" >/dev/null || die "needs $1 on PATH"; }
 
@@ -60,6 +80,92 @@ resolve_release() { # NAME or empty → a release directory name that exists
   echo "$r"
 }
 units_of() { echo "menger@$1.service menger-diagrams@$1.service"; }
+
+# ── the deployment record (DEPLOY-12) ───────────────────────────────────────
+# A run that changes what an environment runs tells menger (DEPLOY-11) what it
+# did, in DEPLOY-10's record, made and sent by deploy/record. Its run id —
+# `promote@<when it began>#<pid>` — is on each of its records and at the end of its
+# log line, so the record `backfill` makes from that line is the one the run
+# sent (same environment, state, revision and run: menger keeps one).
+begin_run() { RUN_AT=$(date -u +%FT%TZ); RUN="$1@$RUN_AT#$$"; } # e.g. promote@2026-10-12T22:04:02Z#4242
+PENDING=() # ENV RELEASE PREVIOUS of a run that told `started` and has not ended
+on_exit() { [[ ${#PENDING[@]} -eq 3 ]] && tell "${PENDING[0]}" failed "${PENDING[1]}" "${PENDING[2]}"; return 0; }
+trap on_exit EXIT
+sha_of() { [[ ${1:-} =~ -([0-9a-f]{7,40})$ ]] && echo "${BASH_REMATCH[1]}" || true; }
+git_repo() { if git -C "$BUILD" rev-parse --git-dir >/dev/null 2>&1; then echo "$BUILD"; else echo "$REPO"; fi; }
+
+# tell ENV STATE RELEASE [PREVIOUS] — the record of this run; never fails, and
+# never holds the run up past a bounded send (MENGER_DEPLOY_RECORD_TIMEOUT).
+tell() {
+  if [[ $2 == started ]]; then PENDING=("$1" "$3" "${4:-}"); else PENDING=(); fi
+  ( set +e; tell_ "$@" ) || true
+}
+tell_() {
+  local env=$1 state=$2 rel=$3 prev=${4:-} rev p at rec=""
+  rev=$(sha_of "$rel"); p=$(sha_of "$prev")
+  [[ -n $rev ]] || { say "record: release '$rel' names no commit — nothing recorded"; return 0; }
+  at=$(date -u +%FT%TZ); [[ $state == started && -n $RUN ]] && at=$RUN_AT
+  local args=(--project menger --env "$env" --state "$state" --revision "$rev" --release "$rel" --at "$at"
+              --source-system menger-pipeline --source-run "${RUN:-$state@$at}" -c)
+  [[ -n $p ]] && args+=(--previous "$p")
+  # Its commits: git log previous..revision in the build checkout, when the
+  # run moves forward (a rollback carries none). Without them menger works
+  # from the commits it has seen.
+  if [[ -n $p && $p != "$rev" && $state != rolled_back ]]; then
+    rec=$(timeout "$SEND_TIMEOUT" "$RECORD" "${args[@]}" --commits-from-git --repo "$(git_repo)" 2>/dev/null)
+  fi
+  [[ -n $rec ]] || rec=$("$RECORD" "${args[@]}") || { say "record: could not make the $env $state record — nothing recorded"; return 0; }
+  enqueue "$rec" && flush_outbox
+}
+
+QSEQ=0
+enqueue() { # RECORD → the outbox, named to sort in the order queued
+  mkdir -p "$OUTBOX" || return 1
+  QSEQ=$((QSEQ + 1))
+  local f; f=$OUTBOX/$(date -u +%Y%m%dT%H%M%S%N)-$$-$(printf %06d "$QSEQ").json
+  printf '%s\n' "$1" > "$f.part" && mv "$f.part" "$f"
+}
+queued() { ls -1 "$OUTBOX" 2>/dev/null | grep '\.json$' | sort || true; }
+what() { jq -r '"\(.environment) \(.state) \(.revision)"' "$1" 2>/dev/null; }
+
+# Sends what waits in the outbox, oldest first. A record menger keeps (or
+# already kept) leaves it, and becomes its environment's last record sent; one
+# menger refuses moves to refused/, said and never retried; at the first that
+# gets no answer the rest wait for the next run. QUIET=1: a sum, not a line each.
+flush_outbox() {
+  [[ -d $OUTBOX ]] || return 0
+  local lock f out rc sent=0 dup=0 refused=0 left
+  exec {lock}>>"$OUTBOX/.lock"
+  flock -n "$lock" || { say "record: another run is sending the outbox"; return 0; }
+  local sargs=(--send --port "$TRACKER_PORT")
+  [[ -n $TRACKER_HOST ]] && sargs+=(--host "$TRACKER_HOST")
+  [[ -n $TRACKER_TOKEN ]] && sargs+=(--token "$TRACKER_TOKEN")
+  # A run's flush stops after a few sends' worth of time; backfill's does not.
+  local until=$((SECONDS + 3 * SEND_TIMEOUT))
+  for f in $(queued); do
+    [[ ${QUIET:-} == 1 || $SECONDS -lt $until ]] || break
+    rc=0; out=$(timeout "$SEND_TIMEOUT" "$RECORD" --from json "$OUTBOX/$f" "${sargs[@]}" 2>&1) || rc=$?
+    if [[ $rc == 0 ]] && grep -q '^type: deployed' <<<"$out"; then
+      local env how=sent; env=$(jq -r .environment "$OUTBOX/$f")
+      if grep -q '^duplicate: true' <<<"$out"; then dup=$((dup + 1)); how="already kept"; else sent=$((sent + 1)); fi
+      [[ ${QUIET:-} == 1 ]] || say "record: $(what "$OUTBOX/$f") → menger :$TRACKER_PORT ($how)"
+      mkdir -p "$SENT"
+      jq -c --arg t "$(date -u +%FT%TZ)" --arg how "$how" '. + {sent_at: $t, sent: $how}' "$OUTBOX/$f" > "$SENT/${env//\//_}.json"
+      rm -f "$OUTBOX/$f"
+    elif [[ $rc == 2 ]] || grep -q '^type: error' <<<"$out"; then
+      refused=$((refused + 1))
+      say "record: menger refused $(what "$OUTBOX/$f"): $(sed -n 's/^message: //p; s/^record: //p' <<<"$out" | head -n 3 | tr '\n' ' ')— kept in $OUTBOX/refused/"
+      mkdir -p "$OUTBOX/refused"; mv "$OUTBOX/$f" "$OUTBOX/refused/"
+    else
+      break
+    fi
+  done
+  left=$(queued | wc -l)
+  [[ $left -gt 0 ]] && say "record: $left record(s) wait in $OUTBOX for the next run (menger :$TRACKER_PORT did not take them in time)"
+  [[ ${QUIET:-} == 1 ]] && say "record: $sent sent, $dup already kept, $refused refused, $left waiting"
+  exec {lock}>&-
+  return 0
+}
 
 # ── install ─────────────────────────────────────────────────────────────────
 cmd_install() {
@@ -271,7 +377,10 @@ snapshot_prod_into_test() {
 cmd_deploy() {
   [[ ${1:-} == test ]] || die "only 'deploy test' — production changes through 'promote'"
   local rel; rel=$(resolve_release "${2:-}")
+  local was; was=$(running_release test)
+  begin_run deploy
   step "deploy $rel to test"
+  tell test started "$rel" "$was"
   stop test
   snapshot_prod_into_test
   switch_to test "$rel"
@@ -279,9 +388,11 @@ cmd_deploy() {
   if cmd_smoke test; then
     chmod u+w "$RELEASES/$rel"; date -u +%FT%TZ > "$RELEASES/$rel/TESTED"; chmod a-w "$RELEASES/$rel"
     record test deploy "$rel" ok
+    tell test succeeded "$rel" "$was"
     say "test runs $rel — smoke passed; the release is TESTED"
   else
     record test deploy "$rel" "smoke failed"
+    tell test failed "$rel" "$was"
     die "test runs $rel and its smoke FAILED — prod untouched; see: deploy/pipeline logs test"
   fi
 }
@@ -295,7 +406,9 @@ cmd_sync() {
   [[ ${1:-} == test ]] || die "only 'sync test' — prod's data is never overwritten by a sync"
   local rel; rel=$(running_release test)
   [[ -n $rel ]] || die "test runs no release yet — 'deploy/pipeline deploy test' first"
+  begin_run sync
   step "sync test from prod's data (test keeps $rel)"
+  tell test started "$rel" "$rel"
   stop test
   local backup; backup=$(backup_db test before-sync)
   if [[ -n $backup ]]; then
@@ -307,9 +420,11 @@ cmd_sync() {
   restart test
   if cmd_smoke test; then
     record test sync "$rel" ok
+    tell test succeeded "$rel" "$rel"
     say "test runs $rel on a fresh snapshot of prod's data — smoke passed"
   else
     record test sync "$rel" "smoke failed"
+    tell test failed "$rel" "$rel"
     die "test's smoke FAILED after the sync — prod untouched; previous data: ${backup:-none}; see: deploy/pipeline logs test"
   fi
 }
@@ -348,16 +463,20 @@ cmd_promote() {
   fi
 
   local was; was=$(running_release "$to")
+  begin_run promote
   step "promote $rel to $to (was: ${was:-none})"
+  tell "$to" started "$rel" "$was"
   local backup; backup=$(backup_db "$to" "before-$rel")
   [[ -n $backup ]] && say "backup: $backup"
   switch_to "$to" "$rel"
   restart "$to"
   if cmd_smoke "$to"; then
     record "$to" promote "$rel" ok
+    tell "$to" succeeded "$rel" "$was"
     say "$to runs $rel — smoke passed"
     return 0
   fi
+  tell "$to" failed "$rel" "$was"
   say "smoke FAILED on $to — rolling back"
   stop "$to"
   [[ -n $backup ]] && restore_db "$to" "$backup" && say "restored $backup"
@@ -366,6 +485,7 @@ cmd_promote() {
     restart "$to"
     if cmd_smoke "$to"; then
       record "$to" promote "$rel" "smoke failed; rolled back to $was"
+      tell "$to" rolled_back "$was" "$rel"
       die "$to is back on $was (smoke passed); $rel was not promoted"
     fi
     record "$to" promote "$rel" "smoke failed; rollback to $was ALSO failed"
@@ -392,13 +512,34 @@ cmd_rollback() {
   [[ ${1:-} == --restore ]] && { restore=${2:-}; [[ -f $restore ]] || die "no backup '$restore'"; }
   local prev; prev=$(previous_release "$env"); [[ -n $prev ]] || die "$env has no previous release"
   local cur; cur=$(running_release "$env")
+  begin_run rollback
   step "rollback $env: $cur → $prev"
+  tell "$env" started "$prev" "$cur"
   stop "$env"
   [[ -n $restore ]] && { restore_db "$env" "$restore"; say "restored $restore"; }
   switch_to "$env" "$prev"
   restart "$env"
-  if cmd_smoke "$env"; then record "$env" rollback "$prev" ok; say "$env runs $prev"
-  else record "$env" rollback "$prev" "smoke failed"; die "$env runs $prev but its smoke FAILED"; fi
+  if cmd_smoke "$env"; then record "$env" rollback "$prev" ok; tell "$env" rolled_back "$prev" "$cur"; say "$env runs $prev"
+  else record "$env" rollback "$prev" "smoke failed"; tell "$env" failed "$prev" "$cur"; die "$env runs $prev but its smoke FAILED"; fi
+}
+
+# ── backfill ────────────────────────────────────────────────────────────────
+# DEPLOY-12: deployments.log replayed into records (deploy/record --from
+# pipeline-log, each with its commits from git where they can be listed),
+# queued and sent like a run's. Idempotent: menger keeps a record it already
+# has once (DEPLOY-11: project, environment, state, revision, run), and a run's
+# own log line makes the record that run sent.
+cmd_backfill() {
+  [[ -f $LOG ]] || die "no $LOG"
+  local recs r filled n=0 repo; repo=$(git_repo)
+  recs=$("$RECORD" --from pipeline-log "$LOG" -c) || die "deploy/record could not read $LOG"
+  while IFS= read -r r; do
+    [[ -n $r ]] || continue
+    filled=$("$RECORD" --from json --commits-from-git --repo "$repo" -c <<<"$r" 2>/dev/null) || filled=$r
+    enqueue "$filled" || die "cannot write $OUTBOX"; n=$((n + 1))
+  done <<<"$recs"
+  say "backfill: $n records from $LOG → menger :$TRACKER_PORT"
+  QUIET=1 flush_outbox
 }
 
 # ── status, releases, logs ──────────────────────────────────────────────────
@@ -420,7 +561,21 @@ cmd_status() {
     else printf '  health    no answer on :%s\n' "$MENGER_WS_PORT"; fi
     printf '  app       http://127.0.0.1:%s/\n' "$MENGER_SHELL_PORT"
     local f; f=$(foreign_holders "$env"); [[ -n $f ]] && printf '  outside   pids %s hold its ports outside systemd\n' "$f"
+    record_status "$env"
   done
+}
+record_status() { # ENV → its last deployment record sent (DEPLOY-12), and what waits to be
+  local f=$SENT/${1//\//_}.json n=0 q
+  if [[ -f $f ]]; then
+    printf '  record    %s\n' "$(jq -r '"\(.state) \(.revision)\(if .release then " (\(.release))" else "" end) at \(.at), \(.source.run // "-") — sent \(.sent_at)\(if .sent == "already kept" then ", already kept" else "" end)"' "$f")"
+  else
+    printf '  record    none sent yet\n'
+  fi
+  for q in $(queued); do [[ $(jq -r .environment "$OUTBOX/$q" 2>/dev/null) == "$1" ]] && n=$((n + 1)); done
+  [[ $n -gt 0 ]] && printf '  outbox    %s record(s) waiting for menger on :%s\n' "$n" "$TRACKER_PORT"
+  n=$(ls -1 "$OUTBOX/refused" 2>/dev/null | grep -c '\.json$' || true)
+  [[ $n -gt 0 ]] && printf '  refused   %s record(s) menger refused, in %s/refused\n' "$n" "$OUTBOX"
+  return 0
 }
 cmd_releases() {
   for r in $(ls -1 "$RELEASES" 2>/dev/null | grep -v '\.tmp$' | sort); do
@@ -445,5 +600,6 @@ case $cmd in
   status)   cmd_status ;;
   releases) cmd_releases ;;
   logs)     cmd_logs "$@" ;;
-  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  backfill) cmd_backfill ;;
+  *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac
