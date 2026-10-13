@@ -709,7 +709,8 @@ impl Watcher {
         if self.under.is_some() {
             return Vec::new(); // the write's own `UnderMoved` says it
         }
-        let highest = moves.moves.iter().flat_map(|m| m.from.into_iter().chain([m.to])).max();
+        // ACT-5: a deleted ticket's `to` is no cell (`GONE`), never admitted.
+        let highest = moves.moves.iter().flat_map(|m| m.from.into_iter().chain([m.to])).filter(|c| *c != super::cells::GONE).max();
         if highest.is_some_and(|c| c as usize >= self.admit.len()) {
             // A cell interned after the compile: compile again — the table
             // only grows, and every id it held means what it meant.

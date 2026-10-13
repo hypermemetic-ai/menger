@@ -400,6 +400,12 @@ impl Inputs {
         }
     }
 
+    /// ACT-5: only the inputs of the tickets `keep` names — a deleted
+    /// ticket's stay in the file, out of every read, for its undo.
+    pub(crate) fn retain(&mut self, keep: impl Fn(&str) -> bool) {
+        self.by_ticket.retain(|t, _| keep(t));
+    }
+
     /// The cache's half of a committed [`apply`]: `input` as it is now.
     pub(crate) fn put(&mut self, input: Input) {
         if let Some(slot) = self

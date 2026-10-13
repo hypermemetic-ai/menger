@@ -552,6 +552,20 @@ pub(super) fn put(conn: &Connection, id: &str, title: &str, body: &str) -> rusql
     }
 }
 
+/// ACT-5: a deleted ticket's row out of the index, in the transaction that
+/// deletes it (an undelete [`put`]s it back).
+pub(super) fn remove(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+    let row: Option<i64> = conn
+        .prepare_cached("SELECT row FROM search_rows WHERE id = ?1")?
+        .query_row([id], |r| r.get(0))
+        .optional()?;
+    if let Some(row) = row {
+        conn.prepare_cached("DELETE FROM search WHERE rowid = ?1")?.execute([row])?;
+        conn.prepare_cached("DELETE FROM search_rows WHERE row = ?1")?.execute([row])?;
+    }
+    Ok(())
+}
+
 /// A row for a ticket the index has none for — what a first open and a
 /// seed write, which know that already (a seed's ids are new: the
 /// ticket's own insert refuses any other), so they skip the lookup.

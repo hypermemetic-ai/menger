@@ -566,7 +566,7 @@ async fn the_wire_assertions_through_the_generated_client() {
         .expect("extents")
         .into_iter()
         .map(|event| match event {
-            TicketsEvent::Extent { epic, last_seq } => (epic, last_seq),
+            TicketsEvent::Extent { epic, last_seq, .. } => (epic, last_seq),
             other => panic!("extents yields only `extent`, got {other:?}"),
         })
         .collect();

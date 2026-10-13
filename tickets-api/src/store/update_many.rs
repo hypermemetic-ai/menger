@@ -217,7 +217,7 @@ impl Store {
     /// ACT-2: the ids a selection names, as the store stands — at most the
     /// ceiling named, at most `max` a filter admits (more is refused, naming
     /// the count).
-    fn selected(&self, select: Selection) -> Result<Vec<String>, StoreError> {
+    pub(super) fn selected(&self, select: Selection) -> Result<Vec<String>, StoreError> {
         match select {
             Selection::Ids(ids) => {
                 let ids = named(&ids);

@@ -1294,6 +1294,36 @@ pub struct Transition {
     pub cause_ticket: Option<String>,
 }
 
+/// ACT-5: what a delete keeps of a ticket — its tombstone. The ticket is
+/// gone (off every read, its number never reused); this says which it was
+/// (`id`, `title`), who deleted it (`by`, the caller's principal; `name` their
+/// display name, when they have one), when (`at_unix`) and why (`message`).
+/// Its history stays in the log. Its body is kept until
+/// `restorable_until_unix` — 30 days — and `undelete` brings it back until
+/// then; after, the body is purged and the field is `null`. `parent` is
+/// where it hung; `reparented`, the children its delete moved to that parent
+/// (`children: reparent`); `unblocked`, the tickets whose block on it the
+/// delete dropped (`unblock`) — what `undelete` puts back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Tombstone {
+    pub id: String,
+    pub title: String,
+    pub by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub at_unix: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restorable_until_unix: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reparented: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unblocked: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TicketsEvent {
@@ -1398,6 +1428,19 @@ pub enum TicketsEvent {
     /// the selection's order (`tickets`), and the ids nothing changed for
     /// (`unchanged`); on `watch` both are empty.
     UpdatedMany { ids: Vec<String>, changed: Vec<String>, tickets: Vec<Ticket>, unchanged: Vec<String> },
+    /// ACT-5: `delete`'s answer, and its write's event on `watch` — `ids` the
+    /// tickets it removed, in the store's order (the selection and, with
+    /// `children: delete`, every descendant), each one's tombstone beside it.
+    /// `get` on a deleted id answers it too, for that one id. Before it on
+    /// `watch`: each moved child's `parent_changed`, each unblocked ticket's
+    /// `blockers_changed`, each surviving parent's `child_removed`, each
+    /// blocker's `unlocks_removed`; after it the groups and placements that
+    /// moved, and a filter's `left`.
+    Deleted { ids: Vec<String>, tombstones: Vec<Tombstone> },
+    /// ACT-5: `undelete`'s answer, and its write's event on `watch` — the
+    /// tickets brought back (whole), in the store's order, with their
+    /// children and blocks put back where nothing has moved them since.
+    Undeleted { ids: Vec<String>, tickets: Vec<Ticket> },
     /// AGS-19: the ticket `id` gained the child `added` — a child was born
     /// naming it as `parent`, or was moved under it by `set_parent`
     /// (yielded by `watch`). SCALE-4: the parent's id and its new
@@ -1459,7 +1502,16 @@ pub enum TicketsEvent {
     /// extent whether or not the nav draws it a row. No watch event keeps
     /// it: `created` carries the newborn's `epic` and `seq`, which is its
     /// shortcode's new `last_seq`.
-    Extent { epic: String, last_seq: u32 },
+    /// ACT-5: and the sequences below `last_seq` the shortcode no longer
+    /// holds — deleted tickets (whose numbers are never reused), or a hand
+    /// edit's hole — so a client's arithmetic skips them: the shortcode holds
+    /// `last_seq - holes.len()` tickets. Absent when it holds every one.
+    Extent {
+        epic: String,
+        last_seq: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        holes: Vec<u32>,
+    },
     /// FILTER-4: how many tickets of one shortcode match a filter (yielded
     /// per shortcode by `counts`, in shortcode order, only for a shortcode
     /// that holds a match) — the filtered `extents`. A sum over the kept
@@ -1633,6 +1685,12 @@ pub enum TicketsEvent {
         status_since_unix: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status_since_exact: Option<bool>,
+        /// ACT-5: the deletes that touched this ticket — each tombstone whose
+        /// delete moved it off its parent (`reparented`) or dropped its block
+        /// on the deleted ticket (`unblocked`), oldest first: why its parent
+        /// or its blockers moved. Absent when none did.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        deletions: Vec<Tombstone>,
     },
 }
 

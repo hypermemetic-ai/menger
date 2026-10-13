@@ -525,6 +525,17 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
             let unchanged: Vec<_> = unchanged.into_iter().filter(|id| reach.holds_id(id)).collect();
             (!ids.is_empty() || !tickets.is_empty()).then_some(E::UpdatedMany { ids, changed, tickets, unchanged })
         }
+        // ACT-5: a delete or an undelete, of the tickets the frame reaches.
+        E::Deleted { ids, tombstones } => {
+            let ids: Vec<_> = ids.into_iter().filter(|id| reach.holds_id(id)).collect();
+            let tombstones: Vec<_> = tombstones.into_iter().filter(|t| reach.holds_id(&t.id)).collect();
+            (!ids.is_empty()).then_some(E::Deleted { ids, tombstones })
+        }
+        E::Undeleted { ids, tickets } => {
+            let ids: Vec<_> = ids.into_iter().filter(|id| reach.holds_id(id)).collect();
+            let tickets: Vec<_> = tickets.into_iter().filter(|t| inside(&t.epic)).collect();
+            (!ids.is_empty()).then_some(E::Undeleted { ids, tickets })
+        }
         // The reach's own count, never the viewer's whole store.
         E::Health { version, unix_now, .. } => Some(E::Health { version, unix_now, ticket_count: reach.tickets }),
         // A dangling blocker's id names no ticket: nothing to read.
@@ -1322,7 +1333,7 @@ mod tests {
             TicketsEvent::InputChanged { input: input("OTHER-7", "d1", InputKind::Choice, &["a"], InputState::Answered) },
             TicketsEvent::Group { group: group("OTHER", None) },
             TicketsEvent::GroupChanged { group: group("OTHER", Some("AREA-1")) },
-            TicketsEvent::Extent { epic: "OTHER".into(), last_seq: 9 },
+            TicketsEvent::Extent { epic: "OTHER".into(), last_seq: 9, holes: Vec::new() },
             TicketsEvent::Count { epic: "OTHER".into(), held: 9 },
             TicketsEvent::Entered { id: "OTHER-7".into(), epic: "OTHER".into(), seq: 7 },
             TicketsEvent::Left { id: "OTHER-7".into(), epic: "OTHER".into(), seq: 7 },

@@ -26,6 +26,20 @@ pub(crate) struct Answer {
     /// FILTER-27: since when its status has been held, and whether that is
     /// a transition's moment or — a ticket from before the log — a bound.
     pub(crate) since: Option<(i64, bool)>,
+    /// ACT-5: the deletes that moved it off its parent or dropped its block.
+    pub(crate) deletions: Vec<menger_tickets_api::Tombstone>,
+}
+
+/// ACT-5: what a delete did to `id`, in a reader's words.
+pub(crate) fn deletion_line(id: &str, t: &menger_tickets_api::Tombstone) -> String {
+    let by = t.name.clone().unwrap_or_else(|| t.by.clone());
+    let what = match (t.reparented.iter().any(|x| x == id), t.unblocked.iter().any(|x| x == id)) {
+        (true, true) => format!("moved it to {} and dropped its block on it", t.parent.as_deref().unwrap_or("the top level")),
+        (true, false) => format!("moved it to {}", t.parent.as_deref().unwrap_or("the top level")),
+        _ => "dropped its block on it".to_string(),
+    };
+    let why = t.message.as_deref().map(|m| format!(" — {m}")).unwrap_or_default();
+    format!("{} was deleted by {by}, which {what}{why}.", t.id)
 }
 
 /// `history`'s events, read into an [`Answer`] — `None` for a refusal.
@@ -35,7 +49,8 @@ pub(crate) fn answer_of(id: &str, events: Vec<TicketsEvent>) -> Option<Answer> {
         match ev {
             TicketsEvent::Transition { transition } if transition.ticket.eq_ignore_ascii_case(id) => a.own.push(transition),
             TicketsEvent::Transition { transition } => a.caused.push(transition),
-            TicketsEvent::HistoryEnd { began_unix, restorable, status_since_unix, status_since_exact } => {
+            TicketsEvent::HistoryEnd { began_unix, restorable, status_since_unix, status_since_exact, deletions } => {
+                a.deletions = deletions;
                 a.began = began_unix;
                 a.restorable = restorable;
                 a.since = status_since_unix.map(|at| (at, status_since_exact.unwrap_or(true)));
@@ -214,8 +229,17 @@ pub(crate) fn HistoryView(ticket: String) -> impl IntoView {
                             </p>
                         }
                     });
+                    let deletions = (!a.deletions.is_empty()).then(|| {
+                        let lines: Vec<(String, String)> = a.deletions.iter().map(|t| (fmt_unix(t.at_unix), deletion_line(&id, t))).collect();
+                        view! {
+                            <ul class="deletions">
+                                {lines.into_iter().map(|(at, line)| view! { <li class="deletion" title=at>{line}</li> }).collect_view()}
+                            </ul>
+                        }
+                    });
                     view! {
                         {own}
+                        {deletions}
                         {caused}
                         {restorable}
                         {since}
@@ -257,7 +281,7 @@ mod tests {
             TicketsEvent::Transition { transition: t(1, "R-2", None, "Pending", "anonymous", None) },
             TicketsEvent::Transition { transition: t(4, "R-2", Some("Pending"), "Canceled", "idp:ada", None) },
             TicketsEvent::Transition { transition: t(5, "R-3", Some("Ready"), "Canceled", SYSTEM_ACTOR, Some((4, "R-2"))) },
-            TicketsEvent::HistoryEnd { began_unix: Some(50), restorable: vec!["R-3".into()], status_since_unix: Some(40), status_since_exact: Some(false) },
+            TicketsEvent::HistoryEnd { began_unix: Some(50), restorable: vec!["R-3".into()], status_since_unix: Some(40), status_since_exact: Some(false), deletions: Vec::new() },
         ];
         let a = answer_of("r-2", events).unwrap();
         assert_eq!(a.own.iter().map(|t| t.id).collect::<Vec<_>>(), [1, 4]);

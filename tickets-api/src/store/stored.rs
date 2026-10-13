@@ -1366,6 +1366,9 @@ pub enum Verdict {
         /// MENGER-13: the transitions the log holds — `None` when the file
         /// has no log yet (the next open begins it).
         transitions: Option<usize>,
+        /// ACT-5: the tombstones the file holds — `None` when it has no
+        /// table yet (the next open makes it).
+        tombstones: Option<usize>,
     },
     /// Where they differ, one line each, naming the structure and the key.
     Differs(Vec<String>),
@@ -1450,6 +1453,11 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
             Some(n)
         }
     };
+    // ACT-5: no tombstone of a ticket that is there.
+    let tombstones = super::delete::check(&tx, &scanned)?.map(|(n, differs)| {
+        out.extend(differs);
+        n
+    });
     tx.commit()?;
     if !out.is_empty() {
         return Ok(Verdict::Differs(out));
@@ -1468,6 +1476,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         holders: want.tree.holders.len(),
         indexed,
         transitions,
+        tombstones,
     })
 }
 

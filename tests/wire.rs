@@ -3060,3 +3060,59 @@ async fn a_comment_keeps_its_anchor_when_its_ticket_changes_over_the_wire() {
     assert_eq!(comment_ids(&client, json!({"under": "DEMAND-2"})).await.0, Vec::<u64>::new());
     assert_eq!(comment_ids(&client, json!({"under": "DEMAND-3"})).await.0, [1], "under where its ticket is now");
 }
+
+/// ACT-5 acceptance 2: `delete` over the real protocol — a delete of a ticket
+/// nothing points at, a refused delete naming its blocker and its children,
+/// a reparenting delete, `get` on a deleted id answering its tombstone, the
+/// `deleted` event on `watch`, the hole `extents` names, and `undelete`.
+#[tokio::test]
+async fn delete_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    for (title, kind, parent, blocked_by) in [
+        ("the root", "scope", None, vec![]),
+        ("an area", "scope", None, vec![]),
+        ("a child", "build", Some("DEL-2"), vec![]),
+        ("waits", "build", None, vec!["DEL-2"]),
+        ("a typo", "build", None, vec![]),
+    ] {
+        answer(&client, "tickets.create", json!({"epic": "DEL", "title": title, "kind": kind, "parent": parent, "blocked_by": blocked_by})).await;
+    }
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let gone = answer(&client, "tickets.delete", json!({"ids": ["DEL-5"], "message": "filed twice"})).await;
+    assert_eq!(gone["type"], "deleted", "{gone}");
+    assert_eq!(gone["ids"], json!(["DEL-5"]));
+    assert_eq!((&gone["tombstones"][0]["title"], &gone["tombstones"][0]["message"]), (&json!("a typo"), &json!("filed twice")));
+    let heard = watch_until(&mut watch, "deleted").await;
+    assert_eq!(heard.last().unwrap()["ids"], json!(["DEL-5"]), "{heard:?}");
+    let got = answer(&client, "tickets.get", json!({"id": "DEL-5"})).await;
+    assert_eq!((&got["type"], &got["tombstones"][0]["by"]), (&json!("deleted"), &json!("anonymous")), "{got}");
+    let extents = collect(call(&client, "tickets.extents", json!({})).await).await;
+    assert_eq!(extents, [json!({"type": "extent", "epic": "DEL", "last_seq": 5, "holes": [5]})], "the deleted last is a hole");
+
+    let refused = answer(&client, "tickets.delete", json!({"ids": ["DEL-2"]})).await;
+    assert_eq!(refused["type"], "error", "{refused}");
+    let message = refused["message"].as_str().unwrap();
+    assert!(message.contains("DEL-3") && message.contains("children reparent"), "{message}");
+    assert!(message.contains("DEL-4 waits on it — unblock"), "{message}");
+    assert_eq!(answer(&client, "tickets.get", json!({"id": "DEL-2"})).await["type"], "ticket", "nothing written");
+
+    let moved = answer(&client, "tickets.delete", json!({"ids": ["DEL-2"], "children": "reparent", "unblock": true})).await;
+    assert_eq!(moved["tombstones"][0]["reparented"], json!(["DEL-3"]), "{moved}");
+    assert_eq!(moved["tombstones"][0]["unblocked"], json!(["DEL-4"]), "{moved}");
+    let heard = watch_until(&mut watch, "deleted").await;
+    let kinds: Vec<&str> = heard.iter().filter_map(|e| e["type"].as_str()).skip_while(|k| *k != "parent_changed").collect();
+    assert_eq!(kinds, ["parent_changed", "children_changed", "blockers_changed", "child_removed", "deleted"], "{heard:?}");
+    let child = answer(&client, "tickets.get", json!({"id": "DEL-3"})).await;
+    assert_eq!(child["ticket"]["parent"], "DEL-1", "moved to its grandparent");
+    let extents = collect(call(&client, "tickets.extents", json!({})).await).await;
+    assert_eq!(extents, [json!({"type": "extent", "epic": "DEL", "last_seq": 5, "holes": [2, 5]})]);
+
+    let back = answer(&client, "tickets.undelete", json!({"ids": ["DEL-2"]})).await;
+    assert_eq!((&back["type"], &back["tickets"][0]["title"]), (&json!("undeleted"), &json!("an area")), "{back}");
+    assert_eq!(answer(&client, "tickets.get", json!({"id": "DEL-3"})).await["ticket"]["parent"], "DEL-2", "back under it");
+    let born = answer(&client, "tickets.create", json!({"epic": "DEL", "title": "after"})).await;
+    assert_eq!(born["ticket"]["id"], "DEL-6", "DEL-5's number is not reused");
+}

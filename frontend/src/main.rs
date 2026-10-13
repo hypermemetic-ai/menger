@@ -1803,6 +1803,27 @@ fn ask_members(epoch: MembersEpoch, gtext: Memo<Option<String>>, members: RwSign
 /// plain links.
 const WANT_MAX: usize = 400;
 
+/// ACT-5: what a deleted ticket's page shows — its tombstone: which it was,
+/// who deleted it, when and why, and until when it can be brought back.
+fn tombstone_view(t: menger_tickets_api::Tombstone) -> impl IntoView {
+    let by = t.name.clone().unwrap_or_else(|| t.by.clone());
+    let when = format!("{} ({})", fmt_unix(t.at_unix), fmt_relative(now_unix(), t.at_unix));
+    let undo = match t.restorable_until_unix {
+        Some(until) => format!("It can be brought back (undelete) until {}.", fmt_unix(until)),
+        None => "Its body has been purged: it can no longer be brought back.".to_string(),
+    };
+    view! {
+        <div id="tombstone" data-ticket-id=t.id.clone()>
+            <h2>{t.id.clone()}" — deleted"</h2>
+            <p class="tomb-title">{t.title.clone()}</p>
+            <p class="tomb-who">"Deleted by "<b>{by}</b>" "{when}"."</p>
+            {t.message.clone().map(|m| view! { <p class="tomb-why">"Why: "{m}</p> })}
+            <p class="tomb-undo">{undo}" Its number is never reused, and its history is kept."</p>
+            <p><a href="#/">"Back to the board"</a>"."</p>
+        </div>
+    }
+}
+
 /// The ticket page (MFE-7). `get` + `blockers` fetch on entry and upsert
 /// into the shared row store; the page renders THROUGH the store's
 /// signals, so the watch stream keeps it live exactly like the board —
@@ -2007,6 +2028,10 @@ fn TicketPage(
             <p class="crumbs"><a href="#/">"← board"</a>{crumbs}</p>
             {move || match ticket.get() {
                 Some(t) => ticket_view(RwSignal::from(t), body, blockers_loaded, kids, more, all, lensed, refs).into_any(),
+                // ACT-5: a deleted ticket — opened, or deleted while open.
+                None if session::tombstone(&id_view).is_some() => {
+                    tombstone_view(session::tombstone(&id_view).expect("checked")).into_any()
+                }
                 None if not_found.get() => {
                     let id = id_view.clone();
                     view! {

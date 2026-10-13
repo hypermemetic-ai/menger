@@ -783,6 +783,11 @@ pub enum Change {
     /// ACT-2: an `update_many` changed `ids` (each in the write's own
     /// events before it) — `changed` the aspects that moved, in any of them.
     UpdatedMany { ids: Vec<String>, changed: Vec<String> },
+    /// ACT-5: a `delete` removed `ids`, each with its tombstone — after the
+    /// events of the tickets it moved ([`delete`]).
+    Deleted { ids: Vec<String>, tombstones: Vec<crate::types::Tombstone> },
+    /// ACT-5: an `undelete` brought `tickets` back — first of its write.
+    Undeleted { ids: Vec<String>, tickets: Vec<Ticket> },
     /// FILTER-4: every ticket whose cell the write moved — a birth, a status
     /// change and the blocker crossings it fans out to, a first commit or a
     /// last, SDLC-13: a kind changed — worked out once per write before it
@@ -837,6 +842,8 @@ impl Change {
             // FILTER-13: one per write, each watch's events already in its epic.
             // ACT-2: one per write, its ids in any shortcode — see `in_epic`.
             Self::UnderMoved { .. } | Self::UpdatedMany { .. } => "",
+            // ACT-5: its ids in any shortcode — see `in_epic`.
+            Self::Deleted { .. } | Self::Undeleted { .. } => "",
         }
     }
 
@@ -854,6 +861,7 @@ impl Change {
             }
             Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => Some(self),
             Self::UpdatedMany { ids, changed } => update_many::in_epic(ids, changed, epic),
+            Self::Deleted { .. } | Self::Undeleted { .. } => delete::in_epic(self, epic),
             // FILTER-4: each move filtered where it is turned into events.
             Self::CellsMoved { .. } | Self::UnderMoved { .. } => Some(self),
             other => (other.epic() == epic).then_some(other),
@@ -1694,6 +1702,8 @@ struct Cache {
     log: history::Log,
     /// THEME-8: every theme and what the site and each shortcode say.
     themes: themes::Themes,
+    /// ACT-5: every deleted ticket's tombstone ([`delete::Tombstones`]).
+    tombstones: delete::Tombstones,
     written: u64,
 }
 
@@ -1938,6 +1948,12 @@ impl Cache {
     /// MENGER-12: with the inputs as stored — whether a ticket is `asking`
     /// is in its cell, and the inputs say it, not the row.
     fn new(loaded: HashMap<String, Row>, inputs: inputs::Inputs) -> Self {
+        Self::built(loaded, inputs, &[])
+    }
+
+    /// ACT-5: [`Cache::new`] with the cell ids `seed` interns kept — what a
+    /// delete rebuilds with, so an open filter's compiled cells stay right.
+    fn built(loaded: HashMap<String, Row>, inputs: inputs::Inputs, seed: &[cells::Key]) -> Self {
         let (mut order, at, paths) = ordered(loaded);
         for t in order.values_mut() {
             t.child_count = 0;
@@ -1985,7 +2001,7 @@ impl Cache {
             started.elapsed().as_secs_f64() * 1000.0
         );
         let started = std::time::Instant::now();
-        let cells = cells::Cells::build(rows, |id| ready.count(id), |id| inputs.asking(id));
+        let cells = cells::Cells::build_seeded(seed, rows, |id| ready.count(id), |id| inputs.asking(id));
         tracing::info!(
             "interned {} cells and filled {} (shortcode, cell) bitmaps ({} bytes serialized) over {} \
              tickets in {:.1} ms",
@@ -2033,6 +2049,7 @@ impl Cache {
             // MENGER-13: and the transition log.
             log,
             themes: themes::Themes::default(),
+            tombstones: Default::default(),
             written: 0,
         }
     }
@@ -2109,6 +2126,7 @@ impl Cache {
             // MENGER-13: and the transition log.
             log,
             themes: themes::Themes::default(),
+            tombstones: Default::default(),
             written: 0,
         }
     }
@@ -2855,6 +2873,8 @@ impl Store {
         // THEME-3: with their owners and the frontmatter's references.
         themes::migrate(&mut conn)?;
         theme_registry::migrate(&mut conn)?;
+        // ACT-5: and one without the tombstones table gains it, empty.
+        delete::migrate(&mut conn)?;
         let cache = Self::load_cache(&mut conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
@@ -2929,8 +2949,11 @@ impl Store {
         cache.place_all();
         // COMP-3: the registry, as stored.
         cache.components = components::load(conn)?;
-        // INPUT-3: the inputs and their histories, as stored.
+        // INPUT-3: the inputs and their histories, as stored — ACT-5: of the
+        // tickets there are (a deleted ticket's wait in the file for its undo).
         cache.inputs = inputs::load(conn)?;
+        cache.inputs.retain(|t| cache.at.contains_key(t));
+        cache.tombstones = delete::load(conn)?;
         // COMMENT-2: the comments, as stored.
         cache.comments = comments::load(conn)?;
         // NOTE-2: the notes, as stored.
@@ -3287,14 +3310,16 @@ impl Store {
         let (ticket, touched, unlocks_added, parent_epic, derived, registered, asked, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let tickets = &cache;
-            let seq = tickets.ids.next_seq(&epic);
+            // ACT-5: past every deleted number too — a number is never reused;
+            // and the first of a shortcode is the one born into none held.
+            let (seq, first) = (tickets.next_seq(&epic), tickets.ids.held(&epic) == 0);
             let id = format!("{epic}-{seq}");
 
             // MNG-12: every shortcode starts with a scope. `seq == 1` is
             // exactly "this prefix has no tickets yet" (ids are never
             // reused), so the newborn would be the shortcode's root.
             // SDLC-11: or a doc — a doc collection's root.
-            if seq == 1 && !new.kind.roots_a_shortcode() {
+            if first && !new.kind.roots_a_shortcode() {
                 return Err(StoreError::FirstMustBeScope {
                     epic,
                     kind: new.kind,
@@ -3318,13 +3343,15 @@ impl Store {
             if let Some(path) = find_cycle(tickets, &id, &new.blocked_by) {
                 return Err(StoreError::Cycle { id, path });
             }
+            // ACT-5: nor on a deleted ticket — it is never born again.
+            tickets.tombstones.refuse_blockers(&id, &new.blocked_by)?;
             // MNG-14 (owner, 2026-09-06): a parent named must exist; a
             // non-root's parent must be inside its own shortcode, and when
             // omitted it defaults to the shortcode's scope root. The root
             // itself (seq == 1) is the exception: its parent, if any, is
             // the shortcode it hangs under — a sub-shortcode — in any
             // prefix; omitted, it stays a top-level root.
-            let parent = match (&requested_parent, seq) {
+            let parent = match (&requested_parent, first) {
                 (Some(p), _) => {
                     let Some(pt) = tickets.get(p) else {
                         return Err(StoreError::ParentNotFound {
@@ -3332,7 +3359,7 @@ impl Store {
                             parent: p.clone(),
                         });
                     };
-                    if seq > 1 && pt.epic != epic {
+                    if !first && pt.epic != epic {
                         return Err(StoreError::ParentOutsideShortcode {
                             id,
                             parent: p.clone(),
@@ -3343,7 +3370,7 @@ impl Store {
                     }
                     Some(p.clone())
                 }
-                (None, 1) => None,
+                (None, true) => None,
                 (None, _) => shortcode_root(tickets, &epic).map(|r| r.id.clone()),
             };
 
@@ -3351,7 +3378,7 @@ impl Store {
             // shortcode's scope root — which it cannot be itself (`seq == 1`)
             // — and its path is one no ticket of the shortcode holds yet.
             if let Some(path) = &new.path {
-                let Some(root) = (seq > 1).then(|| shortcode_root(tickets, &epic)).flatten() else {
+                let Some(root) = (!first).then(|| shortcode_root(tickets, &epic)).flatten() else {
                     return Err(StoreError::PathNoRoot {
                         epic,
                         path: path.clone(),
@@ -5235,198 +5262,6 @@ impl Store {
     pub fn subscribe_filtered(&self) -> broadcast::Receiver<Change> {
         self.tx.filtered.subscribe()
     }
-
-    /// PERF-2: bulk-seeds `spec.count` synthetic tickets, through this
-    /// layer and nothing else. The tickets are generated in memory first
-    /// (ids allocated the way `create` allocates them — max existing seq
-    /// per epic, plus one — every `blocked_by` edge pointing at an
-    /// already-generated ticket so the DAG is acyclic by construction,
-    /// and each mirrored in its blocker's `unlocks`), then written
-    /// through to the database in a few large transactions (one fsync
-    /// per ~50k rows, never one per row), and only then inserted into
-    /// the cache. Deterministic given `spec.seed`.
-    ///
-    /// Refuses a store that already holds tickets unless
-    /// `spec.into_existing` — nothing is generated or written then.
-    /// Nothing is broadcast: seeding runs before the server serves, so
-    /// there is no subscriber to tell, and a million `Created` events
-    /// would only lag the channel. Blocking I/O: call from a blocking
-    /// context (the builder wraps it in `spawn_blocking`).
-    pub fn seed_synthetic(&self, spec: SeedSpec) -> Result<SeedReport, StoreError> {
-        self.seed_synthetic_shaped(spec, SeedShape::Flat)
-    }
-
-    /// FILTER-13: [`Store::seed_synthetic`] in a given shape — PERF-2's flat
-    /// one, or FILTER-3 §6.5's nested one ([`SeedShape`]).
-    pub fn seed_synthetic_shaped(&self, spec: SeedSpec, shape: SeedShape) -> Result<SeedReport, StoreError> {
-        // Mutations stay serialized even here: a concurrent writer means
-        // this was called while serving, which it must not be.
-        let _serial = self
-            .write_serial
-            .try_lock()
-            .map_err(|_| StoreError::Db("seed requested while another write is in flight".into()))?;
-        let started = std::time::Instant::now();
-
-        let (next_seq, existing): (HashMap<String, u32>, usize) = {
-            let cache = self.tickets.read().expect("store lock poisoned");
-            if cache.len() > 0 && !spec.into_existing {
-                return Err(StoreError::SeedRefused {
-                    existing: cache.len(),
-                });
-            }
-            // SCALE-3: the per-shortcode sequence `create` allocates from,
-            // so seeded ids continue exactly where a create's would.
-            let next_seq = cache
-                .ids
-                .last_seqs()
-                .map(|(epic, seq)| (epic.to_string(), seq))
-                .collect();
-            (next_seq, cache.len())
-        };
-
-        let generated = synthetic::generate(spec, &next_seq, shape);
-        let generate = started.elapsed();
-        let epics = {
-            let mut seen: HashSet<&str> = HashSet::new();
-            generated.iter().for_each(|t| {
-                seen.insert(t.epic.as_str());
-            });
-            seen.len()
-        };
-        let edges: usize = generated.iter().map(|t| t.blocked_by.len()).sum();
-
-        let persist_started = std::time::Instant::now();
-        // SCALE-14: one write as a reader counts them ([`Store::full`]),
-        // however many transactions carry it. A seed that fails part way
-        // leaves it counted: some of it may be stored, none of it is in the
-        // cache, and a reader that sees the two counts disagree reads rows
-        // from the database instead of trusting its own.
-        //
-        // SCALE-28: the derived state cannot ride in each chunk's
-        // transaction — it is built once the whole seed is in the cache, as
-        // below — so the first chunk's transaction also says the stored
-        // state is behind the tickets, and the transaction that stores it
-        // says it no longer is. Killed in between, the file says so, and
-        // the next open builds it from the tickets (as for a file from
-        // before SCALE-28): at no instant does it claim a state it does not
-        // hold. The children index is part of that state, kept by SQLite a
-        // row at a time in parent order — not the order a seed writes in:
-        // at 10⁶ it took the persist from ~10 s to ~15 s. So a seed at least
-        // the size of the store it lands in drops it with its first chunk
-        // and builds it again, sorted, with the rest (0.95 s at 10⁶).
-        // SCALE-32: the ready set's index too — and it is built after the
-        // counts it is over are written, not moved by each one.
-        let rebuild_index = generated.len() >= existing;
-        // SCALE-32: each ticket's count of unsatisfied blockers, worked out
-        // before its row is written so the row is written with it. Counted
-        // after the seed is in, the counts were written a second time, a row
-        // each — 177,000 rows at 10⁶, most pages of the file rewritten: the
-        // seed went 14.6 s → 21 s. A generated ticket's blockers are tickets
-        // generated before it; a store's own are looked up, should one be
-        // named. What the seed does to the store's own counts (a newborn that
-        // resolves a forward reference, born done) the stored state after it
-        // still settles.
-        let open: Vec<u32> = {
-            let cache = self.tickets.read().expect("store lock poisoned");
-            let born: HashMap<&str, Status> = generated.iter().map(|t| (t.id.as_str(), t.status)).collect();
-            generated
-                .iter()
-                .map(|t| {
-                    ready::open_blockers(&t.blocked_by, |b| {
-                        born.get(b).copied().or_else(|| cache.get(b).map(|r| r.status))
-                    })
-                })
-                .collect()
-        };
-        self.committing.fetch_add(1, Ordering::SeqCst);
-        {
-            let mut conn = self.db.lock().expect("db lock poisoned");
-            let chunks = generated
-                .chunks(synthetic::ROWS_PER_TRANSACTION)
-                .zip(open.chunks(synthetic::ROWS_PER_TRANSACTION));
-            for (i, (chunk, open)) in chunks.enumerate() {
-                let tx = conn.transaction()?;
-                if i == 0 {
-                    stored::mark_stale(&tx, true)?;
-                    if rebuild_index {
-                        stored::drop_children_index(&tx)?;
-                        stored::drop_ready_index(&tx)?;
-                    }
-                }
-                db::insert_many(&tx, chunk, open)?;
-                // SEARCH-2: indexed in the transaction that writes them.
-                search::put_many(&tx, chunk)?;
-                tx.commit()?;
-            }
-        }
-        let persist = persist_started.elapsed();
-
-        let form = apply(&self.tickets, |tickets| {
-            tickets.at.reserve(generated.len());
-            // SCALE-14: into the cache as rows — each body is dropped as its
-            // ticket goes in, as a load never reads one.
-            for t in generated {
-                tickets.insert(Row::from(t));
-            }
-            // SCALE-4: the children index, and every parent's count from
-            // it, built over the seeded store as a build does — first, because
-            // the roll-ups walk it. A seed only ever adds children, so a
-            // count set before it is either set again here or still right.
-            let children = children::Children::build(tickets.order.values());
-            count_children(&mut tickets.order, &tickets.at, &children);
-            tickets.children = children;
-            // MNG-10: built once over the seeded store, as a build does — not
-            // kept per row: a seed into an existing store can add tickets
-            // to its prefixes in any shape, and nothing is broadcast here.
-            let rollups = rollup::Rollups::build(tickets.rows());
-            tickets.rollups = rollups;
-            // SCALE-3: the id indexes too, for the same reason — the seed
-            // went into the cache without passing through `create`, and
-            // one of its tickets may be an id the store already named.
-            let ids = ids::Ids::build(tickets.rows());
-            tickets.ids = ids;
-            // SCALE-32: and the counts, the ready set and the status counts —
-            // a seed's tickets arrive with their statuses and blockers set.
-            let ready = ready::Ready::build(tickets.rows());
-            tickets.ready = ready;
-            // FILTER-4: and the cells, from the rows and those counts.
-            let cells =
-                cells::Cells::build(tickets.rows(), |id| tickets.ready.count(id), |id| tickets.inputs.asking(id));
-            tickets.cells = cells;
-            // FILTER-13: and the kept tree, from the rows, the children and
-            // the cells.
-            Cache::plant(
-                &tickets.order,
-                &tickets.at,
-                &mut tickets.children,
-                &tickets.cells,
-                &tickets.ready,
-                &tickets.inputs,
-            );
-            // WAVE-6: and every placement, over the seeded store.
-            tickets.place_all();
-            tickets.form()
-        });
-        // SCALE-28: and all of it stored, in one transaction, which also
-        // says the stored state is the tickets' again.
-        {
-            let mut conn = self.db.lock().expect("db lock poisoned");
-            let tx = conn.transaction()?;
-            stored::create_children_index(&tx)?;
-            stored::write_all(&tx, &form)?;
-            stored::create_ready_index(&tx)?;
-            stored::mark_stale(&tx, false)?;
-            tx.commit()?;
-        }
-        Ok(SeedReport {
-            count: spec.count,
-            epics,
-            edges,
-            generate,
-            persist,
-            elapsed: started.elapsed(),
-        })
-    }
 }
 
 /// MNG-10: the per-shortcode roll-ups — AGS-20's nav tree, computed by the
@@ -5520,6 +5355,7 @@ mod ids;
 /// (ids, `blocked_by` -> `unlocks` symmetry, acyclicity) holds by
 /// construction rather than by checking.
 mod synthetic;
+mod seed;
 
 /// SCALE-4: each parent's children, kept from the end that names them —
 /// every ticket's `parent` — in the store's order, which is what
@@ -5638,6 +5474,9 @@ pub use update::{Update, Updated};
 /// ACT-2: `update_many` — the same update to many tickets in one write.
 mod update_many;
 pub use update_many::{refused as refused_many, Selection, UpdatedMany, UPDATE_MANY_MAX};
+/// ACT-5: `delete` and `undelete` — tombstones, the purge, the rebuild.
+mod delete;
+pub use delete::{Children, Deleted, Deletion, Undeleted, KEEP_BODY_FOR, PURGE_EVERY};
 /// THEME-8: the themes and what the site and each shortcode say.
 mod themes;
 pub use themes::ThemeChange;
@@ -5886,3 +5725,6 @@ mod tests_update;
 /// ACT-2: `update_many`, and `label` / `link_commits` over many ids.
 #[cfg(test)]
 mod tests_update_many;
+/// ACT-5: `delete`, `undelete`, the purge — every derived structure after.
+#[cfg(test)]
+mod tests_delete;
