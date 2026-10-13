@@ -13,9 +13,14 @@
 //!   ([`words`]): "created today", "Pending for over 2 weeks", "moved into
 //!   Ready in the last 2 days by owner". The lens bar reads it so.
 //! - **The menu** (src/when_view.rs): Created, Moved into ▸ status, Moved
-//!   out of ▸ status, In status for, Changed — each with its presets and a
-//!   Custom… window editor (src/calendar.rs's calendar and time selector).
-//!   Every edit is one of the pure edits here ([`with_window`], …).
+//!   out of ▸ status, In status for, Changed, Hasn't changed — each with its
+//!   presets and a Custom… window editor (src/calendar.rs's calendar and
+//!   time selector). Every edit is one of the pure edits here
+//!   ([`with_window`], …).
+//! - **FILTER-30**: Hasn't changed is `not touched <window>` — the ticket's
+//!   last touch (any write to it, a comment, an answer) outside the window:
+//!   "hasn't changed in 2 weeks". And any time pill turns around with
+//!   [`negate`] (its ⋯ menu's Negate; a group's, for its time members).
 //!
 //! Everything that decides is a pure function here, pinned by native tests.
 
@@ -46,7 +51,7 @@ pub(crate) fn group(t: &Timed) -> Group {
     Group::one(if t.not { Predicate::is_not(field) } else { Predicate::is(field) })
 }
 
-/// What the When menu builds — one of its five rows.
+/// What the When menu builds — one of its six rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Kind {
     Created,
@@ -54,11 +59,13 @@ pub(crate) enum Kind {
     OutOf,
     Held,
     Changed,
+    /// FILTER-30: `touched` — built negated: hasn't changed.
+    Untouched,
 }
 
 impl Kind {
     /// The menu's order.
-    pub(crate) const ALL: [Kind; 5] = [Kind::Created, Kind::Into, Kind::OutOf, Kind::Held, Kind::Changed];
+    pub(crate) const ALL: [Kind; 6] = [Kind::Created, Kind::Into, Kind::OutOf, Kind::Held, Kind::Changed, Kind::Untouched];
 
     pub(crate) fn of(e: &Event) -> Kind {
         match e {
@@ -67,6 +74,7 @@ impl Kind {
             Event::Left(_) => Kind::OutOf,
             Event::Held(_) => Kind::Held,
             Event::Changed => Kind::Changed,
+            Event::Touched => Kind::Untouched,
         }
     }
 
@@ -78,6 +86,7 @@ impl Kind {
             Kind::OutOf => "Moved out of",
             Kind::Held => "In status for",
             Kind::Changed => "Changed",
+            Kind::Untouched => "Hasn't changed",
         }
     }
 
@@ -89,6 +98,7 @@ impl Kind {
             Kind::OutOf => "outof",
             Kind::Held => "held",
             Kind::Changed => "changed",
+            Kind::Untouched => "untouched",
         }
     }
 
@@ -105,6 +115,30 @@ impl Kind {
     /// Whether its clause may say who (the transitions'; not a birth).
     pub(crate) fn has_who(self) -> bool {
         matches!(self, Kind::Into | Kind::OutOf | Kind::Changed)
+    }
+
+    /// Whether its window may be "ever" (a birth and a touch always have
+    /// one).
+    pub(crate) fn has_ever(self) -> bool {
+        !matches!(self, Kind::Created | Kind::Untouched)
+    }
+
+    /// The window presets its menu offers (FILTER-30: Hasn't changed, the
+    /// lengths a stale ticket is measured in).
+    pub(crate) fn presets(self) -> &'static [&'static str] {
+        match self {
+            Kind::Untouched => &UNTOUCHED_PRESETS,
+            _ => &WINDOW_PRESETS,
+        }
+    }
+
+    /// A preset's chip, in words: `in the last 3 days`; Hasn't changed's,
+    /// the length alone (`3 days`).
+    pub(crate) fn preset_words(self, w: &Window, h12: bool) -> String {
+        match (self, w) {
+            (Kind::Untouched, Window::Within(n, u)) => length_words(*n, *u),
+            _ => window_words(w, h12),
+        }
     }
 }
 
@@ -131,6 +165,9 @@ impl Part {
 /// The window presets each windowed kind offers, as the language writes
 /// them — Changed recently's five (MENGER-13) for every kind.
 pub(crate) const WINDOW_PRESETS: [&str; 5] = ["today", "yesterday", "this week", "within 1h", "within 12h"];
+
+/// FILTER-30: the windows Hasn't changed offers: 1d · 3d · 1w · 2w · 1mo.
+pub(crate) const UNTOUCHED_PRESETS: [&str; 5] = ["within 1d", "within 3d", "within 1w", "within 2w", "within 1mo"];
 
 /// The lengths In status for offers: over 1d · 3d · 1w · 2w · 1mo.
 pub(crate) const LENGTH_PRESETS: [(u32, Unit); 5] = [(1, Unit::Day), (3, Unit::Day), (1, Unit::Week), (2, Unit::Week), (1, Unit::Month)];
@@ -165,7 +202,8 @@ pub(crate) fn window_of(text: &str) -> Option<Window> {
 }
 
 /// A new clause of `kind` — a status's for Moved into / out of, a preset's
-/// window (`None`: ever) for the rest; In status for, over a length.
+/// window (`None`: ever) for the rest; In status for, over a length;
+/// Hasn't changed, `not touched` (in two weeks unless a window is given).
 pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Window>) -> Option<Timed> {
     let event = match kind {
         Kind::Created => Event::Created,
@@ -173,9 +211,29 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
         Kind::OutOf => Event::Left(status?),
         Kind::Changed => Event::Changed,
         Kind::Held => Event::Held(Held { of: HeldOf::Any, over: true, n: 1, unit: Unit::Week }),
+        Kind::Untouched => Event::Touched,
     };
-    let window = if kind == Kind::Created { Some(window.unwrap_or(Window::Today)) } else if kind == Kind::Held { None } else { window };
-    Some(Timed { not: false, h: History { event, window, by: None } })
+    let window = match kind {
+        Kind::Created | Kind::Untouched => Some(window.unwrap_or_else(|| default_window(&event))),
+        Kind::Held => None,
+        _ => window,
+    };
+    Some(Timed { not: kind == Kind::Untouched, h: History { event, window, by: None } })
+}
+
+/// The window a clause that must have one falls back to: a birth's today, a
+/// touch's two weeks.
+fn default_window(e: &Event) -> Window {
+    match e {
+        Event::Touched => Window::Within(2, Unit::Week),
+        _ => Window::Today,
+    }
+}
+
+/// FILTER-30: `t` turned around — `created today` ⇄ `not created today`,
+/// hasn't changed ⇄ touched.
+pub(crate) fn negate(t: &Timed) -> Timed {
+    Timed { not: !t.not, h: t.h.clone() }
 }
 
 /// `t` with the status its event names set (Moved into / out of).
@@ -194,7 +252,7 @@ pub(crate) fn with_window(t: &Timed, w: Option<Window>) -> Timed {
     let mut t = t.clone();
     match t.h.event {
         Event::Held(_) => {}
-        Event::Created => t.h.window = Some(w.unwrap_or(Window::Today)),
+        Event::Created | Event::Touched => t.h.window = Some(w.unwrap_or_else(|| default_window(&t.h.event))),
         _ => t.h.window = w,
     }
     t
@@ -352,11 +410,15 @@ pub(crate) fn held_words(h: &Held) -> String {
 /// it reopens (none: the event's own words).
 pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
     let mut out: Vec<(Option<Part>, String)> = Vec::new();
-    if t.not {
+    // FILTER-30: a touch negated says it in words of its own.
+    let untouched = t.not && t.h.event == Event::Touched;
+    if t.not && !untouched {
         out.push((None, "not".into()));
     }
     match &t.h.event {
         Event::Created => out.push((None, "created".into())),
+        Event::Touched if untouched => out.push((None, "hasn't changed".into())),
+        Event::Touched => out.push((None, "touched".into())),
         Event::Entered(s) => {
             out.push((None, "moved into".into()));
             out.push((Some(Part::Status), s.as_str().into()));
@@ -372,7 +434,12 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
         }
     }
     if Kind::of(&t.h.event).windowed() {
-        let w = t.h.window.as_ref().map_or_else(|| "ever".to_string(), |w| window_words(w, h12));
+        let w = match &t.h.window {
+            None => "ever".to_string(),
+            // "hasn't changed in 2 weeks"
+            Some(Window::Within(n, u)) if untouched => format!("in {}", length_words(*n, *u)),
+            Some(w) => window_words(w, h12),
+        };
         out.push((Some(Part::Window), w));
     }
     if Kind::of(&t.h.event).has_who() {
@@ -399,9 +466,10 @@ pub(crate) fn has_window(t: &Timed, preset: &str) -> bool {
     t.h.window.as_ref().map(Window::format).as_deref() == Some(preset)
 }
 
-/// Whether `t`'s window is none of the presets (a custom one).
+/// Whether `t`'s window is none of its kind's presets (a custom one).
 pub(crate) fn custom_window(t: &Timed) -> bool {
-    t.h.window.as_ref().is_some_and(|w| !WINDOW_PRESETS.contains(&w.format().as_str()))
+    let presets = Kind::of(&t.h.event).presets();
+    t.h.window.as_ref().is_some_and(|w| !presets.contains(&w.format().as_str()))
 }
 
 /// The `for` of `t`, when it is one.
@@ -514,6 +582,56 @@ mod tests {
         assert!(new_clause(Kind::Into, None, None).is_none(), "moved into names a status");
         assert!(has_window(&timed("changed today"), "today") && !custom_window(&timed("changed today")));
         assert!(custom_window(&timed("changed since 3d ago")));
+    }
+
+    /// FILTER-30: Hasn't changed builds `not touched <window>` from its
+    /// presets (two weeks by default), reads "hasn't changed in 2 weeks",
+    /// and its window reopens from the pill; Negate turns any time pill
+    /// around and back.
+    #[test]
+    fn hasnt_changed_and_negate() {
+        let text = |t: &Timed| Filter { groups: vec![group(t)], display: Default::default() }.format();
+        assert!(Kind::ALL.contains(&Kind::Untouched) && Kind::Untouched.label() == "Hasn't changed");
+        let t = new_clause(Kind::Untouched, None, window_of("within 2w")).unwrap();
+        assert_eq!(text(&t), "not touched within 2w");
+        assert_eq!(words(&t, false), "hasn't changed in 2 weeks");
+        assert_eq!(new_clause(Kind::Untouched, None, None), Some(t.clone()), "two weeks unless told");
+        let parts: Vec<_> = segments(&t, false).into_iter().map(|(p, w)| (p.map(Part::key), w)).collect();
+        assert_eq!(parts, [(None, "hasn't changed".to_string()), (Some("window"), "in 2 weeks".to_string())]);
+        for p in UNTOUCHED_PRESETS {
+            let t = new_clause(Kind::Untouched, None, window_of(p)).unwrap();
+            assert_eq!(text(&t), format!("not touched {p}"));
+            assert!(has_window(&t, p) && !custom_window(&t), "{p}");
+        }
+        assert_eq!(Kind::Untouched.preset_words(&window_of("within 3d").unwrap(), false), "3 days");
+        let since = with_window(&t, window_of("since 2026-10-01"));
+        assert_eq!(text(&since), "not touched since 2026-10-01");
+        assert_eq!(words(&since, false), "hasn't changed since Oct 1, 2026");
+        assert!(custom_window(&since));
+        assert_eq!(text(&with_window(&t, None)), "not touched within 2w", "a touch keeps a window");
+        assert_eq!(text(&with_by(&t, Some(Who::Me))), "not touched within 2w", "a touch names no one");
+        assert!(!Kind::Untouched.has_ever() && !Kind::Untouched.has_who() && Kind::Untouched.windowed());
+        // Negate: every time pill turns around, and back.
+        for s in [
+            "created today",
+            "entered Ready within 2d by owner",
+            "left Pending this week",
+            "status Pending for over 2w",
+            "changed before 1w ago",
+            "touched today",
+            "not touched within 2w",
+        ] {
+            let t = timed(s);
+            let n = negate(&t);
+            assert_eq!(text(&n), if let Some(rest) = s.strip_prefix("not ") { rest.to_string() } else { format!("not {s}") }, "{s}");
+            assert_eq!(negate(&n), t, "{s} and back");
+        }
+        assert_eq!(words(&negate(&timed("created today")), false), "not created today");
+        assert_eq!(words(&negate(&t), false), "touched in the last 2 weeks");
+        assert_eq!(words(&timed("touched today"), false), "touched today");
+        // The saved suggestion reads back as the same pill (FILTER-6).
+        let f = Filter::parse("not touched within 2w and not category done and not kind doc").unwrap();
+        assert_eq!(of_group(&f.groups[0]), Some(t));
     }
 
     /// A group that is not one time predicate is no time pill.

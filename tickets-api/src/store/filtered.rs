@@ -83,6 +83,12 @@ impl Lens {
         !self.history.is_empty()
     }
 
+    /// FILTER-30: whether it asks `touched` — what a write that moves no
+    /// cell (a body, a comment, an answer) can move.
+    pub fn asks_touched(&self) -> bool {
+        self.history.iter().any(|h| h.event == crate::filter::Event::Touched)
+    }
+
     /// MENGER-13: whether what it admits moves as time passes — a history
     /// predicate whose window is relative (`within`, `today`, `yesterday`,
     /// `this week`): a `watch` reads it again on a clock.

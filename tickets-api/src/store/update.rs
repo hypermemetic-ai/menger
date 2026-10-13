@@ -431,9 +431,10 @@ fn amend_step(
     let asks = input_list.as_deref().map(inputs::asking_in);
     let was = cache.inputs.asking(&row.id);
     let derived = asks.filter(|a| *a != was).map(|a| cache.cell_change(&row, Some(a)));
-    let under = derived
-        .as_ref()
-        .and_then(|d| lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(d.announced().as_deref())));
+    // FILTER-30: the row is touched whether or not its cell moves.
+    let under = lineage::under_before_with(unders, cache, || {
+        lineage::Touched::of_moves(derived.as_ref().and_then(Derived::announced).as_deref()).row(&row)
+    });
     let announced = derived.as_ref().and_then(Derived::announced);
     db::update_row(txn, &row)?;
     if let Some(b) = &body {
@@ -496,7 +497,7 @@ fn kind_step(
     let (made, moved_inputs) = kind_moves(cache, &old, &row, act);
     let derived = cache.kind_change(&row, &old, cache.inputs.asking_after(&row.id, &moved_inputs));
     let under = lineage::under_before_with(unders, cache, || {
-        let mut t = lineage::Touched::of_moves(derived.announced().as_deref());
+        let mut t = lineage::Touched::of_moves(derived.announced().as_deref()).row(&row);
         if let Some(after) = &derived.moved.rollups {
             t.hosts(cache, after, cache.rows().with(&row), None);
         }
@@ -624,7 +625,7 @@ pub(super) fn cell_step(
     change: impl FnOnce(Ticket) -> Change,
 ) -> Result<(), StoreError> {
     let derived = cache.cell_change(&row, None);
-    let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()));
+    let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()).row(&row));
     let announced = derived.announced();
     let Derived { stored, moved } = derived;
     db::update_row(txn, &row)?;
@@ -686,7 +687,10 @@ fn blockers_step(
     };
     let (gained, lost) = (mirror(added, true), mirror(removed, false));
     let (derived, reblock) = cache.reblock(&row, added, removed);
-    let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()));
+    // FILTER-30: the ticket and each blocker whose `unlocks` it writes.
+    let under = lineage::under_before_with(unders, cache, || {
+        gained.iter().chain(&lost).fold(lineage::Touched::of_moves(derived.announced().as_deref()).row(&row), |t, b| t.row(b))
+    });
     let announced = derived.announced();
     let Derived { stored, moved } = derived;
     if let Some(placement) = moved.placement() {

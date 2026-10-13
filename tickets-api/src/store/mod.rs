@@ -2964,6 +2964,9 @@ impl Store {
         cache.roles = roles::load(conn)?;
         // MENGER-13: the transition log and its kept indexes.
         cache.log = history::load(conn, &cache.at, cache.order.values())?;
+        // FILTER-30: and each ticket's last comment and answer, its touch.
+        let activity = history::activity(&cache.at, &cache.comments, &cache.inputs);
+        cache.log.touch_all(activity);
         // THEME-8: the themes and settings, as stored.
         themes::load(conn, &mut cache.themes)?;
         Ok(cache)
@@ -3496,7 +3499,8 @@ impl Store {
             // of it — the newborn, and (a hand edit's) the subtree that named
             // its id as a parent, and any shortcode it re-hosts.
             let under = self.under_before(tickets, || {
-                let mut t = lineage::Touched::of_moves(derived.announced().as_deref());
+                // FILTER-30: and each blocker whose `unlocks` it writes.
+                let mut t = touched.values().fold(lineage::Touched::of_moves(derived.announced().as_deref()), |t, b| t.row(b));
                 if tickets.children.kids(&newborn.id).is_some() {
                     t.subtree(tickets, &newborn.id, None);
                 }
@@ -4161,7 +4165,7 @@ impl Store {
             // re-roots a shortcode — every shortcode whose hosts that moves.
             let derived = cache.kind_change(&row, &old, cache.inputs.asking_after(&row.id, &moved_inputs));
             let under = self.under_before(&cache, || {
-                let mut t = lineage::Touched::of_moves(derived.announced().as_deref());
+                let mut t = lineage::Touched::of_moves(derived.announced().as_deref()).row(&row);
                 if let Some(after) = &derived.moved.rollups {
                     t.hosts(&cache, after, cache.rows().with(&row), None);
                 }
@@ -4465,7 +4469,11 @@ impl Store {
                 let (d, u) = self.cell_derived(&row, Some(a));
                 (Some(d), u)
             }
-            None => (None, None),
+            // FILTER-30: no cell moves, but the ticket is touched.
+            None => {
+                let cache = self.tickets.read().expect("store lock poisoned");
+                (None, self.touch_before(&cache, &[(&row.epic, row.seq)]))
+            }
         };
         let announced = derived.as_ref().and_then(Derived::announced);
         let (cells_stored, moved) = match derived {
@@ -4636,13 +4644,20 @@ impl Store {
             let cache = self.tickets.read().expect("store lock poisoned");
             (cache.inputs.asking(&row.id), cache.inputs.asking_with(&row.id, &next))
         };
+        // FILTER-30: an answer or a clear touches the ticket.
+        let touches = inputs::touches(&entry);
         let (derived, under) = match asked != asks {
             true => {
                 let (d, u) = self.cell_derived(&row, Some(asks));
                 (Some(d), u)
             }
+            false if touches => {
+                let cache = self.tickets.read().expect("store lock poisoned");
+                (None, self.touch_before(&cache, &[(&row.epic, row.seq)]))
+            }
             false => (None, None),
         };
+        let at = entry.at_unix;
         let announced = derived.as_ref().and_then(Derived::announced);
         let (cells_stored, moved) = match derived {
             Some(Derived { stored, moved }) => (Some(stored), Some(moved)),
@@ -4661,6 +4676,9 @@ impl Store {
             },
             move |cache, _| {
                 cache.inputs.put(kept);
+                if touches {
+                    cache.log.touch(&row.epic, row.seq, at);
+                }
                 if let Some(moved) = moved {
                     let groups = cache.take(moved);
                     debug_assert!(groups.is_empty(), "an input moves no roll-up");
@@ -4723,13 +4741,29 @@ impl Store {
                 principal,
             }
         };
+        // FILTER-30: a comment on a ticket touches it.
+        let (on, under) = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let on = comment.anchor.ticket.as_deref().and_then(|t| cache.at.get(t)).cloned();
+            let under = on.as_ref().and_then(|k| self.touch_before(&cache, &[(&k.epic, k.seq)]));
+            (on, under)
+        };
         let (stored, kept) = (comment.clone(), comment.clone());
+        let cache = Arc::clone(&self.tickets);
         self.write(
             serial,
             move |tx| Ok(comments::store(tx, &stored)?),
-            move |cache, _| cache.comments.put(kept),
+            move |cache, _| {
+                if let Some(k) = &on {
+                    cache.log.touch(&k.epic, k.seq, kept.at);
+                }
+                cache.comments.put(kept);
+            },
             move |(), (), tx| {
                 tx.comment(CommentChange::Added(comment.clone()));
+                if let Some(change) = under.and_then(|u| u.after(&cache)) {
+                    tx.send(change);
+                }
                 comment
             },
         )
@@ -5052,7 +5086,8 @@ impl Store {
     fn cell_derived(&self, row: &Row, asking: Option<bool>) -> (Derived, Option<lineage::UnderBefore>) {
         let cache = self.tickets.read().expect("store lock poisoned");
         let derived = cache.cell_change(row, asking);
-        let under = self.under_before(&cache, || lineage::Touched::of_moves(derived.announced().as_deref()));
+        // FILTER-30: the row is touched whether or not its cell moves.
+        let under = self.under_before(&cache, || lineage::Touched::of_moves(derived.announced().as_deref()).row(row));
         (derived, under)
     }
 
@@ -5573,6 +5608,10 @@ mod tests_themes;
 mod tests_worker_states;
 #[cfg(test)]
 mod tests_times;
+/// FILTER-30: `touched` — each kind of edit touches, a roll-up does not; a
+/// watch hears a touched ticket leave.
+#[cfg(test)]
+mod tests_touched;
 
 /// MNG-16: `amend` — every row of its table, byte-exact bodies through the
 /// file, and nothing else about the ticket moving.

@@ -233,6 +233,13 @@ pub(crate) struct Plan {
     pub(crate) changed: Vec<Input>,
 }
 
+/// FILTER-30: whether a history entry touches its ticket — an answer or a
+/// clear, the owner's word on it; a close, a reopen, a withdrawal or a
+/// restore does not.
+pub(crate) fn touches(entry: &InputHistoryEntry) -> bool {
+    matches!(entry.action, InputAction::Answered | InputAction::Cleared)
+}
+
 /// The store's inputs, as the cache holds them: each ticket's, in its
 /// order — the body's, then the removed ones.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -404,6 +411,14 @@ impl Inputs {
     /// ticket's stay in the file, out of every read, for its undo.
     pub(crate) fn retain(&mut self, keep: impl Fn(&str) -> bool) {
         self.by_ticket.retain(|t, _| keep(t));
+    }
+
+    /// FILTER-30: each answer to and clear of an input, as its ticket and
+    /// when — a touch of that ticket ([`touches`]).
+    pub(crate) fn activity(&self) -> impl Iterator<Item = (&str, i64)> + '_ {
+        self.by_ticket
+            .iter()
+            .flat_map(|(t, list)| list.iter().flat_map(|i| &i.history).filter(|e| touches(e)).map(move |e| (t.as_str(), e.at_unix)))
     }
 
     /// The cache's half of a committed [`apply`]: `input` as it is now.

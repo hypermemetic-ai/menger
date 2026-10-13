@@ -274,7 +274,7 @@ impl Store {
         let (derived, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let derived = cache.status_change_asking(&row, previous, cache.inputs.asking_after(&row.id, &moved_inputs));
-            let under = self.under_before(&cache, || lineage::Touched::of_moves(derived.announced().as_deref()));
+            let under = self.under_before(&cache, || lineage::Touched::of_moves(derived.announced().as_deref()).row(&row));
             (derived, under)
         };
         // FILTER-4: the cells it moves — its own and its fan-out's — said
@@ -445,7 +445,7 @@ pub(super) fn status_step(
     row.status = step.to;
     row.updated_unix = now;
     let derived = cache.status_change_asking(&row, previous, cache.inputs.asking_after(&row.id, &step.inputs));
-    let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()));
+    let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()).row(&row));
     let announced = derived.announced();
     let Derived { stored, moved } = derived;
     if let Some(placement) = moved.placement() {

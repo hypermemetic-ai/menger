@@ -110,6 +110,12 @@ impl Comments {
         self.newest().map_or(1, |n| n + 1)
     }
 
+    /// FILTER-30: each comment's ticket and when it was left — a touch of
+    /// that ticket (a resolve or a reopen is not one: it keeps no time).
+    pub(crate) fn activity(&self) -> impl Iterator<Item = (&str, i64)> + '_ {
+        self.by_id.values().filter_map(|c| Some((c.anchor.ticket.as_deref()?, c.at)))
+    }
+
     /// The cache's half of a committed write: `comment` as it is now.
     pub(crate) fn put(&mut self, comment: Comment) {
         self.by_id.insert(comment.id, comment);

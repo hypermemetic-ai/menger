@@ -699,7 +699,7 @@ impl FromStr for Filter {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 29] = [
+const NAMES: [&str; 30] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -715,6 +715,8 @@ const NAMES: [&str; 29] = [
     "session",
     "asking",
     "created",
+    // FILTER-30: the ticket's last touch.
+    "touched",
     "written",
     "status",
     "lowest",
@@ -993,6 +995,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "entered" | "left" | "changed" | "by" => read_history(name, tail).map(Field::History),
         // FILTER-27: births, over their own index.
         "created" => read_history(name, tail).map(Field::History),
+        // FILTER-30: the last touch, over its own index.
+        "touched" => read_history(name, tail).map(Field::History),
         "for" => read_held("", &rest[name.len()..]).map(Field::History),
         "written" | "age" => Err(format!(
             "`{name}` is refused: it needs an index of its own (FILTER-3 §6.9, open question 6)"
@@ -1113,6 +1117,10 @@ fn parse_group(s: &str) -> Result<Group, String> {
 // `category C for over D` (a list too) are sugar for `status S and for over
 // D`, and the canonical form prints the sugar: one predicate.
 //
+// FILTER-30: `touched <window>` — the ticket's last touch in the window: a
+// write to its own row, a comment on it, an answer to one of its inputs.
+// `not touched within 2w` is "hasn't changed in 2 weeks".
+//
 // The language only reads and writes them; whether one holds for a ticket
 // is the store's to say ([`Facts::history`]), from the log and its times.
 
@@ -1130,6 +1138,11 @@ pub enum Event {
     Created,
     /// FILTER-27: how long it has held its current status.
     Held(Held),
+    /// FILTER-30: the ticket's last touch — any write to its own row (title,
+    /// body, status, kind, severity, parent, labels, blockers, commits), a
+    /// comment left on it, or an answer to (or a clear of) one of its
+    /// inputs. A roll-up or a count moving does not touch it.
+    Touched,
 }
 
 impl Event {
@@ -1141,6 +1154,7 @@ impl Event {
             Event::Left(_) => "left",
             Event::Changed => "changed",
             Event::Created => "created",
+            Event::Touched => "touched",
             Event::Held(_) => "for",
         }
     }
@@ -1446,6 +1460,7 @@ impl History {
             Event::Left(s) => format!("left {}", quoted(s.as_str())),
             Event::Changed => "changed".to_string(),
             Event::Created => "created".to_string(),
+            Event::Touched => "touched".to_string(),
             Event::Held(h) => {
                 let of = |name: &str, vs: Vec<String>| match vs.as_slice() {
                     [one] => format!("{name} {one} "),
@@ -1499,9 +1514,9 @@ fn words(s: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-const HISTORY_HELP: &str = "a history predicate is `entered <status>`, `left <status>`, `changed`, `by <who>` or \
-                            `created`, then a window — `within 12h` (m, h, d, w, mo), `today`, `yesterday`, `this \
-                            week`, `since 2026-10-10`, `before 2w ago`, `between … and …` — and (not for `created`) \
+const HISTORY_HELP: &str = "a history predicate is `entered <status>`, `left <status>`, `changed`, `by <who>`, \
+                            `created` or `touched`, then a window — `within 12h` (m, h, d, w, mo), `today`, `yesterday`, `this \
+                            week`, `since 2026-10-10`, `before 2w ago`, `between … and …` — and (not for `created` or `touched`) \
                             `by me`, `by system` or `by <principal>`; or `[status S | category C] for over|under 2w`";
 
 /// One history predicate's words after its name ([`History`]), strictly:
@@ -1531,6 +1546,7 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
         "left" => (Event::Left(status(&w, &mut i)?), None),
         "changed" => (Event::Changed, None),
         "created" => (Event::Created, None),
+        "touched" => (Event::Touched, None),
         _ => {
             let who = w.first().ok_or("`by` names who: `me`, `system` or a principal")?;
             i = 1;
@@ -1538,12 +1554,15 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
         }
     };
     let window = read_window(&w, &mut i)?;
-    if event == Event::Created && window.is_none() {
-        return Err("`created` takes a window, as `created today` or `created within 3d`".into());
+    if matches!(event, Event::Created | Event::Touched) && window.is_none() {
+        return Err(format!("`{name}` takes a window, as `{name} today` or `{name} within 3d`"));
     }
     if by.is_none() && w.get(i).is_some_and(|t| t.eq_ignore_ascii_case("by")) {
         if event == Event::Created {
             return Err("`created` takes no `by`: a birth before the log has no author on record".into());
+        }
+        if event == Event::Touched {
+            return Err("`touched` takes no `by`: a ticket's last touch is kept without who made it".into());
         }
         let who = w.get(i + 1).ok_or("`by` names who: `me`, `system` or a principal")?;
         by = Some(Who::read(who));

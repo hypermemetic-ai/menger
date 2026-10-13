@@ -125,7 +125,11 @@ pub(super) struct Plain {
 /// MENGER-13: the history predicates the random filters draw on — windows
 /// that move only by hours, so a walk's reads agree with the rule however
 /// long it runs.
-pub(super) const HISTORY_VOCAB: [&str; 15] = [
+pub(super) const HISTORY_VOCAB: [&str; 17] = [
+    // FILTER-30: last touches — every ticket of a walk is written within
+    // the day.
+    "touched within 1d",
+    "touched before 2026-01-01",
     // FILTER-27: births and lengths held — every ticket of a walk is born
     // within the day and holds its status for under one.
     "created within 1d",
@@ -147,7 +151,7 @@ pub(super) const HISTORY_VOCAB: [&str; 15] = [
 
 /// FILTER-27: whether `pred` holds for `row`, whose own transitions are
 /// `own`, in a log that began at `began` — `created` by its birth in the
-/// window, `for` by how long it has held its status (since its latest
+/// window, `touched` by its row's last write in it, `for` by how long it has held its status (since its latest
 /// status transition; with none, since its last update or the log's
 /// beginning, whichever is earlier, and never before its birth); the rest
 /// by [`holds_by_rule`].
@@ -164,6 +168,13 @@ pub(super) fn holds_of_row(
         Event::Created => {
             let Some((lo, hi)) = clock.bounds(pred.window.as_ref()) else { return false };
             lo.is_none_or(|l| row.created_unix >= l) && hi.is_none_or(|h| row.created_unix < h)
+        }
+        // FILTER-30: a walk leaves no comment and gives no answer — the
+        // last touch is the row's last write.
+        Event::Touched => {
+            let Some((lo, hi)) = clock.bounds(pred.window.as_ref()) else { return false };
+            let at = row.updated_unix.max(row.created_unix);
+            lo.is_none_or(|l| at >= l) && hi.is_none_or(|h| at < h)
         }
         Event::Held(h) => {
             let since = match own.iter().rev().find(|t| t.field == TransitionField::Status) {
@@ -193,7 +204,7 @@ pub(super) fn holds_by_rule(pred: &crate::filter::History, own: &[crate::types::
             Event::Entered(s) => t.field == TransitionField::Status && t.to == s.as_str(),
             Event::Left(s) => t.field == TransitionField::Status && t.from.as_deref() == Some(s.as_str()),
             Event::Changed => true,
-            Event::Created | Event::Held(_) => false,
+            Event::Created | Event::Touched | Event::Held(_) => false,
         };
         let when = lo.is_none_or(|l| t.at_unix >= l) && hi.is_none_or(|h| t.at_unix < h);
         let who = match &pred.by {

@@ -447,7 +447,7 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             // MENGER-13: the transition log, when the file has one.
             match transitions {
                 Some(n) => println!(
-                    "{}: the transition log's {n} transitions agree with the tickets and with each other (MENGER-13), and so do the births and status-since kept from them (FILTER-27)",
+                    "{}: the transition log's {n} transitions agree with the tickets and with each other (MENGER-13), and so do the births and status-since kept from them (FILTER-27) and the last touches, with the comments and answers (FILTER-30)",
                     db_path.display()
                 ),
                 None => println!("{}: no transition log yet (MENGER-13) — the next open begins it", db_path.display()),
