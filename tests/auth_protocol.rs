@@ -342,8 +342,12 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
         }
     }
     assert_eq!(seen.len(), TODAY.len(), "every row is a method: {seen:?}");
-    // admin is built in, never declared; nothing else is.
-    assert_eq!(declared.keys().cloned().collect::<BTreeSet<_>>(), names(&["editor", "member", "viewer"]));
+    // admin is built in, never declared; nothing else is — but DEPLOY-11's
+    // deployer: a CI's key, recording deployments and reading them.
+    assert_eq!(declared.keys().cloned().collect::<BTreeSet<_>>(), names(&["deployer", "editor", "member", "viewer"]));
+    let deployer: BTreeSet<String> = declared["deployer"].iter().cloned().collect();
+    assert!(deployer.contains("deployments.record") && deployer.contains("deployments.list"), "{deployer:?}");
+    assert!(!editor.contains("deployments.record") && !deployer.contains("tickets.create"), "record is its own grant");
 }
 
 // ── Over the wire, login on ──────────────────────────────────────────────
@@ -576,8 +580,8 @@ async fn login_off_menger_is_as_it_was() {
     let hub = one(&c, "menger.schema", json!({})).await;
     assert!(hub.get("view").is_none());
     let kids: BTreeSet<String> = hub["children"].as_array().unwrap().iter().map(|k| k["namespace"].as_str().unwrap().to_string()).collect();
-    assert_eq!(kids, names(&["comments", "members", "notes", "session", "themes", "tickets"]), "no auth activation without login");
-    for ns in ["tickets", "comments", "notes", "members", "session", "themes"] {
+    assert_eq!(kids, names(&["comments", "deployments", "members", "notes", "session", "themes", "tickets"]), "no auth activation without login");
+    for ns in ["tickets", "comments", "notes", "members", "session", "themes", "deployments"] {
         let schema = one(&c, &format!("{ns}.schema"), json!({})).await;
         assert!(schema.get("view").is_none());
         for m in schema["methods"].as_array().unwrap() {

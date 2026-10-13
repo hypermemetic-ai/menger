@@ -271,6 +271,8 @@ pub(crate) struct Broadcast {
     /// COMMENT-2: `comments.watch`'s — the comments' own changes, which no
     /// ticket's `watch` carries.
     comments: broadcast::Sender<CommentChange>,
+    /// DEPLOY-11: `deployments.watch`'s — `deployed`, `environment_changed`.
+    deployments: broadcast::Sender<crate::deployments::DeploymentsEvent>,
 }
 
 /// How many changes a subscriber may fall behind before it lags (SCALE-5).
@@ -282,12 +284,18 @@ impl Broadcast {
             plain: broadcast::channel(BROADCAST_CAPACITY).0,
             filtered: broadcast::channel(BROADCAST_CAPACITY).0,
             comments: broadcast::channel(BROADCAST_CAPACITY).0,
+            deployments: broadcast::channel(BROADCAST_CAPACITY).0,
         }
     }
 
     /// COMMENT-2: a comment's change, to `comments.watch`.
     fn comment(&self, change: CommentChange) {
         let _ = self.comments.send(change);
+    }
+
+    /// DEPLOY-11: a deployment's event, to `deployments.watch`.
+    fn deployment(&self, event: crate::deployments::DeploymentsEvent) {
+        let _ = self.deployments.send(event);
     }
 
     /// Sends `change` to every subscriber it is for: a cell move to the
@@ -1704,6 +1712,10 @@ struct Cache {
     themes: themes::Themes,
     /// ACT-5: every deleted ticket's tombstone ([`delete::Tombstones`]).
     tombstones: delete::Tombstones,
+    /// DEPLOY-11: every deployment, each environment and its kept cells
+    /// ([`deployments::Deploys`]) — read at open, moved by a record and by
+    /// every row written (its links).
+    deploys: deployments::Deploys,
     written: u64,
 }
 
@@ -2023,6 +2035,8 @@ impl Cache {
         );
         let mut log = history::Log::began_at(None);
         log.time_all(order.values());
+        // DEPLOY-11: no deployments yet; the rows' links, for when one comes.
+        let deploys = deployments::Deploys::linked(order.values());
         Self {
             order,
             at,
@@ -2050,6 +2064,7 @@ impl Cache {
             log,
             themes: themes::Themes::default(),
             tombstones: Default::default(),
+            deploys,
             written: 0,
         }
     }
@@ -2101,6 +2116,8 @@ impl Cache {
         let (order, at, paths) = ordered(loaded);
         let mut log = history::Log::began_at(None);
         log.time_all(order.values());
+        // DEPLOY-11: no deployments yet; the rows' links, for when one comes.
+        let deploys = deployments::Deploys::linked(order.values());
         Self {
             order,
             at,
@@ -2127,6 +2144,7 @@ impl Cache {
             log,
             themes: themes::Themes::default(),
             tombstones: Default::default(),
+            deploys,
             written: 0,
         }
     }
@@ -2213,6 +2231,8 @@ impl Cache {
     /// mutation-shaped methods below, which call this.
     fn insert(&mut self, ticket: Row) {
         self.log.retime(&ticket);
+        // DEPLOY-11: the join is kept — its commits, wherever they run.
+        self.deploys.relink(&ticket.id, &ticket.commits);
         let key = OrderKey::of(&ticket);
         self.at.insert(ticket.id.clone(), key.clone());
         self.order.insert(key, ticket);
@@ -2875,6 +2895,8 @@ impl Store {
         theme_registry::migrate(&mut conn)?;
         // ACT-5: and one without the tombstones table gains it, empty.
         delete::migrate(&mut conn)?;
+        // DEPLOY-11: and one without the deployments tables gains them, empty.
+        deployments::migrate(&mut conn)?;
         let cache = Self::load_cache(&mut conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
@@ -2969,6 +2991,8 @@ impl Store {
         cache.log.touch_all(activity);
         // THEME-8: the themes and settings, as stored.
         themes::load(conn, &mut cache.themes)?;
+        // DEPLOY-11: the deployments, folded, over the rows' links.
+        cache.deploys.load(conn)?;
         Ok(cache)
     }
 
@@ -5517,6 +5541,10 @@ mod themes;
 pub use themes::ThemeChange;
 /// THEME-3: a theme is a ticket's block — owners, orphans, adoption.
 mod theme_registry;
+/// DEPLOY-11: every deployment, what each environment runs, and where each
+/// ticket's work runs — the `deployed` cells.
+mod deployments;
+pub use deployments::{DeployPage, DeployQuery};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
 /// has commits)` interned as one cell; per shortcode and cell, a Roaring
@@ -5598,6 +5626,9 @@ mod tests_search;
 /// one write and its refusals; across a reopen.
 #[cfg(test)]
 mod tests_notes;
+/// DEPLOY-11: deployments — the fold, rollbacks, the kept join, the cells.
+#[cfg(test)]
+mod tests_deployments;
 /// THEME-8: define, set, theme_for (every row), refusals, a reopen.
 #[cfg(test)]
 mod tests_themes;

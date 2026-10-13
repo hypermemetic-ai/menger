@@ -1,5 +1,5 @@
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{Comments, Members, Notes, ProviderOffer, Session, Themes, Tickets};
+use menger_tickets_api::{Comments, Deployments, Members, Notes, ProviderOffer, Session, Themes, Tickets};
 use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
@@ -182,6 +182,8 @@ pub async fn build_rpc_login(
         .register(Notes::with_access(Arc::clone(&store), access.clone()))
         // THEME-8: `themes` beside them — the themes and what each level adopts.
         .register(Themes::with_access(Arc::clone(&store), access.clone()))
+        // DEPLOY-11: `deployments` beside them — every deploy, where tickets run.
+        .register(Deployments::with_access(Arc::clone(&store), access.clone()))
         .register(Members::new(store, access.clone()))
         // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
         .register(Session::offering(offers).with_access(access.clone()));

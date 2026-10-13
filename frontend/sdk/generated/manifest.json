@@ -27,6 +27,36 @@
       "schema": [],
       "watch": []
     },
+    "deployments": {
+      "environments": [
+        "project"
+      ],
+      "for_ticket": [
+        "id"
+      ],
+      "list": [
+        "after",
+        "environment",
+        "limit",
+        "project",
+        "state",
+        "ticket"
+      ],
+      "record": [
+        "at",
+        "commits",
+        "environment",
+        "previous",
+        "project",
+        "release",
+        "revision",
+        "source",
+        "state",
+        "tickets"
+      ],
+      "schema": [],
+      "watch": []
+    },
     "members": {
       "grant": [
         "principal",

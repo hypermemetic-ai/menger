@@ -1880,6 +1880,74 @@ held anywhere — and `upgrade` is an editor's that also needs
 `tickets.create` where the ticket lands (the parent, else the shortcode's
 root, else `*`).
 
+### Deployments (DEPLOY-11)
+
+menger keeps every deployment any CI records, to any environment, and
+answers for any ticket where its work runs and since when. `deployments` is
+the activation beside `tickets`; it takes DEPLOY-10's record
+(`deploy/record.schema.json`) whole — its fields are `record`'s parameters,
+so `deploy/record --send` passes the record as the params object. Three
+tables a file gains, empty, on open: `deployments`, `deployment_commits` and
+`deploy_environments` (what each environment runs — derived, written
+through, checked by `--verify-derived`).
+
+```sh
+synapse -P 4455 menger deployments record --project menger --environment prod --state succeeded --revision 235ff62 --commits 824e943,235ff62
+synapse -P 4455 menger deployments environments --project menger      # each: what it runs, since, the last deploy
+synapse -P 4455 menger deployments list --environment prod --limit 20 # each deploy with the tickets it carried
+synapse -P 4455 menger deployments for_ticket --id MENGER-34          # running in prod since …, in test since …, not on staging
+synapse -P 4455 menger tickets list --filter 'not category done or not deployed prod'
+```
+
+- **A project is a shortcode** the store holds, any case (`menger` is
+  MENGER) — what a ticket lives in and a grant names. A project name that is
+  not a shortcode is refused.
+- **An environment is a project's**: (project, name), the name kept lower
+  case (`test`, `staging`, `prod`, `pr-412`, `review/pr-412`), shown per
+  project test → staging → prod (development and previews first, unknown
+  names between test and staging).
+- **A deployment's tickets** are those whose linked commits
+  (`link_commits`) are among its `commits` and `revision`, plus the ids its
+  `tickets` names. menger runs no git: two references are one commit when
+  one hash is a prefix of the other (a CI's 40-character SHA matches a
+  merge's seven), the `repo@` aside. The join is kept: a commit linked after
+  it was deployed counts wherever it runs, and an unlink takes it out.
+- **What an environment runs** is its records folded in `(at, id)` order. A
+  `succeeded` deploy runs `revision` and carries its tickets from `at`; a
+  `rolled_back` record (`revision` the commit returned to, `previous` the one
+  taken out), or a later deploy to an older revision, takes out what only the
+  undone deploys carried; `started` and `failed` are recorded and shown and
+  run nothing. A ticket runs there since the earliest deploy still counting
+  that carried it.
+- **A deployment never changes a status** — where a ticket runs is a fact
+  beside it (DEPLOY-9).
+- **A retry is one deployment**: the same project, environment, state,
+  revision and `source.run` (else `at`) answers the kept one with
+  `duplicate: true` and writes nothing.
+
+| method | yields |
+| -- | -- |
+| `deployments.record { project, environment, state, revision, previous?, commits?, tickets?, release?, at?, source? }` | `deployed { deployment, carried, unlinked, live, entered, left, duplicate }` — the deployment kept (`at` RFC 3339 or unix seconds, now when omitted; `recorded_by` the caller), the tickets it carried, its commits no ticket links, whether it still counts, and the tickets that began and stopped running in its environment. A bad field is one `error` naming it, nothing kept |
+| `deployments.list { project?, environment?, state?, ticket?, after?, limit? }` | `deployment { deployment, carried, unlinked, live }` newest first by `(at, id)`, then `page { next }` |
+| `deployments.environments { project? }` | `environment { project, name, order, revision, release, since, deployment, last, last_state, last_at, tickets }` per environment |
+| `deployments.for_ticket { id }` | `running { environment, since, deployment, revision, release }` for each environment it runs in, `not_running` for each other environment of its projects (its shortcode's, its hosts', any it ran in) |
+| `deployments.watch` | `deployed`, then `environment_changed`, as each is recorded; `lagged { missed }` |
+
+**Filter cells.** `deployed <env>` (FILTER-3's language) is a ticket running
+in an environment of that name — `prod` of any project, `menger/prod` of one —
+and `deployed prod within 24h` one running there since a moment in the
+window (every window a history predicate takes); `not deployed prod` the rest.
+Answered from the kept cells, never by testing a ticket, on every filtered
+read; `tickets.watch --filter 'deployed prod'` says `entered` / `left` when a
+deploy or a rollback moves a ticket, and a relative window is read again as
+time passes.
+
+**Under login**, `record` is its own grant, held by the `deployer` role
+(`deployments.record` and the reads) — what a CI's key carries on the
+project's shortcode (a minted session scoped `deployer@MENGER`); `admin`
+holds it too, an editor does not. The reads are a viewer's and answer only
+of the projects where the caller holds them.
+
 ### Themes and their scopes (THEME-8)
 
 A **theme** is a name and a map of token overrides over the token

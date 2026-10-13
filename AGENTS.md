@@ -168,6 +168,27 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger notes upgrade --id 7 --epic MENGER --parent MENGER-2
   ```
 
+  **Deployments** (DEPLOY-11) are the `deployments` activation: every
+  deploy any CI records (DEPLOY-10's record, its fields as `record`'s
+  params — `deploy/record --send` passes it whole), what each environment
+  runs, and where each ticket's work runs. A project is a shortcode
+  (`menger` is MENGER); an environment is a project's. A deploy's tickets
+  are those whose linked commits are among its `commits` and `revision`
+  (a hash prefix is the same commit — menger has no repository) plus the
+  ids it names; a rollback takes out what only the undone deploys carried;
+  `failed` and `started` run nothing; a deployment never moves a status.
+  `deployed <env> [window]` and `not deployed <env>` are filter cells.
+  `record` is the `deployer` grant (a CI's key on the project's
+  shortcode). README "Deployments" has the rest:
+
+  ```sh
+  synapse -P 4455 menger deployments record --project menger --environment prod --state succeeded --revision 235ff62 --commits 824e943,235ff62
+  synapse -P 4455 menger deployments environments --project menger
+  synapse -P 4455 menger deployments list --environment prod --limit 20
+  synapse -P 4455 menger deployments for_ticket --id MENGER-34
+  synapse -P 4455 menger tickets list --filter 'category done and not deployed prod' --summary true
+  ```
+
   **Themes** (THEME-8) are the `themes` activation: a theme is a name and
   token overrides for light and dark — written as a ticket's ` ```theme
   name [extends=parent] ` block (THEME-3: owned by that ticket as a

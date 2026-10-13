@@ -1369,6 +1369,9 @@ pub enum Verdict {
         /// ACT-5: the tombstones the file holds — `None` when it has no
         /// table yet (the next open makes it).
         tombstones: Option<usize>,
+        /// DEPLOY-11: the deployments the file holds — `None` when it has
+        /// no table yet (the next open makes it).
+        deployments: Option<usize>,
     },
     /// Where they differ, one line each, naming the structure and the key.
     Differs(Vec<String>),
@@ -1458,6 +1461,11 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         out.extend(differs);
         n
     });
+    // DEPLOY-11: the environments and the deployed cells.
+    let deployments = super::deployments::check(&tx, &scanned)?.map(|(n, differs)| {
+        out.extend(differs);
+        n
+    });
     tx.commit()?;
     if !out.is_empty() {
         return Ok(Verdict::Differs(out));
@@ -1477,6 +1485,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         indexed,
         transitions,
         tombstones,
+        deployments,
     })
 }
 
