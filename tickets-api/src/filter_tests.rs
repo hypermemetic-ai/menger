@@ -1234,3 +1234,73 @@ fn the_sugar_is_a_status_and_a_length() {
     assert!(parsed("status Pending for over 2w and not status Pending for over 2w").admits_nothing().is_some());
     assert!(parsed("for over 2w and for under 2w").admits_nothing().is_none(), "free truths: never a false contradiction");
 }
+
+// -- FILTER-30: touched — "hasn't changed" ------------------------------------------
+
+/// `touched` takes every window FILTER-27's clauses take, negated or not,
+/// and reads back as written; it is its own event, apart from `changed`.
+#[test]
+fn touched_reads_and_writes_with_every_window() {
+    let windows = [
+        "today",
+        "yesterday",
+        "this week",
+        "within 1d",
+        "within 3d",
+        "within 1w",
+        "within 2w",
+        "within 1mo",
+        "within 12h",
+        "within 30m",
+        "since 2026-10-01",
+        "since 2026-10-01T08:30",
+        "since 2w ago",
+        "before 2026-10-01",
+        "before 3d ago",
+        "between 2026-10-01 and 2026-10-07",
+        "between 3d ago and 1d ago",
+        "between 2026-10-01T08:00 and 2w ago",
+    ];
+    for w in windows {
+        for not in ["", "not "] {
+            let text = format!("{not}touched {w}");
+            let f = parsed(&text);
+            assert_eq!(f.format(), text, "{text}");
+            assert_eq!(parsed(&f.format()), f, "{text} reads back");
+            let p = &f.groups[0].preds[0];
+            assert_eq!(p.not, !not.is_empty(), "{text}");
+            match &p.field {
+                Field::History(h) => {
+                    assert_eq!(h.event, Event::Touched, "{text}");
+                    assert_eq!(h.event.name(), "touched");
+                    assert!(h.by.is_none());
+                }
+                other => panic!("{text}: {other:?}"),
+            }
+        }
+    }
+    for (text, canonical) in [
+        ("touched within 2 weeks", "touched within 2w"),
+        ("not touched within 2w and not category done and not kind doc", "not touched within 2w and not category done and not kind doc"),
+        ("not touched since 2026-10-01 and under THEME", "not touched since 2026-10-01 and under THEME"),
+        ("(touched today or created today)", "(touched today or created today)"),
+    ] {
+        assert_eq!(parsed(text).format(), canonical, "{text}");
+    }
+    assert!(matches!(&parsed("touched within 2w").groups[0].preds[0].field, Field::History(h) if h.relative()));
+    assert!(matches!(&parsed("touched since 2026-10-01").groups[0].preds[0].field, Field::History(h) if !h.relative()));
+}
+
+/// What `touched` cannot be is named.
+#[test]
+fn malformed_touched_is_refused() {
+    for (text, says) in [
+        ("touched", "`touched` takes a window"),
+        ("touched today by me", "`touched` takes no `by`"),
+        ("touched within", "takes a length"),
+        ("touched lately", "not understood"),
+    ] {
+        let e = refused(text).to_string();
+        assert!(e.contains(says), "{text}: {e}");
+    }
+}

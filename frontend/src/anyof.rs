@@ -28,8 +28,9 @@
 //!
 //! Where a pill's menu items live: `filter.rs`'s `pill_menu_view` (the ⋯
 //! on a pill or a group) calls the edits here through `Lens::edit_groups`;
-//! what an item offers, or why it is off, is [`or_refusal`] and
-//! [`flip_refusal`] here.
+//! what an item offers, or why it is off, is [`or_refusal`],
+//! [`flip_refusal`] and (FILTER-30) [`negate_refusal`] here; Negate turns a
+//! time clause around, alone or as a member of a box ([`negate`]).
 
 use menger_tickets_api::filter::{Conj, Field, Group, Predicate};
 
@@ -376,6 +377,44 @@ pub(crate) fn ungroup(groups: &mut Vec<Group>, at: usize) {
     groups.splice(at..=at, parts);
 }
 
+/// FILTER-30: why the clause at `slot` cannot be negated from its menu
+/// (`None`: it can) — only a time clause turns around there; a category's
+/// pill turns with its operator.
+pub(crate) fn negate_refusal(groups: &[Group], slot: Slot) -> Option<String> {
+    time_in(groups, slot).is_none().then(|| "only a time clause is negated here — a category's pill turns with its operator".into())
+}
+
+/// FILTER-30: the time clauses Negate offers on the pill or group `g` at
+/// `at`: the pill itself, or each time member of a box — where each is,
+/// with its words.
+pub(crate) fn negatable(g: &Group, at: usize) -> Vec<(Slot, Timed)> {
+    if let Some(t) = when::of_group(g) {
+        return vec![(Slot { at, member: None }, t)];
+    }
+    if !is_group(g) {
+        return Vec::new();
+    }
+    members(g)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, m)| match m {
+            Member::Time(t) => Some((Slot { at, member: Some(i) }, t)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// FILTER-30: the time clause at `slot` turned around (`created today` ⇄
+/// `not created today`), where it is — a member of a box too: one
+/// predicate either way, it fits any join.
+pub(crate) fn negate(groups: &mut Vec<Group>, slot: Slot) -> Result<(), String> {
+    if let Some(why) = negate_refusal(groups, slot) {
+        return Err(why);
+    }
+    let t = time_in(groups, slot).ok_or("that clause is gone")?;
+    put_time(groups, None, Some(slot), &when::negate(&t)).map(|_| ())
+}
+
 /// Why the pill or group `g` cannot take an alternative (`None`: it can) —
 /// Or… on its menu.
 pub(crate) fn or_refusal(g: &Group) -> Option<String> {
@@ -589,5 +628,33 @@ mod tests {
         assert!(group_any(&mut gs, &[0]).is_err());
         assert!(group_any(&mut gs, &[0, 1]).is_err());
         assert_eq!(text(&gs), "status Ready and not kind in (doc, spike)");
+    }
+
+    /// FILTER-30: Negate turns a time pill around — alone, or a member of an
+    /// any-of group, where it is — and back; a category's pill is refused,
+    /// nothing changed.
+    #[test]
+    fn negate_turns_a_time_clause_around_wherever_it_is() {
+        let mut gs = groups("kind build and created today and (touched within 2w or status Ready)");
+        assert_eq!(negatable(&gs[0], 0), []);
+        assert_eq!(negatable(&gs[1], 1).len(), 1);
+        let inside = negatable(&gs[2], 2);
+        assert_eq!(inside.iter().map(|(s, _)| *s).collect::<Vec<_>>(), [Slot { at: 2, member: Some(0) }]);
+        negate(&mut gs, Slot { at: 1, member: None }).unwrap();
+        assert_eq!(text(&gs), "kind build and not created today and (touched within 2w or status Ready)");
+        negate(&mut gs, inside[0].0).unwrap();
+        assert_eq!(text(&gs), "kind build and not created today and (not touched within 2w or status Ready)");
+        negate(&mut gs, inside[0].0).unwrap();
+        negate(&mut gs, Slot { at: 1, member: None }).unwrap();
+        assert_eq!(text(&gs), "kind build and created today and (touched within 2w or status Ready)", "and back");
+        let before = gs.clone();
+        assert!(negate_refusal(&gs, Slot { at: 0, member: None }).is_some());
+        assert!(negate(&mut gs, Slot { at: 0, member: None }).is_err());
+        assert!(negate(&mut gs, Slot { at: 2, member: Some(1) }).is_err(), "a category member");
+        assert_eq!(gs, before, "nothing changed");
+        // In an all-of group too.
+        let mut gs = groups("(changed today and not touched within 1w)");
+        negate(&mut gs, Slot { at: 0, member: Some(1) }).unwrap();
+        assert_eq!(text(&gs), "(changed today and touched within 1w)");
     }
 }

@@ -1472,6 +1472,18 @@ impl Touched {
         t
     }
 
+    /// FILTER-30: and the ticket `r` itself — a write to its row touches it
+    /// (`touched` asks of it) whether or not its cell moves.
+    pub(super) fn row(mut self, r: &Row) -> Self {
+        self.ticket(&r.epic, r.seq);
+        self
+    }
+
+    /// FILTER-30: and the ticket `(epic, seq)`.
+    pub(super) fn ticket(&mut self, epic: &str, seq: u32) {
+        self.by_epic.entry(epic.to_string()).or_default().insert(seq);
+    }
+
     /// And the subtree of `name` (the ticket `row`, when it is one), as it
     /// stands.
     pub(super) fn subtree(&mut self, cache: &Cache, name: &str, row: Option<&Row>) {
@@ -1537,8 +1549,34 @@ impl Store {
 /// [`Store::under_before`] over `unders` — MENGER-13: what a batch's steps
 /// ask, each against the cache as the steps before it left it.
 pub(super) fn under_before_with(unders: &UnderWatches, cache: &Cache, touched: impl FnOnce() -> Touched) -> Option<UnderBefore> {
+    before_of(unders.live(), cache, touched)
+}
+
+/// FILTER-30: what a write that moves no cell — a body, a comment, an
+/// answer — does to the open watches whose filter asks `touched`: the
+/// tickets at `keys`, before it. `None`, and nothing worked out, when no
+/// such watch is open (a watch that does not ask `touched` cannot see such
+/// a write).
+pub(super) fn touch_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&str, u32)]) -> Option<UnderBefore> {
+    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_touched()).collect();
+    before_of(watches, cache, || {
+        let mut t = Touched::default();
+        for (e, s) in keys {
+            t.ticket(e, *s);
+        }
+        t
+    })
+}
+
+impl Store {
+    /// FILTER-30: [`touch_before_with`] over the store's watches.
+    pub(super) fn touch_before(&self, cache: &Cache, keys: &[(&str, u32)]) -> Option<UnderBefore> {
+        touch_before_with(&self.unders, cache, keys)
+    }
+}
+
+fn before_of(watches: Vec<Arc<UnderWatch>>, cache: &Cache, touched: impl FnOnce() -> Touched) -> Option<UnderBefore> {
     {
-        let watches = unders.live();
         if watches.is_empty() {
             return None;
         }

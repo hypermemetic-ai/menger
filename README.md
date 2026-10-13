@@ -463,9 +463,15 @@ PageUp / PageDown, Home / End, Enter; hours and minutes typed or stepped
 with ↑ ↓ in the reader's 12- or 24-hour clock), drawn from the theme's
 tokens, never the browser's date input; `#/components` shows them live
 under "The app's own" (the registry above them is the tickets'
-components). `Saved ▾` suggests three filters until one of their names is
-saved — **New today** (`created today`), **Moved today** (`changed
-today`), **Stuck** (`category in (ready, active, review) for over 1w`) —
+components). **Hasn't changed** (FILTER-30) builds `not touched <window>`
+— within 1d · 3d · 1w · 2w · 1mo, or Custom… for since a day — a pill
+reading "hasn't changed in 2 weeks"; any time pill's ⋯ menu has
+**Negate** (`created today` ⇄ `not created today`), and a group's ⋯ menu
+one per time clause inside it. `Saved ▾` suggests four filters until one of
+their names is saved — **New today** (`created today`), **Moved today**
+(`changed today`), **Stuck** (`category in (ready, active, review) for over
+1w`), **Untouched 2w** (`not touched within 2w and not category done and
+not kind doc`) —
 each applied by a click, and `keep` saves it as an ordinary saved filter
 (the app offers them; nothing is written into the tracker until you keep
 one). A ticket's History says since when it has held its status — "since
@@ -1777,6 +1783,7 @@ and since when it has held its status — sorted, so a window is a range):
 | `created <window>` | was born in the window (its `created_unix`; no `by`) |
 | `for over <length>` / `for under <length>` | has held its current status longer than the length, or not |
 | `status S for over D`, `category C for over D` | is in S (or C) and held it that long — sugar for `status S and for over D`, a list too (`category in (ready, active, review) for over 1w`); the canonical form prints the sugar |
+| `touched <window>` (FILTER-30) | was last touched in the window — any write to its own row (title, body, status, kind, severity, parent, labels, blockers — the blocker's `unlocks` too —, commits), a comment left on it, or an answer to or a clear of one of its inputs; no `by`. `not touched within 2w` is "hasn't changed in 2 weeks" |
 
 Since when a ticket holds its status is its latest status transition's
 moment (a birth's, for one born since the log began). A ticket the log says
@@ -1787,6 +1794,18 @@ bound, which `history_end` says as `status_since_exact: false`. Every
 status write moves the ticket's entry in the same critical section;
 `--verify-derived` rebuilds the times from the rows and the log and holds
 them to it.
+
+A ticket's **last touch** (FILTER-30; the owner's answer to its decision:
+"any edit, plus comments and answers") is the later of its row's
+`updated_unix` — which every write to the row moves, and nothing derived
+does: a roll-up, a child's count, a placement leave it — and its last
+**activity**, a comment anchored to it or an answer to (or a clear of) one of
+its inputs, which writes no row. Activity is kept beside the times and read
+back at open from the comments and the inputs' histories; a close, a reopen,
+a withdrawal and a resolve are not touches. `changed` keeps meaning a
+transition. A write that touches a ticket without moving its cell (a body, a
+comment, an answer) still moves an open `watch` asking `touched`: the write
+works out that watch's `entered` / `left` for it, as it does for `under`.
 
 A `watch` whose filter moves with the clock — a relative window, an `ago`,
 a `for` — keeps one timer, set for the next moment time alone moves it (the
@@ -1801,6 +1820,9 @@ synapse -P 4455 menger tickets list --filter 'status Pending for over 2w' --summ
 synapse -P 4455 menger tickets counts --filter 'category in (ready, active, review) for over 1w'
 synapse -P 4455 menger tickets list --filter 'created between 3w ago and 1w ago and kind build' --summary true
 synapse -P 4455 menger tickets watch --filter 'status Ready for over 3d' --membership true
+synapse -P 4455 menger tickets list --filter 'not touched within 2w and not category done' --summary true
+synapse -P 4455 menger tickets list --filter 'touched today' --summary true
+synapse -P 4455 menger tickets list --filter 'not touched since 2026-10-01 and under THEME' --summary true
 ```
 
 ```sh

@@ -3,7 +3,8 @@
 //! draws).
 //!
 //! - **The rows**: Created, Moved into ▸, Moved out of ▸, In status for,
-//!   Changed. A row opens its first choice — Moved into / out of a status,
+//!   Changed, Hasn't changed (FILTER-30: `not touched`, its windows 1d · 3d
+//!   · 1w · 2w · 1mo and Custom… for since). A row opens its first choice — Moved into / out of a status,
 //!   In status for a length, the others a window — and the choice makes the
 //!   pill; the pane then edits it.
 //! - **Editing a clause**: its status (one, for Moved into / out of; any,
@@ -164,11 +165,11 @@ fn new_view(lens: Lens, pop: Pop, kind: Kind) -> impl IntoView {
         .into_any(),
         _ => view! {
             <div class="wsec" data-part="window">
-                <div class="whead">"window"</div>
+                <div class="whead">{if kind == Kind::Untouched { "not touched within" } else { "window" }}</div>
                 <div class="wchips">
-                    {when::WINDOW_PRESETS.into_iter().map(|p| {
+                    {kind.presets().iter().copied().map(|p| {
                         let w = when::window_of(p);
-                        let words = w.as_ref().map(|w| when::window_words(w, false)).unwrap_or_default();
+                        let words = w.as_ref().map(|w| kind.preset_words(w, false)).unwrap_or_default();
                         chip(words, p.into(), || false, move || start(when::new_clause(kind, None, w.clone())))
                     }).collect_view()}
                     {chip("custom…".into(), "custom".into(), || false, move || {
@@ -259,10 +260,10 @@ fn edit_view(lens: Lens, pop: Pop, at: Slot, only: Option<Part>) -> impl IntoVie
             <div class="wsec" data-part="window">
                 <div class="whead">"window"</div>
                 <div class="wchips">
-                    {(kind != Kind::Created).then(|| chip("ever".into(), "ever".into(), move || current.get().is_some_and(|t| t.h.window.is_none()), move || set(&|t| when::with_window(t, None))))}
-                    {when::WINDOW_PRESETS.into_iter().map(|p| {
+                    {kind.has_ever().then(|| chip("ever".into(), "ever".into(), move || current.get().is_some_and(|t| t.h.window.is_none()), move || set(&|t| when::with_window(t, None))))}
+                    {kind.presets().iter().copied().map(|p| {
                         let w = when::window_of(p);
-                        let words = w.as_ref().map(|w| when::window_words(w, h12)).unwrap_or_default();
+                        let words = w.as_ref().map(|w| kind.preset_words(w, h12)).unwrap_or_default();
                         let on = move || current.get().is_some_and(|t| when::has_window(&t, p));
                         chip(words, p.into(), on, move || {
                             custom.set(false);

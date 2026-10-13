@@ -311,10 +311,26 @@ impl Log {
     }
 
     /// FILTER-27: every row's times, afresh — at open, after the log is read.
+    /// FILTER-30: the activity kept stays ([`Times::touch`]).
     pub(super) fn time_all<'r>(&mut self, rows: impl IntoIterator<Item = &'r TicketSummary>) {
-        self.times = Times::default();
+        self.times = Times::with_active(self.times.take_active());
         for row in rows {
             self.retime(row);
+        }
+    }
+
+    /// FILTER-30: activity on the ticket `(epic, seq)` at `at` — a comment
+    /// left on it, an answer to or a clear of one of its inputs.
+    pub(super) fn touch(&mut self, epic: &str, seq: u32, at: i64) {
+        let e = Self::intern(&mut self.epic_ix, &mut self.epics, epic);
+        self.times.touch(e, seq, at);
+    }
+
+    /// FILTER-30: every ticket's activity, as the comments and the inputs
+    /// hold it ([`activity`]) — at open, and by `--verify-derived`.
+    pub(super) fn touch_all(&mut self, activity: impl IntoIterator<Item = (OrderKey, i64)>) {
+        for (key, at) in activity {
+            self.touch(&key.epic, key.seq, at);
         }
     }
 
@@ -393,9 +409,11 @@ impl Log {
     /// mark) for `changed`; the actor tested on each mark in the range only
     /// when the range is not the actor's own.
     pub(crate) fn holds(&self, pred: &History, clock: &Clock) -> BTreeMap<String, RoaringBitmap> {
-        // FILTER-27: births and status-since, from the times.
+        // FILTER-27: births and status-since, from the times. FILTER-30: and
+        // last touches.
         let timed = match &pred.event {
             Event::Created => Some(self.times.created(pred.window.as_ref(), clock)),
+            Event::Touched => Some(self.times.touched(pred.window.as_ref(), clock)),
             Event::Held(h) => Some(self.times.held(h, clock)),
             _ => None,
         };
@@ -426,7 +444,7 @@ impl Log {
                 None => (&self.by_time, false),
             },
             // Answered from the times, above.
-            Event::Created | Event::Held(_) => return out,
+            Event::Created | Event::Touched | Event::Held(_) => return out,
         };
         let mut by_epic: HashMap<u32, RoaringBitmap> = HashMap::new();
         for &p in range(list, &self.marks, lo, hi) {
@@ -460,6 +478,7 @@ impl Log {
         let first_from = |from: i64| -> Option<i64> {
             let list: &[u32] = match &pred.event {
                 Event::Created => return self.times.first_born_from(from),
+                Event::Touched => return self.times.first_touched_from(from),
                 Event::Held(_) => return None,
                 Event::Entered(s) => self.entered.get(status_ix(*s) as usize).unwrap_or(&none),
                 Event::Left(s) => self.left.get(status_ix(*s) as usize).unwrap_or(&none),
@@ -615,6 +634,20 @@ pub fn zone(name: Option<&str>) -> Result<jiff::tz::TimeZone, String> {
         return Ok(jiff::tz::TimeZone::fixed(off));
     }
     jiff::tz::TimeZone::get(name).map_err(|_| format!("unknown time zone `{name}` — a name like Europe/Berlin, UTC, or an offset like +02:00"))
+}
+
+/// FILTER-30: each ticket's activity — the moment of every comment left on
+/// it and of every answer to or clear of one of its inputs, placed by `at`
+/// (a ticket it does not place — a deleted one's — left out).
+pub(super) fn activity(
+    at: &HashMap<String, OrderKey>,
+    comments: &super::comments::Comments,
+    inputs: &super::inputs::Inputs,
+) -> Vec<(OrderKey, i64)> {
+    let place = |id: &str| at.get(id).cloned();
+    let said = comments.activity().filter_map(|(id, t)| Some((place(id)?, t)));
+    let answered = inputs.activity().filter_map(|(id, t)| Some((place(id)?, t)));
+    said.chain(answered).collect()
 }
 
 /// Records `t` inside the caller's transaction.
@@ -783,8 +816,17 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
         }
     }
     // FILTER-27: the times, as an open reads them, held to a fresh reading
-    // of every row and to themselves.
-    let log = load(conn, &cache.at, cache.order.values())?;
+    // of every row and to themselves. FILTER-30: with the comments' and the
+    // answers' activity.
+    let mut log = load(conn, &cache.at, cache.order.values())?;
+    let has_comments: bool = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'comments'",
+        [],
+        |r| r.get::<_, i64>(0).map(|n| n > 0),
+    )?;
+    let comments = if has_comments { super::comments::load(conn)? } else { Default::default() };
+    let inputs = super::inputs::load_if_any(conn)?;
+    log.touch_all(activity(&cache.at, &comments, &inputs));
     out.extend(log.check_times(cache.order.values()));
     out.sort();
     Ok(Some((all.len(), out)))
@@ -795,7 +837,7 @@ impl Log {
     /// log give afresh, or from themselves ([`Times::check`]) — and each
     /// exact entry's status from its latest transition's.
     pub(super) fn check_times<'r>(&self, rows: impl IntoIterator<Item = &'r TicketSummary>) -> Vec<String> {
-        let mut fresh = Log { times: Times::default(), ..self.clone() };
+        let mut fresh = Log { times: Times::with_active(self.times.clone().take_active()), ..self.clone() };
         fresh.time_all(rows);
         let mut out = self.times.check(&fresh.times, |e| self.epic_name(e));
         for (key, ps) in &self.tickets {

@@ -74,10 +74,12 @@ pub(crate) const SLUG_MAX: usize = 64;
 /// an ordinary saved filter (a doc under `VIEW-1`, renamed and changed like
 /// any). Offered by the app rather than written into the tracker, so no
 /// install seeds docs into anyone's store.
-pub(crate) const SUGGESTED: [(&str, &str); 3] = [
+pub(crate) const SUGGESTED: [(&str, &str); 4] = [
     ("New today", "created today"),
     ("Moved today", "changed today"),
     ("Stuck", "category in (ready, active, review) for over 1w"),
+    // FILTER-30: open work nobody has touched in two weeks.
+    ("Untouched 2w", "not touched within 2w and not category done and not kind doc"),
 ];
 
 /// The suggestions not yet listed (by their name's slug).
@@ -1453,8 +1455,8 @@ mod tests {
             let f = Filter::parse(text).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(f.format(), text, "{name}: canonical");
         }
-        assert_eq!(suggestions(&[]).len(), 3);
-        let listed = [Entry::new("stuck", "Stuck"), Entry::new("x", "new today")];
+        assert_eq!(suggestions(&[]).len(), 4);
+        let listed = [Entry::new("stuck", "Stuck"), Entry::new("x", "new today"), Entry::new("untouched-2w", "Untouched 2w")];
         assert_eq!(suggestions(&listed), [("Moved today", "changed today")]);
     }
 

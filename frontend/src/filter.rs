@@ -1759,7 +1759,7 @@ fn more_view(lens: Lens, bar: Level, at: usize) -> impl IntoView {
         <span class="pm-wrap">
             <button
                 class="p-more"
-                title="Or…, group, remove"
+                title="Or…, negate, group, remove"
                 aria-label="more for this filter"
                 aria-haspopup="menu"
                 aria-expanded=move || open().to_string()
@@ -1784,6 +1784,8 @@ pub(crate) fn pill_menu_view(lens: Lens, bar: Level, at: usize) -> impl IntoView
     let boxed = anyof::is_group(&g);
     let or_why = anyof::or_refusal(&g);
     let flip_why = anyof::flip_refusal(&g);
+    // FILTER-30: Negate — the time pill, or each time member of a box.
+    let negatable = anyof::negatable(&g, at);
     let answer = move |r: Result<(), String>| {
         pop.more.set(None);
         match r {
@@ -1833,6 +1835,18 @@ pub(crate) fn pill_menu_view(lens: Lens, bar: Level, at: usize) -> impl IntoView
                     "Ungroup"
                 </button>
             })}
+            {negatable.into_iter().map(|(slot, t)| {
+                let label = match slot.member {
+                    None => "Negate".to_string(),
+                    Some(_) => format!("Negate “{}”", crate::when::words(&t, crate::calendar::reader_h12())),
+                };
+                let turned = crate::when::words(&crate::when::negate(&t), crate::calendar::reader_h12());
+                view! {
+                    <button class="pm-i" role="menuitem" data-act="negate" data-member=slot.member title=format!("turn it around: {turned}") on:click=move |_| answer(lens.edit_groups(bar, |gs| anyof::negate(gs, slot)))>
+                        {label}
+                    </button>
+                }
+            }).collect_view()}
             <button class="pm-i" role="menuitem" data-act="remove" on:click=move |_| answer(lens.edit_groups(bar, |gs| { if at < gs.len() { gs.remove(at); } Ok(()) }))>
                 "Remove"
             </button>
