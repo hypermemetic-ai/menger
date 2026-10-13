@@ -532,6 +532,21 @@ inside its content column, so the window grows to the tallest scroller
 (up to 16,000 px). Playwright comes from `perf/node_modules`
 (`cd perf && npm ci`).
 
+### Keys and gestures (AGS-28)
+
+Every key and click the app answers is one row of `BINDINGS` in
+`frontend/src/bindings.rs`: an id (`nav.expand-subtree`), where it applies
+(everywhere, the nav, the board, a ticket page, a menu, a dialog, a chip…),
+its chords (`*`, `Shift+Numpad*`, `g h`, `Mod+k` — ⌘ on a Mac, Ctrl
+elsewhere — `Alt+Click`), its group and what it does. Handlers ask
+`bindings::hit(&ev, Context::Nav)` (or `hit_mouse`, `is`, `key_hit`) and
+match the id; nothing else reads an event's key, button or modifiers — a
+native test lints the sources for it, another fails when two bindings share
+a chord where both are live, another when a binding is dispatched nowhere.
+The `?` sheet and Settings → Keyboard (with a search by key or by words)
+draw the same table. To add a key: a row in `BINDINGS`, a match arm in the
+handler.
+
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service

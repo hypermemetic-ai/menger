@@ -48,7 +48,7 @@ use crate::filter::{
     pop_id, Cat, Clash, Clausal, Clause, Clauses, FilterButton, Op, Pill, Pills, Pop, Popover, Reset, ScTree, TextMode,
     DEFAULT_KINDS,
 };
-use crate::{dom, keys, nav, Route};
+use crate::{bindings, dom, keys, nav, Route};
 
 // ---------------------------------------------------------------------
 // The levels
@@ -1134,11 +1134,10 @@ impl Lens {
     /// resize places it again.
     pub(crate) fn install(self) {
         window_event_listener(leptos::ev::keydown, move |ev: web_sys::KeyboardEvent| {
-            if ev.default_prevented() || ev.is_composing() || ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
-                return;
-            }
-            let key = ev.key();
-            if key != "f" && key != "F" {
+            // AGS-28: `f` and `F` are the table's `filter.view` and
+            // `filter.global`.
+            let global = bindings::is(&ev, bindings::Context::Global, "filter.global");
+            if ev.default_prevented() || !(global || bindings::is(&ev, bindings::Context::Global, "filter.view")) {
                 return;
             }
             let target = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
@@ -1148,7 +1147,7 @@ impl Lens {
             if dom::window().document().and_then(|d| d.query_selector(".overlay").ok().flatten()).is_some() {
                 return;
             }
-            let level = if key == "F" {
+            let level = if global {
                 Level::Global
             } else {
                 match self.surface().filter(|l| self.pop(*l).is_mounted()) {

@@ -52,7 +52,7 @@ pub(super) fn dialog(
         }
     };
     let on_key = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Escape" {
+        if crate::bindings::is(&ev, crate::bindings::Context::Menu, "dialog.close") {
             ev.stop_propagation();
             close();
         }

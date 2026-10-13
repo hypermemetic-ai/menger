@@ -124,7 +124,7 @@ pub(crate) fn install(class: &'static str) {
             kind,
             Box::new(move |ev: web_sys::Event| {
                 let t = now_ms();
-                let tab = Reflect::get(&ev, &JsValue::from_str("key")).ok().and_then(|k| k.as_string()).as_deref() == Some("Tab");
+                let tab = crate::bindings::moves_focus(&ev);
                 TRACK.with(|tr| {
                     let mut tr = tr.borrow_mut();
                     tr.host = Some(t);

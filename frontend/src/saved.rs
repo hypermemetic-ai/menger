@@ -46,6 +46,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::filter::{pill_words, Clauses, Pill};
 use crate::lens::{Kept, Lens, Level};
+use crate::bindings::{self, Context};
 use crate::{dom, keys, session};
 
 // ---------------------------------------------------------------------
@@ -1072,14 +1073,14 @@ pub(crate) fn SavedButton(level: Level) -> impl IntoView {
         if !is_open.get_untracked() {
             return;
         }
-        let key = ev.key();
+        let id = bindings::hit(&ev, Context::Menu);
         // A rename's field keeps its own keys but Escape.
         let in_field = ev
             .target()
             .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
             .is_some_and(|el| el.tag_name() == "INPUT");
-        match key.as_str() {
-            "Escape" => {
+        match id {
+            Some("dialog.close") => {
                 ev.prevent_default();
                 ev.stop_propagation();
                 if s.renaming.get_untracked().is_some() || s.removing.get_untracked().is_some() {
@@ -1092,10 +1093,10 @@ pub(crate) fn SavedButton(level: Level) -> impl IntoView {
                     s.close_menu(true);
                 }
             }
-            "ArrowDown" | "ArrowUp" if !in_field => {
+            Some("list.next" | "list.prev") if !in_field => {
                 ev.prevent_default();
                 let (items, at) = menu_items(level);
-                if let Some(n) = crate::menu::step(at, items.len(), &key) {
+                if let Some(n) = crate::menu::step(at, items.len(), id) {
                     let _ = items[n].focus();
                 }
             }
@@ -1271,7 +1272,7 @@ fn row_view(s: Saved, level: Level, e: Entry) -> impl IntoView {
                         prop:value=move || s.rename_draft.get()
                         on:input=move |ev| s.rename_draft.set(event_target_value(&ev))
                         on:keydown=move |ev: web_sys::KeyboardEvent| {
-                            if ev.key() == "Enter" {
+                            if bindings::is(&ev, Context::Field, "form.submit") {
                                 ev.prevent_default();
                                 done_key();
                             }
@@ -1343,14 +1344,14 @@ fn dialog_view(s: Saved, d: Draft) -> impl IntoView {
         let _ = el.focus();
     });
     let on_key = move |ev: web_sys::KeyboardEvent| {
-        match ev.key().as_str() {
-            "Escape" => {
+        match bindings::hit(&ev, Context::Dialog) {
+            Some("dialog.close") => {
                 ev.prevent_default();
                 s.close_dialog();
             }
-            "Tab" => {
+            Some(id @ ("dialog.next-field" | "dialog.prev-field")) => {
                 ev.prevent_default();
-                keys::trap_tab(ev.shift_key());
+                keys::trap_tab(id == "dialog.prev-field");
             }
             _ => {}
         }
@@ -1397,7 +1398,7 @@ fn dialog_view(s: Saved, d: Draft) -> impl IntoView {
                             s.d_problem.set(None);
                         }
                         on:keydown=move |ev: web_sys::KeyboardEvent| {
-                            if ev.key() == "Enter" {
+                            if bindings::is(&ev, Context::Field, "form.submit") {
                                 ev.prevent_default();
                                 if s.taken.get_untracked().is_none() {
                                     s.submit(false);

@@ -149,7 +149,7 @@ fn menu_view(
     let on_key = move |ev: web_sys::KeyboardEvent| {
         let Some(el) = root.get() else { return };
         let root_el: &web_sys::Element = &el;
-        let key = ev.key();
+        let id = bindings::hit(&ev, Context::Menu);
         let active = document().active_element();
         let list = items(root_el);
         let current = list.iter().position(|i| active.as_ref() == Some(i.as_ref()));
@@ -159,8 +159,8 @@ fn menu_view(
         // ACT-7 × ACT-4: every list opens from its parent, named by its
         // `data-sub`.
         let which = |el: Option<&web_sys::Element>| el.and_then(|e| e.get_attribute("data-sub")).and_then(|n| Sub::of_name(&n));
-        match key.as_str() {
-            "ArrowRight" if on_parent => {
+        match id {
+            Some("menu.into") if on_parent => {
                 let Some(w) = which(current.map(|i| list[i].as_ref())) else { return };
                 open_sub.set(Some(w));
                 // The list mounts on the next render tick; focus its
@@ -177,7 +177,7 @@ fn menu_view(
                 });
                 ev.prevent_default();
             }
-            "ArrowLeft" if open_sub.get_untracked().is_some() => {
+            Some("menu.out") if open_sub.get_untracked().is_some() => {
                 let Some(w) = open_sub.get_untracked() else { return };
                 open_sub.set(None);
                 if let Some(parent) = items(root_el).into_iter().find(|i| i.has_attribute("aria-haspopup") && which(Some(i)) == Some(w)) {
@@ -185,9 +185,9 @@ fn menu_view(
                 }
                 ev.prevent_default();
             }
-            "Tab" => close(),
-            k => {
-                if let Some(n) = step(current, list.len(), k) {
+            Some("menu.leave" | "menu.leave-back") => close(),
+            id => {
+                if let Some(n) = step(current, list.len(), id) {
                     focus(&list[n]);
                     ev.prevent_default();
                 }

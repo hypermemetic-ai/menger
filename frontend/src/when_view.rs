@@ -395,7 +395,7 @@ fn who_view(current: Memo<Option<Timed>>, set: impl Fn(&dyn Fn(&Timed) -> Timed)
                     prop:value=move || typed.get()
                     on:input=move |ev| typed.set(event_target_value(&ev))
                     on:keydown=move |ev: web_sys::KeyboardEvent| {
-                        if ev.key() == "Enter" {
+                        if crate::bindings::is(&ev, crate::bindings::Context::Field, "form.submit") {
                             ev.prevent_default();
                             ev.stop_propagation();
                             take();
@@ -424,9 +424,9 @@ fn NumberUnit(n: RwSignal<u32>, unit: RwSignal<Unit>) -> impl IntoView {
                 }
             }
             on:keydown=move |ev: web_sys::KeyboardEvent| {
-                let by = match ev.key().as_str() {
-                    "ArrowUp" => 1i64,
-                    "ArrowDown" => -1,
+                let by = match crate::bindings::hit(&ev, crate::bindings::Context::TimeField) {
+                    Some("time.up") => 1i64,
+                    Some("time.down") => -1,
                     _ => return,
                 };
                 ev.prevent_default();

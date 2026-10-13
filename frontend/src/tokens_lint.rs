@@ -212,7 +212,7 @@ fn verdict(line: &str) -> Option<&'static str> {
 /// A Rust source without its test modules (from a `#[cfg(test)]` that
 /// opens a `mod` to the end) and its `//` comment lines, blanked so line
 /// numbers hold.
-fn rust_shipped(text: &str) -> String {
+pub(crate) fn rust_shipped(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let cut = lines
         .windows(2)

@@ -330,6 +330,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::bindings::{self, Context};
 use crate::counts::{wire_text, LiveCounts};
 use crate::filter::{Cat, FilterBar, ScTree};
 use crate::flat::{self, View};
@@ -1908,12 +1909,13 @@ fn reveal_now(h: Hook) {
 /// subtree (WAI-ARIA's tree key), Shift+`*` everything, `-` back to the
 /// shortcodes. A `*` typed with Shift because the layout puts it there
 /// (Shift+8) is a plain `*`: Shift counts only on the numpad's, whose `*`
-/// needs none. True when the key was one of them.
-fn shape_key(ev: &web_sys::KeyboardEvent, current: &web_sys::Element) -> bool {
-    let op = match ev.key().as_str() {
-        "*" if ev.shift_key() && ev.code() == "NumpadMultiply" => Op::ExpandAll,
-        "*" => Op::ExpandSubtree,
-        "-" => Op::CollapseAll,
+/// needs none (AGS-28: the table's `*` and `Shift+Numpad*`). True when the
+/// key was one of them.
+fn shape_key(id: &str, current: &web_sys::Element) -> bool {
+    let op = match id {
+        "nav.expand-all" => Op::ExpandAll,
+        "nav.expand-subtree" => Op::ExpandSubtree,
+        "nav.collapse-all" => Op::CollapseAll,
         _ => return false,
     };
     if let Some(at) = at(current) {
@@ -2149,18 +2151,11 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
     if ev.default_prevented() {
         return;
     }
-    if select_key(&ev, ctx, lens) {
-        ev.prevent_default();
-        ev.stop_propagation();
-        return;
-    }
-    if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
-        return;
-    }
-    let key = ev.key();
-    // `g h` first, so the sequence still reaches the board from inside
-    // the tree, where `h` otherwise means "collapse".
-    if keys::consume_go_prefix(&key) {
+    // AGS-28: what the key is in the nav. `g h` still reaches the board
+    // from inside the tree: the `h` that ends it is no collapse here (the
+    // table leaves it to the app's map, which owns the sequence).
+    let Some(id) = bindings::hit(&ev, Context::Nav) else { return };
+    if select_key(id, &ev, ctx, lens) {
         ev.prevent_default();
         ev.stop_propagation();
         return;
@@ -2198,21 +2193,21 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
     };
 
     // ACT-7: `*`, Shift+`*`, `-`.
-    if shape_key(&ev, &current) {
+    if shape_key(id, &current) {
         ev.prevent_default();
         ev.stop_propagation();
         return;
     }
-    let handled = match key.as_str() {
-        "ArrowDown" | "j" => {
+    let handled = match id {
+        "move.next" => {
             step_from(&steps, at, true, ctx, lens, false);
             true
         }
-        "ArrowUp" | "k" => {
+        "move.prev" => {
             step_from(&steps, at, false, ctx, lens, false);
             true
         }
-        "Home" => {
+        "move.first" => {
             match steps.first() {
                 // FILTER-20: the flat list away from its top.
                 Some(first) if is_gap(first) => to_the_top(),
@@ -2220,7 +2215,7 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
             }
             true
         }
-        "End" => {
+        "move.last" => {
             match steps.last() {
                 Some(last) if is_gap(last) => to_the_end(),
                 Some(last) => keys::focus_and_rove(&all, last),
@@ -2231,7 +2226,7 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
         // Open a closed node in place; step into an open one. On a row
         // with no children there is nowhere further in — the pattern says
         // do nothing.
-        "l" => {
+        "nav.expand" => {
             if expandable {
                 if !open {
                     toggle(node_key.clone());
@@ -2243,7 +2238,7 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
         }
         // Close an open node in place; otherwise step out to the row it
         // hangs under (which is where a second h then closes it).
-        "h" => {
+        "nav.collapse" => {
             if expandable && open {
                 toggle(node_key.clone());
             } else if let Some(row) = parent_row(&current) {
@@ -2251,7 +2246,7 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
             }
             true
         }
-        "Enter" => {
+        "open.focused" => {
             match &leaf_id {
                 // The row is a real <a href>, so the browser would
                 // navigate anyway; doing it here keeps one code path (and
@@ -2273,18 +2268,10 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
 /// Shift+j/k extend the selection a row, Space toggles the row, Ctrl/Cmd+A
 /// selects every drawn row. True when the key was one of them. (Esc, which
 /// clears, is the app's: src/keys.rs.)
-fn select_key(ev: &web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) -> bool {
-    if ev.alt_key() || ev.is_composing() {
-        return false;
-    }
-    let key = ev.key();
-    let cmd = ev.ctrl_key() || ev.meta_key();
-    if cmd {
-        if !ev.shift_key() && key.eq_ignore_ascii_case("a") {
-            selection::set(Picked::all(&drawn_order()));
-            return true;
-        }
-        return false;
+fn select_key(id: &str, ev: &web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) -> bool {
+    if id == "select.all" {
+        selection::set(Picked::all(&drawn_order()));
+        return true;
     }
     let Some(current) = ev
         .target()
@@ -2293,15 +2280,15 @@ fn select_key(ev: &web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) -> bool {
     else {
         return false;
     };
-    let down = match key.as_str() {
-        " " if !ev.shift_key() => {
+    let down = match id {
+        "select.toggle" => {
             if let Some(id) = selection::pick_of(&current) {
                 selection::set(selection::now().toggled(&id));
             }
             return true;
         }
-        "ArrowDown" | "J" if ev.shift_key() => true,
-        "ArrowUp" | "K" if ev.shift_key() => false,
+        "select.extend-down" => true,
+        "select.extend-up" => false,
         _ => return false,
     };
     let steps = walkable();
@@ -2348,7 +2335,7 @@ fn step_from(steps: &[web_sys::HtmlElement], at: usize, down: bool, ctx: Ctx, le
 /// ticket is always drawn and selected (FILTER-24, [`reveal`]), so the keys
 /// always have a row to start from.
 fn page_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens, hidden: RwSignal<bool>) {
-    if ev.default_prevented() || ev.is_composing() || ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+    if ev.default_prevented() {
         return;
     }
     let Some(Route::Ticket(id)) = ctx.route.try_get_untracked() else { return };
@@ -2359,16 +2346,16 @@ fn page_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens, hidden: RwSign
     if target.as_ref().is_some_and(|t| keys::defer_to_focus(t) || t.closest("#nav .tree").ok().flatten().is_some()) {
         return;
     }
-    let handled = match ev.key().as_str() {
-        "ArrowDown" | "j" => {
+    let handled = match bindings::hit(&ev, Context::TicketPage) {
+        Some("move.next") => {
             step_selected(id, true, ctx, lens);
             true
         }
-        "ArrowUp" | "k" => {
+        Some("move.prev") => {
             step_selected(id, false, ctx, lens);
             true
         }
-        "f" => {
+        Some("filter.view") => {
             filter_to(&id, ctx, lens);
             true
         }
@@ -2987,7 +2974,7 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                     on:click=tree_click
                     on:mousedown=|ev: web_sys::MouseEvent| {
                         // ACT-3: a Shift+click selects rows, not text.
-                        if ev.shift_key() {
+                        if bindings::hit_mouse(&ev, Context::Nav) == Some("select.range") {
                             ev.prevent_default();
                         }
                     }
@@ -3022,9 +3009,7 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
 /// Shift selects the range from the anchor, Ctrl/Cmd toggles the row — and
 /// neither follows the link: the row takes focus instead.
 fn tree_click(ev: web_sys::MouseEvent) {
-    if ev.button() != 0 {
-        return;
-    }
+    let Some(clicked) = bindings::hit_mouse(&ev, Context::Nav) else { return };
     let Some(row) = ev
         .target()
         .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
@@ -3033,7 +3018,7 @@ fn tree_click(ev: web_sys::MouseEvent) {
         return;
     };
     let Some(id) = selection::pick_of(&row) else { return };
-    let gesture = Gesture::of_mouse(&ev);
+    let gesture = Gesture::of(clicked);
     if gesture != Gesture::Plain {
         ev.prevent_default();
         if let Ok(row) = row.dyn_into::<web_sys::HtmlElement>() {
@@ -3124,7 +3109,7 @@ fn selection_foot(under: Under) -> AnyView {
 /// ticket page it filters the nav to the open ticket and its descendants, as
 /// it does anywhere on the page ([`filter_to`]).
 fn nav_f(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
-    if ev.key() != "f" || ev.default_prevented() || ev.is_composing() || ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+    if ev.default_prevented() || !bindings::is(&ev, Context::Nav, "filter.view") {
         return;
     }
     let target = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
@@ -4025,7 +4010,7 @@ fn group_row(
             // its second click is not another, and it selects no text.
             // ACT-3: a Shift or Ctrl/Cmd click selects instead.
             on:click=move |ev: web_sys::MouseEvent| {
-                if ev.detail() <= 1 && Gesture::of_mouse(&ev) == Gesture::Plain {
+                if ev.detail() <= 1 && Gesture::of_mouse(&ev, Context::Nav) == Gesture::Plain {
                     toggle();
                 }
             }

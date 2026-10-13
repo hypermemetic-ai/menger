@@ -752,8 +752,11 @@ pub(crate) fn install() {
         if ev.default_prevented() {
             return;
         }
+        // AGS-28: a click (Ctrl/⌘ or Shift too) or a middle-click — an
+        // `auxclick` that is the middle button.
         let middle = ev.type_() == "auxclick";
-        if (middle && ev.button() != 1) || (!middle && ev.button() != 0) {
+        let clicked = crate::bindings::hit_mouse(&ev, crate::bindings::Context::Link) == Some("link.follow");
+        if !clicked || middle != crate::bindings::is_middle(&ev) {
             return;
         }
         let Some(a) = ev
@@ -856,16 +859,16 @@ fn dialog_view(a: Asking) -> impl IntoView {
         let _ = el.focus();
     });
     let on_key = move |ev: web_sys::KeyboardEvent| {
-        match ev.key().as_str() {
-            "Escape" => {
+        match crate::bindings::hit(&ev, crate::bindings::Context::Dialog) {
+            Some("dialog.close") => {
                 ev.prevent_default();
                 close();
             }
-            "Tab" => {
+            Some(id @ ("dialog.next-field" | "dialog.prev-field")) => {
                 ev.prevent_default();
-                trap(ev.shift_key());
+                trap(id == "dialog.prev-field");
             }
-            "Enter" => {
+            Some("form.submit") => {
                 // A button takes its own Enter (Cancel cancels).
                 let on_button = ev
                     .target()

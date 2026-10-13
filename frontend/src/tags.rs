@@ -61,6 +61,7 @@ use menger_tickets_api::{Kind, Severity, Status};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
+use crate::bindings::{self, Context};
 use crate::filter::{Cat, Clausal, Clause, Clauses, Op, ScTree};
 use crate::lens::{self, Kept, Lens, Level};
 use crate::waves::epic_of;
@@ -510,7 +511,7 @@ fn install_listeners(open: RwSignal<Option<Open>>, lens: Lens) {
     // chip's own handler never sees it (no navigation; an Alt+click on a
     // link would download it otherwise). Any other click passes untouched.
     let on_click = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
-        if !ev.alt_key() || ev.ctrl_key() || ev.meta_key() || ev.shift_key() || ev.button() != 0 {
+        if bindings::hit_mouse(&ev, Context::Chip) != Some("chip.filter-everywhere") {
             return;
         }
         let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
@@ -528,6 +529,9 @@ fn install_listeners(open: RwSignal<Option<Open>>, lens: Lens) {
     on_click.forget();
 
     let on_context = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
+        if bindings::hit_mouse(&ev, Context::Chip) != Some("menu.open") {
+            return;
+        }
         let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
         // ACT-4: inside a ticket the one menu answers, with these items.
         if menu::host_of(&el).is_some() {
@@ -557,7 +561,7 @@ fn install_listeners(open: RwSignal<Option<Open>>, lens: Lens) {
     on_down.forget();
 
     let on_key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Escape" {
+        if bindings::is(&ev, Context::Menu, "dialog.close") {
             close(open);
         }
     });
@@ -616,13 +620,13 @@ fn menu_view(o: Open, open: RwSignal<Option<Open>>) -> impl IntoView {
     });
     let on_key = move |ev: web_sys::KeyboardEvent| {
         let Some(el) = root.get_untracked() else { return };
-        let key = ev.key();
+        let id = bindings::hit(&ev, Context::Menu);
         let list = menu::items(&el);
         let active = dom::window().document().and_then(|d| d.active_element());
         let current = list.iter().position(|i| active.as_ref() == Some(i.as_ref()));
-        if key == "Tab" {
+        if matches!(id, Some("menu.leave" | "menu.leave-back")) {
             close(open);
-        } else if let Some(n) = menu::step(current, list.len(), &key) {
+        } else if let Some(n) = menu::step(current, list.len(), id) {
             let _ = list[n].focus();
             ev.prevent_default();
         }

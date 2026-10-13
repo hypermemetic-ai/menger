@@ -145,20 +145,21 @@ pub(crate) fn grid(y: i32, m: u32) -> Vec<[Option<Day>; 7]> {
     out
 }
 
-/// Where a key moves the focused day in the grid — `None` for a key that
-/// moves nothing (the ARIA grid pattern's date-picker keys).
-pub(crate) fn key_move(at: Day, key: &str, shift: bool) -> Option<Day> {
-    Some(match key {
-        "ArrowLeft" => at.plus_days(-1),
-        "ArrowRight" => at.plus_days(1),
-        "ArrowUp" => at.plus_days(-7),
-        "ArrowDown" => at.plus_days(7),
-        "PageUp" if shift => at.plus_months(-12),
-        "PageDown" if shift => at.plus_months(12),
-        "PageUp" => at.plus_months(-1),
-        "PageDown" => at.plus_months(1),
-        "Home" => at.plus_days(-i64::from(at.weekday())),
-        "End" => at.plus_days(6 - i64::from(at.weekday())),
+/// Where a binding moves the focused day in the grid — `None` for one that
+/// moves nothing (the ARIA grid pattern's date-picker keys; AGS-28: the
+/// table's `date.*`).
+pub(crate) fn key_move(at: Day, id: &str) -> Option<Day> {
+    Some(match id {
+        "date.prev-day" => at.plus_days(-1),
+        "date.next-day" => at.plus_days(1),
+        "date.prev-week" => at.plus_days(-7),
+        "date.next-week" => at.plus_days(7),
+        "date.prev-year" => at.plus_months(-12),
+        "date.next-year" => at.plus_months(12),
+        "date.prev-month" => at.plus_months(-1),
+        "date.next-month" => at.plus_months(1),
+        "date.week-start" => at.plus_days(-i64::from(at.weekday())),
+        "date.week-end" => at.plus_days(6 - i64::from(at.weekday())),
         _ => return None,
     })
 }
@@ -325,12 +326,12 @@ pub(crate) fn Calendar(
     let keydown = {
         let go = go.clone();
         move |ev: web_sys::KeyboardEvent| {
-            let key = ev.key();
-            if let Some(d) = key_move(focus.get_untracked(), &key, ev.shift_key()) {
+            let id = crate::bindings::hit(&ev, crate::bindings::Context::DatePicker).unwrap_or_default();
+            if let Some(d) = key_move(focus.get_untracked(), id) {
                 ev.prevent_default();
                 ev.stop_propagation();
                 go(d);
-            } else if key == "Enter" || key == " " {
+            } else if id == "date.choose" {
                 ev.prevent_default();
                 ev.stop_propagation();
                 choose(focus.get_untracked());
@@ -370,7 +371,7 @@ pub(crate) fn Calendar(
                     role="listbox"
                     aria-label="years"
                     on:keydown=move |ev: web_sys::KeyboardEvent| {
-                        if ev.key() == "Escape" {
+                        if crate::bindings::is(&ev, crate::bindings::Context::DatePicker, "dialog.close") {
                             ev.prevent_default();
                             ev.stop_propagation();
                             years_open.set(false);
@@ -459,16 +460,15 @@ pub(crate) fn TimeSelect(value: RwSignal<(u8, u8)>, h12: bool, #[prop(into)] lab
     let minutes_text = move || format!("{:02}", value.get().1);
     let spin = move |part: u8| {
         move |ev: web_sys::KeyboardEvent| {
-            let by = match ev.key().as_str() {
-                "ArrowUp" => 1,
-                "ArrowDown" => -1,
-                "PageUp" => 10,
-                "PageDown" => -10,
+            let by = match crate::bindings::hit(&ev, crate::bindings::Context::TimeField) {
+                Some("time.up") => 1,
+                Some("time.down") => -1,
+                Some("time.up-ten") => 10,
+                Some("time.down-ten") => -10,
                 _ => return,
             };
             ev.prevent_default();
             ev.stop_propagation();
-            let by = if ev.shift_key() && part == 1 { by * 10 } else { by };
             value.update(|t| *t = step_time(*t, part, by));
         }
     };
@@ -573,6 +573,11 @@ mod tests {
     #[test]
     fn the_keys_move_the_focus() {
         let at = Day::new(2026, 10, 13);
+        let key_move = |at, key: &str, shift: bool| {
+            use crate::bindings::{pick_single, table, Context, Press};
+            let p = Press { key: key.into(), shift, ..Press::default() };
+            key_move(at, pick_single(&table(), &p, Context::DatePicker, false).unwrap_or_default())
+        };
         assert_eq!(key_move(at, "ArrowLeft", false), Some(Day::new(2026, 10, 12)));
         assert_eq!(key_move(at, "ArrowRight", false), Some(Day::new(2026, 10, 14)));
         assert_eq!(key_move(at, "ArrowUp", false), Some(Day::new(2026, 10, 6)));
