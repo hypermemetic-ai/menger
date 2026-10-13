@@ -637,6 +637,35 @@ pub(crate) fn nav_default() -> Kept {
     k
 }
 
+/// FILTER-26: the nav's own clauses — its groups, less each top-level
+/// group its default holds (`not menger doc`, FILTER-21): what the reader
+/// added, which is what Make global moves. A group the reader changed
+/// (`menger doc`, the pill at `yes`) is the reader's, and moves.
+pub(crate) fn nav_added(nav: &Filter, default: &Filter) -> Vec<Group> {
+    nav.groups.iter().filter(|g| !default.groups.contains(g)).cloned().collect()
+}
+
+/// FILTER-26: whether the nav offers Make global — it holds a clause the
+/// reader added. A nav at its default offers none, nor does one whose only
+/// change is that the default's clause was taken out (nothing would move).
+pub(crate) fn promotable(nav: &Filter, default: &Filter) -> bool {
+    !nav_added(nav, default).is_empty()
+}
+
+/// FILTER-26: the global filter Make global leaves — `global and nav`, less
+/// the nav's default: the global's groups then the nav's added ones, merged
+/// as the lens merges a surface's (FILTER-10's `and`: a duplicate dropped,
+/// one field's lists merged; a clash kept for [`clash_of`] to name). Each
+/// side's or-groups (FILTER-31) carry over whole. The global's local
+/// clauses and display stay; the nav's display (its tree or flat list) is
+/// the nav's own and does not move.
+pub(crate) fn promoted(global: &Kept, nav: &Filter, default: &Filter) -> Kept {
+    let added = Filter { groups: nav_added(nav, default), display: Default::default() };
+    let mut filter = global.filter.and(&added);
+    filter.display = global.filter.display.clone();
+    Kept { filter, local: global.local.clone() }
+}
+
 /// The wave board a route opens on (WAVE-12): Shortcode is any of the
 /// route's tree, Kind is any of build, spike, gap —
 /// `in (…) and kind in (build, spike, gap)`.
@@ -698,6 +727,14 @@ fn store(key: &str, value: Option<&str>) {
             None => s.remove_item(key),
         };
     }
+}
+
+/// FILTER-26: what the global and nav levels were chosen as before Make
+/// global (`None`: the level's default) — what its undo puts back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Promotion {
+    pub(crate) global: Option<Kept>,
+    pub(crate) nav: Option<Kept>,
 }
 
 // ---------------------------------------------------------------------
@@ -933,6 +970,38 @@ impl Lens {
     /// A custom pill's group taken out.
     pub(crate) fn remove_custom(self, level: Level, at: usize) {
         self.edit(level, |k| k.remove_group(at));
+    }
+
+    /// FILTER-26: Make global — the global filter becomes `global and nav`
+    /// less the nav's default ([`promoted`]) and the nav goes back to its
+    /// default. Answers what both were chosen as before, for the one undo
+    /// ([`Lens::restore`]); `None` (nothing done) while the nav has nothing
+    /// to move.
+    pub(crate) fn promote(self) -> Option<Promotion> {
+        let nav = untrack(|| self.kept(Level::Nav))?;
+        let default = nav_default().filter;
+        if !promotable(&nav.filter, &default) {
+            return None;
+        }
+        let before = Promotion { global: self.chosen[Level::Global.index()].get_untracked(), nav: self.chosen[Level::Nav.index()].get_untracked() };
+        let global = untrack(|| self.kept(Level::Global)).unwrap_or_default();
+        let next = promoted(&global, &nav.filter, &default);
+        self.set_kept(Level::Global, Some(next), false);
+        self.set_kept(Level::Nav, None, true);
+        Some(before)
+    }
+
+    /// FILTER-26: the global and nav filters put back as `p` says — Make
+    /// global's undo.
+    pub(crate) fn restore(self, p: Promotion) {
+        self.set_kept(Level::Global, p.global, false);
+        self.set_kept(Level::Nav, p.nav, true);
+    }
+
+    /// FILTER-26: whether the nav offers Make global ([`promotable`]).
+    /// Tracked.
+    pub(crate) fn can_promote(self) -> bool {
+        self.filters[Level::Nav.index()].with(|f| promotable(f, &nav_default().filter))
     }
 
     /// Back to the level's default.
@@ -1800,5 +1869,58 @@ mod tests {
             Some(vec![("ready".into(), vec![Level::Global]), ("blocked".into(), vec![Level::Global])])
         );
         assert_eq!(clash_of(&Filter::default(), &Filter::default(), Level::Nav), None);
+    }
+
+    /// FILTER-26: Make global — the global filter becomes `global and nav`
+    /// less the nav's default; only what the reader added moves; an empty
+    /// global becomes the added clauses; or-groups carry over whole; a
+    /// duplicate is dropped and one field's lists merge as the lens merges;
+    /// a clash is kept for the bar to name. A nav at its default (or with
+    /// only the default taken out) offers nothing.
+    #[test]
+    fn make_global_moves_what_the_reader_added() {
+        let d = nav_default().filter;
+        let up = |g: &str, n: &str| promoted(&Kept { filter: parsed(g), ..Kept::default() }, &parsed(n), &d).filter.format();
+        // The ticket's diagram.
+        assert_eq!(up("status Ready", "in THEME and kind build and not menger doc"), "status Ready and in THEME and kind build");
+        // The default is not copied up, wherever it sits.
+        assert_eq!(up("status Ready", "not menger doc and kind build"), "status Ready and kind build");
+        // An empty global becomes the added clauses.
+        assert_eq!(up("", "kind gap and not menger doc"), "kind gap");
+        // The reader removed the default and added a clause: the clause moves.
+        assert_eq!(up("", "kind gap"), "kind gap");
+        // The reader turned the default over: `menger doc` is theirs.
+        assert_eq!(up("kind doc", "menger doc"), "kind doc and menger doc");
+        // Or-groups carry over whole, from either side.
+        assert_eq!(
+            up("(changed today or created today)", "(status Ready or kind gap) and not menger doc"),
+            "(changed today or created today) and (status Ready or kind gap)"
+        );
+        // FILTER-30's clauses move intact: a negated time clause, `touched`.
+        assert_eq!(
+            up("status Ready", "not touched within 2w and not menger doc and not changed today"),
+            "status Ready and not touched within 2w and not changed today"
+        );
+        assert_eq!(up("not changed today", "touched today"), "not changed today and touched today");
+        // A duplicate is dropped; one field's lists merge.
+        assert_eq!(up("kind build", "kind build and not menger doc"), "kind build");
+        assert_eq!(up("status in (Ready, Coding)", "status in (Coding, Pending)"), "status Coding");
+        // A clash is kept as written, for the global bar to name.
+        let clash = promoted(&Kept { filter: parsed("status Ready"), ..Kept::default() }, &parsed("status Coding"), &d);
+        assert_eq!(clash.filter.format(), "status Ready and status Coding");
+        assert!(clash.filter.admits_nothing().is_some());
+        // The global's display stays; the nav's (its flat list) does not move.
+        let flat = promoted(&Kept::default(), &parsed("kind gap · flat"), &d);
+        assert_eq!(flat.filter.format(), "kind gap");
+        // What is offered.
+        assert!(!promotable(&d, &d), "the nav at its default");
+        assert!(!promotable(&Filter::default(), &d), "only the default taken out: nothing to move");
+        assert!(!promotable(&parsed("not menger doc · flat"), &d), "a display alone");
+        assert!(promotable(&parsed("kind build and not menger doc"), &d));
+        assert!(promotable(&parsed("menger doc"), &d));
+        assert_eq!(nav_added(&parsed("not menger doc and in THEME"), &d), parsed("in THEME").groups);
+        // Through the URL: the new global rides as `g=`, the nav's `n=` drops.
+        let g = promoted(&Kept::default(), &parsed("in THEME and not menger doc"), &d);
+        assert_eq!(lens_hash("#/?n=in%20THEME%20and%20not%20menger%20doc", Some(&g.filter.format()), None, None), "#/?g=in%20THEME");
     }
 }

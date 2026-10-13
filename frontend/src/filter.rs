@@ -1582,6 +1582,8 @@ pub(crate) fn FilterBar(
             {move || (!texting.get()).then(|| view! { <Pills bar=level /> })}
             <TextMode level texting />
             <Reset level />
+            // FILTER-26: the nav's filter made global.
+            {(level == Level::Nav).then(|| view! { <crate::promote::MakeGlobal /> })}
             // FILTER-6: the level's saved filters, and Save as….
             <crate::saved::SavedButton level />
             <Popover level />
@@ -2393,6 +2395,7 @@ fn popover(lens: Lens, pop: Pop) -> impl IntoView {
             }
         >
             {(level == Level::Global).then(|| view! { <div class="flevel">"global — every view"</div> })}
+            {(level == Level::Nav).then(|| view! { <crate::promote::MakeGlobal menu=true /> })}
             {move || pop.into.get().and_then(|at| lens.kept(level).and_then(|k| k.filter.groups.get(at).map(anyof::into_words))).map(|w| view! {
                 <div class="finto" role="note">{w}</div>
             })}
