@@ -35,8 +35,9 @@
 //!   signal in the row cache, in place. A re-parent moves no row — the order is
 //!   the id's.
 //! - **A row is the tree's leaf**: kind glyph, id, title, status tag; a real
-//!   link to `#/ticket/{id}`, selected when it is the open ticket; the ticket
-//!   menu's `data-ticket-id`. A menger document (WAVE-10) is a row like any
+//!   link to `#/ticket/{id}`, current when it is the open ticket; the ticket
+//!   menu's `data-ticket-id`. ACT-3: selected when it is in the app's one
+//!   selection — the tree's gestures and keys, on the same rows (src/nav.rs). A menger document (WAVE-10) is a row like any
 //!   other, listed when the nav's filter admits it — its default does not
 //!   (FILTER-21). Rows are treeitems of the nav's tree, so AGS-18's keys
 //!   walk them, and the stretches not yet in hand are gaps the keys scroll
@@ -1011,6 +1012,8 @@ fn flat_row(
         let id = id.clone();
         Memo::new(move |_| route.with(|rt| matches!(rt, Route::Ticket(x) if *x == id)))
     };
+    // ACT-3: the selection is the app's, as in the tree.
+    let picked = crate::selection::is_picked(id.clone());
     // A ticket's place in the order is fixed at birth; SDLC-13: its kind is
     // not (`set_kind`), so the row follows it.
     let kind = Memo::new(move |_| ticket.with(|t| t.kind.as_str()));
@@ -1030,7 +1033,10 @@ fn flat_row(
             class:outside=move || outside.get()
             role="treeitem"
             tabindex="-1"
-            aria-selected=move || sel.get().to_string()
+            class:picked=move || picked.get()
+            aria-selected=move || picked.get().to_string()
+            aria-current=move || sel.get().then_some("page")
+            data-pick=id.clone()
             aria-setsize=move || n.get()
             aria-posinset=move || posinset.get()
             data-node-key=id.clone()

@@ -520,6 +520,8 @@
      subtree with it): the title quieter, the status chip says which. */
   tbody#board tr.done td:nth-child(2) { color: var(--muted); }
   tbody#board tr[data-ticket-id]:hover td { background: var(--hover); }
+  /* ACT-3: a selected board row — the nav's tint. */
+  tbody#board tr.picked td { background: var(--sel); }
   td.id a { color: inherit; text-decoration: none; }
   td.id a:hover { text-decoration: underline; }
   #ticket-page .crumbs { margin: 0 0 .75rem; }
@@ -817,6 +819,18 @@
   #nav .row.sel { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); border-radius: var(--radius-xs); }
   #nav .row.sel .label { font-weight: var(--weight-strong); }
   #nav .row.sel .code { color: var(--accent); }
+  /* ACT-3: the selection — the list-"on" tint; the open row keeps its bar. */
+  #nav .row.picked:not(.sel) { background: var(--sel); }
+  #nav .nsel {
+    flex: none; display: flex; align-items: baseline; gap: .3rem; padding: 6px 12px;
+    border-top: var(--border) solid var(--line); font-size: calc(11px * var(--text-scale)); color: var(--muted);
+  }
+  #nav .nsel-n { color: var(--accent); font-variant-numeric: tabular-nums; }
+  #nav .nsel-clear {
+    background: none; border: 0; padding: 0; font: inherit; color: var(--muted); cursor: pointer;
+    text-decoration: underline dotted; text-underline-offset: 2px;
+  }
+  #nav .nsel-clear:hover { color: var(--accent); }
   #nav .prefix { color: var(--tree-line); white-space: pre; user-select: none; }
   #nav .toggle { width: 1ch; color: var(--muted); }
   #nav .toggle.clickable { cursor: pointer; }

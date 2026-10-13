@@ -274,6 +274,7 @@ mod needs;
 mod registry;
 mod saved;
 mod scopes;
+mod selection;
 mod swatches;
 mod session;
 mod settings;
@@ -903,23 +904,49 @@ fn Board(
                         // chip, not a control. SDLC-13: a kind changes
                         // (`set_kind`), so which one the cell draws follows it.
                         let is_doc = Memo::new(move |_| ticket.with(|t| !t.kind.has_lifecycle()));
+                        // ACT-3: the app's one selection, drawn here too.
+                        let picked = selection::is_picked(row_id.clone());
+                        let pick_id = row_id.clone();
                         view! {
                             <tr
                                 data-ticket-id=row_id.clone()
+                                data-pick=row_id.clone()
+                                class:picked=move || picked.get()
+                                aria-selected=move || picked.get().then_some("true")
                                 // MENGER-13: done with — complete, superseded or canceled
                                 // (a canceled subtree with it) — drawn as done.
                                 class:done=move || ticket.with(|t| matches!(t.status, Status::Complete | Status::Superseded | Status::Canceled))
                                 tabindex="-1"
                                 aria-rowindex=move || board.pos_of(&index_id).map(|i| i + 2)
-                                on:click=move |ev| {
+                                // ACT-3: a Shift+click selects rows, not text.
+                                on:mousedown=|ev: web_sys::MouseEvent| {
+                                    if ev.shift_key() {
+                                        ev.prevent_default();
+                                    }
+                                }
+                                on:click=move |ev: web_sys::MouseEvent| {
                                     // The select (and its options) keep their own
                                     // behavior; the id link handles itself.
-                                    let hit_control = ev
-                                        .target()
-                                        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                                        .and_then(|el| el.closest("select, option, a").ok().flatten())
-                                        .is_some();
-                                    if !hit_control {
+                                    let hit = |sel: &str| {
+                                        ev.target()
+                                            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                                            .and_then(|el| el.closest(sel).ok().flatten())
+                                            .is_some()
+                                    };
+                                    if hit("select, option") {
+                                        return;
+                                    }
+                                    // ACT-3: as in the nav — a click selects the row and
+                                    // opens it; Shift selects a range, Ctrl/Cmd toggles,
+                                    // and neither opens anything (the id link neither).
+                                    let gesture = selection::Gesture::of_mouse(&ev);
+                                    selection::board_click(board, gesture, &pick_id);
+                                    if gesture != selection::Gesture::Plain {
+                                        ev.prevent_default();
+                                        if let Some(tr) = ev.current_target().and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok()) {
+                                            keys::focus_and_rove(&keys::query_all("#board tr[data-ticket-id]"), &tr);
+                                        }
+                                    } else if !hit("a") {
                                         navigate_to_ticket(&nav_id);
                                     }
                                 }
@@ -2007,6 +2034,8 @@ fn App() -> impl IntoView {
     // SCALE-26: the board's model of the store — the extents, the window's
     // rows it holds — asked for by the session and kept by its own effect.
     let board = board::Board::new();
+    // ACT-3: the one selection — the nav's, the flat list's and the board's.
+    selection::install();
     // COMP-9: an instance's shortcode / ticket attributes are checked
     // against the board's extents.
     frame::know(board);

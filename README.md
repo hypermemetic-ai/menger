@@ -258,6 +258,20 @@ are not the app's keys, AGS-27). `f` on a ticket page makes the nav's filter
 then widens that `under` by one parent — a shortcode's to its root's host —
 and drops it at a top root.
 
+The nav selects like a file list (ACT-3), one selection for the whole app —
+the tree, the flat list and the board draw and take the same one. A click
+opens the ticket and selects its row; Shift+click selects from the anchor
+(the last plain or Ctrl/Cmd click) to the row, in the order drawn (a closed
+node's children are not drawn, so not selected); Ctrl/Cmd+click toggles a
+row; neither opens anything. On a focused row Shift+↑/↓ (Shift+j/k) extend
+the selection, Space toggles the row, Ctrl/Cmd+A selects every drawn row, and
+Esc clears. A shortcode's row stands for its root ticket. Selected rows wear
+`--sel` and `aria-selected` (the tree is `aria-multiselectable`; the open
+ticket is `aria-current`), and the nav's foot says `3 selected · 2 hidden ·
+clear` — hidden: selected, but outside the nav's filter. The selection is
+ids: it survives a filter change, a route change and a live reorder, not a
+reload; one range takes at most 1,000 rows.
+
 The wave board (WAVE-5) is `#/waves/<SHORTCODE>` — e.g.
 `http://127.0.0.1:4456/app/#/waves/PLEXUS`, the platform's work in order:
 the shortcode and every shortcode hosted under it (the nav's `host` chain
