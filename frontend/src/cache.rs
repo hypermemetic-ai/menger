@@ -184,6 +184,17 @@ pub(crate) fn release(id: &str) {
     }
 }
 
+/// ACT-5: a deleted ticket's row out of the cache, whoever holds it — every
+/// view reading it through [`find`] hears that it is gone. A later
+/// [`release`] of it finds nothing and does nothing.
+pub(crate) fn forget(id: &str) {
+    let gone = ROWS.with(|rows| rows.borrow_mut().remove(id).is_some());
+    if gone {
+        count();
+        ARRIVALS.with(ArcTrigger::notify);
+    }
+}
+
 /// A `watch` event's ticket: applied to the row if the cache holds it,
 /// dropped otherwise. True when the cache holds it.
 pub(crate) fn put(t: TicketSummary) -> bool {

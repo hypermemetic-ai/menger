@@ -1560,6 +1560,20 @@ pub(crate) fn child_removed(parent: &str, removed: &str, count: u64) {
     }
 }
 
+/// ACT-5: `deleted`: an open list of `id`'s shortcode lets it go (its
+/// parent's lists hear `child_removed`); every list under the lens asks
+/// again.
+pub(crate) fn departed(id: &str, epic: &str) {
+    for (list, holder) in lists(|s| matches!(s, Source::Epic(e) if e == epic)) {
+        list.try_update(|l| {
+            let n = l.n.saturating_sub(1);
+            l.removed(id, n)
+        });
+        holder.release(id);
+    }
+    ask_again(|_| true);
+}
+
 /// One page of a list, asked of the server — FILTER-14: under the lens, with
 /// what `tree` said of each row.
 enum Asked {

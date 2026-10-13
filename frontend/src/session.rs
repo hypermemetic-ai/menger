@@ -156,10 +156,10 @@ use crate::kids::Kids;
 use crate::{board, cache, comments, dom, frame, inputs, nav, registry, scopes, settings, signin, Conn, Dock};
 use futures::StreamExt;
 use leptos::prelude::*;
-use menger_tickets_api::{CommentsClient, Marked, SearchWord, TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
+use menger_tickets_api::{CommentsClient, Marked, SearchWord, TicketsClient, Status, Ticket, TicketSummary, TicketsEvent, Tombstone};
 use plexus_client::{ClientEvent, WsTransport};
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use wasm_bindgen_futures::spawn_local;
 
@@ -205,6 +205,11 @@ thread_local! {
     /// id beyond its own ticket (its ancestors, blockers, unlocks) is asked
     /// for again, as a reconnect's new socket asks for it.
     static STALE: ArcRwSignal<u32> = ArcRwSignal::new(0);
+
+    /// ACT-5: the tombstones the app has heard of — a `deleted` on `watch`,
+    /// or `get` answering one — by id: what an open page of a deleted ticket
+    /// shows.
+    static TOMBSTONES: ArcRwSignal<HashMap<String, Tombstone>> = ArcRwSignal::new(HashMap::new());
 
     /// SCALE-26: the ids open ticket pages show and have asked the server
     /// for, with the page's holder — a blocker that dangled, an unlock not
@@ -561,6 +566,44 @@ impl std::future::Future for YieldNow {
 /// SCALE-26: the `lagged` count, as a signal — see `STALE`.
 pub(crate) fn stale() -> ArcRwSignal<u32> {
     STALE.with(Clone::clone)
+}
+
+/// ACT-5: `id`'s tombstone, if the app has heard of one — tracked, so an
+/// open page of it redraws when its `deleted` arrives.
+pub(crate) fn tombstone(id: &str) -> Option<Tombstone> {
+    TOMBSTONES.with(|t| t.with(|t| t.get(id).cloned()))
+}
+
+/// ACT-5: tombstones heard — a `deleted`, or `get` answering one.
+pub(crate) fn remember_tombstones(tombstones: Vec<Tombstone>) {
+    TOMBSTONES.with(|t| t.update(|t| t.extend(tombstones.into_iter().map(|x| (x.id.clone(), x)))));
+}
+
+/// ACT-5: `deleted`: the tickets out of every view — the row cache (an open
+/// page of one shows its tombstone), the board's extents and rows, and the
+/// nav's lists of their shortcodes (their parents' lists hear their own
+/// `child_removed`).
+fn deleted(ids: &[String], tombstones: Vec<Tombstone>, board: board::Board) {
+    remember_tombstones(tombstones);
+    board.deleted(ids);
+    for id in ids {
+        if let Some((epic, _)) = crate::kids::key(id) {
+            nav::departed(id, epic);
+        }
+        cache::forget(id);
+    }
+}
+
+/// ACT-5: `undeleted`: each ticket back as if born — its tombstone forgotten.
+fn undeleted(tickets: Vec<Ticket>, board: board::Board) {
+    TOMBSTONES.with(|t| t.update(|t| tickets.iter().for_each(|x| drop(t.remove(&x.id)))));
+    for ticket in tickets {
+        let summary = TicketSummary::from(&ticket);
+        remember(&summary);
+        nav::arrived(&summary, true);
+        wanted(&summary);
+        board.created(&summary);
+    }
 }
 
 /// SCALE-26: an open page registers the ids it asked for (see `WANTED`)
@@ -923,6 +966,9 @@ async fn session(
                 kids_of(&id, |k| k.removed(&removed));
                 nav::child_removed(&id, &removed, child_count);
             }
+            // ACT-5: tickets gone for good, and back.
+            ClientEvent::Data(TicketsEvent::Deleted { ids, tombstones }) => deleted(&ids, tombstones, board),
+            ClientEvent::Data(TicketsEvent::Undeleted { tickets, .. }) => undeleted(tickets, board),
             // SCALE-24 (MNG-10): a shortcode row's roll-up moved.
             ClientEvent::Data(TicketsEvent::GroupChanged { group }) => tree.group_changed(group),
             // WAVE-6: kept placements a write moved — on each row a view
@@ -1004,7 +1050,7 @@ async fn extents(client: &Client, board: board::Board, last_error: RwSignal<Opti
     let mut runs = Vec::new();
     for ev in client.extents_all().await.map_err(|e| describe(&e))? {
         match ev {
-            TicketsEvent::Extent { epic, last_seq } => runs.push((epic, last_seq)),
+            TicketsEvent::Extent { epic, last_seq, holes } => runs.push((epic, last_seq, holes)),
             TicketsEvent::Error { message } => last_error.set(Some(format!("extents: {message}"))),
             _ => {}
         }
@@ -1164,6 +1210,11 @@ pub(crate) fn load_ticket(
                             holder.hold(TicketSummary::from(&ticket));
                         }
                         TicketsEvent::NotFound { .. } => {
+                            not_found.try_set(true);
+                        }
+                        // ACT-5: a deleted ticket — the page shows its tombstone.
+                        TicketsEvent::Deleted { tombstones, .. } => {
+                            remember_tombstones(tombstones);
                             not_found.try_set(true);
                         }
                         TicketsEvent::Error { message } => {

@@ -172,8 +172,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// hands a ticket chip's right-click (or Menu / Shift+F10) to the host
 /// (`menger:ticket-menu`), which opens the app's ticket menu there; ACT-2's
 /// 1.15 adds `update_many` (`updated_many`) and `ids` on `label` and
-/// `link_commits`.
-pub(crate) const SDK_VERSION: &str = "1.15.0";
+/// `link_commits`; ACT-5's 1.16 adds `delete` (`deleted`, its tombstones;
+/// `get` on a deleted id answers it), `undelete` (`undeleted`) and
+/// `extents`' `holes`.
+pub(crate) const SDK_VERSION: &str = "1.16.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is

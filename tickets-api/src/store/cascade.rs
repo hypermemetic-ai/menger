@@ -181,6 +181,8 @@ pub struct HistoryAnswer {
     /// FILTER-27: since when it has held its status, and whether that is a
     /// transition's moment (`true`) or a pre-log bound — "at least" (`false`).
     pub since: Option<(i64, bool)>,
+    /// ACT-5: the deletes that moved it or dropped its block, oldest first.
+    pub deletions: Vec<crate::types::Tombstone>,
 }
 
 impl Store {
@@ -191,23 +193,32 @@ impl Store {
     pub fn history(&self, id: &str) -> Result<HistoryAnswer, StoreError> {
         let id = id.trim().to_ascii_uppercase();
         let cache = self.tickets.read().expect("store lock poisoned");
-        let row = cache.get(&id).ok_or_else(|| StoreError::NotFound(id.clone()))?;
+        // ACT-5: a deleted ticket's history is kept — answered from its id.
+        let row = cache.get(&id);
+        let (epic, seq) = match row {
+            Some(r) => (r.epic.clone(), r.seq),
+            None => match (cache.tombstones.get(&id), id.rsplit_once('-').and_then(|(e, s)| Some((e, s.parse::<u32>().ok()?)))) {
+                (Some(_), Some((e, s))) => (e.to_string(), s),
+                _ => return Err(StoreError::NotFound(id.clone())),
+            },
+        };
         let log = &cache.log;
         let ticket_of = |p: u32| cache.order.get(&log.key_of(p)).map_or_else(|| id.clone(), |t| t.id.clone());
         let cause_of = |p: u32| {
             let c = log.mark(p).cause;
             (c != 0).then(|| log.pos_of(c)).flatten().map(ticket_of)
         };
-        let mine = log.of(&row.epic, row.seq);
-        let own: Vec<Transition> = mine.iter().map(|p| log.transition(*p, row.id.clone(), cause_of(*p))).collect();
+        let mine = log.of(&epic, seq);
+        let own: Vec<Transition> = mine.iter().map(|p| log.transition(*p, id.clone(), cause_of(*p))).collect();
         let caused: Vec<Transition> = mine
             .iter()
             .flat_map(|p| log.caused_by(log.mark(*p).id).iter().copied())
             .map(|p| log.transition(p, ticket_of(p), cause_of(p)))
             .collect();
-        let restorable = restorable(&cache, row).into_iter().map(|(t, _)| t.id.clone()).collect();
-        let since = log.timed(&row.epic, row.seq).map(|t| (t.since, t.exact));
-        Ok(HistoryAnswer { own, caused, began: log.began(), restorable, since })
+        let restorable = row.map(|r| restorable(&cache, r).into_iter().map(|(t, _)| t.id.clone()).collect()).unwrap_or_default();
+        let since = row.and_then(|_| log.timed(&epic, seq)).map(|t| (t.since, t.exact));
+        let deletions = cache.tombstones.touching(&id);
+        Ok(HistoryAnswer { own, caused, began: log.began(), restorable, since, deletions })
     }
 
     /// [`Store::set_status_by`] as nobody signed in, through the API, with

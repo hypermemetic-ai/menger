@@ -356,6 +356,10 @@ pub(super) fn plan(
         if let Some(path) = find_cycle(cache, &id, &added) {
             refusals.push(StoreError::BlockCycle { id: id.clone(), path });
         }
+        // ACT-5: and never a deleted ticket.
+        if let Err(e) = cache.tombstones.refuse_blockers(&id, &added) {
+            refusals.push(e);
+        }
     }
     // ACT-2: label's.
     let mut labels = None;

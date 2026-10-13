@@ -155,6 +155,10 @@
       const stream = this.rpc.call("tickets.create", { blocked_by: blockedBy, body, epic, kind, parent, path, severity, title });
       yield* extractData(stream);
     }
+    async* delete(children, filter, ids, max, message, tz, unblock) {
+      const stream = this.rpc.call("tickets.delete", { children, filter, ids, max, message, tz, unblock });
+      yield* extractData(stream);
+    }
     async* extents() {
       const stream = this.rpc.call("tickets.extents", {});
       yield* extractData(stream);
@@ -233,6 +237,10 @@
     }
     async* tree(filter, after, epic, keep, limit, matchesOnly, parent, tz) {
       const stream = this.rpc.call("tickets.tree", { after, epic, filter, keep, limit, matches_only: matchesOnly, parent, tz });
+      yield* extractData(stream);
+    }
+    async* undelete(ids) {
+      const stream = this.rpc.call("tickets.undelete", { ids });
       yield* extractData(stream);
     }
     async* unlinkCommits(commits, id) {

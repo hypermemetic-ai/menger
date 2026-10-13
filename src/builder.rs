@@ -1,6 +1,6 @@
 use menger_tickets_api::access::Access;
 use menger_tickets_api::{Comments, Members, Notes, ProviderOffer, Session, Themes, Tickets};
-use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError};
+use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
 use crate::auth_backend::MengerAuth;
@@ -22,6 +22,24 @@ pub fn default_db_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("menger")
         .join("tickets.db")
+}
+
+/// ACT-5: the purge of deleted tickets' bodies past their 30 days — at start,
+/// then every [`PURGE_EVERY`], for the life of the process. A failure is
+/// logged and tried again at the next turn: a body kept a day longer harms
+/// nothing.
+fn purge_daily(store: Arc<Store>) {
+    tokio::spawn(async move {
+        loop {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+            match store.purge(now).await {
+                Ok(ids) if !ids.is_empty() => tracing::info!("ACT-5: purged the bodies of {} deleted ticket(s): {}", ids.len(), ids.join(", ")),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("ACT-5: the purge of deleted tickets' bodies failed ({e}) — tried again in a day"),
+            }
+            tokio::time::sleep(PURGE_EVERY).await;
+        }
+    });
 }
 
 /// Builds the `menger` hub with every activation registered — `tickets` and
@@ -152,6 +170,9 @@ pub async fn build_rpc_login(
     // cache, one database handle. IDENTITY-14: `session`, holding nothing,
     // reports who each connection is.
     let store = Arc::new(store);
+    // ACT-5: a deleted ticket's body is kept 30 days for its undo — purged
+    // past that now, and every day after, inside the server.
+    purge_daily(Arc::clone(&store));
     // IDENTITY-21: the members that decide, from the same store.
     access.attach(Arc::clone(&store));
     let mut hub = DynamicHub::new("menger")

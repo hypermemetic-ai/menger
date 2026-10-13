@@ -93,6 +93,14 @@ use update::*;
 mod waves;
 #[cfg(feature = "server")]
 use waves::*;
+#[cfg(feature = "server")]
+mod overview;
+#[cfg(feature = "server")]
+use overview::*;
+#[cfg(feature = "server")]
+mod delete;
+#[cfg(feature = "server")]
+use delete::*;
 #[cfg(all(test, feature = "server"))]
 mod tests;
 
@@ -322,7 +330,8 @@ impl Tickets {
             }
             match store.get(&id).await {
                 Ok(ticket) => yield TicketsEvent::Ticket { ticket },
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+                // ACT-5: a deleted ticket answers its tombstone.
+                Err(StoreError::NotFound(_)) => yield store.tombstone(&id).map_or(TicketsEvent::NotFound { id }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
                 Err(e) => yield TicketsEvent::Error { message: e.to_string() },
             }
         }
@@ -977,6 +986,56 @@ impl Tickets {
         update_many_stream(self.store.clone(), self.access.admit(auth, &reach), ids, filter, max, tz, asked, source, message)
     }
 
+    /// ACT-5: tickets gone for good — refused while something points at
+    /// them unless told what moves; a tombstone kept, the body 30 days. The
+    /// rules, the write and the events are [`crate::store::Deleted`]'s
+    /// module's. Admin only. Yields `Deleted { ids, tombstones }`, or one
+    /// `Error` naming every refused ticket and why.
+    #[plexus_macros::method(
+        group = "write",
+        target = "ids",
+        description = "Delete tickets for good (admin): refused while children, blockers, a shortcode, a component, a theme or a live input point at one, unless children reparent|delete and unblock say what moves; a tombstone kept (get answers deleted), the body 30 days for undelete; yields deleted { ids, tombstones }",
+        params(
+            ids = "Ticket ids, e.g. [\"MENGER-40\"] (or filter)",
+            filter = "Instead of ids: the tickets this filter admits at the write (FILTER-3's language)",
+            max = "With a filter: the most tickets it may delete (default 500)",
+            tz = "The time zone a history filter's days are read in (optional; default UTC)",
+            children = "reparent (they move to its parent) | delete (they go too) — required when one has children",
+            unblock = "Drop the blocks of the tickets that wait on one (optional; default false: refused)",
+            message = "Why — kept in the tombstone (optional)"
+        ),
+        values(children = ["reparent", "delete"]),
+        example(note = "filed twice", params = r#"{"ids": ["MENGER-40"], "message": "filed twice"}"#),
+        example(note = "its children move to its parent", params = r#"{"ids": ["THEME-12"], "children": "reparent"}"#)
+    )]
+    pub async fn delete(
+        &self, auth: Option<&AuthContext>, reach: Reach,
+        ids: Option<Vec<String>>,
+        filter: Option<String>,
+        max: Option<u32>,
+        tz: Option<String>,
+        children: Option<String>,
+        unblock: Option<bool>,
+        message: Option<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        delete_stream(self.store.clone(), self.access.admit(auth, &reach), ids, filter, max, tz, children, unblock, message)
+    }
+
+    /// ACT-5: deleted tickets brought back while their tombstones keep the
+    /// body — each child its delete moved and each block it dropped put back
+    /// where nothing has moved them since. Admin only. Yields `Undeleted {
+    /// ids, tickets }`, or one `Error` naming every refused ticket and why.
+    #[plexus_macros::method(
+        group = "write",
+        target = "ids",
+        description = "Bring deleted tickets back (admin) within 30 days of the delete, whole, children and blocks put back; yields undeleted { ids, tickets }",
+        params(ids = "Deleted ticket ids, e.g. [\"MENGER-40\"]"),
+        example(note = "undo a delete", params = r#"{"ids": ["MENGER-40"]}"#)
+    )]
+    pub async fn undelete(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        undelete_stream(self.store.clone(), self.access.admit(auth, &reach), ids)
+    }
+
     /// The DAG query: which tickets can start now? Yields one row event
     /// per member of the ready set — status `Ready` and every
     /// `blocked_by` entry `Complete` or `Superseded`; never a doc (SDLC-11),
@@ -1620,8 +1679,10 @@ impl Tickets {
     /// one `Extent` per shortcode that holds a ticket, in shortcode order
     /// — its highest sequence, read from the per-shortcode sequence
     /// `create` allocates from (SCALE-3), so the cost is the number of
-    /// shortcodes. Sequences are dense, so with these a client turns a
-    /// position in the store's order into a cursor without walking to it:
+    /// shortcodes. ACT-5: past every deleted number, which a shortcode's
+    /// `holes` name — sequences are dense but for them, so with these a
+    /// client turns a position in the store's order into a cursor without
+    /// walking to it:
     /// prefix sums find the shortcode E and the row k, and `list { after:
     /// "E-k" }` starts at row k + 1. Nothing trails the extents — there is
     /// no cursor to hand back — so the stream's own `done` is the whole
@@ -1629,7 +1690,7 @@ impl Tickets {
     /// `created` already carries the newborn's `epic` and `seq`.
     #[plexus_macros::method(
         group = "overview",
-        description = "Each shortcode's last sequence, in shortcode order — where each shortcode ends in the store's order"
+        description = "Each shortcode's last sequence (a deleted ticket's too: numbers are never reused) and the holes below it, in shortcode order — where each shortcode ends in the store's order"
     )]
     pub async fn extents(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
@@ -1649,11 +1710,11 @@ impl Tickets {
                     return;
                 }
             };
-            for (epic, last_seq) in store.extents() {
+            for (epic, last_seq, holes) in store.extents_holed() {
                 if visible.as_ref().is_some_and(|v| !v.contains(&epic)) {
                     continue;
                 }
-                yield TicketsEvent::Extent { epic, last_seq };
+                yield TicketsEvent::Extent { epic, last_seq, holes };
             }
         }
     }
@@ -1680,41 +1741,7 @@ impl Tickets {
         )
     )]
     pub async fn counts(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<String>, keep: Option<String>, tz: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
-        stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            let filter = match caller.scoped(filter.as_deref()) {
-                Ok(v) => v,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            let clock = match clock_of(&caller, tz.as_deref()) {
-                Ok(c) => c,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            match filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())) {
-                Ok(lens) => {
-                    let lens = lens.with_clock(clock);
-                    let keep = kept(&store, &caller, keep.as_deref());
-                    for (epic, held) in store.counts_keeping(&lens, keep.as_deref()) {
-                        yield TicketsEvent::Count { epic, held };
-                    }
-                }
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
-            }
-        }
+        counts_stream(self.store.clone(), self.access.admit(auth, &reach), filter, keep, tz)
     }
 
     /// FILTER-4: the counts behind every menu (Linear's facets). For each
@@ -1740,47 +1767,7 @@ impl Tickets {
         )
     )]
     pub async fn facets(&self, auth: Option<&AuthContext>, reach: Reach, filter: Option<String>, base: Option<String>, tz: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
-        stream! {
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            let filter = match caller.scoped(filter.as_deref()) {
-                Ok(v) => v,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            let base = match caller.scoped(base.as_deref()) {
-                Ok(v) => v,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            let read = |text: Option<String>| -> Result<crate::filter::Filter, String> {
-                text.as_deref().map_or_else(|| Ok(Default::default()), |t| crate::filter::Filter::parse(t).map_err(|e| e.to_string()))
-            };
-            let answer = clock_of(&caller, tz.as_deref()).and_then(|clock| {
-                read(filter)
-                    .and_then(|f| Ok((f, read(base)?)))
-                    .and_then(|(f, b)| store.facets_at(&f, &b, &clock).map_err(|e| e.to_string()))
-            });
-            match answer {
-                Ok(facets) => {
-                    for (field, value, held) in facets {
-                        yield TicketsEvent::Facet { field, value, held };
-                    }
-                }
-                Err(message) => yield TicketsEvent::Error { message },
-            }
-        }
+        facets_stream(self.store.clone(), self.access.admit(auth, &reach), filter, base, tz)
     }
 
     /// FILTER-13: the nav under a filter — the rows the nav would show at an
@@ -2050,7 +2037,7 @@ impl Tickets {
                     }
                     let restorable = h.restorable.into_iter().filter(|t| sees_id(&store, reach.as_ref(), t)).collect();
                     let (status_since_unix, status_since_exact) = (h.since.map(|s| s.0), h.since.map(|s| s.1));
-                    yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable, status_since_unix, status_since_exact };
+                    yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable, status_since_unix, status_since_exact, deletions: h.deletions };
                 }
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
                 Err(e) => yield TicketsEvent::Error { message: e.to_string() },
@@ -2131,7 +2118,7 @@ impl Tickets {
     #[plexus_macros::method(
         group = "read",
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
+        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
         params(
             epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)",
             filter = "A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256",

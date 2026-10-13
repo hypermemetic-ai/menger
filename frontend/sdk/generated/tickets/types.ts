@@ -665,6 +665,29 @@ export interface TicketsEventUpdatedMany {
   unchanged: string[];
 }
 
+/** ACT-5: `delete`'s answer, and its write's event on `watch` — `ids` the
+tickets it removed, in the store's order (the selection and, with
+`children: delete`, every descendant), each one's tombstone beside it.
+`get` on a deleted id answers it too, for that one id. Before it on
+`watch`: each moved child's `parent_changed`, each unblocked ticket's
+`blockers_changed`, each surviving parent's `child_removed`, each
+blocker's `unlocks_removed`; after it the groups and placements that
+moved, and a filter's `left`. */
+export interface TicketsEventDeleted {
+  type: 'deleted';
+  ids: string[];
+  tombstones: Tombstone[];
+}
+
+/** ACT-5: `undelete`'s answer, and its write's event on `watch` — the
+tickets brought back (whole), in the store's order, with their
+children and blocks put back where nothing has moved them since. */
+export interface TicketsEventUndeleted {
+  type: 'undeleted';
+  ids: string[];
+  tickets: Ticket[];
+}
+
 /** AGS-19: the ticket `id` gained the child `added` — a child was born
 naming it as `parent`, or was moved under it by `set_parent`
 (yielded by `watch`). SCALE-4: the parent's id and its new
@@ -743,10 +766,15 @@ roll-up: unlike `Group::total` it counts only the
 shortcode's own tickets, and every shortcode that holds one has an
 extent whether or not the nav draws it a row. No watch event keeps
 it: `created` carries the newborn's `epic` and `seq`, which is its
-shortcode's new `last_seq`. */
+shortcode's new `last_seq`.
+ACT-5: and the sequences below `last_seq` the shortcode no longer
+holds — deleted tickets (whose numbers are never reused), or a hand
+edit's hole — so a client's arithmetic skips them: the shortcode holds
+`last_seq - holes.len()` tickets. Absent when it holds every one. */
 export interface TicketsEventExtent {
   type: 'extent';
   epic: string;
+  holes: number[];
   lastSeq: number;
 }
 
@@ -1017,12 +1045,17 @@ update or the log's beginning, whichever is earlier — `false`. */
 export interface TicketsEventHistoryEnd {
   type: 'history_end';
   beganUnix: number | null;
+  /** ACT-5: the deletes that touched this ticket — each tombstone whose
+delete moved it off its parent (`reparented`) or dropped its block
+on the deleted ticket (`unblocked`), oldest first: why its parent
+or its blockers moved. Absent when none did. */
+  deletions: Tombstone[];
   restorable: string[];
   statusSinceExact: boolean | null;
   statusSinceUnix: number | null;
 }
 
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
 
 export function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth { return e.type === 'health'; }
 export function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated { return e.type === 'created'; }
@@ -1041,6 +1074,8 @@ export function isTicketsEventBlockersChanged(e: TicketsEvent): e is TicketsEven
 export function isTicketsEventSeverityChanged(e: TicketsEvent): e is TicketsEventSeverityChanged { return e.type === 'severity_changed'; }
 export function isTicketsEventUpdated(e: TicketsEvent): e is TicketsEventUpdated { return e.type === 'updated'; }
 export function isTicketsEventUpdatedMany(e: TicketsEvent): e is TicketsEventUpdatedMany { return e.type === 'updated_many'; }
+export function isTicketsEventDeleted(e: TicketsEvent): e is TicketsEventDeleted { return e.type === 'deleted'; }
+export function isTicketsEventUndeleted(e: TicketsEvent): e is TicketsEventUndeleted { return e.type === 'undeleted'; }
 export function isTicketsEventChildrenChanged(e: TicketsEvent): e is TicketsEventChildrenChanged { return e.type === 'children_changed'; }
 export function isTicketsEventParentChanged(e: TicketsEvent): e is TicketsEventParentChanged { return e.type === 'parent_changed'; }
 export function isTicketsEventChildRemoved(e: TicketsEvent): e is TicketsEventChildRemoved { return e.type === 'child_removed'; }
@@ -1073,6 +1108,29 @@ export function isTicketsEventHit(e: TicketsEvent): e is TicketsEventHit { retur
 export function isTicketsEventSearched(e: TicketsEvent): e is TicketsEventSearched { return e.type === 'searched'; }
 export function isTicketsEventTransition(e: TicketsEvent): e is TicketsEventTransition { return e.type === 'transition'; }
 export function isTicketsEventHistoryEnd(e: TicketsEvent): e is TicketsEventHistoryEnd { return e.type === 'history_end'; }
+
+/** ACT-5: what a delete keeps of a ticket — its tombstone. The ticket is
+gone (off every read, its number never reused); this says which it was
+(`id`, `title`), who deleted it (`by`, the caller's principal; `name` their
+display name, when they have one), when (`at_unix`) and why (`message`).
+Its history stays in the log. Its body is kept until
+`restorable_until_unix` — 30 days — and `undelete` brings it back until
+then; after, the body is purged and the field is `null`. `parent` is
+where it hung; `reparented`, the children its delete moved to that parent
+(`children: reparent`); `unblocked`, the tickets whose block on it the
+delete dropped (`unblock`) — what `undelete` puts back. */
+export interface Tombstone {
+  atUnix: number;
+  by: string;
+  id: string;
+  message?: string | null;
+  name?: string | null;
+  parent?: string | null;
+  reparented?: string[];
+  restorableUntilUnix?: number | null;
+  title: string;
+  unblocked?: string[];
+}
 
 /** MENGER-13: one **transition** — a change of one ticket's status or kind,
 as the store keeps it, append-only: `id` (the log's own, from 1, in the

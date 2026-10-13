@@ -282,6 +282,11 @@ pub struct Moves {
 /// is sent `recount`s instead (FILTER-4: the broadcast's capacity).
 pub const RECOUNT_OVER: usize = 256;
 
+/// ACT-5: the cell a deleted ticket "joins" — a [`CellMove`]'s `to` for a
+/// ticket that is gone. No cell has it, so no filter admits it: a watch whose
+/// filter held the ticket says `left`.
+pub const GONE: u32 = u32::MAX;
+
 /// SCALE-32's shape: what one write does to the cells, worked out before it
 /// commits ([`Cells::moved`]), stored by its transaction ([`Move::store`])
 /// and taken by the cache after ([`Cells::take`]).
@@ -511,7 +516,17 @@ impl Cells {
     /// build, after a seed, and for `--verify-derived` to compare with. The
     /// rows arrive in the store's order, so each bitmap is built by pushing.
     pub(super) fn build(rows: Rows<'_>, unsatisfied: impl Fn(&str) -> u32, asking: impl Fn(&str) -> bool) -> Self {
+        Self::build_seeded(&[], rows, unsatisfied, asking)
+    }
+
+    /// ACT-5: [`Cells::build`] with `seed`'s cells interned first, in its
+    /// order — a delete's rebuild keeps every id the cache's table gave, so a
+    /// filter compiled against it still means what it meant.
+    pub(super) fn build_seeded(seed: &[Key], rows: Rows<'_>, unsatisfied: impl Fn(&str) -> u32, asking: impl Fn(&str) -> bool) -> Self {
         let mut c = Self::default();
+        for k in seed {
+            c.intern(*k);
+        }
         let mut here: Option<(String, Held)> = None;
         for t in rows.tickets() {
             let id = c.intern(Key::of(t, unsatisfied(&t.id), asking(&t.id)));

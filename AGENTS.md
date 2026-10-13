@@ -443,6 +443,21 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
   synapse -P 4455 menger tickets update_many --filter 'label stale and not category done' --status Canceled
   synapse -P 4455 menger tickets label --ids A-1,A-2 --add needs-you
   ```
+
+  **`tickets.delete`** (ACT-5, admin only) removes tickets for good —
+  `--ids` or `--filter`, all or none — refused while something points at
+  one (children, a ticket waiting on it, a shortcode it roots, a component
+  or theme it defines, a live input) unless told what moves: `--children
+  reparent|delete`, `--unblock true`. A tombstone and the history stay;
+  `get` answers `deleted`; the body is kept 30 days for `undelete --ids`;
+  the number is never reused. Prefer `Canceled` / `Superseded` for work
+  that is not done — delete is for a mistake, a duplicate, a test row:
+
+  ```sh
+  synapse -P 4455 menger tickets delete --ids MENGER-40 --message "filed twice"
+  synapse -P 4455 menger tickets delete --ids THEME-12 --children reparent
+  synapse -P 4455 menger tickets undelete --ids MENGER-40
+  ```
 - Architecture (owner-pinned): a service-wide in-memory cache
   (`src/store.rs`) is the ONLY interface the application has to tickets.
   Reads hit the cache, never storage; reads are async-safe (no lock

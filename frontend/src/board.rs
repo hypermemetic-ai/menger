@@ -89,9 +89,15 @@ pub(crate) const KEEP: usize = 1_000;
 
 /// The store's order as `extents` gives it: each shortcode's last sequence,
 /// in shortcode order, and how many rows come before each.
+///
+/// ACT-5: and the sequences each run no longer holds — deleted tickets,
+/// whose numbers are never reused (`extents`' `holes`) — which no row is:
+/// a run's row k is its k-th sequence that is not a hole.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Extents {
     runs: Vec<(String, u32)>,
+    /// Per run, its holes, ascending.
+    holes: Vec<Vec<u32>>,
     before: Vec<usize>,
     n: usize,
 }
@@ -100,8 +106,14 @@ impl Extents {
     /// From `extents`' answer. A shortcode with no ticket has no rows; the
     /// order is the store's (`String`'s, the `(epic, seq)` key's first half),
     /// which the server already sends — sorted here so a lookup can rely on it.
-    pub(crate) fn new(mut runs: Vec<(String, u32)>) -> Self {
-        runs.retain(|(_, last)| *last > 0);
+    #[cfg(test)]
+    pub(crate) fn new(runs: Vec<(String, u32)>) -> Self {
+        Self::holed(runs.into_iter().map(|(e, l)| (e, l, Vec::new())).collect())
+    }
+
+    /// ACT-5: [`Extents::new`] with each run's holes.
+    pub(crate) fn holed(mut runs: Vec<(String, u32, Vec<u32>)>) -> Self {
+        runs.retain(|(_, last, _)| *last > 0);
         runs.sort_by(|a, b| a.0.cmp(&b.0));
         runs.dedup_by(|b, a| {
             let same = a.0 == b.0;
@@ -110,7 +122,18 @@ impl Extents {
             }
             same
         });
-        let mut e = Self { runs, before: Vec::new(), n: 0 };
+        let mut holes = Vec::with_capacity(runs.len());
+        let runs = runs
+            .into_iter()
+            .map(|(e, last, mut h)| {
+                h.retain(|s| *s >= 1 && *s <= last);
+                h.sort_unstable();
+                h.dedup();
+                holes.push(h);
+                (e, last)
+            })
+            .collect();
+        let mut e = Self { runs, holes, before: Vec::new(), n: 0 };
         e.sum();
         e
     }
@@ -120,13 +143,29 @@ impl Extents {
         self.before = self
             .runs
             .iter()
-            .map(|(_, last)| {
+            .zip(&self.holes)
+            .map(|((_, last), holes)| {
                 let b = acc;
-                acc += *last as usize;
+                acc += *last as usize - holes.len();
                 b
             })
             .collect();
         self.n = acc;
+    }
+
+    /// ACT-5: a ticket deleted — `E-seq` is a hole now, and every position
+    /// after it one less. True when that moved anything.
+    pub(crate) fn gone(&mut self, epic: &str, seq: u32) -> bool {
+        let Ok(i) = self.runs.binary_search_by(|(e, _)| e.as_str().cmp(epic)) else { return false };
+        if seq == 0 || seq > self.runs[i].1 {
+            return false;
+        }
+        match self.holes[i].binary_search(&seq) {
+            Ok(_) => return false,
+            Err(at) => self.holes[i].insert(at, seq),
+        }
+        self.sum();
+        true
     }
 
     /// Every row of the board: the store's ticket count.
@@ -138,7 +177,12 @@ impl Extents {
     /// extents do not reach.
     pub(crate) fn pos(&self, epic: &str, seq: u32) -> Option<usize> {
         let i = self.runs.binary_search_by(|(e, _)| e.as_str().cmp(epic)).ok()?;
-        (seq >= 1 && seq <= self.runs[i].1).then(|| self.before[i] + seq as usize - 1)
+        let holes = &self.holes[i];
+        let below = match holes.binary_search(&seq) {
+            Ok(_) => return None,
+            Err(below) => below,
+        };
+        (seq >= 1 && seq <= self.runs[i].1).then(|| self.before[i] + seq as usize - 1 - below)
     }
 
     /// Where the ticket `id` sits, by its own key (`{epic}-{seq}`).
@@ -158,7 +202,16 @@ impl Extents {
             return None;
         }
         let i = self.before.partition_point(|b| *b <= p) - 1;
-        Some((self.runs[i].0.as_str(), (p - self.before[i]) as u32 + 1))
+        // ACT-5: the run's (p − before)-th sequence that is not a hole.
+        let mut seq = (p - self.before[i]) as u32 + 1;
+        for h in &self.holes[i] {
+            if *h <= seq {
+                seq += 1;
+            } else {
+                break;
+            }
+        }
+        Some((self.runs[i].0.as_str(), seq))
     }
 
     /// The id of row `p`.
@@ -175,9 +228,18 @@ impl Extents {
             return false;
         }
         match self.runs.binary_search_by(|(e, _)| e.as_str().cmp(epic)) {
-            Ok(i) if seq <= self.runs[i].1 => return false,
+            // ACT-5: a hole filled — an undeleted ticket.
+            Ok(i) if seq <= self.runs[i].1 => match self.holes[i].binary_search(&seq) {
+                Ok(at) => {
+                    self.holes[i].remove(at);
+                }
+                Err(_) => return false,
+            },
             Ok(i) => self.runs[i].1 = seq,
-            Err(i) => self.runs.insert(i, (epic.to_string(), seq)),
+            Err(i) => {
+                self.runs.insert(i, (epic.to_string(), seq));
+                self.holes.insert(i, Vec::new());
+            }
         }
         self.sum();
         true
@@ -1014,8 +1076,8 @@ impl Board {
     /// `extents` answered: the store's order, as it is now. Holes are asked
     /// about again; a row the extents no longer reach (a reconnect to another
     /// store) is given back.
-    pub(crate) fn set_extents(self, runs: Vec<(String, u32)>) {
-        let ext = Extents::new(runs);
+    pub(crate) fn set_extents(self, runs: Vec<(String, u32, Vec<u32>)>) {
+        let ext = Extents::holed(runs);
         let gone: Vec<String> = self.held.with_untracked(|h| {
             h.rows.iter().filter(|((e, s), _)| ext.pos(e, *s).is_none()).map(|(_, (id, _))| id.clone()).collect()
         });
@@ -1060,6 +1122,28 @@ impl Board {
         } else {
             cache::put(t.clone());
         }
+    }
+
+    /// ACT-5: `deleted`: each ticket is a hole in the extents now — the
+    /// count, the scrollbar and every position after it move — and its row
+    /// is given back. (Under a filter, the membership watch's `left` says it.)
+    pub(crate) fn deleted(self, ids: &[String]) {
+        let keys: Vec<(String, u32)> = ids.iter().filter_map(|id| crate::kids::key(id).map(|(e, s)| (e.to_string(), s))).collect();
+        self.ext.update(|e| {
+            if let Some(e) = e {
+                for (epic, seq) in &keys {
+                    e.gone(epic, *seq);
+                }
+            }
+        });
+        let held: Vec<String> = self.held.with_untracked(|h| keys.iter().filter_map(|k| h.rows.get(k).map(|(id, _)| id.clone())).collect());
+        self.held.update(|h| {
+            for k in &keys {
+                h.rows.remove(k);
+                h.absent.remove(k);
+            }
+        });
+        self.holder.with_value(|holder| held.iter().for_each(|id| holder.release(id)));
     }
 
     /// A page asked for after `after` came back: hold its rows (an update for
@@ -1843,6 +1927,31 @@ mod tests {
             h.rows.insert((t.epic.clone(), t.seq), (t.id.clone(), ArcRwSignal::new(t)));
         }
         h
+    }
+
+    /// ACT-5: a deleted ticket is a hole — no row, every row after it one
+    /// back, the count one less; a hole the extents name, the same; an
+    /// undeleted one fills it again; a shortcode whose every ticket went has
+    /// no row and keeps its numbers.
+    #[test]
+    fn a_hole_is_no_row_and_the_rows_close_over_it() {
+        let mut e = Extents::holed(vec![("AGS".into(), 5, vec![2]), ("GONE".into(), 2, vec![1, 2]), ("MFE".into(), 3, vec![])]);
+        assert_eq!(e.n(), 7);
+        let ids: Vec<String> = (0..e.n()).filter_map(|p| e.id_at(p)).collect();
+        assert_eq!(ids, ["AGS-1", "AGS-3", "AGS-4", "AGS-5", "MFE-1", "MFE-2", "MFE-3"]);
+        for (p, id) in ids.iter().enumerate() {
+            assert_eq!(e.pos_of(id), Some(p), "{id}");
+        }
+        assert_eq!(e.pos("AGS", 2), None, "a hole is no row");
+        assert!(e.gone("AGS", 4));
+        assert!(!e.gone("AGS", 4), "gone already");
+        assert_eq!(e.n(), 6);
+        assert_eq!(e.pos_of("AGS-5"), Some(2));
+        assert_eq!(e.pos_of("MFE-1"), Some(3));
+        assert!(e.born("AGS", 2), "undeleted: the hole filled");
+        assert_eq!((e.n(), e.pos_of("AGS-2"), e.pos_of("AGS-3")), (7, Some(1), Some(2)));
+        assert!(e.born("GONE", 3), "a new ticket past the deleted ones");
+        assert_eq!((e.pos_of("GONE-3"), e.pos_of("MFE-1")), (Some(4), Some(5)));
     }
 
     /// SCALE-26: row k of the board is `E-j` by the extents alone, and back —

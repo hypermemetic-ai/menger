@@ -141,6 +141,15 @@
         "severity",
         "title"
       ],
+      "delete": [
+        "children",
+        "filter",
+        "ids",
+        "max",
+        "message",
+        "tz",
+        "unblock"
+      ],
       "extents": [],
       "facets": [
         "base",
@@ -244,6 +253,9 @@
         "matches_only",
         "parent",
         "tz"
+      ],
+      "undelete": [
+        "ids"
       ],
       "unlink_commits": [
         "commits",

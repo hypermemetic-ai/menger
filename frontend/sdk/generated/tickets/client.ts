@@ -23,7 +23,9 @@ export interface TicketsClient {
   counts(filter?: string | null, keep?: string | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
   /** Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc */
   create(epic: string, title: string, blockedBy?: string[] | null, body?: string | null, kind?: string | null, parent?: string | null, path?: string | null, severity?: string | null): AsyncGenerator<TicketsEvent>;
-  /** Each shortcode's last sequence, in shortcode order — where each shortcode ends in the store's order */
+  /** Delete tickets for good (admin): refused while children, blockers, a shortcode, a component, a theme or a live input point at one, unless children reparent|delete and unblock say what moves; a tombstone kept (get answers deleted), the body 30 days for undelete; yields deleted { ids, tombstones } */
+  delete(children?: string | null, filter?: string | null, ids?: string[] | null, max?: number | null, message?: string | null, tz?: string | null, unblock?: boolean | null): AsyncGenerator<TicketsEvent>;
+  /** Each shortcode's last sequence (a deleted ticket's too: numbers are never reused) and the holes below it, in shortcode order — where each shortcode ends in the store's order */
   extents(): AsyncGenerator<TicketsEvent>;
   /** Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, menger doc, in), the matches of base and filter without filter's own groups for that field, by value */
   facets(base?: string | null, filter?: string | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
@@ -63,13 +65,15 @@ export interface TicketsClient {
   setStatus(id: string, status: string, message?: string | null, restoreChildren?: boolean | null, source?: string | null): AsyncGenerator<TicketsEvent>;
   /** The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page; matches_only: the matches nearest below instead, then the hosted shortcodes drawn there */
   tree(filter: string, after?: string | null, epic?: string | null, keep?: string | null, limit?: number | null, matchesOnly?: boolean | null, parent?: string | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
+  /** Bring deleted tickets back (admin) within 30 days of the delete, whole, children and blocks put back; yields undeleted { ids, tickets } */
+  undelete(ids: string[]): AsyncGenerator<TicketsEvent>;
   /** Unlink commits from a ticket; yields commits_unlinked { ticket, removed } */
   unlinkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
   /** Change any part of a ticket in one write — title, body, kind, status, parent, severity, blockers (block / unblock); all lands or none does; yields updated { ticket, changed } */
   update(id: string, block?: string[] | null, body?: string | null, kind?: string | null, message?: string | null, parent?: string | null, severity?: string | null, source?: string | null, status?: string | null, title?: string | null, unblock?: string[] | null): AsyncGenerator<TicketsEvent>;
   /** The same update to many tickets in one write — kind, status, parent, severity, blockers, labels; by ids or a filter; all lands or none does; yields updated_many { ids, changed, tickets, unchanged } */
   updateMany(block?: string[] | null, filter?: string | null, ids?: string[] | null, kind?: string | null, label?: string[] | null, max?: number | null, message?: string | null, parent?: string | null, severity?: string | null, source?: string | null, status?: string | null, tz?: string | null, unblock?: string[] | null, unlabel?: string[] | null): AsyncGenerator<TicketsEvent>;
-  /** Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
+  /** Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
   watch(epic?: string | null, filter?: string | null, membership?: boolean | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
   /** The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts */
   waves(epics: string[], kinds?: string[] | null): AsyncGenerator<TicketsEvent>;
@@ -121,6 +125,11 @@ class TicketsClientImpl implements TicketsClient {
 
   async *create(epic: string, title: string, blockedBy?: string[] | null, body?: string | null, kind?: string | null, parent?: string | null, path?: string | null, severity?: string | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.create', { blocked_by: blockedBy, body, epic, kind, parent, path, severity, title });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *delete(children?: string | null, filter?: string | null, ids?: string[] | null, max?: number | null, message?: string | null, tz?: string | null, unblock?: boolean | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.delete', { children, filter, ids, max, message, tz, unblock });
     yield* extractData<TicketsEvent>(stream);
   }
 
@@ -221,6 +230,11 @@ class TicketsClientImpl implements TicketsClient {
 
   async *tree(filter: string, after?: string | null, epic?: string | null, keep?: string | null, limit?: number | null, matchesOnly?: boolean | null, parent?: string | null, tz?: string | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.tree', { after, epic, filter, keep, limit, matches_only: matchesOnly, parent, tz });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *undelete(ids: string[]): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.undelete', { ids });
     yield* extractData<TicketsEvent>(stream);
   }
 

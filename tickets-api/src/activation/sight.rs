@@ -198,6 +198,20 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
             return (!kept.is_empty() || !tickets.is_empty())
                 .then(|| TicketsEvent::UpdatedMany { ids: kept, changed: changed.clone(), tickets, unchanged });
         }
+        // ACT-5: a deleted ticket is no member of any reach any more — its
+        // shortcode's is the reach's word; a ticket brought back, its own.
+        TicketsEvent::Deleted { ids, tombstones } => {
+            let held: Vec<String> = store.counts(reach).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect();
+            let seen = |id: &str| id.rsplit_once('-').is_some_and(|(e, _)| held.iter().any(|h| h == e));
+            let ids: Vec<String> = ids.iter().filter(|id| seen(id)).cloned().collect();
+            let tombstones = tombstones.iter().filter(|t| seen(&t.id)).cloned().collect();
+            return (!ids.is_empty()).then_some(TicketsEvent::Deleted { ids, tombstones });
+        }
+        TicketsEvent::Undeleted { ids, tickets } => {
+            let ids: Vec<String> = ids.iter().filter(|id| sees(id)).cloned().collect();
+            let tickets = tickets.iter().filter(|t| sees(&t.id)).cloned().collect();
+            return (!ids.is_empty()).then_some(TicketsEvent::Undeleted { ids, tickets });
+        }
         TicketsEvent::Hit { summary, .. } => Some(summary.id.clone()),
         TicketsEvent::DanglingBlocker { id } | TicketsEvent::Member { id, .. } | TicketsEvent::NotFound { id } => Some(id.clone()),
         TicketsEvent::Extent { epic, .. } | TicketsEvent::Count { epic, .. } | TicketsEvent::Recount { epic, .. } => {

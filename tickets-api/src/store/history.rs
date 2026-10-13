@@ -681,9 +681,15 @@ pub(crate) fn load<'r>(
     let started = std::time::Instant::now();
     let mut log = Log::began_at(began(conn)?);
     let mut stray = 0usize;
+    // ACT-5: a deleted ticket's transitions are kept, placed by its id.
+    let deleted = super::delete::deleted_ids(conn)?;
+    let place = |id: &str| -> Option<OrderKey> {
+        let (epic, seq) = id.rsplit_once('-')?;
+        deleted.contains(id).then(|| Some(OrderKey { epic: epic.to_string(), seq: seq.parse().ok()? })).flatten()
+    };
     for t in read_all(conn)? {
-        match at.get(&t.ticket) {
-            Some(key) => log.append(&t, key),
+        match at.get(&t.ticket).cloned().or_else(|| place(&t.ticket)) {
+            Some(key) => log.append(&t, &key),
             None => stray += 1,
         }
     }
@@ -714,6 +720,7 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
         return Ok(None);
     }
     let all = read_all(conn)?;
+    let deleted = super::delete::deleted_ids(conn)?;
     let mut out = Vec::new();
     let mut ids: HashMap<u64, &Transition> = HashMap::new();
     let mut last: HashMap<(&str, TransitionField), &Transition> = HashMap::new();
@@ -723,11 +730,11 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
             out.push(format!("transition {}: ids out of order (after {previous_id})", t.id));
         }
         previous_id = t.id;
-        let Some(row) = cache.get(&t.ticket) else {
+        // ACT-5: a deleted ticket's transitions stay, with its tombstone.
+        if cache.get(&t.ticket).is_none() && !deleted.contains(&t.ticket) {
             out.push(format!("transition {}: names {}, which is no ticket", t.id, t.ticket));
             continue;
-        };
-        let _ = row;
+        }
         let parses = match t.field {
             TransitionField::Status => {
                 t.to.parse::<Status>().is_ok() && t.from.as_deref().is_none_or(|f| f.parse::<Status>().is_ok())
