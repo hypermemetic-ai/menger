@@ -699,11 +699,13 @@ impl FromStr for Filter {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 30] = [
+const NAMES: [&str; 31] = [
     "has commits",
     "menger doc",
     "discussion",
     "unattested",
+    // DEPLOY-11: where a ticket's work runs.
+    "deployed",
     "category",
     "severity",
     "past cap",
@@ -742,7 +744,7 @@ const NESTED: &str = "groups do not nest: parentheses hold predicates, not group
 const LIST_NESTED: &str = "a list `field in (…)` is a group of its own, never inside parentheses or `or`";
 const NOT_UNDERSTOOD: &str = "not understood: a predicate is `status`, `category`, `kind`, `severity`, `blocked`, \
                               `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under`, `text`, \
-                              `entered`, `left`, `changed`, `by`, `created` or `for`, or a quoted text";
+                              `entered`, `left`, `changed`, `by`, `created`, `for` or `deployed`, or a quoted text";
 const QUOTES: &str = "a quoted value is quoted whole — one `\"` before it and one after, none inside";
 
 /// `raw` cut at `sep` (ASCII case-insensitive) where it stands outside
@@ -997,6 +999,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "created" => read_history(name, tail).map(Field::History),
         // FILTER-30: the last touch, over its own index.
         "touched" => read_history(name, tail).map(Field::History),
+        // DEPLOY-11: over the deployments' kept cells.
+        "deployed" => read_history(name, tail).map(Field::History),
         "for" => read_held("", &rest[name.len()..]).map(Field::History),
         "written" | "age" => Err(format!(
             "`{name}` is refused: it needs an index of its own (FILTER-3 §6.9, open question 6)"
@@ -1143,6 +1147,11 @@ pub enum Event {
     /// comment left on it, or an answer to (or a clear of) one of its
     /// inputs. A roll-up or a count moving does not touch it.
     Touched,
+    /// DEPLOY-11: `deployed <env>` — the ticket's work runs in an
+    /// environment of that name (`prod`, of any project; `menger/prod`, of
+    /// one), since a moment in the window when one is given. Answered from
+    /// the deployments' kept cells, never from the transition log.
+    Deployed(String),
 }
 
 impl Event {
@@ -1156,6 +1165,7 @@ impl Event {
             Event::Created => "created",
             Event::Touched => "touched",
             Event::Held(_) => "for",
+            Event::Deployed(_) => "deployed",
         }
     }
 }
@@ -1461,6 +1471,7 @@ impl History {
             Event::Changed => "changed".to_string(),
             Event::Created => "created".to_string(),
             Event::Touched => "touched".to_string(),
+            Event::Deployed(env) => format!("deployed {}", quoted(env)),
             Event::Held(h) => {
                 let of = |name: &str, vs: Vec<String>| match vs.as_slice() {
                     [one] => format!("{name} {one} "),
@@ -1515,7 +1526,7 @@ fn words(s: &str) -> Result<Vec<String>, String> {
 }
 
 const HISTORY_HELP: &str = "a history predicate is `entered <status>`, `left <status>`, `changed`, `by <who>`, \
-                            `created` or `touched`, then a window — `within 12h` (m, h, d, w, mo), `today`, `yesterday`, `this \
+                            `created`, `touched` or `deployed <environment>`, then a window — `within 12h` (m, h, d, w, mo), `today`, `yesterday`, `this \
                             week`, `since 2026-10-10`, `before 2w ago`, `between … and …` — and (not for `created` or `touched`) \
                             `by me`, `by system` or `by <principal>`; or `[status S | category C] for over|under 2w`";
 
@@ -1547,6 +1558,11 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
         "changed" => (Event::Changed, None),
         "created" => (Event::Created, None),
         "touched" => (Event::Touched, None),
+        "deployed" => {
+            let env = w.first().ok_or("`deployed` names an environment, as `deployed prod` or `deployed menger/prod`")?;
+            i = 1;
+            (Event::Deployed(deployed_env(env)?), None)
+        }
         _ => {
             let who = w.first().ok_or("`by` names who: `me`, `system` or a principal")?;
             i = 1;
@@ -1564,6 +1580,9 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
         if event == Event::Touched {
             return Err("`touched` takes no `by`: a ticket's last touch is kept without who made it".into());
         }
+        if matches!(event, Event::Deployed(_)) {
+            return Err("`deployed` takes no `by`: a deployment is a CI's, not a person's".into());
+        }
         let who = w.get(i + 1).ok_or("`by` names who: `me`, `system` or a principal")?;
         by = Some(Who::read(who));
         i += 2;
@@ -1572,6 +1591,12 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
         return Err(format!("`{extra}` is not understood here — {HISTORY_HELP}"));
     }
     Ok(History { event, window, by })
+}
+
+/// DEPLOY-11: `deployed`'s environment — a name (`prod`, `review/pr-412`),
+/// or a project's (`menger/prod`) — lower case, or why not.
+fn deployed_env(raw: &str) -> Result<String, String> {
+    crate::deployments::environment_of(raw)
 }
 
 /// A length at `w[*i]` — `2w`, `2 w`, `2 weeks`, `1mo` — as `(n, unit)`.

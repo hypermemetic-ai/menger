@@ -426,6 +426,7 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             indexed,
             transitions,
             tombstones,
+            deployments,
         }) => {
             // SEARCH-2: and the search index, when the file has one.
             let search = match indexed {
@@ -455,6 +456,13 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             // ACT-5: the tombstones, none of them a ticket.
             if let Some(n) = tombstones {
                 println!("{}: {n} tombstone(s) of deleted tickets, none of them a ticket still (ACT-5)", db_path.display());
+            }
+            // DEPLOY-11: the environments and the deployed cells.
+            if let Some(n) = deployments {
+                println!(
+                    "{}: {n} deployment(s): every environment is what its deployments fold to, and every deployed cell what a scan of the tickets against them gives (DEPLOY-11)",
+                    db_path.display()
+                );
             }
             0
         }

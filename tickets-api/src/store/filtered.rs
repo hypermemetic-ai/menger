@@ -89,6 +89,12 @@ impl Lens {
         self.history.iter().any(|h| h.event == crate::filter::Event::Touched)
     }
 
+    /// DEPLOY-11: whether it asks `deployed` — what a recorded deployment
+    /// can move.
+    pub fn asks_deployed(&self) -> bool {
+        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Deployed(_)))
+    }
+
     /// MENGER-13: whether what it admits moves as time passes — a history
     /// predicate whose window is relative (`within`, `today`, `yesterday`,
     /// `this week`): a `watch` reads it again on a clock.
@@ -615,7 +621,7 @@ impl Store {
     /// none will move.
     pub fn next_boundary(&self, lens: &Lens) -> Option<i64> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        lens.history().iter().filter_map(|h| cache.log.next_boundary(h, lens.clock())).min()
+        lens.history().iter().filter_map(|h| cache.next_boundary(h, lens.clock())).min()
     }
 
     /// MENGER-13: what time did to a `watch { filter }` whose filter has a

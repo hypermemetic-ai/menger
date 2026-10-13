@@ -61,6 +61,9 @@ pub(crate) enum Kind {
     Changed,
     /// FILTER-30: `touched` — built negated: hasn't changed.
     Untouched,
+    /// DEPLOY-11: `deployed <env>` — read and shown, not in the menu (its
+    /// pill and menu are DEPLOY-13's).
+    Deployed,
 }
 
 impl Kind {
@@ -75,6 +78,7 @@ impl Kind {
             Event::Held(_) => Kind::Held,
             Event::Changed => Kind::Changed,
             Event::Touched => Kind::Untouched,
+            Event::Deployed(_) => Kind::Deployed,
         }
     }
 
@@ -87,6 +91,7 @@ impl Kind {
             Kind::Held => "In status for",
             Kind::Changed => "Changed",
             Kind::Untouched => "Hasn't changed",
+            Kind::Deployed => "Deployed",
         }
     }
 
@@ -99,6 +104,7 @@ impl Kind {
             Kind::Held => "held",
             Kind::Changed => "changed",
             Kind::Untouched => "untouched",
+            Kind::Deployed => "deployed",
         }
     }
 
@@ -212,6 +218,8 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
         Kind::Changed => Event::Changed,
         Kind::Held => Event::Held(Held { of: HeldOf::Any, over: true, n: 1, unit: Unit::Week }),
         Kind::Untouched => Event::Touched,
+        // DEPLOY-11: names an environment, which no menu row offers yet.
+        Kind::Deployed => return None,
     };
     let window = match kind {
         Kind::Created | Kind::Untouched => Some(window.unwrap_or_else(|| default_window(&event))),
@@ -428,6 +436,7 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
             out.push((Some(Part::Status), s.as_str().into()));
         }
         Event::Changed => out.push((None, "changed".into())),
+        Event::Deployed(env) => out.push((None, format!("deployed to {env}"))),
         Event::Held(h) => {
             out.push((Some(Part::Status), scope_words(&h.of)));
             out.push((Some(Part::Length), held_words(h)));

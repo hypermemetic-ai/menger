@@ -11,6 +11,7 @@ export * from './transport';
 
 // Namespace modules (types + clients)
 export * as Comments from './comments';
+export * as Deployments from './deployments';
 export * as Members from './members';
 export * as Notes from './notes';
 export * as Session from './session';

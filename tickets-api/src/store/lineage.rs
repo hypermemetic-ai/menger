@@ -263,7 +263,7 @@ impl<'c> Compiled<'c> {
         let hist = lens.has_history().then(|| {
             let clock = lens.clock();
             let keys: Vec<String> = lens.history().iter().map(crate::filter::History::format).collect();
-            let sets: Vec<BTreeMap<String, RoaringBitmap>> = lens.history().iter().map(|h| cache.log.holds(h, clock)).collect();
+            let sets: Vec<BTreeMap<String, RoaringBitmap>> = lens.history().iter().map(|h| cache.holds(h, clock)).collect();
             let mut any: BTreeMap<String, RoaringBitmap> = BTreeMap::new();
             for s in &sets {
                 for (e, b) in s {
@@ -1559,6 +1559,20 @@ pub(super) fn under_before_with(unders: &UnderWatches, cache: &Cache, touched: i
 /// a write).
 pub(super) fn touch_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&str, u32)]) -> Option<UnderBefore> {
     let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_touched()).collect();
+    before_of(watches, cache, || {
+        let mut t = Touched::default();
+        for (e, s) in keys {
+            t.ticket(e, *s);
+        }
+        t
+    })
+}
+
+/// DEPLOY-11: what a recorded deployment does to the open watches whose
+/// filter asks `deployed`: the tickets at `keys` (each whose cell it moves),
+/// before it. `None` when no such watch is open.
+pub(super) fn deployed_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&str, u32)]) -> Option<UnderBefore> {
+    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_deployed()).collect();
     before_of(watches, cache, || {
         let mut t = Touched::default();
         for (e, s) in keys {
