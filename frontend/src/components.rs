@@ -237,6 +237,54 @@ pub(crate) fn ComponentsPage(only: Option<String>) -> impl IntoView {
                 }
                 .into_any(),
             }}
+            {only.is_none().then(app_components)}
+        </section>
+    }
+}
+
+/// FILTER-27: the app's own components — not a ticket's (the registry
+/// above), but the app's, for any of its forms: what each is, live.
+fn app_components() -> impl IntoView {
+    let day = RwSignal::new(None::<crate::calendar::Day>);
+    let start = RwSignal::new(None::<crate::calendar::Day>);
+    let end = RwSignal::new(None::<crate::calendar::Day>);
+    let time = RwSignal::new((9u8, 30u8));
+    let h12 = crate::calendar::reader_h12();
+    let said = move || {
+        let range = match (start.get(), end.get()) {
+            (Some(a), Some(b)) => format!("{} – {}", a.iso(), b.iso()),
+            (Some(a), None) => format!("{} – …", a.iso()),
+            _ => "no range".into(),
+        };
+        let (h, m) = time.get();
+        format!(
+            "day: {} · range: {range} · time: {}",
+            day.get().map_or_else(|| "none".to_string(), |d| d.iso()),
+            crate::when::clock_words(h, m, h12)
+        )
+    };
+    view! {
+        <section class="app-comps" id="app-components">
+            <h3>"The app's own"</h3>
+            <p class="none">
+                "Drawn by the app for its own forms (the filter menu's When window editor today), themed from the tokens like everything else — not the browser's date input, whose popup no theme reaches."
+            </p>
+            <dl class="app-comp-list">
+                <dt><code>"Calendar"</code>" — src/calendar.rs"</dt>
+                <dd>
+                    "A month grid, Monday first: ‹ › step the months, the year opens a menu of years, today is marked. One day, or a range (the first click its start, the second its end; the days between tinted). Keyboard: the ARIA grid pattern — ← → a day, ↑ ↓ a week, PageUp / PageDown a month (Shift: a year), Home / End the week's ends, Enter or Space chooses."
+                </dd>
+                <dt><code>"TimeSelect"</code>" — src/calendar.rs"</dt>
+                <dd>"Hours and minutes, typed or stepped with ↑ ↓ (Shift: ten minutes), in the reader's 12- or 24-hour clock."</dd>
+            </dl>
+            <div class="wform app-comp-demo">
+                <div class="wrow">
+                    <crate::calendar::Calendar start=day label="a day" />
+                    <crate::calendar::Calendar start end=end label="a range" />
+                </div>
+                <div class="wrow"><crate::calendar::TimeSelect value=time h12 label="a time" /></div>
+                <p class="whint" aria-live="polite">{said}</p>
+            </div>
         </section>
     }
 }

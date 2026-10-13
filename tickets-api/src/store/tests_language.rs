@@ -362,8 +362,8 @@ fn text_is_refused_naming_where_it_lives_and_under_is_answered() {
     assert!(store.facets(&Filter::default(), &under).is_ok(), "the base too");
     let text = Filter::parse("text \"x\"").unwrap();
     assert!(store.facets(&text, &Filter::default()).is_err());
-    let bad = Lens::parse("tag x and ready and created today and nonsense").unwrap_err().to_string();
-    for chunk in ["`tag x`", "`created today`", "`nonsense`"] {
+    let bad = Lens::parse("tag x and ready and written today and nonsense").unwrap_err().to_string();
+    for chunk in ["`tag x`", "`written today`", "`nonsense`"] {
         assert!(bad.contains(chunk), "{bad}");
     }
     assert!(!bad.contains("`ready` —"), "a chunk it took is not named: {bad}");

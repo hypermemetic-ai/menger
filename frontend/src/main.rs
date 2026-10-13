@@ -240,6 +240,7 @@ mod anchor;
 mod annotate;
 mod board;
 mod bridge;
+mod calendar;
 mod cache;
 mod card;
 mod cite;
@@ -283,6 +284,8 @@ mod theme;
 #[cfg(test)]
 mod tokens_lint;
 mod waves;
+mod when;
+mod when_view;
 
 use std::collections::HashSet;
 

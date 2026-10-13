@@ -60,11 +60,13 @@ pub(super) fn walk_events(store: Arc<Store>, mut walk: Walk) -> impl Stream<Item
     }
 }
 
-/// MENGER-13: how often a `watch` whose filter has a relative window (`within
-/// 1h`, `today`, …) reads it again, so a ticket that ages out of the window
-/// is said `left` within this long — shorter than the shortest window
-/// (`within 1m`).
-pub(super) const AGE_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
+/// MENGER-13, FILTER-27: a `watch` whose filter moves with the clock
+/// (`within 1h`, `today`, `for over 2w`, `before 3d ago`) sleeps until the
+/// next moment time moves it ([`crate::store::Watcher::wait`]: a ticket
+/// crossing a length, a transition leaving a window, a new day) — one timer
+/// per watch — and reads it again then; at most this long, when no moment
+/// is in sight.
+pub(super) const AGE_AT_MOST: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// SCALE-6: how many rows `find` answers when no `limit` is asked for —
 /// the 50 the jump palette shows (AGS-18), so a keystroke's answer is a

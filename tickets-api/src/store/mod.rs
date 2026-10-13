@@ -1994,6 +1994,8 @@ impl Cache {
             started.elapsed().as_secs_f64() * 1000.0,
             children.parents()
         );
+        let mut log = history::Log::began_at(None);
+        log.time_all(order.values());
         Self {
             order,
             at,
@@ -2018,7 +2020,7 @@ impl Cache {
             // AUTH-7: and the edited roles.
             roles: roles::RoleEdits::new(),
             // MENGER-13: and the transition log.
-            log: history::Log::began_at(None),
+            log,
             themes: themes::Themes::default(),
             written: 0,
         }
@@ -2069,6 +2071,8 @@ impl Cache {
         cells: cells::Cells,
     ) -> Self {
         let (order, at, paths) = ordered(loaded);
+        let mut log = history::Log::began_at(None);
+        log.time_all(order.values());
         Self {
             order,
             at,
@@ -2092,7 +2096,7 @@ impl Cache {
             // AUTH-7: and the edited roles.
             roles: roles::RoleEdits::new(),
             // MENGER-13: and the transition log.
-            log: history::Log::began_at(None),
+            log,
             themes: themes::Themes::default(),
             written: 0,
         }
@@ -2179,6 +2183,7 @@ impl Cache {
     /// cannot drift apart. Rows only: the roll-ups move through the
     /// mutation-shaped methods below, which call this.
     fn insert(&mut self, ticket: Row) {
+        self.log.retime(&ticket);
         let key = OrderKey::of(&ticket);
         self.at.insert(ticket.id.clone(), key.clone());
         self.order.insert(key, ticket);
@@ -2924,7 +2929,7 @@ impl Store {
         // AUTH-7: the edited roles, as stored.
         cache.roles = roles::load(conn)?;
         // MENGER-13: the transition log and its kept indexes.
-        cache.log = history::load(conn, &cache.at)?;
+        cache.log = history::load(conn, &cache.at, cache.order.values())?;
         // THEME-8: the themes and settings, as stored.
         themes::load(conn, &mut cache.themes)?;
         Ok(cache)
@@ -5610,6 +5615,8 @@ pub use roles::RoleEdits;
 /// filter is answered from.
 mod history;
 pub use history::{zone, Act, Clock};
+/// FILTER-27: each ticket's birth and status-since, kept beside the log.
+mod times;
 /// MENGER-13: cancellation cascades and their undoing — one batch write.
 mod cascade;
 /// MENGER-30: the rules a write after birth is refused by, one place each.
@@ -5711,6 +5718,8 @@ mod tests_themes;
 /// two worker states are not (ready, done, a satisfied blocker).
 #[cfg(test)]
 mod tests_worker_states;
+#[cfg(test)]
+mod tests_times;
 
 /// MNG-16: `amend` — every row of its table, byte-exact bodies through the
 /// file, and nothing else about the ticket moving.

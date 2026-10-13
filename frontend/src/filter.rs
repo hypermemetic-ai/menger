@@ -83,9 +83,10 @@ pub(crate) enum Cat {
     /// MENGER-12: the ticket's labels — `label <name>`; its values are the
     /// labels `facets` counts (and the clause's, and `needs-you`).
     Label,
-    /// MENGER-13: changed recently — `changed within 1h`, `changed today`, …
-    /// (a preset window over the transition log; uncounted).
-    Changed,
+    /// FILTER-27: when — created, moved into or out of a status, held in it
+    /// for a length, changed (MENGER-13's Changed recently folded in): each
+    /// clause its own pill ([`Pill::Time`], src/when.rs; uncounted).
+    When,
     Wave,
     Readiness,
     OffBoard,
@@ -120,10 +121,6 @@ const STATUSES: [&str; 11] = ["Coding", "In Review", "Ready", "Pending", "Blocke
 /// Severity's values — the language's spelling.
 pub(crate) const SEVERITIES: [&str; 5] = ["critical", "high", "medium", "low", "none"];
 
-/// MENGER-13: Changed recently's presets — windows over the transition log,
-/// in the viewer's own days.
-pub(crate) const CHANGED: [&str; 5] = ["within 1h", "within 12h", "today", "yesterday", "this week"];
-
 /// A flag's two values.
 pub(crate) const FLAG: [&str; 2] = ["yes", "no"];
 
@@ -146,7 +143,7 @@ impl Cat {
         Cat::MengerDocs,
         Cat::Asking,
         Cat::Label,
-        Cat::Changed,
+        Cat::When,
         Cat::Wave,
         Cat::Readiness,
         Cat::OffBoard,
@@ -184,7 +181,7 @@ impl Cat {
         Cat::MengerDocs,
         Cat::Asking,
         Cat::Label,
-        Cat::Changed,
+        Cat::When,
     ];
 
     /// The wave board's categories, in its menu's order: WAVE-12's, with the
@@ -223,7 +220,7 @@ impl Cat {
         Cat::MengerDocs,
         Cat::Asking,
         Cat::Label,
-        Cat::Changed,
+        Cat::When,
     ];
 
     /// A surface's own category — evaluated by the surface, kept beside the
@@ -252,7 +249,7 @@ impl Cat {
             Cat::MengerDocs => "menger",
             Cat::Asking => "asking",
             Cat::Label => "label",
-            Cat::Changed => "changed",
+            Cat::When => "when",
             Cat::Wave => "wave",
             Cat::Readiness => "ready",
             Cat::OffBoard => "off",
@@ -279,13 +276,22 @@ impl Cat {
             Cat::MengerDocs => "Menger docs",
             Cat::Asking => "Asking",
             Cat::Label => "Label",
-            Cat::Changed => "Changed recently",
+            Cat::When => "When",
             Cat::Wave => "Wave",
             Cat::Readiness => "Readiness",
             Cat::OffBoard => "Off-board blockers",
             Cat::Title => "Title",
             Cat::State => "State",
             Cat::Removed => "Removed",
+        }
+    }
+
+    /// FILTER-27: words a menu search finds the category by, beside its
+    /// name.
+    pub(crate) fn keywords(self) -> &'static str {
+        match self {
+            Cat::When => "created moved changed recently in status for since before between today",
+            _ => "",
         }
     }
 
@@ -309,7 +315,7 @@ impl Cat {
             Cat::MengerDocs => "§",
             Cat::Asking => "⁇",
             Cat::Label => "⌗",
-            Cat::Changed => "↻",
+            Cat::When => "◷",
             Cat::Wave => "≋",
             Cat::Readiness => "▸",
             Cat::OffBoard => "⧖",
@@ -330,8 +336,7 @@ impl Cat {
             Cat::Readiness => &["workable", "waiting", "missing"],
             Cat::State => &INPUT_STATES,
             Cat::OffBoard => &["some", "none"],
-            Cat::Changed => &CHANGED,
-            Cat::Shortcode | Cat::Wave | Cat::Title | Cat::Label => &[],
+            Cat::Shortcode | Cat::Wave | Cat::Title | Cat::Label | Cat::When => &[],
         }
     }
 
@@ -391,8 +396,6 @@ impl Cat {
             (Cat::Commits, "no") => "none".into(),
             (Cat::Asking, "yes") => "asking".into(),
             (Cat::Asking, "no") => "not asking".into(),
-            (Cat::Changed, "within 1h") => "in the last hour".into(),
-            (Cat::Changed, "within 12h") => "in the last 12 hours".into(),
             (Cat::Readiness, "workable") => "workable now".into(),
             (Cat::OffBoard, "some") => "has some".into(),
             (Cat::Removed, "yes") => "shown".into(),
@@ -443,7 +446,7 @@ pub(crate) fn op_label(c: Cat, op: Op, n: usize) -> &'static str {
 /// pill's, for one value); a flag has none: its `yes` / `no` is already the
 /// negation.
 pub(crate) fn switch_words(c: Cat) -> Option<(&'static str, &'static str)> {
-    (!c.is_flag()).then(|| (op_label(c, Op::Is, 1), op_label(c, Op::Not, 1)))
+    (!c.is_flag() && c != Cat::When).then(|| (op_label(c, Op::Is, 1), op_label(c, Op::Not, 1)))
 }
 
 /// FILTER-19: the operator the switch shows — the clause's; with no clause,
@@ -911,6 +914,9 @@ pub(crate) enum Pill {
     /// A group no category draws — its canonical text; `at`: which of the
     /// level's groups it is.
     Custom { text: String, at: usize },
+    /// FILTER-27: a time clause (When's) — `at`: which of the level's
+    /// groups it is; edited part by part.
+    Time { at: usize, t: crate::when::Timed },
 }
 
 /// The order a clause's values show in on its pill: Shortcode's as the
@@ -942,6 +948,7 @@ pub(crate) fn pill_words(p: &Pill) -> (String, String) {
             (cat.label().to_string(), format!("{} {values}", op_label(*cat, clause.op, clause.values.len())))
         }
         Pill::Custom { text, .. } => ("custom".to_string(), text.clone()),
+        Pill::Time { t, .. } => (Cat::When.label().to_string(), crate::when::words(t, crate::calendar::reader_h12())),
     }
 }
 
@@ -1109,7 +1116,7 @@ pub(crate) fn search(q: &str, k: &MenuFacts) -> Vec<Row> {
     if q.is_empty() {
         return k.cats.iter().copied().map(Row::Cat).collect();
     }
-    let mut out: Vec<Row> = k.cats.iter().copied().filter(|c| palette_match(c.menu_label(), "", q)).map(Row::Cat).collect();
+    let mut out: Vec<Row> = k.cats.iter().copied().filter(|c| palette_match(c.menu_label(), c.keywords(), q)).map(Row::Cat).collect();
     for c in k.cats {
         for r in offered_matching(*c, k, q) {
             if let Row::Value { cat, token, .. } = r {
@@ -1165,6 +1172,10 @@ pub(crate) struct Pop {
     cats: RwSignal<Vec<Cat>>,
     counts: RwSignal<CountsProvider>,
     mounted: RwSignal<u32>,
+    /// FILTER-27: where the When pane is, and whether its window editor
+    /// (Custom…) is open.
+    pub(crate) when: RwSignal<crate::when_view::Step>,
+    pub(crate) custom: RwSignal<bool>,
 }
 
 impl Pop {
@@ -1179,6 +1190,8 @@ impl Pop {
             cats: RwSignal::new(Cat::SERVER.to_vec()),
             counts: RwSignal::new(CountsProvider::none()),
             mounted: RwSignal::new(0),
+            when: RwSignal::new(crate::when_view::Step::Root),
+            custom: RwSignal::new(false),
         }
     }
 
@@ -1220,6 +1233,8 @@ impl Pop {
         self.query.set(String::new());
         self.hi.set(0);
         self.held.set(Op::Is);
+        self.when.set(crate::when_view::Step::Root);
+        self.custom.set(false);
         self.cat.set(cat);
         self.open.set(Some(Anchor { sel, direct: direct && cat.is_some() }));
     }
@@ -1259,6 +1274,8 @@ impl Pop {
 
     fn open_cat(self, c: Cat) {
         self.held.set(Op::Is);
+        self.when.set(crate::when_view::Step::Root);
+        self.custom.set(false);
         self.cat.set(Some(c));
         self.query.set(String::new());
         self.hi.set(0);
@@ -1599,6 +1616,7 @@ fn pill_view(lens: Lens, bar: Level, level: Level, inherited: bool, p: Pill, rou
             }
             .into_any()
         }
+        Pill::Time { at, t } => time_pill_view(lens, bar, level, inherited, at, t),
         Pill::Custom { text, at } => {
             let sel = pill_sel(bar, level, None);
             let x = (!inherited).then(|| {
@@ -1622,6 +1640,53 @@ fn pill_view(lens: Lens, bar: Level, level: Level, inherited: bool, p: Pill, rou
             .into_any()
         }
     }
+}
+
+/// FILTER-27: a time pill — `When`, then its segments: the event's words,
+/// and each part (status, window, length, who) a button reopening the When
+/// pane on that part; × removes it. Inherited (a global pill on a
+/// surface's bar), a part opens the global menu there.
+fn time_pill_view(lens: Lens, bar: Level, level: Level, inherited: bool, at: usize, t: crate::when::Timed) -> AnyView {
+    let pop = lens.pop(level);
+    let h12 = crate::calendar::reader_h12();
+    let words = crate::when::words(&t, h12);
+    let mark = inherited.then(|| view! { <span class="p-lvl" title=format!("set at the {} level", level.name())>{level.name()}</span> });
+    let segs = crate::when::segments(&t, h12)
+        .into_iter()
+        .map(|(part, w)| match part {
+            None => view! { <span class="p-w">{w}</span> }.into_any(),
+            Some(part) => {
+                let sel = format!("[data-fbar=\"{}\"] [data-fpill=\"{}\"][data-ftime=\"{at}\"] [data-part=\"{}\"]", bar.name(), level.name(), part.key());
+                let open = move |_| {
+                    pop.close(false);
+                    lens.open_menu(level, Some(Cat::When), Some((sel.clone(), !inherited)));
+                    pop.when.set(crate::when_view::Step::Edit { at, only: Some(part) });
+                };
+                view! {
+                    <button class="p-vals p-part" data-fopen=level.name() data-part=part.key() title=format!("change the {}", part.key()) on:click=open>
+                        {w}
+                    </button>
+                }
+                .into_any()
+            }
+        })
+        .collect_view();
+    let x = (!inherited).then(|| {
+        view! {
+            <button class="p-x" title="remove this filter" aria-label=format!("remove the filter {words}") on:click=move |_| lens.remove_custom(level, at)>
+                "×"
+            </button>
+        }
+    });
+    view! {
+        <span class="pill when" class:inherited=inherited data-fpill=level.name() data-cat="when" data-ftime=at title=words.clone()>
+            <span class="p-cat">{Cat::When.label()}</span>
+            {segs}
+            {mark}
+            {x}
+        </span>
+    }
+    .into_any()
 }
 
 /// `reset` (a surface) or `clear` (global): back to the level's default,
@@ -1842,7 +1907,7 @@ fn popover(lens: Lens, pop: Pop) -> impl IntoView {
                     {move || list_view(lens, pop, main_rows.get(), move || pop.cat.get().is_none())}
                 </div>
                 {move || pop.cat.get().map(|c| view! {
-                    <div class="fpane fsub" role="menu" aria-label=format!("{} values", c.label()) data-cat=c.key()>
+                    <div class="fpane fsub" role=if c == Cat::When { "group" } else { "menu" } aria-label=format!("{} values", c.label()) data-cat=c.key()>
                         <div class="frow back" on:mousedown=|ev| ev.prevent_default() on:click=move |_| pop.back()>
                             <span class="glyph">"‹"</span>
                             <span class="flabel">{c.menu_label()}</span>
@@ -1850,6 +1915,8 @@ fn popover(lens: Lens, pop: Pop) -> impl IntoView {
                         {switch_view(lens, pop, c)}
                         {if c == Cat::Title {
                             title_view(lens, pop).into_any()
+                        } else if c == Cat::When {
+                            crate::when_view::pane(lens, pop).into_any()
                         } else {
                             view! { {move || list_view(lens, pop, sub_rows.get(), move || true)} }.into_any()
                         }}
@@ -2000,7 +2067,12 @@ fn row_view(lens: Lens, pop: Pop, row: Row, at: Option<usize>, live: impl Fn() -
             .into_any()
         }
         Row::Cat(c) => {
-            let applied = move || lens.clauses(level).get(c).is_some();
+            let applied = move || {
+                if c == Cat::When {
+                    return lens.pills(level).iter().any(|p| matches!(p, Pill::Time { .. }));
+                }
+                lens.clauses(level).get(c).is_some()
+            };
             view! {
                 <div
                     class="frow cat"
@@ -2446,8 +2518,10 @@ pub(crate) mod tests {
 
         // The global menu: the server's categories, no Title to offer.
         let g = MenuFacts { cats: &Cat::SERVER, route: None, tree: Some(&t), clauses: &Clauses::default(), counts: &HashMap::new() };
-        assert_eq!(search("", &g).len(), 11, "MENGER-13: Changed recently among them");
-        assert_eq!(offered(Cat::Changed, &g).len(), CHANGED.len());
+        assert_eq!(search("", &g).len(), 11, "FILTER-27: When among them");
+        assert!(offered(Cat::When, &g).is_empty(), "When draws its own pane");
+        assert_eq!(search("created", &g)[0], Row::Cat(Cat::When), "FILTER-27: found by what it builds");
+        assert_eq!(search("moved", &g)[0], Row::Cat(Cat::When));
         // FILTER-21: typing finds Menger docs, by its name.
         assert_eq!(search("menger", &g)[0], Row::Cat(Cat::MengerDocs));
         assert_eq!(offered(Cat::MengerDocs, &g), [val(Cat::MengerDocs, "yes"), val(Cat::MengerDocs, "no")]);
@@ -2519,7 +2593,8 @@ pub(crate) mod tests {
             assert_eq!(switch_words(c), None, "{c:?}: its yes / no is the negation");
         }
         assert_eq!(switch_words(Cat::Label), Some(("is", "is not")));
-        assert_eq!(Cat::ALL.into_iter().filter(|c| switch_words(*c).is_some()).count(), 11, "every category but the flags");
+        assert_eq!(Cat::ALL.into_iter().filter(|c| switch_words(*c).is_some()).count(), 10, "every category but the flags and When");
+        assert_eq!(switch_words(Cat::When), None, "FILTER-27: a time pill's parts are its own");
 
         let not = Clause { op: Op::Not, values: strs(&["doc"]) };
         let is = Clause { op: Op::Is, values: strs(&["doc"]) };

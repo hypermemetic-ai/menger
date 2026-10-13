@@ -994,11 +994,17 @@ export interface TicketsEventTransition {
 file began), and, for a canceled ticket, `restorable`: the tickets its
 latest cancel canceled and nothing has moved since, which `set_status
 { restore_children: true }` would put back, in the store's order
-(empty otherwise). */
+(empty otherwise). FILTER-27: and since when the ticket has held its
+current status (`status_since_unix`) — its latest status transition,
+`status_since_exact: true`; or, for a ticket the log says nothing of
+(from before it began), a bound — "status since at least …": its last
+update or the log's beginning, whichever is earlier — `false`. */
 export interface TicketsEventHistoryEnd {
   type: 'history_end';
   beganUnix: number | null;
   restorable: string[];
+  statusSinceExact: boolean | null;
+  statusSinceUnix: number | null;
 }
 
 export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;

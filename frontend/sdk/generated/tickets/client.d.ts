@@ -30,7 +30,7 @@ export interface TicketsClient {
     groups(): AsyncGenerator<TicketsEvent>;
     /** Heartbeat — version, unix time, ticket count */
     health(): AsyncGenerator<TicketsEvent>;
-    /** A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then history_end (when the log began; what a restore would put back) */
+    /** A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then history_end (when the log began; what a restore would put back; since when it has held its status) */
     history(id: string): AsyncGenerator<TicketsEvent>;
     /** Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket */
     inputs(epic?: string | null, filter?: string | null, state?: string | null, ticket?: string | null, tz?: string | null): AsyncGenerator<TicketsEvent>;

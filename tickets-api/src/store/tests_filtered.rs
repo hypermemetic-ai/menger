@@ -125,7 +125,15 @@ pub(super) struct Plain {
 /// MENGER-13: the history predicates the random filters draw on — windows
 /// that move only by hours, so a walk's reads agree with the rule however
 /// long it runs.
-pub(super) const HISTORY_VOCAB: [&str; 9] = [
+pub(super) const HISTORY_VOCAB: [&str; 15] = [
+    // FILTER-27: births and lengths held — every ticket of a walk is born
+    // within the day and holds its status for under one.
+    "created within 1d",
+    "created before 2026-01-01",
+    "for under 1d",
+    "for over 1h",
+    "status Pending for under 1d",
+    "category in (ready, active) for under 1d",
     "entered Canceled",
     "entered Ready within 1h",
     "left Pending",
@@ -136,6 +144,41 @@ pub(super) const HISTORY_VOCAB: [&str; 9] = [
     "entered \"In Review\" within 12h",
     "changed within 1h",
 ];
+
+/// FILTER-27: whether `pred` holds for `row`, whose own transitions are
+/// `own`, in a log that began at `began` — `created` by its birth in the
+/// window, `for` by how long it has held its status (since its latest
+/// status transition; with none, since its last update or the log's
+/// beginning, whichever is earlier, and never before its birth); the rest
+/// by [`holds_by_rule`].
+pub(super) fn holds_of_row(
+    pred: &crate::filter::History,
+    row: &Row,
+    own: &[crate::types::Transition],
+    began: Option<i64>,
+    clock: &Clock,
+) -> bool {
+    use crate::filter::Event;
+    use crate::types::TransitionField;
+    match &pred.event {
+        Event::Created => {
+            let Some((lo, hi)) = clock.bounds(pred.window.as_ref()) else { return false };
+            lo.is_none_or(|l| row.created_unix >= l) && hi.is_none_or(|h| row.created_unix < h)
+        }
+        Event::Held(h) => {
+            let since = match own.iter().rev().find(|t| t.field == TransitionField::Status) {
+                Some(t) => t.at_unix,
+                None => {
+                    let u = if row.updated_unix > 0 { row.updated_unix } else { row.created_unix };
+                    began.map_or(u, |b| u.min(b)).max(row.created_unix)
+                }
+            };
+            let held = clock.now() - since;
+            h.of.admits(row.status) && if h.over { held > h.seconds() } else { held <= h.seconds() }
+        }
+        _ => holds_by_rule(pred, own, clock),
+    }
+}
 
 /// MENGER-13: whether `pred` holds for a ticket whose own transitions are
 /// `own`, read at `clock` — the predicate's rule, transition by transition:
@@ -150,6 +193,7 @@ pub(super) fn holds_by_rule(pred: &crate::filter::History, own: &[crate::types::
             Event::Entered(s) => t.field == TransitionField::Status && t.to == s.as_str(),
             Event::Left(s) => t.field == TransitionField::Status && t.from.as_deref() == Some(s.as_str()),
             Event::Changed => true,
+            Event::Created | Event::Held(_) => false,
         };
         let when = lo.is_none_or(|l| t.at_unix >= l) && hi.is_none_or(|h| t.at_unix < h);
         let who = match &pred.by {
@@ -212,8 +256,9 @@ impl Plain {
         let history = rows
             .iter()
             .map(|t| {
-                let own = store.history(&t.id).map(|h| h.own).unwrap_or_default();
-                vocab.iter().filter(|h| holds_by_rule(h, &own, &clock)).map(crate::filter::History::format).collect()
+                let h = store.history(&t.id).ok();
+                let (own, began) = h.map(|h| (h.own, h.began)).unwrap_or_default();
+                vocab.iter().filter(|p| holds_of_row(p, t, &own, began, &clock)).map(crate::filter::History::format).collect()
             })
             .collect();
         Self { rows, cells, at, lineage, history }

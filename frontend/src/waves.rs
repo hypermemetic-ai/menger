@@ -604,8 +604,8 @@ pub(crate) fn value_of(c: Cat, card: &Card, off: bool) -> Option<String> {
         Cat::MengerDocs => flag(menger_tickets_api::is_menger_doc(s.path.as_deref())),
         // MENGER-12: a card holds any number of labels — counted apart
         // ([`counts`]); Asking is not the board's.
-        // MENGER-13: nor is Changed recently, which the log answers.
-        Cat::Asking | Cat::Label | Cat::Changed => None,
+        // FILTER-27: nor is When, which the log and the times answer.
+        Cat::Asking | Cat::Label | Cat::When => None,
         Cat::Wave => Some(match card.placement {
             Placement::Wave { n } => n.to_string(),
             Placement::MissingBlocker => "missing".into(),
