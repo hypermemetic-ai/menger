@@ -23,6 +23,7 @@ use menger_tickets_api::Status;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::calendar::{now_local, reader_h12, today, Calendar, Day, TimeSelect};
+use crate::anyof::{self, Slot};
 use crate::filter::Pop;
 use crate::lens::{Lens, Level};
 use crate::when::{self, Kind, Part, Timed};
@@ -34,9 +35,10 @@ pub(crate) enum Step {
     Root,
     /// A new clause of this kind: its first choice.
     New(Kind),
-    /// The clause at `at` among the level's groups — `only` one part of it
-    /// (opened from a pill's segment).
-    Edit { at: usize, only: Option<Part> },
+    /// The clause at `at` among the level's groups, or among the members
+    /// of the group there (FILTER-31) — `only` one part of it (opened from a
+    /// pill's segment).
+    Edit { at: Slot, only: Option<Part> },
 }
 
 /// Focus kept inside the menu once the control that had it is gone (the
@@ -56,29 +58,23 @@ fn keep_focus(level: Level) {
     });
 }
 
-/// The time clause at `at` among `level`'s groups.
-fn clause_at(lens: Lens, level: Level, at: usize) -> Option<Timed> {
-    lens.kept(level).and_then(|k| k.filter.groups.get(at).and_then(when::of_group))
+/// The time clause at `at` among `level`'s groups (FILTER-31: or a
+/// group's members).
+fn clause_at(lens: Lens, level: Level, at: Slot) -> Option<Timed> {
+    lens.kept(level).and_then(|k| anyof::time_in(&k.filter.groups, at))
 }
 
-/// `t` written at `at` (replacing that group) or — `None` — added last;
-/// where it now is.
-fn put(lens: Lens, level: Level, at: Option<usize>, t: &Timed) -> usize {
-    let mut placed = 0;
-    lens.edit(level, |k| {
-        let g = when::group(t);
-        match at.filter(|i| *i < k.filter.groups.len()) {
-            Some(i) => {
-                k.filter.groups[i] = g;
-                placed = i;
-            }
-            None => {
-                k.filter.groups.push(g);
-                placed = k.filter.groups.len() - 1;
-            }
+/// `t` written at `at` (replacing that clause) or — `None` — added: to the
+/// group the menu adds to (FILTER-31's Or…), else last; where it now is.
+fn put(lens: Lens, pop: Pop, at: Option<Slot>, t: &Timed) -> Option<Slot> {
+    let into = pop.into.get_untracked();
+    match lens.edit_groups(pop.level, |gs| anyof::put_time(gs, into, at, t)) {
+        Ok(slot) => Some(slot),
+        Err(why) => {
+            pop.refusal.set(Some(why));
+            None
         }
-    });
-    placed
+    }
 }
 
 /// The When pane, as `pop`'s step says.
@@ -138,10 +134,8 @@ fn status_label(s: Status) -> String {
 
 /// A new clause's first choice.
 fn new_view(lens: Lens, pop: Pop, kind: Kind) -> impl IntoView {
-    let level = pop.level;
     let start = move |t: Option<Timed>| {
-        if let Some(t) = t {
-            let at = put(lens, level, None, &t);
+        if let Some(at) = t.and_then(|t| put(lens, pop, None, &t)) {
             pop.when.set(Step::Edit { at, only: None });
         }
     };
@@ -178,8 +172,7 @@ fn new_view(lens: Lens, pop: Pop, kind: Kind) -> impl IntoView {
                         chip(words, p.into(), || false, move || start(when::new_clause(kind, None, w.clone())))
                     }).collect_view()}
                     {chip("custom…".into(), "custom".into(), || false, move || {
-                        if let Some(t) = when::new_clause(kind, None, None) {
-                            let at = put(lens, level, None, &t);
+                        if let Some(at) = when::new_clause(kind, None, None).and_then(|t| put(lens, pop, None, &t)) {
                             pop.when.set(Step::Edit { at, only: Some(Part::Window) });
                             pop.custom.set(true);
                         }
@@ -201,13 +194,13 @@ fn new_view(lens: Lens, pop: Pop, kind: Kind) -> impl IntoView {
 }
 
 /// Editing the clause at `at`.
-fn edit_view(lens: Lens, pop: Pop, at: usize, only: Option<Part>) -> impl IntoView {
+fn edit_view(lens: Lens, pop: Pop, at: Slot, only: Option<Part>) -> impl IntoView {
     let level = pop.level;
     let h12 = reader_h12();
     let current = Memo::new(move |_| clause_at(lens, level, at));
     let set = move |f: &dyn Fn(&Timed) -> Timed| {
         if let Some(t) = current.get_untracked() {
-            put(lens, level, Some(at), &f(&t));
+            put(lens, pop, Some(at), &f(&t));
         }
     };
     let kind = untrack(|| current.get().map(|t| Kind::of(&t.h.event))).unwrap_or(Kind::Changed);
@@ -293,7 +286,7 @@ fn edit_view(lens: Lens, pop: Pop, at: usize, only: Option<Part>) -> impl IntoVi
     let who_sec = (shows(Part::Who) && kind.has_who()).then(|| who_view(current, set));
     let said = move || current.get().map(|t| when::words(&t, h12)).unwrap_or_default();
     view! {
-        <div class="when-pane wform" data-when=kind.key() data-at=at>
+        <div class="when-pane wform" data-when=kind.key() data-at=at.at data-member=at.member.map(|m| m.to_string())>
             <button type="button" class="wback" title="another time clause" on:mousedown=|ev| ev.prevent_default() on:click=move |_| pop.when.set(Step::Root)>
                 <span class="glyph">"‹"</span>
                 <span class="flabel">"another time clause"</span>

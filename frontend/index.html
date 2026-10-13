@@ -1612,6 +1612,60 @@
   .fclash .p-lvl { margin-right: .3rem; }
   .fbar .pill.custom .p-cat { font-style: italic; }
   .fbar .pill.custom .p-vals { max-width: 26rem; }
+  /* FILTER-31: any of — a group of pills in a box, its members joined by
+     the joiner (a button: it flips any of / all of), `+ or`, the ⋯ menu on
+     a pill, the Shift-click pick, a refusal, and `and` between the pills
+     while the bar holds a group. */
+  .fbar .fand { font-size: calc(11px * var(--text-scale)); color: var(--muted); font-family: var(--sans); }
+  .fbar .fgrp {
+    display: inline-flex; flex-wrap: wrap; align-items: center; gap: .25rem; padding: .1rem .3rem;
+    border: var(--border) solid var(--accent); border-radius: var(--radius-xl); background: var(--panel);
+    font-size: calc(12px * var(--text-scale)); line-height: 1.6;
+  }
+  .fbar .fgrp.inherited { opacity: .72; border-style: dashed; border-color: var(--line); }
+  .fbar .fgrp .g-l {
+    font-family: var(--sans); font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-strong); letter-spacing: .04em;
+    text-transform: uppercase; color: var(--accent); padding: 0 .15rem;
+  }
+  .fbar .fgrp > button, .fbar .fgrp > .g-join, .fbar .fgrp > .pm-wrap > button {
+    font: inherit; background: none; border: 0; padding: 0 .3rem; color: var(--muted); cursor: pointer; border-radius: var(--radius);
+  }
+  .fbar .fgrp > button:hover, .fbar .fgrp > .pm-wrap > button:hover { background: var(--hover); color: var(--accent); }
+  .fbar .fgrp .g-join { font-family: var(--sans); font-style: italic; color: var(--accent); }
+  .fbar .fgrp .g-join.stuck { color: var(--muted); cursor: help; }
+  .fbar .fgrp .g-add { color: var(--accent); }
+  .fbar .pill.picked, .fbar .fgrp.picked { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .fbar .pm-wrap { position: relative; display: inline-flex; }
+  .fbar .pill > .pm-wrap { padding: 0; }
+  .fbar .pill:has(.pmenu) { overflow: visible; }
+  .fbar .pill .p-more { font: inherit; background: none; border: 0; padding: .05rem .4rem; color: var(--muted); cursor: pointer; }
+  .fbar .pmenu {
+    position: absolute; z-index: 31; top: calc(100% + 4px); right: 0; display: flex; flex-direction: column; min-width: 12rem; max-width: 22rem;
+    padding: 4px; background: var(--bg); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius-lg);
+    box-shadow: 0 10px 30px var(--shadow); font: calc(12.5px * var(--text-scale))/1.5 var(--sans); white-space: normal;
+  }
+  .fbar .pmenu .pm-i {
+    font: inherit; text-align: left; background: none; border: 0; border-radius: var(--radius); padding: .2rem .55rem; color: var(--ink); cursor: pointer;
+  }
+  .fbar .pmenu .pm-i:hover, .fbar .pmenu .pm-i:focus-visible { background: var(--hover); color: var(--accent); outline: none; }
+  .fbar .pmenu .pm-i[disabled] { color: var(--muted); cursor: not-allowed; }
+  .fbar .pmenu .pm-why { padding: 0 .55rem .3rem; font-size: calc(11px * var(--text-scale)); color: var(--muted); }
+  .fbar .fpick { display: inline-flex; align-items: center; gap: .3rem; font-size: calc(12px * var(--text-scale)); }
+  .fbar .fpick .fgroup-any {
+    font: inherit; background: var(--accent); color: var(--bg); border: 0; border-radius: var(--radius-lg); padding: .05rem .6rem; cursor: pointer;
+  }
+  .fbar .fpick .fpick-h { color: var(--muted); font-style: italic; }
+  .fbar .fpick .p-x, .fbar .frefused .p-x { font: inherit; background: none; border: 0; color: var(--muted); cursor: pointer; }
+  .fbar .frefused, .fmenu .frefused {
+    padding: .2rem .55rem; font-size: calc(12px * var(--text-scale)); font-family: var(--sans);
+    background: var(--err-bg); color: var(--err-fg); border: var(--border) solid var(--err-line); border-radius: var(--radius-lg);
+  }
+  .fbar .frefused { flex-basis: 100%; order: 9; }
+  .fmenu .frefused { flex: none; margin: 4px 8px; }
+  .fmenu .finto {
+    flex: none; padding: 4px 10px; border-bottom: var(--border) solid var(--line); font-family: var(--sans); font-size: calc(11.5px * var(--text-scale)); color: var(--accent);
+  }
+  .fmenu .frow .ingrp { color: var(--accent); margin-left: .3rem; font-family: var(--sans); }
   .fbar button.ftext-t {
     background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: calc(12px * var(--text-scale)); color: var(--muted); cursor: pointer;
   }

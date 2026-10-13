@@ -430,6 +430,8 @@ impl Kept {
             .enumerate()
             .map(|(at, (d, g))| match d {
                 Some((cat, clause)) => Pill::Clause { cat, clause },
+                // FILTER-31: two members or more are a box.
+                None if crate::anyof::is_group(g) => Pill::Group { at, conj: g.conj, members: crate::anyof::members(g) },
                 None => match crate::when::of_group(g) {
                     Some(t) => Pill::Time { at, t },
                     None => Pill::Custom { text: g.format(), at },
@@ -447,6 +449,32 @@ impl Kept {
             out.set_clause(c, Some(cl));
         }
         out
+    }
+
+    /// FILTER-31: which of the groups is `c`'s pill.
+    pub(crate) fn at_of(&self, c: Cat) -> Option<usize> {
+        self.drawn().iter().position(|d| d.as_ref().is_some_and(|(x, _)| *x == c))
+    }
+
+    /// FILTER-31: the clauses of the group at `at`'s members, one per
+    /// category (its first) — what the menu checks while it adds to that
+    /// group.
+    pub(crate) fn group_clauses(&self, at: usize) -> Clauses {
+        let mut out = Clauses::default();
+        for c in Cat::SERVER {
+            out.set_clause(c, crate::anyof::clause_in(&self.filter.groups, at, c));
+        }
+        out
+    }
+
+    /// FILTER-31: whether `c` draws a member of some any-of (or all-of)
+    /// group — the menu marks the category so.
+    pub(crate) fn in_group(&self, c: Cat) -> bool {
+        self.filter
+            .groups
+            .iter()
+            .filter(|g| crate::anyof::is_group(g))
+            .any(|g| crate::anyof::members(g).iter().any(|m| m.cat() == Some(c)))
     }
 
     /// How many groups it holds — local clauses counted as groups.
@@ -485,6 +513,40 @@ impl Clausal for Kept {
             }
             (None, Some(g)) => self.filter.groups.push(g),
             (None, None) => {}
+        }
+    }
+}
+
+/// FILTER-31: what the menu edits — a level's clauses, or (`into`) the
+/// members of its group at that place: a category's clause there is its
+/// member, set there is the member replaced, added or taken out
+/// ([`crate::anyof::set_cat`]). An edit the group cannot hold is
+/// `refused`, and the lens commits nothing.
+pub(crate) struct Scope<'a> {
+    pub(crate) k: &'a mut Kept,
+    pub(crate) into: Option<usize>,
+    pub(crate) refused: Option<String>,
+}
+
+impl Clausal for Scope<'_> {
+    fn clause(&self, c: Cat) -> Option<Clause> {
+        match self.into {
+            None => self.k.clause(c),
+            Some(at) => crate::anyof::clause_in(&self.k.filter.groups, at, c),
+        }
+    }
+
+    fn set_clause(&mut self, c: Cat, cl: Option<Clause>) {
+        match self.into {
+            None => self.k.set_clause(c, cl),
+            // A surface's own categories are not the language's: no group
+            // holds them.
+            Some(_) if c.is_local() => {}
+            Some(at) => {
+                if let Err(why) = crate::anyof::set_cat(&mut self.k.filter.groups, at, c, cl) {
+                    self.refused.get_or_insert(why);
+                }
+            }
         }
     }
 }
@@ -825,23 +887,47 @@ impl Lens {
         self.commit(level, Some(next));
     }
 
+    /// FILTER-31: `level`'s state changed by `f` through a [`Scope`] — its
+    /// clauses, or (`into`) the members of its group there; refused, nothing
+    /// is committed and the refusal is answered.
+    pub(crate) fn edit_in(self, level: Level, into: Option<usize>, f: impl FnOnce(&mut Scope)) -> Result<(), String> {
+        let Some(mut next) = untrack(|| self.kept(level)) else { return Ok(()) };
+        let mut scope = Scope { k: &mut next, into, refused: None };
+        f(&mut scope);
+        if let Some(why) = scope.refused {
+            return Err(why);
+        }
+        self.commit(level, Some(next));
+        Ok(())
+    }
+
+    /// FILTER-31: `level`'s groups changed by one of src/anyof.rs's edits;
+    /// refused, nothing is committed.
+    pub(crate) fn edit_groups<T>(self, level: Level, f: impl FnOnce(&mut Vec<Group>) -> Result<T, String>) -> Result<T, String> {
+        let Some(mut next) = untrack(|| self.kept(level)) else { return Err("the filter is not known yet".into()) };
+        let out = f(&mut next.filter.groups)?;
+        self.commit(level, Some(next));
+        Ok(out)
+    }
+
     /// A click on a value of `c`: a shortcode takes its subtree with it. A
-    /// clause it starts takes `op` (FILTER-19: the menu's switch).
-    pub(crate) fn toggle(self, level: Level, c: Cat, token: &str, op: Op) {
+    /// clause it starts takes `op` (FILTER-19: the menu's switch). `into`:
+    /// the group it is made in (FILTER-31).
+    pub(crate) fn toggle(self, level: Level, into: Option<usize>, c: Cat, token: &str, op: Op) -> Result<(), String> {
         let tree = self.sctree.get_untracked();
-        self.edit(level, |k| {
+        self.edit_in(level, into, |k| {
             k.edit_as(c, op, |k| match (c, &tree) {
                 (Cat::Shortcode, Some(t)) => k.toggle_code(t, token),
                 _ => k.toggle(c, token),
             })
-        });
+        })
     }
 
     /// Shortcode is (any of, or — `op`, a new clause's — none of) `code`'s
     /// tree only.
-    pub(crate) fn only(self, level: Level, code: &str, op: Op) {
-        let Some(t) = self.sctree.get_untracked() else { return };
-        self.edit(level, |k| k.edit_as(Cat::Shortcode, op, |k| k.set_values(Cat::Shortcode, t.subtree(code))));
+    pub(crate) fn only(self, level: Level, into: Option<usize>, code: &str, op: Op) -> Result<(), String> {
+        let Some(t) = self.sctree.get_untracked() else { return Ok(()) };
+        self.edit_in(level, into, |k| k.edit_as(Cat::Shortcode, op, |k| k.set_values(Cat::Shortcode, t.subtree(code))))
     }
 
     /// A custom pill's group taken out.
@@ -868,6 +954,21 @@ impl Lens {
     /// Tracked.
     pub(crate) fn clauses(self, level: Level) -> Clauses {
         self.kept(level).map(|k| k.clauses()).unwrap_or_default()
+    }
+
+    /// FILTER-31: the clauses the menu checks — `level`'s, or (`into`) its
+    /// group's members'. Tracked.
+    pub(crate) fn clauses_in(self, level: Level, into: Option<usize>) -> Clauses {
+        match into {
+            None => self.clauses(level),
+            Some(at) => self.kept(level).map(|k| k.group_clauses(at)).unwrap_or_default(),
+        }
+    }
+
+    /// FILTER-31: whether `c` draws a member of one of `level`'s groups.
+    /// Tracked.
+    pub(crate) fn in_group(self, level: Level, c: Cat) -> bool {
+        self.kept(level).is_some_and(|k| k.in_group(c))
     }
 
     /// How many groups `level` holds — the header button's badge. Tracked.
@@ -1358,14 +1459,17 @@ mod tests {
         // Two time clauses are two pills.
         let k = Kept { filter: parsed("created today and left Pending this week"), ..Kept::default() };
         assert!(matches!(k.pills().as_slice(), [Pill::Time { at: 0, .. }, Pill::Time { at: 1, .. }]));
-        // An `or` of time clauses is a custom pill.
+        // FILTER-31: an `or` of time clauses is a group of time pills.
         let k = Kept { filter: parsed("(changed within 1h or changed yesterday)"), ..Kept::default() };
-        assert!(matches!(k.pills().as_slice(), [Pill::Custom { .. }]));
+        let pills_of_k = k.pills();
+        let [Pill::Group { at: 0, conj: Conj::Any, members }] = pills_of_k.as_slice() else { panic!("{:?}", k.pills()) };
+        assert!(matches!(members.as_slice(), [crate::anyof::Member::Time(_), crate::anyof::Member::Time(_)]));
     }
 
     /// Acceptance 1: a group no category draws is a custom pill showing its
     /// canonical text; × takes it out. A second group of one category is
-    /// custom too: a category has one pill.
+    /// custom too: a category has one pill. FILTER-31: a group of pills the
+    /// categories draw is a group pill, not custom.
     #[test]
     fn a_group_no_category_draws_is_a_custom_pill() {
         for text in [
@@ -1384,7 +1488,14 @@ mod tests {
             k.pills(),
             vec![
                 Pill::Clause { cat: Cat::Status, clause: clause(Op::Is, &["Ready"]) },
-                Pill::Custom { text: "(blocked or status Blocked)".into(), at: 1 },
+                Pill::Group {
+                    at: 1,
+                    conj: Conj::Any,
+                    members: vec![
+                        crate::anyof::Member::Clause { cat: Cat::Blocked, clause: clause(Op::Is, &["yes"]) },
+                        crate::anyof::Member::Clause { cat: Cat::Status, clause: clause(Op::Is, &["Blocked"]) },
+                    ],
+                },
                 Pill::Custom { text: "not status Coding".into(), at: 2 },
                 Pill::Clause { cat: Cat::Shortcode, clause: clause(Op::Is, &["MNG"]) },
             ]
@@ -1411,6 +1522,113 @@ mod tests {
         assert_eq!(k.pills().last(), Some(&Pill::Clause { cat: Cat::Wave, clause: clause(Op::Is, &["1"]) }));
         assert_eq!(k.clauses().get(Cat::Wave), Some(&clause(Op::Is, &["1"])));
         assert_eq!(k.clauses().get(Cat::Shortcode), Some(&clause(Op::Is, &["MNG"])));
+    }
+
+    /// FILTER-31 acceptance 1: every shape the language holds — `and` of
+    /// groups, each `and` or `or`, with time pills, flags, labels and
+    /// negated clauses inside — is drawn as pills and boxes (never one raw
+    /// pill), and comes back the same through the pills, the text, the URL
+    /// and a saved filter.
+    #[test]
+    fn groups_round_trip_through_pills_text_url_and_saved() {
+        use crate::anyof::{self, Member};
+        let forms = [
+            "(changed today or created today)",
+            "(changed today or created today) and kind build",
+            "(status Ready or kind gap) and in MNG",
+            "(status Ready and kind gap)",
+            "(blocked or not ready or has commits)",
+            "(label needs-you or asking) and not menger doc",
+            "(not status Ready or not kind gap) and severity in (high, none)",
+            "(status Pending for over 2w or entered Ready today by owner)",
+            "(not created today or status Coding or status \"In Review\")",
+            "(not kind doc and not kind spike and not blocked)",
+            "kind build and (in MNG or under PLEXUS-1)",
+        ];
+        for form in forms {
+            let k = Kept { filter: parsed(form), ..Kept::default() };
+            let pills = k.pills();
+            assert!(pills.iter().any(|p| matches!(p, Pill::Group { .. })), "{form}: {pills:?}");
+            assert!(!pills.iter().any(|p| matches!(p, Pill::Custom { .. })), "{form}: never one raw pill");
+            // Pills → groups: each group pill's members build its group.
+            let mut back = k.clone();
+            for p in &pills {
+                if let Pill::Group { at, conj, members } = p {
+                    back.filter.groups[*at] = anyof::build(*conj, members).unwrap().unwrap();
+                }
+            }
+            // (Values in their category's order: the same pills read back.)
+            assert_eq!(back.pills(), pills, "{form}");
+            assert_eq!(Kept { filter: parsed(&back.filter.format()), ..Kept::default() }, back, "{form}");
+            // Text, the URL and a saved filter.
+            let text = k.filter.format();
+            assert_eq!(Kept { filter: parsed(&text), ..Kept::default() }.pills(), pills, "{form}: text");
+            for level in [Level::Global, Level::Nav, Level::Board] {
+                let q = join(&pairs_of(level, &k));
+                assert_eq!(read(&q, level), Some(Some(k.clone())), "{form}: the URL at {level:?}");
+            }
+            let saved = crate::saved::filter_of(&crate::saved::saved_text(&k.filter)).unwrap();
+            assert_eq!(crate::saved::chosen(saved).pills(), pills, "{form}: saved");
+        }
+        // A member keeps its own pill, operator and values; Status inside a
+        // group is not the level's Status clause, and the menu says so.
+        let k = Kept { filter: parsed("(status Ready or kind gap) and status Coding"), ..Kept::default() };
+        let pills = k.pills();
+        assert_eq!(
+            pills[0],
+            Pill::Group {
+                at: 0,
+                conj: Conj::Any,
+                members: vec![
+                    Member::Clause { cat: Cat::Status, clause: clause(Op::Is, &["Ready"]) },
+                    Member::Clause { cat: Cat::Kind, clause: clause(Op::Is, &["gap"]) },
+                ],
+            }
+        );
+        assert_eq!(k.clauses().get(Cat::Status), Some(&clause(Op::Is, &["Coding"])));
+        assert!(k.in_group(Cat::Status) && k.in_group(Cat::Kind) && !k.in_group(Cat::Severity));
+        assert_eq!(k.group_clauses(0).get(Cat::Status), Some(&clause(Op::Is, &["Ready"])));
+        assert_eq!(k.at_of(Cat::Status), Some(1));
+        // A shape the language refuses draws nothing: the text does not parse.
+        let e = Filter::parse("(changed today and kind build) or created today").unwrap_err();
+        assert!(!e.chunks.is_empty());
+        let e = Filter::parse("((changed today or created today) and kind build)").unwrap_err();
+        assert!(e.chunks.iter().any(|c| c.why.contains("nest")), "{e}");
+    }
+
+    /// FILTER-31: the menu adding to a group — Or… on a pill, the group's
+    /// `+ or` — edits the group's members through the same clause edits as
+    /// the level's; what the group cannot hold is refused and nothing
+    /// changes.
+    #[test]
+    fn the_menu_edits_a_groups_members() {
+        let mut k = Kept { filter: parsed("status Ready and kind build"), ..Kept::default() };
+        // Status's pill, Or… → Kind › gap, then spike.
+        let mut sc = Scope { k: &mut k, into: Some(0), refused: None };
+        sc.edit_as(Cat::Kind, Op::Is, |s| s.toggle(Cat::Kind, "gap"));
+        sc.toggle(Cat::Kind, "spike");
+        assert!(sc.refused.is_none());
+        assert_eq!(k.filter.format(), "(status Ready or kind spike or kind gap) and kind build");
+        // The level's own Kind pill is untouched; its menu marks Kind.
+        assert_eq!(k.clauses().get(Cat::Kind), Some(&clause(Op::Is, &["build"])));
+        assert!(k.in_group(Cat::Kind));
+        // The switch inside the group: Kind is not gap, spike can't be one
+        // alternative — refused.
+        let before = k.clone();
+        let mut sc = Scope { k: &mut k, into: Some(0), refused: None };
+        sc.set_op(Cat::Kind, Op::Not);
+        assert!(sc.refused.is_some());
+        drop(sc);
+        // (The lens commits nothing on a refusal; the scope's own edit is dropped.)
+        k = before;
+        // Taking every value out: the member goes, and the group dissolves.
+        let mut sc = Scope { k: &mut k, into: Some(0), refused: None };
+        sc.remove(Cat::Kind);
+        assert_eq!(k.filter.format(), "status Ready and kind build");
+        // A surface's own categories are no group's.
+        let mut sc = Scope { k: &mut k, into: Some(0), refused: None };
+        sc.set(Cat::Wave, Op::Is, strs(&["1"]));
+        assert_eq!(k.local, Clauses::default());
     }
 
     /// Acceptance 1: each level's query and storage round trip — the same
