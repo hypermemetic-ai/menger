@@ -466,3 +466,48 @@ async fn deploy_10s_records_are_taken_whole() {
     assert_eq!(admitted(&store, "deployed shop/review/pr-412", T0), Vec::<String>::new(), "a failed review app runs nothing");
     assert_eq!(admitted(&store, "deployed staging", T0 * 2), ["MENGER-3", "SHOP-3", "SHOP-9"]);
 }
+
+/// DEPLOY-13: `running` — every environment's kept cells in one read, in
+/// display order (test before prod), each ticket in the store's order with
+/// since and the deploy that brought it; narrowed to a project, an
+/// environment, or ids (an environment with none of them answers empty, so
+/// a copy can replace it); a rollback's answer is the cells it left.
+#[tokio::test]
+async fn running_answers_every_environments_cells() {
+    let store = menger().await;
+    record(&store, rec("prod", "succeeded", "aaaaaaa", &["aaaaaaa"], T0)).await;
+    record(&store, rec("test", "succeeded", "bbbbbbb", &["aaaaaaa", "bbbbbbb"], T0 + 10)).await;
+    let cells = |r: Vec<DeploymentsEvent>| -> Vec<(String, Vec<(String, i64, u64)>)> {
+        r.into_iter()
+            .map(|e| match e {
+                DeploymentsEvent::Cells { environment, running, .. } => {
+                    (environment, running.into_iter().map(|c| (c.ticket, c.since, c.deployment)).collect())
+                }
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    };
+    let all = cells(store.running(None, None, None, None).unwrap());
+    assert_eq!(
+        all,
+        [
+            ("test".to_string(), vec![("MENGER-2".to_string(), T0 + 10, 2), ("MENGER-3".to_string(), T0 + 10, 2)]),
+            ("prod".to_string(), vec![("MENGER-2".to_string(), T0, 1)]),
+        ]
+    );
+    assert_eq!(cells(store.running(Some("MENGER"), Some("Prod"), None, None).unwrap()), [all[1].clone()]);
+    let ids = vec!["menger-3".to_string()];
+    assert_eq!(
+        cells(store.running(None, None, Some(&ids), None).unwrap()),
+        [("test".to_string(), vec![("MENGER-3".to_string(), T0 + 10, 2)]), ("prod".to_string(), vec![])]
+    );
+    let mut back = rec("test", "rolled_back", "aaaaaaa", &[], T0 + 20);
+    back.previous = Some("bbbbbbb".into());
+    record(&store, back).await;
+    assert_eq!(cells(store.running(None, Some("test"), None, None).unwrap()), [("test".to_string(), vec![])], "nothing ran on test before");
+    let none: HashSet<String> = HashSet::new();
+    assert!(store.running(None, None, None, Some(&none)).unwrap().is_empty(), "no project held: nothing");
+    assert!(store.running(Some("no such"), None, None, None).is_err());
+    let many: Vec<String> = (0..=super::deployments::RUNNING_IDS_MAX).map(|i| format!("MENGER-{i}")).collect();
+    assert!(store.running(None, None, Some(&many), None).is_err());
+}

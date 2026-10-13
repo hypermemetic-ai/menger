@@ -54,6 +54,11 @@
         "state",
         "tickets"
       ],
+      "running": [
+        "environment",
+        "ids",
+        "project"
+      ],
       "schema": [],
       "watch": []
     },

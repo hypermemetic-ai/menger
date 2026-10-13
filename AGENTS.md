@@ -195,8 +195,15 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger deployments environments --project menger
   synapse -P 4455 menger deployments list --environment prod --limit 20
   synapse -P 4455 menger deployments for_ticket --id MENGER-34
+  synapse -P 4455 menger deployments running --project menger --environment prod   # the kept cells
   synapse -P 4455 menger tickets list --filter 'category done and not deployed prod' --summary true
   ```
+
+  The app (DEPLOY-13) shows it: a ticket page's Running, a mark per
+  environment on board rows and wave cards, `#/deployments` (environments
+  as columns, each deploy and what it carried, the Complete work waiting
+  for the last one), the filter menu's Deployed and the palette's
+  `deployed …` — all live on `deployments.watch`.
 
   **Themes** (THEME-8) are the `themes` activation: a theme is a name and
   token overrides for light and dark — written as a ticket's ` ```theme

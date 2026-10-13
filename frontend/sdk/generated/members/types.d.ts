@@ -50,5 +50,11 @@ export declare function isMembersEventRevoked(e: MembersEvent): e is MembersEven
 export declare function isMembersEventWaiting(e: MembersEvent): e is MembersEventWaiting;
 export declare function isMembersEventMe(e: MembersEvent): e is MembersEventMe;
 export declare function isMembersEventError(e: MembersEvent): e is MembersEventError;
-/** A role, ordered: each includes the ones before it. */
-export type Role = "viewer" | "editor" | "admin";
+/** A role. Viewer, editor and admin are ordered, each including the ones
+before it. DEPLOY-14: `deployer` stands beside that line — a viewer's
+reads and `deployments.record`, nothing an editor may do — so a CI's key
+can be granted exactly what recording a deployment needs; its place in
+the order is only for sorting. (What each role may is the gate's,
+declared on each activation with `roles(...)`; this names the role a
+membership holds.) */
+export type Role = "viewer" | "deployer" | "editor" | "admin";

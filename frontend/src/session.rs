@@ -755,6 +755,12 @@ pub(crate) fn themes_client() -> Option<menger_tickets_api::ThemesClient<Rc<WsTr
     TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::ThemesClient::new)
 }
 
+/// DEPLOY-13: the `deployments` activation's typed client, over the same
+/// connection — `DeploymentsClient`, emitted from DEPLOY-11's declaration.
+pub(crate) fn deployments_client() -> Option<menger_tickets_api::DeploymentsClient<Rc<WsTransport>>> {
+    TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::DeploymentsClient::new)
+}
+
 /// IDENTITY-22: the `members` activation's typed client, over the same
 /// connection.
 pub(crate) fn members_client() -> Option<menger_tickets_api::MembersClient<Rc<WsTransport>>> {
@@ -858,6 +864,9 @@ async fn session(
     // COMMENT-3: the comments — `comments.watch`, then the list — only once
     // a view has asked (annotation mode, #/comments, a ticket page's count).
     comments::refresh();
+    // DEPLOY-13: where work runs — `deployments.watch`, then the
+    // environments and their cells — only once a view draws a mark.
+    crate::deploys::refresh();
     // THEME-8: the themes and what the site and each shortcode say —
     // `themes.watch`, then the list — on every connection: the site theme
     // holds on every page.
@@ -904,6 +913,11 @@ async fn session(
             registry::heard(data);
             // INPUT-6: an `input_changed` upserts the app's inputs.
             inputs::heard(data);
+            // DEPLOY-13: a commit linked or unlinked moves where the ticket
+            // runs (the server keeps the join): its cells asked again.
+            if let TicketsEvent::CommitsLinked { ticket, .. } | TicketsEvent::CommitsUnlinked { ticket, .. } = data {
+                crate::deploys::relinked(&ticket.id);
+            }
             frame::broadcast_change(data);
         }
         match ev {
@@ -1018,6 +1032,7 @@ async fn session(
                 refetch_open_children(last_error);
                 registry::refresh();
                 inputs::refresh();
+                crate::deploys::refresh();
                 STALE.with(|s| s.update(|n| *n = n.wrapping_add(1)));
             }
             // Future event kinds: ignore, stay live.

@@ -613,6 +613,7 @@ pub(crate) fn from_words(from: &From) -> String {
         (None, "comment") => "From a comment".into(),
         (None, "board note") => "From the board's notes".into(),
         (None, "draft") => "From the draft being edited".into(),
+        (_, "deployment") => "From a deployment's record (its CI run)".into(),
         (None, _) => "From text in menger".into(),
     }
 }
@@ -777,6 +778,8 @@ pub(crate) fn install() {
             .filter(|t| !t.is_empty());
         let place = match holder.get_attribute("data-links").as_deref() {
             Some("comment") => "comment",
+            // DEPLOY-13: a deploy's source on #/deployments.
+            Some("deployment") => "deployment",
             _ if holder.closest("#waves").ok().flatten().is_some() => "board note",
             _ => "body",
         };

@@ -101,6 +101,17 @@ export interface DeploymentsEventNotRunning {
   ticket: string;
 }
 
+/** DEPLOY-13: `running`: an environment's kept cells — every ticket
+running there (of the `ids` asked, when given), in the store's order.
+One per environment asked, an empty one included, so a copy can
+replace what it held for it. */
+export interface DeploymentsEventCells {
+  type: 'cells';
+  environment: string;
+  project: string;
+  running: RunningCell[];
+}
+
 /** Where a `list` stands, once, last: `next` is the id to pass as the
 next call's `after`, `null` when nothing more matches. */
 export interface DeploymentsEventPage {
@@ -122,7 +133,7 @@ export interface DeploymentsEventError {
 
 /** What the `deployments` activation streams. Every method returns
 `impl Stream<Item = DeploymentsEvent>`; a refusal is the in-band `Error`. */
-export type DeploymentsEvent = DeploymentsEventDeployment | DeploymentsEventDeployed | DeploymentsEventEnvironment | DeploymentsEventEnvironmentChanged | DeploymentsEventRunning | DeploymentsEventNotRunning | DeploymentsEventPage | DeploymentsEventLagged | DeploymentsEventError;
+export type DeploymentsEvent = DeploymentsEventDeployment | DeploymentsEventDeployed | DeploymentsEventEnvironment | DeploymentsEventEnvironmentChanged | DeploymentsEventRunning | DeploymentsEventNotRunning | DeploymentsEventCells | DeploymentsEventPage | DeploymentsEventLagged | DeploymentsEventError;
 
 export function isDeploymentsEventDeployment(e: DeploymentsEvent): e is DeploymentsEventDeployment { return e.type === 'deployment'; }
 export function isDeploymentsEventDeployed(e: DeploymentsEvent): e is DeploymentsEventDeployed { return e.type === 'deployed'; }
@@ -130,6 +141,7 @@ export function isDeploymentsEventEnvironment(e: DeploymentsEvent): e is Deploym
 export function isDeploymentsEventEnvironmentChanged(e: DeploymentsEvent): e is DeploymentsEventEnvironmentChanged { return e.type === 'environment_changed'; }
 export function isDeploymentsEventRunning(e: DeploymentsEvent): e is DeploymentsEventRunning { return e.type === 'running'; }
 export function isDeploymentsEventNotRunning(e: DeploymentsEvent): e is DeploymentsEventNotRunning { return e.type === 'not_running'; }
+export function isDeploymentsEventCells(e: DeploymentsEvent): e is DeploymentsEventCells { return e.type === 'cells'; }
 export function isDeploymentsEventPage(e: DeploymentsEvent): e is DeploymentsEventPage { return e.type === 'page'; }
 export function isDeploymentsEventLagged(e: DeploymentsEvent): e is DeploymentsEventLagged { return e.type === 'lagged'; }
 export function isDeploymentsEventError(e: DeploymentsEvent): e is DeploymentsEventError { return e.type === 'error'; }
@@ -153,4 +165,15 @@ export interface Environment {
   since?: number | null;
   /** How many tickets run there. */
   tickets: number;
+}
+
+/** DEPLOY-13: one ticket running in an environment — a kept cell, as
+`running` answers it. */
+export interface RunningCell {
+  /** That deploy. */
+  deployment: number;
+  /** Since when, unix seconds — the earliest still-counting deploy that
+carried it. */
+  since: number;
+  ticket: string;
 }

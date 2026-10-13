@@ -173,6 +173,18 @@ pub struct Environment {
     pub tickets: u64,
 }
 
+/// DEPLOY-13: one ticket running in an environment — a kept cell, as
+/// `running` answers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RunningCell {
+    pub ticket: String,
+    /// Since when, unix seconds — the earliest still-counting deploy that
+    /// carried it.
+    pub since: i64,
+    /// That deploy.
+    pub deployment: u64,
+}
+
 /// What the `deployments` activation streams. Every method returns
 /// `impl Stream<Item = DeploymentsEvent>`; a refusal is the in-band `Error`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -216,6 +228,11 @@ pub enum DeploymentsEvent {
     },
     /// `for_ticket`: an environment of the ticket's project it does not run in.
     NotRunning { ticket: String, project: String, environment: String },
+    /// DEPLOY-13: `running`: an environment's kept cells — every ticket
+    /// running there (of the `ids` asked, when given), in the store's order.
+    /// One per environment asked, an empty one included, so a copy can
+    /// replace what it held for it.
+    Cells { project: String, environment: String, running: Vec<RunningCell> },
     /// Where a `list` stands, once, last: `next` is the id to pass as the
     /// next call's `after`, `null` when nothing more matches.
     Page { next: Option<u64> },

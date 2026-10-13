@@ -150,7 +150,7 @@ pub use session_activation::Session;
 /// [`Deployment`], [`Environment`], [`DeploymentsEvent`]. Wasm-safe, like
 /// [`notes`].
 pub mod deployments;
-pub use deployments::{DeployState, Deployment, DeploymentsEvent, Environment};
+pub use deployments::{DeployState, Deployment, DeploymentsEvent, Environment, RunningCell};
 /// DEPLOY-11: the `deployments` activation, declared once: the server's
 /// [`Deployments`] and the browser's [`DeploymentsClient`].
 pub mod deployments_activation;

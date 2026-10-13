@@ -223,6 +223,20 @@ async fn record_test_then_prod_then_a_rollback() {
     let filtered = collect(call(&client, "tickets.list", json!({"filter": "not deployed prod and kind build", "summary": true})).await).await;
     let text = format!("{filtered:?}");
     assert!(text.contains("MENGER-3") && !text.contains("MENGER-2"), "{text}");
+    // DEPLOY-13: `running` — every environment's cells in one read, the
+    // rollback's taken out; an environment with none answers empty.
+    let cells = collect(call(&client, "deployments.running", json!({"project": "menger"})).await).await;
+    let says: Vec<(String, Vec<String>)> = cells
+        .iter()
+        .map(|c| {
+            assert_eq!(c["type"], "cells");
+            let ids = c["running"].as_array().unwrap().iter().map(|r| r["ticket"].as_str().unwrap().to_string()).collect();
+            (c["environment"].as_str().unwrap().to_string(), ids)
+        })
+        .collect();
+    assert_eq!(says, [("test".to_string(), vec!["MENGER-2".to_string(), "MENGER-3".to_string()]), ("prod".to_string(), vec!["MENGER-2".to_string()])]);
+    let only = collect(call(&client, "deployments.running", json!({"environment": "prod", "ids": ["MENGER-3"]})).await).await;
+    assert_eq!(only[0]["running"], json!([]));
     let refused = one(&client, "deployments.record", json!({"project": "nope", "environment": "prod", "state": "succeeded", "revision": "29a50be"})).await;
     assert_eq!(refused["type"], "error");
 }

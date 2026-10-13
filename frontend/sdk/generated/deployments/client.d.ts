@@ -10,6 +10,8 @@ export interface DeploymentsClient {
     list(after?: number | null, environment?: string | null, limit?: number | null, project?: string | null, state?: string | null, ticket?: string | null): AsyncGenerator<DeploymentsEvent>;
     /** Record a deployment (DEPLOY-10's record): the tickets its commits carry run in the environment; yields deployed { deployment, carried, unlinked, entered, left, duplicate } */
     record(environment: string, project: string, revision: string, state: string, at?: string | null, commits?: string[] | null, previous?: string | null, release?: string | null, source?: DeploySource | null, tickets?: string[] | null): AsyncGenerator<DeploymentsEvent>;
+    /** The kept cells: cells { project, environment, running: [{ ticket, since, deployment }] } per environment */
+    running(environment?: string | null, ids?: string[] | null, project?: string | null): AsyncGenerator<DeploymentsEvent>;
     /** Get plugin or method schema. Pass {"method": "name"} for a specific method. */
     schema(): Promise<unknown>;
     /** Watch deployments: deployed, then environment_changed, as each is recorded */

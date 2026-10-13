@@ -17,6 +17,10 @@
 //!   ago — or between two moments, a range on one calendar with a time for
 //!   each end. "now" and "start of today" are a click each, and the zone
 //!   the moments are read in is shown (the filter is sent with it).
+//! - **DEPLOY-13: Deployed** — the filter menu's own category, this pane
+//!   with two rows: Deployed to ▸ and Not deployed to ▸ an environment (a
+//!   chip for each the app holds, or one typed), then its window; a
+//!   deployed pill's environment segment reopens the environments.
 
 use leptos::prelude::*;
 use menger_tickets_api::filter::{HeldOf, Unit, When, Who, Window};
@@ -92,9 +96,12 @@ pub(crate) fn pane(lens: Lens, pop: Pop) -> impl IntoView {
 }
 
 fn root_view(pop: Pop) -> impl IntoView {
+    // DEPLOY-13: under Deployed, its two rows; else When's six.
+    let deployed = untrack(|| pop.open_cat_tracked()) == Some(crate::filter::Cat::Deployed);
+    let rows: Vec<Kind> = if deployed { Kind::DEPLOYED.to_vec() } else { Kind::ALL.to_vec() };
     view! {
-        <div class="when-rows wform" role="menu" aria-label="when">
-            {Kind::ALL.into_iter().map(|k| view! {
+        <div class="when-rows wform" role="menu" aria-label=if deployed { "deployed" } else { "when" }>
+            {rows.into_iter().map(|k| view! {
                 <button
                     type="button"
                     class="frow cat when-row"
@@ -150,6 +157,12 @@ fn new_view(lens: Lens, pop: Pop, kind: Kind) -> impl IntoView {
             </div>
         }
         .into_any(),
+        // DEPLOY-13: an environment first — every one the app holds, or
+        // one typed.
+        Kind::Deployed | Kind::NotDeployed => {
+            let not = kind == Kind::NotDeployed;
+            env_view(|| None, move |env: String| start(when::new_deployed(&env, not, None))).into_any()
+        }
         Kind::Held => view! {
             <div class="wsec" data-part="length">
                 <div class="whead">"in its status for over"</div>
@@ -218,6 +231,12 @@ fn edit_view(lens: Lens, pop: Pop, at: Slot, only: Option<Part>) -> impl IntoVie
                 </div>
             </div>
         }
+    });
+    let env_sec = (shows(Part::Env) && kind.needs_env()).then(|| {
+        env_view(
+            move || current.get().and_then(|t| when::env_of(&t).map(str::to_string)),
+            move |env: String| set(&|t| when::with_env(t, &env)),
+        )
     });
     let scope_sec = (shows(Part::Status) && kind == Kind::Held).then(|| {
         let of = move || current.get().and_then(|t| when::held(&t).map(|h| h.of.clone())).unwrap_or(HeldOf::Any);
@@ -294,6 +313,7 @@ fn edit_view(lens: Lens, pop: Pop, at: Slot, only: Option<Part>) -> impl IntoVie
             </button>
             <div class="wsaid" aria-live="polite">{said}</div>
             {status_sec}
+            {env_sec}
             {scope_sec}
             {window_sec}
             {length_sec}
@@ -335,6 +355,71 @@ fn length_view(current: Memo<Option<Timed>>, set: impl Fn(&dyn Fn(&Timed) -> Tim
                     "Set"
                 </button>
             </div>
+        </div>
+    }
+}
+
+/// DEPLOY-13: the environment — a chip for each one the app holds
+/// (src/deploys.rs: each name, then each project's own when there are
+/// several), `on` when it is the clause's; or one typed.
+fn env_view(on: impl Fn() -> Option<String> + Copy + Send + Sync + 'static, pick: impl Fn(String) + Copy + Send + Sync + 'static) -> impl IntoView {
+    crate::deploys::want();
+    let held = crate::deploys::held();
+    let choices = Memo::new(move |_| held.with(|h| h.as_ref().map(crate::deploys::Held::choices).unwrap_or_default()));
+    let typed = RwSignal::new(String::new());
+    let problem = RwSignal::new(None::<String>);
+    let take = move || {
+        let name = typed.get_untracked().trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        match menger_tickets_api::deployments::environment_of(&name) {
+            Ok(env) => {
+                problem.set(None);
+                typed.set(String::new());
+                pick(env);
+            }
+            Err(why) => problem.set(Some(why)),
+        }
+    };
+    view! {
+        <div class="wsec" data-part="env">
+            <div class="whead">"environment"</div>
+            <div class="wchips">
+                {move || {
+                    let cs = choices.get();
+                    if cs.is_empty() {
+                        return view! { <span class="whint">"no deployment recorded yet"</span> }.into_any();
+                    }
+                    cs.into_iter().map(|e| {
+                        let v = e.clone();
+                        let mine = e.clone();
+                        chip(e.clone(), e, move || on().as_deref() == Some(mine.as_str()), move || pick(v.clone()))
+                    }).collect_view().into_any()
+                }}
+                {move || on().filter(|e| !choices.get().contains(e)).map(|e| chip(e.clone(), e, || true, || {}))}
+            </div>
+            <div class="wrow">
+                <input
+                    class="win wenv"
+                    type="text"
+                    autocomplete="off"
+                    spellcheck="false"
+                    aria-label="another environment, by name"
+                    placeholder="another environment…"
+                    prop:value=move || typed.get()
+                    on:input=move |ev| typed.set(event_target_value(&ev))
+                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                        if crate::bindings::is(&ev, crate::bindings::Context::Field, "form.submit") {
+                            ev.prevent_default();
+                            ev.stop_propagation();
+                            take();
+                        }
+                    }
+                />
+                <button type="button" class="wbtn" data-apply="env" on:click=move |_| take()>"Set"</button>
+            </div>
+            {move || problem.get().map(|p| view! { <p class="werr" role="alert">{p}</p> })}
         </div>
     }
 }
