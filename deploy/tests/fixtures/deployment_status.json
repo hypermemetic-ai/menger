@@ -1,0 +1,23 @@
+{
+  "action": "created",
+  "deployment_status": {
+    "id": 2001,
+    "state": "success",
+    "environment": "production",
+    "target_url": "https://shop.example.com/",
+    "log_url": "https://github.com/acme/shop/actions/runs/11223344/job/9988",
+    "created_at": "2026-10-12T22:04:19Z",
+    "description": "Deployment finished successfully."
+  },
+  "deployment": {
+    "id": 1001,
+    "sha": "235ff62aa1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "ref": "main",
+    "task": "deploy",
+    "payload": { "previous": "29a50be", "tickets": ["SHOP-3"], "release": "shop-2026.10.12" },
+    "environment": "production",
+    "created_at": "2026-10-12T22:01:02Z"
+  },
+  "repository": { "name": "shop", "full_name": "acme/shop", "html_url": "https://github.com/acme/shop" },
+  "sender": { "login": "deploy-bot" }
+}

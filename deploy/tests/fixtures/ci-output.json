@@ -1,0 +1,8 @@
+{
+  "pipeline": { "id": 812, "url": "https://ci.example.com/shop/812" },
+  "target": { "env": { "name": "prod" } },
+  "git": { "head": "4f1c2a9be0d1", "base": "29a50be" },
+  "outcome": "ok",
+  "artifact": "shop-812.tar.gz",
+  "finished": "2026-10-12T22:04:19Z"
+}

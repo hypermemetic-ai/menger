@@ -1,0 +1,10 @@
+{
+  "project": "shop",
+  "environment": "prod",
+  "state": "succeeded",
+  "revision": "4f1c2a9be0d1",
+  "previous": "29a50be",
+  "release": "shop-812.tar.gz",
+  "at": "2026-10-12T22:04:19Z",
+  "source": { "system": "example-ci", "run": "812", "url": "https://ci.example.com/shop/812" }
+}

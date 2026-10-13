@@ -1,0 +1,347 @@
+#!/usr/bin/env bash
+# DEPLOY-10: the deployment record, made from whatever a CI already has.
+# One JSON shape (deploy/record.schema.json; deploy/README.md "The deployment
+# record") says what a deployment did; this adapter makes it from flags, a CI
+# job's environment, a GitHub deployment event, any JSON, or deploy/pipeline's
+# log, checks it against the schema, and prints it — or sends it to menger's
+# deployments.record (DEPLOY-11) through synapse. Needs bash, jq and (for
+# --commits-from-git) git; nothing else, so any CI runner can run it.
+#
+#   deploy/record --project menger --env prod --state succeeded --revision 235ff62 --previous 29a50be
+#   deploy/record --from github-actions          GITHUB_SHA, GITHUB_RUN_ID, … (+ MENGER_* below)
+#   deploy/record --from gitlab                  CI_COMMIT_SHA, CI_ENVIRONMENT_NAME, CI_JOB_ID, …
+#   deploy/record --from github-event FILE       a deployment_status (or deployment) payload
+#   deploy/record --from json [FILE]             any JSON (stdin by default), its record fields as
+#                                                they are, the rest mapped: --map 'environment=.env.name'
+#   deploy/record --from pipeline-log [FILE]     deploy/pipeline's deployments.log lines (stdin by
+#                                                default): one record per deployment line, in order,
+#                                                each line's previous from the lines before it
+#   deploy/record --validate [FILE]              check a record (stdin by default) against the schema
+#
+# Fields (each wins over what --from or --map gave):
+#   --project P  --env E (--environment)  --state started|succeeded|failed|rolled_back
+#   --revision SHA  --previous SHA  --commits A,B (repeatable)  --tickets ID,ID (repeatable)
+#   --release NAME  --at 2026-10-12T22:04:19Z (default: now)
+#   --source-system S  --source-run R  --source-url URL
+# Mapping: --map 'FIELD=JQ' (repeatable) sets FIELD (dotted: source.url) from the
+#   input — the JSON for json/github-event, the process environment for
+#   github-actions/gitlab, the parsed line {at,env,action,release,result} for
+#   pipeline-log. Flags still win.
+# The CI forms also read MENGER_PROJECT, MENGER_ENVIRONMENT, MENGER_STATE,
+#   MENGER_PREVIOUS, MENGER_RELEASE and MENGER_TICKETS when a job sets them.
+# --commits-from-git [--repo DIR]   commits = git log previous..revision, oldest first
+# --send [--port 4455] [--host H] [--token JWT] [--dry-run]
+#                                   synapse -P PORT -p RECORD menger deployments record
+#                                   (--dry-run: synapse -n, nothing sent); else the record
+#                                   is printed (--compact: one line)
+# Exit: 0 done · 1 usage or input refused · 2 the record breaks the schema · 3 send failed.
+set -euo pipefail
+
+HERE=$(dirname "$(readlink -f "$0")")
+SCHEMA=${DEPLOY_RECORD_SCHEMA:-$HERE/record.schema.json}
+SYNAPSE=${SYNAPSE:-synapse}
+
+say() { printf '%s\n' "$*" >&2; }
+die() { say "record: $*"; exit 1; }
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
+command -v jq >/dev/null || die "needs jq on PATH"
+
+# ── flags ───────────────────────────────────────────────────────────────────
+from=flags input="" validate=0 compact=0 from_git=0 repo=. send=0 port=4455 host="" token="" dry=0
+maps=()
+over=() # jq --arg pairs: name value
+commits=() tickets=()
+arg() { [[ $# -ge 2 ]] || die "$1 needs a value"; }
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -h|--help) usage; exit 0 ;;
+    --from) arg "$@"; from=$2; shift
+            if [[ ${2:-} != "" && ${2:-} != -* ]]; then input=$2; shift; fi ;;
+    --validate) validate=1; if [[ ${2:-} != "" && ${2:-} != -* ]]; then input=$2; shift; fi ;;
+    --project) arg "$@"; over+=(project "$2"); shift ;;
+    --env|--environment) arg "$@"; over+=(environment "$2"); shift ;;
+    --state) arg "$@"; over+=(state "$2"); shift ;;
+    --revision) arg "$@"; over+=(revision "$2"); shift ;;
+    --previous) arg "$@"; over+=(previous "$2"); shift ;;
+    --release) arg "$@"; over+=(release "$2"); shift ;;
+    --at) arg "$@"; over+=(at "$2"); shift ;;
+    --source-system) arg "$@"; over+=(source.system "$2"); shift ;;
+    --source-run) arg "$@"; over+=(source.run "$2"); shift ;;
+    --source-url) arg "$@"; over+=(source.url "$2"); shift ;;
+    --commits|--commit) arg "$@"; commits+=("$2"); shift ;;
+    --tickets|--ticket) arg "$@"; tickets+=("$2"); shift ;;
+    --map) arg "$@"; [[ $2 == *=* ]] || die "--map wants FIELD=JQ, got '$2'"; maps+=("$2"); shift ;;
+    --commits-from-git) from_git=1 ;;
+    --repo) arg "$@"; repo=$2; shift ;;
+    --send) send=1 ;;
+    --port|-P) arg "$@"; port=$2; shift ;;
+    --host|-H) arg "$@"; host=$2; shift ;;
+    --token|-t) arg "$@"; token=$2; shift ;;
+    --dry-run|-n) dry=1 ;;
+    --compact|-c) compact=1 ;;
+    --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}"; continue ;;
+    *) die "unknown argument '$1' (deploy/record --help)" ;;
+  esac; shift
+done
+[[ -f $SCHEMA ]] || die "no schema at $SCHEMA"
+read_input() { if [[ -n $input ]]; then [[ -r $input ]] || die "cannot read $input"; cat -- "$input"; else cat; fi; }
+
+# ── the schema, checked by jq ───────────────────────────────────────────────
+# The subset of JSON Schema record.schema.json uses, read from the schema
+# itself; a keyword this does not know is an error, so the two cannot drift.
+VALIDATE='
+def tmatch($t): if $t == "integer" then (type == "number" and . == floor) else type == $t end;
+def subschemas: ., ((.properties // {})[] | subschemas), (.items // empty | subschemas);
+def unknown_keywords:
+  [subschemas | keys - ["$schema","$id","$comment","title","description","examples","type","enum",
+                        "pattern","minLength","required","additionalProperties","properties","items"] | .[]]
+  | unique | if length > 0 then "the schema uses \(join(", ")), which deploy/record does not check" else empty end;
+def errs($s; $p):
+  . as $v
+  | (if $s | has("type") then ([$s.type] | flatten) as $ts
+       | if any($ts[]; . as $t | $v | tmatch($t)) then empty
+         else "\($p): \($v | tojson) is \($v | type), not \($ts | join(" or "))" end
+     else empty end),
+    (if $s | has("enum") then
+       if any($s.enum[]; . == $v) then empty
+       else "\($p): \($v | tojson) is not one of \($s.enum | map(tojson) | join(", "))" end
+     else empty end),
+    (if ($s | has("pattern")) and ($v | type) == "string" and ($v | test($s.pattern) | not)
+     then "\($p): \($v | tojson) does not match \($s.pattern)" else empty end),
+    (if ($s | has("minLength")) and ($v | type) == "string" and ($v | length) < $s.minLength
+     then "\($p): \($v | tojson) is shorter than \($s.minLength)" else empty end),
+    (if ($v | type) == "object" then
+       (($s.required // [])[] | select(. as $k | $v | has($k) | not) | "\($p).\(.): required"),
+       ($v | keys[] as $k
+        | if ($s.properties // {}) | has($k) then $v[$k] | errs($s.properties[$k]; "\($p).\($k)")
+          elif $s.additionalProperties == false then "\($p).\($k): not a field of the record"
+          else empty end)
+     else empty end),
+    (if ($v | type) == "array" and ($s | has("items")) then
+       $v | to_entries[] | .key as $i | .value | errs($s.items; "\($p)[\($i)]")
+     else empty end);
+[$schema[0] | unknown_keywords] as $u
+| if ($u | length) > 0 then $u else [errs($schema[0]; "record")] end'
+
+# stdin: records, one JSON value each → stdout: the same, compact; refuses (exit 2)
+# naming every error of every record that breaks the schema.
+check() {
+  local out
+  out=$(jq -c --slurpfile schema "$SCHEMA" "($VALIDATE) as \$e | if (\$e | length) == 0 then {ok: .} else {errors: \$e} end") \
+    || die "input is not JSON"
+  if jq -e 'select(has("errors"))' <<<"$out" >/dev/null; then
+    jq -r 'select(has("errors")) | .errors[] | "record: \(.)"' <<<"$out" >&2
+    exit 2
+  fi
+  jq -c '.ok' <<<"$out"
+}
+
+if [[ $validate == 1 ]]; then
+  read_input | check >/dev/null
+  say "record: valid"
+  exit 0
+fi
+
+# ── forms: each emits {input, record} lines ────────────────────────────────
+# MENGER_* : what a CI job sets when its own variables do not say it.
+CI_COMMON='
+def nz: if . == "" then null else . end;
+def menger: {
+  project: ($ENV.MENGER_PROJECT // "" | nz),
+  environment: ($ENV.MENGER_ENVIRONMENT // "" | nz),
+  state: ($ENV.MENGER_STATE // "" | nz),
+  previous: ($ENV.MENGER_PREVIOUS // "" | nz),
+  release: ($ENV.MENGER_RELEASE // "" | nz),
+  tickets: ($ENV.MENGER_TICKETS // "" | nz)
+};'
+
+form_github_actions() {
+  jq -nc "$CI_COMMON"'
+    $ENV as $e | menger as $m
+    | ($e.GITHUB_SERVER_URL // "https://github.com") as $server
+    | {input: $e, record: {
+        project: ($m.project // ($e.GITHUB_REPOSITORY // "" | split("/") | last // "" | nz)),
+        environment: $m.environment,
+        state: ($m.state // "succeeded"),
+        revision: ($e.GITHUB_SHA // "" | nz),
+        previous: $m.previous, release: $m.release, tickets: $m.tickets,
+        source: {system: "github-actions",
+                 run: ($e.GITHUB_RUN_ID // "" | nz),
+                 url: (if ($e.GITHUB_RUN_ID // "") != "" and ($e.GITHUB_REPOSITORY // "") != ""
+                       then "\($server)/\($e.GITHUB_REPOSITORY)/actions/runs/\($e.GITHUB_RUN_ID)" else null end)}}}'
+}
+
+form_gitlab() {
+  jq -nc "$CI_COMMON"'
+    $ENV as $e | menger as $m
+    | {input: $e, record: {
+        project: ($m.project // ($e.CI_PROJECT_NAME // "" | nz)),
+        environment: ($m.environment // ($e.CI_ENVIRONMENT_NAME // "" | nz)),
+        state: ($m.state // ({success: "succeeded", failed: "failed", canceled: "failed",
+                              running: "started"}[$e.CI_JOB_STATUS // ""]) // "succeeded"),
+        revision: ($e.CI_COMMIT_SHA // "" | nz),
+        previous: $m.previous,
+        release: ($m.release // ($e.CI_COMMIT_TAG // "" | nz)),
+        tickets: $m.tickets,
+        source: {system: "gitlab",
+                 run: ($e.CI_JOB_ID // $e.CI_PIPELINE_ID // "" | nz),
+                 url: ($e.CI_JOB_URL // $e.CI_PIPELINE_URL // "" | nz)}}}'
+}
+
+# GitHub's deployment_status (or deployment) webhook payload. A deployment's
+# own `payload` may carry previous, commits, tickets, release and project.
+form_github_event() {
+  [[ -n $input ]] || die "--from github-event needs the payload's file"
+  read_input | jq -c '
+    . as $in
+    | (.deployment // error("not a deployment or deployment_status payload: no .deployment")) as $d
+    | ($d.payload | if type == "string" then (fromjson? // {}) elif type == "object" then . else {} end) as $p
+    | .deployment_status as $s
+    | ($s.state // "pending") as $gs
+    | if $gs == "inactive" then error("an inactive deployment_status says a later deployment replaced this one; nothing was deployed") else . end
+    | {input: $in, record: {
+        project: ($p.project // $in.repository.name),
+        environment: ($s.environment // $d.environment),
+        state: ({success: "succeeded", failure: "failed", error: "failed",
+                 pending: "started", queued: "started", in_progress: "started"}[$gs]
+                // error("unknown deployment state \($gs | tojson)")),
+        revision: $d.sha, previous: $p.previous, commits: $p.commits, tickets: $p.tickets,
+        release: $p.release,
+        at: ($s.created_at // $d.created_at),
+        source: {system: "github", run: ($d.id | if . == null then null else tostring end),
+                 url: ($s.log_url // $s.target_url // null)}}}' \
+    || die "the payload is not a GitHub deployment event"
+}
+
+FIELDS='["project","environment","state","revision","previous","commits","tickets","release","at","source"]'
+form_json() {
+  read_input | jq -c --argjson f "$FIELDS" '{input: ., record: (if type == "object"
+      then with_entries(select(.key as $k | $f | index($k))) else {} end)}' \
+    || die "input is not JSON"
+}
+
+# deploy/pipeline's log: at, env, action, release, result — tab-separated.
+# Builds are not deployments. What runs on each env is followed down the log,
+# so each record's previous is what that env ran before it.
+form_pipeline_log() {
+  read_input | jq -Rnc '
+    def sha: capture("-(?<s>[0-9a-f]{7,40})$").s // null;
+    def rec($l; $state; $rel; $prev):
+      {input: $l, record: {project: "menger", environment: $l.env, state: $state,
+        revision: ($rel | sha), previous: ($prev | if . == null then null else sha end),
+        release: $rel, at: $l.at, source: {system: "menger-pipeline", run: $l.action, url: null}}};
+    foreach (inputs | select(test("\\S")) | split("\t")
+             | {at: .[0], env: .[1], action: .[2], release: .[3], result: (.[4] // "")}) as $l
+      ({runs: {}};
+       .runs[$l.env] as $was
+       | .emit = null
+       | if $l.env == "build" or ($l.action | IN("deploy", "sync", "promote", "rollback") | not) then .
+         elif $l.result == "ok" then
+           .emit = rec($l; if $l.action == "rollback" then "rolled_back" else "succeeded" end; $l.release; $was)
+           | .runs[$l.env] = $l.release
+         elif ($l.result | test("rolled back to \\S+$")) then
+           ($l.result | capture("rolled back to (?<w>\\S+)$").w) as $w
+           | .emit = rec($l; "rolled_back"; $w; $l.release) | .runs[$l.env] = $w
+         else
+           .emit = rec($l; "failed"; $l.release; $was)
+           | .runs[$l.env] = (if ($l.result | test("no previous release")) then null
+                              elif ($l.result | test("rollback to \\S+ ALSO failed")) then ($l.result | capture("rollback to (?<w>\\S+) ALSO").w)
+                              else $l.release end)
+         end;
+       .emit // empty)'
+}
+
+form_flags() { jq -nc '{input: {}, record: {}}'; }
+
+forms=$(mktemp); trap 'rm -f "$forms"' EXIT
+case $from in
+  flags) form_flags ;;
+  github-actions) form_github_actions ;;
+  gitlab) form_gitlab ;;
+  github-event) form_github_event ;;
+  json) form_json ;;
+  pipeline-log) form_pipeline_log ;;
+  *) die "unknown form '$from' (github-actions, gitlab, github-event, json, pipeline-log)" ;;
+esac > "$forms" || exit $?
+
+# ── maps, then flags, then tidy ─────────────────────────────────────────────
+prog='. as $pair | .record' margs=()
+i=0
+for m in "${maps[@]+"${maps[@]}"}"; do
+  field=${m%%=*} expr=${m#*=}
+  [[ $field =~ ^[a-z]+(\.[a-z]+)?$ ]] || die "--map: '$field' is not a record field"
+  prog+=" | setpath(\$map$i | split(\".\"); (\$pair.input | ($expr)))"
+  margs+=(--arg "map$i" "$field"); i=$((i + 1))
+done
+oargs=() j=0 ofold='{}'
+while [[ $j -lt ${#over[@]} ]]; do
+  oargs+=(--arg "o$j" "${over[$((j + 1))]}")
+  ofold+=" | setpath(\"${over[$j]}\" | split(\".\"); \$o$j)"
+  j=$((j + 2))
+done
+list_json() { printf '%s\n' "$@" | jq -Rsc 'split("\n") | map(select(. != ""))'; }
+now=$(date -u +%FT%TZ)
+
+records=$(jq -c "${margs[@]+"${margs[@]}"}" "${oargs[@]+"${oargs[@]}"}" \
+  --argjson commits "$(list_json "${commits[@]+"${commits[@]}"}")" \
+  --argjson tickets "$(list_json "${tickets[@]+"${tickets[@]}"}")" \
+  --arg now "$now" '
+  def nz: if . == "" then null else . end;
+  def list: if type == "string" then [splits("[\\s,]+") | select(. != "")]
+            elif type == "array" then map(tostring | splits("[\\s,]+") | select(. != "")) else . end;
+  ('"$prog"') as $r
+  | ('"$ofold"') as $o
+  | $r * $o
+  | if ($commits | length) > 0 then .commits = $commits else . end
+  | if ($tickets | length) > 0 then .tickets = $tickets else . end
+  | (.commits, .tickets) |= (if . == null then null else list end)
+  | .tickets |= (if type == "array" then map(ascii_upcase) else . end)
+  | (.project, .environment, .state, .revision, .previous, .release, .at) |= (if type == "string" then nz else . end)
+  | if .source == null then del(.source)
+    else .source |= (if type == "object" then
+                       with_entries(.value |= (if type == "number" then tostring elif type == "string" then nz else . end)
+                                    | select(.value != null))
+                     else . end)
+    end
+  | .at //= $now
+  | with_entries(select(.value != null))' < "$forms") \
+  || die "a --map expression failed"
+
+# ── commits from git ────────────────────────────────────────────────────────
+if [[ $from_git == 1 ]]; then
+  command -v git >/dev/null || die "--commits-from-git needs git on PATH"
+  filled=""
+  while IFS= read -r r; do
+    [[ -z $r ]] && continue
+    prev=$(jq -r '.previous // ""' <<<"$r") rev=$(jq -r '.revision // ""' <<<"$r")
+    if [[ -z $prev || -z $rev ]]; then
+      say "record: --commits-from-git: no previous for $(jq -r '"\(.environment)@\(.revision)"' <<<"$r") — commits left out; menger works from what it has seen"
+      filled+=$r$'\n'; continue
+    fi
+    pre="" ; [[ $rev == *@* ]] && pre=${rev%@*}@
+    a=$(git -C "$repo" rev-parse --verify --quiet "${prev#*@}^{commit}") || die "--commits-from-git: no commit $prev in $repo"
+    b=$(git -C "$repo" rev-parse --verify --quiet "${rev#*@}^{commit}") || die "--commits-from-git: no commit $rev in $repo"
+    list=$(git -C "$repo" log --reverse --format="$pre%H" "$a..$b" | jq -Rsc 'split("\n") | map(select(. != ""))')
+    filled+=$(jq -c --argjson c "$list" '.commits = $c' <<<"$r")$'\n'
+  done <<<"$records"
+  records=$filled
+fi
+
+[[ -n ${records//[$'\n ']/} ]] || { say "record: the input holds no deployment"; exit 0; }
+records=$(check <<<"$records")
+
+# ── print, or send ──────────────────────────────────────────────────────────
+if [[ $send == 0 ]]; then
+  if [[ $compact == 1 || $(wc -l <<<"$records") -gt 1 ]]; then printf '%s\n' "$records"
+  else jq . <<<"$records"; fi
+  exit 0
+fi
+sargs=()
+[[ -n $host ]] && sargs+=(-H "$host")
+sargs+=(-P "$port")
+[[ -n $token ]] && sargs+=(-t "$token")
+[[ $dry == 1 ]] && sargs+=(-n)
+while IFS= read -r r; do
+  "$SYNAPSE" "${sargs[@]}" -p "$r" menger deployments record \
+    || { say "record: synapse failed sending $(jq -r '"\(.environment) \(.state) \(.revision)"' <<<"$r")"; exit 3; }
+done <<<"$records"
