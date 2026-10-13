@@ -198,6 +198,9 @@ deploy/record --from json --map 'environment=.env.name' < ci-output.json   # any
 deploy/record --from pipeline-log ~/.local/share/menger-deploy/deployments.log   # one record per deploy line
 deploy/record … --commits-from-git [--repo DIR]   # commits = git log previous..revision
 deploy/record … --send --port 4455 [--token JWT] [--dry-run]
+deploy/record … --send --url wss://menger.example.com [--header 'K: V']   # no synapse: the WebSocket (a deploy key
+                                               # in MENGER_DEPLOY_KEY signs in), or http(s):// the REST bridge
+deploy/record … --previous-from-menger          # previous = what menger says the environment runs now
 deploy/record --validate < record.json
 ```
 
@@ -215,7 +218,8 @@ deploy/record --validate < record.json
   job's `environment:`, so a workflow names it (`MENGER_ENVIRONMENT: prod` or
   `--env prod`). With no state given, a GitHub Actions step says `succeeded`
   (it runs after the deploy step succeeded); GitLab's comes from
-  `CI_JOB_STATUS` (`after_script`). The project defaults to the repository's
+  `CI_JOB_STATUS` (`after_script`); GitHub's `job.status` words are read too (`success` →
+  succeeded, `failure`/`cancelled` → failed). The project defaults to the repository's
   name.
 - **`github-event`**: `success` → succeeded, `failure`/`error` → failed,
   `pending`/`queued`/`in_progress` (or a `deployment` event) → started;
@@ -236,6 +240,198 @@ deploy/record --validate < record.json
 Tests: `deploy/tests/run` (fixtures in `deploy/tests/fixtures/`: a GitHub
 Actions environment, a `deployment_status` payload, a GitLab environment, a
 pipeline log, any JSON); `cargo test` runs it, so the gate does.
+
+## Deployments from any CI (DEPLOY-14)
+
+A CI records each deployment where it happens: a GitHub Actions workflow
+with one step, any other CI with one `deploy/record` command. Each speaks
+straight to menger — no synapse on the runner.
+
+**GitHub Actions.** `deploy/record-action` is a composite action around
+`deploy/record --from github-actions --previous-from-menger
+--commits-from-git --send --url …`. Run it before the deploy as `started`,
+and after it, `if: always()`, with the job's status:
+
+```yaml
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hypermemetic/menger/deploy/record-action@v1
+        with: { menger-url: "${{ vars.MENGER_URL }}", key: "${{ secrets.MENGER_DEPLOY_KEY }}", project: PANTRY, environment: prod, state: started }
+      - run: ./deploy.sh prod
+      - uses: hypermemetic/menger/deploy/record-action@v1
+        if: always()
+        with:
+          menger-url: ${{ vars.MENGER_URL }}
+          key: ${{ secrets.MENGER_DEPLOY_KEY }}
+          project: PANTRY
+          environment: prod                     # the job's environment: GitHub has no context for it
+          state: ${{ job.status }}              # success → succeeded; failure, cancelled → failed
+```
+
+- `GITHUB_SHA` is the revision, `GITHUB_RUN_ID` the run (a re-run step is
+  the same deployment, kept once), the run's page the source.
+- **Previous and commits.** The previous revision is what menger says the
+  environment runs now (`deployments.environments`; the `started` record
+  changes nothing there), and the commits are `git log previous..revision`
+  from the checkout. The default `actions/checkout` is shallow
+  (`fetch-depth: 1`): the action fetches the history itself, or check out
+  with `fetch-depth: 0`. A first deployment sends no commits; `previous:`
+  overrides the question.
+- Other inputs: `release`, `tickets`, `agent` (default `github-actions`),
+  `headers`, `path`, `commits-from-git: false`. Outputs: `deployment` (its
+  id) and `carried` (the tickets); the step summary says both.
+- The runner needs bash, git, jq and node ≥ 18, which every GitHub-hosted
+  runner has.
+
+**The deploy key.** A CI signs in with an agent key (IDENTITY-40/42) that
+holds the `deployer` role on the project's shortcode: the reads, and
+`deployments.record` — nothing an editor may do, and no other project. No
+person's session is involved, and no token expires.
+
+```sh
+synapse _key new pantry-deploy       # prints key:<hex>; the seed is in ~/.plexus/keys/pantry-deploy.key
+node deploy/menger-call.mjs --new-key   # or without synapse: the seed (line 1), then key:<hex>
+synapse -P 4455 -t "$ADMIN" menger members grant --principal key:<hex> --scope PANTRY --role deployer
+gh secret set MENGER_DEPLOY_KEY < ~/.plexus/keys/pantry-deploy.key
+gh variable set MENGER_URL --body wss://menger.example.com
+```
+
+menger must admit key proofs: `--auth-provider key` (in
+`MENGER_AUTH_PROVIDERS`). On each call `deploy/menger-call.mjs` signs a
+fresh proof naming the URL it dials, for the agent `--agent`; the
+connection is `key:<hex>`, and each deployment is `recorded_by` it. To stop
+a CI, revoke its key: `members revoke --principal key:<hex> --scope PANTRY`.
+A deploy key is also `auth.grant`'s `deployer` (AUTH-7). A file holding a
+deployer grant opens only in a build from DEPLOY-14 on (an older build does
+not know the role): revoke it before going back past it.
+
+**Reaching menger.** `--url` (the action's `menger-url`) picks the way:
+
+| `--url` | how | login |
+|---|---|---|
+| `ws://host:4455`, `wss://…` | the WebSocket, through `deploy/menger-call.mjs` (Node's standard library only) | any; a deploy key signs in |
+| `http://host:4457`, `https://…` | the REST bridge, through curl: `POST /rest/deployments/record` | none — REST carries no identity, so `deploy/record` refuses a key there |
+| none | synapse: `--send --port 4455 [--host H] [--token T]` | any |
+
+The WebSocket is the one way with a key: the proof rides the upgrade as
+`Authorization: Bearer plexus-key.…`, which the REST bridge never reads, and
+a menger with `--require-login` has no REST bridge at all. REST is for a
+menger without login on a private network.
+
+**Behind a tunnel** (Cloudflare Tunnel, Tailscale Funnel, ngrok, `ssh -R`):
+point the tunnel's hostname at menger's WebSocket port and name it to menger
+as a socket a proof may name — the proof's audience is the URL the CI
+dials, and menger accepts only its own:
+
+```sh
+menger --auth-provider key=wss://menger.example.com …   # or --public-url https://menger.example.com (its ws form)
+```
+
+A tunnel that gates requests itself takes its headers on every call —
+`headers:` in the action, `--header 'Name: value'` (repeatable) for
+`deploy/record`, `MENGER_HEADERS` (one a line) for `menger-call.mjs`:
+`CF-Access-Client-Id` and `CF-Access-Client-Secret` for a Cloudflare Access
+service token. A proof is good for a minute and once; the connection opened
+with it, for five.
+
+**Getting `deploy/record`** on a runner that has no menger checkout — three
+files, beside each other:
+
+```sh
+mkdir -p .menger && for f in record record.schema.json menger-call.mjs; do curl -fsSL "https://raw.githubusercontent.com/hypermemetic/menger/v1/deploy/$f" -o ".menger/$f"; done && chmod +x .menger/record
+```
+
+Each snippet below is run by `deploy/tests/run`, its records checked
+against the schema (`<!-- ci-snippet … -->` marks them).
+
+**GitLab CI.** `--from gitlab` reads `CI_COMMIT_SHA`, `CI_ENVIRONMENT_NAME`,
+`CI_JOB_ID`/`URL` and `CI_JOB_STATUS` — `running` in `before_script` is
+`started`, `success` or `failed` in `after_script` the outcome. The key is a
+masked CI/CD variable, `MENGER_DEPLOY_KEY`; `MENGER_URL` beside it.
+
+<!-- ci-snippet gitlab -->
+```yaml
+deploy:
+  stage: deploy
+  image: node:22                         # bash, git, curl, node; jq below
+  environment: production
+  variables:
+    GIT_DEPTH: 0                         # the whole history: previous..revision
+    MENGER_PROJECT: PANTRY
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq jq
+    - mkdir -p .menger && for f in record record.schema.json menger-call.mjs; do curl -fsSL "https://raw.githubusercontent.com/hypermemetic/menger/v1/deploy/$f" -o ".menger/$f"; done && chmod +x .menger/record
+    - .menger/record --from gitlab --previous-from-menger --commits-from-git --send --url "$MENGER_URL"
+  script:
+    - ./deploy.sh production
+  after_script:
+    - .menger/record --from gitlab --previous-from-menger --commits-from-git --send --url "$MENGER_URL"
+```
+
+**Buildkite.** No form of its own: flags from Buildkite's variables.
+
+<!-- ci-snippet buildkite -->
+```yaml
+steps:
+  - label: ":rocket: prod"
+    command: |
+      mkdir -p .menger && for f in record record.schema.json menger-call.mjs; do curl -fsSL "https://raw.githubusercontent.com/hypermemetic/menger/v1/deploy/$f" -o ".menger/$f"; done && chmod +x .menger/record
+      .menger/record --project PANTRY --env prod --state started --revision "$BUILDKITE_COMMIT" \
+        --source-system buildkite --source-run "$BUILDKITE_BUILD_ID" --source-url "$BUILDKITE_BUILD_URL" \
+        --previous-from-menger --commits-from-git --send --url "$MENGER_URL"
+      if ./deploy.sh prod; then state=succeeded; else state=failed; fi
+      .menger/record --project PANTRY --env prod --state "$state" --revision "$BUILDKITE_COMMIT" \
+        --source-system buildkite --source-run "$BUILDKITE_BUILD_ID" --source-url "$BUILDKITE_BUILD_URL" \
+        --previous-from-menger --commits-from-git --send --url "$MENGER_URL"
+      test "$state" = succeeded
+```
+
+**A plain shell script.** Any deploy that is a script records itself:
+
+<!-- ci-snippet shell -->
+```sh
+#!/usr/bin/env bash
+# release ENV — deploys this checkout's HEAD to ENV and records it in menger
+set -uo pipefail
+env=$1 rev=$(git rev-parse HEAD) run="$(hostname)-$(date +%s)"
+record() { .menger/record --project PANTRY --env "$env" --state "$1" --revision "$rev" \
+  --source-system shell --source-run "$run" --previous-from-menger --commits-from-git --send --url "$MENGER_URL"; }
+record started
+if ./deploy.sh "$env"; then record succeeded; else record failed; exit 1; fi
+```
+
+**GitHub's `deployment_status` webhook: no change at all.** A job that
+names an `environment:` already makes GitHub create a deployment and post
+its statuses. `deploy/github-relay.mjs` (Node, nothing to install) receives
+the repository's webhook — content type `application/json`, the
+*Deployment statuses* event, a secret — checks the signature, and hands each
+status to `deploy/record --from github-event --previous-from-menger --send`:
+
+```sh
+GITHUB_WEBHOOK_SECRET=… MENGER_URL=wss://menger.example.com MENGER_DEPLOY_KEY=… \
+  node deploy/github-relay.mjs --port 8787 --project PANTRY --repo /srv/clones/pantry
+```
+
+`--project` when the repository's name is not the shortcode; `--repo` a
+clone it fetches and lists the commits from (without one, the record
+carries the revision and previous only). It answers 202 once recorded, 204
+for what is no deployment (a ping, `inactive`), 401 for a bad signature and
+502 when menger refused it — GitHub's *Recent Deliveries* shows which, and
+redelivers. The relay must be reachable by GitHub; the action is the way
+when only the runner can reach menger.
+
+**Talking to menger from a script.** `deploy/menger-call.mjs` calls any
+method over the WebSocket — one call per params line on stdin, or
+`--params`; each data item a JSON line; exit 3 on a refusal:
+
+```sh
+MENGER_DEPLOY_KEY=… node deploy/menger-call.mjs --url wss://menger.example.com deployments.for_ticket --params '{"id":"PANTRY-12"}'
+node deploy/menger-call.mjs --principal      # key:<hex> of $MENGER_DEPLOY_KEY: what to grant
+```
 
 ## Where things are
 

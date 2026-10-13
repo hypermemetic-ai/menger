@@ -34,12 +34,26 @@
 #                                   synapse -P PORT -p RECORD menger deployments record
 #                                   (--dry-run: synapse -n, nothing sent); else the record
 #                                   is printed (--compact: one line)
+# --send --url URL [--agent ID] [--header 'Name: value']…        (DEPLOY-14: no synapse)
+#                                   ws(s)://HOST[:PORT] — the WebSocket, through
+#                                   deploy/menger-call.mjs (Node ≥ 18, nothing else); a
+#                                   deploy key in $MENGER_DEPLOY_KEY (an Ed25519 seed, base64)
+#                                   signs in as key:<hex>, agent ID (default ci)
+#                                   http(s)://HOST[:PORT] — the REST bridge, through curl: a
+#                                   menger without login only (REST carries no identity)
+#                                   --header: for a tunnel's own gate, on either
+# --previous-from-menger            no previous given: ask menger what the environment
+#                                   runs now (deployments.environments, over --url or
+#                                   synapse) — what this deployment replaces; then
+#                                   --commits-from-git has its range
 # Exit: 0 done · 1 usage or input refused · 2 the record breaks the schema · 3 send failed.
 set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 SCHEMA=${DEPLOY_RECORD_SCHEMA:-$HERE/record.schema.json}
 SYNAPSE=${SYNAPSE:-synapse}
+# DEPLOY-14: what speaks the WebSocket for --url ws(s)://; a test stands in for it.
+MENGER_CALL=${MENGER_CALL:-}
 
 say() { printf '%s\n' "$*" >&2; }
 die() { say "record: $*"; exit 1; }
@@ -48,6 +62,7 @@ command -v jq >/dev/null || die "needs jq on PATH"
 
 # ── flags ───────────────────────────────────────────────────────────────────
 from=flags input="" validate=0 compact=0 from_git=0 repo=. send=0 port=4455 host="" token="" dry=0
+url="" agent=${MENGER_AGENT:-ci} prev_from_menger=0 headers=()
 maps=()
 over=() # jq --arg pairs: name value
 commits=() tickets=()
@@ -78,12 +93,22 @@ while [[ $# -gt 0 ]]; do
     --host|-H) arg "$@"; host=$2; shift ;;
     --token|-t) arg "$@"; token=$2; shift ;;
     --dry-run|-n) dry=1 ;;
+    --url) arg "$@"; url=${2%/}; shift ;;
+    --agent) arg "$@"; agent=$2; shift ;;
+    --header) arg "$@"; [[ $2 == *:* ]] || die "--header wants 'Name: value', got '$2'"; headers+=("$2"); shift ;;
+    --previous-from-menger) prev_from_menger=1 ;;
     --compact|-c) compact=1 ;;
     --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}"; continue ;;
     *) die "unknown argument '$1' (deploy/record --help)" ;;
   esac; shift
 done
 [[ -f $SCHEMA ]] || die "no schema at $SCHEMA"
+case $url in
+  ""|ws://*|wss://*) ;;
+  http://*|https://*)
+    [[ -z ${MENGER_DEPLOY_KEY:-} ]] || die "--url $url is the REST bridge, which carries no identity: a deploy key signs in over the WebSocket — --url ws(s)://…" ;;
+  *) die "--url $url: ws:// or wss:// (the WebSocket), http:// or https:// (the REST bridge)" ;;
+esac
 read_input() { if [[ -n $input ]]; then [[ -r $input ]] || die "cannot read $input"; cat -- "$input"; else cat; fi; }
 
 # ── the schema, checked by jq ───────────────────────────────────────────────
@@ -162,7 +187,8 @@ form_github_actions() {
     | {input: $e, record: {
         project: ($m.project // ($e.GITHUB_REPOSITORY // "" | split("/") | last // "" | nz)),
         environment: $m.environment,
-        state: ($m.state // "succeeded"),
+        state: (($m.state // "succeeded") as $s
+                | {success: "succeeded", failure: "failed", cancelled: "failed"}[$s] // $s),
         revision: ($e.GITHUB_SHA // "" | nz),
         previous: $m.previous, release: $m.release, tickets: $m.tickets,
         source: {system: "github-actions",
@@ -309,6 +335,54 @@ records=$(jq -c "${margs[@]+"${margs[@]}"}" "${oargs[@]+"${oargs[@]}"}" \
   | with_entries(select(.value != null))' < "$forms") \
   || die "a --map expression failed"
 
+# ── talking to menger: the WebSocket (node), the REST bridge (curl), synapse ─
+# menger_call NAMESPACE.METHOD PARAMS_JSON → each data item's content, a line
+# each; exit 3 when menger refused or could not be reached.
+menger_call() {
+  local method=$1 params=$2 out
+  case $url in
+    ws://*|wss://*)
+      [[ -n $MENGER_CALL ]] || command -v node >/dev/null || die "--url $url needs node on PATH (≥ 18) — or send through synapse (--port)"
+      local hargs=(); for h in "${headers[@]+"${headers[@]}"}"; do hargs+=(--header "$h"); done
+      local call=(node "$HERE/menger-call.mjs"); [[ -n $MENGER_CALL ]] && call=("$MENGER_CALL")
+      "${call[@]}" --url "$url" --agent "$agent" "${hargs[@]+"${hargs[@]}"}" "$method" --params "$params" ;;
+    http://*|https://*)
+      command -v curl >/dev/null || die "--url $url needs curl on PATH"
+      local hargs=(); for h in "${headers[@]+"${headers[@]}"}"; do hargs+=(-H "$h"); done
+      out=$(curl -sS --fail-with-body --max-time 60 -X POST -H 'content-type: application/json' \
+              "${hargs[@]+"${hargs[@]}"}" --data-binary "$params" "$url/rest/${method/./\/}") \
+        || { say "record: $url: ${out:-no answer}"; return 3; }
+      jq -c '.data[]?' <<<"$out" || { say "record: $url answered no JSON: ${out:0:200}"; return 3; }
+      jq -e '[.data[]? | select(.type == "error")] | length == 0' <<<"$out" >/dev/null || return 3 ;;
+    *)
+      out=$("$SYNAPSE" -j "${sargs[@]}" -p "$params" menger "${method%%.*}" "${method#*.}") || return 3
+      jq -c 'select(.type == "data") | .content' <<<"$out"
+      jq -e -s 'all(.[]; .type != "error" and (.content.type? // "") != "error")' <<<"$out" >/dev/null || return 3 ;;
+  esac
+}
+sargs=()
+[[ -n $host ]] && sargs+=(-H "$host")
+sargs+=(-P "$port")
+[[ -n $token ]] && sargs+=(-t "$token")
+
+# ── previous from menger: what the environment runs now ────────────────────
+if [[ $prev_from_menger == 1 ]]; then
+  asked=""
+  while IFS= read -r r; do
+    [[ -z $r ]] && continue
+    if [[ $(jq -r '.previous // ""' <<<"$r") == "" ]] && jq -e '.project and .environment' <<<"$r" >/dev/null; then
+      envs=$(menger_call deployments.environments "$(jq -c '{project}' <<<"$r")") \
+        || die "--previous-from-menger: menger did not answer what $(jq -r '"\(.project)/\(.environment)"' <<<"$r") runs"
+      prev=$(jq -r --arg e "$(jq -r '.environment | ascii_downcase' <<<"$r")" \
+               'select(.type == "environment") | .environment | select(.name == $e) | .revision // empty' <<<"$envs" | head -n1)
+      if [[ -n $prev ]]; then r=$(jq -c --arg p "$prev" '.previous = $p' <<<"$r")
+      else say "record: --previous-from-menger: $(jq -r '"\(.project)/\(.environment)"' <<<"$r") runs nothing menger knows — a first deployment"; fi
+    fi
+    asked+=$r$'\n'
+  done <<<"$records"
+  records=$asked
+fi
+
 # ── commits from git ────────────────────────────────────────────────────────
 if [[ $from_git == 1 ]]; then
   command -v git >/dev/null || die "--commits-from-git needs git on PATH"
@@ -321,6 +395,13 @@ if [[ $from_git == 1 ]]; then
       filled+=$r$'\n'; continue
     fi
     pre="" ; [[ $rev == *@* ]] && pre=${rev%@*}@
+    # DEPLOY-14: a CI's shallow checkout (GitHub's fetch-depth: 1) lacks the
+    # range; fetch the history from its remote first, once.
+    if [[ $(git -C "$repo" rev-parse --is-shallow-repository 2>/dev/null) == true ]] \
+       && ! git -C "$repo" merge-base --is-ancestor "${prev#*@}" "${rev#*@}" 2>/dev/null; then
+      say "record: --commits-from-git: $repo is a shallow clone — fetching its history for ${prev#*@}..${rev#*@}"
+      git -C "$repo" fetch --quiet --unshallow --no-tags 2>/dev/null || git -C "$repo" fetch --quiet --no-tags origin "${prev#*@}" 2>/dev/null || true
+    fi
     a=$(git -C "$repo" rev-parse --verify --quiet "${prev#*@}^{commit}") || die "--commits-from-git: no commit $prev in $repo"
     b=$(git -C "$repo" rev-parse --verify --quiet "${rev#*@}^{commit}") || die "--commits-from-git: no commit $rev in $repo"
     list=$(git -C "$repo" log --reverse --format="$pre%H" "$a..$b" | jq -Rsc 'split("\n") | map(select(. != ""))')
@@ -338,10 +419,15 @@ if [[ $send == 0 ]]; then
   else jq . <<<"$records"; fi
   exit 0
 fi
-sargs=()
-[[ -n $host ]] && sargs+=(-H "$host")
-sargs+=(-P "$port")
-[[ -n $token ]] && sargs+=(-t "$token")
+if [[ -n $url ]]; then
+  # DEPLOY-14: straight to menger, no synapse — the answer (`deployed`) printed.
+  while IFS= read -r r; do
+    if [[ $dry == 1 ]]; then say "record: would send to $url deployments.record:"; printf '%s\n' "$r"; continue; fi
+    menger_call deployments.record "$r" \
+      || { say "record: $url refused $(jq -r '"\(.environment) \(.state) \(.revision)"' <<<"$r")"; exit 3; }
+  done <<<"$records"
+  exit 0
+fi
 [[ $dry == 1 ]] && sargs+=(-n)
 while IFS= read -r r; do
   "$SYNAPSE" "${sargs[@]}" -p "$r" menger deployments record \

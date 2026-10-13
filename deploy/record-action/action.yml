@@ -1,0 +1,123 @@
+# DEPLOY-14: a GitHub Actions job records its deployment in menger with one
+# step. A composite action around deploy/record (DEPLOY-10):
+#
+#   deploy/record --from github-actions --previous-from-menger --commits-from-git --send --url …
+#
+# GITHUB_SHA is the revision, GITHUB_RUN_ID the run (a retried step is one
+# deployment), the run's page the source; `state` takes job.status's words
+# (success → succeeded, failure and cancelled → failed) or the record's own
+# (started, succeeded, failed, rolled_back). The previous revision is what
+# menger says the environment runs now, and the commits between are read
+# from the checkout — fetched in full first if it is shallow, so the default
+# `actions/checkout` (fetch-depth: 1) works. Needs bash, git, jq and node
+# (≥ 18) — every GitHub-hosted runner has them; synapse is not used.
+#
+#   - uses: hypermemetic/menger/deploy/record-action@v1
+#     if: always()
+#     with:
+#       menger-url: ${{ vars.MENGER_URL }}      # wss://menger.example.com (a tunnel's), or ws://host:4455
+#       key: ${{ secrets.MENGER_DEPLOY_KEY }}   # the deploy key's seed: granted deployer on the project
+#       project: PANTRY
+#       environment: prod                       # the job's `environment:` name (GitHub has no context for it)
+#       state: ${{ job.status }}
+#
+# README "Deployments from any CI" has the deploy key, the tunnel and the
+# other CIs.
+name: Record a deployment in menger
+description: Records this job's deployment (DEPLOY-10's record) in menger, so each ticket shows where its work runs.
+author: hypermemetic
+branding:
+  icon: upload-cloud
+  color: purple
+
+inputs:
+  menger-url:
+    description: "menger's WebSocket, ws:// or wss:// (any login; a deploy key signs in), or its REST bridge, http(s):// (a menger without login only)"
+    required: true
+  key:
+    description: "The deploy key: an Ed25519 seed in base64 (`synapse _key new`, or `node deploy/menger-call.mjs --new-key`) whose key:<hex> holds the deployer role on the project. Empty: no sign-in (a menger without login)"
+    required: false
+    default: ""
+  project:
+    description: "Whose environment: the project's shortcode (any case)"
+    required: true
+  environment:
+    description: "The environment's name — test, staging, prod, pr-412 …"
+    required: true
+  state:
+    description: "job.status (success, failure, cancelled — pass it as the expression) or the record's own: started, succeeded, failed, rolled_back"
+    required: true
+  previous:
+    description: "The commit that ran before; empty: asked of menger (what the environment runs now)"
+    required: false
+    default: ""
+  commits-from-git:
+    description: "List the commits previous..revision from the checkout (true/false)"
+    required: false
+    default: "true"
+  release:
+    description: "The artifact's name (optional)"
+    required: false
+    default: ""
+  tickets:
+    description: "Ticket ids to add to what the commits give, comma or space separated (optional)"
+    required: false
+    default: ""
+  agent:
+    description: "The agent id the key signs in as (shown beside its principal)"
+    required: false
+    default: "github-actions"
+  headers:
+    description: "Extra request headers, one `Name: value` a line — a tunnel's own gate (Cloudflare Access' CF-Access-Client-Id / -Secret, …)"
+    required: false
+    default: ""
+  path:
+    description: "The checkout to read commits from"
+    required: false
+    default: "."
+
+outputs:
+  deployment:
+    description: "The deployment's id in menger"
+    value: ${{ steps.record.outputs.deployment }}
+  carried:
+    description: "The tickets the deployment carried, comma separated"
+    value: ${{ steps.record.outputs.carried }}
+
+runs:
+  using: composite
+  steps:
+    - id: record
+      shell: bash
+      # Inputs reach the script as environment, never spliced into it.
+      env:
+        MENGER_URL: ${{ inputs.menger-url }}
+        MENGER_DEPLOY_KEY: ${{ inputs.key }}
+        MENGER_PROJECT: ${{ inputs.project }}
+        MENGER_ENVIRONMENT: ${{ inputs.environment }}
+        MENGER_STATE: ${{ inputs.state }}
+        MENGER_PREVIOUS: ${{ inputs.previous }}
+        MENGER_RELEASE: ${{ inputs.release }}
+        MENGER_TICKETS: ${{ inputs.tickets }}
+        MENGER_AGENT: ${{ inputs.agent }}
+        MENGER_HEADERS: ${{ inputs.headers }}
+        MENGER_FROM_GIT: ${{ inputs.commits-from-git }}
+        MENGER_REPO: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        for tool in jq node git; do
+          command -v "$tool" >/dev/null || { echo "::error::record-action needs $tool on the runner"; exit 1; }
+        done
+        args=(--from github-actions --previous-from-menger --send --url "$MENGER_URL" --repo "$MENGER_REPO")
+        [[ $MENGER_FROM_GIT == true ]] && args+=(--commits-from-git)
+        while IFS= read -r h; do [[ -n ${h// /} ]] && args+=(--header "$h"); done <<<"$MENGER_HEADERS"
+        unset MENGER_HEADERS   # passed as --header above
+        out=$("$GITHUB_ACTION_PATH/../record" "${args[@]}") || { rc=$?; printf '%s\n' "$out"; exit $rc; }
+        printf '%s\n' "$out"
+        echo "deployment=$(jq -r 'select(.type == "deployed") | .deployment.id' <<<"$out" | head -n1)" >>"$GITHUB_OUTPUT"
+        echo "carried=$(jq -r 'select(.type == "deployed") | .carried | join(",")' <<<"$out" | head -n1)" >>"$GITHUB_OUTPUT"
+        jq -r 'select(.type == "deployed")
+               | "menger: \(.deployment.project)/\(.deployment.environment) \(.deployment.state) \(.deployment.revision[0:12])"
+                 + (if .duplicate then " (already recorded)" else "" end)
+                 + " — carried \(.carried | length) ticket(s)\(if (.carried | length) > 0 then ": " + (.carried | join(", ")) else "" end)"' <<<"$out" \
+          | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"

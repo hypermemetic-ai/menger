@@ -151,5 +151,123 @@ grep -qx -- 4455 "$SYNAPSE_ARGS" && ok || bad "send: default port 4455"
 exits "send: an invalid record is never sent" 2 "$REC" --env prod --state succeeded --revision 235ff62 --send
 SYNAPSE_FAIL=1 exits "send: synapse fails" 3 "$REC" --project p --env e --state started --revision abcdef1 --send
 
+# ── DEPLOY-14: straight to menger — --url, the CI snippets, the action ─────
+# A stand-in for deploy/menger-call.mjs: it logs each call, says the
+# environment runs ${H[1]}, and answers a record with `deployed`.
+cat >"$SCRATCH/menger-call" <<'EOF'
+#!/usr/bin/env bash
+method="" params="" url=""
+while [[ $# -gt 0 ]]; do case $1 in --params) params=$2; shift ;; --url) url=$2; shift ;;
+  --agent|--header) printf '%s %s\n' "$1" "$2" >>"$CALL_LOG"; shift ;; -*) ;; *) method=$1 ;; esac; shift; done
+printf '%s %s %s\n' "$url" "$method" "$params" >>"$CALL_LOG"
+case $method in
+  deployments.environments)
+    for e in production prod staging review/pr-412; do printf '{"type":"environment","environment":{"name":"%s","revision":"%s"}}\n' "$e" "$STUB_PREV"; done ;;
+  deployments.record)
+    printf '%s\n' "$params" >>"$CAPTURE"
+    [[ ${CALL_FAIL:-} == 1 ]] && { echo '{"type":"error","message":"needs deployments.record on SHOP"}'; exit 3; }
+    echo '{"type":"deployed","deployment":{"id":7,"project":"SHOP","environment":"staging","state":"succeeded","revision":"0123456789ab"},"carried":["SHOP-3"],"duplicate":false}' ;;
+esac
+EOF
+chmod +x "$SCRATCH/menger-call"
+export MENGER_CALL=$SCRATCH/menger-call CALL_LOG=$SCRATCH/calls CAPTURE=$SCRATCH/captured STUB_PREV=${H[1]}
+ln -s "$DEPLOY" "$G/.menger"; printf '#!/bin/sh\nexit 0\n' >"$G/deploy.sh"; chmod +x "$G/deploy.sh"
+: >"$CALL_LOG"; : >"$CAPTURE"
+
+exits "--url ws: previous from menger, commits from git" 0 "$REC" --project shop --env Staging --state succeeded \
+  --revision "${H[3]}" --previous-from-menger --commits-from-git --repo "$G" --send --url wss://menger.example.com/ --header 'X-A: 1'
+same_json "--url ws: the record sent" "$(jq -c '[.previous, .commits]' "$CAPTURE")" "[\"${H[1]}\",[\"${H[2]}\",\"${H[3]}\"]]"
+has "--url ws: environments asked first" "$(head -n 3 "$CALL_LOG")" 'wss://menger.example.com deployments.environments {"project":"shop"}'
+has "--url ws: the header passed" "$(<"$CALL_LOG")" "--header X-A: 1"
+has "--url ws: the answer printed" "$out" '"deployed"'
+CALL_FAIL=1 exits "--url ws: a refusal fails" 3 "$REC" --project shop --env staging --state started --revision abcdef1 --send --url ws://h:1
+exits "--url ws --dry-run sends nothing" 0 "$REC" --project shop --env staging --state started --revision abcdef1 --send --url ws://h:1 --dry-run
+has "--url ws --dry-run sends nothing" "$err" "would send"
+MENGER_DEPLOY_KEY=AAAA exits "a key over REST is refused" 1 "$REC" --project p --env e --state started --revision abcdef1 --send --url https://h
+has "a key over REST is refused" "$err" "carries no identity"
+exits "a URL of no known scheme" 1 "$REC" --project p --env e --state started --revision abcdef1 --send --url ftp://h
+r=$(ci_env "$FX/github-actions.env" env MENGER_STATE=failure "$REC" --from github-actions -c)
+same_json "job.status: failure is failed" "$(jq -c .state <<<"$r")" '"failed"'
+r=$(ci_env "$FX/github-actions.env" env MENGER_STATE=cancelled "$REC" --from github-actions -c)
+same_json "job.status: cancelled is failed" "$(jq -c .state <<<"$r")" '"failed"'
+
+# Each documented CI snippet (deploy/README.md, `<!-- ci-snippet NAME -->`)
+# runs as written, in a scratch checkout, its records checked by the schema.
+snippet() { awk -v n="$1" '$0 == "<!-- ci-snippet " n " -->" {m=1; next} m && /^```/ {if (on) exit; on=1; next} on' "$DEPLOY/README.md"; }
+record_lines() { awk '{ if (sub(/\\$/, "")) { buf = buf $0; next } print buf $0; buf = "" }' \
+  | sed -E 's/^[[:space:]]*(- )?//' | grep '^\.menger/record'; }
+check_captured() { # NAME N-RECORDS STATES
+  local name=$1 want=$2 states=$3 got
+  got=$(grep -c . "$CAPTURE"); [[ $got == "$want" ]] && ok || bad "$name: $got records, wanted $want"
+  while IFS= read -r rec; do exits "$name: the record is valid" 0 "$REC" --validate <<<"$rec"; done <"$CAPTURE"
+  same_json "$name: states" "$(jq -sc 'map(.state)' "$CAPTURE")" "$states"
+  same_json "$name: previous and commits" "$(jq -sc 'map([.previous, .commits]) | unique' "$CAPTURE")" "[[\"${H[1]}\",[\"${H[2]}\",\"${H[3]}\"]]]"
+}
+for name in gitlab buildkite shell; do [[ -n $(snippet $name) ]] && ok || bad "no ci-snippet $name in deploy/README.md"; done
+: >"$CAPTURE"
+while IFS= read -r line; do
+  for status in running success; do
+    (cd "$G" && ci_env "$FX/gitlab.env" env CI_COMMIT_SHA="${H[3]}" CI_JOB_STATUS=$status MENGER_PROJECT=PANTRY \
+       MENGER_URL=wss://menger.example.com MENGER_CALL="$MENGER_CALL" CALL_LOG="$CALL_LOG" CAPTURE="$CAPTURE" STUB_PREV="$STUB_PREV" \
+       bash -c "$line" >/dev/null 2>"$SCRATCH/err") || bad "gitlab snippet: $line — $(<"$SCRATCH/err")"
+  done
+done < <(snippet gitlab | record_lines | sort -u)
+check_captured gitlab 2 '["started","succeeded"]'
+same_json "gitlab: environment and run" "$(jq -sc 'map([.project, .environment, .source.run]) | unique' "$CAPTURE")" '[["PANTRY","review/pr-412","77120"]]'
+: >"$CAPTURE"
+while IFS= read -r line; do
+  (cd "$G" && ci_env "$FX/buildkite.env" env BUILDKITE_COMMIT="${H[3]}" state=succeeded \
+     MENGER_URL=wss://menger.example.com MENGER_CALL="$MENGER_CALL" CALL_LOG="$CALL_LOG" CAPTURE="$CAPTURE" STUB_PREV="$STUB_PREV" \
+     bash -c "$line" >/dev/null 2>"$SCRATCH/err") || bad "buildkite snippet: $line — $(<"$SCRATCH/err")"
+done < <(snippet buildkite | record_lines)
+check_captured buildkite 2 '["started","succeeded"]'
+same_json "buildkite: source" "$(jq -c .source "$CAPTURE" | sort -u)" '{"system":"buildkite","run":"0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","url":"https://buildkite.com/acme/pantry/builds/412"}'
+: >"$CAPTURE"
+(cd "$G" && env -i PATH="$PATH" MENGER_URL=wss://menger.example.com MENGER_CALL="$MENGER_CALL" CALL_LOG="$CALL_LOG" \
+   CAPTURE="$CAPTURE" STUB_PREV="$STUB_PREV" bash -s prod <<<"$(snippet shell)" >/dev/null 2>"$SCRATCH/err") \
+  && ok || bad "shell snippet — $(<"$SCRATCH/err")"
+check_captured shell 2 '["started","succeeded"]'
+same_json "shell: the environment and revision" "$(jq -sc 'map([.project, .environment, .revision]) | unique' "$CAPTURE")" "[[\"PANTRY\",\"prod\",\"${H[3]}\"]]"
+
+# The GitHub action's step, as a runner runs it (its `run:` block; the
+# inputs arrive as the environment its `env:` sets).
+awk '/^      run: \|$/ {on=1; next} on && /^        / {sub(/^        /, ""); print; next} on && /^$/ {print ""; next} on {exit}' \
+  "$DEPLOY/record-action/action.yml" >"$SCRATCH/action-step.sh"
+[[ -s $SCRATCH/action-step.sh ]] && ok || bad "no run: block in deploy/record-action/action.yml"
+: >"$CAPTURE"; : >"$CALL_LOG"; : >"$SCRATCH/gh-output"
+(cd "$G" && env -i PATH="$PATH" GITHUB_ACTION_PATH="$DEPLOY/record-action" GITHUB_OUTPUT="$SCRATCH/gh-output" \
+   GITHUB_SHA="${H[3]}" GITHUB_RUN_ID=11223344 GITHUB_REPOSITORY=acme/shop GITHUB_SERVER_URL=https://github.com \
+   MENGER_URL=ws://127.0.0.1:4455 MENGER_DEPLOY_KEY="" MENGER_PROJECT=SHOP MENGER_ENVIRONMENT=staging MENGER_STATE=success \
+   MENGER_PREVIOUS="" MENGER_RELEASE="" MENGER_TICKETS="" MENGER_AGENT=github-actions MENGER_HEADERS=$'CF-Access-Client-Id: abc\n' \
+   MENGER_FROM_GIT=true MENGER_REPO=. MENGER_CALL="$MENGER_CALL" CALL_LOG="$CALL_LOG" CAPTURE="$CAPTURE" STUB_PREV="$STUB_PREV" \
+   bash -e -o pipefail "$SCRATCH/action-step.sh" >"$SCRATCH/action-out" 2>"$SCRATCH/err") \
+  && ok || bad "the action's step — $(<"$SCRATCH/err")"
+check_captured action 1 '["succeeded"]'
+same_json "action: source" "$(jq -c .source "$CAPTURE")" '{"system":"github-actions","run":"11223344","url":"https://github.com/acme/shop/actions/runs/11223344"}'
+has "action: outputs" "$(<"$SCRATCH/gh-output")" $'deployment=7\ncarried=SHOP-3'
+has "action: the header, the agent" "$(<"$CALL_LOG")" "--header CF-Access-Client-Id: abc"
+has "action: the agent" "$(<"$CALL_LOG")" "--agent github-actions"
+has "action: says what it carried" "$(<"$SCRATCH/action-out")" "carried 1 ticket(s): SHOP-3"
+unset MENGER_CALL
+
+# deploy/menger-call.mjs signs synapse's fixed proof vector byte for byte
+# (IDENTITY-43's test/IdentitySpec.hs), so menger admits what it sends.
+if command -v node >/dev/null; then
+  v=$(node --input-type=module -e "
+    const m = await import('$DEPLOY/menger-call.mjs');
+    const seed = Buffer.from(Array.from({ length: 32 }, (_, i) => i + 1));
+    console.log(m.keyProof(seed, 'ws://127.0.0.1:4460', 'worker-3', Buffer.alloc(32, 7), 1791600000));
+    console.log('key:' + m.publicHex(seed));
+    console.log(m.publicHex(m.seedOf(Buffer.from(seed).toString('base64url'))));")
+  has "the proof vector" "$v" "plexus-key.eyJ2IjoxLCJrZXkiOiI3OWI1NTYyZThmZTY1NGY5NDA3OGIxMTJlOGE5OGJhNzkwMWY4NTNhZTY5NWJlZDdlMGUzOTEwYmFkMDQ5NjY0IiwiYXVkIjoid3M6Ly8xMjcuMC4wLjE6NDQ2MCIsImFnZW50Ijoid29ya2VyLTMiLCJub25jZSI6IkJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2MiLCJ0cyI6MTc5MTYwMDAwMCwic2lnIjoiSlJxSGx6VEd2WGZubm8zQWlsMWhudU9wZ2J6SzlyNFZPa0l6OHNRbmpkVzZwWlk4S1h5YlR4QlBBcmdaclFkeFR1M3NvaWtwSkxRMURSaDN3SVFLQVEifQ"
+  has "the key's principal" "$v" "key:79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664"
+  has "a url-safe seed reads too" "$v" $'\n79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664'
+  exits "menger-call: not a WebSocket URL" 1 node "$DEPLOY/menger-call.mjs" --url http://h deployments.list --params '{}'
+  MENGER_DEPLOY_KEY=short exits "menger-call: a key that is no seed" 1 node "$DEPLOY/menger-call.mjs" --url ws://127.0.0.1:9 deployments.list --params '{}'
+  exits "menger-call: nothing listening" 3 node "$DEPLOY/menger-call.mjs" --url ws://127.0.0.1:9 deployments.list --params '{}'
+else
+  printf 'skip: no node — deploy/menger-call.mjs untested\n' >&2
+fi
+
 printf 'deploy/record: %d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]

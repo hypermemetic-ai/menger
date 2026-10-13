@@ -134,13 +134,13 @@ impl Members {
     #[plexus_macros::method(
         group = "admin",
         target = "scope",
-        description = "Give a principal a role (viewer, editor, admin) on a shortcode or *",
+        description = "Give a principal a role (viewer, editor, admin; deployer for a CI's key) on a shortcode or *",
         params(
             principal = "The Plexus principal, e.g. idp:c952acd3-…, oidc:auth0/google-oauth2|…, nostr:<hex>",
             scope = "A shortcode, e.g. IDENTITY (covers the shortcodes hosted under it), or *",
-            role = "viewer | editor | admin"
+            role = "viewer | editor | admin | deployer (a CI's key: the reads and deployments.record, DEPLOY-14)"
         ),
-        values(role = ["viewer", "editor", "admin"]),
+        values(role = ["viewer", "editor", "admin", "deployer"]),
         example(note = "make a person an editor on IDENTITY", params = r#"{"principal": "oidc:workos/user_01M4", "scope": "IDENTITY", "role": "editor"}"#)
     )]
     pub async fn grant(&self, auth: Option<&AuthContext>, reach: Reach, principal: String, scope: String, role: String) -> impl Stream<Item = MembersEvent> + Send + 'static {

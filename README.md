@@ -1949,7 +1949,17 @@ time passes.
 (`deployments.record` and the reads) — what a CI's key carries on the
 project's shortcode (a minted session scoped `deployer@MENGER`); `admin`
 holds it too, an editor does not. The reads are a viewer's and answer only
-of the projects where the caller holds them.
+of the projects where the caller holds them. DEPLOY-14: `deployer` is a
+membership too — `members grant --principal key:<hex> --scope PANTRY --role
+deployer` gives a CI's key exactly that, and nothing it could widen.
+
+**From a CI** (DEPLOY-14): a GitHub Actions job records with one step,
+`hypermemetic/menger/deploy/record-action@v1`; GitLab, Buildkite or a shell
+script with one `deploy/record … --send --url wss://…` (over the WebSocket
+through `deploy/menger-call.mjs`, no synapse; a deploy key in
+`MENGER_DEPLOY_KEY` signs in), and GitHub's `deployment_status` webhook
+through `deploy/github-relay.mjs` with no workflow change. deploy/README.md
+"Deployments from any CI" has the snippets, the deploy key and the tunnel.
 
 ### Themes and their scopes (THEME-8)
 
@@ -2451,6 +2461,7 @@ or `*`.
 | `viewer` | read under the scope, and comment |
 | `editor` | also create and change tickets, and answer inputs |
 | `admin` | also grant and revoke roles on the scope |
+| `deployer` | (DEPLOY-14) read under the scope and record its deployments — a CI's key; beside the line above, not on it |
 
 Every read is answered under the caller's filter **and** their viewer
 scopes. `list --filter 'status Ready'` from someone with IDENTITY and OUGHT
