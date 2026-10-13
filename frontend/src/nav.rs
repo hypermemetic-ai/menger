@@ -31,7 +31,8 @@
 //! for the pattern's key map: Up/Down (j/k) move, Right/Left (l/h) open a
 //! node or step between a node and its children, Enter opens the focused
 //! ticket, Home/End jump. Selection still belongs to the route — the
-//! *focused* row and the *selected* row are two different things.
+//! *focused* row and the *selected* row are two different things. (ACT-3:
+//! the open row is now the *current* one, and selected is a set — below.)
 //!
 //! AGS-25: **a double-click opens or closes a row** that has children —
 //! one toggle per double-click, on its text and on its `▸` alike. A single
@@ -284,6 +285,23 @@
 //!   **↑ on the first ticket** widens the nav's first `under T` group to T's
 //!   parent, a shortcode's to its root's host, and drops it at a top root
 //!   ([`widen`]).
+//!
+//! ACT-3: **the nav selects like a file list** (src/selection.rs holds the
+//! selection and its rules). A click opens the ticket as before and the
+//! selection becomes its row; Shift+click selects from the anchor to the row
+//! in the order the nav draws (the treeitems, top to bottom — a closed node's
+//! children are not drawn, so not selected); Ctrl/Cmd+click toggles the row;
+//! neither opens anything. In the tree's key map Shift+↑/↓ (Shift+j/k) extend
+//! the selection from the focused row — focus moves, nothing opens, a gap is
+//! crossed as AGS-26's steps cross it ([`cross_gap`]); Space toggles the
+//! focused row; Ctrl/Cmd+A selects every drawn row; Esc clears (src/keys.rs).
+//! A plain step of the cursor ([`land`]) is a click's: its row becomes the
+//! selection. The tree is `aria-multiselectable`: `aria-selected` is the
+//! selection's now, and the open ticket — still the `sel` row, AGS-26's
+//! cursor — is `aria-current`. A shortcode's row stands for its root; every
+//! selectable row says which ticket as `data-pick`. The foot counts the
+//! selection ("3 selected · clear") and what the nav's filter hides of it
+//! ([`selection_foot`]). The flat view is the same tree, so the same rows.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -299,6 +317,7 @@ use crate::flat::{self, View};
 use crate::kids::key;
 use crate::lens::{use_lens, Lens, Level};
 use crate::session::Member;
+use crate::selection::{self, Gesture, Picked};
 use crate::{cache, dom, keys, session, st_class, tags, Route};
 use menger_tickets_api::filter::{Field, Filter, Group as FGroup, Predicate};
 use menger_tickets_api::{Group, Kind, Status, TicketSummary, TicketsEvent};
@@ -1718,7 +1737,9 @@ thread_local! {
     /// SCALE-24: a step across a gap in flight — its direction, and how many
     /// more steps were pressed while it waited. One at a time: every press
     /// counts once, and a held key does not start a crossing per repeat.
-    static CROSSING: Cell<Option<(bool, u32)>> = const { Cell::new(None) };
+    /// ACT-3: and whether it extends the selection (Shift) rather than
+    /// opening where it lands.
+    static CROSSING: Cell<Option<(bool, u32, bool)>> = const { Cell::new(None) };
 }
 
 /// AGS-26: what a walkable element is to a step of the nav's cursor.
@@ -1734,10 +1755,12 @@ pub(crate) enum Stop {
     Gap,
 }
 
-fn stop_of(el: &web_sys::Element) -> Stop {
+/// ACT-3: an extending step (`extend`) stops on every selectable row — a
+/// shortcode's heading too, which stands for its root.
+fn stop_of(el: &web_sys::Element, extend: bool) -> Stop {
     if is_gap(el) {
         Stop::Gap
-    } else if el.has_attribute("data-nav-id") {
+    } else if el.has_attribute(if extend { selection::PICK } else { "data-nav-id" }) {
         Stop::Ticket
     } else {
         Stop::Group
@@ -1758,10 +1781,42 @@ pub(crate) fn next_stop(stops: &[Stop], at: usize, down: bool) -> Option<usize> 
 /// AGS-26: the cursor lands on `row` — it takes focus (and the tree's tab
 /// stop) and, a ticket's row, its ticket opens: the cursor and the open
 /// ticket are one row.
+///
+/// ACT-3: a step is a click — its row becomes the selection.
 fn land(row: &web_sys::HtmlElement) {
     keys::focus_and_rove(&tree_items(), row);
+    if let Some(id) = selection::pick_of(row) {
+        selection::set(Picked::only(&id));
+    }
     if let Some(id) = row.get_attribute("data-nav-id") {
         crate::navigate_to_ticket(&id);
+    }
+}
+
+/// ACT-3: the ids of the rows the nav draws, top to bottom — the tree's (or
+/// the flat list's) selectable rows that are mounted and shown.
+pub(crate) fn drawn_order() -> Vec<String> {
+    let rows = keys::query_all(&format!("#nav .tree [{}]", selection::PICK));
+    selection::drawn_order(rows.into_iter().filter(keys::is_visible).filter_map(|el| selection::pick_of(&el)))
+}
+
+/// ACT-3: an extending step lands on `row` — it takes focus, nothing opens,
+/// and the selection runs from the anchor (or `from`, the row the step left)
+/// to it.
+fn extend_to(row: &web_sys::HtmlElement, from: &str) {
+    keys::focus_and_rove(&tree_items(), row);
+    if let Some(to) = selection::pick_of(row) {
+        selection::set(selection::now().extended(&drawn_order(), from, &to));
+    }
+}
+
+/// ACT-3: a row's landing — opening it (a step) or extending the selection
+/// to it from `from`.
+fn arrive(row: &web_sys::HtmlElement, extend: bool, from: &str) {
+    if extend {
+        extend_to(row, from);
+    } else {
+        land(row);
     }
 }
 
@@ -1773,14 +1828,16 @@ fn land(row: &web_sys::HtmlElement) {
 /// past its window (MFE-12), for as long as a fetch can reasonably take. A
 /// press while it waits is one more step, taken when it lands
 /// ([`tree_keydown`]) — the cursor lands, and a ticket opens, once.
-fn cross_gap(from: String, down: bool) {
-    if let Some((dir, extra)) = CROSSING.with(Cell::get) {
+fn cross_gap(from: String, down: bool, extend: bool) {
+    if let Some((dir, extra, ext)) = CROSSING.with(Cell::get) {
         // One in flight: this press is a step more (or one less, against it).
         let extra = if dir == down { extra + 1 } else { extra.saturating_sub(1) };
-        CROSSING.with(|c| c.set(Some((dir, extra))));
+        CROSSING.with(|c| c.set(Some((dir, extra, ext))));
         return;
     }
-    CROSSING.with(|c| c.set(Some((down, 0))));
+    CROSSING.with(|c| c.set(Some((down, 0, extend))));
+    // ACT-3: the row an extending step left — the anchor when none is drawn.
+    let origin = from.clone();
     spawn_local(async move {
         let mut from = from;
         for _ in 0..240 {
@@ -1788,12 +1845,12 @@ fn cross_gap(from: String, down: bool) {
             let Some(i) = els.iter().position(|el| el.get_attribute("data-node-key").as_deref() == Some(&from)) else {
                 break; // the row we started from is gone: nothing to step from
             };
-            let stops: Vec<Stop> = els.iter().map(|el| stop_of(el)).collect();
+            let stops: Vec<Stop> = els.iter().map(|el| stop_of(el, extend)).collect();
             let Some(j) = next_stop(&stops, i, down) else { break };
             if stops[j] != Stop::Gap {
                 // The steps pressed while this one waited, through rows
                 // that are mounted, until another gap (or none are left).
-                let mut extra = CROSSING.with(Cell::get).map_or(0, |(_, e)| e);
+                let mut extra = CROSSING.with(Cell::get).map_or(0, |(_, e, _)| e);
                 let mut at = j;
                 while extra > 0 {
                     match next_stop(&stops, at, down) {
@@ -1804,12 +1861,12 @@ fn cross_gap(from: String, down: bool) {
                         _ => break,
                     }
                 }
-                land(&els[at]);
+                arrive(&els[at], extend, &origin);
                 if extra == 0 {
                     break;
                 }
                 // Another gap with steps still to take: cross it from here.
-                CROSSING.with(|c| c.set(Some((down, extra - 1))));
+                CROSSING.with(|c| c.set(Some((down, extra - 1, extend))));
                 let Some(key) = els[at].get_attribute("data-node-key") else { break };
                 from = key;
                 continue;
@@ -1900,7 +1957,15 @@ fn to_the_top() {
 /// lands when it is mounted ([`cross_gap`]); End does the same for the
 /// end of the tree.
 fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
-    if ev.default_prevented() || ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+    if ev.default_prevented() {
+        return;
+    }
+    if select_key(&ev, ctx, lens) {
+        ev.prevent_default();
+        ev.stop_propagation();
+        return;
+    }
+    if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
         return;
     }
     let key = ev.key();
@@ -1946,11 +2011,11 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
 
     let handled = match key.as_str() {
         "ArrowDown" | "j" => {
-            step_from(&steps, at, true, ctx, lens);
+            step_from(&steps, at, true, ctx, lens, false);
             true
         }
         "ArrowUp" | "k" => {
-            step_from(&steps, at, false, ctx, lens);
+            step_from(&steps, at, false, ctx, lens, false);
             true
         }
         "Home" => {
@@ -1977,7 +2042,7 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
                 if !open {
                     toggle(node_key.clone());
                 } else {
-                    step_from(&steps, at, true, ctx, lens);
+                    step_from(&steps, at, true, ctx, lens, false);
                 }
             }
             true
@@ -2010,23 +2075,71 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
     }
 }
 
+/// ACT-3: the tree's selection keys, on the focused row — Shift+↑/↓ and
+/// Shift+j/k extend the selection a row, Space toggles the row, Ctrl/Cmd+A
+/// selects every drawn row. True when the key was one of them. (Esc, which
+/// clears, is the app's: src/keys.rs.)
+fn select_key(ev: &web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) -> bool {
+    if ev.alt_key() || ev.is_composing() {
+        return false;
+    }
+    let key = ev.key();
+    let cmd = ev.ctrl_key() || ev.meta_key();
+    if cmd {
+        if !ev.shift_key() && key.eq_ignore_ascii_case("a") {
+            selection::set(Picked::all(&drawn_order()));
+            return true;
+        }
+        return false;
+    }
+    let Some(current) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .and_then(|t| t.closest("[role=treeitem]").ok().flatten())
+    else {
+        return false;
+    };
+    let down = match key.as_str() {
+        " " if !ev.shift_key() => {
+            if let Some(id) = selection::pick_of(&current) {
+                selection::set(selection::now().toggled(&id));
+            }
+            return true;
+        }
+        "ArrowDown" | "J" if ev.shift_key() => true,
+        "ArrowUp" | "K" if ev.shift_key() => false,
+        _ => return false,
+    };
+    let steps = walkable();
+    if let Some(at) = steps.iter().position(|el| el.is_same_node(Some(&current))) {
+        step_from(&steps, at, down, ctx, lens, true);
+    }
+    true
+}
+
 /// AGS-26: a step of the nav's cursor from `steps[at]` — onto the next
 /// ticket's row, which opens; across a gap once it is fetched; and Up with no
 /// ticket above, the nav's `under` filter one parent wider.
-fn step_from(steps: &[web_sys::HtmlElement], at: usize, down: bool, ctx: Ctx, lens: Lens) {
+///
+/// ACT-3: `extend` (Shift) — the step moves focus and extends the selection
+/// from this row to the next selectable one; it opens nothing and widens
+/// nothing.
+fn step_from(steps: &[web_sys::HtmlElement], at: usize, down: bool, ctx: Ctx, lens: Lens, extend: bool) {
     if CROSSING.with(Cell::get).is_some() {
         // a crossing is in flight: this press is counted there
-        cross_gap(String::new(), down);
+        cross_gap(String::new(), down, extend);
         return;
     }
-    let stops: Vec<Stop> = steps.iter().map(|el| stop_of(el)).collect();
+    let stops: Vec<Stop> = steps.iter().map(|el| stop_of(el, extend)).collect();
+    let from = steps[at].get_attribute(selection::PICK).or_else(|| steps[at].get_attribute("data-node-key")).unwrap_or_default();
     match next_stop(&stops, at, down) {
         Some(j) if stops[j] == Stop::Gap => {
             if let Some(k) = steps[at].get_attribute("data-node-key") {
-                cross_gap(k, down);
+                cross_gap(k, down, extend);
             }
         }
-        Some(j) => land(&steps[j]),
+        Some(j) => arrive(&steps[j], extend, &from),
+        None if extend => {}
         None if !down => {
             widen(lens, ctx.tree);
         }
@@ -2079,7 +2192,7 @@ fn step_selected(id: String, down: bool, ctx: Ctx, lens: Lens) {
         let row = selected_row(&id)?;
         let steps = walkable();
         let at = steps.iter().position(|el| el.is_same_node(Some(&row)))?;
-        step_from(&steps, at, down, ctx, lens);
+        step_from(&steps, at, down, ctx, lens, false);
         Some(())
     };
     if from_row().is_some() {
@@ -2663,9 +2776,18 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                     class="tree"
                     role="tree"
                     aria-label="tickets"
+                    // ACT-3: rows are selected many at a time.
+                    aria-multiselectable="true"
                     data-view=move || nav_view.get().name()
                     node_ref=tree_ref
                     on:keydown=move |ev| tree_keydown(ev, ctx, lens)
+                    on:click=tree_click
+                    on:mousedown=|ev: web_sys::MouseEvent| {
+                        // ACT-3: a Shift+click selects rows, not text.
+                        if ev.shift_key() {
+                            ev.prevent_default();
+                        }
+                    }
                 >
                     {move || match nav_view.get() {
                         View::Tree => view! {
@@ -2685,8 +2807,113 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
                     View::Flat => flat_note.get().map(|n| flat::note_view(n, under.on.get())),
                 }}
             </div>
+            // ACT-3: what is selected, at the nav's foot.
+            {selection_foot(under)}
         </aside>
     }
+}
+
+/// ACT-3: a click on a row of the nav — the tree's or the flat list's, one
+/// listener on the tree. Plain, the row's own behaviour runs (a ticket opens,
+/// a shortcode's heading opens or closes) and the selection becomes the row;
+/// Shift selects the range from the anchor, Ctrl/Cmd toggles the row — and
+/// neither follows the link: the row takes focus instead.
+fn tree_click(ev: web_sys::MouseEvent) {
+    if ev.button() != 0 {
+        return;
+    }
+    let Some(row) = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .and_then(|t| t.closest("[role=treeitem]").ok().flatten())
+    else {
+        return;
+    };
+    let Some(id) = selection::pick_of(&row) else { return };
+    let gesture = Gesture::of_mouse(&ev);
+    if gesture != Gesture::Plain {
+        ev.prevent_default();
+        if let Ok(row) = row.dyn_into::<web_sys::HtmlElement>() {
+            keys::focus_and_rove(&tree_items(), &row);
+        }
+    }
+    selection::set(gesture.apply(&selection::now(), &drawn_order(), &id));
+}
+
+/// ACT-3: the nav's foot while something is selected — "3 selected · clear",
+/// and how many of them the nav's filter hides ("· 2 hidden"): `member {
+/// ids, filter }` says which it admits, and a ticket drawn anyway (FILTER-24's
+/// open ticket) is not hidden. A filter `member` does not take (`under`,
+/// `text`) counts what is not drawn. Asked again when the selection or the
+/// filter changes, and when the filter's membership moves a selected ticket.
+fn selection_foot(under: Under) -> AnyView {
+    let sel = selection::signal();
+    let n = Memo::new(move |_| sel.with(Picked::len));
+    let hidden = RwSignal::new(0usize);
+    let again = Trigger::new();
+    session::follow_membership(
+        move || under.text.get(),
+        move |ev| match ev {
+            Member::Entered { id, .. } | Member::Left { id, .. } => {
+                if sel.with_untracked(|p| p.contains(id)) {
+                    again.notify();
+                }
+            }
+            Member::Recount { .. } | Member::Lagged | Member::Opened => again.notify(),
+            Member::Refused(_) => {}
+        },
+    );
+    let gen = StoredValue::new(0u32);
+    Effect::new(move |_| {
+        again.track();
+        let ids = sel.with(|p| p.ids().to_vec());
+        let on = under.on.get();
+        let filter = under.text.get();
+        let kept = under.kept.get();
+        let g = gen.get_value().wrapping_add(1);
+        gen.set_value(g);
+        if ids.is_empty() || !on {
+            hidden.set(0);
+            return;
+        }
+        spawn_local(async move {
+            // the tree redraws under a new filter first
+            dom::sleep_ms(60).await;
+            if gen.try_get_value() != Some(g) {
+                return;
+            }
+            let admitted: HashSet<String> = match filter {
+                // a filter that admits nothing
+                None => HashSet::new(),
+                Some(f) => match session::member(ids.clone(), f).await {
+                    Ok(v) => v.into_iter().filter(|(_, m)| *m).map(|(id, _)| id).collect(),
+                    Err(_) => HashSet::new(),
+                },
+            };
+            if gen.try_get_value() != Some(g) {
+                return;
+            }
+            let mut drawn: HashSet<String> = drawn_order().into_iter().collect();
+            drawn.extend(kept);
+            hidden.try_set(selection::hidden_of(&ids, Some(&admitted), &drawn));
+        });
+    });
+    view! {
+        {move || {
+            selection::foot_line(n.get(), hidden.get()).map(|line| {
+                view! {
+                    <div class="nsel" data-nsel=move || n.get() data-nsel-hidden=move || hidden.get()>
+                        <span class="nsel-n" aria-live="polite">{line}</span>
+                        " · "
+                        <button class="nsel-clear" title="clear the selection (Esc)" on:click=move |_| {
+                            selection::clear();
+                        }>"clear"</button>
+                    </div>
+                }
+            })
+        }}
+    }
+    .into_any()
 }
 
 /// FILTER-14: `f` in the nav opens the nav's filter menu — unless typing,
@@ -3521,6 +3748,10 @@ fn group_row(
     owns_attr: impl Fn() -> Option<String> + Send + Sync + 'static,
 ) -> AnyView {
     let tag = crate::tags::Tag::shortcode(&code).attr();
+    // ACT-3: a heading stands for its root (keyed by it); a shortcode with no
+    // root stands for no ticket and is not selectable.
+    let pick = (key != code).then(|| key.clone());
+    let picked = pick.clone().map(selection::is_picked);
     view! {
         <div
             class="row grouprow"
@@ -3530,12 +3761,16 @@ fn group_row(
             role="treeitem"
             tabindex="-1"
             data-node-key=key
+            data-pick=pick
+            class:picked=move || picked.is_some_and(|p| p.get())
+            aria-selected=move || picked.map(|p| p.get().to_string())
             aria-expanded=expanded_attr
             aria-owns=owns_attr
             // AGS-25: a click toggles, and a double-click is one toggle too —
             // its second click is not another, and it selects no text.
+            // ACT-3: a Shift or Ctrl/Cmd click selects instead.
             on:click=move |ev: web_sys::MouseEvent| {
-                if ev.detail() <= 1 {
+                if ev.detail() <= 1 && Gesture::of_mouse(&ev) == Gesture::Plain {
                     toggle();
                 }
             }
@@ -3601,6 +3836,8 @@ fn leaf_row(
         let id = id.clone();
         Memo::new(move |_| route.with(|rt| matches!(rt, Route::Ticket(x) if *x == id)))
     };
+    // ACT-3: whether the row is in the selection — `aria-selected`.
+    let picked = selection::is_picked(id.clone());
     let href = format!("#/ticket/{id}");
     // SDLC-13: a kind changes (`set_kind`), so the row reads it as it reads
     // the status — one memo, which the glyph, its title and the row's
@@ -3627,7 +3864,11 @@ fn leaf_row(
             data-lens=move || face.with(|f| f.as_ref().map(|f| if f.outside { "outside" } else if f.dim { "holder" } else { "match" }))
             role="treeitem"
             tabindex="-1"
-            aria-selected=move || sel.get().to_string()
+            // ACT-3: selected is the selection's; the open ticket is current.
+            class:picked=move || picked.get()
+            aria-selected=move || picked.get().to_string()
+            aria-current=move || sel.get().then_some("page")
+            data-pick=id.clone()
             aria-expanded=expanded_attr
             aria-owns=owns_attr
             aria-setsize=setsize

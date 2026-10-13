@@ -118,6 +118,12 @@
 //! (src/present.rs) — on, and off again; from inside a focused body too (the
 //! SDK and the page shim post it). Esc leaves it, after annotation mode's
 //! own Esc.
+//!
+//! ACT-3: **the selection's keys** (src/selection.rs). On a focused board row
+//! Shift+j/k (Shift+↓/↑) move a row and extend the selection to it, Space
+//! toggles the row, Ctrl/Cmd+A selects every row drawn — the nav tree's own
+//! (src/nav.rs). Esc, once nothing else it closes is open, clears the
+//! selection.
 
 use std::cell::{Cell, RefCell};
 
@@ -127,7 +133,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::filter::Cat;
-use crate::{annotate, board, counts, dom, lens, navigate_to_ticket, present, session, st_class, tags};
+use crate::{annotate, board, counts, dom, lens, navigate_to_ticket, present, selection, session, st_class, tags};
 use menger_tickets_api::{Marked, SearchWord, TicketSummary};
 use std::collections::{BTreeSet, HashSet};
 
@@ -179,8 +185,14 @@ pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
     ("/ filter SC", "the global filter becomes a shortcode (its tree)"),
     ("a or A", "annotation mode: outline the page, click anything to comment on it"),
     ("z", "on a ticket page: its framed body full screen, and back (from inside the body too)"),
+    ("Click", "open a ticket; the selection becomes its row (nav, flat nav, board)"),
+    ("Shift+click", "select from the last click to this row, in the order drawn"),
+    ("Ctrl+click", "add or remove this row from the selection (⌘-click on a Mac)"),
+    ("Shift+j / Shift+k", "extend the selection a row from the focused one (and Shift+↓ / Shift+↑)"),
+    ("Space", "add or remove the focused row from the selection"),
+    ("Ctrl+A", "select every row drawn in the nav or on the board (⌘A on a Mac)"),
     ("?", "this list"),
-    ("Esc", "close the palette or this list; leave annotation mode; leave full screen"),
+    ("Esc", "close the palette or this list; leave annotation mode; leave full screen; clear the selection"),
 ];
 
 // ---------------------------------------------------------------------
@@ -929,6 +941,17 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         ev.prevent_default();
         return;
     }
+    // ACT-3: then Esc clears the selection, when there is one.
+    if key == "Escape" && selection::clear() {
+        ev.prevent_default();
+        return;
+    }
+    // ACT-3: the board's selection keys — Ctrl/Cmd+A among them, so before
+    // the chords are left to the browser.
+    if board_select_key(ev, target.as_ref(), board) {
+        ev.prevent_default();
+        return;
+    }
     if cmd {
         // ⌘K / Ctrl+K was taken in the capture phase (MENGER-6); every
         // other chord stays the browser's (Ctrl+R, ⌘L, …).
@@ -970,6 +993,46 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
     if board_key(&key, target.as_ref(), board) {
         ev.prevent_default();
     }
+}
+
+/// ACT-3: the board's selection keys, on its focused row — the nav's
+/// (src/nav.rs): Shift+j/k and Shift+↑/↓ move focus a row and extend the
+/// selection to it, Space toggles the row, Ctrl/Cmd+A selects every row the
+/// board draws. True when the key was one of them.
+fn board_select_key(ev: &web_sys::KeyboardEvent, target: Option<&web_sys::Element>, board: board::Board) -> bool {
+    if ev.alt_key() {
+        return false;
+    }
+    let Some(row) = target.and_then(|t| t.closest("#board tr[data-ticket-id]").ok().flatten()) else {
+        return false;
+    };
+    let Some(focused) = row.get_attribute("data-ticket-id") else { return false };
+    let key = ev.key();
+    if ev.ctrl_key() || ev.meta_key() {
+        if ev.shift_key() || !key.eq_ignore_ascii_case("a") {
+            return false;
+        }
+        let drawn = query_all("#board tr[data-ticket-id]").into_iter().filter_map(|r| r.get_attribute("data-ticket-id"));
+        selection::set(selection::Picked::all(&selection::drawn_order(drawn)));
+        return true;
+    }
+    let down = match key.as_str() {
+        " " if !ev.shift_key() => {
+            selection::set(selection::now().toggled(&focused));
+            return true;
+        }
+        "J" | "ArrowDown" if ev.shift_key() => true,
+        "K" | "ArrowUp" if ev.shift_key() => false,
+        _ => return false,
+    };
+    let Some(at) = board.pos_of_untracked(&focused) else { return true };
+    let last = board.n_untracked().saturating_sub(1);
+    let next = if down { (at + 1).min(last) } else { at.saturating_sub(1) };
+    if let Some(to) = board.id_at(next) {
+        selection::board_extend(board, &focused, &to);
+    }
+    focus_board_row(&query_all("#board tr[data-ticket-id]"), next, board);
+    true
 }
 
 /// The mounted board row for ticket `id`, if the window holds it.
@@ -2037,6 +2100,11 @@ mod tests {
             "/ filter SC", // the palette's filter (FILTER-22)
             "a or A",      // annotation mode (COMMENT-3)
             "z",           // full screen (MENGER-15)
+            "Shift+click", // a range (ACT-3)
+            "Ctrl+click",  // a toggle
+            "Shift+j / Shift+k",
+            "Space",
+            "Ctrl+A",
             "?",           // this list
             "Esc",         // close
         ] {
