@@ -275,6 +275,7 @@ mod registry;
 mod saved;
 mod scopes;
 mod selection;
+mod shape;
 mod swatches;
 mod session;
 mod settings;
