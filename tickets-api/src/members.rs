@@ -12,16 +12,24 @@
 //! | `viewer` | read under the scope, and comment |
 //! | `editor` | also create and change tickets, and answer inputs |
 //! | `admin` | also grant and revoke roles on the scope |
+//! | `deployer` | read under the scope, and record its deployments — a CI's key (DEPLOY-14) |
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-/// A role, ordered: each includes the ones before it.
+/// A role. Viewer, editor and admin are ordered, each including the ones
+/// before it. DEPLOY-14: `deployer` stands beside that line — a viewer's
+/// reads and `deployments.record`, nothing an editor may do — so a CI's key
+/// can be granted exactly what recording a deployment needs; its place in
+/// the order is only for sorting. (What each role may is the gate's,
+/// declared on each activation with `roles(...)`; this names the role a
+/// membership holds.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     Viewer,
+    Deployer,
     Editor,
     Admin,
 }
@@ -30,6 +38,7 @@ impl Role {
     pub const fn as_str(self) -> &'static str {
         match self {
             Role::Viewer => "viewer",
+            Role::Deployer => "deployer",
             Role::Editor => "editor",
             Role::Admin => "admin",
         }
@@ -47,9 +56,10 @@ impl FromStr for Role {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_ascii_lowercase().as_str() {
             "viewer" => Ok(Role::Viewer),
+            "deployer" => Ok(Role::Deployer),
             "editor" => Ok(Role::Editor),
             "admin" => Ok(Role::Admin),
-            other => Err(format!("unknown role `{other}` — the roles are viewer, editor, admin")),
+            other => Err(format!("unknown role `{other}` — the roles are viewer, editor, admin, deployer")),
         }
     }
 }
@@ -117,6 +127,9 @@ mod tests {
         assert!(Role::Viewer < Role::Editor && Role::Editor < Role::Admin);
         assert_eq!("Editor".parse::<Role>(), Ok(Role::Editor));
         assert!("owner".parse::<Role>().is_err());
+        // DEPLOY-14: a CI's key holds deployer, and it reads back as itself.
+        assert_eq!("Deployer".parse::<Role>(), Ok(Role::Deployer));
+        assert_eq!(Role::Deployer.as_str().parse::<Role>(), Ok(Role::Deployer));
     }
 
     #[test]

@@ -270,10 +270,11 @@ impl Memberships for Book {
 impl MembershipStore for Book {
     async fn grant(&self, m: Membership) -> Result<(), GateStoreError> {
         let store = self.store().ok_or_else(|| GateStoreError::new("no store is attached"))?;
-        // IDENTITY-21's rows hold viewer, editor or admin; a role an admin
-        // defined with auth.role_set is not a membership menger keeps yet.
+        // IDENTITY-21's rows hold viewer, editor or admin (DEPLOY-14: or
+        // deployer); a role an admin defined with auth.role_set is not a
+        // membership menger keeps yet.
         let role: Role = m.role.as_str().parse().map_err(|_| {
-            GateStoreError::new(format!("menger keeps viewer, editor and admin memberships; {} is not one of them", m.role))
+            GateStoreError::new(format!("menger keeps viewer, editor, admin and deployer memberships; {} is not one of them", m.role))
         })?;
         let scope = crate::members::scope_of(m.scope.as_str()).map_err(GateStoreError::new)?;
         let principal = m.principal.to_string();
