@@ -178,6 +178,9 @@ pub struct HistoryAnswer {
     pub began: Option<i64>,
     /// For a canceled ticket, what a restore would put back.
     pub restorable: Vec<String>,
+    /// FILTER-27: since when it has held its status, and whether that is a
+    /// transition's moment (`true`) or a pre-log bound — "at least" (`false`).
+    pub since: Option<(i64, bool)>,
 }
 
 impl Store {
@@ -203,7 +206,8 @@ impl Store {
             .map(|p| log.transition(p, ticket_of(p), cause_of(p)))
             .collect();
         let restorable = restorable(&cache, row).into_iter().map(|(t, _)| t.id.clone()).collect();
-        Ok(HistoryAnswer { own, caused, began: log.began(), restorable })
+        let since = log.timed(&row.epic, row.seq).map(|t| (t.since, t.exact));
+        Ok(HistoryAnswer { own, caused, began: log.began(), restorable, since })
     }
 
     /// [`Store::set_status_by`] as nobody signed in, through the API, with

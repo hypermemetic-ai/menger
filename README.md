@@ -402,6 +402,38 @@ and Title (the inputs page's State and Removed) are not in the language,
 so Save as… leaves them out and says so. The app reads `VIEW-1` when a
 menu opens — nothing at startup — and, once read, follows its `amended`.
 
+**When** (FILTER-27): every menu has a **When** category that builds the
+language's time clauses by clicks — **Created** (today · yesterday · this
+week · in the last hour · 12 hours · Custom…), **Moved into ▸** and **Moved
+out of ▸** a status (then a window, and **by**: anyone, me, the system, a
+member, or a name typed), **In status for** (over 1 day · 3 days · 1 week ·
+2 weeks · 1 month, over or under, a custom length; any status, or chosen
+categories or statuses) and **Changed** (MENGER-13's Changed recently,
+folded in). Every choice is a pill of its own, read in words — "created
+today", "Pending for over 2 weeks", "moved into Ready in the last 2 days
+by owner" — and each part of it (the status, the window, the length, who)
+is a button that reopens the menu on that part alone; a time clause typed
+in the text mode comes back as the same pill, and the pill prints the
+canonical text. **Custom…** opens the window editor: *within* (a number
+and a unit), *since* or *before* a moment — a day on the calendar with an
+optional time, or a length ago — and *between* two moments, picked as a
+range on one calendar (the first click its start, the second its end, the
+days between tinted) with a time for each end; "now" and "start of today"
+are one click, and the zone the moments are read in is shown. The calendar
+and the time selector are the app's own (`src/calendar.rs`: a month grid
+with ‹ › and a year menu, today marked, the ARIA grid keys — arrows,
+PageUp / PageDown, Home / End, Enter; hours and minutes typed or stepped
+with ↑ ↓ in the reader's 12- or 24-hour clock), drawn from the theme's
+tokens, never the browser's date input; `#/components` shows them live
+under "The app's own" (the registry above them is the tickets'
+components). `Saved ▾` suggests three filters until one of their names is
+saved — **New today** (`created today`), **Moved today** (`changed
+today`), **Stuck** (`category in (ready, active, review) for over 1w`) —
+each applied by a click, and `keep` saves it as an ordinary saved filter
+(the app offers them; nothing is written into the tracker until you keep
+one). A ticket's History says since when it has held its status — "since
+at least …" for a ticket from before the log.
+
 **A tag is a filter** (FILTER-22, `src/tags.rs`): a right-click on any tag
 the app draws — a shortcode, a ticket id, a status, a kind, a severity, on
 the ticket page, the board, the nav and the wave board — opens a menu at the
@@ -1381,7 +1413,7 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
 | `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
 | `tickets.search { query, filter?, limit?, offset? }` | SEARCH-2: search inside tickets — one `hit { summary, title, snippet, corrected }` per ticket whose title or body's text holds every word of `query`, best first, then one `searched { matched, next, words }`. Each word also matches as a prefix; a misspelt one (unknown to the index, or rare in it) of four letters or more also matches the index's words one edit away (two from eight letters); `FILTER-23`, `set_status` and `"a phrase"` are phrases. Uncorrected matches first, then corrected; BM25 within, the title weighing 4 to the body's 1. `title` and `snippet` are `[{ text, hit }]` stretches, the matched words marked. `filter` as `find`'s; `limit` 20 by default, at most 100; `offset` skips matches — `next` is the next page's. A blank query is no hits and `matched: 0`. See "Search" below |
 | `tickets.set_status { id, status restore_children?, source?, message? }` | `status_changed { ticket, previous }` — any of the nine, from any status (SDLC-7: the worker states `Coding` and `In Review` included); one outside them is an in-band `error` naming the nine; SDLC-11: on a doc, an in-band `error` (a doc has no lifecycle), and `Doc` on any other kind an in-band `error` too; MENGER-13: a transition (the caller's, from `source` — `app` / `api` / `pipeline` —, with `message`), said on `watch` as `transition` right after the `status_changed`; into `Canceled` it cancels every open descendant in the same write and withdraws the open inputs, out of it restores the inputs and, with `restore_children`, what its cancel canceled — see "History and cancellation" |
-| `tickets.history { id }` | MENGER-13: one `transition { transition }` per change of the ticket's status or kind, oldest first, then one per transition those caused in other tickets, then `history_end { began_unix, restorable }`; `not_found` for an id naming no ticket |
+| `tickets.history { id }` | MENGER-13: one `transition { transition }` per change of the ticket's status or kind, oldest first, then one per transition those caused in other tickets, then `history_end { began_unix, restorable, status_since_unix, status_since_exact }` (FILTER-27: since when it has held its status — its latest status transition, `exact`; or, for a ticket from before the log, its last update or the log's start, whichever is earlier: "since at least"); `not_found` for an id naming no ticket |
 | `tickets.set_kind { id, kind, status? }` | `kind_changed { ticket, previous }` (SDLC-13) — the one write that changes a kind; everything kept by kind moves in its write. To a `doc`: status `Doc` (a `status` other than `Doc` is an in-band `error`), refused while the ticket waits on a blocker or a ticket waits on it (each named); from a doc: `status` if given (never `Doc`), else `Epic` for a scope and `Pending` otherwise; between two kinds of work the status stays unless given (`Doc` an in-band `error`). A shortcode's root becoming a kind that roots nothing is an in-band `error` naming the shortcode (doc ↔ scope is allowed); so is a path holder (WAVE-10) becoming work, and an unknown kind or status; an id naming no ticket is `not_found`. A lower-seq ticket made a scope or a doc becomes its shortcode's root. The kind (and status) it has is no write and no broadcast, answering `previous` equal to its kind. `watch` carries `kind_changed` first, then the write's `group_changed` (a root's whenever its kind or status changed; every row a re-root moved), `placements_changed`, and — filtered — `entered` / `left` |
 | `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id. COMP-3: a new body moves the component registry (definitions, references, orphans); a malformed ` ```component ` block (COMP-8: or `<docs>`), or a name another ticket defines, is an in-band `error` and nothing is written, title included; MENGER-15: a body past the cap is the typed `body_too_large { id, bytes, max, message }` and nothing is written, title included |
 | `tickets.link_commits { id, commits }` | `commits_linked { ticket, added }` (SDLC-9) — appends every commit reference in `commits` the ticket does not already carry, in the order given; `added` is what was newly linked, in order. Every entry already linked, or `commits` empty, is no write and no broadcast and answers `added: []`. An entry that is not a commit reference is one in-band `error` naming every such entry, and nothing is written — a call is all or nothing; so is a link that would put more than 256 commits on the ticket. An id naming no ticket is `not_found`. Durable before it is acknowledged; `updated_unix` moves, nothing else does |
@@ -1605,16 +1637,51 @@ scan of tickets), composable with every other:
 | `changed [window] [by who]` | is any change (a birth, a kind) |
 | `by <who> [window]` | is anyone's (`changed … by who`) |
 
-A window is `within <n>{m,h,d,w}`, `today`, `yesterday`, `this week` (from
-Monday), `since <date>`, `before <date>` or `between <date> and <date>` (a
-date `2026-10-10`, or a moment `2026-10-10T08:00`; a date ends a `between`
-whole); none is "ever, since the log began". Who is `me`, `system`, or a
-principal. Days are the viewer's: every filtered read takes `tz` (an IANA
-name, `UTC`, or an offset like `+02:00`), the app sends the browser's, and
-synapse reads UTC unless `--tz` is given. A `watch` whose filter has a
-relative window reads it again every 15 s, saying `left` (or `entered`) for
-what time moved. The filter menu's **Changed recently** offers the presets;
-the palette's `filter …` takes any of it.
+A window is `within <n>{m,h,d,w,mo}` (a month is 30 days), `today`,
+`yesterday`, `this week` (from Monday), `since <moment>`, `before <moment>`
+or `between <moment> and <moment>` — a moment a date `2026-10-10`, a date
+and a time `2026-10-10T08:00` (a date ends a `between` whole), or
+(FILTER-27) a length back from now, `2w ago`, `12h ago`, `1mo ago`; none is
+"ever, since the log began". Who is `me`, `system`, or a principal. Days
+are the viewer's: every filtered read takes `tz` (an IANA name, `UTC`, or
+an offset like `+02:00`), the app sends the browser's, and synapse reads
+UTC unless `--tz` is given. The filter menu's **When** builds all of it
+(see "Filters" above); the palette's `filter …` takes any of it.
+
+**Filtering by when** (FILTER-27) — two more, over time itself rather than
+the log, answered from the **times** kept beside it (each ticket's birth,
+and since when it has held its status — sorted, so a window is a range):
+
+| predicate | holds when the ticket … |
+|---|---|
+| `created <window>` | was born in the window (its `created_unix`; no `by`) |
+| `for over <length>` / `for under <length>` | has held its current status longer than the length, or not |
+| `status S for over D`, `category C for over D` | is in S (or C) and held it that long — sugar for `status S and for over D`, a list too (`category in (ready, active, review) for over 1w`); the canonical form prints the sugar |
+
+Since when a ticket holds its status is its latest status transition's
+moment (a birth's, for one born since the log began). A ticket the log says
+nothing of — from before it began — is taken to hold it since its last
+update or, updated since the log began, since the log began (a change of
+status since then would be on record), never before its birth: a lower
+bound, which `history_end` says as `status_since_exact: false`. Every
+status write moves the ticket's entry in the same critical section;
+`--verify-derived` rebuilds the times from the rows and the log and holds
+them to it.
+
+A `watch` whose filter moves with the clock — a relative window, an `ago`,
+a `for` — keeps one timer, set for the next moment time alone moves it (the
+first ticket to cross a length, a transition or a birth leaving a window,
+tomorrow or next Monday in the reader's zone; at most an hour), and then
+says `entered` / `left` for what crossed — no write needed.
+
+```sh
+synapse -P 4455 menger tickets list --filter 'created today' --tz Europe/Berlin --summary true
+synapse -P 4455 menger tickets list --filter 'left Pending this week' --summary true
+synapse -P 4455 menger tickets list --filter 'status Pending for over 2w' --summary true
+synapse -P 4455 menger tickets counts --filter 'category in (ready, active, review) for over 1w'
+synapse -P 4455 menger tickets list --filter 'created between 3w ago and 1w ago and kind build' --summary true
+synapse -P 4455 menger tickets watch --filter 'status Ready for over 3d' --membership true
+```
 
 ```sh
 synapse -P 4455 menger tickets list --filter 'status "In Review" and entered "In Review" within 12h' --summary true
@@ -2548,6 +2615,8 @@ tickets-api/           the ticket vocabulary, the `tickets` activation and the
     history.rs         the transition log (MENGER-13): its table, the kept
                        indexes a history filter is a range of, the windows
                        in a zone (Clock), `--verify-derived`'s look at it
+    times.rs           births and status-since, sorted (FILTER-27): what
+                       `created` and `for` are ranges of
     cascade.rs         cancellation cascades and restores, as one batch write;
                        `history`; `set_status`'s path
     stored.rs          the derived state as stored beside the tickets — its
@@ -2636,6 +2705,9 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        header's bar (FILTER-11), src/counts.rs menu counts and
                        the header's n of N (FILTER-12), src/saved.rs saved
                        filters — Saved ▾, Save as…, VIEW-1 (FILTER-6),
+                       src/when.rs + src/when_view.rs the When category —
+                       time clauses as pills, the window editor (FILTER-27),
+                       src/calendar.rs the calendar and time selector,
                        src/notes.rs its annotation and the body editor (WAVE-11),
                        src/links.rs links people wrote — classified, the
                        leave dialog, "don't ask again" (MENGER-14;

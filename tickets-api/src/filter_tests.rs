@@ -1093,7 +1093,7 @@ fn history_predicates_read_and_write_canonically() {
     match &f.groups[0].preds[0].field {
         Field::History(h) => {
             assert_eq!(h.event, Event::Changed);
-            assert!(matches!(h.window, Some(Window::Between(a, b)) if a.day == 1 && b.day == 5));
+            assert!(matches!(h.window, Some(Window::Between(When::At(a), When::At(b))) if a.day == 1 && b.day == 5));
             assert!(!h.relative(), "fixed moments do not age");
         }
         other => panic!("{other:?}"),
@@ -1136,4 +1136,101 @@ fn a_history_predicate_is_a_free_truth() {
     assert!(!f.matches(&x));
     x.history = vec!["entered Coding within 12h".into()];
     assert!(f.matches(&x));
+}
+
+// -- FILTER-27: when — created, for, ago --------------------------------------------
+
+/// Every form of FILTER-27's language block reads and writes canonically —
+/// `created <window>`, `[status S | category C] for over|under D` (the sugar
+/// printed as sugar), and `N ago` wherever a moment goes — and the `and` of
+/// a `between … ago and … ago` stays the window's.
+#[test]
+fn when_predicates_read_and_write_canonically() {
+    for (text, canonical) in [
+        ("created today", "created today"),
+        ("created within 3d", "created within 3d"),
+        ("created this week", "created this week"),
+        ("created before 2w ago", "created before 2w ago"),
+        ("created between 2026-10-01 and 2026-10-07", "created between 2026-10-01 and 2026-10-07"),
+        ("entered Pending today", "entered Pending today"),
+        ("left Pending this week", "left Pending this week"),
+        ("entered Ready within 2d by owner", "entered Ready within 2d by owner"),
+        ("status Pending for over 2w", "status Pending for over 2w"),
+        ("status \"In Review\" for over 3d", "status \"In Review\" for over 3d"),
+        ("category active for under 1h", "category active for under 1h"),
+        ("for over 2w", "for over 2w"),
+        ("changed before 1w ago", "changed before 1w ago"),
+        ("changed since 12h ago", "changed since 12h ago"),
+        ("changed since 3 days ago", "changed since 3d ago"),
+        ("created between 3d ago and 1d ago and kind build", "created between 3d ago and 1d ago and kind build"),
+        ("created between 2026-10-01T08:00 and 2w ago", "created between 2026-10-01T08:00 and 2w ago"),
+        ("status in (Pending, Ready) for over 1w", "status in (Pending, Ready) for over 1w"),
+        ("category (ready, active, review) for over 1w", "category in (ready, active, review) for over 1w"),
+        ("category in (ready, active, review) for over 1w", "category in (ready, active, review) for over 1w"),
+        ("not status Pending for over 2 weeks", "not status Pending for over 2w"),
+        ("for under 1mo and in MENGER", "for under 1mo and in MENGER"),
+        ("created within 2 months", "created within 2mo"),
+        ("(for over 2w or blocked)", "(for over 2w or blocked)"),
+        ("status in review for over 3d", "status \"In Review\" for over 3d"),
+    ] {
+        let f = parsed(text);
+        assert_eq!(f.format(), canonical, "{text}");
+        assert_eq!(parsed(canonical), f, "{canonical} reads back");
+    }
+    let held = |t: &str| match &parsed(t).groups[0].preds[0].field {
+        Field::History(History { event: Event::Held(h), .. }) => h.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(held("status Pending for over 2w"), Held { of: HeldOf::Statuses(vec![Status::Pending]), over: true, n: 2, unit: Unit::Week });
+    assert_eq!(held("for under 1mo").of, HeldOf::Any);
+    assert_eq!(held("category active for under 1h").of, HeldOf::Categories(vec![Category::Active]));
+    let f = parsed("created between 3d ago and 1d ago and kind build");
+    assert_eq!(f.groups.len(), 2);
+    match &f.groups[0].preds[0].field {
+        Field::History(h) => {
+            assert_eq!(h.window, Some(Window::Between(When::Ago(3, Unit::Day), When::Ago(1, Unit::Day))));
+            assert!(h.relative(), "an `ago` moves with the clock");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(parsed("for over 2w").groups[0].preds[0].field.name() == "for");
+    assert!(matches!(&parsed("created since 2026-10-01").groups[0].preds[0].field, Field::History(h) if !h.relative()));
+    assert!(matches!(&parsed("status Ready for over 1d").groups[0].preds[0].field, Field::History(h) if h.relative()));
+}
+
+/// What a FILTER-27 form cannot be is named, and nothing is parsed.
+#[test]
+fn malformed_when_predicates_are_refused() {
+    for (text, says) in [
+        ("created", "takes a window"),
+        ("created today by me", "takes no `by`"),
+        ("for", "`for over <length>`"),
+        ("for 2w", "`for over <length>`"),
+        ("for over", "takes a length"),
+        ("for over 2", "needs a unit"),
+        ("for over 2w today", "takes no window"),
+        ("kind build for over 2w", "before `for` stands"),
+        ("status Shipped for over 2w", "unknown status"),
+        ("category hot for over 2w", "unknown category"),
+        ("changed before 2y ago", "is not a date"),
+        ("changed since ago", "is not a date"),
+        ("written today", "needs an index of its own"),
+    ] {
+        let e = refused(text).to_string();
+        assert!(e.contains(says), "{text}: {e}");
+    }
+}
+
+/// The sugar is `status S and for over D`: a ticket passes it exactly when
+/// it passes both — the store says the `for` truth of a ticket, here its
+/// facts' history; and a `for` is a free truth beside its status.
+#[test]
+fn the_sugar_is_a_status_and_a_length() {
+    let f = parsed("status Pending for over 2w");
+    let mut x = facts("H-1", "", Status::Pending, Kind::Build);
+    assert!(!f.matches(&x));
+    x.history = vec!["status Pending for over 2w".into()];
+    assert!(f.matches(&x));
+    assert!(parsed("status Pending for over 2w and not status Pending for over 2w").admits_nothing().is_some());
+    assert!(parsed("for over 2w and for under 2w").admits_nothing().is_none(), "free truths: never a false contradiction");
 }

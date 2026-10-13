@@ -1977,7 +1977,7 @@ impl Tickets {
     /// the cache; `watch` carries each new `Transition`.
     #[plexus_macros::method(
         group = "read",
-        description = "A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then history_end (when the log began; what a restore would put back)",
+        description = "A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then history_end (when the log began; what a restore would put back; since when it has held its status)",
         params(id = "Ticket id, e.g. MENGER-7"),
         example(note = "who moved MENGER-7, and what its cancel canceled", params = r#"{"id": "MENGER-7"}"#)
     )]
@@ -2013,7 +2013,8 @@ impl Tickets {
                         yield TicketsEvent::Transition { transition };
                     }
                     let restorable = h.restorable.into_iter().filter(|t| sees_id(&store, reach.as_ref(), t)).collect();
-                    yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable };
+                    let (status_since_unix, status_since_exact) = (h.since.map(|s| s.0), h.since.map(|s| s.1));
+                    yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable, status_since_unix, status_since_exact };
                 }
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
                 Err(e) => yield TicketsEvent::Error { message: e.to_string() },
@@ -2161,7 +2162,7 @@ impl Tickets {
                     let next = if watcher.relative() {
                         tokio::select! {
                             r = rx.recv() => Some(r),
-                            _ = tokio::time::sleep(AGE_EVERY) => None,
+                            _ = tokio::time::sleep(watcher.wait(&store, AGE_AT_MOST)) => None,
                         }
                     } else {
                         Some(rx.recv().await)

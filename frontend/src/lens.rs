@@ -335,10 +335,6 @@ pub(crate) fn field_of(c: Cat, t: &str) -> Option<Field> {
         Cat::MengerDocs => Field::MengerDoc,
         Cat::Asking => Field::Asking,
         Cat::Label => Field::Label(menger_tickets_api::labels::normalize(t).ok()?),
-        // MENGER-13: a preset window, as the language reads `changed <window>`.
-        Cat::Changed if crate::filter::CHANGED.contains(&t) => {
-            Filter::parse(&format!("changed {t}")).ok()?.groups.into_iter().next()?.preds.into_iter().next()?.field
-        }
         _ => return None,
     })
 }
@@ -358,11 +354,8 @@ pub(crate) fn token_of(f: &Field) -> Option<(Cat, Option<String>)> {
         Field::MengerDoc => (Cat::MengerDocs, None),
         Field::Asking => (Cat::Asking, None),
         Field::Label(l) => (Cat::Label, Some(l.to_ascii_lowercase())),
-        // MENGER-13: `changed <preset>`, by anyone, is Changed recently's.
-        Field::History(h) if h.event == menger_tickets_api::filter::Event::Changed && h.by.is_none() => {
-            let w = h.window.as_ref()?.format();
-            (Cat::Changed, Some(crate::filter::CHANGED.iter().find(|p| **p == w)?.to_string()))
-        }
+        // FILTER-27: a time clause is a pill of its own (When's), never a
+        // category's value.
         Field::Category(_) | Field::Under(_) | Field::Text(_) | Field::History(_) => return None,
     })
 }
@@ -437,7 +430,10 @@ impl Kept {
             .enumerate()
             .map(|(at, (d, g))| match d {
                 Some((cat, clause)) => Pill::Clause { cat, clause },
-                None => Pill::Custom { text: g.format(), at },
+                None => match crate::when::of_group(g) {
+                    Some(t) => Pill::Time { at, t },
+                    None => Pill::Custom { text: g.format(), at },
+                },
             })
             .collect();
         out.extend(self.local.iter().map(|(cat, cl)| Pill::Clause { cat, clause: cl.clone() }));
@@ -1233,7 +1229,7 @@ mod tests {
     #[test]
     fn each_categorys_pill_is_its_group() {
         use Op::{Is, Not};
-        let cases: [(Cat, Clause, &str); 29] = [
+        let cases: [(Cat, Clause, &str); 27] = [
             (Cat::Shortcode, clause(Is, &["MNG"]), "in MNG"),
             (Cat::Shortcode, clause(Is, &["CONTEXT", "RETURNS"]), "in (CONTEXT, RETURNS)"),
             (Cat::Shortcode, clause(Not, &["CONTEXT", "RETURNS"]), "not in (CONTEXT, RETURNS)"),
@@ -1259,9 +1255,6 @@ mod tests {
             (Cat::Asking, clause(Is, &["no"]), "not asking"),
             (Cat::Label, clause(Is, &["needs-you"]), "label needs-you"),
             (Cat::Label, clause(Not, &["a", "b"]), "not label in (a, b)"),
-            // MENGER-13: Changed recently, a preset window over the log.
-            (Cat::Changed, clause(Is, &["today"]), "changed today"),
-            (Cat::Changed, clause(Is, &["within 1h", "yesterday"]), "(changed within 1h or changed yesterday)"),
             (Cat::Status, clause(Is, &["In Review"]), "status \"In Review\""),
             (Cat::Kind, clause(Is, &["scope", "execution"]), "kind in (scope, execution)"),
         ];
@@ -1319,6 +1312,55 @@ mod tests {
         let mut r = Kept { filter: parsed("ready"), ..Kept::default() };
         r.set_op(Cat::Ready, Op::Not);
         assert_eq!(r.filter.format(), "ready");
+    }
+
+    /// FILTER-27 acceptance 3: every time clause of the language block, typed
+    /// in the bar's text mode, comes back as a time pill — beside the
+    /// categories' pills, in the filter's order — and the pills print the
+    /// canonical text again: text ⇄ pills round-trips; × takes one out.
+    #[test]
+    fn time_clauses_are_pills_and_round_trip() {
+        let forms = [
+            "created today",
+            "created within 3d",
+            "created this week",
+            "created before 2w ago",
+            "created between 2026-10-01 and 2026-10-07",
+            "entered Pending today",
+            "left Pending this week",
+            "entered Ready within 2d by owner",
+            "status Pending for over 2w",
+            "status \"In Review\" for over 3d",
+            "category active for under 1h",
+            "for over 2w",
+            "changed before 1w ago",
+            "category in (ready, active, review) for over 1w",
+            "created between 2026-10-01T08:30 and 2026-10-03T17:00",
+            "changed today",
+        ];
+        for form in forms {
+            let text = format!("kind build and {form} and in MNG");
+            let k = Kept { filter: parsed(&text), ..Kept::default() };
+            let pills = k.pills();
+            assert_eq!(pills.len(), 3, "{form}");
+            assert!(matches!(&pills[0], Pill::Clause { cat: Cat::Kind, .. }), "{form}");
+            let Pill::Time { at, t } = &pills[1] else { panic!("{form}: {:?}", pills[1]) };
+            assert_eq!(*at, 1);
+            // The pill back to its group, and the whole back to text.
+            let mut back = k.clone();
+            back.filter.groups[1] = crate::when::group(t);
+            assert_eq!(back.filter.format(), parsed(&text).format(), "{form}");
+            assert_eq!(k.clauses().get(Cat::When), None, "a time clause is no category's value");
+        }
+        let mut k = Kept { filter: parsed("created today and status Ready"), ..Kept::default() };
+        k.remove_group(0);
+        assert_eq!(k.filter.format(), "status Ready");
+        // Two time clauses are two pills.
+        let k = Kept { filter: parsed("created today and left Pending this week"), ..Kept::default() };
+        assert!(matches!(k.pills().as_slice(), [Pill::Time { at: 0, .. }, Pill::Time { at: 1, .. }]));
+        // An `or` of time clauses is a custom pill.
+        let k = Kept { filter: parsed("(changed within 1h or changed yesterday)"), ..Kept::default() };
+        assert!(matches!(k.pills().as_slice(), [Pill::Custom { .. }]));
     }
 
     /// Acceptance 1: a group no category draws is a custom pill showing its

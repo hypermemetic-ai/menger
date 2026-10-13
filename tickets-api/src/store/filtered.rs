@@ -603,6 +603,15 @@ impl Store {
         Watcher { lens, admit, under: None, read_at: 0 }
     }
 
+    /// FILTER-27: the next moment after the lens's now at which time alone
+    /// moves what it admits — the earliest of its history predicates' next
+    /// boundaries ([`super::history::Log::next_boundary`]); `None` when
+    /// none will move.
+    pub fn next_boundary(&self, lens: &Lens) -> Option<i64> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        lens.history().iter().filter_map(|h| cache.log.next_boundary(h, lens.clock())).min()
+    }
+
     /// MENGER-13: what time did to a `watch { filter }` whose filter has a
     /// relative window, since `then` — each ticket whose history truths
     /// differ between `then` and `now`, judged both ways against the store
@@ -664,6 +673,17 @@ impl Watcher {
     /// stream reads it again ([`Watcher::tick`]) on a timer.
     pub fn relative(&self) -> bool {
         self.lens.relative()
+    }
+
+    /// FILTER-27: how long to sleep before time next moves what this
+    /// watch's filter admits ([`Store::next_boundary`]) — at least a second,
+    /// at most `cap`.
+    pub fn wait(&self, store: &Store, cap: std::time::Duration) -> std::time::Duration {
+        let now = self.lens.clock().now();
+        match store.next_boundary(&self.lens) {
+            Some(at) => std::time::Duration::from_secs(at.saturating_sub(now).max(1) as u64).min(cap),
+            None => cap,
+        }
     }
 
     /// MENGER-13: what time did to this watch's filter since it was last

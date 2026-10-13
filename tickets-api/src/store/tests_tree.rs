@@ -794,8 +794,9 @@ async fn tree_and_under_equal_the_rule_on_a_nested_seed() {
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     // The seed only steers coverage (the answers are checked whatever it
     // is); SDLC-15's eleventh status reshuffled the walk, and A133 is a
-    // walk that still draws matches away from their parent often enough.
-    let seen = tree_walk(store, &path, 0x7EE_A133, 240, 12, &epics).await;
+    // walk that still draws matches away from their parent often enough —
+    // FILTER-27's six history predicates reshuffled it again: A137.
+    let seen = tree_walk(store, &path, 0x7EE_A137, 240, 12, &epics).await;
     assert!(seen.pages > 300 && seen.matched > 100 && seen.holding > 10 && seen.with_under > 40, "{seen:?}");
     assert!(seen.only_pages > 300 && seen.moved_up > 20, "{seen:?}");
     assert!(seen.kept_pages > 300 && seen.kept_rows > 20, "{seen:?}");

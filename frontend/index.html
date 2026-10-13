@@ -682,7 +682,7 @@
   section.histsec li.tr .msg { color: var(--fg, inherit); flex-basis: 100%; padding-left: 4.5em; font-size: calc(12.5px * var(--text-scale)); }
   section.histsec li.tr .cause { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
   section.histsec li.tr a.code { font-family: var(--mono); font-size: calc(12px * var(--text-scale)); }
-  section.histsec p.began, section.histsec p.restorable, section.histsec p.none, section.histsec p.loading {
+  section.histsec p.began, section.histsec p.since, section.histsec p.restorable, section.histsec p.none, section.histsec p.loading {
     margin: .6rem 0 0; color: var(--muted); font-size: calc(12px * var(--text-scale));
   }
   section.histsec p.restorable { color: inherit; }
@@ -1444,6 +1444,90 @@
   .fmenu.narrow.has-sub .fmain { display: none; }
   .fmenu.narrow .fsub { border-left: 0; }
   .fmenu.narrow:not(.direct) .frow.back { display: flex; }
+  /* FILTER-27: the When pane (src/when_view.rs) — its rows, a clause's
+     parts as chips, the window editor; a time pill's parts each a button. */
+  .fmenu .fsub[data-cat="when"] { width: 20rem; }
+  .app-comp-demo { display: inline-flex; flex-direction: column; gap: 6px; padding: 8px; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--bg); }
+  .fmenu.narrow .fsub[data-cat="when"] { width: 20rem; }
+  .when-rows { display: flex; flex-direction: column; }
+  .fmenu button.frow, .fmenu button.wback {
+    font: inherit; color: inherit; background: none; border: 0; text-align: left; width: 100%;
+  }
+  .fmenu button.frow:hover, .fmenu button.frow:focus-visible { background: var(--hover); outline: none; }
+  .wform .wback {
+    display: flex; align-items: center; gap: .45rem; padding: 3px 8px; cursor: pointer; color: var(--muted);
+    border-bottom: var(--border) solid var(--line) !important; margin-bottom: 4px;
+  }
+  .wform .wback:hover, .wform .wback:focus-visible { color: var(--accent); outline: none; }
+  .wform .when-pane { display: flex; flex-direction: column; gap: 2px; }
+  .wform .wsaid { padding: 2px 8px 4px; font-family: var(--sans); color: var(--ink); font-weight: var(--weight-medium); }
+  .wform .wsec { padding: 2px 6px 6px; border-top: var(--border) solid var(--line); }
+  .wform .wsec:first-of-type { border-top: 0; }
+  .wform .whead {
+    padding: 4px 2px 2px; font-family: var(--sans); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-strong);
+    letter-spacing: .06em; text-transform: uppercase; color: var(--chip-fg);
+  }
+  .wform .wchips { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 0; }
+  .wform .wchip, .wform .wbtn, .wform .wtab, .wform .wlink {
+    font: inherit; font-size: calc(11.5px * var(--text-scale)); line-height: 1.5; cursor: pointer;
+    background: var(--card); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius-md); padding: 0 .45rem;
+  }
+  .wform .wchip:hover, .wform .wbtn:hover, .wform .wtab:hover { border-color: var(--accent); color: var(--accent); }
+  .wform .wchip.on, .wform .wtab.on { background: var(--sel); border-color: var(--accent); color: var(--accent); }
+  .wform .wbtn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .wform .wbtn.primary:hover { color: var(--bg); }
+  .wform .wlink { background: none; border-color: transparent; color: var(--accent); padding: 0 .2rem; }
+  .wform .wlink:hover { text-decoration: underline; }
+  .wform :is(.wchip, .wbtn, .wtab, .wlink, .cal-step, .cal-year, .cal-y, .tsel-ap):focus-visible,
+  .wform .cal-day:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .wform .wrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 3px 0; }
+  .wform .whint, .wform .wzone { color: var(--chip-fg); font-size: calc(11px * var(--text-scale)); }
+  .wform .win, .wform .tsel input {
+    font: inherit; font-size: calc(12px * var(--text-scale)); padding: 0 .35rem; background: var(--card); color: var(--ink);
+    border: var(--border) solid var(--line); border-radius: var(--radius); outline: none;
+  }
+  .wform .win:focus, .wform .tsel input:focus { border-color: var(--accent); }
+  .wform .wnum { width: 4.5ch; text-align: right; }
+  .wform .wwho { flex: 1; min-width: 8rem; }
+  .wform .wunits { display: inline-flex; flex-wrap: wrap; gap: 3px; }
+  .wform .wcheck { display: inline-flex; align-items: center; gap: 4px; color: var(--chip-fg); font-size: calc(11px * var(--text-scale)); }
+  .wform .wcheck input { accent-color: var(--accent); }
+  .wform .weditor { margin-top: 4px; padding: 6px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
+  .wform .wtabs { display: flex; gap: 3px; margin-bottom: 6px; flex-wrap: wrap; }
+  .wform .wfoot { justify-content: space-between; border-top: var(--border) solid var(--line); margin-top: 4px; padding-top: 6px; }
+  .wform .werr { margin: 4px 0 0; color: var(--err-fg); font-size: calc(11px * var(--text-scale)); }
+  .wform .wdone { display: flex; justify-content: flex-end; padding: 6px; border-top: var(--border) solid var(--line); }
+  /* FILTER-27: the calendar and the time selector (src/calendar.rs). */
+  .cal { display: inline-flex; flex-direction: column; gap: 4px; position: relative; font-family: var(--sans); }
+  .cal-head { display: flex; align-items: center; gap: 4px; }
+  .cal-title { flex: 1; text-align: center; font-weight: var(--weight-strong); color: var(--ink); }
+  .cal-step, .cal-year, .cal-y, .tsel-ap {
+    font: inherit; font-size: calc(12px * var(--text-scale)); background: var(--card); color: var(--ink); cursor: pointer;
+    border: var(--border) solid var(--line); border-radius: var(--radius); padding: 0 .4rem; line-height: 1.6;
+  }
+  .cal-step:hover, .cal-year:hover, .cal-y:hover, .tsel-ap:hover { border-color: var(--accent); color: var(--accent); }
+  .cal-years {
+    position: absolute; z-index: 2; top: 1.9rem; right: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; padding: 4px;
+    background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius-lg); box-shadow: 0 6px 18px var(--shadow);
+  }
+  .cal-y[aria-selected="true"] { background: var(--sel); border-color: var(--accent); color: var(--accent); }
+  .cal-grid { border-collapse: separate; border-spacing: 2px; }
+  .cal-grid th { font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-medium); color: var(--chip-fg); text-align: center; padding: 0; }
+  .cal-day {
+    width: 2rem; height: 1.8rem; text-align: center; cursor: pointer; border-radius: var(--radius); color: var(--ink);
+    font-size: calc(12px * var(--text-scale)); font-variant-numeric: tabular-nums; border: var(--border) solid transparent;
+  }
+  .cal-day:hover { background: var(--hover); }
+  .cal-day.today { border-color: var(--accent); font-weight: var(--weight-strong); }
+  .cal-day.span { background: var(--sel); }
+  .cal-day.on { background: var(--accent); color: var(--bg); }
+  .tsel { display: inline-flex; align-items: center; gap: 2px; font-family: var(--mono); }
+  .tsel input { width: 3ch; text-align: center; font-variant-numeric: tabular-nums; }
+  .tsel-sep { color: var(--chip-fg); }
+  /* A time pill: its parts, each its own button. */
+  .fbar .pill.when .p-w { color: var(--muted); }
+  .fbar .pill.when .p-part { max-width: 16rem; }
+  section.histsec p.since { color: var(--muted); }
   /* FILTER-11: the header's Filter button (its badge: the global groups),
      the lens bar under the header while the global filter is non-empty, the
      inherited pills, a custom group's pill, the text mode, and the notice

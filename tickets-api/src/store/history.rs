@@ -28,8 +28,9 @@
 //! a cascade's names its cause.
 
 use super::{Cache, OrderKey};
-use crate::filter::{Event, History, Moment, Who, Window};
-use crate::types::{Kind, Status, Transition, TransitionField, TransitionSource, ANONYMOUS_ACTOR, SYSTEM_ACTOR};
+use super::times::{self, Times};
+use crate::filter::{Event, History, Moment, When, Who, Window};
+use crate::types::{Kind, Status, TicketSummary, Transition, TransitionField, TransitionSource, ANONYMOUS_ACTOR, SYSTEM_ACTOR};
 use roaring::RoaringBitmap;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeMap, HashMap};
@@ -173,6 +174,10 @@ pub(crate) struct Log {
     by_actor: HashMap<u32, Vec<u32>>,
     /// When the log began — `None` for a log nobody began (a test's).
     began: Option<i64>,
+    /// FILTER-27: each ticket's birth and status-since, and their indexes
+    /// ([`Times`]) — moved by [`Log::retime`] (a row written) and by a
+    /// status mark's append.
+    pub(super) times: Times,
 }
 
 /// Inserts `pos` into `list`, kept by `(at, id)` — at the end, unless a
@@ -238,6 +243,11 @@ impl Log {
         }
         let epic = Self::intern(&mut self.epic_ix, &mut self.epics, &key.epic);
         let actor = Self::intern(&mut self.actor_ix, &mut self.actors, &t.actor);
+        if t.field == TransitionField::Status {
+            if let Ok(to) = t.to.parse::<Status>() {
+                self.times.moved(epic, key.seq, status_ix(to), t.at_unix);
+            }
+        }
         let (from, to) = match t.field {
             TransitionField::Status => (
                 t.from.as_deref().and_then(|s| s.parse::<Status>().ok()).map(status_ix),
@@ -281,6 +291,32 @@ impl Log {
                 insert_sorted(&mut self.left[f as usize], &self.marks, pos);
             }
         }
+    }
+
+    /// FILTER-27: `row` written — its times as its row and the log say
+    /// ([`times::timed`]).
+    pub(super) fn retime(&mut self, row: &TicketSummary) {
+        let epic = Self::intern(&mut self.epic_ix, &mut self.epics, &row.epic);
+        let latest = self.latest(&row.epic, row.seq, TransitionField::Status).map(|p| self.mark(p).at);
+        self.times.put(epic, row.seq, times::timed(row, latest, self.began));
+    }
+
+    /// FILTER-27: every row's times, afresh — at open, after the log is read.
+    pub(super) fn time_all<'r>(&mut self, rows: impl IntoIterator<Item = &'r TicketSummary>) {
+        self.times = Times::default();
+        for row in rows {
+            self.retime(row);
+        }
+    }
+
+    /// FILTER-27: `(epic, seq)`'s times.
+    pub(crate) fn timed(&self, epic: &str, seq: u32) -> Option<times::Timed> {
+        self.epic_ix.get(epic).and_then(|e| self.times.get(*e, seq))
+    }
+
+    /// FILTER-27: the shortcode the log interned as `e`.
+    pub(super) fn epic_name(&self, e: u32) -> String {
+        self.epics.get(e as usize).cloned().unwrap_or_default()
     }
 
     /// The mark at `pos`.
@@ -348,6 +384,15 @@ impl Log {
     /// mark) for `changed`; the actor tested on each mark in the range only
     /// when the range is not the actor's own.
     pub(crate) fn holds(&self, pred: &History, clock: &Clock) -> BTreeMap<String, RoaringBitmap> {
+        // FILTER-27: births and status-since, from the times.
+        let timed = match &pred.event {
+            Event::Created => Some(self.times.created(pred.window.as_ref(), clock)),
+            Event::Held(h) => Some(self.times.held(h, clock)),
+            _ => None,
+        };
+        if let Some(by) = timed {
+            return by.into_iter().map(|(e, b)| (self.epic_name(e), b)).collect();
+        }
         let mut out: BTreeMap<String, RoaringBitmap> = BTreeMap::new();
         let Some((lo, hi)) = clock.bounds(pred.window.as_ref()) else { return out };
         let actor: Option<Option<u32>> = pred.by.as_ref().map(|w| {
@@ -371,6 +416,8 @@ impl Log {
                 Some(a) => (self.by_actor.get(&a).map_or(&none[..], Vec::as_slice), false),
                 None => (&self.by_time, false),
             },
+            // Answered from the times, above.
+            Event::Created | Event::Held(_) => return out,
         };
         let mut by_epic: HashMap<u32, RoaringBitmap> = HashMap::new();
         for &p in range(list, &self.marks, lo, hi) {
@@ -384,6 +431,49 @@ impl Log {
             out.insert(self.epics[e as usize].clone(), bm);
         }
         out
+    }
+}
+
+impl Log {
+    /// FILTER-27: the next moment after the clock's now at which `pred`'s
+    /// answer moves with no write — a ticket crossing a `for`'s length, a
+    /// transition or a birth leaving (or entering) a relative window, a new
+    /// day or week; `None` when it never will (fixed moments, or nothing to
+    /// cross).
+    pub(crate) fn next_boundary(&self, pred: &History, clock: &Clock) -> Option<i64> {
+        let now = clock.now();
+        if let Event::Held(h) = &pred.event {
+            return self.times.next_held(h, now);
+        }
+        let w = pred.window.as_ref()?;
+        let none: Vec<u32> = Vec::new();
+        // The earliest moment at or after `from` the predicate's list holds.
+        let first_from = |from: i64| -> Option<i64> {
+            let list: &[u32] = match &pred.event {
+                Event::Created => return self.times.first_born_from(from),
+                Event::Held(_) => return None,
+                Event::Entered(s) => self.entered.get(status_ix(*s) as usize).unwrap_or(&none),
+                Event::Left(s) => self.left.get(status_ix(*s) as usize).unwrap_or(&none),
+                Event::Changed => &self.by_time,
+            };
+            range(list, &self.marks, Some(from), None).first().map(|p| self.mark(*p).at)
+        };
+        // A length back from now: what is inside it now leaves (or enters
+        // `before …`) when it is that length old.
+        let edge = |len: i64| first_from(now - len).map(|at| at + len + 1);
+        let ago = |x: &When| match x {
+            When::Ago(n, u) => edge(i64::from(*n) * u.seconds()),
+            When::At(_) => None,
+        };
+        match w {
+            Window::Within(n, u) => edge(i64::from(*n) * u.seconds()),
+            Window::Today | Window::Yesterday | Window::ThisWeek => clock.next_day(matches!(w, Window::ThisWeek)),
+            Window::Since(x) | Window::Before(x) => ago(x),
+            Window::Between(a, b) => match (ago(a), ago(b)) {
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, y) => x.or(y),
+            },
+        }
     }
 }
 
@@ -433,7 +523,7 @@ impl Clock {
         let today = jiff::Timestamp::from_second(now)
             .map(|t| t.to_zoned(self.tz.clone()).date())
             .unwrap_or_else(|_| jiff::civil::date(1970, 1, 1));
-        let at = |m: &Moment| -> i64 {
+        let on = |m: &Moment| -> i64 {
             let d = jiff::civil::date(m.year, m.month as i8, m.day as i8);
             match m.time {
                 None => day_start(d),
@@ -444,13 +534,20 @@ impl Clock {
                     .unwrap_or(now),
             }
         };
-        let end_of = |m: &Moment| -> i64 {
-            match m.time {
-                Some(_) => at(m),
-                None => {
+        // FILTER-27: an `ago` is a length back from now.
+        let at = |w: &When| -> i64 {
+            match w {
+                When::At(m) => on(m),
+                When::Ago(n, u) => now - i64::from(*n) * u.seconds(),
+            }
+        };
+        let end_of = |w: &When| -> i64 {
+            match w {
+                When::At(m) if m.time.is_none() => {
                     let d = jiff::civil::date(m.year, m.month as i8, m.day as i8);
                     d.tomorrow().map(day_start).unwrap_or(i64::MAX)
                 }
+                w => at(w),
             }
         };
         let (lo, hi) = match w {
@@ -473,6 +570,17 @@ impl Clock {
             (Some(l), Some(h)) if h <= l => None,
             other => Some(other),
         }
+    }
+}
+
+impl Clock {
+    /// FILTER-27: the start of tomorrow in the clock's zone — of next
+    /// Monday, for `week` — as unix seconds.
+    pub fn next_day(&self, week: bool) -> Option<i64> {
+        let today = jiff::Timestamp::from_second(self.now()).ok()?.to_zoned(self.tz.clone()).date();
+        let ahead = if week { 7 - i64::from(today.weekday().to_monday_zero_offset()) } else { 1 };
+        let next = today.checked_add(jiff::Span::new().days(ahead)).ok()?;
+        next.to_zoned(self.tz.clone()).ok().map(|z| z.timestamp().as_second())
     }
 }
 
@@ -556,7 +664,11 @@ fn began(conn: &Connection) -> rusqlite::Result<Option<i64>> {
 /// The log as stored, its marks placed by `at` (the cache's map from an id
 /// to its place in the store's order). A transition of an id the store does
 /// not hold — only a hand edit makes one — is logged and left out.
-pub(crate) fn load(conn: &Connection, at: &HashMap<String, OrderKey>) -> anyhow::Result<Log> {
+pub(crate) fn load<'r>(
+    conn: &Connection,
+    at: &HashMap<String, OrderKey>,
+    rows: impl IntoIterator<Item = &'r TicketSummary>,
+) -> anyhow::Result<Log> {
     let started = std::time::Instant::now();
     let mut log = Log::began_at(began(conn)?);
     let mut stray = 0usize;
@@ -569,6 +681,8 @@ pub(crate) fn load(conn: &Connection, at: &HashMap<String, OrderKey>) -> anyhow:
     if stray > 0 {
         tracing::warn!("MENGER-13: {stray} transition(s) name no ticket the store holds — not loaded");
     }
+    // FILTER-27: the times, from the rows and the log just read.
+    log.time_all(rows);
     tracing::info!(
         "MENGER-13: read {} transition(s) and kept their indexes in {:.1} ms",
         log.len(),
@@ -652,6 +766,40 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
             ));
         }
     }
+    // FILTER-27: the times, as an open reads them, held to a fresh reading
+    // of every row and to themselves.
+    let log = load(conn, &cache.at, cache.order.values())?;
+    out.extend(log.check_times(cache.order.values()));
     out.sort();
     Ok(Some((all.len(), out)))
+}
+
+impl Log {
+    /// FILTER-27: where the kept times differ from the times `rows` and the
+    /// log give afresh, or from themselves ([`Times::check`]) — and each
+    /// exact entry's status from its latest transition's.
+    pub(super) fn check_times<'r>(&self, rows: impl IntoIterator<Item = &'r TicketSummary>) -> Vec<String> {
+        let mut fresh = Log { times: Times::default(), ..self.clone() };
+        fresh.time_all(rows);
+        let mut out = self.times.check(&fresh.times, |e| self.epic_name(e));
+        for (key, ps) in &self.tickets {
+            let Some(t) = self.times.get(key.0, key.1) else { continue };
+            let last = ps.iter().rev().map(|p| self.marks[*p as usize]).find(|m| m.field == TransitionField::Status);
+            if let Some(m) = last {
+                if (m.at, m.to) != (t.since, t.status) || !t.exact {
+                    out.push(format!(
+                        "times of {}-{}: status {} since {} ({}); its latest transition: {} at {}",
+                        self.epic_name(key.0),
+                        key.1,
+                        t.status,
+                        t.since,
+                        if t.exact { "exact" } else { "a bound" },
+                        m.to,
+                        m.at
+                    ));
+                }
+            }
+        }
+        out
+    }
 }

@@ -1613,8 +1613,19 @@ pub enum TicketsEvent {
     /// file began), and, for a canceled ticket, `restorable`: the tickets its
     /// latest cancel canceled and nothing has moved since, which `set_status
     /// { restore_children: true }` would put back, in the store's order
-    /// (empty otherwise).
-    HistoryEnd { began_unix: Option<i64>, restorable: Vec<String> },
+    /// (empty otherwise). FILTER-27: and since when the ticket has held its
+    /// current status (`status_since_unix`) — its latest status transition,
+    /// `status_since_exact: true`; or, for a ticket the log says nothing of
+    /// (from before it began), a bound — "status since at least …": its last
+    /// update or the log's beginning, whichever is earlier — `false`.
+    HistoryEnd {
+        began_unix: Option<i64>,
+        restorable: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status_since_unix: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status_since_exact: Option<bool>,
+    },
 }
 
 #[cfg(test)]

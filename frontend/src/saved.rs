@@ -67,6 +67,24 @@ pub(crate) const FILTER_LINE: &str = "filter:";
 pub(crate) const NAME_MAX: usize = 120;
 pub(crate) const SLUG_MAX: usize = 64;
 
+/// FILTER-27: the filters every reader is offered before saving any —
+/// "to get attention in one place": what was born today, what moved today,
+/// and what is stuck. Each is shown under **Suggested** in `Saved ▾` until a
+/// filter of its name is listed; choosing one applies it, `keep` saves it as
+/// an ordinary saved filter (a doc under `VIEW-1`, renamed and changed like
+/// any). Offered by the app rather than written into the tracker, so no
+/// install seeds docs into anyone's store.
+pub(crate) const SUGGESTED: [(&str, &str); 3] = [
+    ("New today", "created today"),
+    ("Moved today", "changed today"),
+    ("Stuck", "category in (ready, active, review) for over 1w"),
+];
+
+/// The suggestions not yet listed (by their name's slug).
+pub(crate) fn suggestions(listed: &[Entry]) -> Vec<(&'static str, &'static str)> {
+    SUGGESTED.into_iter().filter(|(name, _)| !listed.iter().any(|e| slug(&e.name) == slug(name) || e.id == slug(name))).collect()
+}
+
 /// A name as a path's last part: lower case, letters and digits, every run
 /// of anything else one `-`, none at either end; at most [`SLUG_MAX`]
 /// characters. Empty when the name has no letter or digit.
@@ -834,6 +852,37 @@ impl Saved {
         });
     }
 
+    /// FILTER-27: a suggestion chosen — its filter becomes the level's.
+    fn suggest(self, level: Level, name: &'static str, text: &'static str) {
+        let Ok(filter) = Filter::parse(text) else { return };
+        self.lens.commit(level, Some(chosen(filter)));
+        self.close_menu(true);
+        self.say(level, format!("\u{201c}{name}\u{201d} applied"));
+    }
+
+    /// FILTER-27: a suggestion kept — saved as an ordinary saved filter.
+    fn keep(self, level: Level, name: &'static str, text: &'static str) {
+        let Ok(filter) = Filter::parse(text) else { return };
+        if self.busy.get_untracked() {
+            return;
+        }
+        self.busy.set(true);
+        self.problem.set(None);
+        spawn_local(async move {
+            let got = save_as(filter, name).await;
+            self.busy.try_set(false);
+            match got {
+                Ok(_) => {
+                    self.refresh();
+                    self.say(level, format!("\u{201c}{name}\u{201d} kept among the saved filters"));
+                }
+                Err(why) => {
+                    self.problem.try_set(Some(format!("not kept: {why}")));
+                }
+            }
+        });
+    }
+
     /// A saved filter chosen: its filter becomes the level's.
     fn choose(self, level: Level, e: Entry) {
         if self.busy.get_untracked() {
@@ -1145,6 +1194,12 @@ fn menu_view(s: Saved, level: Level) -> impl IntoView {
         Listing::Read(list) => list,
         _ => Vec::new(),
     });
+    // FILTER-27: the suggestions not yet listed — once the list is read.
+    let suggested = Memo::new(move |_| match s.list.get() {
+        Listing::Read(list) => suggestions(&list),
+        Listing::Failed(_) => SUGGESTED.to_vec(),
+        _ => Vec::new(),
+    });
     let rows = view! {
         {move || note.get().map(|(bad, words)| view! { <div class="fempty" class:sproblem=bad>{words}</div> })}
         <For
@@ -1157,6 +1212,19 @@ fn menu_view(s: Saved, level: Level) -> impl IntoView {
         <div class="fmenu smenu" role="menu" tabindex="-1" aria-label="saved filters" data-level=level.name() data-reading=move || s.reading.get().then_some("")>
             <div class="fhead">"Saved filters"</div>
             <div class="slist">{rows}</div>
+            {move || (!suggested.get().is_empty()).then(|| view! {
+                <div class="fhead fdiv">"Suggested"</div>
+                {suggested.get().into_iter().map(|(name, text)| view! {
+                    <div class="frow srow suggested" data-suggested=slug(name)>
+                        <button class="schoose" role="menuitem" title=format!("{name}: {text}") on:click=move |_| s.suggest(level, name, text)>
+                            {name}
+                        </button>
+                        <button class="sact" data-act="keep" title="keep it among the saved filters" disabled=move || s.busy.get() on:click=move |_| s.keep(level, name, text)>
+                            "keep"
+                        </button>
+                    </div>
+                }).collect_view()}
+            })}
             {move || s.problem.get().map(|p| view! { <div class="fempty sproblem" role="alert">{p}</div> })}
             <div class="fhead fdiv"></div>
             <button
@@ -1379,6 +1447,17 @@ mod tests {
     /// The slug: lower case, letters and digits, one `-` per run of anything
     /// else, none at the ends — empty for a name with no letter or digit;
     /// at most 64 characters, never ending in `-`.
+    #[test]
+    fn the_suggestions_parse_and_step_aside_once_listed() {
+        for (name, text) in SUGGESTED {
+            let f = Filter::parse(text).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(f.format(), text, "{name}: canonical");
+        }
+        assert_eq!(suggestions(&[]).len(), 3);
+        let listed = [Entry::new("stuck", "Stuck"), Entry::new("x", "new today")];
+        assert_eq!(suggestions(&listed), [("Moved today", "changed today")]);
+    }
+
     #[test]
     fn a_name_becomes_a_slug() {
         assert_eq!(slug("open builds"), "open-builds");

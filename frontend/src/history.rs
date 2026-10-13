@@ -23,6 +23,9 @@ pub(crate) struct Answer {
     pub(crate) caused: Vec<Transition>,
     pub(crate) began: Option<i64>,
     pub(crate) restorable: Vec<String>,
+    /// FILTER-27: since when its status has been held, and whether that is
+    /// a transition's moment or — a ticket from before the log — a bound.
+    pub(crate) since: Option<(i64, bool)>,
 }
 
 /// `history`'s events, read into an [`Answer`] — `None` for a refusal.
@@ -32,9 +35,10 @@ pub(crate) fn answer_of(id: &str, events: Vec<TicketsEvent>) -> Option<Answer> {
         match ev {
             TicketsEvent::Transition { transition } if transition.ticket.eq_ignore_ascii_case(id) => a.own.push(transition),
             TicketsEvent::Transition { transition } => a.caused.push(transition),
-            TicketsEvent::HistoryEnd { began_unix, restorable } => {
+            TicketsEvent::HistoryEnd { began_unix, restorable, status_since_unix, status_since_exact } => {
                 a.began = began_unix;
                 a.restorable = restorable;
+                a.since = status_since_unix.map(|at| (at, status_since_exact.unwrap_or(true)));
             }
             TicketsEvent::NotFound { .. } | TicketsEvent::Error { .. } => return None,
             _ => {}
@@ -79,6 +83,19 @@ pub(crate) fn began_line(began: Option<i64>) -> String {
         ),
         None => "History begins when this menger started keeping it; changes before then were not recorded.".into(),
     }
+}
+
+/// FILTER-27: since when the status has been held — "status since …", or
+/// for a ticket from before the log, "status since at least …".
+pub(crate) fn since_line(since: Option<(i64, bool)>) -> Option<String> {
+    let (at, exact) = since?;
+    Some(match exact {
+        true => format!("In its status since {}.", local_date(at)),
+        false => format!(
+            "In its status since at least {} — it has not moved since the log began, and its last update was then or later.",
+            local_date(at)
+        ),
+    })
 }
 
 /// A moment in the viewer's own zone and words.
@@ -172,6 +189,7 @@ pub(crate) fn HistoryView(ticket: String) -> impl IntoView {
                 None => view! { <p class="loading">"loading history…"</p> }.into_any(),
                 Some(a) => {
                     let began = began_line(a.began);
+                    let since = since_line(a.since).map(|s| view! { <p class="since">{s}</p> });
                     let own = if a.own.is_empty() {
                         view! { <p class="none">"No change recorded yet."</p> }.into_any()
                     } else {
@@ -200,6 +218,7 @@ pub(crate) fn HistoryView(ticket: String) -> impl IntoView {
                         {own}
                         {caused}
                         {restorable}
+                        {since}
                         <p class="began">{began}</p>
                     }
                     .into_any()
@@ -238,7 +257,7 @@ mod tests {
             TicketsEvent::Transition { transition: t(1, "R-2", None, "Pending", "anonymous", None) },
             TicketsEvent::Transition { transition: t(4, "R-2", Some("Pending"), "Canceled", "idp:ada", None) },
             TicketsEvent::Transition { transition: t(5, "R-3", Some("Ready"), "Canceled", SYSTEM_ACTOR, Some((4, "R-2"))) },
-            TicketsEvent::HistoryEnd { began_unix: Some(50), restorable: vec!["R-3".into()] },
+            TicketsEvent::HistoryEnd { began_unix: Some(50), restorable: vec!["R-3".into()], status_since_unix: Some(40), status_since_exact: Some(false) },
         ];
         let a = answer_of("r-2", events).unwrap();
         assert_eq!(a.own.iter().map(|t| t.id).collect::<Vec<_>>(), [1, 4]);
