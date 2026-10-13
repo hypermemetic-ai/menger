@@ -187,12 +187,12 @@
       const stream = this.rpc.call("tickets.inputs", { epic, filter, state, ticket, tz });
       yield* extractData(stream);
     }
-    async* label(id, add, remove) {
-      const stream = this.rpc.call("tickets.label", { add, id, remove });
+    async* label(add, id, ids, remove) {
+      const stream = this.rpc.call("tickets.label", { add, id, ids, remove });
       yield* extractData(stream);
     }
-    async* linkCommits(commits, id) {
-      const stream = this.rpc.call("tickets.link_commits", { commits, id });
+    async* linkCommits(commits, id, ids) {
+      const stream = this.rpc.call("tickets.link_commits", { commits, id, ids });
       yield* extractData(stream);
     }
     async* list(after, at, epic, filter, keep, limit, parent, status, summary, tz) {
@@ -241,6 +241,10 @@
     }
     async* update(id, block, body, kind, message, parent, severity, source, status, title, unblock) {
       const stream = this.rpc.call("tickets.update", { block, body, id, kind, message, parent, severity, source, status, title, unblock });
+      yield* extractData(stream);
+    }
+    async* updateMany(block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unblock, unlabel) {
+      const stream = this.rpc.call("tickets.update_many", { block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unblock, unlabel });
       yield* extractData(stream);
     }
     async* watch(epic, filter, membership, tz) {

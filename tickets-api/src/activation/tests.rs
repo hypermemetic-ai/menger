@@ -329,13 +329,13 @@ async fn link_commits_yields_commits_linked_and_watch_carries_only_what_changed(
     let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
     let commits = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
 
-    let ev = one(hub.link_commits(None, Reach::everywhere(), "lc-1".into(), commits(&["77df9a0", "plexus-macros@4F7114A"])).await).await;
+    let ev = one(hub.link_commits(None, Reach::everywhere(), Some("lc-1".into()), None, commits(&["77df9a0", "plexus-macros@4F7114A"])).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
     assert_eq!(wire["type"], "commits_linked");
     assert_eq!(wire["added"], serde_json::json!(["77df9a0", "plexus-macros@4f7114a"]));
     assert_eq!(wire["ticket"]["id"], "LC-1");
     assert_eq!(wire["ticket"]["commits"], wire["added"]);
-    let ev = one(hub.link_commits(None, Reach::everywhere(), "LC-1".into(), commits(&["77df9a0", "0bb28b2"])).await).await;
+    let ev = one(hub.link_commits(None, Reach::everywhere(), Some("LC-1".into()), None, commits(&["77df9a0", "0bb28b2"])).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
     assert_eq!(wire["added"], serde_json::json!(["0bb28b2"]), "the third alone");
     let three = serde_json::json!(["77df9a0", "plexus-macros@4f7114a", "0bb28b2"]);
@@ -358,19 +358,19 @@ async fn link_commits_yields_commits_linked_and_watch_carries_only_what_changed(
     }
 
     // The no-op, the refusal, the miss: nothing on `watch`.
-    match one(hub.link_commits(None, Reach::everywhere(), "LC-1".into(), commits(&["0BB28B2"])).await).await {
+    match one(hub.link_commits(None, Reach::everywhere(), Some("LC-1".into()), None, commits(&["0BB28B2"])).await).await {
         TicketsEvent::CommitsLinked { added, ticket } => {
             assert!(added.is_empty(), "{added:?}");
             assert_eq!(ticket.commits.len(), 3);
         }
         other => panic!("expected CommitsLinked, got {other:?}"),
     }
-    match one(hub.link_commits(None, Reach::everywhere(), "LC-1".into(), commits(&["c8c5678", "77df9a0;rm", "090cdec"])).await).await {
+    match one(hub.link_commits(None, Reach::everywhere(), Some("LC-1".into()), None, commits(&["c8c5678", "77df9a0;rm", "090cdec"])).await).await {
         TicketsEvent::Error { message } => assert!(message.contains("'77df9a0;rm'"), "names the entry: {message}"),
         other => panic!("expected Error, got {other:?}"),
     }
     assert!(matches!(
-        one(hub.link_commits(None, Reach::everywhere(), "LC-9".into(), commits(&["c8c5678"])).await).await,
+        one(hub.link_commits(None, Reach::everywhere(), Some("LC-9".into()), None, commits(&["c8c5678"])).await).await,
         TicketsEvent::NotFound { id } if id == "LC-9"
     ));
     let got = serde_json::to_value(one(hub.get(None, Reach::everywhere(), "LC-1".into()).await).await).unwrap();

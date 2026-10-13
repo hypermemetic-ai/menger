@@ -650,6 +650,21 @@ export interface TicketsEventUpdated {
   ticket: Ticket;
 }
 
+/** ACT-2: `update_many`'s answer, and its write's last event on `watch`
+(before a filter's `entered` / `left` / `recount`) — `ids` the tickets
+it changed (each said by its own events before this), `changed` the
+aspects that moved in any, in `updated`'s order (`labels` last). The
+answer also carries every ticket selected as the write left it, in
+the selection's order (`tickets`), and the ids nothing changed for
+(`unchanged`); on `watch` both are empty. */
+export interface TicketsEventUpdatedMany {
+  type: 'updated_many';
+  changed: string[];
+  ids: string[];
+  tickets: Ticket[];
+  unchanged: string[];
+}
+
 /** AGS-19: the ticket `id` gained the child `added` — a child was born
 naming it as `parent`, or was moved under it by `set_parent`
 (yielded by `watch`). SCALE-4: the parent's id and its new
@@ -1007,7 +1022,7 @@ export interface TicketsEventHistoryEnd {
   statusSinceUnix: number | null;
 }
 
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
 
 export function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth { return e.type === 'health'; }
 export function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated { return e.type === 'created'; }
@@ -1025,6 +1040,7 @@ export function isTicketsEventUnlocksRemoved(e: TicketsEvent): e is TicketsEvent
 export function isTicketsEventBlockersChanged(e: TicketsEvent): e is TicketsEventBlockersChanged { return e.type === 'blockers_changed'; }
 export function isTicketsEventSeverityChanged(e: TicketsEvent): e is TicketsEventSeverityChanged { return e.type === 'severity_changed'; }
 export function isTicketsEventUpdated(e: TicketsEvent): e is TicketsEventUpdated { return e.type === 'updated'; }
+export function isTicketsEventUpdatedMany(e: TicketsEvent): e is TicketsEventUpdatedMany { return e.type === 'updated_many'; }
 export function isTicketsEventChildrenChanged(e: TicketsEvent): e is TicketsEventChildrenChanged { return e.type === 'children_changed'; }
 export function isTicketsEventParentChanged(e: TicketsEvent): e is TicketsEventParentChanged { return e.type === 'parent_changed'; }
 export function isTicketsEventChildRemoved(e: TicketsEvent): e is TicketsEventChildRemoved { return e.type === 'child_removed'; }

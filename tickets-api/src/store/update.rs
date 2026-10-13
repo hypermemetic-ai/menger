@@ -55,6 +55,10 @@ pub struct Update {
     pub block: Vec<String>,
     /// Ids it no longer waits on.
     pub unblock: Vec<String>,
+    /// ACT-2: labels to add, and to take off — `label`'s rules
+    /// ([`crate::labels::apply`]; one in both is added).
+    pub label: Vec<String>,
+    pub unlabel: Vec<String>,
     /// What the caller refused already — an unknown kind, status or
     /// severity — named with the store's own refusals, so one answer names
     /// every one ([`StoreError::Invalid`]).
@@ -63,7 +67,7 @@ pub struct Update {
 
 /// MENGER-30: an update's answer — the ticket as it left it, and the
 /// aspects that moved, in the order `changed` names them: `title`, `body`,
-/// `kind`, `status`, `parent`, `severity`, `blocked_by`.
+/// `kind`, `status`, `parent`, `severity`, `blocked_by` — ACT-2: `labels`.
 #[derive(Debug, Clone)]
 pub struct Updated {
     pub ticket: Ticket,
@@ -71,8 +75,8 @@ pub struct Updated {
 }
 
 /// What an update will do, worked out and checked before anything moves.
-struct Plan {
-    id: String,
+pub(super) struct Plan {
+    pub(super) id: String,
     title: Option<String>,
     body: Option<String>,
     registered: components::Plan,
@@ -87,7 +91,9 @@ struct Plan {
     removed: Vec<String>,
     /// The ticket becomes a doc: it sheds its blockers before its kind.
     blockers_first: bool,
-    changed: Vec<String>,
+    /// ACT-2: the labels after, and what moved — `None`: none did.
+    labels: Option<Vec<String>>,
+    pub(super) changed: Vec<String>,
 }
 
 /// Ids as a write keeps them — trimmed, upper-cased, each once — and the
@@ -104,7 +110,7 @@ fn ids_of(entries: &[String]) -> (Vec<String>, bool) {
 /// the row before, `row` after. Shared by `set_kind` and `update`.
 pub(super) fn kind_moves(cache: &Cache, old: &Row, row: &Row, act: &Act) -> (Vec<Transition>, Vec<(Input, InputHistoryEntry)>) {
     let first = cache.log.next_id();
-    let transition = |id, field, from: &str, to: &str, cause: Option<u64>| Transition {
+    let transition = |id, field, from: &str, to: &str, cause: Option<(u64, &str)>| Transition {
         id,
         ticket: row.id.clone(),
         field,
@@ -115,15 +121,16 @@ pub(super) fn kind_moves(cache: &Cache, old: &Row, row: &Row, act: &Act) -> (Vec
         name: act.name.clone(),
         source: act.source,
         message: act.message.clone(),
-        cause_ticket: cause.map(|_: u64| row.id.clone()),
-        cause,
+        cause_ticket: cause.map(|(_, t)| t.to_string()),
+        cause: cause.map(|(c, _)| c),
     };
     let mut made = Vec::new();
     if row.kind != old.kind {
-        made.push(transition(first, TransitionField::Kind, old.kind.as_str(), row.kind.as_str(), None));
+        made.push(transition(first, TransitionField::Kind, old.kind.as_str(), row.kind.as_str(), act.shared_cause()));
     }
     if row.status != old.status {
-        let cause = made.first().map(|t| t.id);
+        // Caused by its kind's, when that moved; else the write's own cause.
+        let cause = made.first().map(|t| (t.id, row.id.as_str())).or_else(|| act.shared_cause());
         let id = first + made.len() as u64;
         made.push(transition(id, TransitionField::Status, old.status.as_str(), row.status.as_str(), cause));
     }
@@ -178,33 +185,8 @@ impl Store {
             let txn = conn.transaction()?;
             let now = chrono::Utc::now().timestamp();
             let mut out = Gathered::default();
-            let Plan { id, title, body, registered, asked, kind, status, parent, severity, added, removed, blockers_first, changed } = plan;
-            let blockers = !added.is_empty() || !removed.is_empty();
-            if title.is_some() || body.is_some() {
-                amend_step(&txn, cache, unders, &id, title, body, registered, asked, now, &mut out)?;
-            }
-            if blockers && blockers_first {
-                blockers_step(&txn, cache, unders, &id, &added, &removed, now, &mut out)?;
-            }
-            if let Some((kind, status)) = kind {
-                kind_step(&txn, cache, unders, &id, kind, status, &act, now, &mut out)?;
-            }
-            if let Some(status) = status {
-                let row = cache.get(&id).cloned().ok_or_else(|| StoreError::NotFound(id.clone()))?;
-                rules::status_refusal(&row, status)?;
-                for step in status_steps(cache, &row, status, &act, false, now) {
-                    status_step(&txn, cache, unders, step, now, &mut out)?;
-                }
-            }
-            if blockers && !blockers_first {
-                blockers_step(&txn, cache, unders, &id, &added, &removed, now, &mut out)?;
-            }
-            if let Some(parent) = parent {
-                parent_step(&txn, cache, unders, &id, parent, now, &mut out)?;
-            }
-            if let Some(severity) = severity {
-                severity_step(&txn, cache, unders, &id, severity, now, &mut out)?;
-            }
+            let (id, changed) = (plan.id.clone(), plan.changed.clone());
+            apply(&txn, cache, unders, plan, &act, now, &mut out)?;
             let row = cache.get(&id).cloned().ok_or_else(|| StoreError::NotFound(id.clone()))?;
             let body = db::body(&txn, &id)?.ok_or_else(|| missing(&id))?;
             txn.commit()?;
@@ -214,9 +196,59 @@ impl Store {
     }
 }
 
+/// MENGER-30: a planned update's steps, in the module doc's order, into
+/// `txn` and the cache as the steps before it left it; its events into
+/// `out`. ACT-2: `update_many` makes each ticket's this way, in turn —
+/// and a status a cascade earlier in its write already gave the ticket is
+/// no step.
+pub(super) fn apply(
+    txn: &rusqlite::Transaction<'_>,
+    cache: &mut Cache,
+    unders: &lineage::UnderWatches,
+    plan: Plan,
+    act: &Act,
+    now: i64,
+    out: &mut Gathered,
+) -> Result<(), StoreError> {
+    let Plan { id, title, body, registered, asked, kind, status, parent, severity, added, removed, blockers_first, labels, changed: _ } = plan;
+    let blockers = !added.is_empty() || !removed.is_empty();
+    if title.is_some() || body.is_some() {
+        amend_step(txn, cache, unders, &id, title, body, registered, asked, now, out)?;
+    }
+    if blockers && blockers_first {
+        blockers_step(txn, cache, unders, &id, &added, &removed, now, out)?;
+    }
+    if let Some((kind, status)) = kind {
+        kind_step(txn, cache, unders, &id, kind, status, act, now, out)?;
+    }
+    if let Some(status) = status {
+        let row = cache.get(&id).cloned().ok_or_else(|| StoreError::NotFound(id.clone()))?;
+        // ACT-2: a cascade earlier in the write may have given it already.
+        if row.status != status {
+            rules::status_refusal(&row, status)?;
+            for step in status_steps(cache, &row, status, act, false, now) {
+                status_step(txn, cache, unders, step, now, out)?;
+            }
+        }
+    }
+    if blockers && !blockers_first {
+        blockers_step(txn, cache, unders, &id, &added, &removed, now, out)?;
+    }
+    if let Some(parent) = parent {
+        parent_step(txn, cache, unders, &id, parent, now, out)?;
+    }
+    if let Some(severity) = severity {
+        severity_step(txn, cache, unders, &id, severity, now, out)?;
+    }
+    if let Some(labels) = labels {
+        labels_step(txn, cache, unders, &id, labels, now, out)?;
+    }
+    Ok(())
+}
+
 /// Every rule, asked of the ticket as it stands (`current`) and the update
 /// as asked — each refusal into `refusals` — and what moves.
-fn plan(
+pub(super) fn plan(
     cache: &Cache,
     current: &Ticket,
     u: Update,
@@ -325,6 +357,18 @@ fn plan(
             refusals.push(StoreError::BlockCycle { id: id.clone(), path });
         }
     }
+    // ACT-2: label's.
+    let mut labels = None;
+    if !u.label.is_empty() || !u.unlabel.is_empty() {
+        match crate::labels::apply(&row.labels, &u.label, &u.unlabel) {
+            Err(why) => refusals.push(StoreError::Labels { id: id.clone(), why }),
+            Ok((after, added, removed)) if !added.is_empty() || !removed.is_empty() => {
+                changed.push("labels".into());
+                labels = Some(after);
+            }
+            Ok(_) => {}
+        }
+    }
     Plan {
         id,
         title,
@@ -338,6 +382,7 @@ fn plan(
         added,
         removed,
         blockers_first: !final_kind.has_lifecycle(),
+        labels,
         changed,
     }
 }
@@ -542,15 +587,47 @@ fn severity_step(
     let previous = row.severity;
     row.severity = severity;
     row.updated_unix = now;
+    cell_step(txn, cache, unders, row, out, |ticket| Change::SeverityChanged { ticket, previous })
+}
+
+/// ACT-2: `label`'s write, as a step: the row and its cell (`label <name>`).
+fn labels_step(
+    txn: &rusqlite::Transaction<'_>,
+    cache: &mut Cache,
+    unders: &lineage::UnderWatches,
+    id: &str,
+    labels: Vec<String>,
+    now: i64,
+    out: &mut Gathered,
+) -> Result<(), StoreError> {
+    let mut row = cache.get(id).cloned().ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+    let added: Vec<String> = labels.iter().filter(|l| !row.labels.contains(l)).cloned().collect();
+    let removed: Vec<String> = row.labels.iter().filter(|l| !labels.contains(l)).cloned().collect();
+    row.labels = labels;
+    row.updated_unix = now;
+    cell_step(txn, cache, unders, row, out, |ticket| Change::LabelsChanged { ticket, added, removed })
+}
+
+/// A write that moves only `row`'s cell — its labels, its severity, its
+/// commits: the row, its cell and the kept tree, and `change` of the whole
+/// ticket.
+pub(super) fn cell_step(
+    txn: &rusqlite::Transaction<'_>,
+    cache: &mut Cache,
+    unders: &lineage::UnderWatches,
+    row: Row,
+    out: &mut Gathered,
+    change: impl FnOnce(Ticket) -> Change,
+) -> Result<(), StoreError> {
     let derived = cache.cell_change(&row, None);
     let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()));
     let announced = derived.announced();
     let Derived { stored, moved } = derived;
     db::update_row(txn, &row)?;
     stored.write(txn)?;
-    let body = db::body(txn, id)?.ok_or_else(|| missing(id))?;
+    let body = db::body(txn, &row.id)?.ok_or_else(|| missing(&row.id))?;
     cache.commits_changed(row.clone(), moved);
-    out.tickets.push(Change::SeverityChanged { ticket: whole(row, body), previous });
+    out.tickets.push(change(whole(row, body)));
     out.filtered(announced, under.and_then(|u| u.after_in(cache)));
     Ok(())
 }

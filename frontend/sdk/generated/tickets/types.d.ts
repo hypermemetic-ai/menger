@@ -590,6 +590,20 @@ export interface TicketsEventUpdated {
     changed: string[];
     ticket: Ticket;
 }
+/** ACT-2: `update_many`'s answer, and its write's last event on `watch`
+(before a filter's `entered` / `left` / `recount`) — `ids` the tickets
+it changed (each said by its own events before this), `changed` the
+aspects that moved in any, in `updated`'s order (`labels` last). The
+answer also carries every ticket selected as the write left it, in
+the selection's order (`tickets`), and the ids nothing changed for
+(`unchanged`); on `watch` both are empty. */
+export interface TicketsEventUpdatedMany {
+    type: 'updated_many';
+    changed: string[];
+    ids: string[];
+    tickets: Ticket[];
+    unchanged: string[];
+}
 /** AGS-19: the ticket `id` gained the child `added` — a child was born
 naming it as `parent`, or was moved under it by `set_parent`
 (yielded by `watch`). SCALE-4: the parent's id and its new
@@ -915,7 +929,7 @@ export interface TicketsEventHistoryEnd {
     statusSinceExact: boolean | null;
     statusSinceUnix: number | null;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -932,6 +946,7 @@ export declare function isTicketsEventUnlocksRemoved(e: TicketsEvent): e is Tick
 export declare function isTicketsEventBlockersChanged(e: TicketsEvent): e is TicketsEventBlockersChanged;
 export declare function isTicketsEventSeverityChanged(e: TicketsEvent): e is TicketsEventSeverityChanged;
 export declare function isTicketsEventUpdated(e: TicketsEvent): e is TicketsEventUpdated;
+export declare function isTicketsEventUpdatedMany(e: TicketsEvent): e is TicketsEventUpdatedMany;
 export declare function isTicketsEventChildrenChanged(e: TicketsEvent): e is TicketsEventChildrenChanged;
 export declare function isTicketsEventParentChanged(e: TicketsEvent): e is TicketsEventParentChanged;
 export declare function isTicketsEventChildRemoved(e: TicketsEvent): e is TicketsEventChildRemoved;

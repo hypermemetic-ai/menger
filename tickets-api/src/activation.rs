@@ -116,7 +116,7 @@ mod tests;
         ],
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "link_commits",
-            "unlink_commits", "label", "update", "answer", "clear_answer", "close_input", "reopen_input"
+            "unlink_commits", "label", "update", "update_many", "answer", "clear_answer", "close_input", "reopen_input"
         ],
     )
 )]
@@ -752,13 +752,16 @@ impl Tickets {
     /// every entry that is not a reference, or for a link past 256 commits
     /// on the ticket; an error writes nothing. Moves `updated_unix` and
     /// nothing else — not the status. `watch` carries every
-    /// `CommitsLinked` that added something.
+    /// `CommitsLinked` that added something. ACT-2: `ids` instead of `id`
+    /// links them to each, in one write, all or none, one `CommitsLinked`
+    /// per ticket (`cells_stream`).
     #[plexus_macros::method(
         group = "write",
         target = "id",
-        description = "Link commits to a ticket (the commits that finished it); yields commits_linked { ticket, added }",
+        description = "Link commits to a ticket, or to many (ids; one write, all or none) — the commits that finished it; yields commits_linked { ticket, added } per ticket",
         params(
-            id = "Ticket id, e.g. MNG-10",
+            id = "Ticket id, e.g. MNG-10 (or ids)",
+            ids = "Ticket ids, instead of id: every one gets the commits, in one write, all or none",
             commits = "Commit references, in link order: a hex object name of 7-64 characters, optionally repo@ before it — e.g. [\"77df9a0\", \"plexus-macros@4f7114a\"]"
         ),
         example(note = "link the commit that finished it", params = r#"{"id": "MENGER-40", "commits": ["77df9a0"]}"#),
@@ -766,24 +769,12 @@ impl Tickets {
     )]
     pub async fn link_commits(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: String,
+        id: Option<String>,
+        ids: Option<Vec<String>>,
         commits: Vec<String>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
-        stream! {
-            // AUTH-7: the gate held the grant on the target; the sign-in
-            // must still stand.
-            if let Err(message) = admitted {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-            match store.link_commits(&id, commits).await {
-                Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
-            }
-        }
+        // AUTH-7: the gate held the grant on `id`; `ids` are asked there.
+        cells_stream(self.store.clone(), self.access.admit(auth, &reach), id, ids, CellWrite::Commits(commits))
     }
 
     /// SDLC-9: the inverse of `link_commits` — every entry the ticket
@@ -836,12 +827,15 @@ impl Tickets {
     /// label, or a result past 16; an error writes nothing. Moves
     /// `updated_unix` and the ticket's filter cell (`label <name>`), nothing
     /// else. `watch` carries every `LabelsChanged` that moved something.
+    /// ACT-2: `ids` instead of `id` moves each one's, in one write, all or
+    /// none, one `LabelsChanged` per ticket (`cells_stream`).
     #[plexus_macros::method(
         group = "write",
         target = "id",
-        description = "Add or remove a ticket's labels (e.g. needs-you); yields labels_changed { ticket, added, removed }",
+        description = "Add or remove a ticket's labels (e.g. needs-you), or many tickets' (ids; one write, all or none); yields labels_changed { ticket, added, removed } per ticket",
         params(
-            id = "Ticket id, e.g. MENGER-12",
+            id = "Ticket id, e.g. MENGER-12 (or ids)",
+            ids = "Ticket ids, instead of id: every one's labels move, in one write, all or none",
             add = "Labels to add — letters, digits and -, at most 32 characters, lower-cased (e.g. [\"needs-you\"]) (optional)",
             remove = "Labels to remove (optional)"
         ),
@@ -850,25 +844,14 @@ impl Tickets {
     )]
     pub async fn label(
         &self, auth: Option<&AuthContext>, reach: Reach,
-        id: String,
+        id: Option<String>,
+        ids: Option<Vec<String>>,
         add: Option<Vec<String>>,
         remove: Option<Vec<String>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
-        stream! {
-            // AUTH-7: the gate held the grant on the target; the sign-in
-            // must still stand.
-            if let Err(message) = admitted {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-            match store.label(&id, add.unwrap_or_default(), remove.unwrap_or_default()).await {
-                Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
-            }
-        }
+        // AUTH-7: the gate held the grant on `id`; `ids` are asked there.
+        let write = CellWrite::Labels(add.unwrap_or_default(), remove.unwrap_or_default());
+        cells_stream(self.store.clone(), self.access.admit(auth, &reach), id, ids, write)
     }
 
     /// MENGER-30: any part of a ticket in one write, all of it or none — the
@@ -939,6 +922,59 @@ impl Tickets {
                 Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, sight.as_ref(), id)) },
             }
         }
+    }
+
+    /// ACT-2: `update`'s change to many tickets in one write, all or none —
+    /// the selection, the rules, the steps and the events are
+    /// [`crate::store::UpdatedMany`]'s module's. Yields exactly one event:
+    /// `UpdatedMany { ids, changed, tickets, unchanged }`, or one `Error`
+    /// naming every refused ticket and why.
+    #[plexus_macros::method(
+        group = "write",
+        target = "ids",
+        description = "The same update to many tickets in one write — kind, status, parent, severity, blockers, labels; by ids or a filter; all lands or none does; yields updated_many { ids, changed, tickets, unchanged }",
+        params(
+            ids = "Ticket ids, e.g. [\"THEME-9\", \"THEME-10\"] (or filter)",
+            filter = "Instead of ids: the tickets this filter admits at the write, e.g. 'label stale and not category done' (FILTER-3's language)",
+            max = "With a filter: the most tickets it may change (default 500); more is refused, naming the count",
+            tz = "The time zone a history filter's days are read in (optional; default UTC)",
+            kind = "New kind (optional; set_kind's rules)",
+            status = "New status (optional; set_status's rules — Canceled cascades)",
+            parent = "Id of the ticket to file every one under (optional; set_parent's rules — a cycle among them refused)",
+            severity = "Critical | High | Medium | Low — or none, to clear it (optional)",
+            block = "Ticket ids every one waits on from now on (optional)",
+            unblock = "Ticket ids none waits on any more (optional)",
+            label = "Labels to add to every one (optional; label's rules)",
+            unlabel = "Labels to take off every one (optional)",
+            source = "app | api | pipeline (optional, default api) — kept in its transitions",
+            message = "Why, kept in every transition the write makes (optional)"
+        ),
+        values(kind = ["scope", "execution", "build", "gap", "spike", "doc"], status = ["Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Idea", "Epic", "Superseded", "Canceled", "Doc"], severity = ["Critical", "High", "Medium", "Low", "none"], source = ["app", "api", "pipeline"]),
+        example(note = "promote three tickets", params = r#"{"ids": ["THEME-9", "THEME-10", "THEME-11"], "status": "Ready"}"#),
+        example(note = "sweep by a filter", params = r#"{"filter": "label stale and not category done", "status": "Canceled", "message": "swept"}"#)
+    )]
+    pub async fn update_many(
+        &self, auth: Option<&AuthContext>, reach: Reach,
+        ids: Option<Vec<String>>,
+        filter: Option<String>,
+        max: Option<u32>,
+        tz: Option<String>,
+        kind: Option<String>,
+        status: Option<String>,
+        parent: Option<String>,
+        severity: Option<String>,
+        block: Option<Vec<String>>,
+        unblock: Option<Vec<String>>,
+        label: Option<Vec<String>>,
+        unlabel: Option<Vec<String>>,
+        source: Option<String>,
+        message: Option<String>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        // AUTH-7: the gate held the grant on each of `ids`; a filter's
+        // tickets, and a parent or blocker beyond them, are asked there.
+        let mut asked = update_of(None, None, kind, status, parent, severity, block, unblock);
+        (asked.label, asked.unlabel) = (label.unwrap_or_default(), unlabel.unwrap_or_default());
+        update_many_stream(self.store.clone(), self.access.admit(auth, &reach), ids, filter, max, tz, asked, source, message)
     }
 
     /// The DAG query: which tickets can start now? Yields one row event
@@ -2095,7 +2131,7 @@ impl Tickets {
     #[plexus_macros::method(
         group = "read",
         streaming,
-        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
+        description = "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
         params(
             epic = "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)",
             filter = "A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256",

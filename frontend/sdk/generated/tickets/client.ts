@@ -39,10 +39,10 @@ export interface TicketsClient {
   history(id: string): AsyncGenerator<TicketsEvent>;
   /** Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket */
   inputs(epic?: string | null, filter?: string | null, state?: string | null, ticket?: string | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
-  /** Add or remove a ticket's labels (e.g. needs-you); yields labels_changed { ticket, added, removed } */
-  label(id: string, add?: string[] | null, remove?: string[] | null): AsyncGenerator<TicketsEvent>;
-  /** Link commits to a ticket (the commits that finished it); yields commits_linked { ticket, added } */
-  linkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
+  /** Add or remove a ticket's labels (e.g. needs-you), or many tickets' (ids; one write, all or none); yields labels_changed { ticket, added, removed } per ticket */
+  label(add?: string[] | null, id?: string | null, ids?: string[] | null, remove?: string[] | null): AsyncGenerator<TicketsEvent>;
+  /** Link commits to a ticket, or to many (ids; one write, all or none) — the commits that finished it; yields commits_linked { ticket, added } per ticket */
+  linkCommits(commits: string[], id?: string | null, ids?: string[] | null): AsyncGenerator<TicketsEvent>;
   /** List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at */
   list(after?: string | null, at?: number | null, epic?: string | null, filter?: string | null, keep?: string | null, limit?: number | null, parent?: string | null, status?: string | null, summary?: boolean | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
   /** Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids */
@@ -67,7 +67,9 @@ export interface TicketsClient {
   unlinkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
   /** Change any part of a ticket in one write — title, body, kind, status, parent, severity, blockers (block / unblock); all lands or none does; yields updated { ticket, changed } */
   update(id: string, block?: string[] | null, body?: string | null, kind?: string | null, message?: string | null, parent?: string | null, severity?: string | null, source?: string | null, status?: string | null, title?: string | null, unblock?: string[] | null): AsyncGenerator<TicketsEvent>;
-  /** Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
+  /** The same update to many tickets in one write — kind, status, parent, severity, blockers, labels; by ids or a filter; all lands or none does; yields updated_many { ids, changed, tickets, unchanged } */
+  updateMany(block?: string[] | null, filter?: string | null, ids?: string[] | null, kind?: string | null, label?: string[] | null, max?: number | null, message?: string | null, parent?: string | null, severity?: string | null, source?: string | null, status?: string | null, tz?: string | null, unblock?: string[] | null, unlabel?: string[] | null): AsyncGenerator<TicketsEvent>;
+  /** Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events */
   watch(epic?: string | null, filter?: string | null, membership?: boolean | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
   /** The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts */
   waves(epics: string[], kinds?: string[] | null): AsyncGenerator<TicketsEvent>;
@@ -162,13 +164,13 @@ class TicketsClientImpl implements TicketsClient {
     yield* extractData<TicketsEvent>(stream);
   }
 
-  async *label(id: string, add?: string[] | null, remove?: string[] | null): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.label', { add, id, remove });
+  async *label(add?: string[] | null, id?: string | null, ids?: string[] | null, remove?: string[] | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.label', { add, id, ids, remove });
     yield* extractData<TicketsEvent>(stream);
   }
 
-  async *linkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent> {
-    const stream = this.rpc.call('tickets.link_commits', { commits, id });
+  async *linkCommits(commits: string[], id?: string | null, ids?: string[] | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.link_commits', { commits, id, ids });
     yield* extractData<TicketsEvent>(stream);
   }
 
@@ -229,6 +231,11 @@ class TicketsClientImpl implements TicketsClient {
 
   async *update(id: string, block?: string[] | null, body?: string | null, kind?: string | null, message?: string | null, parent?: string | null, severity?: string | null, source?: string | null, status?: string | null, title?: string | null, unblock?: string[] | null): AsyncGenerator<TicketsEvent> {
     const stream = this.rpc.call('tickets.update', { block, body, id, kind, message, parent, severity, source, status, title, unblock });
+    yield* extractData<TicketsEvent>(stream);
+  }
+
+  async *updateMany(block?: string[] | null, filter?: string | null, ids?: string[] | null, kind?: string | null, label?: string[] | null, max?: number | null, message?: string | null, parent?: string | null, severity?: string | null, source?: string | null, status?: string | null, tz?: string | null, unblock?: string[] | null, unlabel?: string[] | null): AsyncGenerator<TicketsEvent> {
+    const stream = this.rpc.call('tickets.update_many', { block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unblock, unlabel });
     yield* extractData<TicketsEvent>(stream);
   }
 
