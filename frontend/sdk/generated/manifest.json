@@ -172,11 +172,13 @@
       "label": [
         "add",
         "id",
+        "ids",
         "remove"
       ],
       "link_commits": [
         "commits",
-        "id"
+        "id",
+        "ids"
       ],
       "list": [
         "after",
@@ -259,6 +261,22 @@
         "status",
         "title",
         "unblock"
+      ],
+      "update_many": [
+        "block",
+        "filter",
+        "ids",
+        "kind",
+        "label",
+        "max",
+        "message",
+        "parent",
+        "severity",
+        "source",
+        "status",
+        "tz",
+        "unblock",
+        "unlabel"
       ],
       "watch": [
         "epic",

@@ -54,6 +54,7 @@ pub(super) fn act_of(caller: &Caller, source: Option<&str>, message: Option<Stri
         name: caller.name.clone(),
         source,
         message: message.map(|m| m.trim().to_string()).filter(|m| !m.is_empty()),
+        cause: None,
     })
 }
 
@@ -189,6 +190,14 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
             let kept: Vec<String> = ids.iter().filter(|id| sees(id)).cloned().collect();
             return (!kept.is_empty()).then_some(TicketsEvent::WaveCycle { ids: kept });
         }
+        // ACT-2: a write over many tickets, of those the reach holds.
+        TicketsEvent::UpdatedMany { ids, changed, tickets, unchanged } => {
+            let kept: Vec<String> = ids.iter().filter(|id| sees(id)).cloned().collect();
+            let tickets: Vec<crate::types::Ticket> = tickets.iter().filter(|t| sees(&t.id)).cloned().collect();
+            let unchanged: Vec<String> = unchanged.iter().filter(|id| sees(id)).cloned().collect();
+            return (!kept.is_empty() || !tickets.is_empty())
+                .then(|| TicketsEvent::UpdatedMany { ids: kept, changed: changed.clone(), tickets, unchanged });
+        }
         TicketsEvent::Hit { summary, .. } => Some(summary.id.clone()),
         TicketsEvent::DanglingBlocker { id } | TicketsEvent::Member { id, .. } | TicketsEvent::NotFound { id } => Some(id.clone()),
         TicketsEvent::Extent { epic, .. } | TicketsEvent::Count { epic, .. } | TicketsEvent::Recount { epic, .. } => {
@@ -313,6 +322,10 @@ fn redact(e: StoreError, sees: &dyn Fn(&str) -> bool) -> String {
         StoreError::Refused { id, refusals } => {
             let each: Vec<String> = refusals.into_iter().map(|r| redact(r, sees)).collect();
             format!("update of '{id}' refused, nothing written — {}", each.join("; "))
+        }
+        // ACT-2: `update_many`'s, each ticket's each refusal.
+        StoreError::RefusedMany { refusals } => {
+            crate::store::refused_many(refusals.into_iter().map(|(id, w)| (id, w.into_iter().map(|e| redact(e, sees)).collect())).collect())
         }
         e => e.to_string(),
     }

@@ -81,7 +81,7 @@ fn types(changes: &[Change]) -> Vec<&'static str> {
 /// placements WAVE-4's rule gives, every derived structure a build by scan
 /// makes, and the forward references a scan finds.
 #[track_caller]
-fn assert_kept(store: &Store, after: &str) {
+pub(super) fn assert_kept(store: &Store, after: &str) {
     assert_eq!(store.groups(), tests::nav(store), "the roll-ups the nav draws, after {after}");
     tests_placements::assert_kept_placements_are_the_rule(store, after);
     let cache = store.tickets.read().unwrap();
@@ -196,7 +196,7 @@ async fn all_at_once_is_one_write_its_events_in_order() {
                 severity: Some(Some(Severity::Low)),
                 block: vec!["U-2".into(), "V-2".into()],
                 unblock: vec![],
-                refused: vec![],
+                ..Update::default()
             },
         )
         .await

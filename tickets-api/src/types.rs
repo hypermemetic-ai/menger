@@ -1390,6 +1390,14 @@ pub enum TicketsEvent {
     /// would change, which wrote nothing; `watch` never carries it (it
     /// carries each aspect's own event).
     Updated { ticket: Ticket, changed: Vec<String> },
+    /// ACT-2: `update_many`'s answer, and its write's last event on `watch`
+    /// (before a filter's `entered` / `left` / `recount`) — `ids` the tickets
+    /// it changed (each said by its own events before this), `changed` the
+    /// aspects that moved in any, in `updated`'s order (`labels` last). The
+    /// answer also carries every ticket selected as the write left it, in
+    /// the selection's order (`tickets`), and the ids nothing changed for
+    /// (`unchanged`); on `watch` both are empty.
+    UpdatedMany { ids: Vec<String>, changed: Vec<String>, tickets: Vec<Ticket>, unchanged: Vec<String> },
     /// AGS-19: the ticket `id` gained the child `added` — a child was born
     /// naming it as `parent`, or was moved under it by `set_parent`
     /// (yielded by `watch`). SCALE-4: the parent's id and its new

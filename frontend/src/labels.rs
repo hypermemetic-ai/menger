@@ -84,7 +84,7 @@ async fn label(id: String, add: Vec<String>, remove: Vec<String>) -> Result<(), 
     let client = session::client().ok_or_else(|| "not connected".to_string())?;
     let add = (!add.is_empty()).then_some(add);
     let remove = (!remove.is_empty()).then_some(remove);
-    let events = client.label_all(id, add, remove).await.map_err(|e| session::describe(&e))?;
+    let events = client.label_all(Some(id), None, add, remove).await.map_err(|e| session::describe(&e))?;
     for ev in events {
         match ev {
             TicketsEvent::LabelsChanged { ticket, .. } => {

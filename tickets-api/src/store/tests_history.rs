@@ -25,7 +25,7 @@ fn ticket(epic: &str, title: &str, kind: Kind, parent: Option<&str>, body: &str)
 }
 
 fn act(actor: &str, source: TransitionSource) -> Act {
-    Act { actor: actor.into(), name: None, source, message: None }
+    Act { actor: actor.into(), name: None, source, message: None, cause: None }
 }
 
 /// The house decision, with an id.

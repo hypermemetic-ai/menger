@@ -103,6 +103,8 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         Change::UnlocksRemoved { ticket, removed } => TicketsEvent::UnlocksRemoved { ticket, removed },
         Change::BlockersChanged { ticket, added, removed } => TicketsEvent::BlockersChanged { ticket, added, removed },
         Change::SeverityChanged { ticket, previous } => TicketsEvent::SeverityChanged { ticket, previous },
+        // ACT-2: an `update_many`'s write, after its tickets' own events.
+        Change::UpdatedMany { ids, changed } => TicketsEvent::UpdatedMany { ids, changed, tickets: Vec::new(), unchanged: Vec::new() },
         // SCALE-4: the parent's shortcode filtered `watch { epic }` on the
         // way here; the wire carries the id and the count.
         Change::ChildrenChanged {

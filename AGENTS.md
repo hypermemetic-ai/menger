@@ -431,6 +431,18 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
   synapse -P 4455 menger tickets update --id MENGER-30 --unblock MENGER-23 --block MENGER-29
   synapse -P 4455 menger tickets update --id MENGER-40 --kind gap --status Ready --severity High
   ```
+
+  **`tickets.update_many`** (ACT-2) is the same update to many tickets in
+  one write, all or none — `--ids`, or `--filter` (at most `--max`, default
+  500); `update`'s fields but title and body, plus `--label` / `--unlabel`;
+  a refusal names each refused id. `label` and `link_commits` take `--ids`
+  too:
+
+  ```sh
+  synapse -P 4455 menger tickets update_many --ids THEME-9,THEME-10 --status Ready --message "promoted"
+  synapse -P 4455 menger tickets update_many --filter 'label stale and not category done' --status Canceled
+  synapse -P 4455 menger tickets label --ids A-1,A-2 --add needs-you
+  ```
 - Architecture (owner-pinned): a service-wide in-memory cache
   (`src/store.rs`) is the ONLY interface the application has to tickets.
   Reads hit the cache, never storage; reads are async-safe (no lock

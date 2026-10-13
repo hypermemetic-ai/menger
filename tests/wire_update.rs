@@ -2,7 +2,8 @@
 //! TransportServer, a real WebSocket client, the `menger.call` envelope
 //! (tests/wire.rs's) — its answer, `watch` carrying each aspect's own events
 //! in order, blockers moving `blockers` and `waves`, the no-op, and a
-//! refusal that names every reason and writes nothing.
+//! refusal that names every reason and writes nothing. ACT-2: and
+//! `tickets.update_many` — a hundred tickets in one call.
 
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
@@ -189,4 +190,91 @@ async fn update_over_the_wire_one_write_its_events_in_order() {
     assert!(ev["message"].as_str().unwrap().contains("UPD-3 -> UPD-2 -> UPD-3"), "{ev}");
     let ev = one(&client, "tickets.update", json!({"id": "UPD-404", "title": "x"})).await;
     assert_eq!(ev["type"], "not_found");
+}
+
+/// ACT-2: `tickets.update_many` over the real protocol — 100 tickets moved,
+/// labelled and re-statused in one call: one answer, on `watch` each
+/// ticket's own events then one `updated_many`; a filter's selection; a
+/// refusal naming each refused id, writing nothing; `label` over `ids`.
+#[tokio::test]
+async fn update_many_over_the_wire_a_hundred_tickets_in_one_call() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    assert_eq!(one(&client, "tickets.create", json!({"epic": "MANY", "title": "root", "kind": "scope"})).await["type"], "created");
+    assert_eq!(one(&client, "tickets.create", json!({"epic": "MANY", "title": "home", "kind": "scope"})).await["type"], "created");
+    for i in 0..100 {
+        assert_eq!(one(&client, "tickets.create", json!({"epic": "MANY", "title": format!("t{i}")})).await["type"], "created");
+    }
+    let ids: Vec<String> = (3..103).map(|i| format!("MANY-{i}")).collect();
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+
+    let ev = one(
+        &client,
+        "tickets.update_many",
+        json!({"ids": ids, "parent": "MANY-2", "label": ["moved"], "status": "Ready", "message": "the hundred"}),
+    )
+    .await;
+    assert_eq!(ev["type"], "updated_many", "{ev}");
+    assert_eq!(ev["changed"], json!(["status", "parent", "labels"]));
+    assert_eq!(ev["ids"].as_array().unwrap().len(), 100);
+    assert_eq!(ev["unchanged"], json!([]));
+    let tickets = ev["tickets"].as_array().unwrap();
+    assert_eq!(tickets.len(), 100);
+    assert!(tickets.iter().all(|t| t["parent"] == "MANY-2" && t["status"] == "Ready" && t["labels"] == json!(["moved"])), "{ev}");
+
+    // Each ticket's own events (status, transition, parent, both parents'
+    // children, labels: 600 and the groups), then one `updated_many`. The
+    // write sends them at once, past the broadcast's 256 (SCALE-5), so a
+    // watch may lag: then one `lagged` says how many it lost, and the tail
+    // — `updated_many` last — still arrives.
+    let seen = watch_until(&mut watch, "updated_many").await;
+    let kinds = types(&seen);
+    assert_eq!(kinds.iter().filter(|k| **k == "updated_many").count(), 1);
+    let missed: u64 = seen.iter().filter(|e| e["type"] == "lagged").map(|e| e["missed"].as_u64().unwrap()).sum();
+    if missed == 0 {
+        for kind in ["status_changed", "transition", "parent_changed", "children_changed", "child_removed", "labels_changed"] {
+            assert_eq!(kinds.iter().filter(|k| **k == kind).count(), 100, "{kind}");
+        }
+    } else {
+        assert!(missed as usize + seen.len() > 600, "{missed} lost, {} seen", seen.len());
+    }
+    let last = seen.last().unwrap();
+    assert_eq!((last["ids"].as_array().unwrap().len(), last["changed"].clone()), (100, json!(["status", "parent", "labels"])));
+    assert_eq!(last["tickets"], json!([]), "watch carries the ids, not the tickets");
+    // The message on every transition, one shared cause: the first's.
+    let history = collect(call(&client, "tickets.history", json!({"id": "MANY-3"})).await).await;
+    let all: Vec<&Value> = history.iter().filter(|e| e["type"] == "transition").map(|e| &e["transition"]).collect();
+    let first = all.iter().find(|t| t["ticket"] == "MANY-3" && t["to"] == "Ready").expect("MANY-3's transition");
+    assert_eq!((first["message"].clone(), first["cause"].clone()), (json!("the hundred"), Value::Null), "{history:?}");
+    let caused: Vec<&&Value> = all.iter().filter(|t| t["ticket"] != "MANY-3").collect();
+    assert_eq!(caused.len(), 99, "the rest, caused by the first: {history:?}");
+    assert!(caused.iter().all(|t| t["message"] == "the hundred" && t["cause"] == first["id"]));
+    let home = one(&client, "tickets.get", json!({"id": "MANY-2"})).await;
+    assert_eq!(home["ticket"]["child_count"], 100);
+
+    // By a filter, capped: over the cap refused, naming the count.
+    let ev = one(&client, "tickets.update_many", json!({"filter": "label moved", "max": 50, "status": "Coding"})).await;
+    assert_eq!(ev["type"], "error");
+    assert!(ev["message"].as_str().unwrap().contains("admits 100 tickets"), "{ev}");
+    let ev = one(&client, "tickets.update_many", json!({"filter": "label moved", "severity": "High"})).await;
+    assert_eq!((ev["type"].clone(), ev["ids"].as_array().map(Vec::len)), (json!("updated_many"), Some(100)), "{ev}");
+
+    // All or none: a doc and an unknown id refuse the write, each named.
+    one(&client, "tickets.create", json!({"epic": "MANY", "title": "a doc", "kind": "doc"})).await;
+    let ev = one(&client, "tickets.update_many", json!({"ids": ["MANY-3", "MANY-103", "MANY-404"], "status": "Complete"})).await;
+    assert_eq!(ev["type"], "error", "{ev}");
+    let message = ev["message"].as_str().unwrap();
+    assert!(message.starts_with("2 tickets refused, nothing written") && message.contains("MANY-103:") && message.contains("MANY-404:"), "{message}");
+    assert_eq!(one(&client, "tickets.get", json!({"id": "MANY-3"})).await["ticket"]["status"], "Ready", "nothing written");
+    let ev = one(&client, "tickets.update_many", json!({"status": "Complete"})).await;
+    assert_eq!(ev["type"], "error", "ids or a filter: {ev}");
+
+    // `label` and `link_commits` over ids: one event per ticket, one write.
+    let evs = collect(call(&client, "tickets.label", json!({"ids": ["MANY-3", "MANY-4"], "add": ["needs-you"]})).await).await;
+    assert_eq!(types(&evs), ["labels_changed", "labels_changed"]);
+    assert_eq!(evs[1]["ticket"]["labels"], json!(["moved", "needs-you"]));
+    let evs = collect(call(&client, "tickets.link_commits", json!({"ids": ["MANY-3", "MANY-4"], "commits": ["77df9a0"]})).await).await;
+    assert_eq!(types(&evs), ["commits_linked", "commits_linked"]);
+    let ev = one(&client, "tickets.label", json!({"id": "MANY-3", "ids": ["MANY-4"], "add": ["x"]})).await;
+    assert_eq!(ev["type"], "error", "id or ids, not both: {ev}");
 }

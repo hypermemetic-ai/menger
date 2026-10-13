@@ -106,7 +106,7 @@ fn status_transition(id: u64, ticket: &str, from: Status, to: Status, at: i64, a
 
 /// The store's own act: `system`, from `cascade`, saying `message`.
 fn system(message: String) -> Act {
-    Act { actor: SYSTEM_ACTOR.into(), name: None, source: TransitionSource::Cascade, message: Some(message) }
+    Act { actor: SYSTEM_ACTOR.into(), name: None, source: TransitionSource::Cascade, message: Some(message), cause: None }
 }
 
 /// One step of a batch: a ticket's new status, the transition that records
@@ -130,7 +130,7 @@ pub(super) fn status_steps(cache: &Cache, row: &Row, status: Status, act: &Act, 
     let uncanceling = previous == Status::Canceled && status != Status::Canceled;
     let mut next = cache.log.next_id();
     let own = (previous != status).then(|| {
-        let t = status_transition(next, &row.id, previous, status, now, act, None);
+        let t = status_transition(next, &row.id, previous, status, now, act, act.shared_cause());
         next += 1;
         t
     });
@@ -516,6 +516,25 @@ impl Gathered {
             self.filtered.push(Change::CellsMoved { moves });
         }
         self.filtered.extend(under);
+    }
+
+    /// ACT-2: the first transition gathered so far — its id and ticket.
+    pub(super) fn first_transition(&self) -> Option<(u64, String)> {
+        self.tickets.iter().find_map(|c| match c {
+            Change::Transition { transition, .. } => Some((transition.id, transition.ticket.clone())),
+            _ => None,
+        })
+    }
+
+    /// ACT-2: [`Gathered::finish`] with `last` after every ticket's events,
+    /// the groups, the placements, the components and the inputs — and
+    /// before the filtered moves, which are a write's last.
+    pub(super) fn finish_with(mut self, last: Change) -> Vec<Change> {
+        let filtered = std::mem::take(&mut self.filtered);
+        let mut changes = self.finish();
+        changes.push(last);
+        changes.extend(filtered);
+        changes
     }
 
     /// The write's events, in the order they are sent.

@@ -259,6 +259,7 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.label", Today::Editor, Some("id")),
     // MENGER-30: any part of a ticket in one write — an editor's, on it.
     ("tickets.update", Today::Editor, Some("id")),
+    ("tickets.update_many", Today::Editor, Some("ids")),
     ("tickets.answer", Today::Editor, Some("ticket")),
     ("tickets.clear_answer", Today::Editor, Some("ticket")),
     ("tickets.close_input", Today::Editor, Some("ticket")),

@@ -780,6 +780,9 @@ pub enum Change {
     /// is its ticket's shortcode, what `watch { epic }` filters by; it does
     /// not cross the wire.
     Transition { epic: String, transition: crate::types::Transition },
+    /// ACT-2: an `update_many` changed `ids` (each in the write's own
+    /// events before it) — `changed` the aspects that moved, in any of them.
+    UpdatedMany { ids: Vec<String>, changed: Vec<String> },
     /// FILTER-4: every ticket whose cell the write moved — a birth, a status
     /// change and the blocker crossings it fans out to, a first commit or a
     /// last, SDLC-13: a kind changed — worked out once per write before it
@@ -832,7 +835,8 @@ impl Change {
             // FILTER-4: one per write, its moves in any shortcode.
             Self::CellsMoved { .. } => "",
             // FILTER-13: one per write, each watch's events already in its epic.
-            Self::UnderMoved { .. } => "",
+            // ACT-2: one per write, its ids in any shortcode — see `in_epic`.
+            Self::UnderMoved { .. } | Self::UpdatedMany { .. } => "",
         }
     }
 
@@ -849,6 +853,7 @@ impl Change {
                 (!changes.is_empty()).then_some(Self::PlacementsChanged { changes })
             }
             Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => Some(self),
+            Self::UpdatedMany { ids, changed } => update_many::in_epic(ids, changed, epic),
             // FILTER-4: each move filtered where it is turned into events.
             Self::CellsMoved { .. } | Self::UnderMoved { .. } => Some(self),
             other => (other.epic() == epic).then_some(other),
@@ -1151,6 +1156,9 @@ pub enum StoreError {
     /// MENGER-30: an `update` refused for more than one reason — every one,
     /// in the order the write would meet them. Nothing was written.
     Refused { id: String, refusals: Vec<StoreError> },
+    /// ACT-2: an `update_many` refused — each refused ticket with its
+    /// reasons, in the order selected. Nothing was written.
+    RefusedMany { refusals: Vec<(String, Vec<StoreError>)> },
 }
 
 impl StoreError {
@@ -1322,6 +1330,9 @@ impl std::fmt::Display for StoreError {
             Self::Refused { id, refusals } => {
                 let each: Vec<String> = refusals.iter().map(|r| r.to_string()).collect();
                 write!(f, "update of '{id}' refused, nothing written — {}", each.join("; "))
+            }
+            Self::RefusedMany { refusals } => {
+                f.write_str(&update_many::refused(refusals.iter().map(|(id, w)| (id.clone(), w.iter().map(|e| e.to_string()).collect())).collect()))
             }
             Self::Db(msg) => write!(f, "database error: {msg}"),
             Self::SeedRefused { existing } => write!(
@@ -5624,6 +5635,9 @@ mod rules;
 /// MENGER-30: `update` — any part of a ticket in one write.
 mod update;
 pub use update::{Update, Updated};
+/// ACT-2: `update_many` — the same update to many tickets in one write.
+mod update_many;
+pub use update_many::{refused as refused_many, Selection, UpdatedMany, UPDATE_MANY_MAX};
 /// THEME-8: the themes and what the site and each shortcode say.
 mod themes;
 pub use themes::ThemeChange;
@@ -5869,3 +5883,6 @@ mod tests_history;
 /// random walk of updates leaving `--verify-derived` clean.
 #[cfg(test)]
 mod tests_update;
+/// ACT-2: `update_many`, and `label` / `link_commits` over many ids.
+#[cfg(test)]
+mod tests_update_many;

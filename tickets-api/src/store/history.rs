@@ -92,12 +92,16 @@ pub struct Act {
     pub name: Option<String>,
     pub source: TransitionSource,
     pub message: Option<String>,
+    /// ACT-2: the transition every transition of this act's write that has
+    /// no cause of its own is caused by — its id and its ticket: an
+    /// `update_many`'s first, shared by the rest. `None`: none.
+    pub cause: Option<(u64, String)>,
 }
 
 impl Default for Act {
     /// Nobody signed in, through the API, saying nothing.
     fn default() -> Self {
-        Self { actor: ANONYMOUS_ACTOR.into(), name: None, source: TransitionSource::Api, message: None }
+        Self { actor: ANONYMOUS_ACTOR.into(), name: None, source: TransitionSource::Api, message: None, cause: None }
     }
 }
 
@@ -105,6 +109,11 @@ impl Act {
     /// How a message names the actor: its name, else its principal.
     pub(super) fn who(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.actor)
+    }
+
+    /// ACT-2: the shared cause, as a transition takes it.
+    pub(super) fn shared_cause(&self) -> Option<(u64, &str)> {
+        self.cause.as_ref().map(|(c, t)| (*c, t.as_str()))
     }
 }
 
