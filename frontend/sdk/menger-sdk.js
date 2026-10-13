@@ -192,6 +192,9 @@
  *                 chip right-clicked (1.12, MENGER-34) — or Menu /
  *                 Shift+F10 on a focused one (`keyboard`, the point its
  *                 rect's bottom-left); `x`, `y` in this frame's viewport
+ *   frame → host  menger:filter-everywhere { id }         a ticket chip
+ *                 Alt+clicked (1.17, FILTER-25): the host sets the global
+ *                 filter to its shortcode's clause; the click goes no further
  *   frame → host  menger:inspect { id, name, attrs }      a badge hovered
  *                 or focused (`attrs`: [[name, value], …])
  *   host → frame  menger:inspected { id, inspection }     its tooltip
@@ -261,7 +264,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.16.0";
+  var VERSION = "1.17.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -2243,6 +2246,17 @@
     }
     return null;
   }
+  // FILTER-25 (1.17): Alt+click on a chip sets the app's global filter — the
+  // click taken here, first (capture), so the chip neither opens its ticket
+  // nor downloads a link. A plain click is the chip's, as before.
+  window.addEventListener("click", function (ev) {
+    if (annotating || ev.defaultPrevented || !ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button !== 0) return;
+    var chip = chipOf(ev.composedPath ? ev.composedPath() : [ev.target]);
+    if (!chip) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    post("menger:filter-everywhere", { id: chip.id });
+  }, true);
   window.addEventListener("contextmenu", function (ev) {
     if (annotating || ev.defaultPrevented) return;
     var chip = chipOf(ev.composedPath ? ev.composedPath() : [ev.target]);

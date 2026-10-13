@@ -14,6 +14,8 @@
  * 1.12 (MENGER-34) neither: a ticket chip right-clicked in the body (an
  * `<m-ticket ref>`, or anything carrying `data-ticket-id`) opens the app's
  * ticket menu (`menger:ticket-menu`); plain text keeps the browser's.
+ * 1.17 (FILTER-25) neither: Alt+click on such a chip sets the app's global
+ * filter to its shortcode (`menger:filter-everywhere`).
  *
  * Published by the app at /app/sdk/menger.d.ts, beside the SDK itself
  * (/app/sdk/menger-sdk.js) and the generated client's declarations

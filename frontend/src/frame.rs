@@ -174,8 +174,10 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// 1.15 adds `update_many` (`updated_many`) and `ids` on `label` and
 /// `link_commits`; ACT-5's 1.16 adds `delete` (`deleted`, its tombstones;
 /// `get` on a deleted id answers it), `undelete` (`undeleted`) and
-/// `extents`' `holes`.
-pub(crate) const SDK_VERSION: &str = "1.16.0";
+/// `extents`' `holes`; FILTER-25's 1.17 hands a ticket chip's Alt+click to
+/// the host (`menger:filter-everywhere { id }`), which sets the global filter
+/// to its shortcode's clause, as an Alt+click on an app chip does.
+pub(crate) const SDK_VERSION: &str = "1.17.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -534,6 +536,9 @@ pub(crate) enum Msg {
     Link,
     /// MENGER-34: a ticket chip in the body asked for the ticket menu.
     TicketMenu,
+    /// FILTER-25: a ticket chip in the body was Alt+clicked — the global
+    /// filter becomes its shortcode's clause.
+    FilterEverywhere,
 }
 
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
@@ -555,6 +560,7 @@ pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) 
         "menger:uncite" => Some(Msg::Uncite),
         "menger:link" => Some(Msg::Link),
         "menger:ticket-menu" => Some(Msg::TicketMenu),
+        "menger:filter-everywhere" => Some(Msg::FilterEverywhere),
         "menger:size" => {
             let h = height.filter(|h| h.is_finite())?;
             Some(Msg::Size { height: h.clamp(0.0, MAX_HEIGHT).ceil() as u32, settled: settled.unwrap_or(false) })
@@ -1188,6 +1194,16 @@ fn on_message(ev: web_sys::MessageEvent) {
             let (vx, vy) = crate::menu::frame_point(r.left(), r.top(), r.width(), cw, x, y);
             crate::menu::open_from_frame(id, vx, vy, keyboard);
         }
+        Some(Msg::FilterEverywhere) => {
+            // FILTER-25: as the ticket menu's message is checked — a live
+            // gesture in this very frame (a body's script cannot set the
+            // filter), never while annotating, on what has a ticket's form.
+            let Some(id) = field("id").and_then(|v| v.as_string()).and_then(|v| crate::menu::frame_ticket(&v)) else { return };
+            if annotate::is_on() || !gesture::live_in(&frame) {
+                return;
+            }
+            crate::tags::filter_everywhere(&id);
+        }
         Some(Msg::Uncite) => {
             if let Some(n) = field("cite").and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v >= 0.0) {
                 cite::dropped(&channel, n as u32);
@@ -1796,6 +1812,8 @@ mod tests {
         assert_eq!(parse_msg("menger:link", None, None), Some(Msg::Link));
         // MENGER-34: a chip's ticket menu.
         assert_eq!(parse_msg("menger:ticket-menu", None, None), Some(Msg::TicketMenu));
+        // FILTER-25: a chip's Alt+click.
+        assert_eq!(parse_msg("menger:filter-everywhere", None, None), Some(Msg::FilterEverywhere));
         for outbound in [
             "menger:theme", "menger:result", "menger:components", "menger:change", "menger:inspected", "menger:reveal",
             "menger:submitted", "menger:cleared", "menger:annotate", "menger:probe", "menger:locate", "menger:cited",

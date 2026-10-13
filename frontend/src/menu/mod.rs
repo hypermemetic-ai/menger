@@ -162,7 +162,7 @@ pub(crate) fn open_from_frame(id: String, x: f64, y: f64, keyboard: bool) {
         keys::remember_focus();
     }
     let ids = model::target_ids(&id, &selection::ids());
-    target.set(Some(Target { ids, shortcode: None, x, y, nav: None, chip: None, level: Level::Global }));
+    target.set(Some(Target { ids, shortcode: None, x, y, nav: None, chip: None, level: Level::Global, framed: true }));
 }
 
 /// ACT-4: the ticket element `el` is (or sits in) — what the one menu opens
@@ -191,7 +191,16 @@ fn target_on(host: &web_sys::Element, el: &web_sys::Element, x: f64, y: f64, nav
         Some((tag, level)) => (Some(tag), level),
         None => (None, level_at(host)),
     };
-    Some(Target { ids: model::target_ids(&id, &selection::ids()), shortcode: host.get_attribute("data-shortcode"), x, y, nav, chip, level })
+    Some(Target {
+        ids: model::target_ids(&id, &selection::ids()),
+        shortcode: host.get_attribute("data-shortcode"),
+        x,
+        y,
+        nav,
+        chip,
+        level,
+        framed: false,
+    })
 }
 
 /// The menu's DOM id — the one element the document-level listeners
@@ -251,6 +260,8 @@ struct Target {
     chip: Option<Tag>,
     /// ACT-4: whose filter the filter items build.
     level: Level,
+    /// FILTER-25: opened on a chip in a framed body.
+    framed: bool,
 }
 
 /// How a copy ended (see module doc): the async API, the legacy command,
@@ -372,7 +383,7 @@ fn focused_ticket() -> Option<Target> {
     let rect = host.get_bounding_client_rect();
     match target_on(&host, &active, rect.left(), rect.bottom(), nav.clone()) {
         Some(t) => Some(Target { chip: None, ..t }),
-        None => Some(Target { ids: Vec::new(), shortcode: None, x: rect.left(), y: rect.bottom(), nav, chip: None, level: Level::Global }),
+        None => Some(Target { ids: Vec::new(), shortcode: None, x: rect.left(), y: rect.bottom(), nav, chip: None, level: Level::Global, framed: false }),
     }
 }
 
@@ -400,7 +411,7 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
             // FILTER-22: a tag outside any ticket is the tag menu's.
         } else if nav.is_some() {
             ev.prevent_default();
-            target.set(Some(Target { ids: Vec::new(), shortcode: None, x, y, nav, chip: None, level: Level::Nav }));
+            target.set(Some(Target { ids: Vec::new(), shortcode: None, x, y, nav, chip: None, level: Level::Nav, framed: false }));
         }
     });
     let _ = doc.add_event_listener_with_callback("contextmenu", on_context.as_ref().unchecked_ref());

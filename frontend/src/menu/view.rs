@@ -83,7 +83,7 @@ fn menu_view(
     toaster: Toaster,
     confirm: RwSignal<Option<model::DeletePlan>>,
 ) -> impl IntoView {
-    let Target { ids, shortcode, x, y, nav, chip, level } = t;
+    let Target { ids, shortcode, x, y, nav, chip, level, framed } = t;
     // SCALE-26: the menu holds the tickets it is open on, and asks for those
     // no view holds (no walk puts every ticket in the cache any more) — the
     // first few hundred of a selection: the rest mark nothing until shown.
@@ -114,6 +114,8 @@ fn menu_view(
                         grants: granted,
                         nav: nav_here,
                         tree: tree.as_ref(),
+                        global: level == Level::Global,
+                        framed,
                     })
                 })
             })
