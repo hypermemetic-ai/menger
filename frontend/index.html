@@ -1084,6 +1084,21 @@
     font: inherit; font-size: calc(.8rem * var(--text-scale)); border-radius: var(--radius); padding: 0 .5rem; cursor: pointer;
   }
   #toast button:hover { color: var(--accent); border-color: var(--accent); }
+  /* FILTER-26: Make global's toast, with its Undo — the toast's look, one
+     row higher so the two never cover each other. */
+  #ftoast {
+    position: fixed; right: 16px; bottom: 64px; z-index: 1001;
+    display: flex; align-items: baseline; gap: .6rem; max-width: calc(100vw - 32px);
+    background: var(--panel); color: var(--ink); border: var(--border) solid var(--line);
+    border-left: 4px solid var(--live); border-radius: var(--radius-lg);
+    padding: .45rem .7rem; font-size: calc(.85rem * var(--text-scale)); box-shadow: 0 8px 24px var(--shadow);
+  }
+  #ftoast .msg { min-width: 0; overflow-wrap: anywhere; }
+  #ftoast button {
+    background: none; border: var(--border) solid var(--line); color: var(--muted);
+    font: inherit; font-size: calc(.8rem * var(--text-scale)); border-radius: var(--radius); padding: 0 .5rem; cursor: pointer;
+  }
+  #ftoast button:hover { color: var(--accent); border-color: var(--accent); }
   /* WAVE-5: the wave board — a column per wave (or per stage), cards in
      the house chip idiom. The board takes the content column's whole
      width; its columns scroll sideways when they outgrow it. Owner,
@@ -1431,6 +1446,14 @@
     background: none; border: 0; padding: 0 .2rem; font: inherit; font-size: calc(12px * var(--text-scale)); color: var(--accent); cursor: pointer;
   }
   .fbar button.reset:hover { text-decoration: underline; }
+  /* FILTER-26: Make global, at the top of the nav's filter menu. */
+  .fmenu .fpromote { display: flex; align-items: baseline; gap: .5rem; padding: .3rem .6rem; border-bottom: var(--border) solid var(--line); }
+  .fmenu .fpromote button {
+    background: none; border: var(--border) solid var(--line); border-radius: var(--radius); padding: 0 .5rem;
+    font: inherit; font-size: calc(12px * var(--text-scale)); color: var(--accent); cursor: pointer; white-space: nowrap; flex: none;
+  }
+  .fmenu .fpromote button:hover, .fmenu .fpromote button:focus-visible { border-color: var(--accent); }
+  .fmenu .fpromote-hint { color: var(--muted); font-size: calc(11px * var(--text-scale)); }
   .fmenu {
     position: absolute; z-index: 30; display: flex; flex-direction: column; max-width: calc(100vw - 16px);
     background: var(--bg); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius-xl);

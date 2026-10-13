@@ -91,6 +91,10 @@
 //! clause, the one a right-click on its tag's Filter makes (src/tags.rs),
 //! and the palette closes where it was.
 //!
+//! FILTER-26: `promote filter` (or `make global`) offers, while the nav
+//! holds a clause the reader added, the nav's Make global
+//! (src/promote.rs).
+//!
 //! SEARCH-3: **the palette searches inside tickets.** Every question is
 //! asked of `search` too (SEARCH-2), under the same number and the same pass:
 //! below the jump rows, an "In bodies" section holds its best hits — the
@@ -276,6 +280,8 @@ pub(crate) enum PalCmd {
     /// THEME-7: the reader's site theme becomes this one (`None`: the
     /// site's own again).
     Theme(Option<String>),
+    /// FILTER-26: `promote filter` — the nav's filter made global.
+    Promote,
 }
 
 /// THEME-7: the palette's `theme <name>` (or `theme: <name>`) — what is
@@ -1424,6 +1430,10 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
             let names = crate::scopes::held().with(crate::scopes::Held::names);
             out.extend(theme_offers(&typed, &names).into_iter().map(PalCmd::Theme));
         }
+        // FILTER-26: `promote filter`, while the nav has a clause to move.
+        if crate::promote::promote_command(&q) && lens.can_promote() {
+            out.push(PalCmd::Promote);
+        }
         out
     });
     // Enter pressed while the answer was on its way, with nothing to open.
@@ -1451,6 +1461,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                     }
                 }
                 PalCmd::Theme(name) => crate::scopes::pick(name),
+                PalCmd::Promote => crate::promote::make_global(lens),
             }
             return;
         }
@@ -1626,6 +1637,11 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                                     PalCmd::Text(text) => ("Filter", text, "the global filter becomes this".to_string()),
                                     PalCmd::Theme(Some(name)) => ("Theme", name, "your site theme, at once (settings keeps it)".to_string()),
                                     PalCmd::Theme(None) => ("Theme", "the site's".to_string(), "wear the site's theme again".to_string()),
+                                    PalCmd::Promote => (
+                                        "Promote filter",
+                                        lens.text(lens::Level::Nav),
+                                        "make the nav's filter global; the nav goes back to its default".to_string(),
+                                    ),
                                 };
                                 let at = code.clone();
                                 view! {

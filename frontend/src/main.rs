@@ -274,6 +274,7 @@ mod menu;
 mod nav;
 mod notes;
 mod present;
+mod promote;
 
 mod mermaid;
 mod needs;
@@ -2384,6 +2385,8 @@ fn App() -> impl IntoView {
             // draws builds a filter from it; mounted once, as the ticket
             // menu is.
             <tags::TagMenu />
+            // FILTER-26: Make global's toast, with its Undo.
+            <promote::PromoteToast />
             <keys::Overlays overlay />
             // FILTER-6: Save as…, mounted once.
             <saved::SaveDialog />
