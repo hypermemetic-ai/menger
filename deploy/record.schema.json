@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "menger:deploy/record.schema.json",
+  "title": "A deployment record (DEPLOY-10)",
+  "description": "What one deployment did, in a shape every CI can produce: deploy/record makes it from flags, a GitHub Actions or GitLab job's environment, a GitHub deployment_status payload, a pipeline log line or any JSON; menger's deployments.record (DEPLOY-11) takes it as its parameters. A deployment never changes a ticket's status (DEPLOY-9 'status'); its tickets are those its commits are linked to, plus any it names (DEPLOY-9 'mapping'); an environment is a project's ((project, environment), DEPLOY-9 'env-identity').",
+  "type": "object",
+  "required": ["project", "environment", "state", "revision"],
+  "additionalProperties": false,
+  "properties": {
+    "project": {
+      "description": "Whose environment: a shortcode, or a project name menger maps to one.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "environment": {
+      "description": "The environment's name within its project: test, staging, prod, pr-412 …",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    },
+    "state": {
+      "description": "started: under way, revision not yet confirmed running. succeeded: revision runs. failed: revision was tried and did not come up healthy (what runs is not asserted). rolled_back: the environment was returned to revision, taking previous back out.",
+      "enum": ["started", "succeeded", "failed", "rolled_back"]
+    },
+    "revision": {
+      "description": "The commit now running (for failed: the one tried) — an abbreviated or full hash, or repo@hash for a commit outside the project's repository.",
+      "type": "string",
+      "pattern": "^([A-Za-z0-9._-]+@)?[0-9a-f]{7,64}$"
+    },
+    "previous": {
+      "description": "The commit that ran before, when known; same spelling as revision.",
+      "type": ["string", "null"],
+      "pattern": "^([A-Za-z0-9._-]+@)?[0-9a-f]{7,64}$"
+    },
+    "commits": {
+      "description": "Every commit in previous..revision, oldest first, when the CI can list them (deploy/record --commits-from-git); omitted, menger works from what it has seen.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^([A-Za-z0-9._-]+@)?[0-9a-f]{7,64}$" }
+    },
+    "tickets": {
+      "description": "Ticket ids the CI names itself, added to those the commits give.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9]*-[0-9]+$" }
+    },
+    "release": {
+      "description": "The artifact's name, when there is one.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "at": {
+      "description": "When, in UTC: RFC 3339 with a Z.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "source": {
+      "description": "Where the record came from and where to read the run.",
+      "type": "object",
+      "required": ["system"],
+      "additionalProperties": false,
+      "properties": {
+        "system": {
+          "description": "menger-pipeline, github-actions, github, gitlab, or any name a CI gives itself.",
+          "type": "string",
+          "minLength": 1
+        },
+        "run": {
+          "description": "The run's identity in that system (a run id, a pipeline action).",
+          "type": ["string", "null"]
+        },
+        "url": {
+          "description": "Where to read the run.",
+          "type": ["string", "null"],
+          "pattern": "^https?://"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "project": "menger",
+      "environment": "prod",
+      "state": "succeeded",
+      "revision": "235ff62",
+      "previous": "29a50be",
+      "commits": ["824e943", "235ff62"],
+      "release": "20261012T220402Z-235ff62",
+      "at": "2026-10-12T22:04:19Z",
+      "source": { "system": "menger-pipeline", "run": "promote", "url": null }
+    },
+    {
+      "project": "PANTRY",
+      "environment": "pr-412",
+      "state": "started",
+      "revision": "pantry-web@4f1c2a9be0d1",
+      "tickets": ["PANTRY-12"]
+    }
+  ]
+}

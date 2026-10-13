@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# DEPLOY-10: deploy/record's tests — every input form against a fixture, the
+# schema against the docs' examples, --commits-from-git on a scratch repo and
+# --send against a stand-in synapse. bash, git and jq only; under a second.
+# `cargo test` runs it (tests/deploy_record.rs), so the pipeline's gate does.
+#
+#   deploy/tests/run            all of them; exit 1 if any failed
+set -uo pipefail
+
+HERE=$(dirname "$(readlink -f "$0")")
+DEPLOY=$(dirname "$HERE")
+REC=$DEPLOY/record
+FX=$HERE/fixtures
+AT=2026-10-12T22:04:19Z
+SCRATCH=$(mktemp -d); trap 'rm -rf "$SCRATCH"' EXIT
+pass=0 fail=0
+
+ok()   { pass=$((pass + 1)); }
+bad()  { fail=$((fail + 1)); printf 'FAIL %s\n' "$*" >&2; }
+# same_json NAME ACTUAL EXPECTED — equal as JSON, key order aside
+same_json() {
+  if jq -n --argjson a "$2" --argjson b "$3" -e '$a == $b' >/dev/null 2>&1; then ok
+  else bad "$1"; diff <(jq -S . <<<"$3" 2>&1) <(jq -S . <<<"$2" 2>&1) >&2; fi
+}
+# exits NAME CODE CMD… — CMD exits with CODE; its stderr in $err
+exits() {
+  local name=$1 want=$2; shift 2
+  "$@" >"$SCRATCH/out" 2>"$SCRATCH/err"; local got=$?
+  err=$(<"$SCRATCH/err"); out=$(<"$SCRATCH/out")
+  [[ $got == "$want" ]] && ok || bad "$name: exit $got, wanted $want — $err"
+}
+has() { [[ $2 == *"$3"* ]] && ok || bad "$1: wanted '$3' in: $2"; }
+# a CI job's environment from a fixture: nothing else of ours leaks in
+ci_env() { local f=$1; shift; local vars=(); while IFS= read -r l; do
+  [[ -z $l || $l == \#* ]] || vars+=("$l"); done <"$f"
+  env -i PATH="$PATH" "${vars[@]}" "$@"; }
+
+# ── each form → the fixture's record ───────────────────────────────────────
+same_json flags "$("$REC" --project menger --env prod --state succeeded --revision 235ff62 --previous 29a50be \
+  --commits 824e943,235ff62 --release 20261012T220402Z-235ff62 --at $AT \
+  --source-system menger-pipeline --source-run promote)" \
+  "$(jq '.examples[0] | del(.source.url)' "$DEPLOY/record.schema.json")"
+
+same_json github-actions "$(ci_env "$FX/github-actions.env" "$REC" --from github-actions --at $AT)" "$(<"$FX/github-actions.expected.json")"
+same_json gitlab "$(ci_env "$FX/gitlab.env" "$REC" --from gitlab --at $AT)" "$(<"$FX/gitlab.expected.json")"
+same_json github-event "$("$REC" --from github-event "$FX/deployment_status.json")" "$(<"$FX/deployment_status.expected.json")"
+same_json json+map "$("$REC" --from json --project shop \
+  --map 'environment=.target.env.name' --map 'revision=.git.head' --map 'previous=.git.base' \
+  --map 'state=if .outcome == "ok" then "succeeded" else "failed" end' --map 'release=.artifact' \
+  --map 'at=.finished' --map 'source.system="example-ci"' --map 'source.run=.pipeline.id' \
+  --map 'source.url=.pipeline.url' <"$FX/ci-output.json")" "$(<"$FX/ci-output.expected.json")"
+same_json pipeline-log "$("$REC" --from pipeline-log "$FX/pipeline.log" | jq -sc .)" \
+  "$(jq -sc . "$FX/pipeline.expected.ndjson")"
+same_json pipeline-log-stdin "$("$REC" --from pipeline-log <"$FX/pipeline.log" | jq -sc .)" \
+  "$(jq -sc . "$FX/pipeline.expected.ndjson")"
+# a record already in the shape passes through --from json untouched
+same_json json-as-is "$(jq '.examples[1]' "$DEPLOY/record.schema.json" | "$REC" --from json --at $AT)" \
+  "$(jq --arg at $AT '.examples[1] + {at: $at}' "$DEPLOY/record.schema.json")"
+
+# ── flags win; lists; defaults ──────────────────────────────────────────────
+r=$(ci_env "$FX/github-actions.env" "$REC" --from github-actions --env prod --state started --tickets SHOP-1 --tickets SHOP-2,SHOP-4 -c)
+same_json flags-win "$(jq -c '[.environment, .state, .tickets]' <<<"$r")" '["prod","started",["SHOP-1","SHOP-2","SHOP-4"]]'
+r=$("$REC" --project p --env e --state succeeded --revision abcdef1 -c)
+jq -e '.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$")' <<<"$r" >/dev/null && ok || bad "at defaults to now: $r"
+same_json key=value "$("$REC" --project=p --env=e --state=failed --revision=abcdef1 --at=$AT -c)" \
+  '{"project":"p","environment":"e","state":"failed","revision":"abcdef1","at":"2026-10-12T22:04:19Z"}'
+
+# ── deployment events: states, refusals ─────────────────────────────────────
+for pair in failure:failed error:failed in_progress:started queued:started pending:started; do
+  jq --arg s "${pair%%:*}" '.deployment_status.state = $s' "$FX/deployment_status.json" >"$SCRATCH/ev.json"
+  same_json "github-event ${pair%%:*}" "$("$REC" --from github-event "$SCRATCH/ev.json" | jq -c .state)" "\"${pair#*:}\""
+done
+jq 'del(.deployment_status)' "$FX/deployment_status.json" >"$SCRATCH/ev.json"
+same_json "a deployment event is started" "$("$REC" --from github-event "$SCRATCH/ev.json" | jq -c '[.state, .at]')" '["started","2026-10-12T22:01:02Z"]'
+jq '.deployment.payload = "{\"commits\":[\"824e943\",\"235ff62\"]}"' "$FX/deployment_status.json" >"$SCRATCH/ev.json"
+same_json "a payload given as a string" "$("$REC" --from github-event "$SCRATCH/ev.json" | jq -c .commits)" '["824e943","235ff62"]'
+jq '.deployment_status.state = "inactive"' "$FX/deployment_status.json" >"$SCRATCH/ev.json"
+exits "inactive is no deployment" 1 "$REC" --from github-event "$SCRATCH/ev.json"; has inactive "$err" "inactive"
+echo '{"zen":"Keep it logically awesome."}' >"$SCRATCH/ev.json"
+exits "a ping is no deployment" 1 "$REC" --from github-event "$SCRATCH/ev.json"
+exits "github-event needs a file" 1 "$REC" --from github-event
+
+# ── the schema refuses, naming every reason ────────────────────────────────
+exits invalid 2 "$REC" --env prod --state ok --revision zz --tickets 'not-a-ticket' --source-url ftp://x
+has invalid "$err" "record.project: required"
+has invalid "$err" 'record.state: "ok" is not one of'
+has invalid "$err" 'record.revision: "zz" does not match'
+has invalid "$err" 'record.tickets[0]: "NOT-A-TICKET" does not match'
+has invalid "$err" "record.source.system: required"
+has invalid "$err" 'record.source.url: "ftp://x" does not match'
+exits "--from json keeps only the record's fields" 0 "$REC" --from json -c <<<'{"project":"p","environment":"e","state":"started","revision":"abcdef1","colour":"red"}'
+jq -e 'has("colour") | not' <<<"$out" >/dev/null && ok || bad "--from json kept colour: $out"
+exits "--validate refuses an unknown field" 2 "$REC" --validate <<<'{"project":"p","environment":"e","state":"started","revision":"abcdef1","colour":"red"}'
+has "--validate refuses an unknown field" "$err" "record.colour: not a field of the record"
+exits "unknown field kept by --map" 2 "$REC" --from json --map 'colour=.x' <<<'{}'
+exits "a bad --map field" 1 "$REC" --from json --map 'Colour=.x' <<<'{}'
+exits "a broken --map" 1 "$REC" --from json --map 'environment=.[' <<<'{}'
+exits "unknown flag" 1 "$REC" --colour red
+exits "unknown form" 1 "$REC" --from jenkins
+exits "not JSON" 1 "$REC" --from json <<<'nope'
+has "not JSON" "$err" "not JSON"
+exits "--validate valid" 0 "$REC" --validate <<<"$(jq '.examples[0]' "$DEPLOY/record.schema.json")"
+exits "--validate invalid" 2 "$REC" --validate <<<'{"project":"p"}'
+# the validator reads the schema and refuses a keyword it cannot check, so the two never drift
+jq '.properties.project.maxLength = 9' "$DEPLOY/record.schema.json" >"$SCRATCH/schema.json"
+DEPLOY_RECORD_SCHEMA=$SCRATCH/schema.json exits "a keyword the validator lacks" 2 "$REC" --validate <<<'{}'
+has "a keyword the validator lacks" "$err" "maxLength"
+
+# ── every example in the docs and the schema validates ─────────────────────
+n=0
+while IFS= read -r ex; do
+  n=$((n + 1)); exits "docs example $n" 0 "$REC" --validate <<<"$ex"
+done < <(awk '/^```json$/{on=1; buf=""; next} on && /^```$/{on=0; print buf; next} on{buf = buf $0 " "}' "$DEPLOY/README.md")
+while IFS= read -r ex; do
+  n=$((n + 1)); exits "schema example $n" 0 "$REC" --validate <<<"$ex"
+done < <(jq -c '.examples[]' "$DEPLOY/record.schema.json")
+[[ $n -ge 4 ]] && ok || bad "the docs hold $n examples; wanted the README's and the schema's"
+
+# ── --commits-from-git ─────────────────────────────────────────────────────
+G=$SCRATCH/repo
+git init -q -b main "$G"
+gc() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \
+       GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t git -C "$G" "$@"; }
+for i in 1 2 3 4; do echo "$i" >"$G/f"; gc add f; gc commit -qm "c$i"; done
+mapfile -t H < <(gc log --reverse --format=%H)
+r=$("$REC" --project p --env e --state succeeded --revision "${H[3]:0:7}" --previous "${H[1]:0:7}" --commits-from-git --repo "$G" -c)
+same_json commits-from-git "$(jq -c .commits <<<"$r")" "[\"${H[2]}\",\"${H[3]}\"]"
+r=$("$REC" --project p --env e --state succeeded --revision "shop@${H[3]}" --previous "shop@${H[2]}" --commits-from-git --repo "$G" -c)
+same_json "commits-from-git, repo@sha" "$(jq -c .commits <<<"$r")" "[\"shop@${H[3]}\"]"
+exits "commits-from-git, no previous" 0 "$REC" --project p --env e --state succeeded --revision "${H[3]}" --commits-from-git --repo "$G" -c
+has "commits-from-git, no previous" "$err" "commits left out"
+jq -e 'has("commits") | not' <<<"$out" >/dev/null && ok || bad "no previous: commits omitted — $out"
+exits "commits-from-git, unknown commit" 1 "$REC" --project p --env e --state succeeded --revision abcdef1 --previous "${H[0]}" --commits-from-git --repo "$G"
+
+# ── --send through synapse (a stand-in records its arguments) ──────────────
+cat >"$SCRATCH/synapse" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >>"$SYNAPSE_ARGS"; printf -- '---\n' >>"$SYNAPSE_ARGS"
+[[ ${SYNAPSE_FAIL:-} == 1 ]] && exit 4; echo '{"type":"recorded"}'
+EOF
+chmod +x "$SCRATCH/synapse"
+export SYNAPSE=$SCRATCH/synapse SYNAPSE_ARGS=$SCRATCH/args
+exits send 0 "$REC" --project menger --env prod --state succeeded --revision 235ff62 --at $AT --send --port 4460 --token tok --dry-run
+same_json "send: synapse's arguments" "$(head -n -1 "$SYNAPSE_ARGS" | jq -Rsc 'split("\n")[:-1]')" \
+  '["-P","4460","-t","tok","-n","-p","{\"project\":\"menger\",\"environment\":\"prod\",\"state\":\"succeeded\",\"revision\":\"235ff62\",\"at\":\"2026-10-12T22:04:19Z\"}","menger","deployments","record"]'
+has "send prints synapse's answer" "$out" recorded
+: >"$SYNAPSE_ARGS"
+exits "send, one call per record" 0 "$REC" --from pipeline-log "$FX/pipeline.log" --send
+same_json "send, one call per record" "$(grep -c -- '^---$' "$SYNAPSE_ARGS")" 11
+grep -qx -- 4455 "$SYNAPSE_ARGS" && ok || bad "send: default port 4455"
+exits "send: an invalid record is never sent" 2 "$REC" --env prod --state succeeded --revision 235ff62 --send
+SYNAPSE_FAIL=1 exits "send: synapse fails" 3 "$REC" --project p --env e --state started --revision abcdef1 --send
+
+printf 'deploy/record: %d passed, %d failed\n' "$pass" "$fail"
+[[ $fail == 0 ]]

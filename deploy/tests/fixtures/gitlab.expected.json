@@ -1,0 +1,8 @@
+{
+  "project": "shop",
+  "environment": "review/pr-412",
+  "state": "failed",
+  "revision": "9c41e07d2b5a8f6e3c1d0b9a8f7e6d5c4b3a2918",
+  "at": "2026-10-12T22:04:19Z",
+  "source": { "system": "gitlab", "run": "77120", "url": "https://gitlab.com/acme/shop/-/jobs/77120" }
+}

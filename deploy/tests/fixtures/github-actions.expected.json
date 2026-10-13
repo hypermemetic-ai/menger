@@ -1,0 +1,10 @@
+{
+  "project": "SHOP",
+  "environment": "staging",
+  "state": "succeeded",
+  "revision": "235ff62aa1b2c3d4e5f60718293a4b5c6d7e8f90",
+  "previous": "29a50be",
+  "tickets": ["SHOP-3", "SHOP-9"],
+  "at": "2026-10-12T22:04:19Z",
+  "source": { "system": "github-actions", "run": "11223344", "url": "https://github.com/acme/shop/actions/runs/11223344" }
+}
