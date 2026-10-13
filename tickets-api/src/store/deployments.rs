@@ -43,13 +43,16 @@
 use super::history::Clock;
 use super::{lineage, Cache, OrderKey, Row, Store, StoreError};
 use crate::deployments::{
-    environment_of, project_of, rank, DeploySource, DeployState, Deployment, DeploymentsEvent, Environment, Record, COMMITS_MAX, TICKETS_MAX,
+    environment_of, project_of, rank, DeploySource, DeployState, Deployment, DeploymentsEvent, Environment, Record, RunningCell, COMMITS_MAX, TICKETS_MAX,
 };
 use crate::filter::{When, Window};
 use roaring::RoaringBitmap;
 use rusqlite::{params, Connection};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+
+/// DEPLOY-13: the most ids one `running` may name.
+pub const RUNNING_IDS_MAX: usize = 1_000;
 
 /// The tables.
 pub(super) const TABLES: &str = "
@@ -787,6 +790,47 @@ impl Store {
                 },
                 None => DeploymentsEvent::NotRunning { ticket: row.id.clone(), project: env.project, environment: env.name },
             });
+        }
+        Ok(out)
+    }
+
+    /// DEPLOY-13: the kept cells — one `cells` per environment (of
+    /// `project`, named `environment` when given; of the projects in
+    /// `allowed` when given), by project then in display order, each with
+    /// every ticket running there — only `ids`' when given (at most
+    /// [`RUNNING_IDS_MAX`]) — in the store's order. What the app's board
+    /// marks are drawn from: asked once, then per environment a deploy moves.
+    pub fn running(
+        &self,
+        project: Option<&str>,
+        environment: Option<&str>,
+        ids: Option<&[String]>,
+        allowed: Option<&HashSet<String>>,
+    ) -> Result<Vec<DeploymentsEvent>, StoreError> {
+        let blank = |v: Option<&str>| v.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+        let project = blank(project).as_deref().map(project_of).transpose().map_err(StoreError::Invalid)?;
+        let environment = blank(environment).as_deref().map(environment_of).transpose().map_err(StoreError::Invalid)?;
+        if ids.is_some_and(|i| i.len() > RUNNING_IDS_MAX) {
+            return Err(StoreError::Invalid(format!("`running` takes at most {RUNNING_IDS_MAX} ids")));
+        }
+        let only: Option<HashSet<String>> = ids.map(|i| i.iter().map(|t| t.trim().to_ascii_uppercase()).collect());
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let mut out = Vec::new();
+        for env in cache.environments_of(project.as_deref()) {
+            if allowed.is_some_and(|a| !a.contains(&env.project)) || environment.as_ref().is_some_and(|e| *e != env.name) {
+                continue;
+            }
+            let k = &cache.deploys.envs[&(env.project.clone(), env.name.clone())];
+            let mut cells: Vec<(&OrderKey, RunningCell)> = k
+                .running
+                .iter()
+                .filter(|(t, _)| only.as_ref().is_none_or(|o| o.contains(*t)))
+                .filter_map(|(t, (since, deployment))| {
+                    cache.at.get(t).map(|key| (key, RunningCell { ticket: t.clone(), since: *since, deployment: *deployment }))
+                })
+                .collect();
+            cells.sort_by(|a, b| a.0.cmp(b.0));
+            out.push(DeploymentsEvent::Cells { project: env.project, environment: env.name, running: cells.into_iter().map(|(_, c)| c).collect() });
         }
         Ok(out)
     }

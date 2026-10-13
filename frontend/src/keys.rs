@@ -245,6 +245,40 @@ pub(crate) fn filter_text_command(query: &str) -> Option<String> {
     (!f.groups.is_empty()).then(|| f.format())
 }
 
+/// DEPLOY-13: the palette's `deployed …` — typed `depl…`, `deployed pr`,
+/// `not depl…` or `waiting` (after `filter ` or not), the `deployed` cells
+/// it may mean, each a filter's canonical text: `deployed <env>` for every
+/// environment `choices` holds that begins with what follows, `not deployed
+/// <env>` after `not`, and `waiting` the Complete work not yet on the last
+/// one — at most [`FILTER_OFFERS`].
+pub(crate) fn deployed_offers(query: &str, choices: &[String]) -> Vec<String> {
+    let q = query.trim().to_ascii_lowercase();
+    let q = q.strip_prefix("filter ").map_or(q.as_str(), str::trim_start);
+    let words: Vec<&str> = q.split_whitespace().collect();
+    let begins = |w: &str, of: &str, min: usize| w.len() >= min && of.starts_with(w);
+    let canon = |text: String| menger_tickets_api::filter::Filter::parse(&text).ok().map(|f| f.format());
+    let (not, rest) = match words.as_slice() {
+        ["not", w, rest @ ..] if begins(w, "deployed", 3) => (true, rest),
+        [w, rest @ ..] if begins(w, "deployed", 4) => (false, rest),
+        [w] if begins(w, "waiting", 4) => {
+            let last = choices.iter().filter(|c| !c.contains('/')).max_by_key(|c| (menger_tickets_api::deployments::rank(c), c.to_string()));
+            return last.and_then(|l| canon(format!("status Complete and not deployed {l}"))).into_iter().collect();
+        }
+        _ => return Vec::new(),
+    };
+    let typed = match rest {
+        [] => "",
+        [one] => one,
+        _ => return Vec::new(),
+    };
+    choices
+        .iter()
+        .filter(|c| c.starts_with(typed))
+        .filter_map(|c| canon(format!("{}deployed {c}", if not { "not " } else { "" })))
+        .take(FILTER_OFFERS)
+        .collect()
+}
+
 /// A command row the palette offers above the tickets.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PalCmd {
@@ -1316,6 +1350,9 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     // FILTER-22: `filter <shortcode>` — the shortcodes it offers, above the
     // tickets.
     let sctree = lens.sctree();
+    // DEPLOY-13: the environments, for `deployed …`.
+    crate::deploys::want();
+    let deploy_choices = crate::deploys::held();
     let offers = Memo::new(move |_| {
         let q = query.get();
         let typed = filter_command(&q);
@@ -1327,6 +1364,13 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
             .collect();
         // MENGER-12: and the text, when it is a filter.
         out.extend(filter_text_command(&q).map(PalCmd::Text));
+        // DEPLOY-13: `deployed …` — the environments the app holds.
+        let choices = deploy_choices.with(|h| h.as_ref().map(crate::deploys::Held::choices).unwrap_or_default());
+        for text in deployed_offers(&q, &choices) {
+            if !out.contains(&PalCmd::Text(text.clone())) {
+                out.push(PalCmd::Text(text));
+            }
+        }
         // THEME-7: `theme <name>` — the themes the app holds.
         if let Some(typed) = theme_command(&q) {
             let names = crate::scopes::held().with(crate::scopes::Held::names);
@@ -1789,7 +1833,7 @@ pub(crate) fn KeyTable(#[prop(into)] query: Signal<String>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_words, filter_command, filter_offers, filter_text_command, narrows, palette_match, pass, theme_command, theme_offers, Found, Pass, FILTER_OFFERS};
+    use super::{count_words, deployed_offers, filter_command, filter_offers, filter_text_command, narrows, palette_match, pass, theme_command, theme_offers, Found, Pass, FILTER_OFFERS};
 
     /// THEME-7: `theme <name>` and `theme: <name>` in the palette — the
     /// themes held that begin with what is typed, and the site's own.
@@ -2058,6 +2102,22 @@ mod tests {
         for not in ["", "filter", "filter ", "filters demand", "filter demand now", "filter de$mand", "demand", "find demand"] {
             assert_eq!(filter_command(not), None, "{not:?}");
         }
+    }
+
+    /// DEPLOY-13: `deployed …` offers the environments held — `not` turns
+    /// them around, a partial name narrows them, `waiting` is the Complete
+    /// work not on the last one; anything else offers nothing.
+    #[test]
+    fn the_palette_offers_the_deployed_cells() {
+        let held: Vec<String> = ["test", "prod", "menger/test", "menger/prod"].map(String::from).to_vec();
+        assert_eq!(deployed_offers("depl", &held), ["deployed test", "deployed prod", "deployed menger/test", "deployed menger/prod"]);
+        assert_eq!(deployed_offers("filter deployed pr", &held), ["deployed prod"]);
+        assert_eq!(deployed_offers("not dep m", &held), ["not deployed menger/test", "not deployed menger/prod"]);
+        assert_eq!(deployed_offers("waiting", &held), ["status Complete and not deployed prod"]);
+        for none in ["", "dep", "deploy a b", "notes", "waste", "deployment x y"] {
+            assert!(deployed_offers(none, &held).is_empty(), "{none:?}");
+        }
+        assert!(deployed_offers("deployed", &[]).is_empty(), "no environment held: nothing to offer");
     }
 
     /// FILTER-22: what `filter <typed>` offers — the shortcode typed when the

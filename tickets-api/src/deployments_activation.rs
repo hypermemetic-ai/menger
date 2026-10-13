@@ -87,14 +87,14 @@ fn refused(e: StoreError) -> DeploymentsEvent {
 // Not `#[cfg]`-gated: the client-only build needs it too (see activation.rs).
 #[plexus_macros::activation(
     namespace = "deployments",
-    description = "Deployments: every deploy from any CI to any environment — record, list, environments, for_ticket, watch",
+    description = "Deployments: every deploy to any environment — record, list, environments, for_ticket, running, watch",
     client,
     server_cfg = "feature = \"server\"",
     crate_path = "plexus_core",
     // AUTH-7: reads are a viewer's; recording is a deployer's alone (a
     // CI's key on the project's shortcode) — and admin's, who holds all.
     roles(
-        viewer = ["list", "environments", "for_ticket", "watch"],
+        viewer = ["list", "environments", "for_ticket", "running", "watch"],
         editor = [viewer],
         deployer = [viewer, "record"],
     )
@@ -293,6 +293,49 @@ impl Deployments {
                     }
                 }
                 Err(StoreError::NotFound(id)) => yield DeploymentsEvent::Error { message: format!("no ticket {id}") },
+                Err(e) => yield refused(e),
+            }
+        }
+    }
+
+    /// DEPLOY-13: the kept cells — one `cells { project, environment,
+    /// running }` per environment (of `project`, named `environment`, when
+    /// given), `running` every ticket there (only `ids`' when given, at most
+    /// 1,000), each with since when and the deploy that brought it, in the
+    /// store's order — an empty one too, so a copy can replace what it held.
+    /// What the app's board marks are drawn from, one read for every row.
+    #[plexus_macros::method(
+        group = "read",
+        description = "The kept cells: cells { project, environment, running: [{ ticket, since, deployment }] } per environment",
+        params(
+            project = "Only this project's (a shortcode) (optional)",
+            environment = "Only environments of this name (optional)",
+            ids = "Only these tickets' cells, at most 1,000 (optional)"
+        ),
+        example(note = "what runs on menger's prod", params = r#"{"project": "menger", "environment": "prod"}"#)
+    )]
+    pub async fn running(
+        &self, auth: Option<&AuthContext>, reach: Reach,
+        project: Option<String>,
+        environment: Option<String>,
+        ids: Option<Vec<String>>,
+    ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
+        let store = self.store.clone();
+        let admitted = self.access.admit(auth, &reach);
+        stream! {
+            let allowed = match admitted.and_then(|c| allowed(&c, &store)) {
+                Ok(a) => a,
+                Err(message) => {
+                    yield DeploymentsEvent::Error { message };
+                    return;
+                }
+            };
+            match store.running(project.as_deref(), environment.as_deref(), ids.as_deref(), allowed.as_ref()) {
+                Ok(rows) => {
+                    for row in rows {
+                        yield row;
+                    }
+                }
                 Err(e) => yield refused(e),
             }
         }

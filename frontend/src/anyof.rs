@@ -101,7 +101,7 @@ impl Member {
     pub(crate) fn cat(&self) -> Option<Cat> {
         match self {
             Member::Clause { cat, .. } => Some(*cat),
-            Member::Time(_) => Some(Cat::When),
+            Member::Time(t) => Some(crate::filter::time_cat(t)),
             Member::Custom(_) => None,
         }
     }

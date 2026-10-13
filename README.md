@@ -1934,6 +1934,7 @@ synapse -P 4455 menger tickets list --filter 'not category done or not deployed 
 | `deployments.list { project?, environment?, state?, ticket?, after?, limit? }` | `deployment { deployment, carried, unlinked, live }` newest first by `(at, id)`, then `page { next }` |
 | `deployments.environments { project? }` | `environment { project, name, order, revision, release, since, deployment, last, last_state, last_at, tickets }` per environment |
 | `deployments.for_ticket { id }` | `running { environment, since, deployment, revision, release }` for each environment it runs in, `not_running` for each other environment of its projects (its shortcode's, its hosts', any it ran in) |
+| `deployments.running { project?, environment?, ids? }` | DEPLOY-13: `cells { project, environment, running: [{ ticket, since, deployment }] }` per environment (an empty one too), each ticket running there — only `ids`' (at most 1,000) when given — in the store's order: what the app's board marks are drawn from, in one read |
 | `deployments.watch` | `deployed`, then `environment_changed`, as each is recorded; `lagged { missed }` |
 
 **Filter cells.** `deployed <env>` (FILTER-3's language) is a ticket running
@@ -1944,6 +1945,21 @@ Answered from the kept cells, never by testing a ticket, on every filtered
 read; `tickets.watch --filter 'deployed prod'` says `entered` / `left` when a
 deploy or a rollback moves a ticket, and a relative window is read again as
 time passes.
+
+**In the app** (DEPLOY-13): a ticket page's **Running** says where its work
+runs — `prod since 22:04 · test since 22:04 · not on staging`, each linked to
+its deploy; a board row and a wave card carry a small mark per environment,
+in the project's order; `#/deployments` (the header's `deployments`) shows
+each project's environments as columns — what each runs, since when, and a
+timeline of its deploys (state, when, the source's link, the tickets each
+carried) — under the project's **waiting** work: Complete, not yet on its last
+environment (`status Complete and under MENGER and not deployed menger/prod`).
+The filter menu's **Deployed** category builds `deployed <env> [window]` and
+`not deployed <env>` from the environments recorded (a pill like When's), and
+the palette offers them as you type `deployed`, `not deployed` or `waiting`.
+The app holds the environments and their cells (`environments`, `running`),
+kept by `deployments.watch` — a deploy asks again only for its environment —
+so every mark moves live, with no request per row.
 
 **Under login**, `record` is its own grant, held by the `deployer` role
 (`deployments.record` and the reads) — what a CI's key carries on the

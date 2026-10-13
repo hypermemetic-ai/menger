@@ -484,7 +484,8 @@
   table.board { table-layout: fixed; }
   table.board th.c-id { width: 11rem; }
   table.board th.c-kind { width: 6.5rem; }
-  table.board th.c-status { width: 9rem; }
+  /* DEPLOY-13: the status, then a mark per environment the work runs in. */
+  table.board th.c-status { width: 13rem; }
   table.board th.c-sev { width: 6.5rem; }
   table.board th.c-blk { width: 10rem; }
   tbody#board td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1541,9 +1542,9 @@
   .fmenu.narrow:not(.direct) .frow.back { display: flex; }
   /* FILTER-27: the When pane (src/when_view.rs) — its rows, a clause's
      parts as chips, the window editor; a time pill's parts each a button. */
-  .fmenu .fsub[data-cat="when"] { width: 20rem; }
+  .fmenu .fsub[data-cat="when"], .fmenu .fsub[data-cat="deployed"] { width: 20rem; }
   .app-comp-demo { display: inline-flex; flex-direction: column; gap: 6px; padding: 8px; border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--bg); }
-  .fmenu.narrow .fsub[data-cat="when"] { width: 20rem; }
+  .fmenu.narrow .fsub[data-cat="when"], .fmenu.narrow .fsub[data-cat="deployed"] { width: 20rem; }
   .when-rows { display: flex; flex-direction: column; }
   .fmenu button.frow, .fmenu button.wback {
     font: inherit; color: inherit; background: none; border: 0; text-align: left; width: 100%;
@@ -2116,6 +2117,86 @@
   #needs-you .nanswer { white-space: nowrap; color: var(--accent); font-size: calc(12px * var(--text-scale)); font-weight: var(--weight-strong); text-decoration: none; }
   #needs-you .nanswer:hover, #needs-you .nanswer:focus-visible { text-decoration: underline; }
   #needs-you .nmore { margin: .4rem 0 0; font-size: calc(.8rem * var(--text-scale)); }
+  /* DEPLOY-13: where work runs — a mark per environment on a board row and
+     a wave card, the ticket page's Running, and #/deployments. */
+  .envmarks { display: inline-flex; flex-wrap: nowrap; gap: .2rem; margin-left: .35rem; vertical-align: 1px; }
+  .envmark {
+    display: inline-block; font-family: var(--sans); font-size: calc(10px * var(--text-scale)); line-height: 1.5; white-space: nowrap;
+    padding: 0 5px; border-radius: var(--radius-xl); color: var(--st-complete-fg); background: var(--st-complete-bg);
+    border: var(--border) solid var(--chip-line); text-decoration: none;
+  }
+  a.envmark:hover, a.envmark:focus-visible { border-color: var(--accent); }
+  .envmark.off { color: var(--muted); background: transparent; border-style: dashed; }
+  .envmark.big { font-size: calc(12px * var(--text-scale)); padding: 1px 8px; font-weight: var(--weight-strong); }
+  .wave-board .card .foot .envmarks, #waves .card .foot .envmarks { margin-left: 0; }
+  #t-running { line-height: 1.9; }
+  #t-running a.run, #t-running a.notrun { color: var(--ink); text-decoration: none; white-space: nowrap; }
+  #t-running a.notrun { color: var(--muted); }
+  #t-running a:hover { color: var(--accent); }
+  #t-running .none, #t-running .derr { color: var(--muted); }
+  #deployments-page { max-width: 100%; }
+  #deployments-page h2 { font-size: calc(1rem * var(--text-scale)); margin: 0 0 .4rem; }
+  #deployments-page .dback { margin: 0 0 .5rem; font-size: calc(.8rem * var(--text-scale)); }
+  #deployments-page .hint { color: var(--muted); font-size: calc(.8rem * var(--text-scale)); margin: .2rem 0 .5rem; overflow-wrap: anywhere; }
+  #deployments-page .hint code, #deployments-page code.rev { font-family: var(--mono); font-size: calc(11px * var(--text-scale)); }
+  #deployments-page .dnone { color: var(--muted); }
+  #deployments-page .derr { color: var(--err-fg); font-size: calc(.8rem * var(--text-scale)); overflow-wrap: anywhere; }
+  #deployments-page .none, #deployments-page .loading { color: var(--muted); font-size: calc(.85rem * var(--text-scale)); margin: .2rem 0; }
+  .dproject { margin: 0 0 1.5rem; }
+  .dproject h3 { font-size: calc(.95rem * var(--text-scale)); margin: .5rem 0 .5rem; }
+  .dproject h3 a { color: var(--ink); text-decoration: none; }
+  .dproject h3 .n, .dwaiting h4 .n { color: var(--muted); font-weight: var(--weight-normal); }
+  .dwaiting {
+    margin: 0 0 .9rem; padding: .5rem .75rem .6rem; background: var(--panel);
+    border: var(--border) solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-xl);
+  }
+  .dwaiting h4 { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem; font-size: calc(.9rem * var(--text-scale)); margin: 0; }
+  .dlink {
+    font: inherit; font-size: calc(.75rem * var(--text-scale)); background: none; border: none; padding: 0 .2rem;
+    color: var(--accent); cursor: pointer;
+  }
+  .dwaiting .dlink { margin-left: auto; }
+  .dwaiting .dsub { margin: .35rem 0 0; font-size: calc(.8rem * var(--text-scale)); color: var(--muted); }
+  .dlink:hover, .dlink:focus-visible { text-decoration: underline; }
+  ul.drows { list-style: none; margin: .3rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .2rem; }
+  ul.drows li { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .45rem; font-size: calc(13px * var(--text-scale)); min-width: 0; }
+  ul.drows li.more { color: var(--muted); font-size: calc(.8rem * var(--text-scale)); }
+  ul.drows .dtitle { color: var(--ink); text-decoration: none; min-width: 0; overflow-wrap: anywhere; flex: 1 1 12rem; }
+  ul.drows .dtitle:hover { color: var(--accent); }
+  ul.drows .tag { font-size: calc(10px * var(--text-scale)); padding: 0 5px; border-radius: var(--radius-lg); white-space: nowrap; }
+  ul.drows .envmarks { margin-left: 0; }
+  #deployments-page a.code {
+    font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-strong); color: var(--chip-fg); background: var(--chip-bg);
+    border: var(--border) solid var(--chip-line); border-radius: var(--radius-md); padding: 0 5px; white-space: nowrap; text-decoration: none;
+  }
+  #deployments-page a.code:hover, #deployments-page a.code:focus-visible { color: var(--accent); border-color: var(--accent); }
+  .denvs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(15rem, 1fr); gap: .75rem; overflow-x: auto; padding-bottom: .4rem; }
+  .denv { background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-xl); padding: .55rem .65rem; min-width: 0; }
+  .denv .dhead { display: flex; flex-direction: column; gap: .15rem; margin: 0 0 .3rem; }
+  .denv .druns { font-size: calc(.8rem * var(--text-scale)); color: var(--ink); }
+  .denv .druns .since, .denv .rel, .denv .dcount { color: var(--muted); font-size: calc(.75rem * var(--text-scale)); overflow-wrap: anywhere; }
+  .denv .dcount { margin: 0 0 .45rem; }
+  ol.dtimeline { list-style: none; margin: 0; padding: 0 0 0 .55rem; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: .45rem; }
+  .ddeploy { background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); padding: .3rem .5rem; font-size: calc(12px * var(--text-scale)); }
+  .ddeploy.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .ddeploy.undone, .ddeploy.started { opacity: .75; }
+  .ddeploy .dline { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .4rem; }
+  .ddeploy time { color: var(--muted); margin-left: auto; }
+  .ddeploy .dback-to { color: var(--muted); }
+  .dstate { font-size: calc(10px * var(--text-scale)); padding: 0 6px; border-radius: var(--radius-lg); white-space: nowrap; font-weight: var(--weight-strong); }
+  .dstate.ok { color: var(--st-complete-fg); background: var(--st-complete-bg); }
+  .dstate.undone { color: var(--muted); background: var(--chip-bg); text-decoration: line-through; }
+  .dstate.failed { color: var(--err-fg); background: var(--err-bg); }
+  .dstate.started { color: var(--st-coding-fg); background: var(--st-coding-bg); }
+  .dstate.rolledback { color: var(--st-blocked-fg); background: var(--st-blocked-bg); }
+  .ddeploy .dsrc { display: block; color: var(--muted); overflow-wrap: anywhere; }
+  .ddeploy .dsrc a { color: var(--accent); text-decoration: none; }
+  .ddeploy .dcarried { display: flex; flex-wrap: wrap; gap: .2rem; margin-top: .25rem; }
+  .ddeploy .dunlinked { color: var(--muted); margin-top: .2rem; }
+  .denv .dmore {
+    margin-top: .45rem; font: inherit; font-size: calc(.75rem * var(--text-scale)); cursor: pointer; background: var(--card); color: var(--ink);
+    border: var(--border) solid var(--line); border-radius: var(--radius); padding: 0 .55rem;
+  }
 </style>
 </head>
 <body></body>

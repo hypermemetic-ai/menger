@@ -21,6 +21,11 @@
 //!   last touch (any write to it, a comment, an answer) outside the window:
 //!   "hasn't changed in 2 weeks". And any time pill turns around with
 //!   [`negate`] (its ⋯ menu's Negate; a group's, for its time members).
+//! - **DEPLOY-13**: `deployed <env> [window]` is a time pill too — its
+//!   environment a part of its own ([`Part::Env`]) — built from the filter
+//!   menu's own Deployed category: Deployed to ▸ and Not deployed to ▸ an
+//!   environment ([`new_deployed`], [`with_env`]), windows of what reached it
+//!   lately ([`DEPLOYED_PRESETS`]).
 //!
 //! Everything that decides is a pure function here, pinned by native tests.
 
@@ -61,14 +66,20 @@ pub(crate) enum Kind {
     Changed,
     /// FILTER-30: `touched` — built negated: hasn't changed.
     Untouched,
-    /// DEPLOY-11: `deployed <env>` — read and shown, not in the menu (its
-    /// pill and menu are DEPLOY-13's).
+    /// DEPLOY-13: `deployed <env> [window]` — the filter menu's Deployed
+    /// category (src/filter.rs), not When's rows.
     Deployed,
+    /// DEPLOY-13: `not deployed <env> [window]` — built negated, as Hasn't
+    /// changed is; a pill of it is a Deployed one, turned around.
+    NotDeployed,
 }
 
 impl Kind {
     /// The menu's order.
     pub(crate) const ALL: [Kind; 6] = [Kind::Created, Kind::Into, Kind::OutOf, Kind::Held, Kind::Changed, Kind::Untouched];
+
+    /// DEPLOY-13: the Deployed category's rows.
+    pub(crate) const DEPLOYED: [Kind; 2] = [Kind::Deployed, Kind::NotDeployed];
 
     pub(crate) fn of(e: &Event) -> Kind {
         match e {
@@ -91,7 +102,8 @@ impl Kind {
             Kind::Held => "In status for",
             Kind::Changed => "Changed",
             Kind::Untouched => "Hasn't changed",
-            Kind::Deployed => "Deployed",
+            Kind::Deployed => "Deployed to",
+            Kind::NotDeployed => "Not deployed to",
         }
     }
 
@@ -105,12 +117,19 @@ impl Kind {
             Kind::Changed => "changed",
             Kind::Untouched => "untouched",
             Kind::Deployed => "deployed",
+            Kind::NotDeployed => "notdeployed",
         }
     }
 
     /// Whether its clause names a status first (Moved into, Moved out of).
     pub(crate) fn needs_status(self) -> bool {
         matches!(self, Kind::Into | Kind::OutOf)
+    }
+
+    /// DEPLOY-13: whether its clause names an environment first (Deployed
+    /// to, Not deployed to).
+    pub(crate) fn needs_env(self) -> bool {
+        matches!(self, Kind::Deployed | Kind::NotDeployed)
     }
 
     /// Whether its clause has a window (all but In status for).
@@ -134,6 +153,7 @@ impl Kind {
     pub(crate) fn presets(self) -> &'static [&'static str] {
         match self {
             Kind::Untouched => &UNTOUCHED_PRESETS,
+            Kind::Deployed | Kind::NotDeployed => &DEPLOYED_PRESETS,
             _ => &WINDOW_PRESETS,
         }
     }
@@ -152,6 +172,8 @@ impl Kind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Part {
     Status,
+    /// DEPLOY-13: the environment `deployed` names.
+    Env,
     Window,
     Length,
     Who,
@@ -161,6 +183,7 @@ impl Part {
     pub(crate) fn key(self) -> &'static str {
         match self {
             Part::Status => "status",
+            Part::Env => "env",
             Part::Window => "window",
             Part::Length => "length",
             Part::Who => "who",
@@ -174,6 +197,10 @@ pub(crate) const WINDOW_PRESETS: [&str; 5] = ["today", "yesterday", "this week",
 
 /// FILTER-30: the windows Hasn't changed offers: 1d · 3d · 1w · 2w · 1mo.
 pub(crate) const UNTOUCHED_PRESETS: [&str; 5] = ["within 1d", "within 3d", "within 1w", "within 2w", "within 1mo"];
+
+/// DEPLOY-13: the windows Deployed to offers — what reached an environment
+/// lately.
+pub(crate) const DEPLOYED_PRESETS: [&str; 5] = ["within 1h", "within 24h", "today", "this week", "within 2w"];
 
 /// The lengths In status for offers: over 1d · 3d · 1w · 2w · 1mo.
 pub(crate) const LENGTH_PRESETS: [(u32, Unit); 5] = [(1, Unit::Day), (3, Unit::Day), (1, Unit::Week), (2, Unit::Week), (1, Unit::Month)];
@@ -218,8 +245,8 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
         Kind::Changed => Event::Changed,
         Kind::Held => Event::Held(Held { of: HeldOf::Any, over: true, n: 1, unit: Unit::Week }),
         Kind::Untouched => Event::Touched,
-        // DEPLOY-11: names an environment, which no menu row offers yet.
-        Kind::Deployed => return None,
+        // DEPLOY-13: names an environment first ([`new_deployed`]).
+        Kind::Deployed | Kind::NotDeployed => return None,
     };
     let window = match kind {
         Kind::Created | Kind::Untouched => Some(window.unwrap_or_else(|| default_window(&event))),
@@ -235,6 +262,30 @@ fn default_window(e: &Event) -> Window {
     match e {
         Event::Touched => Window::Within(2, Unit::Week),
         _ => Window::Today,
+    }
+}
+
+/// DEPLOY-13: `deployed <env> [window]` — `not` for Not deployed to —
+/// or `None` when `env` is no environment name (`prod`, `menger/prod`).
+pub(crate) fn new_deployed(env: &str, not: bool, window: Option<Window>) -> Option<Timed> {
+    let env = menger_tickets_api::deployments::environment_of(env).ok()?;
+    Some(Timed { not, h: History { event: Event::Deployed(env), window, by: None } })
+}
+
+/// DEPLOY-13: `t` with the environment its `deployed` names set.
+pub(crate) fn with_env(t: &Timed, env: &str) -> Timed {
+    let mut t = t.clone();
+    if let (Event::Deployed(e), Ok(env)) = (&mut t.h.event, menger_tickets_api::deployments::environment_of(env)) {
+        *e = env;
+    }
+    t
+}
+
+/// DEPLOY-13: the environment `t` names, when it is a `deployed`.
+pub(crate) fn env_of(t: &Timed) -> Option<&str> {
+    match &t.h.event {
+        Event::Deployed(e) => Some(e),
+        _ => None,
     }
 }
 
@@ -436,7 +487,10 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
             out.push((Some(Part::Status), s.as_str().into()));
         }
         Event::Changed => out.push((None, "changed".into())),
-        Event::Deployed(env) => out.push((None, format!("deployed to {env}"))),
+        Event::Deployed(env) => {
+            out.push((None, "deployed to".into()));
+            out.push((Some(Part::Env), env.clone()));
+        }
         Event::Held(h) => {
             out.push((Some(Part::Status), scope_words(&h.of)));
             out.push((Some(Part::Length), held_words(h)));
@@ -641,6 +695,40 @@ mod tests {
         // The saved suggestion reads back as the same pill (FILTER-6).
         let f = Filter::parse("not touched within 2w and not category done and not kind doc").unwrap();
         assert_eq!(of_group(&f.groups[0]), Some(t));
+    }
+
+    /// DEPLOY-13: Deployed to and Not deployed to build `deployed <env>`
+    /// and `not deployed <env>`, a window from their presets; each reads in
+    /// words, its environment a part of its own; the pill turns around.
+    #[test]
+    fn deployed_pills_build_read_and_turn_around() {
+        let text = |t: &Timed| Filter { groups: vec![group(t)], display: Default::default() }.format();
+        for (text_in, said) in [
+            ("deployed prod", "deployed to prod"),
+            ("deployed menger/prod within 24h", "deployed to menger/prod in the last 24 hours"),
+            ("not deployed prod", "not deployed to prod"),
+            ("deployed test today", "deployed to test today"),
+        ] {
+            let t = timed(text_in);
+            assert_eq!(words(&t, false), said, "{text_in}");
+            assert_eq!(text(&t), Filter::parse(text_in).unwrap().format(), "{text_in}");
+        }
+        let t = new_deployed("Prod", false, None).unwrap();
+        assert_eq!(text(&t), "deployed prod");
+        assert_eq!(text(&new_deployed("prod", true, window_of("within 24h")).unwrap()), "not deployed prod within 24h");
+        assert!(new_deployed("no such env!", false, None).is_none());
+        assert_eq!(text(&with_env(&t, "staging")), "deployed staging");
+        assert_eq!(env_of(&with_env(&t, "bad env!")), Some("prod"), "a bad name changes nothing");
+        assert_eq!(text(&negate(&t)), "not deployed prod");
+        assert_eq!(text(&with_by(&t, Some(Who::Me))), "deployed prod", "a deployment names no one");
+        let parts: Vec<_> = segments(&t, false).into_iter().map(|(p, w)| (p.map(Part::key), w)).collect();
+        assert_eq!(parts, [(None, "deployed to".to_string()), (Some("env"), "prod".to_string()), (Some("window"), "ever".to_string())]);
+        assert!(Kind::Deployed.needs_env() && Kind::NotDeployed.needs_env() && !Kind::Deployed.has_who() && Kind::Deployed.has_ever());
+        for p in DEPLOYED_PRESETS {
+            let t = new_deployed("prod", false, window_of(p)).unwrap();
+            assert!(has_window(&t, p) && !custom_window(&t), "{p}");
+        }
+        assert!(!Kind::ALL.contains(&Kind::Deployed), "When's rows are When's");
     }
 
     /// A group that is not one time predicate is no time pill.

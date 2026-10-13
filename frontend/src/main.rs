@@ -233,6 +233,14 @@
 //! selection) and the filter items together; a tag outside any ticket keeps
 //! FILTER-22's menu.
 
+//! DEPLOY-13: where work runs (src/deploys.rs, the app's copy of DEPLOY-11's
+//! environments and cells, kept by `deployments.watch`): a ticket page's
+//! Running, a mark per environment on board rows and wave cards, and
+//! `#/deployments` (src/deploys_page.rs) — per project, its environments as
+//! columns with their deploys, and the Complete work still waiting for the
+//! last one. The filter menu's Deployed and the palette's `deployed …` offer
+//! the `deployed <env>` cells.
+
 //! COMMENT-3: annotation mode (src/annotate.rs) — `a`, or Annotate in the
 //! header, outlines every element (the bodies' frames too); a click leaves a
 //! comment there, anchored by src/anchor.rs and kept by the server's
@@ -255,6 +263,8 @@ mod comments;
 mod comments_page;
 mod components;
 mod counts;
+mod deploys;
+mod deploys_page;
 mod dom;
 mod filter;
 mod flat;
@@ -396,6 +406,10 @@ pub(crate) enum Route {
     Comments,
     /// IDENTITY-22: `#/members` — who holds which role; an admin's page.
     Members,
+    /// DEPLOY-13: `#/deployments` (`None`) — every project's environments
+    /// and deploys; `#/deployments/<SHORTCODE>` one project's (held upper
+    /// case). `?d=<id>` (a deploy to pick out) is the page's.
+    Deployments(Option<String>),
 }
 
 fn parse_route(hash: &str) -> Route {
@@ -421,6 +435,11 @@ fn parse_route(hash: &str) -> Route {
         _ if path.trim_end_matches('/') == "settings" => Route::Settings,
         _ if path.trim_end_matches('/') == "comments" => Route::Comments,
         _ if path.trim_end_matches('/') == "members" => Route::Members,
+        Some(("deployments", sc)) => {
+            let sc = sc.trim_end_matches('/').to_ascii_uppercase();
+            Route::Deployments((!sc.is_empty()).then_some(sc))
+        }
+        None if path == "deployments" => Route::Deployments(None),
         _ => Route::Board,
     }
 }
@@ -441,6 +460,8 @@ pub(crate) fn route_text(route: &Route) -> String {
         Route::Settings => "#/settings".to_string(),
         Route::Comments => "#/comments".to_string(),
         Route::Members => "#/members".to_string(),
+        Route::Deployments(None) => "#/deployments".to_string(),
+        Route::Deployments(Some(sc)) => format!("#/deployments/{sc}"),
     }
 }
 
@@ -1058,6 +1079,9 @@ fn Board(
                                         }
                                             .into_any()
                                     }}
+                                    // DEPLOY-13: a mark per environment it runs in,
+                                    // from the app's one copy — never a request per row.
+                                    {deploys::row_marks(row_id.clone())}
                                 </td>
                                 <td>
                                     {move || ticket.with(|t| t.severity).map(|s| view! { <span data-tag=tags::Tag::severity(s).attr()>{s.to_string()}</span> })}
@@ -1338,6 +1362,7 @@ fn ticket_view(
     // update on `watch` — no fetch, no reload — and the memo keeps any
     // other change to the row from rebuilding them.
     let commits = Memo::new(move |_| ticket.with(|t| t.commits.clone()));
+    let running_id = ticket.with_untracked(|t| t.id.clone());
     let commits_view = move || {
         let refs = commits.get();
         if refs.is_empty() {
@@ -1598,6 +1623,9 @@ fn ticket_view(
                     </dd>
                 </div>
                 <div><dt>"Commits"</dt><dd id="t-commits">{commits_view}</dd></div>
+                // DEPLOY-13: where its work runs — each environment linked
+                // to the deploy that brought it, and those it is not on.
+                <div><dt>"Running"</dt><dd id="t-running"><deploys::Running id=running_id.clone() commits /></dd></div>
                 // MENGER-12: its labels — chips, editable by a writer.
                 <div><dt>"Labels"</dt><dd id="t-labels"><labels::Editor ticket /></dd></div>
                 // COMMENT-3: its open comments, linking to them on #/comments.
@@ -2267,6 +2295,16 @@ fn App() -> impl IntoView {
                             })
                         }}
                     </a>
+                    // DEPLOY-13: where work runs — every project's
+                    // environments and deploys.
+                    <a
+                        class="hlink"
+                        id="deployments-link"
+                        href="#/deployments"
+                        aria-current=move || matches!(route.get(), Route::Deployments(_)).then_some("page")
+                    >
+                        "deployments"
+                    </a>
                     // IDENTITY-22: an admin's members page.
                     {move || signin::account().with(|a| a.is_admin()).then(|| view! {
                         <a class="hlink" id="members-link" href="#/members"
@@ -2311,6 +2349,7 @@ fn App() -> impl IntoView {
                             Route::Settings => "settings (MFE-21)",
                             Route::Comments => "comments (COMMENT-3)",
                             Route::Members => "members (IDENTITY-22)",
+                            Route::Deployments(_) => "deployments (DEPLOY-13)",
                         }}
                     </span>
                     // IDENTITY-15: who this connection is, or `sign in`.
@@ -2376,6 +2415,7 @@ fn App() -> impl IntoView {
                         Route::Settings => view! { <settings::SettingsPage test_link /> }.into_any(),
                         Route::Comments => view! { <comments_page::CommentsPage /> }.into_any(),
                         Route::Members => view! { <members_page::MembersPage /> }.into_any(),
+                        Route::Deployments(project) => view! { <deploys_page::DeploymentsPage project /> }.into_any(),
                     }}
                 </main>
             </div>
@@ -2424,6 +2464,10 @@ mod tests {
         assert_eq!(parse_route("#/waves/"), Route::Waves(String::new()));
         assert_eq!(parse_route("#/ticket/MNG-4"), Route::Ticket("MNG-4".into()));
         assert_eq!(parse_route("#/ticket/"), Route::Board);
+        // DEPLOY-13: the deployments page, every project's or one's.
+        assert_eq!(parse_route("#/deployments"), Route::Deployments(None));
+        assert_eq!(parse_route("#/deployments/menger?d=4"), Route::Deployments(Some("MENGER".into())));
+        assert_eq!(parse_route("#/deployments/"), Route::Deployments(None));
         assert_eq!(parse_route("#/"), Route::Board);
         assert_eq!(parse_route(""), Route::Board);
         assert_eq!(parse_route("#/wavesX"), Route::Board);
