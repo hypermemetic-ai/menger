@@ -26,8 +26,8 @@
 //!   the flat list's and the board's each draw `aria-selected` and the
 //!   `picked` tint (`--sel`) from it ([`is_picked`]). The menu (ACT-4) reads
 //!   it with [`ids`]: a right-click on a selected row acts on the selection,
-//!   on another row on that row alone — the selection kept either way. Until
-//!   ACT-4 lands, the ticket menu acts on the row it opened on.
+//!   on another row on that row alone — the selection kept either way
+//!   (src/menu/model.rs's `target_ids`).
 //! - **The nav's foot says it** ([`foot_line`]): "3 selected · clear", and
 //!   how many of them the nav's filter hides ([`hidden_of`]: `member { ids,
 //!   filter }` — not admitted, and no row drawn for it, which keeps
@@ -228,7 +228,6 @@ pub(crate) fn signal() -> RwSignal<Picked> {
 }
 
 /// ACT-4: the ids selected now, in the order chosen (untracked).
-#[allow(dead_code)] // ACT-4's menu
 pub(crate) fn ids() -> Vec<String> {
     signal().with_untracked(|p| p.ids.clone())
 }

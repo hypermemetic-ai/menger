@@ -4001,6 +4001,7 @@ fn group_row(
     // ACT-3: a heading stands for its root (keyed by it); a shortcode with no
     // root stands for no ticket and is not selectable.
     let pick = (key != code).then(|| key.clone());
+    let heading_code = pick.as_ref().map(|_| code.clone());
     let picked = pick.clone().map(selection::is_picked);
     view! {
         <div
@@ -4011,7 +4012,11 @@ fn group_row(
             role="treeitem"
             tabindex="-1"
             data-node-key=key
-            data-pick=pick
+            data-pick=pick.clone()
+            // ACT-4: a heading is its root's row — the root's menu, with the
+            // shortcode's items.
+            data-ticket-id=pick
+            data-shortcode=heading_code
             class:picked=move || picked.is_some_and(|p| p.get())
             aria-selected=move || picked.map(|p| p.get().to_string())
             aria-expanded=expanded_attr

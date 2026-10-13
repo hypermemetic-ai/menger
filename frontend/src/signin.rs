@@ -96,6 +96,16 @@ impl Account {
         }
     }
 
+    /// ACT-4: whether the person may delete — admin only (ACT-5); with login
+    /// off the server admits every call, so anyone.
+    pub(crate) fn may_delete(&self) -> bool {
+        match self.login {
+            None => false,
+            Some(false) => true,
+            Some(true) => self.is_admin(),
+        }
+    }
+
     /// Whether the person administers anything (`#/members`).
     pub(crate) fn is_admin(&self) -> bool {
         self.admin_everywhere || self.grants.as_ref().is_some_and(|g| g.iter().any(|g| g.role == Role::Admin))
@@ -461,8 +471,12 @@ mod tests {
     fn an_admin_is_admin_somewhere() {
         let a = Account { login: Some(true), me: Some(me()), grants: Some(vec![grant("OUGHT", Role::Editor)]), admin_everywhere: false };
         assert!(!a.is_admin());
-        let b = Account { grants: Some(vec![grant("IDENTITY", Role::Admin)]), ..a };
+        let b = Account { grants: Some(vec![grant("IDENTITY", Role::Admin)]), ..a.clone() };
         assert!(b.is_admin());
+        // ACT-4: delete is an admin's; with login off, anyone's.
+        assert!(!a.may_delete() && b.may_delete());
+        assert!(Account { login: Some(false), ..Default::default() }.may_delete());
+        assert!(!Account::default().may_delete(), "not known yet");
     }
 
     #[test]

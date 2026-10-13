@@ -22,10 +22,14 @@
 //! - **Which filter** ([`tag_at`]): the surface's own where the tag sits on
 //!   one; on the ticket page, the global filter.
 //! - **One menu**, as AGS-16's: one document-level `contextmenu` listener.
-//!   A tag inside a row the ticket menu answers (a nav row, a board row, a
-//!   card, a ticket page's heading or relation) is the tag's — the ticket
-//!   menu stands down for it — and a right-click anywhere else on the row is
-//!   still the ticket menu's; anywhere else at all, the menus of before.
+//!   ACT-4: a tag inside an element the ticket menu answers (a nav row, a
+//!   board row, a card, a ticket page's heading or relation) opens the ticket
+//!   menu — the one menu (src/menu/) — with these items in its filter group,
+//!   a status, kind, severity or label chip's first; this menu stands down
+//!   for it, and answers only a tag drawn outside any ticket (a shortcode's
+//!   rootless row, a label on the inputs page).
+//! - **Over a selection** ([`many_items`], ACT-4): the shortcodes the
+//!   tickets share, or `under` each of them ([`TagClause::UnderAny`]).
 //! - **The palette** takes `filter <shortcode>` (src/keys.rs): the global
 //!   filter becomes that shortcode's clause — the Filter item's ([`run`]).
 //!
@@ -129,6 +133,9 @@ pub(crate) enum TagClause {
     /// `under` a ticket: the ticket and its descendants — a group no
     /// category draws (a custom pill).
     Under(String),
+    /// ACT-4: `under` any of several tickets — a selection's subtrees, one
+    /// group (`under A-1 or under B-4`).
+    UnderAny(Vec<String>),
 }
 
 impl TagClause {
@@ -136,7 +143,7 @@ impl TagClause {
     pub(crate) fn cat(&self) -> Option<Cat> {
         match self {
             TagClause::Of(c, _) => Some(*c),
-            TagClause::Under(_) => None,
+            TagClause::Under(_) | TagClause::UnderAny(_) => None,
         }
     }
 
@@ -145,6 +152,10 @@ impl TagClause {
         match self {
             TagClause::Of(c, cl) => lens::group_of(*c, cl),
             TagClause::Under(id) => Some(Group::one(Predicate::is(Field::Under(id.to_ascii_uppercase())))),
+            TagClause::UnderAny(ids) if ids.is_empty() => None,
+            TagClause::UnderAny(ids) => {
+                Some(Group::any(ids.iter().map(|id| Predicate::is(Field::Under(id.to_ascii_uppercase()))).collect()))
+            }
         }
     }
 }
@@ -242,7 +253,11 @@ pub(crate) struct Item {
 /// Filter status Pending · Add status Pending to the filter · Build a filter from Pending…
 /// ```
 pub(crate) fn items(tag: &Tag, tree: Option<&ScTree>) -> Vec<Item> {
-    let offers = offers(tag, tree);
+    items_of(offers(tag, tree))
+}
+
+/// The items for `offers`, the first leading Add and Build.
+fn items_of(offers: Vec<Offer>) -> Vec<Item> {
     let mut out: Vec<Item> =
         offers.iter().map(|o| Item { act: Act::Filter, clause: o.clause.clone(), words: format!("Filter {}", o.name) }).collect();
     if let Some(first) = offers.first() {
@@ -250,6 +265,36 @@ pub(crate) fn items(tag: &Tag, tree: Option<&ScTree>) -> Vec<Item> {
         out.push(Item { act: Act::Build, clause: first.clause.clone(), words: format!("Build a filter from {}…", first.value) });
     }
     out
+}
+
+/// ACT-4: a selection's filter items — **Filter** the shortcodes its
+/// tickets share (each one's tree, as one clause), **Filter under each** of
+/// them, then Add and Build with the shortcodes:
+///
+/// ```text
+/// Filter DEMAND, MNG · Filter under each of 3 · Add DEMAND, MNG to the filter · Build a filter from DEMAND, MNG…
+/// ```
+pub(crate) fn many_items(ids: &[String], tree: Option<&ScTree>) -> Vec<Item> {
+    let mut codes: Vec<String> = Vec::new();
+    for id in ids {
+        if let Some(sc) = epic_of(id).and_then(|sc| Cat::Shortcode.token(sc)) {
+            if !codes.contains(&sc) {
+                codes.push(sc);
+            }
+        }
+    }
+    let values: Vec<String> = codes.iter().filter_map(|c| shortcode_clause(c, tree)).flat_map(|cl| cl.values).collect();
+    let mut offers = Vec::new();
+    if let Some(cl) = Clause::new(Cat::Shortcode, Op::Is, values) {
+        let name = codes.join(", ");
+        offers.push(Offer { clause: TagClause::Of(Cat::Shortcode, cl), name: name.clone(), value: name });
+    }
+    let under: Vec<String> = ids.iter().map(|id| id.to_ascii_uppercase()).collect();
+    if !under.is_empty() {
+        let n = under.len();
+        offers.push(Offer { clause: TagClause::UnderAny(under), name: format!("under each of {n}"), value: format!("{n} tickets") });
+    }
+    items_of(offers)
 }
 
 /// What an item makes of a level's state `k`.
@@ -314,8 +359,8 @@ pub(crate) fn filter_globally(lens: Lens, code: &str) {
 // The DOM
 
 /// The tag `el` is (or sits in) and the level its surface names — `None`
-/// where it is no tag the app drew. The ticket menu asks first, and stands
-/// down for one.
+/// where it is no tag the app drew. ACT-4: inside a ticket element the one
+/// menu (src/menu/) takes it as its chip.
 pub(crate) fn tag_at(el: &web_sys::Element) -> Option<(Tag, Level)> {
     let host = el.closest("[data-tag]").ok().flatten()?;
     let tag = Tag::parse(&host.get_attribute("data-tag")?)?;
@@ -349,6 +394,10 @@ fn install_listeners(open: RwSignal<Option<Open>>) {
     let Some(doc) = dom::window().document() else { return };
     let on_context = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
         let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
+        // ACT-4: inside a ticket the one menu answers, with these items.
+        if menu::host_of(&el).is_some() {
+            return;
+        }
         if let Some((tag, level)) = tag_at(&el) {
             ev.prevent_default();
             open.set(Some(Open { tag, level, x: ev.client_x() as f64, y: ev.client_y() as f64 }));
@@ -667,6 +716,25 @@ mod tests {
         let next = apply(Act::Add, &pending, &k);
         assert_eq!(next.local, k.local);
         assert_eq!(text(&next), "kind build and status Pending · flat");
+    }
+
+    /// ACT-4: a selection's items — the shortcodes its tickets share, each
+    /// one's tree, then `under` each of them; Add and Build with the first.
+    #[test]
+    fn a_selection_filters_its_shortcodes_or_under_each() {
+        let t = demand();
+        let ids = strs(&["DEMAND-4", "MNG-2", "DEMAND-7"]);
+        let it = many_items(&ids, Some(&t));
+        assert_eq!(
+            it.iter().map(|i| i.words.as_str()).collect::<Vec<_>>(),
+            ["Filter DEMAND, MNG", "Filter under each of 3", "Add DEMAND, MNG to the filter", "Build a filter from DEMAND, MNG…"]
+        );
+        assert_eq!(only(&it[0].clause, &Kept::default()).filter.format(), "in (DEMAND, MNG, SUB)");
+        let under = only(&it[1].clause, &Kept::default()).filter.format();
+        assert_eq!(under, "under in (DEMAND-4, MNG-2, DEMAND-7)");
+        assert_eq!(Filter::parse(&under).unwrap().format(), under, "it reads back");
+        assert_eq!(it[1].clause.cat(), None);
+        assert!(many_items(&[], None).is_empty());
     }
 
     /// The level a tag's surface names: the board, the nav, the wave board —

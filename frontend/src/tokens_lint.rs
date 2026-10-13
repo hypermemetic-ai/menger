@@ -254,12 +254,8 @@ fn shipped() -> Vec<(String, String)> {
     out.push(("frontend/index.html".to_string(), format!("{pad}{}", strip_block_comments(&css))));
     let sdk = std::fs::read_to_string(format!("{}/sdk/menger-sdk.js", root())).unwrap();
     out.push(("frontend/sdk/menger-sdk.js".to_string(), js_shipped(&sdk)));
-    let mut files: Vec<_> = std::fs::read_dir(Path::new(root()).join("src"))
-        .unwrap()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
-        .collect();
+    let src = Path::new(root()).join("src");
+    let mut files: Vec<_> = rust_files(&src);
     files.sort();
     for p in files {
         let name = p.file_name().unwrap().to_string_lossy().to_string();
@@ -267,7 +263,22 @@ fn shipped() -> Vec<(String, String)> {
             continue;
         }
         let text = std::fs::read_to_string(&p).unwrap();
-        out.push((format!("frontend/src/{name}"), rust_shipped(&text)));
+        let rel = p.strip_prefix(&src).unwrap().to_string_lossy().to_string();
+        out.push((format!("frontend/src/{rel}"), rust_shipped(&text)));
+    }
+    out
+}
+
+/// Every `.rs` under `dir`, its modules' directories too (src/menu/, ACT-4).
+pub(crate) fn rust_files(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(rust_files(&p));
+        } else if p.extension().is_some_and(|x| x == "rs") {
+            out.push(p);
+        }
     }
     out
 }

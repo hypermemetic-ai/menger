@@ -272,6 +272,29 @@ clear` — hidden: selected, but outside the nav's filter. The selection is
 ids: it survives a filter change, a route change and a live reorder, not a
 reload; one range takes at most 1,000 rows.
 
+**One menu for a ticket** (ACT-4, `src/menu/`): a right-click — or Menu /
+Shift+F10 on a focused one — on a ticket anywhere it is drawn (its nav row,
+its id or status chip, a board row, a wave card, the ticket page's heading,
+a relation, a chip inside a framed body) opens the same menu: Open, Open in
+new tab, the wave boards and Copy code; every update — **Set status ▸**,
+**Set kind ▸**, **Set severity ▸**, **Labels ▸** (add or remove; Add a
+label…), **Move under…** and **Blocked by…** (a ticket picker, the palette's
+`find`), **Unblock ▸**, **Rename…**, **Link commits…**; the filter items
+(FILTER-22's — a status, kind, severity or label chip puts its own first);
+**Nav ▸** in the nav; and **Delete…**. On a selected row of a selection of
+more than one it acts on all of them: "N tickets", Copy codes, every update
+as one `update_many` (ACT-2), the shortcodes they share or `under` each,
+Delete N… (Open, Rename… and Link commits… step aside); a submenu marks one
+ticket's value, or how many of the selection hold each. One ticket's update
+is one `update` (status: `set_status`, which keeps MENGER-13's restore
+prompt; labels: `label`). A refusal lands in the error banner in the
+server's words. The updates are absent for a reader who cannot write, Delete
+for anyone but an admin (with login off, everyone may). Delete… confirms in
+the app — every ticket, its children (moved to its parent, or deleted too)
+and the tickets that wait on it (unblocked) — and then offers **Undo**
+(`undelete`) in its toast. A shortcode's row is its root's menu with the
+shortcode's Wave board. A tag outside any ticket keeps FILTER-22's menu.
+
 The wave board (WAVE-5) is `#/waves/<SHORTCODE>` — e.g.
 `http://127.0.0.1:4456/app/#/waves/PLEXUS`, the platform's work in order:
 the shortcode and every shortcode hosted under it (the nav's `host` chain
@@ -456,8 +479,9 @@ to the filter** joins it to the filter as it stands, **Build a filter from
 …** makes it the clause and opens the filter menu on its category. A
 shortcode's clause is its tree (what checking it in the menu makes); a
 ticket id offers its shortcode first and `under` the ticket second. It
-builds the surface's own filter, or on the ticket page the global one; a
-tag inside a row is the tag's, the rest of the row keeps the ticket menu.
+builds the surface's own filter, or on the ticket page the global one. A
+tag inside a ticket (a row, a card, a heading) opens the ticket's one menu
+(ACT-4), these items first in its filter group.
 The palette takes `filter <shortcode>`: the global filter becomes it.
 
 ```sh

@@ -88,6 +88,24 @@
 //! a heading — opens the same menu holding only the Nav items
 //! ([`nav_menu_view`]). On the flat list only the reveal means anything.
 //! When ACT-4's one menu lands, Nav ▸ is one of its groups.
+//!
+//! ACT-4: **one menu for a ticket, wherever it is drawn** — its nav row, its
+//! id chip, a board row, a card, the ticket page's heading, a relation, a
+//! framed chip (owner, 2026-10-13: "the nav entry and the chip itself to have
+//! the same menu"). It holds the ticket actions, every update, the filter
+//! items and Nav ▸ together; what it holds for a target is a pure function
+//! (src/menu/model.rs: one ticket or a selection, the chip right-clicked, the
+//! reader's grants). A chip inside a ticket element no longer opens FILTER-22's
+//! menu: its items are this menu's filter group, a status, kind, severity or
+//! label chip's first. A right-click on a selected row acts on the selection
+//! (ACT-3) when it holds more than one — "N tickets", the one-ticket items
+//! stepping aside — and every update is one write: `update` for one ticket,
+//! `update_many` (ACT-2) for many (src/menu/write.rs). Move under… and
+//! Blocked by… pick a ticket with the palette's find, Rename… and Link
+//! commits… ask in place (src/menu/forms.rs); Delete… confirms inside the
+//! app, listing every ticket and what moves, then offers Undo while the
+//! tombstone keeps them (src/menu/delete.rs). A shortcode's row in the nav is
+//! its root ticket's menu, plus the shortcode's Wave board.
 
 use js_sys::Reflect;
 use leptos::prelude::*;
@@ -96,10 +114,23 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use std::cell::Cell;
+use std::sync::Arc;
 
+mod delete;
+mod forms;
+pub(crate) mod model;
+mod view;
+mod write;
+
+pub(crate) use view::TicketMenu;
+use view::Toaster;
+
+use crate::lens::{self, Level};
 use crate::shape::{self, Item};
-use crate::{cache, dom, keys, nav, session, st_class, tags, waves};
-use menger_tickets_api::{AttrKind, KnowNothing, Kind, Status};
+use crate::tags::Tag;
+use crate::{cache, dom, keys, nav, selection, session, signin, st_class, tags, waves};
+use menger_tickets_api::{AttrKind, KnowNothing, TicketSummary};
+use model::{Entry, Facts, Form, Grants, Mark, Sub};
 
 thread_local! {
     /// MENGER-34: the one menu's open state, for the frame bridge to open
@@ -130,7 +161,37 @@ pub(crate) fn open_from_frame(id: String, x: f64, y: f64, keyboard: bool) {
     if keyboard {
         keys::remember_focus();
     }
-    target.set(Some(Target { id: Some(id), shortcode: None, x, y, nav: None }));
+    let ids = model::target_ids(&id, &selection::ids());
+    target.set(Some(Target { ids, shortcode: None, x, y, nav: None, chip: None, level: Level::Global }));
+}
+
+/// ACT-4: the ticket element `el` is (or sits in) — what the one menu opens
+/// on. FILTER-22's tag menu stands down inside one.
+pub(crate) fn host_of(el: &web_sys::Element) -> Option<web_sys::Element> {
+    el.closest("[data-ticket-id]").ok().flatten()
+}
+
+/// ACT-4: whose filter the menu's filter items build, for a right-click on
+/// `el` inside `host`: the chip's surface, else the host's, else the global
+/// filter (the ticket page, a Needs-you row, a framed chip).
+fn level_at(host: &web_sys::Element) -> Level {
+    host.closest("[data-tag-level]")
+        .ok()
+        .flatten()
+        .and_then(|s| s.get_attribute("data-tag-level"))
+        .and_then(|n| Level::of_name(&n))
+        .unwrap_or(Level::Global)
+}
+
+/// ACT-4: the menu's target on `host`, opened at `(x, y)` — the selection
+/// when the host is in it and it holds more than one.
+fn target_on(host: &web_sys::Element, el: &web_sys::Element, x: f64, y: f64, nav: Option<nav::At>) -> Option<Target> {
+    let id = host.get_attribute("data-ticket-id").or_else(|| host.get_attribute("data-nav-id"))?;
+    let (chip, level) = match tags::tag_at(el) {
+        Some((tag, level)) => (Some(tag), level),
+        None => (None, level_at(host)),
+    };
+    Some(Target { ids: model::target_ids(&id, &selection::ids()), shortcode: host.get_attribute("data-shortcode"), x, y, nav, chip, level })
 }
 
 /// The menu's DOM id — the one element the document-level listeners
@@ -142,6 +203,9 @@ const EDGE: f64 = 4.0;
 /// the manual-copy fallback holds its selected id until the user acts.
 const TOAST_MS: i32 = 2200;
 const TOAST_MANUAL_MS: i32 = 12_000;
+/// ACT-4: how long a delete's Undo is offered (the tombstone keeps the
+/// tickets 30 days; the toast is the quick way back).
+const TOAST_UNDO_MS: i32 = 15_000;
 
 /// MENGER-31: the menu's wave items for a ticket, each its words, its link
 /// and the attribute a harness finds it by. The owner's reading (MENGER-31's
@@ -172,9 +236,10 @@ pub(crate) fn wave_items(id: &str, parent: Option<&str>) -> Vec<WaveItem> {
 /// What was right-clicked, and where.
 #[derive(Clone, PartialEq)]
 struct Target {
-    /// The ticket — ACT-7: none for the nav's own menu (its empty space,
-    /// a row that stands for no ticket).
-    id: Option<String>,
+    /// The tickets — ACT-4: one, or the selection it was opened on; ACT-7:
+    /// none for the nav's own menu (its empty space, a row that stands for no
+    /// ticket).
+    ids: Vec<String>,
     /// WAVE-5: the shortcode the element stands for, when it is a
     /// shortcode's row in the nav (`data-shortcode`).
     shortcode: Option<String>,
@@ -182,6 +247,10 @@ struct Target {
     y: f64,
     /// ACT-7: opened in the nav — where, for its Nav ▸ items.
     nav: Option<nav::At>,
+    /// ACT-4: the chip right-clicked inside the element (FILTER-22's tag).
+    chip: Option<Tag>,
+    /// ACT-4: whose filter the filter items build.
+    level: Level,
 }
 
 /// How a copy ended (see module doc): the async API, the legacy command,
@@ -194,10 +263,12 @@ enum Copied {
 }
 
 #[derive(Clone, PartialEq)]
-struct Toast {
+pub(super) struct Toast {
     text: String,
     /// The id to show selected in a field (the manual fallback).
     manual: Option<String>,
+    /// ACT-4: the tickets a delete removed — the toast's Undo brings them back.
+    undo: Option<Vec<String>>,
 }
 
 /// Where a `w`×`h` box opened at the cursor (`x`, `y`) goes so it stays
@@ -298,9 +369,11 @@ fn focused_ticket() -> Option<Target> {
         None if nav.is_some() => active.closest("#nav [role=treeitem]").ok().flatten()?,
         None => return None,
     };
-    let id = host.get_attribute("data-ticket-id").or_else(|| host.get_attribute("data-nav-id"));
     let rect = host.get_bounding_client_rect();
-    Some(Target { id, shortcode: host.get_attribute("data-shortcode"), x: rect.left(), y: rect.bottom(), nav })
+    match target_on(&host, &active, rect.left(), rect.bottom(), nav.clone()) {
+        Some(t) => Some(Target { chip: None, ..t }),
+        None => Some(Target { ids: Vec::new(), shortcode: None, x: rect.left(), y: rect.bottom(), nav, chip: None, level: Level::Global }),
+    }
 }
 
 /// The document-level listeners, installed once for the app's lifetime
@@ -312,25 +385,22 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
     let win = dom::window();
 
     let on_context = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
-        let el = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
-        // FILTER-22: a tag inside the row is the tag menu's (src/tags.rs);
-        // the rest of the row is still this one's.
-        if el.as_ref().and_then(tags::tag_at).is_some() {
-            return;
-        }
+        let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
         // ACT-7: in the nav, the menu carries Nav ▸ — and its empty space,
         // its header and a row that stands for no ticket open the nav's
         // items alone.
-        let nav = el.as_ref().and_then(nav::at).filter(offers);
-        let host = el.and_then(|el| el.closest("[data-ticket-id]").ok().flatten());
+        let nav = nav::at(&el).filter(offers);
         let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
-        if let Some((id, shortcode)) = host.and_then(|el| Some((el.get_attribute("data-ticket-id")?, el.get_attribute("data-shortcode")))) {
+        // ACT-4: anywhere on a ticket element — its chips too — this menu.
+        if let Some(t) = host_of(&el).and_then(|host| target_on(&host, &el, x, y, nav.clone())) {
             // Only here: a right-click anywhere else keeps the native menu.
             ev.prevent_default();
-            target.set(Some(Target { id: Some(id), shortcode, x, y, nav }));
+            target.set(Some(t));
+        } else if tags::tag_at(&el).is_some() {
+            // FILTER-22: a tag outside any ticket is the tag menu's.
         } else if nav.is_some() {
             ev.prevent_default();
-            target.set(Some(Target { id: None, shortcode: None, x, y, nav }));
+            target.set(Some(Target { ids: Vec::new(), shortcode: None, x, y, nav, chip: None, level: Level::Nav }));
         }
     });
     let _ = doc.add_event_listener_with_callback("contextmenu", on_context.as_ref().unchecked_ref());
@@ -470,7 +540,13 @@ async fn copy_text(text: &str) -> Copied {
 fn show_toast(toast: RwSignal<Option<Toast>>, gen: StoredValue<u32>, t: Toast) {
     let g = gen.get_value().wrapping_add(1);
     gen.set_value(g);
-    let ms = if t.manual.is_some() { TOAST_MANUAL_MS } else { TOAST_MS };
+    let ms = if t.manual.is_some() {
+        TOAST_MANUAL_MS
+    } else if t.undo.is_some() {
+        TOAST_UNDO_MS
+    } else {
+        TOAST_MS
+    };
     toast.set(Some(t));
     spawn_local(async move {
         dom::sleep_ms(ms).await;
@@ -482,276 +558,6 @@ fn show_toast(toast: RwSignal<Option<Toast>>, gen: StoredValue<u32>, t: Toast) {
 
 // ---------------------------------------------------------------------
 // Views
-
-/// Mounted once by the App, outside every ticket element. Renders the
-/// open menu (if any) and the confirmation toast (if any); owns the
-/// document-level listeners.
-#[component]
-pub(crate) fn TicketMenu(last_error: RwSignal<Option<String>>) -> impl IntoView {
-    let target = RwSignal::new(None::<Target>);
-    let toast = RwSignal::new(None::<Toast>);
-    let toast_gen = StoredValue::new(0u32);
-    install_listeners(target);
-    OPEN.with(|o| o.set(Some(target)));
-
-    view! {
-        {move || {
-            target.get().map(|t| match t.id.clone() {
-                Some(id) => menu_view(id, t, last_error, target, toast, toast_gen).into_any(),
-                None => nav_menu_view(t, target).into_any(),
-            })
-        }}
-        {move || toast.get().map(|t| toast_view(t, toast))}
-    }
-}
-
-/// One open menu: header (code chip · status chip · title), the four
-/// items, and the inline status list under **Set status** — SDLC-11: three
-/// items for a doc, which has no status to set. Built fresh
-/// per open, so a second right-click starts with the list closed and the
-/// keyboard cursor on the menu itself.
-fn menu_view(
-    id: String,
-    t: Target,
-    last_error: RwSignal<Option<String>>,
-    target: RwSignal<Option<Target>>,
-    toast: RwSignal<Option<Toast>>,
-    toast_gen: StoredValue<u32>,
-) -> impl IntoView {
-    let Target { shortcode, x, y, nav, .. } = t;
-    // SCALE-26: the menu holds the ticket it is open on, and asks for it when
-    // no view does (no walk puts every ticket in the cache any more).
-    let holder = cache::Holder::new();
-    if !holder.hold_id(&id) {
-        session::load_rows(vec![id.clone()], holder);
-    }
-    let ticket = {
-        let id = id.clone();
-        Memo::new(move |_| cache::find(&id))
-    };
-    // Live through the row's signal: a status change arriving over watch
-    // while the menu is open moves the mark.
-    let status = Memo::new(move |_| ticket.get().map(|s| s.with(|x| x.status)));
-    // SDLC-11: a doc has no lifecycle, so the menu offers it no status
-    // moves — no Set status at all. Until the row is held, none either.
-    let moves = Memo::new(move |_| ticket.get().is_some_and(|s| s.with(|x| x.kind.has_lifecycle())));
-    let title = move || ticket.get().map(|s| s.with(|x| x.title.clone())).unwrap_or_default();
-    let sub = RwSignal::new(false);
-    // ACT-7: the Nav ▸ list, beside the status list.
-    let nav_sub = RwSignal::new(false);
-    let root = NodeRef::<leptos::html::Div>::new();
-    let close = move || close_menu(target);
-    let href = format!("#/ticket/{id}");
-
-    // Place once mounted, focus the menu so the arrow keys work at once,
-    // and re-place when the status list changes the height.
-    let focused = StoredValue::new(false);
-    Effect::new(move |_| {
-        let Some(el) = root.get() else { return };
-        sub.track();
-        nav_sub.track();
-        place(&el, x, y);
-        if !focused.get_value() {
-            focused.set_value(true);
-            focus(&el);
-        }
-    });
-
-    let on_key = move |ev: web_sys::KeyboardEvent| {
-        let Some(el) = root.get() else { return };
-        let root_el: &web_sys::Element = &el;
-        let key = ev.key();
-        let active = document().active_element();
-        let list = items(root_el);
-        let current = list.iter().position(|i| active.as_ref() == Some(i.as_ref()));
-        let on_parent = list
-            .get(current.unwrap_or(usize::MAX))
-            .is_some_and(|i| i.has_attribute("aria-haspopup"));
-        // ACT-7: two lists open from a parent — Set status's and Nav's —
-        // each named by its `data-sub`.
-        let which = |el: Option<&web_sys::Element>| el.and_then(|e| e.get_attribute("data-sub"));
-        let open_of = move |w: &str| if w == "nav" { nav_sub } else { sub };
-        match key.as_str() {
-            "ArrowRight" if on_parent => {
-                let w = which(current.map(|i| list[i].as_ref())).unwrap_or_else(|| "status".into());
-                open_of(&w).set(true);
-                // The list mounts on the next render tick; focus its
-                // first row once it exists.
-                spawn_local(async move {
-                    dom::sleep_ms(0).await;
-                    let first = root.get_untracked().and_then(|el| {
-                        let group = el.query_selector(&format!(".sub[data-sub='{w}']")).ok().flatten()?;
-                        items(&group).into_iter().next()
-                    });
-                    if let Some(first) = first {
-                        focus(&first);
-                    }
-                });
-                ev.prevent_default();
-            }
-            "ArrowLeft" if sub.get_untracked() || nav_sub.get_untracked() => {
-                // The list focus is in, else whichever is open.
-                let inside = active.as_ref().and_then(|a| a.closest(".sub").ok().flatten());
-                let w = which(inside.as_ref()).unwrap_or_else(|| if sub.get_untracked() { "status".into() } else { "nav".into() });
-                open_of(&w).set(false);
-                if let Some(parent) = items(root_el).into_iter().find(|i| i.has_attribute("aria-haspopup") && which(Some(i)).as_deref() == Some(w.as_str())) {
-                    focus(&parent);
-                }
-                ev.prevent_default();
-            }
-            "Tab" => close(),
-            k => {
-                if let Some(n) = step(current, list.len(), k) {
-                    focus(&list[n]);
-                    ev.prevent_default();
-                }
-            }
-        }
-    };
-
-    let copy = {
-        let id = id.clone();
-        move |_| {
-            let id = id.clone();
-            close();
-            spawn_local(async move {
-                let t = match copy_text(&id).await {
-                    Copied::Api | Copied::Legacy => Toast { text: format!("copied {id}"), manual: None },
-                    Copied::Manual => Toast {
-                        text: "clipboard unavailable — copy it from here:".into(),
-                        manual: Some(id),
-                    },
-                };
-                show_toast(toast, toast_gen, t);
-            });
-        }
-    };
-
-    let status_items = {
-        let id = id.clone();
-        move || {
-            let id = id.clone();
-            // MFE-9: the closed vocabulary from the type that owns it, so
-            // the chips and what `set_status` sends cannot disagree.
-            // SDLC-11: the lifecycle — `Doc` is held, never moved to.
-            Status::LIFECYCLE
-                .into_iter()
-                .map(|s| {
-                    let id = id.clone();
-                    let current = move || status.get() == Some(s);
-                    view! {
-                        <button
-                            class="item"
-                            role="menuitemradio"
-                            aria-checked=move || current().to_string()
-                            data-status=s.as_str()
-                            on:click=move |_| {
-                                if !current() {
-                                    session::request_set_status(id.clone(), s, last_error, || {});
-                                }
-                                close();
-                            }
-                        >
-                            <span class="mark" aria-hidden="true">{move || if current() { "✓" } else { "" }}</span>
-                            <span class=st_class(s.as_str())>{s.as_str()}</span>
-                        </button>
-                    }
-                })
-                .collect_view()
-        }
-    };
-
-    view! {
-        <div
-            id=MENU_ID
-            role="menu"
-            tabindex="-1"
-            node_ref=root
-            data-ticket=id.clone()
-            aria-label=format!("ticket {id}")
-            style=format!("left: {x}px; top: {y}px")
-            on:contextmenu=|ev| ev.prevent_default()
-            on:keydown=on_key
-        >
-            <div class="h">
-                <span class="code">{id.clone()}</span>
-                <span class=move || {
-                    format!("tag {}", st_class(status.get().map_or("", |s| s.as_str())))
-                }>{move || status.get().map(|s| s.to_string()).unwrap_or_default()}</span>
-                <span class="title">{title}</span>
-            </div>
-            <a class="item" role="menuitem" href=href.clone() on:click=move |_| close()>"Open"</a>
-            <a class="item" role="menuitem" href=href target="_blank" rel="noopener" on:click=move |_| close()>
-                "Open in new tab"
-            </a>
-            // MENGER-31: the parent's wave board (none for a root) and the
-            // board whose final state this ticket is (none for a doc, which
-            // has no place in the order of work) — from the row, once held.
-            {
-                let id = id.clone();
-                move || {
-                    let (parent, doc) = ticket
-                        .get()
-                        .map(|s| s.with(|x| (x.parent.clone(), x.kind == Kind::Doc)))
-                        .unwrap_or((None, false));
-                    wave_items(&id, parent.as_deref())
-                        .into_iter()
-                        .filter(|w| !(doc && w.kind == "to"))
-                        .map(|w| view! {
-                            <a class="item" role="menuitem" href=w.href data-wave=w.kind on:click=move |_| close()>{w.words}</a>
-                        })
-                        .collect_view()
-                }
-            }
-            // WAVE-5: a shortcode's row offers the shortcode's wave board.
-            {shortcode.map(|sc| view! {
-                <a class="item" role="menuitem" href=format!("#/waves/{sc}") data-wave-board=sc.clone() on:click=move |_| close()>
-                    "Wave board"
-                </a>
-            })}
-            <button class="item" role="menuitem" on:click=copy>"Copy code"</button>
-            {move || {
-                let status_items = status_items.clone();
-                moves.get().then(|| {
-                    view! {
-                        <button
-                            class="item"
-                            role="menuitem"
-                            aria-haspopup="menu"
-                            data-sub="status"
-                            aria-expanded=move || sub.get().to_string()
-                            on:click=move |_| sub.update(|s| *s = !*s)
-                        >
-                            "Set status "
-                            <span class="arrow" aria-hidden="true">{move || if sub.get() { "▾" } else { "▸" }}</span>
-                        </button>
-                        {move || sub.get().then(|| view! { <div class="sub" role="group" data-sub="status">{status_items()}</div> })}
-                    }
-                })
-            }}
-            // ACT-7: Nav ▸, only when the menu opened in the nav.
-            {nav.map(|at| {
-                view! {
-                    <button
-                        class="item"
-                        role="menuitem"
-                        aria-haspopup="menu"
-                        data-sub="nav"
-                        aria-expanded=move || nav_sub.get().to_string()
-                        on:click=move |_| nav_sub.update(|s| *s = !*s)
-                    >
-                        "Nav "
-                        <span class="arrow" aria-hidden="true">{move || if nav_sub.get() { "▾" } else { "▸" }}</span>
-                    </button>
-                    {move || {
-                        let at = at.clone();
-                        nav_sub.get().then(|| view! { <div class="sub" role="group" data-sub="nav">{nav_items(at, target)}</div> })
-                    }}
-                }
-            })}
-        </div>
-    }
-}
 
 /// ACT-7: whether the nav has anything to offer where the menu opened — the
 /// flat list with no ticket open has nothing, so no Nav ▸ (and no menu of
@@ -851,7 +657,9 @@ fn nav_menu_view(t: Target, target: RwSignal<Option<Target>>) -> impl IntoView {
 
 /// The confirmation toast. The manual fallback carries the id in a
 /// read-only field, selected on mount, so Ctrl/Cmd+C finishes the copy.
-fn toast_view(t: Toast, toast: RwSignal<Option<Toast>>) -> impl IntoView {
+/// ACT-4: a delete's toast carries Undo, which calls `undelete`.
+fn toast_view(t: Toast, toaster: Toaster, last_error: RwSignal<Option<String>>) -> impl IntoView {
+    let toast = toaster.toast;
     let field = NodeRef::<leptos::html::Input>::new();
     if t.manual.is_some() {
         field.on_load(|el: web_sys::HtmlInputElement| {
@@ -860,10 +668,28 @@ fn toast_view(t: Toast, toast: RwSignal<Option<Toast>>) -> impl IntoView {
         });
     }
     let manual = t.manual.clone();
+    let undo = t.undo.clone().map(|ids| {
+        let busy = RwSignal::new(false);
+        let undo = move |_| {
+            let ids = ids.clone();
+            busy.set(true);
+            spawn_local(async move {
+                match write::undelete(ids.clone()).await {
+                    Ok(()) => toaster.show(format!("restored {}", model::heading(&ids)), None),
+                    Err(e) => {
+                        busy.try_set(false);
+                        last_error.set(Some(format!("undelete: {e}")));
+                    }
+                }
+            });
+        };
+        view! { <button data-act="undo" disabled=move || busy.get() on:click=undo>"Undo"</button> }
+    });
     view! {
         <div id="toast" role="status" class:manual=t.manual.is_some()>
             <span class="msg">{t.text}</span>
             {manual.map(|id| view! { <input class="code" readonly value=id node_ref=field /> })}
+            {undo}
             <button on:click=move |_| toast.set(None)>"dismiss"</button>
         </div>
     }
