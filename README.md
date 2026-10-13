@@ -1954,7 +1954,7 @@ membership too — `members grant --principal key:<hex> --scope PANTRY --role
 deployer` gives a CI's key exactly that, and nothing it could widen.
 
 **From a CI** (DEPLOY-14): a GitHub Actions job records with one step,
-`hypermemetic/menger/deploy/record-action@v1`; GitLab, Buildkite or a shell
+`hypermemetic-ai/menger/deploy/record-action@v1`; GitLab, Buildkite or a shell
 script with one `deploy/record … --send --url wss://…` (over the WebSocket
 through `deploy/menger-call.mjs`, no synapse; a deploy key in
 `MENGER_DEPLOY_KEY` signs in), and GitHub's `deployment_status` webhook

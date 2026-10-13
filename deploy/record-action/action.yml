@@ -12,7 +12,7 @@
 # `actions/checkout` (fetch-depth: 1) works. Needs bash, git, jq and node
 # (≥ 18) — every GitHub-hosted runner has them; synapse is not used.
 #
-#   - uses: hypermemetic/menger/deploy/record-action@v1
+#   - uses: hypermemetic-ai/menger/deploy/record-action@v1
 #     if: always()
 #     with:
 #       menger-url: ${{ vars.MENGER_URL }}      # wss://menger.example.com (a tunnel's), or ws://host:4455

@@ -259,10 +259,10 @@ jobs:
     environment: prod
     steps:
       - uses: actions/checkout@v4
-      - uses: hypermemetic/menger/deploy/record-action@v1
+      - uses: hypermemetic-ai/menger/deploy/record-action@v1
         with: { menger-url: "${{ vars.MENGER_URL }}", key: "${{ secrets.MENGER_DEPLOY_KEY }}", project: PANTRY, environment: prod, state: started }
       - run: ./deploy.sh prod
-      - uses: hypermemetic/menger/deploy/record-action@v1
+      - uses: hypermemetic-ai/menger/deploy/record-action@v1
         if: always()
         with:
           menger-url: ${{ vars.MENGER_URL }}
@@ -342,7 +342,7 @@ with it, for five.
 files, beside each other:
 
 ```sh
-mkdir -p .menger && for f in record record.schema.json menger-call.mjs; do curl -fsSL "https://raw.githubusercontent.com/hypermemetic/menger/v1/deploy/$f" -o ".menger/$f"; done && chmod +x .menger/record
+mkdir -p .menger && for f in record record.schema.json menger-call.mjs; do curl -fsSL "https://raw.githubusercontent.com/hypermemetic-ai/menger/v1/deploy/$f" -o ".menger/$f"; done && chmod +x .menger/record
 ```
 
 Each snippet below is run by `deploy/tests/run`, its records checked
@@ -364,7 +364,7 @@ deploy:
     MENGER_PROJECT: PANTRY
   before_script:
     - apt-get update -qq && apt-get install -y -qq jq
-    - mkdir -p .menger && for f in record record.schema.json menger-call.mjs; do curl -fsSL "https://raw.githubusercontent.com/hypermemetic/menger/v1/deploy/$f" -o ".menger/$f"; done && chmod +x .menger/record
+    - mkdir -p .menger && for f in record record.schema.json menger-call.mjs; do curl -fsSL "https://raw.githubusercontent.com/hypermemetic-ai/menger/v1/deploy/$f" -o ".menger/$f"; done && chmod +x .menger/record
     - .menger/record --from gitlab --previous-from-menger --commits-from-git --send --url "$MENGER_URL"
   script:
     - ./deploy.sh production
@@ -379,7 +379,7 @@ deploy:
 steps:
   - label: ":rocket: prod"
     command: |
-      mkdir -p .menger && for f in record record.schema.json menger-call.mjs; do curl -fsSL "https://raw.githubusercontent.com/hypermemetic/menger/v1/deploy/$f" -o ".menger/$f"; done && chmod +x .menger/record
+      mkdir -p .menger && for f in record record.schema.json menger-call.mjs; do curl -fsSL "https://raw.githubusercontent.com/hypermemetic-ai/menger/v1/deploy/$f" -o ".menger/$f"; done && chmod +x .menger/record
       .menger/record --project PANTRY --env prod --state started --revision "$BUILDKITE_COMMIT" \
         --source-system buildkite --source-run "$BUILDKITE_BUILD_ID" --source-url "$BUILDKITE_BUILD_URL" \
         --previous-from-menger --commits-from-git --send --url "$MENGER_URL"
