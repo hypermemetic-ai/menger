@@ -225,8 +225,13 @@
 //! the nav and the wave board — opens the tag menu (src/tags.rs): Filter …
 //! at once, Add … to the filter, Build a filter from … (the menu opens on
 //! its category). The surface's filter, or on the ticket page the global
-//! one; a tag inside a row is the tag's, the rest of the row the ticket
-//! menu's. The palette takes `filter <shortcode>`.
+//! one. The palette takes `filter <shortcode>`.
+
+//! ACT-4: one menu for a ticket wherever it is drawn (src/menu/) — its row,
+//! its chips, a card, its heading, a relation, a framed chip: the ticket
+//! actions, every update (one write: `update`, or `update_many` over the
+//! selection) and the filter items together; a tag outside any ticket keeps
+//! FILTER-22's menu.
 
 //! COMMENT-3: annotation mode (src/annotate.rs) — `a`, or Annotate in the
 //! header, outlines every element (the bodies' frames too); a click leaves a

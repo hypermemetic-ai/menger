@@ -363,9 +363,7 @@ mod tests {
             assert!(!bundle.contains(h), "the bundle names {h}");
         }
         let mut files = vec![root.join("index.html"), root.join("sdk/menger-sdk.js"), root.join("sdk/menger-page.js")];
-        for e in std::fs::read_dir(root.join("src")).unwrap().flatten() {
-            files.push(e.path());
-        }
+        files.extend(crate::tokens_lint::rust_files(&root.join("src")));
         for f in files {
             let text = std::fs::read_to_string(&f).unwrap();
             for (n, line) in text.lines().enumerate() {

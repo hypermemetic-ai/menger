@@ -1030,6 +1030,44 @@
   #tmenu .sub .st { padding: 0 5px; border-radius: var(--radius-lg); font-size: calc(11px * var(--text-scale)); }
   /* ACT-7: the Nav ▸ items' separators. */
   #tmenu .rule { border-top: var(--border) solid var(--line); margin: 4px 6px; }
+  /* ACT-4: the one menu — Delete… in the error colour; a form (a ticket
+     picker, Rename…, Link commits…, Add a label…) in the items' place. */
+  #tmenu .item.danger { color: var(--err-fg); }
+  #tmenu .item.back { color: var(--muted); }
+  #tmenu .mform-row { display: flex; gap: 4px; padding: 2px 6px 4px; }
+  #tmenu .mfield {
+    flex: 1; min-width: 12rem; font: inherit; padding: 2px 6px; color: var(--ink); background: var(--bg);
+    border: var(--border) solid var(--line); border-radius: var(--radius-md); outline: none; user-select: text;
+  }
+  #tmenu .mfield:focus { border-color: var(--accent); }
+  #tmenu .mgo {
+    font: inherit; padding: 0 8px; cursor: pointer; color: var(--ink); background: transparent;
+    border: var(--border) solid var(--line); border-radius: var(--radius-md);
+  }
+  #tmenu .mgo:hover { color: var(--accent); border-color: var(--accent); }
+  #tmenu .merr, #delete .merr { margin: 2px 10px 4px; color: var(--err-fg); white-space: normal; }
+  #tmenu .pick { display: flex; gap: 6px; align-items: baseline; max-width: 22rem; }
+  #tmenu .pick .tag { flex: none; font-size: calc(10px * var(--text-scale)); padding: 0 5px; border-radius: var(--radius-lg); }
+  #tmenu .pick .ptitle { overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  /* ACT-4: Delete…'s confirmation — every ticket, and what moves. */
+  #delete { width: 34rem; padding: .9rem 1.1rem 1rem; display: flex; flex-direction: column; gap: .6rem; }
+  #delete h2 { font-size: calc(.95rem * var(--text-scale)); margin: 0; }
+  #delete p { margin: 0; font-size: calc(.85rem * var(--text-scale)); }
+  #delete .dlist { margin: 0; padding: 0; list-style: none; max-height: 40vh; overflow: auto; font-size: calc(.85rem * var(--text-scale)); }
+  #delete .dlist li { display: flex; gap: .4rem; align-items: baseline; padding: 1px 0; }
+  #delete .dlist .code { font-family: var(--mono); font-size: calc(11.5px * var(--text-scale)); color: var(--accent); flex: none; }
+  #delete .dtitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #delete .dnote { flex: none; color: var(--muted); font-size: calc(.8rem * var(--text-scale)); }
+  #delete .dchildren { border: var(--border) solid var(--line); border-radius: var(--radius-md); font-size: calc(.85rem * var(--text-scale)); display: flex; flex-direction: column; gap: .2rem; }
+  #delete .sacts { display: flex; gap: .5rem; justify-content: flex-end; flex-wrap: wrap; }
+  #delete .sacts button {
+    font: inherit; font-size: calc(.85rem * var(--text-scale)); padding: .25rem .8rem; cursor: pointer;
+    background: none; color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius);
+  }
+  #delete .sacts button:hover { border-color: var(--accent); color: var(--accent); }
+  #delete .sacts button.danger { background: var(--err-fg); border-color: var(--err-fg); color: var(--bg); }
+  #delete .sacts button:disabled { opacity: .5; cursor: default; }
+  #delete .sacts button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* The copy confirmation. The manual fallback shows the id selected in
      a field; the banner idiom's left edge marks it as a notice. */
   #toast {

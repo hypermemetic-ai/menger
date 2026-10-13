@@ -273,6 +273,18 @@ pub(crate) fn Panel() -> impl IntoView {
         }
         _ => ask(),
     });
+    // ACT-4: a `lagged` on the session's own `watch` — a bulk write's
+    // events (~6 a ticket) outrun it — may have lost the rows' changes
+    // (their statuses, their labels) while the membership watch saw nothing
+    // enter or leave: ask again.
+    let stale = session::stale();
+    Effect::new(move |prev: Option<u32>| {
+        let now = stale.get();
+        if prev.is_some_and(|p| p != now) {
+            ask();
+        }
+        now
+    });
 
     let editing = RwSignal::new(false);
     let draft = RwSignal::new(String::new());
