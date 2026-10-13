@@ -1107,21 +1107,24 @@ fn on_message(ev: web_sys::MessageEvent) {
         }
         Some(Msg::Key) => {
             if let Some(key) = field("key").and_then(|v| v.as_string()) {
-                // MENGER-6: the palette's chord, pressed inside the body.
-                if key == "palette" {
-                    crate::keys::palette_from_frame();
-                } else if key == "z" {
+                // AGS-28: what the posted key is, inside a framed body.
+                match crate::bindings::key_hit(&key, crate::bindings::Context::Frame) {
+                    // MENGER-6: the palette's chord, pressed inside the body.
+                    Some("palette.toggle") => crate::keys::palette_from_frame(),
                     // MENGER-15: full screen, from inside the body.
-                    if crate::keys::no_overlay() {
-                        present::toggle_from(&frame);
+                    Some("view.full-screen") => {
+                        if crate::keys::no_overlay() {
+                            present::toggle_from(&frame);
+                        }
                     }
-                } else if key == "Escape" {
                     // What annotation mode has open first, then full screen.
-                    if !annotate::escape() {
-                        present::escape();
+                    Some("app.escape") => {
+                        if !annotate::escape() {
+                            present::escape();
+                        }
                     }
-                } else {
-                    annotate::frame_key(&key);
+                    Some("annotate.toggle") => annotate::frame_toggle(),
+                    _ => {}
                 }
             }
         }

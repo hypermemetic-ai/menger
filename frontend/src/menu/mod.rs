@@ -125,6 +125,7 @@ mod write;
 pub(crate) use view::TicketMenu;
 use view::Toaster;
 
+use crate::bindings::{self, Context};
 use crate::lens::{self, Level};
 use crate::shape::{self, Item};
 use crate::tags::Tag;
@@ -293,19 +294,21 @@ pub(crate) fn clamp(x: f64, y: f64, w: f64, h: f64, vw: f64, vh: f64) -> (f64, f
     (left, top)
 }
 
-/// Keyboard cursor over `len` items: the index to focus for `key` given
+/// Keyboard cursor over `len` items: the index to focus for the binding
+/// `id` (AGS-28: what `bindings::hit(&ev, Context::Menu)` answered) given
 /// the currently focused item (`None` = focus is on the menu itself, not
-/// an item). Arrows wrap; Home/End jump. `None` out means the key is not
-/// a cursor key (or there is nothing to move over).
-pub(crate) fn step(current: Option<usize>, len: usize, key: &str) -> Option<usize> {
+/// an item). `list.next`/`list.prev` wrap; `list.first`/`list.last` jump.
+/// `None` out means the key is not a cursor key (or there is nothing to
+/// move over).
+pub(crate) fn step(current: Option<usize>, len: usize, id: Option<&str>) -> Option<usize> {
     if len == 0 {
         return None;
     }
-    match key {
-        "ArrowDown" => Some(current.map_or(0, |i| (i + 1) % len)),
-        "ArrowUp" => Some(current.map_or(len - 1, |i| (i + len - 1) % len)),
-        "Home" => Some(0),
-        "End" => Some(len - 1),
+    match id? {
+        "list.next" => Some(current.map_or(0, |i| (i + 1) % len)),
+        "list.prev" => Some(current.map_or(len - 1, |i| (i + len - 1) % len)),
+        "list.first" => Some(0),
+        "list.last" => Some(len - 1),
         _ => None,
     }
 }
@@ -396,6 +399,9 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
     let win = dom::window();
 
     let on_context = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
+        if bindings::hit_mouse(&ev, Context::Ticket) != Some("menu.open") {
+            return;
+        }
         let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return };
         // ACT-7: in the nav, the menu carries Nav ▸ — and its empty space,
         // its header and a row that stands for no ticket open the nav's
@@ -440,8 +446,7 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
     on_down.forget();
 
     let on_key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
-        let key = ev.key();
-        if key == "Escape" {
+        if bindings::is(&ev, Context::Menu, "dialog.close") {
             close_menu(target);
             return;
         }
@@ -449,7 +454,7 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
         // whatever ticket has focus, at that row's rect. `preventDefault`
         // is what stops the engine from also firing its own `contextmenu`
         // for the same keystroke and re-opening us at its coordinates.
-        if key == "ContextMenu" || (key == "F10" && ev.shift_key()) {
+        if bindings::is(&ev, Context::Ticket, "menu.open") {
             if let Some(t) = focused_ticket() {
                 ev.prevent_default();
                 ev.stop_propagation();
@@ -629,10 +634,10 @@ fn nav_menu_view(t: Target, target: RwSignal<Option<Target>>) -> impl IntoView {
         let list = items(&el);
         let active = document().active_element();
         let current = list.iter().position(|i| active.as_ref() == Some(i.as_ref()));
-        match ev.key().as_str() {
-            "Tab" => close_menu(target),
-            k => {
-                if let Some(n) = step(current, list.len(), k) {
+        match bindings::hit(&ev, Context::Menu) {
+            Some("menu.leave" | "menu.leave-back") => close_menu(target),
+            id => {
+                if let Some(n) = step(current, list.len(), id) {
                     focus(&list[n]);
                     ev.prevent_default();
                 }
@@ -778,15 +783,16 @@ mod tests {
     /// itself lands on the first (down) or last (up) item.
     #[test]
     fn keyboard_cursor_wraps_and_ignores_other_keys() {
-        assert_eq!(step(None, 4, "ArrowDown"), Some(0));
-        assert_eq!(step(None, 4, "ArrowUp"), Some(3));
-        assert_eq!(step(Some(0), 4, "ArrowDown"), Some(1));
-        assert_eq!(step(Some(3), 4, "ArrowDown"), Some(0));
-        assert_eq!(step(Some(0), 4, "ArrowUp"), Some(3));
-        assert_eq!(step(Some(2), 11, "Home"), Some(0));
-        assert_eq!(step(Some(2), 11, "End"), Some(10));
-        assert_eq!(step(Some(1), 4, "Enter"), None);
-        assert_eq!(step(Some(1), 4, "a"), None);
-        assert_eq!(step(None, 0, "ArrowDown"), None);
+        let k = |key: &str| crate::bindings::pick_single(&crate::bindings::table(), &crate::bindings::Press::key(key), crate::bindings::Context::Menu, false);
+        assert_eq!(step(None, 4, k("ArrowDown")), Some(0));
+        assert_eq!(step(None, 4, k("ArrowUp")), Some(3));
+        assert_eq!(step(Some(0), 4, k("ArrowDown")), Some(1));
+        assert_eq!(step(Some(3), 4, k("ArrowDown")), Some(0));
+        assert_eq!(step(Some(0), 4, k("ArrowUp")), Some(3));
+        assert_eq!(step(Some(2), 11, k("Home")), Some(0));
+        assert_eq!(step(Some(2), 11, k("End")), Some(10));
+        assert_eq!(step(Some(1), 4, k("Enter")), None);
+        assert_eq!(step(Some(1), 4, k("a")), None);
+        assert_eq!(step(None, 0, k("ArrowDown")), None);
     }
 }

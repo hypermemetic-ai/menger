@@ -963,19 +963,37 @@
   #palette-list li.empty, #palette .hint { color: var(--muted); font-size: calc(.75rem * var(--text-scale)); }
   #palette-list li.empty { padding: .3rem .8rem; cursor: default; }
   #palette .hint { padding: .35rem .8rem; border-top: var(--border) solid var(--line); }
-  #cheats { width: 32rem; padding: .9rem 1.1rem 1rem; }
+  #cheats { width: 46rem; max-width: calc(100vw - 2rem); padding: .9rem 1.1rem 1rem; }
   #cheats h2 { font-size: calc(.95rem * var(--text-scale)); margin: 0 0 .7rem; }
-  #cheats dl {
-    margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: .3rem .9rem;
-    font-size: calc(.85rem * var(--text-scale));
+  #cheats h2 .cheats-more { margin-left: .3rem; color: var(--muted); font-weight: normal; font-size: calc(.75rem * var(--text-scale)); }
+  #cheats .cheats-scroll { max-height: 70vh; overflow: auto; }
+  /* AGS-28: the key map — the `?` sheet and Settings → Keyboard draw the
+     same table (src/keys.rs's KeyTable). */
+  table.keymap { border-collapse: collapse; width: 100%; font-size: calc(.82rem * var(--text-scale)); }
+  table.keymap th[scope=rowgroup] {
+    text-align: left; vertical-align: top; color: var(--accent); font-weight: var(--weight-strong);
+    padding: .45rem .8rem .2rem 0; white-space: nowrap; font-size: calc(.75rem * var(--text-scale));
   }
-  #cheats dt, #cheats dd { margin: 0; }
-  #cheats dd { color: var(--muted); }
-  #cheats kbd {
+  table.keymap tbody + tbody tr:first-child > * { border-top: var(--border) solid var(--line); }
+  table.keymap td { padding: .2rem .8rem .2rem 0; vertical-align: top; }
+  table.keymap tr:first-child td { padding-top: .45rem; }
+  table.keymap td.k { width: 12rem; }
+  table.keymap td.k kbd { display: inline-block; white-space: nowrap; margin-bottom: .15rem; }
+  table.keymap td.does { color: var(--ink); }
+  table.keymap td.where { width: 10rem; color: var(--muted); font-size: calc(.75rem * var(--text-scale)); }
+  table.keymap kbd, #settings-keyboard p.now kbd {
     font-family: var(--mono); font-size: calc(11px * var(--text-scale)); color: var(--chip-fg);
     background: var(--chip-bg); border: var(--border) solid var(--chip-line);
-    border-radius: var(--radius-md); padding: 0 5px;
+    border-radius: var(--radius-md); padding: 0 5px; margin-right: .25rem;
   }
+  p.keys-none { color: var(--muted); font-size: calc(.8rem * var(--text-scale)); }
+  #settings input#keys-search {
+    width: 100%; max-width: 26rem; font: inherit; font-size: calc(.85rem * var(--text-scale)); color: var(--ink);
+    background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); padding: .25rem .5rem;
+    margin-bottom: .5rem;
+  }
+  #settings input#keys-search:focus { border-color: var(--accent); outline: none; }
+  #settings-keyboard #keys-table { overflow-x: auto; }
   #cheats .close {
     margin-top: .9rem; font: inherit; font-size: calc(.8rem * var(--text-scale)); cursor: pointer;
     background: var(--panel); border: var(--border) solid var(--line); color: var(--muted);

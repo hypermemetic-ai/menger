@@ -169,7 +169,7 @@ pub(crate) fn Toggle() -> impl IntoView {
     // too — every open page follows it (`storage` fires in the others).
     {
         let cb = Closure::<dyn FnMut(web_sys::StorageEvent)>::new(move |ev: web_sys::StorageEvent| {
-            if ev.key().as_deref() == Some(KEY) {
+            if ev.key().as_deref() == Some(KEY) { // bindings-lint: a StorageEvent's key
                 let next = Theme::parse(ev.new_value().as_deref());
                 if choice.get_untracked() != next {
                     choice.set(next);

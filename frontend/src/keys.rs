@@ -133,6 +133,16 @@
 //! the focused row's subtree, Shift+`*` everything (the numpad's `*`: where
 //! the layout puts `*` on Shift, Shift is how it is typed), `-` collapses
 //! everything. None of them is the selection's.
+//!
+//! AGS-28: **no key is spelled here.** Every key and gesture above is a
+//! binding in src/bindings.rs's table — an id, where it applies, its chords,
+//! what it does — and the handlers here (the global map, the board's keys,
+//! the overlays') match what [`bindings::hit`] answers by id. The `g …`
+//! sequences and their timeout are the table's; ⌘K is `palette.toggle`
+//! wherever the platform says ⌘. The cheat sheet draws the table
+//! ([`KeyTable`]) — grouped, each row its chords as this platform spells
+//! them, what it does and where — and so does Settings → Keyboard, with a
+//! search over it.
 
 use std::cell::{Cell, RefCell};
 
@@ -141,13 +151,11 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::bindings::{self, Context, Group};
 use crate::filter::Cat;
 use crate::{annotate, board, counts, dom, lens, navigate_to_ticket, present, selection, session, st_class, tags};
 use menger_tickets_api::{Marked, SearchWord, TicketSummary};
 use std::collections::{BTreeSet, HashSet};
-
-/// How long a `g` stays armed as the first key of a `g …` sequence.
-const GO_WINDOW_MS: f64 = 1500.0;
 
 /// How many matches the jump palette renders at once. The list is
 /// rebuilt per keystroke, so this is a rendering budget, not a filter
@@ -173,39 +181,6 @@ pub(crate) enum Overlay {
     Palette,
     Cheats,
 }
-
-/// The cheat sheet's rows, and the app's key map in one place: what `?`
-/// shows is this table, so the documentation cannot drift from a
-/// separate hand-written list (a native test pins that every key the
-/// handlers implement appears here).
-pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
-    ("Tab", "into the nav tree, the board rows, and the controls"),
-    ("j / ↓", "the next ticket in the nav, opened — from anywhere on a ticket page; the next row on the board"),
-    ("k / ↑", "the previous ticket, opened; on the nav's first ticket, its `under` filter one parent wider"),
-    ("l", "expand a group in the nav, or step into it"),
-    ("h", "collapse a group in the nav, or step out to it"),
-    ("Home / End", "first / last row (nav tree, board)"),
-    ("Enter", "open the focused ticket"),
-    ("/ or Ctrl+K", "jump to a ticket (⌘K on a Mac)"),
-    ("g h", "go to the board"),
-    ("g n", "go to Needs you (Home's panel of what waits on you)"),
-    ("f", "on a ticket page: filter the nav to this ticket and its children; elsewhere: filter this view"),
-    ("F", "filter every view (the global filter)"),
-    ("/ filter SC", "the global filter becomes a shortcode (its tree)"),
-    ("a or A", "annotation mode: outline the page, click anything to comment on it"),
-    ("z", "on a ticket page: its framed body full screen, and back (from inside the body too)"),
-    ("Click", "open a ticket; the selection becomes its row (nav, flat nav, board)"),
-    ("Shift+click", "select from the last click to this row, in the order drawn"),
-    ("Ctrl+click", "add or remove this row from the selection (⌘-click on a Mac)"),
-    ("Shift+j / Shift+k", "extend the selection a row from the focused one (and Shift+↓ / Shift+↑)"),
-    ("Space", "add or remove the focused row from the selection"),
-    ("Ctrl+A", "select every row drawn in the nav or on the board (⌘A on a Mac)"),
-    ("*", "in the nav: expand the focused row's subtree, at every depth"),
-    ("Shift+* (numpad)", "in the nav: expand everything (or right-click › Nav › Expand all)"),
-    ("-", "in the nav: collapse everything, back to the shortcodes"),
-    ("?", "this list"),
-    ("Esc", "close the palette or this list; leave annotation mode; leave full screen; clear the selection"),
-];
 
 // ---------------------------------------------------------------------
 // Matching (pure — the part that is worth a native test)
@@ -623,8 +598,6 @@ pub(crate) fn ensure_tab_stop(item_selector: &str, preferred: Option<&str>) {
 thread_local! {
     /// MENGER-6: the overlay signal, for the chord a frame forwards.
     static PALETTE_OVERLAY: Cell<Option<RwSignal<Overlay>>> = const { Cell::new(None) };
-    /// When the `g` of a `g …` sequence was pressed (ms since epoch).
-    static GO_ARMED_AT: Cell<f64> = const { Cell::new(f64::NEG_INFINITY) };
     /// Where focus was when the overlay opened.
     static FOCUS_BEFORE_OVERLAY: RefCell<Option<web_sys::HtmlElement>> = const { RefCell::new(None) };
     /// MFE-12: the board row that last had focus, until focus lands
@@ -784,38 +757,6 @@ pub(crate) fn close_overlay(overlay: RwSignal<Overlay>) {
 // ---------------------------------------------------------------------
 // The global listener
 
-/// `g …` sequences. Returns true when the key was swallowed by the
-/// sequence — either arming it (`g`) or completing it (`g h` → the
-/// board). The nav tree asks first, so `h` keeps its collapse meaning
-/// there while `g h` still works from inside the tree.
-pub(crate) fn consume_go_prefix(key: &str) -> bool {
-    let now = js_sys::Date::now();
-    let armed = GO_ARMED_AT.with(|c| now - c.get() < GO_WINDOW_MS);
-    match key {
-        "g" => {
-            GO_ARMED_AT.with(|c| c.set(now));
-            true
-        }
-        "h" if armed => {
-            GO_ARMED_AT.with(|c| c.set(f64::NEG_INFINITY));
-            let _ = dom::window().location().set_hash("/");
-            true
-        }
-        // MENGER-12: `g n` — Home, focus on Needs you.
-        "n" if armed => {
-            GO_ARMED_AT.with(|c| c.set(f64::NEG_INFINITY));
-            crate::needs::go();
-            true
-        }
-        _ => {
-            if armed {
-                GO_ARMED_AT.with(|c| c.set(f64::NEG_INFINITY));
-            }
-            false
-        }
-    }
-}
-
 /// One `window` keydown listener for the app's lifetime — the same
 /// shape as the router's `hashchange`. MFE-12: it holds the row store,
 /// which is what the board's j/k walk now. SCALE-26: the board's model —
@@ -827,7 +768,7 @@ pub(crate) fn install(overlay: RwSignal<Overlay>, board: board::Board) {
     // search box) never runs. A framed body forwards it ([`palette_from_frame`]).
     PALETTE_OVERLAY.with(|o| o.set(Some(overlay)));
     let chord = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
-        if is_palette_chord(&ev) {
+        if bindings::is(&ev, Context::Anywhere, "palette.toggle") {
             ev.prevent_default();
             toggle_palette(overlay);
         }
@@ -865,26 +806,6 @@ pub(crate) fn install(overlay: RwSignal<Overlay>, board: board::Board) {
     on_focus.forget(); // lives as long as the app
 }
 
-/// COMMENT-3: no overlay (the palette, the cheat sheet) is up — a key a
-/// frame posts is the app's then.
-/// MENGER-6: whether a key is the palette's chord — ⌘K on a Mac (where
-/// Ctrl+K is a text field's delete-to-end-of-line), Ctrl+K or ⌘K elsewhere;
-/// no Shift or Alt, and not mid-composition.
-pub(crate) fn palette_chord(key: &str, ctrl: bool, meta: bool, alt: bool, shift: bool, composing: bool, mac: bool) -> bool {
-    let cmd = if mac { meta } else { ctrl || meta };
-    cmd && !alt && !shift && !composing && key.eq_ignore_ascii_case("k")
-}
-
-fn is_palette_chord(ev: &web_sys::KeyboardEvent) -> bool {
-    palette_chord(&ev.key(), ev.ctrl_key(), ev.meta_key(), ev.alt_key(), ev.shift_key(), ev.is_composing(), is_mac())
-}
-
-fn is_mac() -> bool {
-    let nav = dom::window().navigator();
-    let p = nav.platform().unwrap_or_default();
-    p.contains("Mac") || p.contains("iPhone") || p.contains("iPad")
-}
-
 /// The palette, opened — or closed, when it is what is open.
 fn toggle_palette(overlay: RwSignal<Overlay>) {
     if overlay.get_untracked() == Overlay::Palette {
@@ -902,6 +823,8 @@ pub(crate) fn palette_from_frame() {
     }
 }
 
+/// COMMENT-3: no overlay (the palette, the cheat sheet) is up — a key a
+/// frame posts is the app's then.
 pub(crate) fn no_overlay() -> bool {
     dom::window().document().and_then(|d| d.query_selector(".overlay").ok().flatten()).is_none()
 }
@@ -925,13 +848,11 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         return;
     }
     let target = ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
-    let key = ev.key();
-    let cmd = ev.ctrl_key() || ev.meta_key();
 
     // Escape reaches here only when focus escaped the dialog (a click on
     // the scrim, a removed row); the dialog's own handler is the normal
     // path. Cheap safety net, so Escape always closes an overlay.
-    if key == "Escape" && overlay.get_untracked() != Overlay::None {
+    if overlay.get_untracked() != Overlay::None && bindings::is(ev, Context::Global, "app.escape") {
         ev.prevent_default();
         close_overlay(overlay);
         return;
@@ -944,67 +865,50 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
     if overlay.get_untracked() != Overlay::None {
         return;
     }
-    // COMMENT-3: Esc closes what annotation mode has open, then leaves it.
-    if key == "Escape" && annotate::escape() {
-        ev.prevent_default();
-        return;
-    }
-    // MENGER-15: then Esc leaves full screen (the overlay; the browser's own
-    // full screen takes its Esc itself).
-    if key == "Escape" && present::escape() {
-        ev.prevent_default();
-        return;
-    }
-    // ACT-3: then Esc clears the selection, when there is one.
-    if key == "Escape" && selection::clear() {
-        ev.prevent_default();
-        return;
-    }
-    // ACT-3: the board's selection keys — Ctrl/Cmd+A among them, so before
-    // the chords are left to the browser.
-    if board_select_key(ev, target.as_ref(), board) {
-        ev.prevent_default();
-        return;
-    }
-    if cmd {
-        // ⌘K / Ctrl+K was taken in the capture phase (MENGER-6); every
-        // other chord stays the browser's (Ctrl+R, ⌘L, …).
-        return;
-    }
-    if ev.alt_key() {
-        return;
-    }
-    match key.as_str() {
-        "/" => {
-            ev.prevent_default(); // Firefox's quick-find would eat it
-            open_overlay(overlay, Overlay::Palette);
-            return;
+    let used = match bindings::hit(ev, Context::Global) {
+        // COMMENT-3: Esc closes what annotation mode has open, then leaves
+        // it; MENGER-15: then full screen (the overlay; the browser's own
+        // full screen takes its Esc itself); ACT-3: then the selection.
+        Some("app.escape") => annotate::escape() || present::escape() || selection::clear(),
+        // The first key of a `g …` sequence: swallowed, the table armed.
+        Some(bindings::PREFIX) => true,
+        Some("go.board") => {
+            let _ = dom::window().location().set_hash("/");
+            true
         }
-        "?" => {
-            ev.prevent_default();
+        // MENGER-12: `g n` — Home, focus on Needs you.
+        Some("go.needs") => {
+            crate::needs::go();
+            true
+        }
+        // Prevented: Firefox's quick-find would eat the `/`.
+        Some("palette.open") => {
+            open_overlay(overlay, Overlay::Palette);
+            true
+        }
+        Some("help.keys") => {
             open_overlay(overlay, Overlay::Cheats);
-            return;
+            true
         }
         // COMMENT-3: annotation mode, on and off.
-        "a" | "A" => {
-            ev.prevent_default();
+        Some("annotate.toggle") => {
             annotate::toggle();
-            return;
+            true
         }
-        // MENGER-15: the ticket page's framed body, full screen and back.
-        "z" => {
-            if present::toggle_page() {
-                ev.prevent_default();
-            }
-            return;
-        }
-        _ => {}
-    }
-    if consume_go_prefix(&key) {
+        _ => false,
+    };
+    if used {
         ev.prevent_default();
         return;
     }
-    if board_key(&key, target.as_ref(), board) {
+    // MENGER-15: the ticket page's framed body, full screen and back.
+    if bindings::is(ev, Context::TicketPage, "view.full-screen") {
+        if present::toggle_page() {
+            ev.prevent_default();
+        }
+        return;
+    }
+    if board_key(ev, target.as_ref(), board) {
         ev.prevent_default();
     }
 }
@@ -1012,31 +916,24 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
 /// ACT-3: the board's selection keys, on its focused row — the nav's
 /// (src/nav.rs): Shift+j/k and Shift+↑/↓ move focus a row and extend the
 /// selection to it, Space toggles the row, Ctrl/Cmd+A selects every row the
-/// board draws. True when the key was one of them.
-fn board_select_key(ev: &web_sys::KeyboardEvent, target: Option<&web_sys::Element>, board: board::Board) -> bool {
-    if ev.alt_key() {
-        return false;
-    }
+/// board draws. True when `id` was one of them and a row has focus.
+fn board_select_key(id: &str, target: Option<&web_sys::Element>, board: board::Board) -> bool {
     let Some(row) = target.and_then(|t| t.closest("#board tr[data-ticket-id]").ok().flatten()) else {
         return false;
     };
     let Some(focused) = row.get_attribute("data-ticket-id") else { return false };
-    let key = ev.key();
-    if ev.ctrl_key() || ev.meta_key() {
-        if ev.shift_key() || !key.eq_ignore_ascii_case("a") {
-            return false;
+    let down = match id {
+        "select.all" => {
+            let drawn = query_all("#board tr[data-ticket-id]").into_iter().filter_map(|r| r.get_attribute("data-ticket-id"));
+            selection::set(selection::Picked::all(&selection::drawn_order(drawn)));
+            return true;
         }
-        let drawn = query_all("#board tr[data-ticket-id]").into_iter().filter_map(|r| r.get_attribute("data-ticket-id"));
-        selection::set(selection::Picked::all(&selection::drawn_order(drawn)));
-        return true;
-    }
-    let down = match key.as_str() {
-        " " if !ev.shift_key() => {
+        "select.toggle" => {
             selection::set(selection::now().toggled(&focused));
             return true;
         }
-        "J" | "ArrowDown" if ev.shift_key() => true,
-        "K" | "ArrowUp" if ev.shift_key() => false,
+        "select.extend-down" => true,
+        "select.extend-up" => false,
         _ => return false,
     };
     let Some(at) = board.pos_of_untracked(&focused) else { return true };
@@ -1065,7 +962,15 @@ fn mounted_board_row<'a>(mounted: &'a [web_sys::HtmlElement], id: &str) -> Optio
 /// (a row's position is its id's), the row may not be fetched yet either, a
 /// step still on its way is where the next one starts, and Home/End are the
 /// board's ends once a row has focus.
-fn board_key(key: &str, target: Option<&web_sys::Element>, board: board::Board) -> bool {
+fn board_key(ev: &web_sys::KeyboardEvent, target: Option<&web_sys::Element>, board: board::Board) -> bool {
+    let Some(id) = bindings::hit(ev, Context::Board) else { return false };
+    if id.starts_with("select.") {
+        return board_select_key(id, target, board);
+    }
+    // A letter with no row focused starts at the near end; an arrow with
+    // no row focused is the page's own scroll, left alone.
+    let letter = bindings::typed(ev);
+    let down = id == "move.next";
     // SCALE-26: whether the board is on screen is its `<tbody>`, not its
     // mounted rows — a window run ahead of its pages (k held down past what
     // has been fetched) mounts none for a moment, and the presses made then
@@ -1098,9 +1003,8 @@ fn board_key(key: &str, target: Option<&web_sys::Element>, board: board::Board) 
     // a parked row it gave back (scrolled more than its margins away) is
     // placed by the server — a deep link, `list { filter, after, limit: 0 }`
     // — and the step taken from there.
-    if resume.is_none() && board.filtered_untracked() && matches!(key, "j" | "k") {
+    if resume.is_none() && board.filtered_untracked() && letter && matches!(id, "move.next" | "move.prev") {
         if let Some(id) = parked {
-            let down = key == "j";
             spawn_local(async move {
                 let next = match board.locate(&id).await {
                     Some(p) if down => (p + 1).min(board.n_untracked().saturating_sub(1)),
@@ -1114,18 +1018,16 @@ fn board_key(key: &str, target: Option<&web_sys::Element>, board: board::Board) 
         }
     }
     let last = n - 1;
-    let next = match key {
-        // A letter with no row focused starts at the near end; an arrow
-        // with no row focused is the page's own scroll, left alone.
-        "j" => Some(resume.map_or(0, |i| (i + 1).min(last))),
-        "k" => Some(resume.map_or(last, |i| i.saturating_sub(1))),
-        "ArrowDown" => cur.map(|i| (i + 1).min(last)),
-        "ArrowUp" => cur.map(|i| i.saturating_sub(1)),
+    let next = match id {
+        "move.next" if letter => Some(resume.map_or(0, |i| (i + 1).min(last))),
+        "move.prev" if letter => Some(resume.map_or(last, |i| i.saturating_sub(1))),
+        "move.next" => cur.map(|i| (i + 1).min(last)),
+        "move.prev" => cur.map(|i| i.saturating_sub(1)),
         // SCALE-26: the board's ends, once a row has focus — with none, the
         // page's own Home/End, as before.
-        "Home" => resume.map(|_| 0),
-        "End" => resume.map(|_| last),
-        "Enter" => {
+        "move.first" => resume.map(|_| 0),
+        "move.last" => resume.map(|_| last),
+        "open.focused" => {
             let Some(id) = focused else { return false };
             navigate_to_ticket(&id);
             return true;
@@ -1265,7 +1167,7 @@ pub(crate) fn ensure_board_tab_stop() {
 /// Keep Tab inside the open dialog (both overlays are modal). Focus
 /// cycles through the dialog's own focusable elements and never reaches
 /// the page behind it.
-pub(crate) fn trap_tab(shift: bool) {
+pub(crate) fn trap_tab(back: bool) {
     let Some(doc) = dom::window().document() else { return };
     let Ok(Some(dialog)) = doc.query_selector("[role=dialog]") else {
         return;
@@ -1286,7 +1188,7 @@ pub(crate) fn trap_tab(shift: bool) {
         .and_then(|a| items.iter().position(|el| el.is_same_node(Some(&a))))
         .unwrap_or(0);
     let n = items.len();
-    let next = if shift { (cur + n - 1) % n } else { (cur + 1) % n };
+    let next = if back { (cur + n - 1) % n } else { (cur + 1) % n };
     let _ = items[next].focus();
 }
 
@@ -1516,7 +1418,6 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     });
 
     let on_key = move |ev: web_sys::KeyboardEvent| {
-        let key = ev.key();
         // SEARCH-3: the jump rows and the hits in bodies, as one list.
         let len = results.with_untracked(Vec::len) + hits.with_untracked(Vec::len);
         // FILTER-22: the shortcodes offered come first.
@@ -1525,12 +1426,12 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
         // is a row like the others.
         let items = cmds + len + usize::from(under);
         let cur = hi.get_untracked().min(items.saturating_sub(1));
-        match key.as_str() {
-            "Escape" => {
+        match bindings::hit(&ev, Context::Palette) {
+            Some("dialog.close") => {
                 ev.prevent_default();
                 close_overlay(overlay);
             }
-            "Enter" => {
+            Some("list.choose") => {
                 ev.prevent_default();
                 if cmds == 0 && len == 0 && found.with_untracked(Found::pending) {
                     // SCALE-25: the answer is on its way — open its first.
@@ -1539,29 +1440,29 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                     open_at(cur);
                 }
             }
-            "ArrowDown" => {
+            Some("list.next") => {
                 ev.prevent_default();
                 if items > 0 {
                     hi.set((cur + 1) % items);
                 }
             }
-            "ArrowUp" => {
+            Some("list.prev") => {
                 ev.prevent_default();
                 if items > 0 {
                     hi.set((cur + items - 1) % items);
                 }
             }
-            "Home" => {
+            Some("list.first") => {
                 ev.prevent_default();
                 hi.set(0);
             }
-            "End" => {
+            Some("list.last") => {
                 ev.prevent_default();
                 hi.set(items.saturating_sub(1));
             }
-            "Tab" => {
+            Some(id @ ("dialog.next-field" | "dialog.prev-field")) => {
                 ev.prevent_default();
-                trap_tab(ev.shift_key());
+                trap_tab(id == "dialog.prev-field");
             }
             _ => {}
         }
@@ -1785,9 +1686,10 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
     }
 }
 
-/// The `?` cheat sheet: [`SHORTCUTS`] rendered, nothing else. Its close
-/// button is the focus trap's one stop, and it takes focus on open so
-/// Escape and Enter both work with no aim.
+/// The `?` cheat sheet: the key map ([`KeyTable`]), nothing else — the rows
+/// Settings → Keyboard draws, unsearched. Its close button is the focus
+/// trap's one stop, and it takes focus on open so Escape and Enter both work
+/// with no aim.
 #[component]
 fn Cheats(overlay: RwSignal<Overlay>) -> impl IntoView {
     let close_ref = NodeRef::<leptos::html::Button>::new();
@@ -1795,14 +1697,14 @@ fn Cheats(overlay: RwSignal<Overlay>) -> impl IntoView {
         let _ = el.focus();
     });
     let on_key = move |ev: web_sys::KeyboardEvent| {
-        match ev.key().as_str() {
-            "Escape" => {
+        match bindings::hit(&ev, Context::Dialog) {
+            Some("dialog.close") => {
                 ev.prevent_default();
                 close_overlay(overlay);
             }
-            "Tab" => {
+            Some(id @ ("dialog.next-field" | "dialog.prev-field")) => {
                 ev.prevent_default();
-                trap_tab(ev.shift_key());
+                trap_tab(id == "dialog.prev-field");
             }
             _ => {}
         }
@@ -1820,18 +1722,10 @@ fn Cheats(overlay: RwSignal<Overlay>) -> impl IntoView {
                 on:click=|ev| ev.stop_propagation()
                 on:keydown=on_key
             >
-                <h2>"keyboard"</h2>
-                <dl>
-                    {SHORTCUTS
-                        .iter()
-                        .map(|(k, what)| {
-                            view! {
-                                <dt><kbd>{*k}</kbd></dt>
-                                <dd>{*what}</dd>
-                            }
-                        })
-                        .collect_view()}
-                </dl>
+                <h2>"keyboard" <span class="cheats-more">"· Settings › Keyboard searches it"</span></h2>
+                <div class="cheats-scroll">
+                    <KeyTable query=Signal::derive(String::new) />
+                </div>
                 <button class="close" node_ref=close_ref on:click=move |_| close_overlay(overlay)>
                     "close (Esc)"
                 </button>
@@ -1840,9 +1734,62 @@ fn Cheats(overlay: RwSignal<Overlay>) -> impl IntoView {
     }
 }
 
+/// AGS-28: the key map as a table — every binding [`bindings::search`]
+/// keeps for `query`, grouped ([`Group::ALL`]'s order), each row its chords
+/// as this platform spells them, what it does and where it applies. The `?`
+/// sheet draws it whole; Settings → Keyboard with its search. A row is
+/// `tr[data-binding=<id>]`.
+#[component]
+pub(crate) fn KeyTable(#[prop(into)] query: Signal<String>) -> impl IntoView {
+    let mac = bindings::is_mac();
+    let table = StoredValue::new(bindings::table());
+    move || {
+        let q = query.get();
+        table.with_value(|t| {
+            let rows = bindings::search(t, &q, mac);
+            if rows.is_empty() {
+                return view! { <p class="keys-none">"no key or action matches"</p> }.into_any();
+            }
+            let groups = Group::ALL
+                .into_iter()
+                .filter_map(|g| {
+                    let mine: Vec<&bindings::Entry> = rows.iter().copied().filter(|e| e.binding.group == g).collect();
+                    (!mine.is_empty()).then_some((g, mine))
+                })
+                .map(|(g, mine)| {
+                    let n = mine.len();
+                    let trs = mine
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, e)| {
+                            let b = e.binding;
+                            let head = (i == 0).then(|| view! { <th scope="rowgroup" rowspan=n.to_string()>{g.label()}</th> });
+                            let keys = e
+                                .chords
+                                .iter()
+                                .map(|c| view! { <kbd>{c.show(mac)}</kbd> })
+                                .collect_view();
+                            view! {
+                                <tr data-binding=b.id data-native=b.native.then_some("browser")>
+                                    {head}
+                                    <td class="k">{keys}</td>
+                                    <td class="does">{b.does}</td>
+                                    <td class="where">{bindings::where_text(b)}</td>
+                                </tr>
+                            }
+                        })
+                        .collect_view();
+                    view! { <tbody data-group=g.label()>{trs}</tbody> }
+                })
+                .collect_view();
+            view! { <table class="keymap">{groups}</table> }.into_any()
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{count_words, filter_command, filter_offers, filter_text_command, narrows, palette_chord, palette_match, pass, theme_command, theme_offers, Found, Pass, FILTER_OFFERS, SHORTCUTS};
+    use super::{count_words, filter_command, filter_offers, filter_text_command, narrows, palette_match, pass, theme_command, theme_offers, Found, Pass, FILTER_OFFERS};
 
     /// THEME-7: `theme <name>` and `theme: <name>` in the palette — the
     /// themes held that begin with what is typed, and the site's own.
@@ -1863,20 +1810,6 @@ mod tests {
         assert!(theme_offers("zz", &names).is_empty());
     }
 
-    #[test]
-    fn the_palette_chord_is_cmd_k_on_a_mac_and_ctrl_k_elsewhere() {
-        //                         key  ctrl   meta   alt    shift  compose mac
-        assert!(palette_chord("k", false, true, false, false, false, true), "⌘K on a Mac");
-        assert!(palette_chord("K", false, true, false, false, false, true), "caps lock");
-        assert!(!palette_chord("k", true, false, false, false, false, true), "Ctrl+K on a Mac is a field's kill-line");
-        assert!(palette_chord("k", true, false, false, false, false, false), "Ctrl+K elsewhere");
-        assert!(palette_chord("k", false, true, false, false, false, false), "⌘K elsewhere too");
-        assert!(!palette_chord("k", true, false, false, true, false, false), "Shift keeps it the browser's");
-        assert!(!palette_chord("k", true, false, true, false, false, false), "Alt too");
-        assert!(!palette_chord("k", true, false, false, false, true, false), "not mid-composition");
-        assert!(!palette_chord("j", true, false, false, false, false, false));
-        assert!(!palette_chord("k", false, false, false, false, false, false), "a bare k is the board's");
-    }
     use crate::filter::tests::{platform, strs};
     use crate::lens::Kept;
     use crate::tags::{self, Act, Tag};
@@ -2098,45 +2031,6 @@ mod tests {
         assert!(f.refuse(back, String::new(), "under comes with FILTER-13".into()));
         assert!(!f.everything && f.rows.is_empty());
         assert_eq!(count_words(&f, true), "the global filter was not taken");
-    }
-
-    /// What `?` shows is the key map: every key the handlers implement
-    /// has a row, and every row says what it does.
-    #[test]
-    fn the_cheat_sheet_documents_the_key_map() {
-        for (key, what) in SHORTCUTS {
-            assert!(!key.trim().is_empty() && !what.trim().is_empty(), "{key}: {what}");
-        }
-        let keys: Vec<&str> = SHORTCUTS.iter().map(|(k, _)| *k).collect();
-        for required in [
-            "Tab",         // reaches the nav
-            "j / ↓",       // move
-            "k / ↑",
-            "l",           // expand / into
-            "h",           // collapse / out
-            "Home / End",
-            "Enter",       // open
-            "/ or Ctrl+K", // palette
-            "g h",         // board
-            "g n",         // Needs you (MENGER-12)
-            "f",           // the view's filter (WAVE-12); the open ticket's tree (AGS-26)
-            "F",           // the global filter (FILTER-11)
-            "/ filter SC", // the palette's filter (FILTER-22)
-            "a or A",      // annotation mode (COMMENT-3)
-            "z",           // full screen (MENGER-15)
-            "Shift+click", // a range (ACT-3)
-            "Ctrl+click",  // a toggle
-            "Shift+j / Shift+k",
-            "Space",
-            "Ctrl+A",
-            "*",           // a subtree (ACT-7)
-            "Shift+* (numpad)",
-            "-",
-            "?",           // this list
-            "Esc",         // close
-        ] {
-            assert!(keys.contains(&required), "cheat sheet is missing {required}: {keys:?}");
-        }
     }
 
     /// FILTER-22: the palette reads `filter <shortcode>` — the word in any

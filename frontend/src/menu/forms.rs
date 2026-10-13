@@ -149,15 +149,19 @@ pub(super) fn view(
 
     let on_key = {
         let submit = submit.clone();
-        move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
-            "Enter" => {
+        move |ev: web_sys::KeyboardEvent| {
+            use crate::bindings::{is, Context};
+            if is(&ev, Context::Field, "form.submit") {
                 ev.prevent_default();
                 ev.stop_propagation();
                 submit();
+                return;
             }
             // The menu walks its items; Escape and Tab close it.
-            "ArrowDown" | "ArrowUp" | "Escape" | "Tab" => {}
-            _ => ev.stop_propagation(),
+            let menus = ["list.next", "list.prev", "dialog.close", "menu.leave", "menu.leave-back"];
+            if !menus.iter().any(|id| is(&ev, Context::Menu, id)) {
+                ev.stop_propagation();
+            }
         }
     };
     let ask_on_input = ask.clone();

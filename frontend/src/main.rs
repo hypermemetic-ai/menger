@@ -244,6 +244,7 @@
 mod anchor;
 mod anyof;
 mod annotate;
+mod bindings;
 mod board;
 mod bridge;
 mod calendar;
@@ -928,7 +929,7 @@ fn Board(
                                 aria-rowindex=move || board.pos_of(&index_id).map(|i| i + 2)
                                 // ACT-3: a Shift+click selects rows, not text.
                                 on:mousedown=|ev: web_sys::MouseEvent| {
-                                    if ev.shift_key() {
+                                    if bindings::hit_mouse(&ev, bindings::Context::Board) == Some("select.range") {
                                         ev.prevent_default();
                                     }
                                 }
@@ -947,7 +948,7 @@ fn Board(
                                     // ACT-3: as in the nav — a click selects the row and
                                     // opens it; Shift selects a range, Ctrl/Cmd toggles,
                                     // and neither opens anything (the id link neither).
-                                    let gesture = selection::Gesture::of_mouse(&ev);
+                                    let gesture = selection::Gesture::of_mouse(&ev, bindings::Context::Board);
                                     selection::board_click(board, gesture, &pick_id);
                                     if gesture != selection::Gesture::Plain {
                                         ev.prevent_default();

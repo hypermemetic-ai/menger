@@ -295,7 +295,7 @@ pub(crate) fn install() {
         repaint();
     });
     let cb = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::StorageEvent)>::new(move |ev: web_sys::StorageEvent| {
-        if ev.key().as_deref() == Some(READER_KEY) {
+        if ev.key().as_deref() == Some(READER_KEY) { // bindings-lint: a StorageEvent's key
             let next = load_reader();
             READER.with(|r| {
                 if r.with_untracked(|r| *r != next) {

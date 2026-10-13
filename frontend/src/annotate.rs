@@ -565,7 +565,9 @@ fn install_listeners(a: Annot) {
                 return; // its compatibility mouse events are stopped below
             }
             ev.prevent_default();
-            if kind == "click" {
+            // AGS-28: a click is `annotate.pick`; the rest are only taken.
+            let picked = ev.dyn_ref::<web_sys::MouseEvent>().is_some_and(|m| crate::bindings::hit_mouse(m, crate::bindings::Context::Annotate) == Some("annotate.pick"));
+            if kind == "click" && picked {
                 pick_app(a, el);
             }
         });
@@ -739,18 +741,11 @@ pub(crate) fn frame_changed(channel: &str) {
     schedule();
 }
 
-/// A key pressed in a frame (`menger:key`): `a`/`A` and Esc are the app's.
-pub(crate) fn frame_key(key: &str) {
-    match key {
-        "a" | "A" => {
-            if crate::keys::no_overlay() {
-                toggle();
-            }
-        }
-        "Escape" => {
-            escape();
-        }
-        _ => {}
+/// `a`/`A` pressed in a frame (`menger:key`, AGS-28's `annotate.toggle`):
+/// the mode turns, unless an overlay is up. (Its Esc is src/frame.rs's.)
+pub(crate) fn frame_toggle() {
+    if crate::keys::no_overlay() {
+        toggle();
     }
 }
 
@@ -912,12 +907,12 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
             data-path=anchor.path.clone()
             style=style
             on:keydown=move |ev: web_sys::KeyboardEvent| {
-                match ev.key().as_str() {
-                    "Escape" => {
+                match crate::bindings::hit(&ev, crate::bindings::Context::Dialog) {
+                    Some("dialog.close") => {
                         ev.prevent_default();
                         cancel(a);
                     }
-                    "Enter" if ev.ctrl_key() || ev.meta_key() => {
+                    Some("comment.save") => {
                         ev.prevent_default();
                         save(a, body.get_untracked());
                     }
@@ -975,7 +970,7 @@ fn list_view(a: Annot, key: String, ids: Vec<u64>, moved: bool) -> AnyView {
                 data-pin=key.clone()
                 style=style
                 on:keydown=move |ev: web_sys::KeyboardEvent| {
-                    if ev.key() == "Escape" {
+                    if crate::bindings::is(&ev, crate::bindings::Context::Dialog, "dialog.close") {
                         ev.prevent_default();
                         ev.stop_propagation();
                         a.open.set(None);

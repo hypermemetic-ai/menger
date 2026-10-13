@@ -16,7 +16,9 @@
 //!   anchor to the row; Ctrl/Cmd+click [`Picked::toggled`]; Shift+↑/↓ (and
 //!   Shift+j/k) [`Picked::extended`] from the focused row; Space toggles the
 //!   focused row; Ctrl/Cmd+A [`Picked::all`] the drawn rows; Esc
-//!   [`Picked::default`]. Which a mouse click is: [`Gesture::of`].
+//!   [`Picked::default`]. Which a mouse click is: [`Gesture::of`], from
+//!   the binding the click is (AGS-28: `select.only`, `select.range`,
+//!   `select.toggle` in src/bindings.rs's table).
 //! - **A shortcode's row stands for its root ticket** (AGS-23: the row *is*
 //!   the root's, or, under the lens, a heading keyed by it — FILTER-23); a
 //!   shortcode with no root stands for no ticket and is not selectable.
@@ -158,18 +160,21 @@ pub(crate) enum Gesture {
 }
 
 impl Gesture {
-    pub(crate) fn of(shift: bool, ctrl: bool, meta: bool) -> Gesture {
-        if shift {
-            Gesture::Range
-        } else if ctrl || meta {
-            Gesture::Toggle
-        } else {
-            Gesture::Plain
+    /// The gesture a click's binding is — anything but a range or a toggle
+    /// is a plain click.
+    pub(crate) fn of(binding: &str) -> Gesture {
+        match binding {
+            "select.range" => Gesture::Range,
+            "select.toggle" => Gesture::Toggle,
+            "select.only" => Gesture::Plain,
+            // Any other click (an Alt+click off a chip) is a plain one too.
+            _ => Gesture::Plain,
         }
     }
 
-    pub(crate) fn of_mouse(ev: &web_sys::MouseEvent) -> Gesture {
-        Gesture::of(ev.shift_key(), ev.ctrl_key(), ev.meta_key())
+    /// The gesture a click on a row of `ctx` (the nav, the board) is.
+    pub(crate) fn of_mouse(ev: &web_sys::MouseEvent, ctx: crate::bindings::Context) -> Gesture {
+        crate::bindings::hit_mouse(ev, ctx).map_or(Gesture::Plain, Gesture::of)
     }
 
     /// The selection after this click on `id`, the view drawing `order`.
@@ -404,11 +409,16 @@ mod tests {
 
     #[test]
     fn which_gesture_a_click_is() {
-        assert_eq!(Gesture::of(false, false, false), Gesture::Plain);
-        assert_eq!(Gesture::of(true, false, false), Gesture::Range);
-        assert_eq!(Gesture::of(true, true, false), Gesture::Range);
-        assert_eq!(Gesture::of(false, true, false), Gesture::Toggle);
-        assert_eq!(Gesture::of(false, false, true), Gesture::Toggle, "Cmd on a Mac");
+        use crate::bindings::{pick_single, table, Button, Context, Press};
+        let of = |shift, ctrl, meta, mac| {
+            let p = Press { button: Some(Button::Click), shift, ctrl, meta, ..Press::default() };
+            pick_single(&table(), &p, Context::Nav, mac).map_or(Gesture::Plain, Gesture::of)
+        };
+        assert_eq!(of(false, false, false, false), Gesture::Plain);
+        assert_eq!(of(true, false, false, false), Gesture::Range);
+        assert_eq!(of(true, true, false, false), Gesture::Range);
+        assert_eq!(of(false, true, false, false), Gesture::Toggle);
+        assert_eq!(of(false, false, true, true), Gesture::Toggle, "Cmd on a Mac");
     }
 
     #[test]

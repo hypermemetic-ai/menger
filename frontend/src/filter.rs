@@ -70,6 +70,7 @@ use menger_tickets_api::{Group, Status};
 use wasm_bindgen::JsCast;
 
 use crate::anyof::{self, Member, Slot};
+use crate::bindings::{self, Context};
 use crate::keys::palette_match;
 use crate::lens::{self, Lens, Level};
 use crate::nav::kind_glyph;
@@ -1439,41 +1440,41 @@ impl Pop {
     /// empty field goes back, Esc closes; Tab moves on to the open
     /// category's operator switch (FILTER-19), or — none — closes.
     fn key(self, lens: Lens, ev: web_sys::KeyboardEvent) {
-        let key = ev.key();
+        let id = bindings::hit(&ev, Context::Menu);
         let empty = self.query.with_untracked(String::is_empty);
-        match key.as_str() {
-            "Escape" => {
+        match id {
+            Some("dialog.close") => {
                 ev.prevent_default();
                 ev.stop_propagation();
                 self.close(true);
             }
-            "ArrowDown" | "ArrowUp" => {
+            Some("list.next" | "list.prev") => {
                 let len = self.active(lens).len();
-                if let Some(n) = menu::step(Some(self.hi.get_untracked().min(len.saturating_sub(1))), len, &key) {
+                if let Some(n) = menu::step(Some(self.hi.get_untracked().min(len.saturating_sub(1))), len, id) {
                     self.hi.set(n);
                     ev.prevent_default();
                 }
             }
-            "Enter" => {
+            Some("list.choose") => {
                 ev.prevent_default();
                 let rows = self.active(lens);
                 if let Some(r) = rows.get(self.hi.get_untracked()).or(rows.first()) {
                     self.act(lens, r);
                 }
             }
-            "ArrowRight" if empty && self.cat.get_untracked().is_none() => {
+            Some("menu.into") if empty && self.cat.get_untracked().is_none() => {
                 if let Some(Row::Cat(c)) = self.active(lens).get(self.hi.get_untracked()) {
                     ev.prevent_default();
                     self.open_cat(*c);
                 }
             }
-            "ArrowLeft" | "Backspace" if empty && self.cat.get_untracked().is_some() && !self.direct() => {
+            Some("menu.out") if empty && self.cat.get_untracked().is_some() && !self.direct() => {
                 ev.prevent_default();
                 self.back();
             }
             // The switch follows the field: Tab's own move reaches it.
-            "Tab" if !ev.shift_key() && self.cat.get_untracked().and_then(switch_words).is_some() => {}
-            "Tab" => self.close(false),
+            Some("menu.leave") if self.cat.get_untracked().and_then(switch_words).is_some() => {}
+            Some("menu.leave" | "menu.leave-back") => self.close(false),
             _ => {}
         }
     }
@@ -1690,7 +1691,8 @@ fn pill_at(lens: Lens, level: Level, p: &Pill) -> Option<usize> {
 /// before the pill's own buttons see the click.
 fn pick(pop: Pop, fat: Option<usize>, inherited: bool) -> impl Fn(web_sys::MouseEvent) + 'static {
     move |ev: web_sys::MouseEvent| {
-        let Some(at) = fat.filter(|_| !inherited && ev.shift_key()) else { return };
+        let shift = bindings::hit_mouse(&ev, Context::FilterBar) == Some("filter.pick");
+        let Some(at) = fat.filter(|_| !inherited && shift) else { return };
         ev.prevent_default();
         ev.stop_propagation();
         pop.picked.update(|p| match p.iter().position(|x| *x == at) {
@@ -1704,7 +1706,7 @@ fn pick(pop: Pop, fat: Option<usize>, inherited: bool) -> impl Fn(web_sys::Mouse
 
 /// FILTER-31: a Shift-press on a pill picks it, never a run of text.
 fn no_shift_select(ev: web_sys::MouseEvent) {
-    if ev.shift_key() {
+    if bindings::hit_mouse(&ev, Context::FilterBar) == Some("filter.pick") {
         ev.prevent_default();
     }
 }
@@ -1818,7 +1820,7 @@ pub(crate) fn pill_menu_view(lens: Lens, bar: Level, at: usize) -> impl IntoView
             role="menu"
             node_ref=menu
             on:keydown=move |ev: web_sys::KeyboardEvent| {
-                if ev.key() == "Escape" {
+                if bindings::is(&ev, Context::Menu, "dialog.close") {
                     ev.prevent_default();
                     ev.stop_propagation();
                     pop.more.set(None);
@@ -2281,12 +2283,12 @@ pub(crate) fn TextMode(level: Level, texting: RwSignal<bool>) -> impl IntoView {
                     placeholder="status in (Ready, Coding) and in MNG"
                     prop:value=move || draft.get()
                     on:input=move |ev| draft.set(event_target_value(&ev))
-                    on:keydown=move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
-                        "Enter" => {
+                    on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
+                        Some("form.submit") => {
                             ev.prevent_default();
                             apply();
                         }
-                        "Escape" => {
+                        Some("form.cancel") => {
                             ev.prevent_default();
                             ev.stop_propagation();
                             texting.set(false);
@@ -2387,7 +2389,7 @@ fn popover(lens: Lens, pop: Pop) -> impl IntoView {
             class:has-sub=move || pop.cat.with(Option::is_some)
             on:keydown=move |ev: web_sys::KeyboardEvent| {
                 // Escape from anywhere inside (the title's field, a row).
-                if ev.key() == "Escape" {
+                if bindings::is(&ev, Context::Menu, "dialog.close") {
                     ev.prevent_default();
                     ev.stop_propagation();
                     pop.close(true);
@@ -2465,7 +2467,7 @@ fn switch_view(lens: Lens, pop: Pop, c: Cat) -> Option<impl IntoView> {
                 on:mousedown=|ev| ev.prevent_default()
                 on:click=move |_| pop.flip_switch(lens, c)
                 on:keydown=move |ev: web_sys::KeyboardEvent| {
-                    if ev.key() == "Tab" && !ev.shift_key() && c != Cat::Title {
+                    if bindings::is(&ev, Context::Menu, "menu.leave") && c != Cat::Title {
                         pop.close(false);
                     }
                 }
@@ -2502,12 +2504,12 @@ fn title_view(lens: Lens, pop: Pop) -> impl IntoView {
                     let op = pop.pane_op(lens, Cat::Title);
                     lens.edit(level, |k| k.set(Cat::Title, op, [text].into_iter().filter(|t| !t.trim().is_empty())));
                 }
-                on:keydown=move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
-                    "Enter" => {
+                on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
+                    Some("form.submit") => {
                         ev.prevent_default();
                         pop.close(true);
                     }
-                    "Backspace" if event_target_value(&ev).is_empty() && !pop.direct() => {
+                    _ if event_target_value(&ev).is_empty() && !pop.direct() && bindings::is(&ev, Context::Menu, "menu.out") => {
                         ev.prevent_default();
                         pop.back();
                         focus_field(level);

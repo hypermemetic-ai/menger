@@ -614,7 +614,7 @@ pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
                                     problem.set(None);
                                 }
                                 on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                    if ev.key() == "Enter" {
+                                    if crate::bindings::is(&ev, crate::bindings::Context::Field, "form.submit") {
                                         ev.prevent_default();
                                         run_test();
                                     }
@@ -702,7 +702,7 @@ pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
                                     test_note.set(None);
                                 }
                                 on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                    if ev.key() == "Enter" {
+                                    if crate::bindings::is(&ev, crate::bindings::Context::Field, "form.submit") {
                                         ev.prevent_default();
                                         save_test();
                                     }
@@ -742,7 +742,40 @@ pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
             </fieldset>
             // MENGER-14: the sites links open without asking, revocable.
             <crate::links::TrustGroup />
+            // AGS-28: every key and gesture — the table the `?` sheet draws.
+            <KeyboardGroup />
         </section>
+    }
+}
+
+/// AGS-28: Settings → Keyboard — every binding of src/bindings.rs's table,
+/// grouped, with its chords as this platform spells them, what it does and
+/// where it applies (src/keys.rs's `KeyTable`, which the `?` sheet draws
+/// too); the search narrows it by a key (`j`, `Esc`, `⌘K`, `g h`) or by
+/// words. Drawn from the table, never by hand — a binding added there is a
+/// row here.
+#[component]
+fn KeyboardGroup() -> impl IntoView {
+    let query = RwSignal::new(String::new());
+    view! {
+        <fieldset class="group" id="settings-keyboard">
+            <legend>"Keyboard"</legend>
+            <p class="now">"Every key and click the app answers — " <kbd>"?"</kbd> " shows the same list anywhere."</p>
+            <input
+                id="keys-search"
+                type="search"
+                spellcheck="false"
+                autocomplete="off"
+                aria-label="search keys or actions"
+                aria-controls="keys-table"
+                placeholder="search keys or actions…"
+                prop:value=move || query.get()
+                on:input=move |ev| query.set(event_target_value(&ev))
+            />
+            <div id="keys-table">
+                <crate::keys::KeyTable query=query />
+            </div>
+        </fieldset>
     }
 }
 
