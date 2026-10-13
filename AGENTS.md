@@ -29,8 +29,17 @@ deploy/pipeline build          # main's tip → gate (cargo test --workspace + f
 deploy/pipeline deploy test    # the release → test, on a fresh copy of prod's data; smoke checks
 deploy/pipeline sync test      # test's data refreshed from prod, same release (DEPLOY-4)
 deploy/pipeline promote        # the release test passed → prod; smoke; automatic rollback on failure
-deploy/pipeline status         # what each env runs and whether it is healthy
+deploy/pipeline status         # what each env runs, whether it is healthy, its last deployment record
+deploy/pipeline backfill       # deployments.log → menger's deployments (DEPLOY-12; idempotent)
 ```
+
+- **Every deploy test, sync, promote and rollback records itself in menger**
+  (DEPLOY-12): `started`, then `succeeded` / `failed` / `rolled_back`, sent
+  to the tracker (`MENGER_DEPLOY_TRACKER_PORT`, 4455) through
+  `deploy/record`. A record the tracker does not take waits in
+  `~/.local/share/menger-deploy/outbox/` for the next run; it never fails a
+  deploy. A test of the pipeline runs it on a throwaway root
+  (`deploy/tests/pipeline`), never against the real environments.
 
 - **Production changes only through `promote`**, and only to a release that
   passed the test environment. A `cargo build` or `trunk build` in a checkout

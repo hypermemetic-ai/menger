@@ -29,7 +29,8 @@ deploy/pipeline build                # main's tip → gate → release (prints i
 deploy/pipeline deploy test          # the newest release → test, with a fresh copy of prod's data
 deploy/pipeline sync test            # test's data refreshed from prod; test keeps its release
 deploy/pipeline promote              # the release test runs → prod
-deploy/pipeline status               # what each env runs, whether it is up, its health
+deploy/pipeline status               # what each env runs, whether it is up, its health, its last record
+deploy/pipeline backfill             # deployments.log → menger's deployments (idempotent)
 ```
 
 1. **Build** (`build [REV]`, default `main`). A commit, never a working
@@ -80,6 +81,57 @@ database, which the next `deploy test` or `sync test` replaces. Run it alone:
 
 **Drills.** `DEPLOY_SMOKE_FAIL=test deploy/pipeline promote --to test` fails
 the first smoke on purpose, so the automatic rollback can be watched on test.
+
+## Recording deployments
+
+Every `deploy test`, `sync test`, `promote` and `rollback` tells menger what
+it did (DEPLOY-12), in the deployment record below, made and sent by
+`deploy/record` to `deployments.record` (DEPLOY-11) — so each ticket shows
+where its work runs:
+
+| the run | records (environment, revision) |
+|---|---|
+| begins | `started` — the release it moves to (`previous`: what ran) |
+| smoke passed | `succeeded` (a rollback: `rolled_back` to the release it returned to) |
+| smoke failed | `failed` |
+| promote's automatic rollback, smoke passed | `failed`, then `rolled_back` to what ran before |
+| dies after `started` (a unit will not restart …) | `failed`, on its way out |
+
+- **The commits** are `git log previous..revision` in the build checkout
+  (`../menger-build`, else the repository), oldest first, when a run moves
+  forward; a rollback carries none. Without them menger works from what it
+  has seen.
+- **One run, one id.** Each run's records carry `source.run` =
+  `promote@<when it began>#<pid>`, and so does the end of its line in
+  `deployments.log`. `backfill` makes from that line the record the run sent
+  (same environment, state, revision and run), which menger already keeps.
+- **Never in the way.** Every record goes through the outbox
+  (`~/.local/share/menger-deploy/outbox/`, `MENGER_DEPLOY_OUTBOX`), oldest
+  first, each send bounded (`MENGER_DEPLOY_RECORD_TIMEOUT`, 10 s). One menger
+  keeps (or already kept) leaves; at the first that gets no answer the rest
+  wait for the next run, which sends them before its own. One menger refuses
+  moves to `outbox/refused/` and is said, never retried. A record never
+  fails a run.
+- **Where.** `MENGER_DEPLOY_TRACKER_PORT` (4455, prod's tracker — test's
+  deploys are recorded there too), `MENGER_DEPLOY_TRACKER_HOST`,
+  `MENGER_DEPLOY_TRACKER_TOKEN` (a key holding `deployer` when the tracker
+  requires login).
+- **`status`** shows each environment's last record sent (`sent/<env>.json`)
+  and how many wait in the outbox.
+- **`backfill`** replays `deployments.log` (`deploy/record --from
+  pipeline-log`, each with its commits from git) through the outbox.
+  Idempotent: run it again and menger answers each record `duplicate`.
+
+```sh
+deploy/pipeline backfill        # backfill: 88 records … → record: 88 sent, 0 already kept, 0 refused, 0 waiting
+deploy/pipeline backfill        # record: 0 sent, 88 already kept, 0 refused, 0 waiting
+synapse -P 4455 menger deployments for_ticket --id MENGER-34
+```
+
+Tests: `deploy/tests/pipeline` runs the pipeline itself on a throwaway root —
+`HOME` a scratch directory, `systemctl`, `synapse` and the rest stand-ins —
+through every row above, a tracker down, hung and refusing, `status` and
+`backfill`; `cargo test` runs it.
 
 ## The deployment record
 
@@ -175,7 +227,9 @@ deploy/record --validate < record.json
   before it. Builds are no deployment. `ok` is `succeeded` (`rolled_back` for
   `rollback`); `smoke failed; rolled back to R` is `rolled_back` to R, taking
   the promoted release out; every other failure is `failed`. `sync` is a
-  record too (same revision before and after).
+  record too (same revision before and after). Each line's `source.run` is
+  the run id its sixth column holds (DEPLOY-12), else `action@at` — one line,
+  one deployment.
 - **`--commits-from-git`** with no `previous` leaves `commits` out and says
   so: a first deployment does not send the whole history.
 
@@ -188,6 +242,8 @@ pipeline log, any JSON); `cargo test` runs it, so the gate does.
 - releases: `~/.local/share/menger-deploy/releases/`
 - what each env runs: `~/.local/share/menger-deploy/envs/{prod,test}/{current,previous}`
 - every build, deploy, promote and rollback: `~/.local/share/menger-deploy/deployments.log`
+- deployment records waiting for menger: `~/.local/share/menger-deploy/outbox/`
+  (refused: `outbox/refused/`); the last sent per env: `…/menger-deploy/sent/`
 - logs: `deploy/pipeline logs prod` (`journalctl --user -u menger@prod -u menger-diagrams@prod`)
 - prod backups: `~/.local/share/menger/backups/`
 

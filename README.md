@@ -1889,7 +1889,10 @@ the activation beside `tickets`; it takes DEPLOY-10's record
 so `deploy/record --send` passes the record as the params object. Three
 tables a file gains, empty, on open: `deployments`, `deployment_commits` and
 `deploy_environments` (what each environment runs — derived, written
-through, checked by `--verify-derived`).
+through, checked by `--verify-derived`). menger's own pipeline records every
+deploy test, sync, promote and rollback as it runs, and `deploy/pipeline
+backfill` replays what it logged before (DEPLOY-12; `deploy/README.md`
+"Recording deployments").
 
 ```sh
 synapse -P 4455 menger deployments record --project menger --environment prod --state succeeded --revision 235ff62 --commits 824e943,235ff62
