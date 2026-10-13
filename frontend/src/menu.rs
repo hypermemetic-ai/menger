@@ -76,6 +76,18 @@
 //! frame's box ([`frame_point`]) and opens this same menu there
 //! ([`open_from_frame`]). Focus moving into a frame (the window's `blur`)
 //! closes it, as an outside mousedown does on the app's own document.
+//!
+//! ACT-7: **Nav ▸** — opened in the nav (a right-click, or Menu / Shift+F10,
+//! on any of its rows), the menu carries a submenu that shapes the tree:
+//! expand or collapse the row's subtree, all of its shortcode from the root,
+//! collapse the others, expand or collapse everything, reveal the open
+//! ticket (src/shape.rs says which items where, and what each does; the nav,
+//! src/nav.rs, does them — [`nav::at`], [`nav::act`]). Elsewhere in the app
+//! the menu has no Nav ▸. A right-click on the nav's empty space or its
+//! header — or on a row that stands for no ticket, a rootless shortcode's or
+//! a heading — opens the same menu holding only the Nav items
+//! ([`nav_menu_view`]). On the flat list only the reveal means anything.
+//! When ACT-4's one menu lands, Nav ▸ is one of its groups.
 
 use js_sys::Reflect;
 use leptos::prelude::*;
@@ -85,7 +97,8 @@ use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 use std::cell::Cell;
 
-use crate::{cache, dom, keys, session, st_class, tags, waves};
+use crate::shape::{self, Item};
+use crate::{cache, dom, keys, nav, session, st_class, tags, waves};
 use menger_tickets_api::{AttrKind, KnowNothing, Kind, Status};
 
 thread_local! {
@@ -117,7 +130,7 @@ pub(crate) fn open_from_frame(id: String, x: f64, y: f64, keyboard: bool) {
     if keyboard {
         keys::remember_focus();
     }
-    target.set(Some(Target { id, shortcode: None, x, y }));
+    target.set(Some(Target { id: Some(id), shortcode: None, x, y, nav: None }));
 }
 
 /// The menu's DOM id — the one element the document-level listeners
@@ -159,12 +172,16 @@ pub(crate) fn wave_items(id: &str, parent: Option<&str>) -> Vec<WaveItem> {
 /// What was right-clicked, and where.
 #[derive(Clone, PartialEq)]
 struct Target {
-    id: String,
+    /// The ticket — ACT-7: none for the nav's own menu (its empty space,
+    /// a row that stands for no ticket).
+    id: Option<String>,
     /// WAVE-5: the shortcode the element stands for, when it is a
     /// shortcode's row in the nav (`data-shortcode`).
     shortcode: Option<String>,
     x: f64,
     y: f64,
+    /// ACT-7: opened in the nav — where, for its Nav ▸ items.
+    nav: Option<nav::At>,
 }
 
 /// How a copy ended (see module doc): the async API, the legacy command,
@@ -267,20 +284,23 @@ fn close_menu(target: RwSignal<Option<Target>>) {
 /// ever loses the former still answers. Nothing inside an overlay dialog
 /// counts (those own their keys), and the menu opens at the element's
 /// rect rather than a cursor that does not exist.
-fn focused_ticket() -> Option<(String, Option<String>, f64, f64)> {
+///
+/// ACT-7: a focused row of the nav opens it too — a row that stands for no
+/// ticket (a rootless shortcode's, a heading) with the nav's items alone.
+fn focused_ticket() -> Option<Target> {
     let active = document().active_element()?;
     if active.closest("[role=dialog]").ok().flatten().is_some() {
         return None;
     }
-    let host = active
-        .closest("[data-ticket-id], [data-nav-id]")
-        .ok()
-        .flatten()?;
-    let id = host
-        .get_attribute("data-ticket-id")
-        .or_else(|| host.get_attribute("data-nav-id"))?;
+    let nav = nav::at(&active).filter(offers);
+    let host = match active.closest("[data-ticket-id], [data-nav-id]").ok().flatten() {
+        Some(host) => host,
+        None if nav.is_some() => active.closest("#nav [role=treeitem]").ok().flatten()?,
+        None => return None,
+    };
+    let id = host.get_attribute("data-ticket-id").or_else(|| host.get_attribute("data-nav-id"));
     let rect = host.get_bounding_client_rect();
-    Some((id, host.get_attribute("data-shortcode"), rect.left(), rect.bottom()))
+    Some(Target { id, shortcode: host.get_attribute("data-shortcode"), x: rect.left(), y: rect.bottom(), nav })
 }
 
 /// The document-level listeners, installed once for the app's lifetime
@@ -298,11 +318,19 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
         if el.as_ref().and_then(tags::tag_at).is_some() {
             return;
         }
+        // ACT-7: in the nav, the menu carries Nav ▸ — and its empty space,
+        // its header and a row that stands for no ticket open the nav's
+        // items alone.
+        let nav = el.as_ref().and_then(nav::at).filter(offers);
         let host = el.and_then(|el| el.closest("[data-ticket-id]").ok().flatten());
+        let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
         if let Some((id, shortcode)) = host.and_then(|el| Some((el.get_attribute("data-ticket-id")?, el.get_attribute("data-shortcode")))) {
             // Only here: a right-click anywhere else keeps the native menu.
             ev.prevent_default();
-            target.set(Some(Target { id, shortcode, x: ev.client_x() as f64, y: ev.client_y() as f64 }));
+            target.set(Some(Target { id: Some(id), shortcode, x, y, nav }));
+        } else if nav.is_some() {
+            ev.prevent_default();
+            target.set(Some(Target { id: None, shortcode: None, x, y, nav }));
         }
     });
     let _ = doc.add_event_listener_with_callback("contextmenu", on_context.as_ref().unchecked_ref());
@@ -341,11 +369,11 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
         // is what stops the engine from also firing its own `contextmenu`
         // for the same keystroke and re-opening us at its coordinates.
         if key == "ContextMenu" || (key == "F10" && ev.shift_key()) {
-            if let Some((id, shortcode, x, y)) = focused_ticket() {
+            if let Some(t) = focused_ticket() {
                 ev.prevent_default();
                 ev.stop_propagation();
                 keys::remember_focus();
-                target.set(Some(Target { id, shortcode, x, y }));
+                target.set(Some(t));
             }
         }
     });
@@ -467,7 +495,12 @@ pub(crate) fn TicketMenu(last_error: RwSignal<Option<String>>) -> impl IntoView 
     OPEN.with(|o| o.set(Some(target)));
 
     view! {
-        {move || target.get().map(|t| menu_view(t, last_error, target, toast, toast_gen))}
+        {move || {
+            target.get().map(|t| match t.id.clone() {
+                Some(id) => menu_view(id, t, last_error, target, toast, toast_gen).into_any(),
+                None => nav_menu_view(t, target).into_any(),
+            })
+        }}
         {move || toast.get().map(|t| toast_view(t, toast))}
     }
 }
@@ -478,13 +511,14 @@ pub(crate) fn TicketMenu(last_error: RwSignal<Option<String>>) -> impl IntoView 
 /// per open, so a second right-click starts with the list closed and the
 /// keyboard cursor on the menu itself.
 fn menu_view(
+    id: String,
     t: Target,
     last_error: RwSignal<Option<String>>,
     target: RwSignal<Option<Target>>,
     toast: RwSignal<Option<Toast>>,
     toast_gen: StoredValue<u32>,
 ) -> impl IntoView {
-    let Target { id, shortcode, x, y } = t;
+    let Target { shortcode, x, y, nav, .. } = t;
     // SCALE-26: the menu holds the ticket it is open on, and asks for it when
     // no view does (no walk puts every ticket in the cache any more).
     let holder = cache::Holder::new();
@@ -503,6 +537,8 @@ fn menu_view(
     let moves = Memo::new(move |_| ticket.get().is_some_and(|s| s.with(|x| x.kind.has_lifecycle())));
     let title = move || ticket.get().map(|s| s.with(|x| x.title.clone())).unwrap_or_default();
     let sub = RwSignal::new(false);
+    // ACT-7: the Nav ▸ list, beside the status list.
+    let nav_sub = RwSignal::new(false);
     let root = NodeRef::<leptos::html::Div>::new();
     let close = move || close_menu(target);
     let href = format!("#/ticket/{id}");
@@ -513,6 +549,7 @@ fn menu_view(
     Effect::new(move |_| {
         let Some(el) = root.get() else { return };
         sub.track();
+        nav_sub.track();
         place(&el, x, y);
         if !focused.get_value() {
             focused.set_value(true);
@@ -530,25 +567,34 @@ fn menu_view(
         let on_parent = list
             .get(current.unwrap_or(usize::MAX))
             .is_some_and(|i| i.has_attribute("aria-haspopup"));
+        // ACT-7: two lists open from a parent — Set status's and Nav's —
+        // each named by its `data-sub`.
+        let which = |el: Option<&web_sys::Element>| el.and_then(|e| e.get_attribute("data-sub"));
+        let open_of = move |w: &str| if w == "nav" { nav_sub } else { sub };
         match key.as_str() {
             "ArrowRight" if on_parent => {
-                sub.set(true);
+                let w = which(current.map(|i| list[i].as_ref())).unwrap_or_else(|| "status".into());
+                open_of(&w).set(true);
                 // The list mounts on the next render tick; focus its
                 // first row once it exists.
                 spawn_local(async move {
                     dom::sleep_ms(0).await;
-                    let first = root
-                        .get_untracked()
-                        .and_then(|el| items(&el).into_iter().find(|i| i.get_attribute("role").as_deref() == Some("menuitemradio")));
+                    let first = root.get_untracked().and_then(|el| {
+                        let group = el.query_selector(&format!(".sub[data-sub='{w}']")).ok().flatten()?;
+                        items(&group).into_iter().next()
+                    });
                     if let Some(first) = first {
                         focus(&first);
                     }
                 });
                 ev.prevent_default();
             }
-            "ArrowLeft" if sub.get_untracked() => {
-                sub.set(false);
-                if let Some(parent) = items(root_el).into_iter().find(|i| i.has_attribute("aria-haspopup")) {
+            "ArrowLeft" if sub.get_untracked() || nav_sub.get_untracked() => {
+                // The list focus is in, else whichever is open.
+                let inside = active.as_ref().and_then(|a| a.closest(".sub").ok().flatten());
+                let w = which(inside.as_ref()).unwrap_or_else(|| if sub.get_untracked() { "status".into() } else { "nav".into() });
+                open_of(&w).set(false);
+                if let Some(parent) = items(root_el).into_iter().find(|i| i.has_attribute("aria-haspopup") && which(Some(i)).as_deref() == Some(w.as_str())) {
                     focus(&parent);
                 }
                 ev.prevent_default();
@@ -672,18 +718,135 @@ fn menu_view(
                             class="item"
                             role="menuitem"
                             aria-haspopup="menu"
+                            data-sub="status"
                             aria-expanded=move || sub.get().to_string()
                             on:click=move |_| sub.update(|s| *s = !*s)
                         >
                             "Set status "
                             <span class="arrow" aria-hidden="true">{move || if sub.get() { "▾" } else { "▸" }}</span>
                         </button>
-                        {move || sub.get().then(|| view! { <div class="sub" role="group">{status_items()}</div> })}
+                        {move || sub.get().then(|| view! { <div class="sub" role="group" data-sub="status">{status_items()}</div> })}
                     }
                 })
             }}
+            // ACT-7: Nav ▸, only when the menu opened in the nav.
+            {nav.map(|at| {
+                view! {
+                    <button
+                        class="item"
+                        role="menuitem"
+                        aria-haspopup="menu"
+                        data-sub="nav"
+                        aria-expanded=move || nav_sub.get().to_string()
+                        on:click=move |_| nav_sub.update(|s| *s = !*s)
+                    >
+                        "Nav "
+                        <span class="arrow" aria-hidden="true">{move || if nav_sub.get() { "▾" } else { "▸" }}</span>
+                    </button>
+                    {move || {
+                        let at = at.clone();
+                        nav_sub.get().then(|| view! { <div class="sub" role="group" data-sub="nav">{nav_items(at, target)}</div> })
+                    }}
+                }
+            })}
         </div>
     }
+}
+
+/// ACT-7: whether the nav has anything to offer where the menu opened — the
+/// flat list with no ticket open has nothing, so no Nav ▸ (and no menu of
+/// the nav's own).
+fn offers(at: &nav::At) -> bool {
+    !shape::items(&at.place, at.reveal).is_empty()
+}
+
+/// ACT-7: the Nav ▸ items for where the menu opened ([`shape::items`]),
+/// each a button that does its op and closes the menu. The reveal moves
+/// focus to the open ticket's row, so the menu hands focus back first.
+fn nav_items(at: nav::At, target: RwSignal<Option<Target>>) -> AnyView {
+    shape::items(&at.place, at.reveal)
+        .into_iter()
+        .map(|item| match item {
+            Item::Rule => view! { <div class="rule" role="separator"></div> }.into_any(),
+            Item::Do(op, words) => {
+                let at = at.clone();
+                view! {
+                    <button
+                        class="item"
+                        role="menuitem"
+                        data-nav-op=op.name()
+                        on:click=move |_| {
+                            close_menu(target);
+                            nav::act(op, &at);
+                        }
+                    >
+                        {words}
+                    </button>
+                }
+                .into_any()
+            }
+        })
+        .collect_view()
+        .into_any()
+}
+
+/// ACT-7: the nav's own menu — opened on its empty space, its header, or a
+/// row that stands for no ticket: a header naming the place, and the Nav
+/// items alone (those that need no row, off a row). Placed, focused and
+/// walked by the keys as the ticket menu is.
+fn nav_menu_view(t: Target, target: RwSignal<Option<Target>>) -> impl IntoView {
+    let Target { x, y, nav, .. } = t;
+    let Some(at) = nav else { return ().into_any() };
+    let root = NodeRef::<leptos::html::Div>::new();
+    let focused = StoredValue::new(false);
+    Effect::new(move |_| {
+        let Some(el) = root.get() else { return };
+        place(&el, x, y);
+        if !focused.get_value() {
+            focused.set_value(true);
+            focus(&el);
+        }
+    });
+    let on_key = move |ev: web_sys::KeyboardEvent| {
+        let Some(el) = root.get() else { return };
+        let list = items(&el);
+        let active = document().active_element();
+        let current = list.iter().position(|i| active.as_ref() == Some(i.as_ref()));
+        match ev.key().as_str() {
+            "Tab" => close_menu(target),
+            k => {
+                if let Some(n) = step(current, list.len(), k) {
+                    focus(&list[n]);
+                    ev.prevent_default();
+                }
+            }
+        }
+    };
+    let label = match &at.place {
+        shape::Place::Row { label, .. } => label.clone(),
+        shape::Place::Flat => "the flat list".to_string(),
+        shape::Place::Space => "the tree".to_string(),
+    };
+    view! {
+        <div
+            id=MENU_ID
+            role="menu"
+            tabindex="-1"
+            node_ref=root
+            data-nav-menu=""
+            aria-label="nav"
+            style=format!("left: {x}px; top: {y}px")
+            on:contextmenu=|ev| ev.prevent_default()
+            on:keydown=on_key
+        >
+            <div class="h">
+                <span class="code">"Nav"</span>
+                <span class="title">{label}</span>
+            </div>
+            {nav_items(at, target)}
+        </div>
+    }
+    .into_any()
 }
 
 /// The confirmation toast. The manual fallback carries the id in a

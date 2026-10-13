@@ -124,6 +124,11 @@
 //! toggles the row, Ctrl/Cmd+A selects every row drawn — the nav tree's own
 //! (src/nav.rs). Esc, once nothing else it closes is open, clears the
 //! selection.
+//!
+//! ACT-7: **the nav's shape keys** (src/nav.rs, src/shape.rs) — `*` expands
+//! the focused row's subtree, Shift+`*` everything (the numpad's `*`: where
+//! the layout puts `*` on Shift, Shift is how it is typed), `-` collapses
+//! everything. None of them is the selection's.
 
 use std::cell::{Cell, RefCell};
 
@@ -191,6 +196,9 @@ pub(crate) const SHORTCUTS: &[(&str, &str)] = &[
     ("Shift+j / Shift+k", "extend the selection a row from the focused one (and Shift+↓ / Shift+↑)"),
     ("Space", "add or remove the focused row from the selection"),
     ("Ctrl+A", "select every row drawn in the nav or on the board (⌘A on a Mac)"),
+    ("*", "in the nav: expand the focused row's subtree, at every depth"),
+    ("Shift+* (numpad)", "in the nav: expand everything (or right-click › Nav › Expand all)"),
+    ("-", "in the nav: collapse everything, back to the shortcodes"),
     ("?", "this list"),
     ("Esc", "close the palette or this list; leave annotation mode; leave full screen; clear the selection"),
 ];
@@ -2105,6 +2113,9 @@ mod tests {
             "Shift+j / Shift+k",
             "Space",
             "Ctrl+A",
+            "*",           // a subtree (ACT-7)
+            "Shift+* (numpad)",
+            "-",
             "?",           // this list
             "Esc",         // close
         ] {

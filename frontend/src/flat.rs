@@ -919,7 +919,14 @@ pub(crate) fn flat_list(
     // is counted. AGS-26: centred, and kept there while the rows around it
     // arrive; a row already drawn (a step of the cursor, a click) is centred
     // where it is, with nothing to ask.
+    // ACT-7: Reveal the open ticket (the nav's menu) asks again.
+    let asked = StoredValue::new(nav::reveal_asked().map(|r| r.get_untracked()));
     Effect::new(move |_| {
+        let ask = nav::reveal_asked().map(|r| r.get());
+        if asked.get_value() != ask {
+            asked.set_value(ask);
+            revealed.set_value(None);
+        }
         let Route::Ticket(id) = route.get() else { return };
         if f.matches.with(Option::is_none) {
             return; // not counted yet: this re-runs when it is

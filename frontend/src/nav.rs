@@ -302,6 +302,25 @@
 //! selectable row says which ticket as `data-pick`. The foot counts the
 //! selection ("3 selected · clear") and what the nav's filter hides of it
 //! ([`selection_foot`]). The flat view is the same tree, so the same rows.
+//!
+//! ACT-7: **the tree's shape, a menu away** (owner, 2026-10-13: "a special
+//! sub menu in the right click menu on the nav that is nav centric"). What is
+//! open is a [`Shape`] (src/shape.rs) — a default and per-key marks, deep or
+//! plain, the newer word winning along a chain — not a set of keys: each node
+//! folds it over its ancestors' keys ([`Up`]), so "everything under THEME-4"
+//! needs nothing under THEME-4 known. The menu (src/menu.rs) asks [`at`] where
+//! it opened — a row (its key, its chain from the DOM, its shortcode's root),
+//! the flat list, or the nav's empty space — and [`act`] does the item:
+//! expand or collapse a subtree, a shortcode from its root, everything;
+//! collapse the others; reveal the open ticket (the reveal again, then focus).
+//! Expanding marks; it fetches nothing itself. A node open by a mark of its
+//! own asks its first page at once, as a click's does; one open only by a
+//! bulk expand asks once its list is near the viewport, holding the room its
+//! subtree will take until then ([`Lazy`], [`near`]) — so Expand all on prod
+//! asks 31 pages for its first screen, not 196, and the rest as the scroll
+//! reaches them; a long list stays a window. Under the lens only what `tree`
+//! draws opens. Canceled rows stay closed (MENGER-13). Keys: `*`, Shift+`*`,
+//! `-` ([`shape_key`]).
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -318,6 +337,7 @@ use crate::kids::key;
 use crate::lens::{use_lens, Lens, Level};
 use crate::session::Member;
 use crate::selection::{self, Gesture, Picked};
+use crate::shape::{Op, Place, Shape};
 use crate::{cache, dom, keys, session, st_class, tags, Route};
 use menger_tickets_api::filter::{Field, Filter, Group as FGroup, Predicate};
 use menger_tickets_api::{Group, Kind, Status, TicketSummary, TicketsEvent};
@@ -365,18 +385,15 @@ pub(crate) fn storage() -> Option<web_sys::Storage> {
     dom::window().local_storage().ok().flatten()
 }
 
-fn load_expanded() -> BTreeSet<String> {
-    storage()
-        .and_then(|s| s.get_item(EXPANDED_KEY).ok().flatten())
-        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
-        .map(|v| v.into_iter().collect())
-        .unwrap_or_default()
+/// ACT-7: the expansion is a [`Shape`] now, kept under the same key — a set
+/// stored before reads as its plain marks.
+fn load_expanded() -> Shape {
+    Shape::load(storage().and_then(|s| s.get_item(EXPANDED_KEY).ok().flatten()).as_deref())
 }
 
-fn save_expanded(set: &BTreeSet<String>) {
+fn save_expanded(shape: &Shape) {
     if let Some(s) = storage() {
-        let raw = serde_json::to_string(&set.iter().collect::<Vec<_>>()).unwrap_or_default();
-        let _ = s.set_item(EXPANDED_KEY, &raw);
+        let _ = s.set_item(EXPANDED_KEY, &shape.stored());
     }
 }
 
@@ -561,22 +578,9 @@ pub(crate) fn climb(g: Option<&Group>, cur: &TicketSummary) -> Climb {
 /// open tree stays open across the upgrade. A code whose shortcode has no
 /// root still names its shortcode row, and one the groups do not name yet
 /// is left as it is (it moves when its group arrives). `None` when nothing
-/// moves.
-pub(crate) fn migrate_expanded(expanded: &BTreeSet<String>, groups: &BTreeMap<String, Group>) -> Option<BTreeSet<String>> {
-    let moves: Vec<(&String, &String)> = expanded
-        .iter()
-        .filter(|k| !k.contains('-'))
-        .filter_map(|k| groups.get(k).and_then(|g| g.root.as_ref()).map(|r| (k, r)))
-        .collect();
-    if moves.is_empty() {
-        return None;
-    }
-    let mut next = expanded.clone();
-    for (code, root) in moves {
-        next.remove(code);
-        next.insert(root.clone());
-    }
-    Some(next)
+/// moves. ACT-7: on the shape's marks, each keeping what it says.
+pub(crate) fn migrate_expanded(expanded: &Shape, groups: &BTreeMap<String, Group>) -> Option<Shape> {
+    expanded.rekeyed(|code| groups.get(code).and_then(|g| g.root.clone()))
 }
 
 // ---------------------------------------------------------------------
@@ -1097,6 +1101,25 @@ pub(crate) struct Geom {
     pub(crate) above: f64,
     pub(crate) viewport: f64,
     pub(crate) pitch: f64,
+}
+
+/// ACT-7: whether a list `n` rows long, where `g` measured it, is on or
+/// near the nav's viewport — its top less than two viewports below the
+/// viewport's top, its bottom less than one above it. A list whose first page
+/// has not come is one row long at least.
+pub(crate) fn near(g: Geom, n: usize) -> bool {
+    let top = -g.above;
+    let bottom = top + (n.max(1) as f64) * g.pitch;
+    top < 2.0 * g.viewport && bottom > -g.viewport
+}
+
+/// ACT-7: how an open node's list asks — at once when the node is open by a
+/// mark of its own, otherwise once near the viewport — and how many rows of
+/// room it holds until it has asked.
+#[derive(Clone, Copy)]
+struct Lazy {
+    marked: Memo<bool>,
+    reserve: usize,
 }
 
 /// What a list mounts: chunks `start..end`, and the heights of the two
@@ -1733,6 +1756,158 @@ fn parent_row(current: &web_sys::Element) -> Option<web_sys::HtmlElement> {
         .and_then(|r| r.dyn_into::<web_sys::HtmlElement>().ok())
 }
 
+// ---------------------------------------------------------------------
+// ACT-7: the Nav ▸ menu's ops on the tree (what each does to the shape is
+// src/shape.rs's).
+
+thread_local! {
+    /// ACT-7: the mounted nav's handles — what the menu (src/menu.rs) and
+    /// the keys act through.
+    static HOOK: Cell<Option<Hook>> = const { Cell::new(None) };
+}
+
+#[derive(Clone, Copy)]
+struct Hook {
+    ctx: Ctx,
+    view: RwSignal<View>,
+    /// Bumped by Reveal the open ticket: the tree's and the flat list's
+    /// reveal run again.
+    reveal: RwSignal<u32>,
+}
+
+/// ACT-7: Reveal the open ticket's count — what the tree's and the flat
+/// list's reveal effects follow (`None` until the nav is mounted).
+pub(crate) fn reveal_asked() -> Option<RwSignal<u32>> {
+    HOOK.with(Cell::get).map(|h| h.reveal)
+}
+
+/// ACT-7: the keys of the rows above a row of the tree, the top first — the
+/// `.node`s whose `.kids` hold it (a hosted shortcode's host among them, as
+/// its row is drawn there).
+fn chain_of(row: &web_sys::Element) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut at = row.closest(".node").ok().flatten();
+    while let Some(node) = at {
+        let up = node.parent_element().and_then(|p| p.closest(".kids").ok().flatten()).and_then(|k| k.parent_element());
+        if let Some(up) = &up {
+            if let Some(k) = up.get_attribute("data-node-key") {
+                out.push(k);
+            }
+        }
+        at = up;
+    }
+    out.reverse();
+    out
+}
+
+/// ACT-7: where in the nav the Nav ▸ menu opened, and what its items need.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct At {
+    pub(crate) place: Place,
+    /// A ticket is open: Reveal the open ticket is offered.
+    pub(crate) reveal: bool,
+    row: Option<RowAt>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RowAt {
+    key: String,
+    chain: Vec<String>,
+    open: bool,
+    /// The row's shortcode's root — its code for a shortcode with none.
+    root: Option<String>,
+}
+
+/// ACT-7: the nav place `el` is in — a row of the tree, the flat list, or
+/// the nav's empty space or header — `None` outside the nav, before it is
+/// mounted, and inside a field or a popover of its own (those keep theirs).
+pub(crate) fn at(el: &web_sys::Element) -> Option<At> {
+    el.closest("#nav").ok().flatten()?;
+    if el.closest("input, textarea, select, [contenteditable], [role=dialog], [role=menu], [role=listbox]").ok().flatten().is_some() {
+        return None;
+    }
+    let h = HOOK.with(Cell::get)?;
+    let reveal = h.ctx.route.with_untracked(|r| matches!(r, Route::Ticket(_)));
+    if h.view.get_untracked() == View::Flat {
+        return Some(At { place: Place::Flat, reveal, row: None });
+    }
+    let Some(row) = el.closest("#nav .tree [role=treeitem]").ok().flatten() else {
+        return Some(At { place: Place::Space, reveal, row: None });
+    };
+    let node = row.closest(".node").ok().flatten()?;
+    let key = node.get_attribute("data-node-key")?;
+    let epic = node
+        .get_attribute("data-group")
+        .or_else(|| crate::kids::key(&key).map(|(e, _)| e.to_string()))
+        .unwrap_or_else(|| key.clone());
+    let root = h.ctx.tree.groups.with_untracked(|m| {
+        m.as_ref().and_then(|m| m.get(&epic)).map(|g| g.root.clone().unwrap_or_else(|| g.epic.clone()))
+    });
+    let has_kids = row.has_attribute("aria-expanded");
+    let place = Place::Row { label: key.clone(), has_kids, shortcode: root.as_ref().map(|_| epic) };
+    let row = RowAt { chain: chain_of(&row), open: row.get_attribute("aria-expanded").as_deref() == Some("true"), key, root };
+    Some(At { place, reveal, row: Some(row) })
+}
+
+/// ACT-7: one Nav ▸ item, done. The shape moves, and the tree follows it —
+/// a node that opens asks its first page, and a long list stays a window
+/// (SCALE-24): nothing here walks the store.
+pub(crate) fn act(op: Op, at: &At) {
+    let Some(h) = HOOK.with(Cell::get) else { return };
+    if op == Op::Reveal {
+        reveal_now(h);
+        return;
+    }
+    let (key, chain, open) = match (&at.row, op) {
+        (_, Op::ExpandAll | Op::CollapseAll) => (String::new(), Vec::new(), false),
+        (Some(r), Op::ExpandShortcode | Op::CollapseShortcode) => match &r.root {
+            Some(root) => (root.clone(), Vec::new(), false),
+            None => return,
+        },
+        (Some(r), _) => (r.key.clone(), r.chain.clone(), r.open),
+        (None, _) => return,
+    };
+    h.ctx.expanded.update(|s| s.apply(op, &key, &chain, open));
+}
+
+/// ACT-7: Reveal the open ticket — its chain opens (the tree's reveal, run
+/// again whatever it did before; the flat list's, which scrolls to it), the
+/// row is centred, and once it stands still it takes focus.
+fn reveal_now(h: Hook) {
+    let Route::Ticket(id) = h.ctx.route.get_untracked() else { return };
+    h.reveal.update(|n| *n = n.wrapping_add(1));
+    spawn_local(async move {
+        for _ in 0..200 {
+            dom::sleep_ms(25).await;
+            if selected_row(&id).is_some() {
+                break;
+            }
+        }
+        settle_centred(id.clone(), || true).await;
+        if let Some(row) = selected_row(&id) {
+            keys::focus_and_rove(&tree_items(), &row);
+        }
+    });
+}
+
+/// ACT-7: the tree's own keys for its shape — `*` the focused row's
+/// subtree (WAI-ARIA's tree key), Shift+`*` everything, `-` back to the
+/// shortcodes. A `*` typed with Shift because the layout puts it there
+/// (Shift+8) is a plain `*`: Shift counts only on the numpad's, whose `*`
+/// needs none. True when the key was one of them.
+fn shape_key(ev: &web_sys::KeyboardEvent, current: &web_sys::Element) -> bool {
+    let op = match ev.key().as_str() {
+        "*" if ev.shift_key() && ev.code() == "NumpadMultiply" => Op::ExpandAll,
+        "*" => Op::ExpandSubtree,
+        "-" => Op::CollapseAll,
+        _ => return false,
+    };
+    if let Some(at) = at(current) {
+        act(op, &at);
+    }
+    true
+}
+
 thread_local! {
     /// SCALE-24: a step across a gap in flight — its direction, and how many
     /// more steps were pressed while it waited. One at a time: every press
@@ -1999,16 +2174,21 @@ fn tree_keydown(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
     let node_key = current.get_attribute("data-node-key");
     let expandable = current.has_attribute("aria-expanded");
     let open = current.get_attribute("aria-expanded").as_deref() == Some("true");
+    // ACT-7: the row's chain says what it inherits; it opens or closes the
+    // other way from how it is drawn.
     let toggle = |k: Option<String>| {
         if let Some(k) = k {
-            ctx.expanded.update(|e| {
-                if !e.remove(&k) {
-                    e.insert(k);
-                }
-            });
+            let chain = chain_of(&current);
+            ctx.expanded.update(|e| e.set_open(&chain, &k, !open));
         }
     };
 
+    // ACT-7: `*`, Shift+`*`, `-`.
+    if shape_key(&ev, &current) {
+        ev.prevent_default();
+        ev.stop_propagation();
+        return;
+    }
     let handled = match key.as_str() {
         "ArrowDown" | "j" => {
             step_from(&steps, at, true, ctx, lens, false);
@@ -2214,10 +2394,8 @@ fn step_selected(id: String, down: bool, ctx: Ctx, lens: Lens) {
 /// ([`reveal`], once per filter).
 fn filter_to(id: &str, ctx: Ctx, lens: Lens) {
     lens.edit(Level::Nav, |k| *k = tags::only(&tags::TagClause::Under(id.to_string()), k));
-    if ctx.expanded.with_untracked(|e| !e.contains(id)) {
-        ctx.expanded.update(|e| {
-            e.insert(id.to_string());
-        });
+    if ctx.expanded.with_untracked(|e| !e.marked_open(id)) {
+        ctx.expanded.update(|e| e.force_open(id));
     }
 }
 
@@ -2284,7 +2462,8 @@ fn widen(lens: Lens, tree: Tree) {
 struct Ctx {
     tree: Tree,
     route: RwSignal<Route>,
-    expanded: RwSignal<BTreeSet<String>>,
+    /// ACT-7: what is open — a [`Shape`], not a set of keys.
+    expanded: RwSignal<Shape>,
     /// FILTER-14: the nav's lens.
     under: Under,
 }
@@ -2459,9 +2638,9 @@ async fn reveal(ctx: Ctx, leaf: String, gen: u32) {
         None => (steps, leaf),
     };
     let keys: Vec<String> = steps.iter().map(|(n, _)| n.key().to_string()).collect();
-    let missing: Vec<String> = ctx.expanded.with_untracked(|e| keys.into_iter().filter(|k| !e.contains(k)).collect());
+    let missing: Vec<String> = ctx.expanded.with_untracked(|e| keys.into_iter().filter(|k| !e.marked_open(k)).collect());
     if !missing.is_empty() {
-        ctx.expanded.update(|e| e.extend(missing));
+        ctx.expanded.update(|e| missing.iter().for_each(|k| e.force_open(k)));
     }
     ctx.tree.reveal.set(Some(Reveal { gen, steps }));
     for _ in 0..300 {
@@ -2591,10 +2770,13 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
     // FILTER-21: menger's own documents are no toggle here — the nav's
     // filter leaves them out by default (`not menger doc`, src/lens.rs).
     let ctx = Ctx { tree, route, expanded, under };
+    // ACT-7: Reveal the open ticket's count — the reveals below follow it.
+    let reveal_ask = RwSignal::new(0u32);
     // FILTER-20: Tree or Flat, the choice kept with the nav's other state. A
     // switch starts the nav at its top (the open ticket is brought back into
     // view by the view it switched to).
     let nav_view = RwSignal::new(flat::load_view());
+    HOOK.with(|h| h.set(Some(Hook { ctx, view: nav_view, reveal: reveal_ask })));
     Effect::new(move |prev: Option<View>| {
         let now = nav_view.get();
         if prev.is_some_and(|p| p != now) {
@@ -2668,7 +2850,14 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
     // open ticket is centred in it again. A row already drawn (a step of the
     // cursor, a click) is centred where it is, with no chain to fetch.
     let revealed = StoredValue::new(None::<(String, Option<String>)>);
+    // ACT-7: Reveal the open ticket asks again: what was revealed is forgotten.
+    let asked = StoredValue::new(0u32);
     Effect::new(move |_| {
+        let ask = reveal_ask.get();
+        if asked.get_value() != ask {
+            asked.set_value(ask);
+            revealed.set_value(None);
+        }
         let Route::Ticket(id) = route.get() else { return };
         let filter = under.text.get();
         if tree.epoch.get() == 0 {
@@ -2707,7 +2896,7 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
     // measures again — opening a node moves everything below it.
     Effect::new(move |_| {
         top_nodes.track();
-        expanded.with(|e| e.len());
+        expanded.track();
         let _ = route.get();
         spawn_local(async move {
             dom::sleep_ms(0).await;
@@ -2942,11 +3131,19 @@ fn nav_f(ev: web_sys::KeyboardEvent, ctx: Ctx, lens: Lens) {
 /// what turns a depth into the tree's connector art ([`art`]: `│ ` for an
 /// ancestor with siblings still to come, two spaces for one that was
 /// last). Each flag is a memo, so an insert repaints only the rows whose
-/// answer actually changed.
-type Ancestry = Arc<Vec<Memo<bool>>>;
+/// answer actually changed. ACT-7: and each ancestor's key — the chain a
+/// row folds the nav's [`Shape`] over to know whether it is open.
+type Ancestry = Arc<Vec<Up>>;
+
+/// One ancestor of a row: whether it is its list's last, and its key.
+#[derive(Clone)]
+struct Up {
+    last: Memo<bool>,
+    key: String,
+}
 
 fn connectors(anc: &Ancestry, last: bool) -> String {
-    art(anc.iter().map(|a| a.get()), last)
+    art(anc.iter().map(|a| a.last.get()), last)
 }
 
 /// A child's place in a list: the list, and whether it is windowed (then
@@ -3026,12 +3223,14 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
     // (the reveal's chain opens it, so the cursor can stand on its row).
     let canceled = Memo::new(move |_| ticket.is_some_and(|t| t.with(|t| t.status == Status::Canceled)));
     let peek = RwSignal::new(false);
+    // ACT-7: the keys above this row — what it inherits from the shape.
+    let chain: Arc<Vec<String>> = Arc::new(ancestry.iter().map(|a| a.key.clone()).collect());
     let open = {
-        let k = key.clone();
+        let (k, chain) = (key.clone(), chain.clone());
         let expanded = ctx.expanded;
         let route = ctx.route;
         Memo::new(move |_| {
-            expanded.with(|e| e.contains(&k))
+            expanded.with(|e| e.is_open(&chain, &k))
                 && (!canceled.get()
                     || peek.get()
                     || route.with(|r| matches!(r, Route::Ticket(open) if open_is_below(open, &k))))
@@ -3108,7 +3307,7 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
     };
     let child_ancestry: Ancestry = {
         let mut v = (*ancestry).clone();
-        v.push(mine_last);
+        v.push(Up { last: mine_last, key: key.clone() });
         Arc::new(v)
     };
 
@@ -3129,24 +3328,13 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
         let k = key.clone();
         let expanded = ctx.expanded;
         move || {
+            // ACT-7: the other way from how it is drawn, under its chain.
+            let now = !open.get_untracked();
             // MENGER-13: a canceled row opens for this view only.
             if canceled.get_untracked() {
-                let now = !open.get_untracked();
                 peek.set(now);
-                expanded.update(|e| {
-                    if now {
-                        e.insert(k.clone());
-                    } else {
-                        e.remove(&k);
-                    }
-                });
-                return;
             }
-            expanded.update(|e| {
-                if !e.remove(&k) {
-                    e.insert(k.clone());
-                }
-            })
+            expanded.update(|e| e.set_open(&chain, &k, now));
         }
     };
     // A row with no children is a leaf of the a11y tree: no
@@ -3228,6 +3416,12 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
     };
 
     let kids_ref = NodeRef::<leptos::html::Div>::new();
+    // ACT-7: opened by a mark of its own (a click, h/l, the reveal) — or only
+    // by a bulk expand, when its list waits to be near the viewport to ask.
+    let marked = {
+        let k = key.clone();
+        Memo::new(move |_| ctx.expanded.with(|e| e.marked_open(&k)))
+    };
     view! {
         <div
             class="node"
@@ -3257,7 +3451,7 @@ fn node_view(node: Node, ctx: Ctx, ancestry: Ancestry, last: Memo<Option<String>
                                         (true, None) => return None,
                                         (on, text) => text.filter(|_| on),
                                     };
-                                    open.get().then(|| children_of(node.clone(), ctx, child_ancestry.clone(), kids_ref, ticket, lensed))
+                                    open.get().then(|| children_of(node.clone(), ctx, child_ancestry.clone(), kids_ref, ticket, lensed, marked))
                                 }}
                             </div>
                         }
@@ -3278,27 +3472,43 @@ fn children_of(
     kids_ref: NodeRef<leptos::html::Div>,
     ticket: Option<Signal<TicketSummary>>,
     lensed: Option<String>,
+    marked: Memo<bool>,
 ) -> AnyView {
     let tree = ctx.tree;
     let hosted = |id: &str| {
         let id = id.to_string();
         Memo::new(move |_| tree.hosted.with(|h| h.get(&id).cloned().unwrap_or_default()))
     };
+    // ACT-7: a lazy list not asked yet keeps the room its subtree will take
+    // open, so the lists below it are not all near at once — a shortcode's
+    // root's, its roll-up (everything under it); under the lens, its matches,
+    // and a ticket's the matches below it (a ticket's list off the lens has
+    // its `child_count` of pending rows already).
+    let under = ctx.under;
+    let reserve = |epic: &str| match lensed {
+        Some(_) => untrack(|| under.count(epic)).unwrap_or(0),
+        None => tree.with_group(epic, |g| (g.total + g.docs).saturating_sub(1) as usize).unwrap_or(0),
+    };
     match node {
-        Node::Group(epic) => list_view(Source::Epic(epic), None, ctx, ancestry, kids_ref, None, lensed),
+        Node::Group(epic) => {
+            let lazy = Lazy { marked, reserve: reserve(&epic) };
+            list_view(Source::Epic(epic), None, ctx, ancestry, kids_ref, None, lensed, lazy)
+        }
         Node::Ticket(id) => {
             // FILTER-14: under the lens a row's `child_count` is not its
             // list's: the pruned tree is sized by its first page.
             let count = ticket.filter(|_| lensed.is_none()).map(|t| Memo::new(move |_| t.with(|t| t.child_count as usize)));
             let hosted = hosted(&id);
-            list_view(Source::Parent(id), count, ctx, ancestry, kids_ref, Some(hosted), lensed)
+            let below = if lensed.is_some() { untrack(|| under.mark(&id)).map_or(0, |m| m.below as usize) } else { 0 };
+            list_view(Source::Parent(id), count, ctx, ancestry, kids_ref, Some(hosted), lensed, Lazy { marked, reserve: below })
         }
         // AGS-23: the root's row is the group's, which carries no count of
         // its children: its list is sized by its first page, and moved by
         // `children_changed` / `child_removed`, which carry the count.
-        Node::Root(id, _) => {
+        Node::Root(id, epic) => {
             let hosted = hosted(&id);
-            list_view(Source::Parent(id), None, ctx, ancestry, kids_ref, Some(hosted), lensed)
+            let lazy = Lazy { marked, reserve: reserve(&epic) };
+            list_view(Source::Parent(id), None, ctx, ancestry, kids_ref, Some(hosted), lensed, lazy)
         }
     }
 }
@@ -3319,6 +3529,16 @@ enum Slot {
 /// FILTER-14: `lensed`, the nav's filter: the children are the pruned tree
 /// `tree` answers for it, and `watch`'s deltas are not applied — the list
 /// asks again when the membership watch says its chain moved.
+///
+/// ACT-7: [`Lazy`] — while the node is open only by a bulk expand (Expand
+/// all, a subtree, a shortcode), not by a mark of its own, the list asks its
+/// first page only once it has been measured near the nav's viewport
+/// ([`near`]): Expand all on 650 tickets opens every node, and only those on
+/// or near the screen ask; the rest ask as the scroll reaches them. Until its
+/// page comes, it holds the room of its reserve's rows (a gap, as a spacer
+/// is), so the lists below it are measured where they will be. A mark (a
+/// click, the reveal's chain) makes it ask at once.
+#[allow(clippy::too_many_arguments)]
 fn list_view(
     source: Source,
     count: Option<Memo<usize>>,
@@ -3327,6 +3547,7 @@ fn list_view(
     kids_ref: NodeRef<leptos::html::Div>,
     hosted: Option<Memo<Vec<String>>>,
     lensed: Option<String>,
+    lazy: Lazy,
 ) -> AnyView {
     let tree = ctx.tree;
     let under = ctx.under;
@@ -3351,6 +3572,11 @@ fn list_view(
 
     let windowed = Memo::new(move |_| list.with(|l| l.n > WHOLE));
     let geom = RwSignal::new(Geom { above: 0.0, viewport: 900.0, pitch: PITCH_GUESS });
+    // ACT-7: whether a lazy list may ask — once measured, near the viewport.
+    let placed = RwSignal::new(false);
+    let Lazy { marked, reserve } = lazy;
+    let may_ask = Memo::new(move |_| marked.get() || (placed.get() && near(geom.get(), list.with(|l| l.n).max(reserve))));
+    let reserved = Memo::new(move |_| (reserve > 0 && !marked.get() && list.with(|l| !l.loaded)).then_some(reserve));
     // The mounted chunks' measured heights, stamped with the list's `moved`
     // when they were taken: once known indices move, a chunk is not the
     // children it was measured with, and its height is the estimate again.
@@ -3379,6 +3605,9 @@ fn list_view(
         let g = Geom { above: s.top() - k.top(), viewport: f64::from(sc.client_height()), pitch: tree.pitch.get_untracked() };
         if geom.try_get_untracked() != Some(g) {
             geom.try_set(g);
+        }
+        if placed.try_get_untracked() == Some(false) {
+            placed.try_set(true);
         }
     };
     Effect::new(move |_| {
@@ -3429,6 +3658,10 @@ fn list_view(
             let (lo, hi) = range.get();
             list.track();
             retry.track();
+            // ACT-7: a lazy list off the screen asks nothing yet.
+            if !may_ask.get() && list.with_untracked(|l| !l.loaded) {
+                return;
+            }
             if epoch == 0 || busy.get_value() {
                 return;
             }
@@ -3639,6 +3872,9 @@ fn list_view(
     let child_ancestry = ancestry.clone();
     let hosted_ancestry = ancestry;
     view! {
+        {move || reserved.get().map(|n| view! {
+            <div class="spacer gap" role="none" aria-hidden="true" data-reserve=n style:height=move || format!("{}px", n as f64 * tree.pitch.get())></div>
+        })}
         {spacer(|s| s.top_px)}
         <For
             each=move || slots.get()
@@ -3956,8 +4192,22 @@ mod tests {
     use super::{
         art, chunks, climb, drawn_steps, face, face_of, hidden_count, kept_codes, kept_face, Holds, hidden_line, kind_glyph, last_drawn, migrate_expanded, offset_of,
         on_chain, rollup_label, root_has_kids, shortcode_face, shortcode_node, shown, span, summed, Ask, Climb, Face, Geom, List, Mark,
-        Node, Source, CHUNK, PAGE, WHOLE, centring, next_stop, under_group, with_under, Stop,
+        Node, Source, CHUNK, PAGE, WHOLE, centring, next_stop, under_group, with_under, Stop, near,
     };
+
+    /// ACT-7: a lazy list asks once it is on the screen, or within two
+    /// screens below it, or a screen above.
+    #[test]
+    fn a_lazy_list_asks_when_near() {
+        let at = |top: f64| Geom { above: -top, viewport: 900.0, pitch: 19.0 };
+        assert!(near(at(0.0), 0), "at the top");
+        assert!(near(at(850.0), 3), "on the screen");
+        assert!(near(at(1700.0), 3), "within two screens below");
+        assert!(!near(at(1800.0), 3), "further down");
+        assert!(near(at(-950.0), 10), "its end within a screen above");
+        assert!(!near(at(-2000.0), 10), "far above");
+        assert!(near(at(-2000.0), 100), "a long list reaching the screen");
+    }
     use crate::board::Matches;
     use crate::filter::ScTree;
     use menger_tickets_api::{Group, Kind, RootRow, Status, TicketSummary};
@@ -4169,10 +4419,12 @@ mod tests {
     #[test]
     fn a_persisted_shortcode_key_opens_its_root() {
         let g = demo();
-        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<BTreeSet<String>>();
+        // ACT-7: the set as it was stored, read as a shape's plain marks.
+        let set = |v: &[&str]| crate::shape::Shape::load(Some(&serde_json::to_string(v).unwrap()));
+        let keys = |s: &crate::shape::Shape| s.marks.keys().cloned().collect::<BTreeSet<String>>();
         let was = set(&["SUP", "SUP-1", "SUP-4", "SUB", "DOCS", "PRE", "PRE-1", "GONE"]);
         let now = migrate_expanded(&was, &g).expect("the codes with a root move");
-        assert_eq!(now, set(&["SUP-1", "SUP-4", "SUB-1", "DOCS-1", "PRE", "PRE-1", "GONE"]));
+        assert_eq!(keys(&now), keys(&set(&["SUP-1", "SUP-4", "SUB-1", "DOCS-1", "PRE", "PRE-1", "GONE"])));
         assert_eq!(migrate_expanded(&now, &g), None, "once");
         assert_eq!(migrate_expanded(&set(&[]), &g), None);
         assert_eq!(migrate_expanded(&set(&["SUP-1", "PRE"]), &g), None);
