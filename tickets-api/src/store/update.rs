@@ -241,9 +241,9 @@ fn plan(
         if let Some((uses, problems)) = uses {
             match problems.into_iter().next() {
                 Some(problem) => refusals.push(StoreError::component(Some(&id), problem)),
-                None => match cache.components.plan(&id, &uses) {
+                None => match cache.plan_registry(&id, &uses, Some(&id)) {
                     Ok(p) => registered = p,
-                    Err(o) => refusals.push(StoreError::ComponentOwned { id: Some(id.clone()), name: o.name, owner: o.owner }),
+                    Err(e) => refusals.push(e),
                 },
             }
         }
@@ -406,7 +406,7 @@ fn amend_step(
         None => None,
     };
     let groups = cache.amended(row.clone(), title_changed);
-    cache.components.take(registry_moves);
+    cache.take_registry(registry_moves);
     if let Some(list) = input_list {
         cache.inputs.take(&row.id, list);
     }

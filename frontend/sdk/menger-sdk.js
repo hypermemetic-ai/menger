@@ -36,7 +36,17 @@
  *     `on('change', cb)` → `cb(event)` for every `watch`
  *     event the app hears (`amended`, `status_changed`,
  *     `component_changed`, `input_changed`, …), returning a function that
- *     stops it;
+ *     stops it; (1.13, THEME-7) `on('theme', cb)` → `cb({ scheme, theme,
+ *     tokens })` whenever what this frame is painted with moves — the
+ *     light/dark mode, the theme its region wears (a reader's pick, an
+ *     amended ```theme block, a project entered or left) or any token's
+ *     value — called once the new tokens are live on `:root` (a component
+ *     reading `var(--accent)` or `getComputedStyle` sees them), never for a
+ *     message that moved nothing; a component that draws with colours in
+ *     JS (a canvas, a colour copied into an attribute) redraws there. A
+ *     subscription made while a component's script runs ends with that
+ *     render, as `on('change')`'s does. `theme` (1.13, a getter) is what
+ *     the frame wears now, `{ scheme, theme, tokens }`, a fresh copy;
  *     `navigate(route)` (COMP-9) → the app goes to an app route
  *     (`#/ticket/…` — with `?component=`, or COMP-14's `?field=` /
  *     `?anchor=`, `#/components…`, `#/waves/…`; the host ignores any
@@ -144,6 +154,11 @@
  *     component's shadow root);
  *   - mermaid placeholders (md.rs) drawn here, with the vendored bundle,
  *     in the theme's mermaid palette, redrawn on a flip;
+ *   - (1.12, MENGER-22) every code block highlighted, with the vendored
+ *     highlighter (`highlight.url`), by the app's rules (src/highlight.rs:
+ *     a block's `language-x`, `text`/`plain` plain, an unlabeled fence as
+ *     `highlight.unlabeled` says), coloured by the `--code-*` tokens — a
+ *     flip or a theme recolours it with no parse again;
  *   - the document's height, reported to the host (ResizeObserver), which
  *     sizes the frame to it: a frame never scrolls inside.
  *
@@ -156,8 +171,10 @@
  * from `window.parent` carrying its channel.
  *
  *   frame → host  menger:ready  { version }               once, at start
- *   host → frame  menger:theme  { scheme, tokens }        on ready, and on
- *                                                         every theme flip
+ *   host → frame  menger:theme  { scheme, tokens, css, theme }  on ready,
+ *                 and whenever the app repaints (THEME-7's one path: a mode
+ *                 flip, a theme picked, amended, entered or left); `theme`
+ *                 the name the frame's region wears (1.13), `css` its rules
  *   host → frame  menger:components { components }        on ready, and
  *                 whenever the app (re)fetches the registry — the whole
  *                 registry (`[{ name, source, owner, references }]`); what
@@ -233,7 +250,7 @@
  *                 such section — `height` 0).
  *
  * The init block (#menger-init, JSON) carries
- * `{ channel, version, scheme, mermaid: { url, config }, components, ticket, cite }`
+ * `{ channel, version, scheme, theme, mermaid: { url, config }, highlight: { url, unlabeled, detect, plain, aliases, min_relevance }, components, ticket, cite }`
  * — `components` the registry as the app held it (null: not yet), `ticket`
  * the ticket whose stored body this is (null: none), `cite` (1.7) the
  * section a cited window shows (`{ field }` or `{ anchor }`; null: a whole
@@ -244,7 +261,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.12.0";
+  var VERSION = "1.14.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -265,7 +282,11 @@
   }
   var channel = String(init.channel || "");
   var scheme = init.scheme === "dark" ? "dark" : "light";
+  // THEME-7: the theme this frame's region wears (its name), as painted.
+  var themeName = typeof init.theme === "string" && init.theme ? init.theme : "default";
   var mermaidInit = init.mermaid && init.mermaid.url ? init.mermaid : null;
+  // MENGER-22: the highlighter and its rules (src/highlight.rs).
+  var highlightInit = init.highlight && init.highlight.url ? init.highlight : null;
   // COMP-14: a cited window's frame shows one section, display only.
   var citeTarget = null;
   if (init.cite && typeof init.cite === "object") {
@@ -356,9 +377,11 @@
   var rendering = null;
 
   function on(kind, cb) {
-    if (kind !== "change") throw new TypeError("menger.on: no event '" + kind + "' — there is 'change'");
+    if (kind !== "change" && kind !== "theme") {
+      throw new TypeError("menger.on: no event '" + kind + "' — there are 'change' and 'theme'");
+    }
     if (typeof cb !== "function") throw new TypeError("menger.on: the listener must be a function");
-    var entry = { cb: cb };
+    var entry = { cb: cb, kind: kind };
     listeners.push(entry);
     if (rendering) rendering.subs.push(entry);
     return function off() {
@@ -367,12 +390,14 @@
     };
   }
 
-  function notify(event) {
+  function notify(event, kind) {
+    kind = kind || "change";
     var now = listeners.slice();
     for (var i = 0; i < now.length; i++) {
+      if (now[i].kind !== kind) continue;
       if (listeners.indexOf(now[i]) < 0) continue; // stopped by an earlier one
       try {
-        now[i].cb(event);
+        now[i].cb(kind === "theme" ? worn() : event);
       } catch (e) {
         logError(e);
       }
@@ -848,7 +873,10 @@
 
   // -- window.menger ------------------------------------------------------
 
-  var api = Object.freeze({ version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input });
+  var api = { version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input };
+  // THEME-7: what the frame wears now — a fresh copy each read.
+  Object.defineProperty(api, "theme", { enumerable: true, get: function () { return worn(); } });
+  api = Object.freeze(api);
   try {
     Object.defineProperty(window, "menger", { value: api, enumerable: true, writable: false, configurable: false });
   } catch (e) {
@@ -882,57 +910,78 @@
     "*,*::before,*::after{box-sizing:border-box}",
     ":where(html){overflow:hidden;height:auto;background:transparent}",
     ":where(body){margin:0;padding:0;display:flow-root;overflow-x:auto;background:transparent;" +
-      "color:var(--ink);font:14px/1.6 var(--sans)}",
-    ":where(" + EVERY + "h1,h1[data-md]){font-size:1.1rem;margin:1.1rem 0 .4rem}",
-    ":where(" + EVERY + ":is(h2,h3,h4),:is(h2,h3,h4)[data-md]){font-size:1rem;margin:1.1rem 0 .4rem}",
-    ":where(" + EVERY + "code,code[data-md]," + CARD_CODE + "){font-family:var(--mono);font-size:.92em;background:var(--panel);" +
-      "border:1px solid var(--line);border-radius:3px;padding:0 .25rem}",
-    ":where(" + EVERY + "pre,pre[data-md]," + CARD_PRE + "){font-family:var(--mono);background:var(--panel);border:1px solid var(--line);" +
-      "border-radius:4px;padding:.6rem .8rem;overflow-x:auto}",
+      "color:var(--ink);font:calc(14px * var(--text-scale))/1.6 var(--sans)}",
+    // THEME-5: headings in the display face (a theme's --font-display), with room.
+    ":where(" + EVERY + ":is(h1,h2,h3,h4),:is(h1,h2,h3,h4)[data-md]){font-family:var(--font-display);font-weight:var(--weight-strong);" +
+      "line-height:1.25;letter-spacing:-.005em;margin:1.6rem 0 .55rem}",
+    ":where(" + EVERY + "h1,h1[data-md]){font-size:calc(1.5rem * var(--text-scale))}",
+    ":where(" + EVERY + "h2,h2[data-md]){font-size:calc(1.25rem * var(--text-scale))}",
+    ":where(" + EVERY + "h3,h3[data-md]){font-size:calc(1.1rem * var(--text-scale))}",
+    ":where(" + EVERY + "h4,h4[data-md]){font-size:calc(1rem * var(--text-scale))}",
+    ":where(" + EVERY + "code,code[data-md]," + CARD_CODE + "){font-family:var(--mono);font-size:calc(.92em * var(--text-scale));background:var(--panel);" +
+      "border:var(--border) solid var(--line);border-radius:var(--radius-sm);padding:0 .25rem}",
+    ":where(" + EVERY + "pre,pre[data-md]," + CARD_PRE + "){font-family:var(--mono);background:var(--panel);border:var(--border) solid var(--line);" +
+      "border-radius:var(--radius);padding:.6rem .8rem;overflow-x:auto}",
     ":where(" + EVERY + "pre code,pre[data-md]>code[data-md]," + CARD_PRE + ">code){font-family:var(--mono);border:0;padding:0;background:none;font-size:inherit}",
     ":where(" + EVERY + "a,a[data-md],.menger-card .mc-refs){color:var(--accent)}",
     ":where(" + EVERY + "blockquote,blockquote[data-md]){border-left:3px solid var(--line);margin:.5rem 0;padding:0 .8rem;color:var(--muted)}",
     ":where(" + EVERY + "table,table[data-md]," + CARD_TABLE + "){border-collapse:collapse}",
-    ":where(" + EVERY + ":is(th,td),:is(th,td)[data-md]," + CARD_TABLE + " :is(th,td)){border:1px solid var(--line);padding:.25rem .5rem;text-align:left}",
+    ":where(" + EVERY + ":is(th,td),:is(th,td)[data-md]," + CARD_TABLE + " :is(th,td)){border:var(--border) solid var(--line);padding:.25rem .5rem;text-align:left}",
     ":where(" + EVERY + ":is(img,video),img[data-md]){max-width:100%}",
     ":where(" + EVERY + "details>summary,.menger-card .mc-source>summary){cursor:pointer}",
-    ":where(.mermaid){background:var(--panel);border:1px solid var(--line);border-radius:4px;" +
+    ":where(.mermaid){background:var(--panel);border:var(--border) solid var(--line);border-radius:var(--radius);" +
       "padding:.6rem .8rem;margin:.5rem 0;overflow-x:auto}",
     ":where(.mermaid pre){margin:0;padding:0;background:none;border:0;font-family:var(--mono);overflow-x:auto}",
     ":where(.mermaid pre code){font-family:var(--mono);font-size:inherit}",
     ":where(.mermaid[data-state=rendering] pre){color:var(--muted)}",
     ":where(.mermaid[data-state=done] svg){display:block;max-width:100%;height:auto;margin:0 auto}",
     ":where(.mermaid[data-state=error]){border-color:var(--err-fg)}",
-    ":where(.mermaid .mermaid-error){color:var(--err-fg);margin:0 0 .6rem;white-space:pre-wrap;font-size:.85rem}",
-    ":where(.wave-ref){font-family:var(--mono);font-size:.85em;white-space:nowrap;text-decoration:none;" +
-      "border:1px solid var(--chip-line);background:var(--chip-bg);color:var(--chip-fg);border-radius:6px;padding:0 5px}",
+    ":where(.mermaid .mermaid-error){color:var(--err-fg);margin:0 0 .6rem;white-space:pre-wrap;font-size:calc(.85rem * var(--text-scale))}",
+    // MENGER-22: highlighted code — highlight.js's classes in the --code-*
+    // tokens (index.html's rules, word for word, at zero specificity).
+    ":where(.hljs-keyword,.hljs-selector-tag,.hljs-doctag,.hljs-section){color:var(--code-keyword)}",
+    ":where(.hljs-string,.hljs-regexp,.hljs-symbol,.hljs-char){color:var(--code-string)}",
+    ":where(.hljs-comment,.hljs-quote){color:var(--code-comment);font-style:italic}",
+    ":where(.hljs-number,.hljs-literal){color:var(--code-number)}",
+    ":where(.hljs-title,.hljs-name){color:var(--code-title)}",
+    ":where(.hljs-type,.hljs-title.class_,.hljs-title.class_.inherited__){color:var(--code-type)}",
+    ":where(.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string){color:var(--code-meta)}",
+    ":where(.hljs-built_in){color:var(--code-builtin)}",
+    ":where(.hljs-attr,.hljs-attribute,.hljs-property,.hljs-selector-class,.hljs-selector-id,.hljs-selector-attr,.hljs-selector-pseudo){color:var(--code-attr)}",
+    ":where(.hljs-variable,.hljs-template-variable,.hljs-params){color:var(--code-variable)}",
+    ":where(.hljs-addition){color:var(--live)}",
+    ":where(.hljs-deletion){color:var(--err-fg)}",
+    ":where(.hljs-emphasis){font-style:italic}",
+    ":where(.hljs-strong){font-weight:var(--weight-strong)}",
+    ":where(.wave-ref){font-family:var(--mono);font-size:calc(.85em * var(--text-scale));white-space:nowrap;text-decoration:none;" +
+      "border:var(--border) solid var(--chip-line);background:var(--chip-bg);color:var(--chip-fg);border-radius:var(--radius-lg);padding:0 5px}",
     ":where(a.wave-ref){color:var(--accent)}",
     ":where(.wave-ref.missing){color:var(--err-fg)}",
     // COMP-9: a definition's docs card (src/card.rs builds it).
-    ":where(.menger-card){border:1px solid var(--line);border-radius:6px;background:var(--card);padding:.6rem .8rem;margin:.75rem 0}",
+    ":where(.menger-card){border:var(--border) solid var(--line);border-radius:var(--radius-lg);background:var(--card);padding:.6rem .8rem;margin:.75rem 0}",
     ":where(.menger-card .mc-head){display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap}",
-    ":where(.menger-card .mc-tag){font-weight:600}",
+    ":where(.menger-card .mc-tag){font-weight:var(--weight-strong)}",
     ":where(.menger-card .mc-none){color:var(--muted);font-style:italic}",
-    ":where(.menger-card .mc-refs){margin-left:auto;font:12px/1.5 var(--mono);text-decoration:none}",
-    ":where(.menger-card .mc-label){font:11px/1.5 var(--mono);text-transform:uppercase;letter-spacing:.06em;" +
+    ":where(.menger-card .mc-refs){margin-left:auto;font:calc(12px * var(--text-scale))/1.5 var(--mono);text-decoration:none}",
+    ":where(.menger-card .mc-label){font:calc(11px * var(--text-scale))/1.5 var(--mono);text-transform:uppercase;letter-spacing:.06em;" +
       "color:var(--muted);margin:.75rem 0 .25rem}",
-    ":where(.menger-card .mc-preview){border:1px dashed var(--line);border-radius:4px;padding:.15rem .6rem .5rem;margin:.6rem 0}",
+    ":where(.menger-card .mc-preview){border:var(--border) dashed var(--line);border-radius:var(--radius);padding:.15rem .6rem .5rem;margin:.6rem 0}",
     ":where(.menger-card .mc-preview .mc-label){margin-top:.2rem}",
-    ":where(.menger-card table){width:100%;font-size:13px}",
-    ":where(.menger-card .mc-req){color:var(--accent);font:12px/1.5 var(--mono)}",
+    ":where(.menger-card table){width:100%;font-size:calc(13px * var(--text-scale))}",
+    ":where(.menger-card .mc-req){color:var(--accent);font:calc(12px * var(--text-scale))/1.5 var(--mono)}",
     ":where(.menger-card .mc-example){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:.6rem;" +
       "align-items:start;margin:.35rem 0}",
     ":where(.menger-card .mc-example .mc-live){padding:.3rem 0}",
-    ":where(.menger-card .mc-example pre){margin:0;font-size:12px;white-space:pre-wrap}",
+    ":where(.menger-card .mc-example pre){margin:0;font-size:calc(12px * var(--text-scale));white-space:pre-wrap}",
     ":where(.menger-card .mc-help){margin-top:.6rem}",
-    ":where(.menger-card .mc-error){color:var(--err-fg);background:var(--err-bg);border:1px solid var(--err-line);" +
-      "border-radius:4px;padding:.25rem .5rem;font-size:13px}",
+    ":where(.menger-card .mc-error){color:var(--err-fg);background:var(--err-bg);border:var(--border) solid var(--err-line);" +
+      "border-radius:var(--radius);padding:.25rem .5rem;font-size:calc(13px * var(--text-scale))}",
     ":where(.menger-card .mc-source){margin-top:.6rem}",
-    ":where(.menger-card .mc-source>summary){font:12px/1.5 var(--mono);color:var(--muted)}",
+    ":where(.menger-card .mc-source>summary){font:calc(12px * var(--text-scale))/1.5 var(--mono);color:var(--muted)}",
   ].join("\n");
   // The SDK's flash on a revealed card: outside the layer, as it always was.
   var FLASH_CSS =
-    ".menger-flash{animation:menger-flash 1.8s ease-out}\n" +
+    ".menger-flash{animation:menger-flash var(--motion-flash) var(--ease)}\n" +
     "@keyframes menger-flash{0%,35%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 3px transparent}}";
 
   var base = doc.createElement("style");
@@ -961,6 +1010,45 @@
     return sheet && sheet.cssRules[0];
   }
 
+  // THEME-3: the rules of the theme this frame wears — its font imports and
+  // @font-face rules and its m-*::part(…) skins (validated by the server:
+  // looks only) — in a stylesheet of their own, replaced whole.
+  function themeRules(css) {
+    var el = doc.getElementById("menger-theme-rules");
+    if (!el) {
+      if (!css) return;
+      el = doc.createElement("style");
+      el.id = "menger-theme-rules";
+      doc.head.appendChild(el);
+    }
+    if (el.textContent !== css) el.textContent = css;
+  }
+
+  // THEME-7: what the frame is painted with — the mode, the theme's name,
+  // its rules and every token — as one string: a menger:theme that leaves it
+  // as it was moves nothing and tells no `on('theme')` listener.
+  var paintedKey = null;
+  function paintedNow() {
+    var rule = themeRule(), key = scheme + "|" + themeName + "|";
+    var rules = doc.getElementById("menger-theme-rules");
+    key += (rules ? rules.textContent : "") + "|";
+    if (rule && rule.style) for (var i = 0; i < rule.style.length; i++) {
+      var n = rule.style[i];
+      key += n + ":" + rule.style.getPropertyValue(n) + ";";
+    }
+    return key;
+  }
+
+  // THEME-7: `{ scheme, theme, tokens }` — what the frame wears now.
+  function worn() {
+    var rule = themeRule(), tokens = {};
+    if (rule && rule.style) for (var i = 0; i < rule.style.length; i++) {
+      var n = rule.style[i];
+      if (TOKEN_NAME.test(n)) tokens[n] = rule.style.getPropertyValue(n).trim();
+    }
+    return { scheme: scheme, theme: themeName, tokens: tokens };
+  }
+
   function applyTheme(next, tokens) {
     var rule = themeRule();
     if (rule && rule.style) {
@@ -972,10 +1060,23 @@
       }
     }
     doc.documentElement.setAttribute("data-theme", next);
-    if (next !== scheme) {
+    // THEME-2: a diagram is drawn again when the mode flips, or when a
+    // diagram colour moved (a theme naming --diagram-*).
+    var colours = diagramKey();
+    if (drawnColours === null) drawnColours = colours; // the srcdoc's own: drawn with them
+    if (next !== scheme || colours !== drawnColours) {
       scheme = next;
+      drawnColours = colours;
       redrawDiagrams();
     }
+  }
+
+  var drawnColours = null;
+  function diagramKey() {
+    var table = (mermaidInit && mermaidInit.diagram) || {};
+    var cs = window.getComputedStyle(doc.documentElement), key = "";
+    for (var token in table) key += token + ":" + (cs.getPropertyValue(token) || "").trim() + ";";
+    return key;
   }
 
   window.addEventListener("message", function (ev) {
@@ -983,7 +1084,17 @@
     var m = ev.data;
     if (!m || typeof m !== "object" || m.channel !== channel) return;
     if (m.type === "menger:theme") {
+      if (paintedKey === null) paintedKey = paintedNow(); // the srcdoc's own
+      if (typeof m.theme === "string" && m.theme) themeName = m.theme;
       applyTheme(m.scheme === "dark" ? "dark" : "light", m.tokens && typeof m.tokens === "object" ? m.tokens : {});
+      if (typeof m.css === "string") themeRules(m.css);
+      // THEME-7: the components that draw with colours in JS redraw — once
+      // the new tokens are live, and only when something moved.
+      var key = paintedNow();
+      if (key !== paintedKey) {
+        paintedKey = key;
+        notify(null, "theme");
+      }
     } else if (m.type === "menger:result") {
       answered(m);
     } else if (m.type === "menger:submitted") {
@@ -1070,8 +1181,8 @@
   }
 
   var NOTICE_CSS =
-    ".menger-notice{font:12px/1.5 var(--mono);color:var(--err-fg);background:var(--err-bg);" +
-    "border:1px solid var(--err-line);border-radius:3px;padding:0 .35em}" +
+    ".menger-notice{font:calc(12px * var(--text-scale))/1.5 var(--mono);color:var(--err-fg);background:var(--err-bg);" +
+    "border:var(--border) solid var(--err-line);border-radius:var(--radius-sm);padding:0 .35em}" +
     "pre.menger-notice{white-space:pre-wrap;margin:.25em 0;padding:.25em .5em}";
 
   function notice(root, tagName, text) {
@@ -1326,31 +1437,31 @@
   var BADGE_CSS =
     ".menger-badge{display:none}.menger-badge.on{display:inline}" +
     ".menger-badge{position:absolute;z-index:2147483646;transform:translateY(-100%);opacity:0;pointer-events:none;" +
-    "font:10px/1.5 var(--mono);padding:0 5px;border-radius:4px 4px 4px 0;background:var(--accent);color:var(--bg);" +
-    "white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none;transition:opacity .12s;outline-offset:1px}" +
-    ".menger-badge.inside{transform:none;border-radius:0 0 4px 0}" +
+    "font:calc(10px * var(--text-scale))/1.5 var(--mono);padding:0 5px;border-radius:var(--radius) var(--radius) var(--radius) 0;background:var(--accent);color:var(--bg);" +
+    "white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none;transition:opacity var(--motion-fast);outline-offset:1px}" +
+    ".menger-badge.inside{transform:none;border-radius:0 0 var(--radius) 0}" +
     ".menger-badge.flagged{background:var(--err-fg)}" +
     ":host(:hover) .menger-badge,:host(:focus-within) .menger-badge,.menger-badge:focus-visible," +
     ".menger-badge.open{opacity:1;pointer-events:auto}";
 
   var TIP_CSS =
     ":host{all:initial}" +
-    ".tip{display:block;box-sizing:border-box;font:12.5px/1.5 var(--sans);color:var(--ink);background:var(--card);" +
-    "border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 24px var(--shadow);padding:.45rem .65rem;" +
+    ".tip{display:block;box-sizing:border-box;font:calc(12.5px * var(--text-scale))/1.5 var(--sans);color:var(--ink);background:var(--card);" +
+    "border:var(--border) solid var(--line);border-radius:var(--radius-lg);box-shadow:0 8px 24px var(--shadow);padding:.45rem .65rem;" +
     "min-width:14rem;max-width:28rem}" +
     ".t-head{display:flex;gap:.5rem;align-items:baseline}" +
-    ".t-name{font:600 12.5px/1.5 var(--mono)}" +
-    ".t-owner{font:11px/1.5 var(--mono);color:var(--muted)}" +
+    ".t-name{font:var(--weight-strong) calc(12.5px * var(--text-scale))/1.5 var(--mono)}" +
+    ".t-owner{font:calc(11px * var(--text-scale))/1.5 var(--mono);color:var(--muted)}" +
     ".t-summary{margin:.2rem 0 .35rem}" +
     ".t-none{margin:.2rem 0 .35rem;color:var(--muted);font-style:italic}" +
-    "table{border-collapse:collapse;width:100%;font-size:12px}" +
+    "table{border-collapse:collapse;width:100%;font-size:calc(12px * var(--text-scale))}" +
     "td{padding:1px 8px 1px 0;vertical-align:top}" +
     "td.n,td.v{font-family:var(--mono)}" +
-    "td.k{font:11px/1.6 var(--mono);color:var(--muted)}" +
+    "td.k{font:calc(11px * var(--text-scale))/1.6 var(--mono);color:var(--muted)}" +
     "td.w{color:var(--muted)}" +
     "tr.missing td,tr.unfit td.v,tr.unfit td.w,tr.missing td.w{color:var(--err-fg)}" +
     "tr.fits td.w{color:var(--accent)}" +
-    ".t-links{display:flex;gap:.9rem;margin-top:.4rem;font:12px/1.5 var(--mono)}" +
+    ".t-links{display:flex;gap:.9rem;margin-top:.4rem;font:calc(12px * var(--text-scale))/1.5 var(--mono)}" +
     ".t-links a{color:var(--accent);cursor:pointer;text-decoration:none}" +
     ".t-links a:hover,.t-links a:focus-visible{text-decoration:underline}";
 
@@ -1593,7 +1704,7 @@
   // (src/anchor.rs); this side reads the DOM, outlines, and keeps clicks.
 
   var ANNOT_CSS =
-    "*{outline:1px dashed var(--annot)!important;outline-offset:-1px!important;cursor:crosshair!important}" +
+    "*{outline:var(--border) dashed var(--annot)!important;outline-offset:-1px!important;cursor:crosshair!important}" +
     "[data-menger-tip]{outline:0!important;cursor:auto!important}";
   var annotStyle = null;
   var hovered = null;
@@ -2190,6 +2301,20 @@
     el.insertBefore(p, el.firstChild);
   }
 
+  // THEME-2: a theme's diagram colours — each `colour.diagram` token the
+  // frame wears that names a colour (not `auto`, mermaid's own palette) set
+  // into themeVariables, by the app's table (init.mermaid.diagram).
+  function diagramColours(config) {
+    var table = mermaidInit.diagram || {};
+    var cs = window.getComputedStyle(doc.documentElement);
+    for (var token in table) {
+      var v = (cs.getPropertyValue(token) || "").trim();
+      if (!v || v === "auto" || /[<>{};\\]/.test(v)) continue;
+      config.themeVariables = config.themeVariables || {};
+      for (var i = 0; i < table[token].length; i++) config.themeVariables[table[token][i]] = v;
+    }
+  }
+
   function draw(el, src) {
     var gen = String(++nextGen);
     el.setAttribute("data-gen", gen);
@@ -2198,6 +2323,7 @@
         .then(function (m) {
           var config = JSON.parse(JSON.stringify(mermaidInit.config || {}));
           config.theme = scheme === "dark" ? "dark" : "default";
+          diagramColours(config);
           m.initialize(config);
           return m.render("menger-mermaid-" + nextId++, src);
         })
@@ -2235,6 +2361,94 @@
     if (!mermaidInit) return;
     var nodes = doc.querySelectorAll('.mermaid[data-state="done"][data-src]');
     for (var i = 0; i < nodes.length; i++) draw(nodes[i], nodes[i].getAttribute("data-src"));
+  }
+
+  // -- code -------------------------------------------------------------------
+  // MENGER-22: every `<pre><code>` that is not a mermaid placeholder's,
+  // highlighted with the app's vendored highlighter, loaded the first time
+  // the frame holds one, by the app's rules (src/highlight.rs `ask`). A
+  // block is claimed (`data-hl`) before its pass; one the highlighter does
+  // not know, or a bundle that will not load, stays plain — nothing thrown.
+
+  var hlLoading = null;
+
+  function loadHighlighter() {
+    if (window.hljs && typeof window.hljs.highlight === "function") return Promise.resolve(window.hljs);
+    if (hlLoading) return hlLoading;
+    hlLoading = new Promise(function (resolve, reject) {
+      var s = doc.createElement("script");
+      s.src = highlightInit.url;
+      s.onload = function () {
+        if (window.hljs && typeof window.hljs.highlight === "function") resolve(window.hljs);
+        else reject(new Error(highlightInit.url + " loaded but defined no `hljs` global"));
+      };
+      s.onerror = function () {
+        hlLoading = null;
+        reject(new Error("could not load the highlighter from " + highlightInit.url));
+      };
+      head.appendChild(s);
+    });
+    return hlLoading;
+  }
+
+  // What a block asks for: a language, "detect", or null (plain).
+  function askCode(code) {
+    var plain = highlightInit.plain || [];
+    var aliases = highlightInit.aliases || {};
+    var cls = (code.getAttribute("class") || "").split(/\s+/);
+    for (var i = 0; i < cls.length; i++) {
+      var m = /^(?:language|lang)-(.*)$/.exec(cls[i]);
+      if (!m) continue;
+      var lang = m[1].toLowerCase();
+      if (!lang || plain.indexOf(lang) >= 0) return null;
+      return Object.prototype.hasOwnProperty.call(aliases, lang) ? aliases[lang] : lang;
+    }
+    return highlightInit.unlabeled === "detect" ? "detect" : null;
+  }
+
+  function paintCode(h, code, lang) {
+    var text = code.textContent || "";
+    var out;
+    if (lang === "detect") {
+      out = h.highlightAuto(text, highlightInit.detect || []);
+      if (!out || (out.relevance || 0) < (highlightInit.min_relevance || 0)) return "plain";
+    } else {
+      if (!h.getLanguage(lang)) return "plain";
+      out = h.highlight(text, { language: lang, ignoreIllegals: true });
+    }
+    code.innerHTML = out.value;
+    code.classList.add("hljs");
+    return out.language || "on";
+  }
+
+  function mountCode() {
+    if (!highlightInit) return Promise.resolve();
+    var nodes = doc.querySelectorAll("pre > code:not([data-hl])");
+    var blocks = [];
+    for (var i = 0; i < nodes.length; i++) {
+      var code = nodes[i];
+      if (code.closest(".mermaid")) continue;
+      var lang = askCode(code);
+      code.setAttribute("data-hl", lang ? "pending" : "plain");
+      if (lang) blocks.push([code, lang]);
+    }
+    if (!blocks.length) return Promise.resolve();
+    return loadHighlighter().then(
+      function (h) {
+        for (var j = 0; j < blocks.length; j++) {
+          var done = "plain";
+          try {
+            done = paintCode(h, blocks[j][0], blocks[j][1]);
+          } catch (e) {
+            done = "plain";
+          }
+          blocks[j][0].setAttribute("data-hl", done);
+        }
+      },
+      function () {
+        for (var j = 0; j < blocks.length; j++) blocks[j][0].setAttribute("data-hl", "plain");
+      }
+    );
   }
 
   // -- height -----------------------------------------------------------------
@@ -2303,9 +2517,9 @@
       });
     }
     report(true);
-    // Settled: diagrams drawn, the registry in hand, and what the
-    // components asked for meanwhile answered.
-    Promise.all([mountDiagrams(), whenKnown()]).then(whenIdle).then(settle, settle);
+    // Settled: diagrams drawn, code highlighted (MENGER-22), the registry
+    // in hand, and what the components asked for meanwhile answered.
+    Promise.all([mountDiagrams(), mountCode(), whenKnown()]).then(whenIdle).then(settle, settle);
     setTimeout(settle, SETTLE_MS);
   }
 

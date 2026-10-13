@@ -276,6 +276,23 @@ mod tests {
         }
     }
 
+    /// THEME-7: the page wears the app's site theme — the tokens the app
+    /// last painted, kept under `<app>.themes.site` — before its first
+    /// paint, and follows another tab's change live; the script is the
+    /// template's own, so the policy admits it.
+    #[test]
+    fn the_page_wears_the_apps_site_theme() {
+        let p = render(&chrome(), Body { heading: heading("Sign in", "to continue"), ..Body::default() });
+        assert!(p.intact());
+        let (scripts, _) = template_blocks("toy", "toy_dev");
+        let s = scripts.iter().find(|s| s.contains("themes.site")).expect("the site theme's script");
+        assert!(s.contains(r#"localStorage.getItem("toy.themes.site")"#) && s.contains("style.cssText=s"), "{s}");
+        assert!(s.contains(r#"addEventListener("storage""#) && s.contains(r#"e.key==="toy.themes.site""#), "{s}");
+        assert!(s.contains("try{") && s.contains("catch(e){}"), "guarded: {s}");
+        let h = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(s.as_bytes()));
+        assert!(p.csp.contains(&h), "{}", p.csp);
+    }
+
     #[test]
     fn the_template_s_blocks_hold_only_configuration_slots() {
         for b in blocks(TEMPLATE, "<script>", "</script>").into_iter().chain(blocks(TEMPLATE, "<style>", "</style>")) {

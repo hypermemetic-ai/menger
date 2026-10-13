@@ -253,6 +253,36 @@ pub(crate) enum PalCmd {
     Code(String),
     /// MENGER-12: the global filter becomes this text.
     Text(String),
+    /// THEME-7: the reader's site theme becomes this one (`None`: the
+    /// site's own again).
+    Theme(Option<String>),
+}
+
+/// THEME-7: the palette's `theme <name>` (or `theme: <name>`) — what is
+/// typed after the word, trimmed and lower case (empty: every theme);
+/// `None` for anything else.
+pub(crate) fn theme_command(query: &str) -> Option<String> {
+    let rest = query.trim_start();
+    let word_end = rest.find(|c: char| c.is_whitespace() || c == ':').unwrap_or(rest.len());
+    if !rest[..word_end].eq_ignore_ascii_case("theme") {
+        return None;
+    }
+    let typed = rest[word_end..].trim_start_matches(':').trim();
+    (!typed.contains(char::is_whitespace)).then(|| typed.to_ascii_lowercase())
+}
+
+/// THEME-7: the themes `theme <typed>` offers, in `names`' order (`default`
+/// first): each beginning with `typed`, then "the site's" (`None`) when
+/// `typed` is empty or begins `site` — at most [`FILTER_OFFERS`].
+pub(crate) fn theme_offers(typed: &str, names: &[String]) -> Vec<Option<String>> {
+    names
+        .iter()
+        .filter(|n| n.starts_with(typed))
+        .cloned()
+        .map(Some)
+        .chain(("site's".starts_with(typed) || typed.is_empty()).then_some(None))
+        .take(FILTER_OFFERS)
+        .collect()
 }
 
 /// How many shortcodes `filter <shortcode>` offers at most.
@@ -1318,6 +1348,11 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
             .collect();
         // MENGER-12: and the text, when it is a filter.
         out.extend(filter_text_command(&q).map(PalCmd::Text));
+        // THEME-7: `theme <name>` — the themes the app holds.
+        if let Some(typed) = theme_command(&q) {
+            let names = crate::scopes::held().with(crate::scopes::Held::names);
+            out.extend(theme_offers(&typed, &names).into_iter().map(PalCmd::Theme));
+        }
         out
     });
     // Enter pressed while the answer was on its way, with nothing to open.
@@ -1344,6 +1379,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                         lens.edit(lens::Level::Global, |k| *k = crate::saved::chosen(f));
                     }
                 }
+                PalCmd::Theme(name) => crate::scopes::pick(name),
             }
             return;
         }
@@ -1511,12 +1547,14 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                             .into_iter()
                             .enumerate()
                             .map(|(i, cmd)| {
-                                let (code, hint) = match cmd {
+                                let (verb, code, hint) = match cmd {
                                     PalCmd::Code(code) => {
                                         let hint = format!("the global filter becomes Shortcode is {code}");
-                                        (code, hint)
+                                        ("Filter", code, hint)
                                     }
-                                    PalCmd::Text(text) => (text, "the global filter becomes this".to_string()),
+                                    PalCmd::Text(text) => ("Filter", text, "the global filter becomes this".to_string()),
+                                    PalCmd::Theme(Some(name)) => ("Theme", name, "your site theme, at once (settings keeps it)".to_string()),
+                                    PalCmd::Theme(None) => ("Theme", "the site's".to_string(), "wear the site's theme again".to_string()),
                                 };
                                 let at = code.clone();
                                 view! {
@@ -1529,7 +1567,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                                         class:hi=i == cur
                                         on:click=move |_| open_at(i)
                                     >
-                                        <span class="pal-do">"Filter"</span>
+                                        <span class="pal-do">{verb}</span>
                                         <span class="code">{code}</span>
                                         <span class="label pal-hint">{hint}</span>
                                     </li>
@@ -1717,7 +1755,26 @@ fn Cheats(overlay: RwSignal<Overlay>) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_words, filter_command, filter_offers, filter_text_command, narrows, palette_chord, palette_match, pass, Found, Pass, FILTER_OFFERS, SHORTCUTS};
+    use super::{count_words, filter_command, filter_offers, filter_text_command, narrows, palette_chord, palette_match, pass, theme_command, theme_offers, Found, Pass, FILTER_OFFERS, SHORTCUTS};
+
+    /// THEME-7: `theme <name>` and `theme: <name>` in the palette — the
+    /// themes held that begin with what is typed, and the site's own.
+    #[test]
+    fn the_palette_picks_a_theme() {
+        assert_eq!(theme_command("theme pantry").as_deref(), Some("pantry"));
+        assert_eq!(theme_command("Theme: Pan").as_deref(), Some("pan"));
+        assert_eq!(theme_command("theme").as_deref(), Some(""));
+        assert_eq!(theme_command("  theme:").as_deref(), Some(""));
+        assert_eq!(theme_command("themes"), None);
+        assert_eq!(theme_command("theme a b"), None);
+        assert_eq!(theme_command("filter MNG"), None);
+        let names: Vec<String> = ["default", "garish", "ocean", "pantry"].map(String::from).to_vec();
+        assert_eq!(theme_offers("pa", &names), vec![Some("pantry".to_string())]);
+        assert_eq!(theme_offers("", &names).len(), FILTER_OFFERS);
+        assert_eq!(theme_offers("", &names)[0].as_deref(), Some("default"));
+        assert_eq!(theme_offers("site", &names), vec![None], "the site's own");
+        assert!(theme_offers("zz", &names).is_empty());
+    }
 
     #[test]
     fn the_palette_chord_is_cmd_k_on_a_mac_and_ctrl_k_elsewhere() {

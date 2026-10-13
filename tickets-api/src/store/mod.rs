@@ -1162,6 +1162,7 @@ impl StoreError {
             components::Problem::Name(name) => Self::ComponentName { id, name },
             components::Problem::Twice(name) => Self::ComponentTwice { id, name },
             components::Problem::Docs { name, problem } => Self::ComponentDocs { id, name, problem },
+            components::Problem::Theme { name, error } => Self::Invalid(format!("```theme {name}: {error} (nothing was written)")),
         }
     }
 }
@@ -1680,6 +1681,8 @@ struct Cache {
     /// ([`history::Log`]) — read at open, appended to by every write that
     /// changes a status or a kind, in the same critical section as its rows.
     log: history::Log,
+    /// THEME-8: every theme and what the site and each shortcode say.
+    themes: themes::Themes,
     written: u64,
 }
 
@@ -2016,6 +2019,7 @@ impl Cache {
             roles: roles::RoleEdits::new(),
             // MENGER-13: and the transition log.
             log: history::Log::began_at(None),
+            themes: themes::Themes::default(),
             written: 0,
         }
     }
@@ -2089,6 +2093,7 @@ impl Cache {
             roles: roles::RoleEdits::new(),
             // MENGER-13: and the transition log.
             log: history::Log::began_at(None),
+            themes: themes::Themes::default(),
             written: 0,
         }
     }
@@ -2830,6 +2835,10 @@ impl Store {
         // MENGER-13: and one without the transition log gains it, empty,
         // with the moment it began — no ticket gets a history it never had.
         history::migrate(&mut conn)?;
+        // THEME-8: and one without the themes tables gains them, empty —
+        // THEME-3: with their owners and the frontmatter's references.
+        themes::migrate(&mut conn)?;
+        theme_registry::migrate(&mut conn)?;
         let cache = Self::load_cache(&mut conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
@@ -2916,6 +2925,8 @@ impl Store {
         cache.roles = roles::load(conn)?;
         // MENGER-13: the transition log and its kept indexes.
         cache.log = history::load(conn, &cache.at)?;
+        // THEME-8: the themes and settings, as stored.
+        themes::load(conn, &mut cache.themes)?;
         Ok(cache)
     }
 
@@ -3350,14 +3361,7 @@ impl Store {
             // stored and no id spent, when it defines a name another ticket
             // owns. Last of the checks: a body without components is refused
             // for nothing it was not refused for before.
-            let registered = tickets
-                .components
-                .plan(&id, &uses)
-                .map_err(|o| StoreError::ComponentOwned {
-                    id: None,
-                    name: o.name,
-                    owner: o.owner,
-                })?;
+            let registered = tickets.plan_registry(&id, &uses, None)?;
             // INPUT-3: the newborn's inputs, born open.
             let asked = tickets.inputs.plan(&id, declared);
 
@@ -3546,7 +3550,7 @@ impl Store {
                 if let Some(n) = note_kept {
                     cache.notes.put(n);
                 }
-                cache.components.take(registry_moves);
+                cache.take_registry(registry_moves);
                 if let Some(list) = input_list {
                     cache.inputs.take(&born_id, list);
                 }
@@ -4372,14 +4376,7 @@ impl Store {
                     return Err(StoreError::component(Some(&id), problem));
                 }
                 let cache = self.tickets.read().expect("store lock poisoned");
-                cache
-                    .components
-                    .plan(&ticket.id, &uses)
-                    .map_err(|o| StoreError::ComponentOwned {
-                        id: Some(id.clone()),
-                        name: o.name,
-                        owner: o.owner,
-                    })?
+                cache.plan_registry(&ticket.id, &uses, Some(&id))?
             }
         };
         // INPUT-3: and its inputs — the whole amend refused, title too, when
@@ -4460,7 +4457,7 @@ impl Store {
             // cell an input opened or settled moves.
             move |cache, row| {
                 let groups = cache.amended(row.clone(), title_changed);
-                cache.components.take(registry_moves);
+                cache.take_registry(registry_moves);
                 if let Some(list) = input_list {
                     cache.inputs.take(&row.id, list);
                 }
@@ -5620,6 +5617,11 @@ mod rules;
 /// MENGER-30: `update` — any part of a ticket in one write.
 mod update;
 pub use update::{Update, Updated};
+/// THEME-8: the themes and what the site and each shortcode say.
+mod themes;
+pub use themes::ThemeChange;
+/// THEME-3: a theme is a ticket's block — owners, orphans, adoption.
+mod theme_registry;
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
 /// has commits)` interned as one cell; per shortcode and cell, a Roaring
@@ -5701,6 +5703,9 @@ mod tests_search;
 /// one write and its refusals; across a reopen.
 #[cfg(test)]
 mod tests_notes;
+/// THEME-8: define, set, theme_for (every row), refusals, a reopen.
+#[cfg(test)]
+mod tests_themes;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).
@@ -5784,6 +5789,10 @@ mod tests_placements;
 /// reference, durability, events, and a database from before the table.
 #[cfg(test)]
 mod tests_components;
+/// THEME-5: documented parts registered, a part the template lacks refused,
+/// and (on demand) the house bodies checked.
+#[cfg(test)]
+mod tests_parts;
 /// INPUT-3: the inputs store — every row of the ticket's table: parsed on
 /// write (and refused), answered (and refused), cleared, closed, reopened,
 /// removed and restored; the query; the events and their place; durability;

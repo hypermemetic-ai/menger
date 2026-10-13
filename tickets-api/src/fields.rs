@@ -761,7 +761,7 @@ fn options() -> Options {
 /// `frontend/src/md.rs`'s frontmatter split, word for word (the tests hold
 /// it to the original): `(Some(frontmatter), rest)` when the body opens
 /// with a `---` line and a later line is `---` alone.
-fn split_frontmatter(body: &str) -> (Option<&str>, &str) {
+pub(crate) fn split_frontmatter(body: &str) -> (Option<&str>, &str) {
     let Some(after_open) = body.strip_prefix("---") else {
         return (None, body);
     };

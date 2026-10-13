@@ -320,7 +320,7 @@ fn row(c: Comment) -> impl IntoView {
                 <span class="cid">"#"{id}</span>
             </div>
             // MENGER-14: its bare URLs are links, followed by the app.
-            <div class="cbody" data-links="comment" data-ticket=c.anchor.ticket.clone()><crate::links::Linkified text=c.body.clone() /></div>
+            <div class="cbody" data-links="comment" data-ticket=c.anchor.ticket.clone()><crate::highlight::CommentText text=c.body.clone() /></div>
             {(!c.anchor.excerpt.is_empty()).then(|| view! { <div class="cexcerpt">"“"{c.anchor.excerpt.clone()}"”"</div> })}
             <div class="cacts">
                 <span class="croute">{c.anchor.route.clone()}</span>

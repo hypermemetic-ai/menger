@@ -153,7 +153,7 @@
 //! ask its counts.
 
 use crate::kids::Kids;
-use crate::{board, cache, comments, dom, frame, inputs, nav, registry, settings, signin, Conn, Dock};
+use crate::{board, cache, comments, dom, frame, inputs, nav, registry, scopes, settings, signin, Conn, Dock};
 use futures::StreamExt;
 use leptos::prelude::*;
 use menger_tickets_api::{CommentsClient, Marked, SearchWord, TicketsClient, Status, Ticket, TicketSummary, TicketsEvent};
@@ -706,6 +706,12 @@ pub(crate) fn comments_client() -> Option<CommentsClient<Rc<WsTransport>>> {
     TRANSPORT.with(|t| t.borrow().clone()).map(CommentsClient::new)
 }
 
+/// THEME-8: the `themes` activation's typed client, over the same
+/// connection.
+pub(crate) fn themes_client() -> Option<menger_tickets_api::ThemesClient<Rc<WsTransport>>> {
+    TRANSPORT.with(|t| t.borrow().clone()).map(menger_tickets_api::ThemesClient::new)
+}
+
 /// IDENTITY-22: the `members` activation's typed client, over the same
 /// connection.
 pub(crate) fn members_client() -> Option<menger_tickets_api::MembersClient<Rc<WsTransport>>> {
@@ -809,6 +815,10 @@ async fn session(
     // COMMENT-3: the comments — `comments.watch`, then the list — only once
     // a view has asked (annotation mode, #/comments, a ticket page's count).
     comments::refresh();
+    // THEME-8: the themes and what the site and each shortcode say —
+    // `themes.watch`, then the list — on every connection: the site theme
+    // holds on every page.
+    scopes::refresh();
 
     // 2. The dock.
     for ev in client.health_all().await.map_err(|e| describe(&e))? {

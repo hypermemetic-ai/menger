@@ -296,6 +296,12 @@ pub fn render_help(src: &str) -> String {
     render(src, None, true, false).html
 }
 
+/// THEME-3: a fence that opens a theme (` ```theme name … `): framed, it
+/// renders as the theme's swatch sheet (src/swatches.rs).
+pub(crate) fn is_theme_fence(info: &str) -> bool {
+    info.split_whitespace().next() == Some("theme")
+}
+
 /// COMP-9: the card a definition block renders as in a framed body — the
 /// block's tag and preview from its info string, its docs parsed from its
 /// content (src/card.rs).
@@ -529,13 +535,14 @@ pub fn is_framed(src: &str) -> bool {
     if is_page(src) {
         return true;
     }
-    if !src.contains('<') && !src.contains("component") {
+    if !src.contains('<') && !src.contains("component") && !src.contains("theme") {
         return false;
     }
     Parser::new_ext(src, options()).any(|ev| match ev {
         Event::Html(s) | Event::InlineHtml(s) => holds_markup(&s),
-        // COMP-9: a definition renders as its card, in the frame.
-        Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => component_docs::definition(&info).is_some(),
+        // COMP-9: a definition renders as its card, in the frame — THEME-3:
+        // and a theme block as its swatch sheet.
+        Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => component_docs::definition(&info).is_some() || is_theme_fence(&info),
         _ => false,
     })
 }
@@ -621,6 +628,9 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
                 }
                 Event::End(TagEnd::CodeBlock) => {
                     let (info, source) = definition.take().expect("checked");
+                    if is_theme_fence(&info) {
+                        return Some(Event::Html(crate::swatches::sheet(&info, &source).into()));
+                    }
                     Some(Event::Html(definition_card(&info, &source).into()))
                 }
                 _ => None,
@@ -667,7 +677,7 @@ fn render(src: &str, resolve: Option<&dyn Fn(&str) -> Option<WaveRef>>, framed: 
                 None
             }
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref info)))
-                if cards && component_docs::definition(info).is_some() =>
+                if cards && (component_docs::definition(info).is_some() || is_theme_fence(info)) =>
             {
                 definition = Some((info.to_string(), String::new()));
                 None
@@ -1091,6 +1101,24 @@ mod tests {
         assert!(!r.html.contains("class=\"mermaid\""), "{}", r.html);
     }
 
+    /// MENGER-22: a labeled fence carries its language class — in the app's
+    /// body, the framed body and the help — which is what the highlighter
+    /// reads; `text` and `plain` carry theirs and stay plain; an unlabeled
+    /// fence carries none and is the open decision's (`highlight::UNLABELED`).
+    #[test]
+    fn a_fence_carries_its_language_for_the_highlighter() {
+        use crate::highlight::{ask, Ask};
+        let src = "```rust\nfn main() {}\n```\n\n```ts\nlet a = 1;\n```\n\n```json\n{\"a\": 1}\n```\n\n```text\nas written\n```\n\n```plain\nas written\n```\n\n```\nno label\n```\n";
+        for html in [render_body(src).html, render_body_framed(src, &|_| None).html, render_help(src)] {
+            for (lang, asked) in [("rust", Ask::Language("rust".into())), ("ts", Ask::Language("ts".into())), ("json", Ask::Language("json".into())), ("text", Ask::Plain), ("plain", Ask::Plain)] {
+                let at = html.find(&format!("class=\"language-{lang}\"")).unwrap_or_else(|| panic!("{lang}: {html}"));
+                assert!(html[..at].ends_with("<code ") || html[..at].ends_with("<code data-md "), "{lang}: {html}");
+                assert_eq!(ask(Some(&format!("language-{lang}"))), asked);
+            }
+            assert!(html.contains("<code>no label\n</code>") || html.contains("<code data-md>no label\n</code>"), "{html}");
+        }
+    }
+
     #[test]
     fn a_mention_of_mermaid_is_not_a_fence() {
         let r = render_body("Use `mermaid` here.\n\n```text\nmermaid\n```\n");
@@ -1347,6 +1375,17 @@ mod tests {
     /// its own. Outside a frame (never reached for such a body) it is the
     /// code block it always was; in an example fence or indented code it
     /// is text and frames nothing.
+    #[test]
+    fn a_theme_block_frames_and_renders_as_its_swatch_sheet() {
+        let body = "The pantry theme.\n\n```theme pantry\n:root { --accent: #d4572a; }\n```\n";
+        assert!(is_framed(body), "a theme block frames");
+        let html = render_body_framed(body, &|_| None).html;
+        assert!(html.contains("<section class=\"mts\" data-menger-theme=\"pantry\">"), "{html}");
+        assert!(!html.contains("language-theme"), "{html}");
+        assert!(render_help(body).contains("language-theme"), "in a card's help it is a code block");
+        assert!(!is_framed("```themes x\n:root{}\n```\n"));
+    }
+
     #[test]
     fn a_definition_frames_and_renders_as_its_card() {
         let body = "Defines it.\n\n```component m-x board=RETURNS\n<template>x</template>\n<docs>\n  <summary>Says x.</summary>\n  <attr name=\"board\" type=\"shortcode\" required>Which.</attr>\n  Help with a **bold** word.\n\n  ~~~component m-nested\n  y\n  ~~~\n</docs>\n```\n\nAfter.\n";

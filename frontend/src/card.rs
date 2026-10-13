@@ -29,7 +29,7 @@
 //! SDK's (`.menger-card`, at zero specificity).
 
 use menger_tickets_api::component_docs::is_component_name;
-use menger_tickets_api::{AttrDoc, ComponentDocs, SlotDoc};
+use menger_tickets_api::{AttrDoc, ComponentDocs, PartDoc, SlotDoc};
 use pulldown_cmark_escape::escape_html;
 
 /// One card's inputs.
@@ -70,6 +70,12 @@ pub(crate) fn slot_rows(slots: &[SlotDoc]) -> Vec<[String; 2]> {
         .iter()
         .map(|s| [s.name.clone().unwrap_or_else(|| "default".to_string()), s.description.clone()])
         .collect()
+}
+
+/// THEME-5: one row of the parts table — the selector a theme writes for
+/// it (`m-name::part(label)`), its description.
+pub(crate) fn part_rows(name: &str, parts: &[PartDoc]) -> Vec<[String; 2]> {
+    parts.iter().map(|p| [format!("{name}::part({})", p.name), p.description.clone()]).collect()
 }
 
 fn esc(out: &mut String, s: &str) {
@@ -188,6 +194,18 @@ pub(crate) fn card_html(card: &Card, help: &dyn Fn(&str) -> String) -> String {
             }
             out.push_str("</tbody></table>\n");
         }
+        let parts = part_rows(name, &d.parts);
+        if !parts.is_empty() {
+            out.push_str("<div class=\"mc-label\">parts a theme may skin</div>\n<table class=\"mc-slots mc-parts\"><thead><tr><th>part</th><th>description</th></tr></thead><tbody>\n");
+            for [n, description] in &parts {
+                out.push_str("<tr><td><code>");
+                esc(&mut out, n);
+                out.push_str("</code></td><td>");
+                esc(&mut out, description);
+                out.push_str("</td></tr>\n");
+            }
+            out.push_str("</tbody></table>\n");
+        }
         if !d.examples.is_empty() {
             out.push_str("<div class=\"mc-label\">examples</div>\n");
             for example in &d.examples {
@@ -208,7 +226,8 @@ pub(crate) fn card_html(card: &Card, help: &dyn Fn(&str) -> String) -> String {
     if in_body {
         out.push_str("<details class=\"mc-source\"><summary>");
         esc(&mut out, &source_label(source));
-        out.push_str("</summary><pre><code>");
+        // MENGER-22: a definition's source is HTML, highlighted as such.
+        out.push_str("</summary><pre><code class=\"language-html\">");
         esc(&mut out, source);
         out.push_str("</code></pre></details>\n");
     }
@@ -238,6 +257,7 @@ mod tests {
                 SlotDoc { name: Some("title".into()), description: "Optional title markup.".into() },
                 SlotDoc { name: None, description: "The rest.".into() },
             ],
+            parts: vec![PartDoc { name: "count".into(), scripted: false, description: "The number.".into() }],
             examples: vec!["<m-wave-summary board=\"RETURNS\"></m-wave-summary>".into()],
             help: "Longer *help*.".into(),
         }
@@ -284,9 +304,11 @@ mod tests {
         assert!(html.contains("<div class=\"mc-live\"><m-wave-summary board=\"RETURNS\" label=\"A &quot;b&quot; &lt;c&gt;\"></m-wave-summary></div>"), "{html}");
         assert!(html.contains("<tr><td><code>board</code></td><td><code>shortcode</code></td><td class=\"mc-req\">required</td><td>The shortcode to count.</td></tr>"));
         assert!(html.contains("<tr><td><code>default</code></td><td>The rest.</td></tr>"));
+        assert!(html.contains("<table class=\"mc-slots mc-parts\"><thead><tr><th>part</th><th>description</th></tr></thead><tbody>\n<tr><td><code>m-wave-summary::part(count)</code></td><td>The number.</td></tr>"), "{html}");
+        assert!(at("mc-slots\"") < at("mc-parts") && at("mc-parts") < at("mc-example"));
         assert!(html.contains("<figure class=\"mc-example\"><div class=\"mc-live\"><m-wave-summary board=\"RETURNS\"></m-wave-summary></div><pre><code>&lt;m-wave-summary board=&quot;RETURNS&quot;&gt;&lt;/m-wave-summary&gt;</code></pre></figure>"), "{html}");
         assert!(html.contains("<div class=\"mc-help\"><p>[Longer *help*.]</p></div>"));
-        assert!(html.contains("<details class=\"mc-source\"><summary>source · 2 lines</summary><pre><code>&lt;template&gt;x&lt;/template&gt;"));
+        assert!(html.contains("<details class=\"mc-source\"><summary>source · 2 lines</summary><pre><code class=\"language-html\">&lt;template&gt;x&lt;/template&gt;"));
         assert!(at("mc-head") < at("mc-preview") && at("mc-preview") < at("mc-attrs") && at("mc-attrs") < at("mc-slots"));
         assert!(at("mc-slots") < at("mc-example") && at("mc-example") < at("mc-help") && at("mc-help") < at("mc-source"));
         assert!(html.ends_with("</section>\n"));

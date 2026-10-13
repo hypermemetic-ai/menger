@@ -572,14 +572,18 @@ async fn login_off_menger_is_as_it_was() {
     let hub = one(&c, "menger.schema", json!({})).await;
     assert!(hub.get("view").is_none());
     let kids: BTreeSet<String> = hub["children"].as_array().unwrap().iter().map(|k| k["namespace"].as_str().unwrap().to_string()).collect();
-    assert_eq!(kids, names(&["comments", "members", "notes", "session", "tickets"]), "no auth activation without login");
-    for ns in ["tickets", "comments", "notes", "members", "session"] {
+    assert_eq!(kids, names(&["comments", "members", "notes", "session", "themes", "tickets"]), "no auth activation without login");
+    for ns in ["tickets", "comments", "notes", "members", "session", "themes"] {
         let schema = one(&c, &format!("{ns}.schema"), json!({})).await;
         assert!(schema.get("view").is_none());
         for m in schema["methods"].as_array().unwrap() {
             assert!(m.get("held_on").is_none(), "{m}");
             let props = m["params"]["properties"].as_object().cloned().unwrap_or_default();
-            assert!(!props.contains_key("reach") && !props.contains_key("auth"), "{ns}.{}: {props:?}", m["name"]);
+            // THEME-8: `themes.set`'s `reach` is the setting's own (how far a
+            // theme takes over — a string), declared by the method; the
+            // gate's answer it does not take.
+            let own_reach = ns == "themes" && m["name"] == "set" && props["reach"]["type"] != json!(null);
+            assert!((own_reach || !props.contains_key("reach")) && !props.contains_key("auth"), "{ns}.{}: {props:?}", m["name"]);
         }
     }
     let tickets = one(&c, "tickets.schema", json!({})).await;

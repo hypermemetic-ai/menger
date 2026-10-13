@@ -30,7 +30,7 @@ use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 
-use crate::{dom, frame, mermaid};
+use crate::{dom, scopes};
 
 /// The localStorage key; the value is `"light"` or `"dark"`, and the key
 /// is absent for the system default. index.html's pre-paint script reads
@@ -165,6 +165,21 @@ pub(crate) fn Toggle() -> impl IntoView {
         cb.forget(); // lives as long as the app
     }
 
+    // THEME-7: a choice made in another tab of this browser is this tab's
+    // too — every open page follows it (`storage` fires in the others).
+    {
+        let cb = Closure::<dyn FnMut(web_sys::StorageEvent)>::new(move |ev: web_sys::StorageEvent| {
+            if ev.key().as_deref() == Some(KEY) {
+                let next = Theme::parse(ev.new_value().as_deref());
+                if choice.get_untracked() != next {
+                    choice.set(next);
+                }
+            }
+        });
+        let _ = dom::window().add_event_listener_with_callback("storage", cb.as_ref().unchecked_ref());
+        cb.forget(); // lives as long as the app
+    }
+
     // One effect, in order: persist, stamp, and — only when what is
     // painted actually changed — redraw the diagrams against the newly
     // painted background. The first run (mount) stamps and redraws nothing.
@@ -174,10 +189,11 @@ pub(crate) fn Toggle() -> impl IntoView {
         save(t);
         apply(t);
         if prev.is_some_and(|p| p != mode) {
-            mermaid::rerender_all();
-            // COMP-4: a framed body takes the new tokens (and redraws its
-            // own diagrams) — the frame cannot read the app's CSS.
-            frame::retheme_all();
+            // THEME-7: the one repaint path, light/dark its special case —
+            // every region's tokens for the new mode, then (COMP-4) every
+            // framed body takes its region's (the frame cannot read the
+            // app's CSS) and the diagrams redraw.
+            scopes::repaint();
         }
         mode
     });

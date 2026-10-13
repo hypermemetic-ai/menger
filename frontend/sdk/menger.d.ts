@@ -118,6 +118,16 @@ export interface MengerInput {
 }
 
 /** `window.menger` — frozen; also `this.menger` in a component script. */
+/** THEME-7: what a frame is painted with — `on('theme')`'s argument, and `menger.theme`. */
+export interface MengerTheme {
+  /** The painted mode. */
+  scheme: 'light' | 'dark';
+  /** The theme the frame's region wears (`default`: none). */
+  theme: string;
+  /** Every token of the contract, as painted (`--accent` → `#d4572a`). */
+  tokens: Record<string, string>;
+}
+
 export interface Menger {
   /** "1.8.0". */
   readonly version: string;
@@ -163,6 +173,20 @@ export interface Menger {
    * before that instance's next render.
    */
   on(kind: 'change', listener: (event: WireEvent) => void): () => void;
+
+  /**
+   * THEME-7 (1.13): whenever what this frame is painted with moves — the
+   * light/dark mode, the theme its region wears (a reader's pick, an
+   * amended ```theme block, a project entered or left) or any token's
+   * value. Called once the new tokens are live on `:root`, never for a
+   * repaint that moved nothing: a component that draws with colours in JS
+   * redraws here. Returns the function that stops it; one made while a
+   * component script runs also stops before that instance's next render.
+   */
+  on(kind: 'theme', listener: (theme: MengerTheme) => void): () => void;
+
+  /** THEME-7 (1.13): what this frame wears now — a fresh copy each read. */
+  readonly theme: MengerTheme;
 
   /**
    * COMP-9: move the app to an app route — `#/ticket/<id>` (with

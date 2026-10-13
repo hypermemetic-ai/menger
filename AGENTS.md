@@ -168,6 +168,37 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   synapse -P 4455 menger notes upgrade --id 7 --epic MENGER --parent MENGER-2
   ```
 
+  **Themes** (THEME-8) are the `themes` activation: a theme is a name and
+  token overrides for light and dark — written as a ticket's ` ```theme
+  name [extends=parent] ` block (THEME-3: owned by that ticket as a
+  component is, orphaned and adopted the same way, validated on write —
+  tokens of the contract `tickets-api/src/tokens.toml` (THEME-2) in `:root`
+  / `:root[data-theme="dark"]`, `@font-face`, `@import url("https://…")`,
+  `m-*::part(…)`, looks only — a component's skinnable parts are the
+  `<part name>`s its `<docs>` declares (THEME-5; a documented part its
+  template lacks is refused); a refusal names the block's line), or with
+  `define` for admin and tests (the maps go through `-p`);
+  the site or a shortcode adopts one with `set` (`--reach frame|ticket|site`,
+  `--takeover off`; THEME-4: a hosted shortcode inherits its host's, and a
+  reader may turn project themes off in settings — `themes set --scope`
+  is the spelling, there is no `tickets set_theme`), a ticket in its frontmatter (`theme:`, `reach:`,
+  `takeover:`, `frame-theme:`, `frame-takeover:`); `theme_for` says who
+  wears what and from which level; `watch` says `theme_changed` /
+  `theme_removed`. PANTRY is the worked example (THEME-6). README "Themes
+  and their scopes", "A theme is a ticket", "Parts to skin":
+
+  ```sh
+  synapse -P 4455 -p '{"name":"ocean","light":{"--accent":"#00796b"},"dark":{"--accent":"#4db6ac"}}' menger themes define
+  synapse -P 4455 menger themes set --scope PANTRY --theme pantry --reach site
+  synapse -P 4455 menger themes theme_for --id PANTRY-4
+  ```
+
+  Every open page follows a theme change in place (THEME-7): one repaint
+  path in the app (`scopes::repaint`), `menger.on('theme')` in a frame for
+  a component that draws with colours in JS. A change that touches how
+  anything is painted is checked with the sweep test,
+  `scripts/theme-sweep.mjs`, on a throwaway server (README "On the fly").
+
   **Login** (IDENTITY-14) is off unless `--auth-provider` names a
   provider: `idp=…`, `auth0=…`, `oidc:<name>=…` or `nostr=…`. Each
   becomes an adapter that turns its credential into a Plexus identity at

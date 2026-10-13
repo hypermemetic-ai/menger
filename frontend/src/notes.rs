@@ -179,9 +179,13 @@ pub(crate) fn body_view(raw: &str, refs: Option<Refs>) -> AnyView {
     // AGS-14: once this div is in the DOM, hand its mermaid placeholders to
     // the renderer; a diagram-free body never touches it.
     let md_node = NodeRef::<leptos::html::Div>::new();
-    if diagrams > 0 {
-        md_node.on_load(move |el: web_sys::HtmlDivElement| mermaid::mount(&el));
-    }
+    md_node.on_load(move |el: web_sys::HtmlDivElement| {
+        if diagrams > 0 {
+            mermaid::mount(&el);
+        }
+        // MENGER-22: and its code highlighted — fetched only if it holds any.
+        crate::highlight::mount(&el);
+    });
     view! {
         {fm_view}
         <div class="md" node_ref=md_node inner_html=html></div>

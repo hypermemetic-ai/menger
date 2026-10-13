@@ -144,6 +144,29 @@ and its source in place; the rest of the page is unaffected.
 `RUST_LOG=menger=debug` logs one line per served asset, which is how to
 see that a diagram-free page never pulls the bundle.
 
+Code (MENGER-22) is always highlighted: every fenced or `<pre><code
+class="language-x">` block — in a plain body, a framed body and `m-code`, a
+comment, a board note, a component's docs card and its source on
+`#/components`. The highlighter is highlight.js 11.11.1 (BSD-3-Clause),
+**vendored** the same way at `frontend/vendor/highlight/` (its README: the
+bundle's makeup, checksums, upgrade steps) and served at
+`/app/vendor/highlight-11.11.1.min.js`, fetched the first time a page — or a
+frame, from `highlight.url` in its init block — holds a code block
+(`frontend/src/highlight.rs`; the frame SDK's `mountCode`). A block's
+`language-x` names its language (rust, typescript, javascript, json, toml,
+yaml, bash, sql, html, css, markdown, haskell, python, diff — and every other
+language in the bundle); `text` or `plain` stays plain; a fence with no
+language is guessed from those fourteen (`highlight::UNLABELED`, MENGER-22's
+open decision `unlabeled`; a guess scoring under 2 stays plain). The colours
+are the `--code-*` tokens (`keyword`, `string`, `comment`, `number`,
+`title`, `type`, `meta`, `builtin`, `attr`, `variable`), mapped from the
+`hljs-*` classes by index.html's rules and the SDK's base — no vendor
+stylesheet — so a THEME-8 theme, a region's scope or the light/dark toggle
+recolours code with no parse again. An unknown language, a bundle that will
+not load or a highlighter that throws leaves the block as written; an
+amended or still-streaming body is highlighted as it lands. Whole-document
+bodies (MENGER-15) are their own pages and are left as they are.
+
 Data plane (MFE-1 pins: REST for calls, SSE for `watch`; the view layer
 owns no routing):
 
@@ -729,14 +752,16 @@ as `docs` (`null` without one):
 | `<summary>` (at most one) | `summary` — its text: tags dropped, whitespace collapsed, trimmed (`""` without one) |
 | `<attr name type? required?>` | `attrs[]` — `{ name, kind, required, description }`, in order; `name` lowercased; `kind` the `type`: `string` (the default), `number`, `boolean`, `shortcode` (an existing shortcode), `ticket` (an existing id) or `enum(a\|b\|c)`, internally tagged — `{"type": "shortcode"}`, `{"type": "enum", "values": ["a", "b", "c"]}`; `required` whether the attribute is present |
 | `<slot name?>` | `slots[]` — `{ name, description }`; `name` `null` for the default slot |
+| `<part name scripted?>` | `parts[]` — `{ name, scripted, description }`, in order (THEME-5): what a theme may skin as `m-name::part(name)`; the template must carry `part="name"` on an element, unless `scripted` (the component's script makes it) |
 | `<example>` | `examples[]` — each one's inner HTML as written (its common indentation and surrounding blank lines removed) |
-| everything else | `help` — markdown: the four elements' lines removed, the rest de-indented, runs of blank lines one |
+| everything else | `help` — markdown: the five elements' lines removed, the rest de-indented, runs of blank lines one |
 
-The four are the `<docs>` element's own children: one inside another
+The five are the `<docs>` element's own children: one inside another
 element of the help (`<details><summary>`) or a backtick code span or fence
 is help. A malformed `<docs>` — two of them, one never closed, two
 `<summary>`s, an `<attr>` without a `name`, an unknown `type`, an `enum()`
-naming nothing, an attribute or slot declared twice — is an in-band `error`
+naming nothing, an attribute, slot or part declared twice, a part with no
+name, a documented part no element of the `<template>` carries — is an in-band `error`
 on the `create` or `amend` that carries it, naming the component and the
 problem, and nothing is written.
 
@@ -1630,6 +1655,310 @@ Under login a note is any member's — `add`, `list` and `get` are a viewer's,
 held anywhere — and `upgrade` is an editor's that also needs
 `tickets.create` where the ticket lands (the parent, else the shortcode's
 root, else `*`).
+
+### Themes and their scopes (THEME-8)
+
+A **theme** is a name and a map of token overrides over the token
+contract (below), one map for light and one for dark; `default` overrides
+nothing. A token that is not a colour (a face, a size, a radius) set for
+light holds in dark too; a colour set for light only leaves dark's default. `themes` is the
+activation beside `tickets`; themes and settings are kept behind the cache,
+in `themes` and `theme_settings` tables a file gains, empty, on open.
+
+**Four levels, the nearest wins.** The **site** (the shell, nav, board,
+Home — with or without a ticket open), the **shortcode** (the ticket's, or
+the nearest one hosting it that says anything), the **ticket view** (its
+header, properties and body) and the **frame** (one body, or one component;
+a component takes its frame's theme). Each may adopt a theme with a
+**reach** — `frame` (only the frames inside it), `ticket` (itself and
+everything inside; the default) or `site` (and the site, while the ticket is
+the open one) — and may say **`takeover: off`**: it and everything inside
+ignore the themes above and wear `default`, or their own adoption. The
+**reader** is outermost: `#/settings` → Themes keeps their own site theme
+(in place of the site's), "project themes off" (THEME-4: no shortcode's
+setting reaches them — the site's, a ticket's and a frame's own still do)
+and "every takeover off" (their site theme, or `default`, everywhere) in
+this browser.
+
+**A project adopts a theme** (THEME-4): a shortcode's setting is kept with
+it; a hosted shortcode without one inherits the nearest host's that says
+anything, up the kept tree, ending at `default` — the server answers it
+(`theme_for`), and the app paints the same answer at once from the
+shortcode tree it keeps, so walking from a project into a shortcode hosted
+under it never detours by the site's theme. Walking into a project's ticket
+repaints the page through THEME-7's one path, and walking out (the board,
+Home, any page without a ticket open — they span projects) puts the site
+theme back. The tracker's spelling is `themes set --scope PANTRY …` (THEME-8);
+the `tickets set_theme --epic` of THEME-4's first draft was not added beside
+it.
+
+**The worked example: PANTRY** (THEME-6). The pantry look — warm paper, one
+burnt-orange accent, Fraunces for what leads, Inter for what reads,
+JetBrains Mono for code, generous radii, code and diagram colours for both
+modes, a field's label skinned as a kicker (`m-field::part(label)`) — is
+one ` ```theme pantry ` block on a PANTRY doc, and PANTRY adopts it reaching
+the site (`themes set --scope PANTRY --theme pantry --reach site`): while a
+PANTRY ticket is open all of menger wears it. PANTRY's bodies are house
+components and load nothing from outside menger (the theme's fonts come
+from Google Fonts, THEME-1 `fonts`). Each region says its paper, ink and
+text face again where its own tokens are (`#ticket-page, .mscope-frame`),
+since a face, a size or an ink inherits as a value resolved on `body`: a
+theme worn by the ticket view or a frame's box alone sets its text too.
+A shortcode's own boards (`#/waves/PANTRY`) open no ticket and stay the
+site's (THEME-10).
+
+A ticket says it in its body's frontmatter, as MENGER-15's `view:`:
+
+```yaml
+---
+theme: pantry          # the ticket view adopts it (and its frame)
+reach: ticket          # frame | ticket | site
+takeover: off          # ignore every theme from above
+frame-theme: ocean     # its frame alone adopts one (= theme: + reach: frame)
+frame-takeover: off    # its frame alone ignores the themes above
+---
+```
+
+The site and a shortcode say it over the wire:
+
+```sh
+synapse -P 4455 -p '{"name":"ocean","light":{"--accent":"#00796b","--bg":"#eef7f6"},"dark":{"--accent":"#4db6ac"}}' menger themes define
+synapse -P 4455 menger themes set --scope site --theme ocean                     # everyone's site theme (admin)
+synapse -P 4455 menger themes set --scope PANTRY --theme pantry --reach site     # a project, taking over while open
+synapse -P 4455 menger themes set --scope MENGER --takeover off                  # keep MENGER default
+synapse -P 4455 menger themes set --scope MENGER                                 # say nothing again
+synapse -P 4455 menger themes theme_for --id PANTRY-4                            # who wears what, and from where
+synapse -P 4455 menger themes list
+```
+
+| method | yields |
+| -- | -- |
+| `themes.define { name, light?, dark? }` | the `theme` as kept (its maps whole, keys written `--name`). A token not in the contract, a value with `< > { } ; \` or a line break (or over 200 bytes), a name that is not lowercase letters, digits and `-`, or `default` is one `error`, naming each |
+| `themes.list` | every `theme` (`default` first), then a `setting` for the site and each shortcode that says anything |
+| `themes.get { name }` | the `theme`, or one `error` naming the ones there are |
+| `themes.set { scope, theme?, reach?, takeover? }` | the `setting` as kept — `scope` `site` or a shortcode holding a ticket; `theme` none or `default` adopts none; saying nothing clears it. The site takes neither a reach nor `takeover: off`; an undefined theme is refused |
+| `themes.theme_for { id }` | `regions { id, regions: { site, ticket, frame }, levels }` — each region's `theme` and the `level` it came from (`none`, `site`, `shortcode` with `from`, `ticket`, `frame`), and what each level said |
+| `themes.watch` | `theme` (defined) and `setting` (moved), in order; `lagged { missed }` |
+
+Under login the reads are a viewer's; `define` and `set` an editor's —
+`define` on `*` (a theme is the whole site's), `set` on the shortcode it
+names — and the site's theme takes admin on `*`.
+
+**In the app** each region is its own token scope: the site's tokens on
+`<html>`'s own style, the ticket view's on `#ticket-page`, the frame's on
+the box its body sits in (`.mscope-frame`) — a region wearing its outer
+region's theme writes nothing and inherits. A frame reads its tokens where
+it sits, so it wears its region's. One repaint path (`src/scopes.rs`'s
+`repaint`; THEME-7, below) takes every cause — a theme defined, a setting
+moved, a ticket opened, left or amended, the reader's choice, the
+light/dark toggle — and re-themes every frame and redraws the diagrams in
+place; no reload. The
+root says what each region wears (`data-theme-site`, `data-theme-ticket`,
+`data-theme-frame`: `pantry ticket`).
+
+### On the fly (THEME-7)
+
+Change the theme, or edit it, and every open menger page repaints in place:
+no reload, no blank frame, nothing left in the old colours.
+
+**One repaint path for every cause** (`src/scopes.rs`'s `repaint`): a
+reader's pick — `#/settings` → Themes, or the palette's **`theme <name>`**
+(`theme: pantry`, `theme` alone lists them; "the site's" puts the site's
+back), kept in this browser and reaching its other open tabs through
+`storage` —, an amended ` ```theme ` block or a setting moved (over
+`themes.watch`, so a theme ticket is its own live editor: every open page
+wearing it follows the amend), a project entered or left, and the
+light/dark toggle (also followed by the other tabs), which is only its
+special case. It writes each region's tokens; then, only when what is
+painted moved (the mode, a region's theme, its tokens, its rules or fonts),
+every frame takes its region's (`menger:theme`) and the diagrams redraw —
+the app's own in the colours where each diagram sits. Everything else the
+app draws paints through the tokens (THEME-2's lint), so writing them is the
+whole repaint. The sign-in page wears the site theme the app last painted
+(`menger.themes.site`) from its first paint and follows a change made in
+another tab. Whole-document bodies (MENGER-15) follow light/dark only.
+
+**In a frame, `menger.on('theme', cb)`** (SDK 1.13): `cb({ scheme, theme,
+tokens })` whenever what the frame is painted with moves — called once the
+new tokens are live on `:root`, never for a repaint that moved nothing.
+`menger.theme` is what it wears now. A component that draws with colours in
+JS (a canvas, a colour copied into an attribute) redraws there; one that
+paints through `var(--…)` needs nothing:
+
+```javascript
+return this.menger.on('theme', () => draw());   // tokens are already live on :root
+```
+
+**The sweep test** (`scripts/theme-sweep.mjs`, Playwright from
+`perf/node_modules`) proves it on a throwaway server. It seeds its own
+tickets under `SWEEP` (three themes as ` ```theme ` docs — `pantry`, a
+`garish` one setting every colour and face, `ocean` —, a framed body with
+code, a diagram and house components, a mockup, and THEME-8's table as
+tickets; a `pantry` already owned elsewhere — PANTRY's own — is used as
+it is), opens every route at once — the board, a framed body, a mockup, a
+full-screen ticket, both wave boards, `#/components` and a docs card,
+`#/inputs`, `#/comments`, `#/settings`, the palette, the cheat sheet, a
+menu, MENGER-14's leave dialog and a toast — and switches default → pantry
+→ garish → garish dark → garish light → the site's → ocean → ocean's
+`--accent` amended → default, by the palette, the toggle, `themes set` and
+an amend. After each switch every element of every page, open shadow root
+and frame is scanned (colour, background, borders, outline, fill, stroke,
+font-family): none may hold a value the old theme painted that the new one
+does not (compared as the browser reads them, so `#fff` in one theme and
+`#ffffff` in the other are one value — THEME-6); no page may reload and no frame be replaced; a component's
+`on('theme')` is heard once, after the tokens; the diagrams are redrawn in
+the new `--diagram-*`; a planted element in an old value is found (the
+control). `--rows` checks THEME-8's table region by region, `--project`
+THEME-4's walk (`#/board` → a project's ticket → back: two repaints, no
+reload, the shell's and the frame's tokens the project's; a hosted
+shortcode inheriting and then saying its own; "project themes off" from
+another tab; `--project-ticket PANTRY-4` walks into that ticket's
+shortcode), `--signin-shell` the sign-in page:
+
+```sh
+cargo build && (cd frontend && trunk build --release)
+cp ~/.local/share/menger/tickets.db /tmp/sweep.db      # a copy; never prod's file
+PLEXUS_NO_REGISTRY=1 target/debug/menger --port 4510 --shell-port 4511 --rest-port 4512 --db-path /tmp/sweep.db &
+node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --seed --browsers chromium,firefox --rows --project
+```
+
+It refuses prod's and test's ports (4450–4458): it writes. Exit 0 when every
+check held; `report.json` and a screenshot per switch land in `--out`.
+
+### A theme is a ticket (THEME-3)
+
+A theme is written in a ticket's body, as a block — usually a doc under the
+project it dresses — and the registry keeps it the way it keeps components
+(COMP-3):
+
+````markdown
+```theme pantry extends=default
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:wght@400;600&display=swap");
+:root { --accent: #d4572a; --font-display: "Fraunces", serif; --radius: 6px; }
+:root[data-theme="dark"] { --accent: #f08a5d; }
+@font-face { font-family: "Plex"; src: url(https://example.org/plex.woff2) format("woff2"); }
+m-ring::part(ring) { outline: 1px solid var(--accent); }
+```
+````
+
+- **What a block may say** — looks only (THEME-1, `skins`): tokens of the
+  contract in `:root` (light; a token that is not a colour holds in dark
+  too) and `:root[data-theme="dark"]`; `@font-face` (`font-family`, `src`,
+  `font-weight`, `font-style`, `font-display`, `font-stretch`,
+  `unicode-range`); `@import url("https://…")` (a font's stylesheet); and
+  `m-name::part(part)` rules (with `:hover`, `:focus`, `:focus-visible` or
+  `:active`), never `behavior`, `-moz-binding`, `content`,
+  `pointer-events`, `expression(` or `javascript:`. **Fonts come from any
+  host** (THEME-1, `fonts`: owner, any URL) — over https only; the frame's
+  CSP (`connect-src 'none'`) leaves styles and fonts free, and the bundles
+  menger serves itself (mermaid, the highlighter) still name no CDN.
+- **Validated on write** (`tickets.create`, `amend`, `update`): anything
+  else is one in-band `error` naming the block and its line — ```` ```theme
+  pantry: line 2: `--nope` is not a token of the contract ```` — and
+  nothing is written, the title included; so is a second block of one
+  name, `default`, or an `extends` that goes round (named:
+  `pantry → deep → sea → pantry`).
+- **One owner, orphans, adoption.** The ticket whose body holds the block
+  owns the theme; another ticket's block naming it is refused, naming the
+  owner, and so is `themes.define` over it. When the block goes the theme
+  is an orphan — kept, read-only, while a ticket's frontmatter, a setting
+  or a live theme's `extends` uses it, and removed by the write that leaves
+  it unused. A block naming an orphan (or a theme `define` made) adopts it.
+- **`extends`** chains to `default`: a theme states only what differs.
+  `themes.get` / `list` answer what each says itself (with `owner`,
+  `orphan`, `extends`, `rules`, `imports`); the app paints it flattened.
+- **`watch`** says `theme_changed` (defined, a block written, orphaned or
+  adopted) and `theme_removed`.
+- **The swatch sheet.** In its owning ticket the block renders (the body
+  frames) as a sheet: the theme beside `default`, light and dark — paper
+  and ink, a title in the display face, a link, every status chip, every
+  kind glyph, a highlighted code block and a decision, the theme's
+  `::part`s scoped to its panels — and every token of the contract, both
+  themes, both modes. A block the server would refuse shows the refusal.
+- **Painted**: a region wearing a theme also names it (`--menger-theme`),
+  so a frame is handed its theme's rules with its tokens (`menger:theme`'s
+  `css`); the app's own document takes the fonts of every theme a region
+  wears (`<style id="menger-theme-fonts">`).
+
+### Parts to skin, and the house redone (THEME-5)
+
+A theme changes how a house component looks, never what it does (THEME-1,
+`skins`): through the tokens, and through the **parts** each component
+exposes. A component documents its parts in its `<docs>` —
+
+```html
+<template><section class="f" part="section"><header part="head"><span class="l" part="label"></span>…</header>…</section></template>
+<docs>
+  <part name="section">The section the field is.</part>
+  <part name="label">The field's label.</part>
+  <part name="submit" scripted>Submit (the script makes it).</part>
+</docs>
+```
+
+— and a theme skins them: `m-field::part(label) { font-family: var(--font-display); }`.
+A documented part the template does not carry is refused by the write that
+holds it, so a part in the docs is always one the component exposes. The
+docs card (a definition's card, `#/components/<name>`) lists them under
+**parts a theme may skin**, each as the selector a theme writes.
+`MENGER_HOUSE_BODIES=a.md:b.md cargo test -p menger-tickets-api house_bodies`
+files bodies on a throwaway store and fails unless every component they
+define (but one that renders nothing) documents its parts — the check the
+house's own bodies are held to before they are filed.
+
+The house components (ART-9; m-cite in COMP-15; m-ring and m-dial in
+DESIGN-26; m-sponge in DESIGN-20) live in the tracker, not here. THEME-5's
+versions — less chrome (a field is a section under a quiet label, the panel
+an option: `panel` on the tag), columns not rows (two options or cards side
+by side, more than two or under 720px stacked), the display face for what
+leads (a summary's lead, a question, a stat, an option's name), two new
+components (`m-beat`, a claim beside its figure; `m-walk`, numbered steps
+lit as they scroll in), and parts on every one — are filed by amending
+their owners when the owner approves the look. A frame's base styles and
+the app's bodies set headings in `--font-display`.
+
+### The token contract (THEME-2)
+
+Everything menger draws takes its colours, faces, sizes, radii and timings
+from one named set of tokens, and nowhere else. **The contract is one file,
+`tickets-api/src/tokens.toml`**: a table per group, a line per token — its
+light value, its dark value (only a colour says a different one) and what
+it paints:
+
+```toml
+[colour.accent]
+"--accent" = ['#0066cc', '#8ab4f8', "links, ids, the selected row's bar, focus"]
+```
+
+| group | tokens |
+| -- | -- |
+| `colour.paper`, `.ink`, `.line`, `.chip`, `.accent`, `.signal` | `--bg --panel --card --hover --row-sel --sel --scrim --shadow`, `--ink --muted`, `--line --tree-line`, `--chip-*`, `--accent --annot --annot-hi`, `--live --err-*` |
+| `colour.status` | `--st-<status>-bg` / `-fg` for every status (`.st-<status>` reads its pair) |
+| `colour.kind`, `colour.code` | `--kind-*` (AGS-13's glyphs), `--code-*` (MENGER-22's highlighting) |
+| `colour.diagram` | `--diagram-node --diagram-border --diagram-line --diagram-text` — `auto` (mermaid's own palette for the mode) unless a theme names a colour, which the app and every frame set into mermaid's `themeVariables` |
+| `type.face`, `.scale`, `.weight` | `--mono --sans --font-text` (the app's text) `--font-display` (a ticket's title); `--text-size --text-leading --text-scale` (every other size is `calc(N * var(--text-scale))`); `--weight-normal/-medium/-strong/-bold` |
+| `space` | `--space` — density, multiplying the page's gutters |
+| `shape.radius`, `.border` | `--radius-xs … --radius-2xl`, `--radius-bubble --radius-device --radius-phone --radius-pill`; `--border` (every hairline's width) |
+| `motion` | `--motion-fast --motion-flash --ease` |
+
+Everything else is produced from it: `themes::TOKENS` reads it (a theme
+naming anything else is refused; a frame receives exactly these), and
+index.html's `:root` blocks — light, and dark twice (the media query and
+the toggle's attribute) — are generated between `/* tokens:begin */` and
+`/* tokens:end */`. **Edit the contract, never the blocks**:
+`MENGER_BLESS=1 cargo test index_htmls_token_blocks` in `frontend/`
+rewrites them, and the gate fails while they differ.
+
+**The lint** (`frontend/src/tokens_lint.rs`, in the gate) fails on a colour
+(`#hex`, `rgb()`/`hsl()`, a named colour), a face (a family named in
+`font-family:` or `font:`) or a radius (a length in `border-radius`; `0`
+and a percentage are shapes) written anywhere but the contract: index.html's
+stylesheet, the frame SDK (`sdk/menger-sdk.js`) and `frontend/src`. Test
+modules are exempt; a line that parses a colour the browser computed says
+`tokens-lint:` at its end. The default theme is the contract's values:
+today's look, pixel for pixel (THEME-2's screenshot diff of the board, ticket
+pages, framed bodies and the house components, light and dark). House
+components (ART-9's, DESIGN's) paint with the same tokens — no private
+palette.
 
 ### Login (IDENTITY-14)
 

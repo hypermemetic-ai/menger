@@ -53,7 +53,7 @@ pub mod filter;
 pub mod labels;
 pub use types::{
     is_menger_doc, is_menger_path, path_address, Answer, AnswerSource, AttrDoc, AttrKind, AttrState, Component, ComponentDocs, Group, Input,
-    InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, SlotDoc, Kind, Marked, Placement,
+    InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue, KnowNothing, Known, PartDoc, SlotDoc, Kind, Marked, Placement,
     PlacementChange, RootRow, SearchWord, Severity, Status, Ticket, TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
 };
 // MENGER-13: the transition log's vocabulary.
@@ -103,6 +103,26 @@ pub mod notes_activation;
 pub use notes_activation::NotesClient;
 #[cfg(feature = "server")]
 pub use notes_activation::Notes;
+
+/// THEME-2: the token contract — every token menger draws with, its group
+/// and its defaults, read from `tokens.toml` ([`tokens::TOKENS`]), and
+/// index.html's `:root` blocks as it says them ([`tokens::root_css`]).
+pub mod tokens;
+/// THEME-8: the themes vocabulary — [`Theme`], the levels that adopt one,
+/// the tokens a theme may set ([`themes::TOKENS`]) and the rule that decides
+/// who wears what ([`themes::resolve`]). Wasm-safe: the app resolves with it.
+pub mod themes;
+pub use themes::{Theme, ThemesEvent};
+/// THEME-3: a theme is a ticket's ` ```theme ` block — read and validated
+/// here, wasm-safe: the server refuses a write whose block is not a theme,
+/// the app renders the block as its swatch sheet.
+pub mod theme_block;
+/// THEME-8: the `themes` activation, declared once: the server's [`Themes`]
+/// and the browser's [`ThemesClient`].
+pub mod themes_activation;
+pub use themes_activation::ThemesClient;
+#[cfg(feature = "server")]
+pub use themes_activation::Themes;
 
 /// IDENTITY-21: the members vocabulary — [`Role`], [`Grant`],
 /// [`MembersEvent`]. Wasm-safe, like [`comments`].

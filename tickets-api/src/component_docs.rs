@@ -11,6 +11,7 @@
 //!   <attr name="board" type="shortcode" required>The shortcode to count, e.g. RETURNS.</attr>
 //!   <attr name="label" type="string">Shown before the count.</attr>
 //!   <slot name="title">Optional title markup.</slot>
+//!   <part name="count">The number, for a theme to skin.</part>
 //!   <example><m-wave-summary board="RETURNS"></m-wave-summary></example>
 //!   Longer help, as markdown prose.
 //! </docs>
@@ -21,13 +22,13 @@
 //! `<style>` (raw text) and HTML comments; anywhere among them. None: the
 //! component has no docs (`None`). Two: malformed.
 //!
-//! **What is in it**: its top-level children `<summary>`, `<attr>`, `<slot>`
+//! **What is in it**: its top-level children `<summary>`, `<attr>`, `<slot>`, `<part>`
 //! and `<example>` — each matched to its own close tag, nesting counted, so
 //! an example may hold any markup — and everything else, which is the help.
 //! A child inside another element of the help (`<details><summary>`) is
 //! that element's, and help; so is one inside a backtick code span or fence,
 //! which is how the help shows markup. The help is markdown: the lines the
-//! four elements stood on removed, the rest de-indented by its common
+//! five elements stood on removed, the rest de-indented by its common
 //! indentation, blank lines around it trimmed.
 //!
 //! **Malformed** — refused in-band by the write that holds it, naming the
@@ -37,6 +38,14 @@
 //! `ticket`, `enum(a|b|c)` ([`AttrKind`]'s `FromStr`); an attribute or a
 //! slot (the default slot included) declared twice.
 //!
+//! **Parts** (THEME-5): `<part name="label">` declares a piece of the shadow
+//! tree a theme may skin (`m-name::part(label)`, looks only). Its name is a
+//! CSS identifier's letters, digits, `-` and `_`; declared twice, or with no
+//! `part="… label …"` on an element of the source's `<template>`, it is
+//! refused — so a component's documented parts are always ones it exposes.
+//! A part the script makes is declared `<part name="go" scripted>`, and the
+//! template is not asked for it.
+//!
 //! **The preview line** ([`preview`]): after ` ```component m-x `, the
 //! attributes an author writes as on a tag — `board=RETURNS label="Platform
 //! team"` — `[name, value]` in order, the name ASCII-lowercased, a value
@@ -44,7 +53,7 @@
 //! line is refused: it was ignored before COMP-8, and what cannot be read
 //! as an attribute is skipped.
 
-use crate::types::{AttrDoc, AttrKind, ComponentDocs, SlotDoc};
+use crate::types::{AttrDoc, AttrKind, ComponentDocs, PartDoc, SlotDoc};
 
 /// HTML's void elements: an open tag with no close tag to look for. (ART-5:
 /// [`crate::fields`] reads tags with these helpers too.)
@@ -56,7 +65,90 @@ pub(crate) const VOID: [&str; 14] = [
 /// none, `Err` naming what is malformed.
 pub fn parse(source: &str) -> Result<Option<ComponentDocs>, String> {
     let Some((start, end)) = find_docs(source)? else { return Ok(None) };
-    docs(&source[start..end]).map(Some)
+    let d = docs(&source[start..end])?;
+    if d.parts.iter().any(|p| !p.scripted) {
+        let exposed = template_parts(source);
+        if let Some(p) = d.parts.iter().find(|p| !p.scripted && !exposed.contains(&p.name)) {
+            return Err(format!(
+                "the part '{0}' is documented but no element of the <template> carries part=\"{0}\" \
+                 — add it there, or write <part name=\"{0}\" scripted> when the script makes it",
+                p.name
+            ));
+        }
+    }
+    Ok(Some(d))
+}
+
+/// THEME-5: every name in a `part` attribute of an element inside the
+/// source's top-level `<template>`s (a `part` holds a space-separated list),
+/// in order, duplicates kept once. Comments, `<script>` and `<style>` inside
+/// are skipped.
+pub fn template_parts(source: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while let Some(off) = source[i..].find('<') {
+        let lt = i + off;
+        if let Some(after) = comment_end(source, lt) {
+            i = after;
+            continue;
+        }
+        let Some((name, name_end)) = tag_name(source, lt) else {
+            i = lt + 1;
+            continue;
+        };
+        let Some((gt, _)) = open_end(source, name_end) else {
+            i = lt + 1;
+            continue;
+        };
+        i = match name.as_str() {
+            "script" | "style" => raw_close(source, &name, gt).map_or(source.len(), |(_, after)| after),
+            "template" => {
+                let (end, after) = close(source, "template", gt).unwrap_or((source.len(), source.len()));
+                collect_parts(&source[gt..end], &mut out);
+                after
+            }
+            _ => gt,
+        };
+    }
+    out
+}
+
+/// The `part` names on every element of `markup` (a template's content).
+fn collect_parts(markup: &str, out: &mut Vec<String>) {
+    let mut i = 0;
+    while let Some(off) = markup[i..].find('<') {
+        let lt = i + off;
+        if let Some(after) = comment_end(markup, lt) {
+            i = after;
+            continue;
+        }
+        let Some((name, name_end)) = tag_name(markup, lt) else {
+            i = lt + 1;
+            continue;
+        };
+        let Some((gt, _)) = open_end(markup, name_end) else {
+            i = lt + 1;
+            continue;
+        };
+        for (k, v) in attributes(markup[name_end..gt - 1].trim_end_matches('/')) {
+            if k == "part" {
+                for p in v.unwrap_or_default().split_whitespace() {
+                    if !out.iter().any(|x| x == p) {
+                        out.push(p.to_string());
+                    }
+                }
+            }
+        }
+        i = match name.as_str() {
+            "script" | "style" => raw_close(markup, &name, gt).map_or(markup.len(), |(_, after)| after),
+            _ => gt,
+        };
+    }
+}
+
+/// Whether `name` may name a part: letters, digits, `-` and `_`.
+fn part_name_ok(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// The attributes on a definition's opening line after the tag — see the
@@ -155,7 +247,7 @@ fn docs(content: &str) -> Result<ComponentDocs, String> {
     let mut out = ComponentDocs::default();
     let mut summary = false;
     let mut default_slot = false;
-    // The ranges the four elements take — the rest is the help.
+    // The ranges the five elements take — the rest is the help.
     let mut cuts: Vec<(usize, usize)> = Vec::new();
     let mut i = 0;
     while let Some(off) = content[i..].find(['<', '`']) {
@@ -176,7 +268,7 @@ fn docs(content: &str) -> Result<ComponentDocs, String> {
             i = at + 1;
             continue;
         };
-        if !matches!(name.as_str(), "summary" | "attr" | "slot" | "example") {
+        if !matches!(name.as_str(), "summary" | "attr" | "slot" | "part" | "example") {
             // Help: an element of it is skipped whole, so what it holds stays
             // its own.
             i = if self_closing || VOID.contains(&name.as_str()) {
@@ -236,6 +328,18 @@ fn docs(content: &str) -> Result<ComponentDocs, String> {
                     name: slot_name,
                     description: text(inner),
                 });
+            }
+            "part" => {
+                let part_name = attr("name").map(str::trim).unwrap_or_default().to_string();
+                if !part_name_ok(&part_name) {
+                    return Err(format!(
+                        "a <part> needs a name of letters, digits, - and _ — write <part name=\"label\"> (got '{part_name}')"
+                    ));
+                }
+                if out.parts.iter().any(|p| p.name == part_name) {
+                    return Err(format!("the part '{part_name}' is declared twice"));
+                }
+                out.parts.push(PartDoc { name: part_name, scripted: attr("scripted").is_some(), description: text(inner) });
             }
             _ => out.examples.push(block(inner)),
         }
@@ -504,7 +608,7 @@ fn block(s: &str) -> String {
         .join("\n")
 }
 
-/// The help: `content` without the four elements' ranges — an element alone
+/// The help: `content` without the five elements' ranges — an element alone
 /// on its lines takes the lines — as a [`block`].
 fn help(content: &str, cuts: &[(usize, usize)]) -> String {
     let mut out = String::with_capacity(content.len());
@@ -714,6 +818,34 @@ mod tests {
             assert!(e.contains(needle), "{source}: {e}");
         }
         assert!(parse("<docs><attr name=n type=date></attr></docs>").unwrap_err().contains("<attr name=\"n\">"));
+    }
+
+    /// THEME-5: parts are declared, read in order, and must be ones the
+    /// template exposes (or the script makes, `scripted`).
+    #[test]
+    fn parts_are_documented_and_exposed() {
+        let src = "<template><section part=\"frame panel\"><span part='label'></span><!-- <i part=\"ghost\"> --></section></template>\n\
+                   <script>const s = '<b part=\"inscript\">';</script>\n\
+                   <docs><part name=\"frame\">The section.</part><part name=label>The label.</part>\
+                   <part name=\"go\" scripted>Submit.</part></docs>";
+        let d = docs_of(src);
+        let names: Vec<(&str, bool, &str)> = d.parts.iter().map(|p| (p.name.as_str(), p.scripted, p.description.as_str())).collect();
+        assert_eq!(names, vec![("frame", false, "The section."), ("label", false, "The label."), ("go", true, "Submit.")]);
+        assert_eq!(template_parts(src), vec!["frame", "panel", "label"]);
+        assert_eq!(d.help, "");
+        for (source, needle) in [
+            ("<template><b part=a></b></template><docs><part name=b>x</part></docs>", "the part 'b' is documented but no element"),
+            ("<template><b part=a></b></template><docs><part name=a></part><part name=a></part></docs>", "the part 'a' is declared twice"),
+            ("<template><!-- <b part=c> --></template><docs><part name=c></part></docs>", "the part 'c' is documented"),
+            ("<template></template><script>'<b part=d>'</script><docs><part name=d></part></docs>", "the part 'd' is documented"),
+            ("<docs><part>x</part></docs>", "a <part> needs a name"),
+            ("<docs><part name=\"a b\">x</part></docs>", "a <part> needs a name"),
+        ] {
+            let e = parse(source).expect_err(source);
+            assert!(e.contains(needle), "{source}: {e}");
+        }
+        // No parts declared: nothing is asked of the template.
+        assert_eq!(docs_of("<template><b part=x></b></template><docs></docs>").parts, vec![]);
     }
 
     #[test]
