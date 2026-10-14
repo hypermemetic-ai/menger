@@ -1,14 +1,17 @@
-# menger.sh — the landing page (MENGER-7), served by the edge.
+# menger.sh — the landing page (MENGER-7, MENGER-10), served by the edge.
 #
 # Deployed by hypermemetic-infra's Ansible edge role (SCAFFOLD-19), which
-# copies menger's landing/ (index.html, style.css, main.js, favicon.svg) to
-# /srv/menger.sh and this file into the edge's sites/ — replacing the inline
-# placeholder there. Not deployed by hand. The hosted app is app.menger.sh
-# (MENGER-8), a site of its own; nothing here proxies to it.
+# copies menger's landing/ (index.html, style.css, main.js, favicon.svg,
+# guide/ — the reference — and media/ — the app's stills and clips, made by
+# scripts/landing-media.sh) to /srv/menger.sh and this file into the edge's
+# sites/ — replacing the inline placeholder there. Not deployed by hand. The
+# hosted app is app.menger.sh (MENGER-8), a site of its own; nothing here
+# proxies to it.
 #
-# The page makes no requests of its own: no fonts, scripts or styles from
-# elsewhere, no inline script or style (so the CSP needs no hash or
-# 'unsafe-inline'), and nothing to connect to.
+# The pages make no requests beyond their own files: no fonts, scripts or
+# styles from elsewhere, no inline script or style (so the CSP needs no hash
+# or 'unsafe-inline'), and nothing to connect to. Images and clips come from
+# media/ on this origin (img-src, media-src).
 
 menger.sh {
 	encode zstd gzip
@@ -16,7 +19,7 @@ menger.sh {
 	file_server
 
 	header {
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "strict-origin-when-cross-origin"
@@ -25,14 +28,27 @@ menger.sh {
 		-Server
 	}
 
-	# the page: always revalidated, so a deploy shows at once
-	@page path / /index.html
+	# the pages: always revalidated, so a deploy shows at once (file_server
+	# redirects /guide to /guide/)
+	@page path / /index.html /guide/ /guide/index.html
 	header @page Cache-Control "no-cache"
 
-	# its assets: names are not fingerprinted, so an hour, then revalidate
+	# their assets: names are not fingerprinted, so an hour, then revalidate
 	# in the background for a day
-	@assets path /style.css /main.js /favicon.svg
+	@assets path /style.css /main.js /favicon.svg /grain.svg
 	header @assets Cache-Control "public, max-age=3600, stale-while-revalidate=86400"
+	# the faces (DESIGN-37: Geist and Geist Mono, self-hosted under fonts/):
+	# a day, then revalidate in the background for a week — woff2 is
+	# compressed already
+	@fonts path /fonts/*
+	header @fonts Cache-Control "public, max-age=86400, stale-while-revalidate=604800"
+
+	# the stills and clips: regenerated rarely, under the same names, so a
+	# day, then revalidate in the background for a week. AVIF, WebP, MP4 and
+	# WebM are compressed already (encode leaves them alone: not text
+	# types), and file_server answers the Range requests video needs.
+	@media path /media/*
+	header @media Cache-Control "public, max-age=86400, stale-while-revalidate=604800"
 }
 
 # If www.menger.sh is ever given a DNS record, add:
