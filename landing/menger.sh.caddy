@@ -37,6 +37,11 @@ menger.sh {
 	# in the background for a day
 	@assets path /style.css /main.js /favicon.svg
 	header @assets Cache-Control "public, max-age=3600, stale-while-revalidate=86400"
+	# the faces (DESIGN-37: Geist and Geist Mono, self-hosted under fonts/):
+	# a day, then revalidate in the background for a week — woff2 is
+	# compressed already
+	@fonts path /fonts/*
+	header @fonts Cache-Control "public, max-age=86400, stale-while-revalidate=604800"
 
 	# the stills and clips: regenerated rarely, under the same names, so a
 	# day, then revalidate in the background for a week. AVIF, WebP, MP4 and
