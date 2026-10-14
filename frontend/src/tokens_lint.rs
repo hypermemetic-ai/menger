@@ -196,7 +196,10 @@ const PASS: &str = "tokens-lint: ";
 
 /// What the lint found on one line.
 fn verdict(line: &str) -> Option<&'static str> {
-    if line.contains(PASS) {
+    // DESIGN-38: an `@font-face` (one per line) names the face the contract's
+    // face defaults ask for — it declares a family and paints nothing; a rule
+    // that uses the family by name is still refused.
+    if line.contains(PASS) || line.trim_start().starts_with("@font-face") {
         None
     } else if has_color_literal(line) {
         Some("colour")
@@ -295,6 +298,34 @@ fn no_colour_face_or_radius_is_written_outside_the_contract() {
     );
 }
 
+/// DESIGN-38: the faces the contract's defaults name first are menger's
+/// own — each has an `@font-face` in the stylesheet whose file is in
+/// frontend/fonts/ and is copied by Trunk to /app/fonts/; nothing names a
+/// font host.
+#[test]
+fn the_default_faces_are_self_hosted() {
+    let html = index_html();
+    assert!(html.contains("<link data-trunk rel=\"copy-dir\" href=\"fonts\" data-target-path=\"fonts\" />"));
+    let css = app_css();
+    for (face, file) in [("Geist", "geist-latin.woff2"), ("Geist Mono", "geist-mono-latin.woff2")] {
+        let rule = css
+            .lines()
+            .find(|l| l.trim_start().starts_with("@font-face") && l.contains(&format!("font-family: \"{face}\";")))
+            .unwrap_or_else(|| panic!("no @font-face for {face}"));
+        assert!(rule.contains(&format!("url(/app/fonts/{file})")), "{rule}");
+        assert!(rule.contains("font-weight: 100 900") && rule.contains("font-display: swap"), "{rule}");
+        assert!(Path::new(root()).join("fonts").join(file).is_file(), "frontend/fonts/{file}");
+    }
+    let (_, blocks) = split_blocks(&html);
+    for token in ["--mono", "--font-text"] {
+        assert!(blocks.contains(&format!("{token}: \"Geist Mono\", ")), "{token} defaults to Geist Mono");
+    }
+    for token in ["--sans", "--font-display"] {
+        assert!(blocks.contains(&format!("{token}: \"Geist\", ")), "{token} defaults to Geist");
+    }
+    assert!(!html.contains("fonts.googleapis.com") && !html.contains("fonts.gstatic.com"));
+}
+
 /// The lint is live: a literal planted in each place it reads is named.
 #[test]
 fn the_lint_catches_a_planted_literal() {
@@ -306,6 +337,7 @@ fn the_lint_catches_a_planted_literal() {
         "  td.id { font: 12px/1.5 Menlo, monospace; }",
         "  td.id { border-radius: 7px; }",
         "  td.id { border-radius: var(--radius) 3px; }",
+        "  .wordmark { font-family: \"Geist\"; }",
     ] {
         assert_eq!(lint("x", plant).len(), 1, "{plant}");
     }
@@ -319,6 +351,7 @@ fn the_lint_catches_a_planted_literal() {
         "  .x { font: var(--weight-strong) calc(11px * var(--text-scale))/18px var(--mono); }",
         "  \"border-radius:var(--radius) var(--radius) var(--radius) 0;font:calc(10px * var(--text-scale))/1.5 var(--mono)\"",
         "  let s = format!(\"#{id}\");",
+        "  @font-face { font-family: \"Geist\"; font-weight: 100 900; src: url(/app/fonts/geist-latin.woff2) format(\"woff2\"); }",
     ] {
         assert!(lint("x", clean).is_empty(), "{clean}");
     }

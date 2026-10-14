@@ -27,6 +27,10 @@
      published beside it for whoever writes a component. -->
 <link data-trunk rel="copy-file" href="sdk/menger.d.ts" data-target-path="sdk" />
 <link data-trunk rel="copy-dir" href="sdk/generated" data-target-path="sdk/generated" />
+<!-- DESIGN-38: menger's faces, Geist and Geist Mono (OFL, latin, variable
+     100–900; fonts/OFL.txt), self-hosted at /app/fonts/ — the token
+     contract's face defaults name them; nothing is fetched from elsewhere. -->
+<link data-trunk rel="copy-dir" href="fonts" data-target-path="fonts" />
 <!-- AGS-17: stamp a stored theme choice before first paint, so a reload
      never flashes the system theme; src/theme.rs owns the key and
      re-applies it once mounted (a native test pins the two agree). -->
@@ -122,10 +126,10 @@
     --diagram-line: auto; /* edges and arrows (mermaid lineColor) */
     --diagram-text: auto; /* labels (mermaid primaryTextColor) */
     /* type.face */
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; /* code, ids, the app body */
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; /* prose in bodies, labels */
-    --font-text: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; /* the app's text (the shell, nav and board) */
-    --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; /* a ticket's title */
+    --mono: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; /* code, ids, the app body */
+    --sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; /* prose in bodies, labels */
+    --font-text: "Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; /* the app's text (the shell, nav and board) */
+    --font-display: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; /* a ticket's title */
     /* type.scale */
     --text-size: 14px; /* the app's body size */
     --text-leading: 1.5; /* the app's line height */
@@ -311,6 +315,11 @@
     --diagram-text: auto; /* labels (mermaid primaryTextColor) */
   }
   /* tokens:end */
+  /* DESIGN-38: the faces the contract's defaults name (--mono, --font-text:
+     Geist Mono; --sans, --font-display: Geist), served beside the app. One
+     rule per line — the lint reads an @font-face as a declaration. */
+  @font-face { font-family: "Geist"; font-style: normal; font-weight: 100 900; font-display: swap; src: url(/app/fonts/geist-latin.woff2) format("woff2"); }
+  @font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 100 900; font-display: swap; src: url(/app/fonts/geist-mono-latin.woff2) format("woff2"); }
   /* The status table (pinned, AGS-15): a chip wears its status as colour —
      its pair from the contract's colour.status (`--st-<status>-bg/-fg`), so
      dark needs no second table — plus weight (Blocked is bold) and
@@ -2196,6 +2205,139 @@
   .denv .dmore {
     margin-top: .45rem; font: inherit; font-size: calc(.75rem * var(--text-scale)); cursor: pointer; background: var(--card); color: var(--ink);
     border: var(--border) solid var(--line); border-radius: var(--radius); padding: 0 .55rem;
+  }
+
+  /* ── DESIGN-38: the shell in the grammar (DESIGN-34's first screen, the
+     landing page's family): a bar with the carpet wordmark and the live
+     mark, mono uppercase small labels, the board a ruled table whose
+     statuses are cells, rows that invert to ink under the cursor, the nav's
+     carpet pip, a faint 48px grid under the content column. Everything
+     paints through the contract's tokens (or a color-mix of them), so light,
+     dark and every theme follow; these rules restyle, the markup and its
+     ids stay. ── */
+  /* The carpet (src/carpet.rs): each cell a status of the lifecycle, in
+     order, the accent last — the landing page's `.mark`. */
+  .carpet { display: block; flex: none; overflow: visible; }
+  .carpet .c1 { fill: var(--st-epic-fg); }
+  .carpet .c2 { fill: var(--st-pending-fg); }
+  .carpet .c3 { fill: var(--st-ready-fg); }
+  .carpet .c4 { fill: var(--st-coding-fg); }
+  .carpet .c6 { fill: var(--st-in-review-fg); }
+  .carpet .c7 { fill: var(--st-complete-fg); }
+  .carpet .c8 { fill: var(--st-ready-fg); }
+  .carpet .c9 { fill: var(--accent); }
+  /* The bar: the panel's ground, one line of 48px, everything centred. */
+  header {
+    align-items: center; gap: .35rem .9rem; min-height: 48px; padding: .4rem 1rem;
+    background: var(--panel);
+  }
+  header h1 { font-family: var(--font-display); font-size: calc(16px * var(--text-scale)); letter-spacing: -.02em; line-height: 1; }
+  header h1 a.wordmark { display: inline-flex; align-items: center; gap: 9px; }
+  header .carpet.mark { width: 16px; height: 16px; }
+  header .hlink {
+    font-family: var(--mono); font-size: calc(11px * var(--text-scale)); line-height: 1.6; white-space: nowrap;
+    text-transform: uppercase; letter-spacing: .12em; color: var(--muted);
+  }
+  header .hlink[aria-current] { color: var(--ink); }
+  header .hlink:hover { color: var(--accent); }
+  /* A count is a filled chip (the inputs' and Needs you's alike). */
+  header .hlink .hbadge {
+    margin-left: .45rem; padding: 0 6px; border-radius: var(--radius-sm); letter-spacing: 0;
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); font-variant-numeric: tabular-nums; vertical-align: 0;
+  }
+  /* The health line is the page's crumb: the version and the count, then
+     the page's name in the accent. */
+  #health { font-family: var(--mono); font-size: calc(11.5px * var(--text-scale)); font-variant-numeric: tabular-nums; }
+  #health .tag { color: var(--accent); }
+  #health .tag::before { content: "·"; color: var(--muted); margin: 0 .6em; }  header #who, header .theme, header .hbtn, header .nav-reveal, header button.fbtn {
+    font-family: var(--mono); font-size: calc(11px * var(--text-scale));
+  }
+  /* The right of the bar: the global filter, then who, the live mark and
+     the buttons, each group pushed right — so when the column is too narrow
+     for one line (the app's bar holds more than the mock's), the second
+     line is the right-hand group, flush right. */
+  header button.fbtn { margin-left: auto; }
+  header #conn, header #who { margin-left: auto; }
+  header #who + #conn { margin-left: .2rem; }
+  header .hbtn, header .theme, header .nav-reveal { border-radius: var(--radius-sm); padding: 1px 7px; text-transform: lowercase; background: var(--card); }
+  /* The live mark: a cell in the connection's colour, pulsing while live. */
+  #conn {
+    display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+    font-family: var(--mono); font-size: calc(11.5px * var(--text-scale));
+  }
+  #conn .cell { flex: none; width: 8px; height: 8px; border-radius: var(--radius-xs); background: currentColor; }
+  #conn.live .cell { animation: menger-pulse 2.4s ease-in-out infinite; }
+  @keyframes menger-pulse { 50% { opacity: .4; } }
+  /* The grid: faint 48px rules under the content column, in the ink. */
+  #app .content {
+    background-image:
+      linear-gradient(color-mix(in srgb, var(--ink) 5%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--ink) 5%, transparent) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+  /* The board: a ruled table on the card's ground — heads mono uppercase on
+     the panel, a hairline under every row, ids in the accent, kinds in their
+     colours, the status a cell of one width, tabular numbers throughout. One
+     line per row still (MFE-12): the cell's height is pinned. */
+  table.board {
+    background: var(--card); border: var(--border) solid color-mix(in srgb, var(--muted) 40%, var(--line));
+    font-size: calc(12.5px * var(--text-scale)); font-variant-numeric: tabular-nums;
+  }
+  table.board th {
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); font-weight: var(--weight-medium);
+    letter-spacing: .12em; text-transform: uppercase; color: var(--muted); background: var(--panel);
+    padding: 8px 12px; border-bottom: var(--border) solid color-mix(in srgb, var(--muted) 40%, var(--line));
+  }
+  tbody#board td { padding: 8px 12px; transition: background-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease); }
+  tbody#board tr[data-ticket-id] td:nth-child(2) { font-family: var(--sans); font-size: calc(13.5px * var(--text-scale)); }
+  tbody#board td.id { font-weight: var(--weight-medium); }
+  tbody#board td.kind { font-family: var(--mono); font-size: calc(11px * var(--text-scale)); }
+  tbody#board td.kind[data-kind="scope"] { color: var(--kind-scope); }
+  tbody#board td.kind[data-kind="build"] { color: var(--kind-build); }
+  tbody#board td.kind[data-kind="execution"] { color: var(--kind-execution); }
+  tbody#board td.kind[data-kind="gap"] { color: var(--kind-gap); }
+  tbody#board td.kind[data-kind="spike"] { color: var(--kind-spike); }
+  tbody#board select.status, tbody#board span.status.chip {
+    appearance: none; -webkit-appearance: none; display: inline-block; vertical-align: middle;
+    width: 8.6em; height: 1.25rem; line-height: calc(1.25rem - 2px); padding: 0 6px;
+    border: var(--border) solid transparent; border-radius: var(--radius-sm);
+    font-family: var(--mono); font-size: calc(10.5px * var(--text-scale)); letter-spacing: .04em; text-transform: uppercase;
+    text-align: center; text-align-last: center;
+  }
+  tbody#board select.status { cursor: pointer; }
+  tbody#board select.status:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* The selected row keeps the accent bar on the list-"on" tint. */
+  tbody#board tr.picked td:first-child { box-shadow: inset 2px 0 var(--accent); }
+  /* A row inverts under the cursor; its status cell keeps its colours. */
+  tbody#board tr[data-ticket-id]:hover td { background: var(--ink); color: var(--bg); }
+  tbody#board tr[data-ticket-id]:hover :is(td.id, td.kind, td.id .haskids) { color: var(--bg); }
+  /* The nav: its head as tall as the bar, in the bar's small mono voice; the
+     carpet pip beside the view switch; the same status cells; rows that
+     invert (the open row keeps its tint and bar). */
+  #nav .brand {
+    align-items: center; min-height: 48px; padding: 0 12px 0 14px;
+    font-family: var(--mono); font-size: calc(11px * var(--text-scale)); font-weight: var(--weight-medium);
+    letter-spacing: .12em; text-transform: uppercase;
+  }
+  #nav .carpet.pip { width: 16px; height: 16px; margin-left: auto; transform-origin: 50% 50%; animation: menger-breathe 4s ease-in-out infinite; }
+  @keyframes menger-breathe { 50% { transform: scale(1.06); } }
+  #nav .pip + .nview { margin-left: 10px; }
+  #nav .nview-b { letter-spacing: 0; text-transform: lowercase; }
+  #nav .tag {
+    width: 7.4em; font-family: var(--mono); letter-spacing: .03em; text-transform: uppercase;
+    border-radius: var(--radius-sm); font-variant-numeric: tabular-nums;
+  }
+  /* A roll-up is a count, not a status: narrow, ruled, quiet. */
+  #nav .tag.roll { width: 4.2em; background: transparent; color: var(--muted); border-color: var(--line); }
+  /* Ids are the accent's words, as on the board — no chip. */
+  #nav .code { background: transparent; border-color: transparent; padding: 0; color: var(--accent); font-weight: var(--weight-medium); letter-spacing: 0; }
+  #nav .row { transition: background-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease); }
+  #nav .row:not(.sel):not(.pending):hover { background: var(--ink); color: var(--bg); }
+  #nav .row:not(.sel):not(.pending):hover :is(.toggle, .label, .code, .tag.roll) { color: var(--bg); }
+  #nav .row:not(.sel):not(.pending):hover .prefix { color: color-mix(in srgb, var(--bg) 55%, transparent); }
+  @media (prefers-reduced-motion: reduce) {
+    #conn.live .cell, #nav .carpet.pip { animation: none; }
+    tbody#board td, #nav .row { transition: none; }
   }
 </style>
 </head>

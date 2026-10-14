@@ -119,11 +119,15 @@
 
 # -- type -------------------------------------------------------------------
 
+# DESIGN-38: Geist (prose, titles) and Geist Mono (the app's text, ids,
+# code) are menger's own faces — self-hosted (frontend/fonts/, latin, OFL,
+# variable 100–900; @font-face in index.html), the system stacks after them
+# as fallbacks. A project theme still overrides them.
 [type.face]
-"--mono" = ['ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', 'code, ids, the app body']
-"--sans" = ['-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', 'prose in bodies, labels']
-"--font-text" = ['ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', "the app's text (the shell, nav and board)"]
-"--font-display" = ['-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', "a ticket's title"]
+"--mono" = ['"Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', '"Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', 'code, ids, the app body']
+"--sans" = ['"Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', '"Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', 'prose in bodies, labels']
+"--font-text" = ['"Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', '"Geist Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace', "the app's text (the shell, nav and board)"]
+"--font-display" = ['"Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', '"Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', "a ticket's title"]
 
 [type.scale]
 "--text-size" = ['14px', '14px', "the app's body size"]
