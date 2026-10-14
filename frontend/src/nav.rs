@@ -4097,6 +4097,7 @@ fn leaf_row(
     let toggle = std::sync::Arc::new(toggle);
     let on_toggle = toggle.clone();
     let (click_id, dbl_id, leave_id) = (id.clone(), id.clone(), id.clone());
+    let click_toggle = toggle.clone();
 
     view! {
         <a
@@ -4147,20 +4148,26 @@ fn leaf_row(
                         });
                     }
                     rowclick::Act::Swallow => ev.prevent_default(),
+                    // AGS-30: an even click of a quick run opens or closes it.
+                    rowclick::Act::Toggle(_) => {
+                        ev.prevent_default();
+                        click_toggle();
+                    }
                     _ => {}
                 }
             }
-            // AGS-25, AGS-29: a double-click on a row with children opens or
-            // closes it, and opens nothing; it selects no text.
+            // AGS-25, AGS-29, AGS-30: a double-click on a row with children
+            // opens or closes it (from the click handler's even click), and
+            // opens nothing; it selects no text.
             on:dblclick=move |ev: web_sys::MouseEvent| {
                 if bindings::hit_mouse(&ev, Context::Nav) != Some("nav.toggle") {
                     return;
                 }
+                // AGS-30: the toggle was the run's even click; this only keeps
+                // the browser's default (a word selected) away.
                 let parent = expanded_attr().is_some();
-                if let rowclick::Act::Toggle(_) = rowclick::feed(rowclick::Ev::DoubleClick { row: &dbl_id, parent }) {
-                    ev.prevent_default();
-                    toggle();
-                }
+                rowclick::feed(rowclick::Ev::DoubleClick { row: &dbl_id, parent });
+                ev.prevent_default();
             }
             // AGS-29: the pointer leaving the row drops its held click.
             on:mouseleave=move |_| {
@@ -4171,15 +4178,15 @@ fn leaf_row(
             <span class="prefix">{prefix}</span>
             <span
                 class="toggle clickable"
-                // A double-click here is one toggle: the first click toggles,
-                // the second is not another, and the double-click stops here
-                // rather than reaching the row's.
+                // A double-click here is one toggle: every odd click of a run
+                // toggles (AGS-30), and the clicks stop here rather than
+                // reaching the row's.
                 on:click=move |ev: web_sys::MouseEvent| {
                     ev.prevent_default();
                     ev.stop_propagation();
                     // AGS-29: the latest click wins — a held one is dropped.
                     rowclick::feed(rowclick::Ev::Other);
-                    if ev.detail() <= 1 {
+                    if rowclick::glyph_toggles(ev.detail()) {
                         on_toggle();
                     }
                 }
