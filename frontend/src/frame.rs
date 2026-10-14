@@ -176,8 +176,12 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// `get` on a deleted id answers it), `undelete` (`undeleted`) and
 /// `extents`' `holes`; FILTER-25's 1.17 hands a ticket chip's Alt+click to
 /// the host (`menger:filter-everywhere { id }`), which sets the global filter
-/// to its shortcode's clause, as an Alt+click on an app chip does.
-pub(crate) const SDK_VERSION: &str = "1.17.0";
+/// to its shortcode's clause, as an Alt+click on an app chip does;
+/// DESIGN-40's 1.18 carries the app's Motion setting into the frame
+/// (`motion` and `entered` in the init block, `menger:motion`, `motion` on
+/// `menger:theme`) as `html[data-motion]` / `html[data-entered]`, adds
+/// `menger.motion`, and declares the house faces (`<style id="menger-fonts">`).
+pub(crate) const SDK_VERSION: &str = "1.18.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -208,6 +212,60 @@ impl Emulate {
     }
 }
 
+/// DESIGN-40: the app's Motion setting (DESIGN-39: `html[data-motion]` on
+/// the app's document — absent is `full`): `full` plays every move, `calm`
+/// drops the decorative ones (a figure drawing itself, a code block typing,
+/// a step's glow, an option settling in), `none` stops them all. A frame
+/// wears it as its own `html[data-motion]` (the SDK sets it from the init
+/// block, and from `menger:motion` / `menger:theme` when it changes), so the
+/// house components honour it; `prefers-reduced-motion` stops them too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) enum Motion {
+    #[default]
+    Full,
+    Calm,
+    None,
+}
+
+impl Motion {
+    /// The attribute's value as written; anything else (or none) is `full`.
+    pub(crate) fn parse(v: Option<&str>) -> Motion {
+        match v.map(str::trim) {
+            Some("calm") => Motion::Calm,
+            Some("none") => Motion::None,
+            _ => Motion::Full,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Motion::Full => "full",
+            Motion::Calm => "calm",
+            Motion::None => "none",
+        }
+    }
+}
+
+/// DESIGN-40: the house faces in a framed body — the contract's families
+/// (`--mono`, `--sans`: "Geist Mono", "Geist"), declared as index.html
+/// declares them, from the app's `/app/fonts/` named absolutely (`base`,
+/// ending in `/`). A base that could end the rule early declares nothing:
+/// the system stacks the tokens fall back to paint instead.
+pub(crate) fn fonts_css(base: &str) -> String {
+    let unsafe_char = |c: char| c.is_whitespace() || matches!(c, '<' | '>' | '{' | '}' | '(' | ')' | ';' | '"' | '\'' | '\\');
+    if base.is_empty() || base.chars().any(unsafe_char) {
+        return String::new();
+    }
+    FONT_FACES.trim().replace("{base}", base)
+}
+
+/// The rules [`fonts_css`] fills in — one `@font-face` a line, as the token
+/// lint reads a declaration.
+const FONT_FACES: &str = "
+@font-face{font-family:\"Geist\";font-style:normal;font-weight:100 900;font-display:swap;src:url({base}geist-latin.woff2) format(\"woff2\")}
+@font-face{font-family:\"Geist Mono\";font-style:normal;font-weight:100 900;font-display:swap;src:url({base}geist-mono-latin.woff2) format(\"woff2\")}
+";
+
 /// The frame's sandbox (COMP-1 decision 1, after lavish-axi's): scripts,
 /// and popups that escape the sandbox — never `allow-same-origin`, which
 /// would hand the body the app's origin. IDENTITY-28: and no longer
@@ -224,6 +282,10 @@ pub(crate) const SANDBOX: &str = "allow-scripts allow-popups allow-popups-to-esc
 /// anywhere. Scripts, styles, images and fonts are left alone — bodies
 /// import modules from esm.sh and show images from anywhere.
 pub(crate) const CSP: &str = "connect-src 'none'; form-action 'none'";
+
+/// DESIGN-40: where the app serves the house faces (Trunk copies
+/// `frontend/fonts/` there; index.html's `@font-face` rules name them).
+const FONTS_URL: &str = "/app/fonts/";
 
 /// The class every frame's `<iframe>` wears — what the listener and
 /// [`retheme_all`] look frames up by.
@@ -290,6 +352,16 @@ pub(crate) struct Shell<'a> {
     pub(crate) mermaid_url: &'a str,
     /// MENGER-22: the vendored highlighter, absolute, the same way.
     pub(crate) highlight_url: &'a str,
+    /// DESIGN-40: where the house faces are (`…/app/fonts/`), absolute — the
+    /// frame's origin is opaque, so its document names them by the app's
+    /// origin (the shell answers them with CORS). Empty: none declared.
+    pub(crate) fonts_url: &'a str,
+    /// DESIGN-40: the app's Motion setting as painted now
+    /// (`html[data-motion]`: [`Motion`]).
+    pub(crate) motion: Motion,
+    /// DESIGN-40: this body was already shown here (a re-render after an
+    /// amend, a keystroke in a preview): its entrance moves do not play again.
+    pub(crate) entered: bool,
     /// COMP-5: the component registry as the app holds it now — `None`
     /// before the app has fetched it (the frame is handed it once it has).
     pub(crate) components: Option<&'a [Component]>,
@@ -364,6 +436,9 @@ pub(crate) fn init_json(shell: &Shell) -> String {
         }),
         // MENGER-15: what the page shim emulates (a mockup's frames).
         "emulate": shell.emulate.map(Emulate::json),
+        // DESIGN-40: the Motion setting, and a re-render's "already shown".
+        "motion": shell.motion.as_str(),
+        "entered": shell.entered,
     });
     init.to_string().replace('<', "\\u003c")
 }
@@ -471,6 +546,13 @@ pub(crate) fn srcdoc(body_html: &str, shell: &Shell) -> String {
     doc.push_str(CSP);
     doc.push_str("\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
     doc.push_str("<base target=\"_blank\">");
+    // DESIGN-40: the house faces, before the tokens that name them.
+    let fonts = fonts_css(shell.fonts_url);
+    if !fonts.is_empty() {
+        doc.push_str("<style id=\"menger-fonts\">");
+        doc.push_str(&fonts);
+        doc.push_str("</style>");
+    }
     doc.push_str("<style id=\"menger-theme\">");
     doc.push_str(&theme_css(shell.scheme, shell.tokens));
     doc.push_str("</style><script type=\"application/json\" id=\"menger-init\">");
@@ -667,7 +749,44 @@ fn theme_message(frame: &web_sys::HtmlIFrameElement, channel: &str) -> JsValue {
     let worn = worn_at(frame);
     set(&msg, "css", &crate::scopes::rules_for(&worn).into());
     set(&msg, "theme", &worn.into());
+    // DESIGN-40: and the Motion setting, so a frame that loaded across a
+    // change wears the one painted now.
+    set(&msg, "motion", &host_motion().as_str().into());
     msg.into()
+}
+
+/// DESIGN-40: the app's Motion setting as painted now — DESIGN-39's
+/// `html[data-motion]` on the app's document; absent is `full`.
+fn host_motion() -> Motion {
+    let v = dom::window().document().and_then(|d| d.document_element()).and_then(|e| e.get_attribute("data-motion"));
+    Motion::parse(v.as_deref())
+}
+
+/// DESIGN-40: `menger:motion { motion }` to every open frame — the app's
+/// Motion setting moved (DESIGN-39 sets `html[data-motion]`).
+fn remotion_all() {
+    let motion = host_motion();
+    for f in frames() {
+        if let Some(channel) = f.get_attribute("data-channel") {
+            let msg = message("menger:motion", &channel);
+            set(&msg, "motion", &motion.as_str().into());
+            post(&f, &msg.into());
+        }
+    }
+}
+
+/// DESIGN-40: the Motion setting reaches every frame the moment it moves —
+/// one observer on the app's `<html>`, for the app's lifetime.
+fn watch_motion() {
+    let Some(root) = dom::window().document().and_then(|d| d.document_element()) else { return };
+    let cb = Closure::<dyn FnMut(js_sys::Array, web_sys::MutationObserver)>::new(|_: js_sys::Array, _: web_sys::MutationObserver| remotion_all());
+    let Ok(observer) = web_sys::MutationObserver::new(cb.as_ref().unchecked_ref()) else { return };
+    cb.forget();
+    let opts = web_sys::MutationObserverInit::new();
+    opts.set_attributes(true);
+    let filter = js_sys::Array::of1(&JsValue::from_str("data-motion"));
+    opts.set_attribute_filter(&filter);
+    let _ = observer.observe_with_options(&root, &opts);
 }
 
 /// THEME-3/THEME-7: the theme the region around `el` wears, by the name it
@@ -1360,6 +1479,8 @@ fn install_listener() {
     cb.forget();
     // IDENTITY-36: what a write's gesture is read from.
     gesture::install(FRAME_CLASS);
+    // DESIGN-40: the Motion setting, followed into every frame.
+    watch_motion();
     let hash = Closure::<dyn FnMut()>::new(|| anchor_changed(&dom::window().location().hash().unwrap_or_default()));
     let _ = w.add_event_listener_with_callback("hashchange", hash.as_ref().unchecked_ref());
     hash.forget();
@@ -1431,6 +1552,12 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     let worn = worn_at(container);
     let mermaid_url = format!("{}{}", w.location().origin().unwrap_or_default(), mermaid::ASSET_URL);
     let highlight_url = format!("{}{}", w.location().origin().unwrap_or_default(), highlight::ASSET_URL);
+    // DESIGN-40: the house faces, the same way; the Motion setting as the
+    // app wears it; and whether this container already shows the body (a
+    // re-render: its entrance moves are not played again).
+    let fonts_url = format!("{}{}", w.location().origin().unwrap_or_default(), FONTS_URL);
+    let motion = host_motion();
+    let entered = container.query_selector(":scope > iframe:not([data-state=\"pending\"])").ok().flatten().is_some();
     let components = registry::snapshot();
     // MENGER-15: a whole document follows the app's mode unless a mockup
     // says otherwise.
@@ -1446,6 +1573,9 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
             tokens: &tokens,
             mermaid_url: &mermaid_url,
             highlight_url: &highlight_url,
+            fonts_url: &fonts_url,
+            motion,
+            entered,
             components: components.as_deref(),
             ticket: init_ticket,
             cite: cite.map(|(section, _, _)| section),
@@ -1604,7 +1734,7 @@ mod tests {
     fn the_csp_comes_first_and_closes_connections_and_forms() {
         assert_eq!(CSP, "connect-src 'none'; form-action 'none'");
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f9", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", components: None, ticket: Some("A-1"), cite: None, emulate: None };
+        let shell = Shell { channel: "f9", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, entered: false, components: None, ticket: Some("A-1"), cite: None, emulate: None };
         let doc = srcdoc("<script>fetch('https://x')</script><form action=\"https://x\"></form>", &shell);
         let head = "<!doctype html><html lang=\"en\" data-theme=\"light\"><head>";
         assert!(
@@ -1629,7 +1759,7 @@ mod tests {
     #[test]
     fn the_srcdoc_is_the_shell_then_the_body() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", highlight_url: "http://h:1/app/vendor/hl.js", components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", highlight_url: "http://h:1/app/vendor/hl.js", fonts_url: "http://h:1/app/fonts/", motion: Motion::Calm, entered: true, components: None, ticket: None, cite: None, emulate: None };
         let doc = srcdoc("<details><summary>s</summary><p>x</p></details>", &shell);
         assert!(doc.starts_with("<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta http-equiv=\"Content-Security-Policy\""), "{doc}");
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
@@ -1642,12 +1772,42 @@ mod tests {
         assert!(doc.contains(&format!("<script id=\"menger-sdk\" data-version=\"{SDK_VERSION}\" data-src=\"{SDK_URL}\">{SDK_JS}</script></head>")));
     }
 
+    /// DESIGN-40: a framed body declares the house faces from the app's
+    /// origin (its own is opaque), before the tokens that name them; and is
+    /// told the Motion setting and whether it was shown before.
+    #[test]
+    fn a_frame_declares_the_house_faces_and_wears_the_motion_setting() {
+        let tokens = shell_tokens();
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "http://h:1/app/fonts/", motion: Motion::Calm, entered: true, components: None, ticket: None, cite: None, emulate: None };
+        let doc = srcdoc("<p>x</p>", &shell);
+        let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
+        assert!(at("<base target=\"_blank\">") < at("<style id=\"menger-fonts\">"));
+        assert!(at("<style id=\"menger-fonts\">") < at("<style id=\"menger-theme\">"));
+        assert!(doc.contains("font-family:\"Geist\";") && doc.contains("src:url(http://h:1/app/fonts/geist-latin.woff2) format(\"woff2\")"), "{doc}");
+        assert!(doc.contains("font-family:\"Geist Mono\";") && doc.contains("src:url(http://h:1/app/fonts/geist-mono-latin.woff2)"), "{doc}");
+        let v: serde_json::Value = serde_json::from_str(&init_json(&shell)).unwrap();
+        assert_eq!(v["motion"], "calm");
+        assert_eq!(v["entered"], true);
+        // No base, or one that could end the rule: nothing declared.
+        for bad in ["", "http://h/a)b/", "http://h/</style>/", "http://h/a b/", "x;}"] {
+            assert_eq!(fonts_css(bad), "", "{bad}");
+        }
+        let none = Shell { fonts_url: "", ..shell };
+        assert!(!srcdoc("<p>x</p>", &none).contains("menger-fonts"));
+        // The setting as the app's <html> says it; absent or unknown is full.
+        assert_eq!(Motion::parse(None), Motion::Full);
+        assert_eq!(Motion::parse(Some("calm")), Motion::Calm);
+        assert_eq!(Motion::parse(Some(" none ")), Motion::None);
+        assert_eq!(Motion::parse(Some("fast")), Motion::Full);
+        assert_eq!(Motion::None.as_str(), "none");
+    }
+
     /// The init block parses back to what the SDK reads, and nothing in it
     /// can close its script element.
     #[test]
     fn the_init_block_is_json_that_cannot_close_its_script() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f1", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", highlight_url: "http://h/hl.js", components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f1", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", highlight_url: "http://h/hl.js", fonts_url: "", motion: Motion::Full, entered: false, components: None, ticket: None, cite: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1688,6 +1848,7 @@ mod tests {
             theme: "default",
             tokens: &tokens,
             mermaid_url: "u", highlight_url: "h",
+            fonts_url: "", motion: Motion::Full, entered: false,
             components: None,
             ticket: Some("AUTH-10"),
             cite: Some(&field),
@@ -1744,7 +1905,7 @@ mod tests {
             Component { name: "m-a".into(), source: source.into(), owner: Some("A-2".into()), references: vec!["A-3".into()], docs: None, preview: vec![] },
             Component { name: "m-b".into(), source: "<i>b</i>".into(), owner: None, references: vec!["m-a".into()], docs: None, preview: vec![] },
         ];
-        let shell = Shell { channel: "f2", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", components: Some(&components), ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f2", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, entered: false, components: Some(&components), ticket: None, cite: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2014,7 +2175,7 @@ mod tests {
     }
 
     fn page_shell(tokens: &[(String, String)], emulate: Option<Emulate>) -> Shell<'_> {
-        Shell { channel: "f5", scheme: Scheme::Dark, theme: "default", tokens, mermaid_url: "u", highlight_url: "h", components: None, ticket: Some("MENGER-16"), cite: None, emulate }
+        Shell { channel: "f5", scheme: Scheme::Dark, theme: "default", tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, entered: false, components: None, ticket: Some("MENGER-16"), cite: None, emulate }
     }
 
     /// MENGER-15: a whole document renders as itself — its own head, styles

@@ -174,6 +174,10 @@ async fn router(cfg: ShellConfig) -> Router {
         app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));
     }
     let mut app = app.merge(favicon_routes());
+    // DESIGN-40: a framed body's document has an opaque origin, so the
+    // house faces it loads from `/app/fonts/` are cross-origin fetches —
+    // answered with CORS (`*`: public files, no data).
+    app = app.layer(axum::middleware::from_fn(fonts_cors));
     if let Some(login) = cfg.login.clone() {
         use crate::web_login as w;
         app = app.merge(
@@ -211,7 +215,8 @@ async fn require_session(
     // public code, no data — and a ticket body's frame loads them from an
     // opaque origin, which sends no SameSite cookie, so behind the session
     // they were a redirect to the login page and no diagram drew.
-    if login.session(req.headers()).is_some() || req.uri().path().starts_with("/app/vendor/") {
+    // DESIGN-40: so are the faces (`/app/fonts/…`), for the same frames.
+    if login.session(req.headers()).is_some() || is_public_asset(req.uri().path()) {
         return next.run(req).await;
     }
     let path = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/");
@@ -220,6 +225,29 @@ async fn require_session(
     }
     let to = format!("/login?next={}", url::form_urlencoded::byte_serialize(path.as_bytes()).collect::<String>());
     (StatusCode::SEE_OTHER, [(header::LOCATION, to)]).into_response()
+}
+
+/// IDENTITY-38 / DESIGN-40: the app's files a ticket body's frame loads
+/// from its opaque origin — public code and faces, no data.
+fn is_public_asset(path: &str) -> bool {
+    path.starts_with("/app/vendor/") || is_font(path)
+}
+
+/// DESIGN-40: the house faces, served from the app's build.
+fn is_font(path: &str) -> bool {
+    path.starts_with("/app/fonts/")
+}
+
+/// DESIGN-40: a face is fetched with CORS (a font always is), and a framed
+/// body's document has an opaque origin: `/app/fonts/…` says any origin may
+/// read it.
+async fn fonts_cors(req: Request, next: axum::middleware::Next) -> Response {
+    let font = is_font(req.uri().path());
+    let mut r = next.run(req).await;
+    if font {
+        r.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_static("*"));
+    }
+    r
 }
 
 /// The `Host` values this shell answers to: its port on 127.0.0.1 and
@@ -282,6 +310,35 @@ mod tests {
         let stamped = plexus_shell::stamp(VANILLA, &cfg.stamps_for(4450));
         assert!(stamped.contains("<title>menger.test</title>") && !stamped.contains("{{WS_PORT}}"));
         assert_eq!(cfg.pages[0].0, "/vanilla");
+    }
+
+    /// DESIGN-40: the faces and the vendored code are the public assets a
+    /// frame loads; nothing else of the app is.
+    #[test]
+    fn only_the_faces_and_the_vendored_code_are_public_assets() {
+        assert!(is_public_asset("/app/fonts/geist-latin.woff2"));
+        assert!(is_public_asset("/app/vendor/mermaid.min.js"));
+        assert!(!is_public_asset("/app/index.html"));
+        assert!(!is_public_asset("/app/fontsx"));
+        assert!(!is_public_asset("/"));
+    }
+
+    /// DESIGN-40: a face is answered with `Access-Control-Allow-Origin: *`;
+    /// any other path is not.
+    #[tokio::test]
+    async fn a_face_is_readable_from_any_origin() {
+        let app = Router::new()
+            .route("/app/fonts/geist-latin.woff2", get(|| async { "font" }))
+            .route("/app/index.html", get(|| async { "page" }))
+            .layer(axum::middleware::from_fn(fonts_cors));
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let at = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let ask = |p: &str| reqwest::get(format!("http://{at}{p}"));
+        let font = ask("/app/fonts/geist-latin.woff2").await.unwrap();
+        assert_eq!(font.headers().get("access-control-allow-origin").unwrap(), "*");
+        let page = ask("/app/index.html").await.unwrap();
+        assert!(page.headers().get("access-control-allow-origin").is_none());
     }
 
     #[test]

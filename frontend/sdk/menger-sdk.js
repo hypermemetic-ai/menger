@@ -175,6 +175,10 @@
  *                 and whenever the app repaints (THEME-7's one path: a mode
  *                 flip, a theme picked, amended, entered or left); `theme`
  *                 the name the frame's region wears (1.13), `css` its rules
+ *                 — and (1.18) `motion`, the app's Motion setting
+ *   host → frame  menger:motion { motion }                the app's Motion
+ *                 setting moved (DESIGN-40): `full`, `calm` or `none`, worn
+ *                 as html[data-motion]
  *   host → frame  menger:components { components }        on ready, and
  *                 whenever the app (re)fetches the registry — the whole
  *                 registry (`[{ name, source, owner, references }]`); what
@@ -253,7 +257,11 @@
  *                 such section — `height` 0).
  *
  * The init block (#menger-init, JSON) carries
- * `{ channel, version, scheme, theme, mermaid: { url, config }, highlight: { url, unlabeled, detect, plain, aliases, min_relevance }, components, ticket, cite }`
+ * `{ channel, version, scheme, theme, mermaid: { url, config }, highlight: { url, unlabeled, detect, plain, aliases, min_relevance }, components, ticket, cite, motion, entered }`
+ * — (1.18) `motion` the app's Motion setting and `entered` true on a
+ * re-render, worn as html[data-motion] and html[data-entered]; and
+ * html[data-settled] once the first paint is complete (the host shows the
+ * frame then: entrance moves start from it)
  * — `components` the registry as the app held it (null: not yet), `ticket`
  * the ticket whose stored body this is (null: none), `cite` (1.7) the
  * section a cited window shows (`{ field }` or `{ anchor }`; null: a whole
@@ -264,7 +272,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.17.0";
+  var VERSION = "1.18.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -288,6 +296,22 @@
   // THEME-7: the theme this frame's region wears (its name), as painted.
   var themeName = typeof init.theme === "string" && init.theme ? init.theme : "default";
   var mermaidInit = init.mermaid && init.mermaid.url ? init.mermaid : null;
+  // DESIGN-40 (1.18): the app's Motion setting, worn as html[data-motion]
+  // (full | calm | none) before the body is parsed, so the house components'
+  // moves read it from their first render; html[data-entered] on a re-render
+  // (the body was already shown: entrance moves do not play again).
+  function setMotion(v) {
+    var m = v === "calm" || v === "none" ? v : "full";
+    if (doc.documentElement.getAttribute("data-motion") !== m) doc.documentElement.setAttribute("data-motion", m);
+  }
+  setMotion(init.motion);
+  if (init.entered === true) doc.documentElement.setAttribute("data-entered", "");
+  // What moves now: the setting, and `none` while the reader's system asks
+  // for reduced motion.
+  function motionNow() {
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    return reduce ? "none" : doc.documentElement.getAttribute("data-motion") || "full";
+  }
   // MENGER-22: the highlighter and its rules (src/highlight.rs).
   var highlightInit = init.highlight && init.highlight.url ? init.highlight : null;
   // COMP-14: a cited window's frame shows one section, display only.
@@ -891,6 +915,8 @@
   var api = { version: VERSION, tickets: tickets, call: call, on: on, navigate: navigate, input: input };
   // THEME-7: what the frame wears now — a fresh copy each read.
   Object.defineProperty(api, "theme", { enumerable: true, get: function () { return worn(); } });
+  // DESIGN-40 (1.18): what moves now — "full", "calm" or "none".
+  Object.defineProperty(api, "motion", { enumerable: true, get: function () { return motionNow(); } });
   api = Object.freeze(api);
   try {
     Object.defineProperty(window, "menger", { value: api, enumerable: true, writable: false, configurable: false });
@@ -1098,7 +1124,10 @@
     if (ev.source !== host) return;
     var m = ev.data;
     if (!m || typeof m !== "object" || m.channel !== channel) return;
-    if (m.type === "menger:theme") {
+    if (m.type === "menger:motion") {
+      setMotion(m.motion);
+    } else if (m.type === "menger:theme") {
+      if (typeof m.motion === "string") setMotion(m.motion);
       if (paintedKey === null) paintedKey = paintedNow(); // the srcdoc's own
       if (typeof m.theme === "string" && m.theme) themeName = m.theme;
       applyTheme(m.scheme === "dark" ? "dark" : "light", m.tokens && typeof m.tokens === "object" ? m.tokens : {});
@@ -2522,6 +2551,10 @@
   function settle() {
     if (settled) return;
     settled = true;
+    // DESIGN-40 (1.18): the host shows a frame once it is settled — the
+    // house components start their entrance moves from here, not while
+    // the frame is still loading out of sight.
+    doc.documentElement.setAttribute("data-settled", "");
     report(true);
   }
 

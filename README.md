@@ -2110,6 +2110,21 @@ paints through `var(--…)` needs nothing:
 return this.menger.on('theme', () => draw());   // tokens are already live on :root
 ```
 
+**Motion in a frame** (DESIGN-40, SDK 1.18): a frame wears the app's
+Motion setting (DESIGN-39's `html[data-motion]`: `full`, `calm`, `none`;
+absent is `full`) as its own `html[data-motion]` — set from the init block
+before the body parses, and followed live (`menger:motion`, one observer on
+the app's `<html>`); `menger.motion` reads it, `none` under reduced motion.
+A re-rendered body (an amend, a preview's keystroke) also wears
+`html[data-entered]`, and a settled frame `html[data-settled]`: the house
+components play their entrance moves once, as each comes into the reader's
+view, from a shown frame — a figure drawing itself, code typing, an option
+settling in, a stat counting up — and a step's glow loops; `calm` keeps
+only the count, `none` nothing. The frame's document also declares the
+house faces (`<style id="menger-fonts">`, Geist and Geist Mono from the
+app's `/app/fonts/`, named absolutely: its own origin is opaque), which the
+shell answers with `Access-Control-Allow-Origin: *` and outside a session.
+
 **The sweep test** (`scripts/theme-sweep.mjs`, Playwright from
 `perf/node_modules`) proves it on a throwaway server. It seeds its own
 tickets under `SWEEP` (three themes as ` ```theme ` docs — `pantry`, a

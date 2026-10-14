@@ -191,6 +191,15 @@ export interface Menger {
   readonly theme: MengerTheme;
 
   /**
+   * DESIGN-40 (1.18): what moves now — the app's Motion setting, worn as
+   * `html[data-motion]` (followed live), or `none` while the reader's
+   * system asks for reduced motion. `calm` drops the decorative moves; a
+   * re-rendered body also wears `html[data-entered]` (its entrance moves
+   * have played).
+   */
+  readonly motion: 'full' | 'calm' | 'none';
+
+  /**
    * COMP-9: move the app to an app route — `#/ticket/<id>` (with
    * `?component=<tag>` to scroll to and flash that docs card),
    * `#/components`, `#/components/<tag>` (a component's help page),
