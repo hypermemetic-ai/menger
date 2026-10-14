@@ -95,6 +95,11 @@ impl Lens {
         self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Deployed(_)))
     }
 
+    /// MENGER-39: whether it asks `queued` — what a queue write can move.
+    pub fn asks_queued(&self) -> bool {
+        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Queued(_)))
+    }
+
     /// MENGER-13: whether what it admits moves as time passes — a history
     /// predicate whose window is relative (`within`, `today`, `yesterday`,
     /// `this week`): a `watch` reads it again on a clock.

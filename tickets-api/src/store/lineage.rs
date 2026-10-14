@@ -1582,6 +1582,20 @@ pub(super) fn deployed_before_with(unders: &UnderWatches, cache: &Cache, keys: &
     })
 }
 
+/// MENGER-39: what a queue write does to the open watches whose filter asks
+/// `queued`: the tickets at `keys`, before it. `None` when no such watch is
+/// open.
+pub(super) fn queued_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&str, u32)]) -> Option<UnderBefore> {
+    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_queued()).collect();
+    before_of(watches, cache, || {
+        let mut t = Touched::default();
+        for (e, s) in keys {
+            t.ticket(e, *s);
+        }
+        t
+    })
+}
+
 impl Store {
     /// FILTER-30: [`touch_before_with`] over the store's watches.
     pub(super) fn touch_before(&self, cache: &Cache, keys: &[(&str, u32)]) -> Option<UnderBefore> {

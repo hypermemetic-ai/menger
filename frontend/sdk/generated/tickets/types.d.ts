@@ -313,6 +313,49 @@ export interface PlacementChange {
     id: string;
     placement: Placement;
 }
+/** What one queue write did — a [`QueueRecord`]'s action. */
+export type QueueAction = "queued" | "raised" | "requeued" | "snoozed" | "unqueued" | "closed";
+/** A ticket in the queue, as it stands. */
+export interface QueueEntry {
+    /** When it was last queued (a requeue moves it; a snooze does not). */
+    askedUnix: number;
+    /** Who queued it last: a principal (`anonymous` with login off). */
+    by: string;
+    /** The input on the ticket whose answer is what is asked — required at
+  `blocking`; closing it takes the ticket out of the queue. */
+    input?: string | null;
+    /** Their display name, when they have one. */
+    name?: string | null;
+    /** When it was first queued — "oldest" in the queue's order. */
+    queuedUnix: number;
+    /** Why the owner should look. */
+    reason: string;
+    /** Out of the alerting surfaces until then; `None`: not snoozed. */
+    snoozedUntilUnix?: number | null;
+    source: TransitionSource;
+    ticket: string;
+    urgency: Urgency;
+}
+/** One line of a ticket's queue history — what `history` yields beside its
+transitions: who queued it, why and at what urgency; who snoozed it and
+until when; who took it out. */
+export interface QueueRecord {
+    action: QueueAction;
+    actor: string;
+    atUnix: number;
+    /** The queue log's order (its own, not the transitions'). */
+    id: number;
+    input?: string | null;
+    name?: string | null;
+    reason?: string | null;
+    source: TransitionSource;
+    ticket: string;
+    /** A snooze's end. */
+    untilUnix?: number | null;
+    /** The urgency the write left (queued, raised, requeued, snoozed), or
+  the one it had (unqueued, closed). */
+    urgency: Urgency;
+}
 /** AGS-23: a shortcode root's row as the nav draws it at the top of its
 shortcode — the three fields of the root ticket a row shows beside its
 id ([`Group::root`]). */
@@ -960,7 +1003,63 @@ export interface TicketsEventHistoryEnd {
     statusSinceExact: boolean | null;
     statusSinceUnix: number | null;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd;
+/** MENGER-39: a ticket put in front of the owner, or queued again
+(`action`: `queued`, `raised` — a higher urgency —, `requeued` — the
+urgency kept) — `queue`'s answer, and on `watch`; the entry as the
+write leaves it and its ticket's row. */
+export interface TicketsEventQueued {
+    type: 'queued';
+    action: QueueAction;
+    entry: QueueEntry;
+    ticket: TicketSummary;
+}
+/** MENGER-39: a ticket out of the queue — `unqueue`'s answer, and on
+`watch`; `action` `unqueued`, or `closed` (the input the entry named
+was closed); the entry as it was, who took it out, when. */
+export interface TicketsEventUnqueued {
+    type: 'unqueued';
+    action: QueueAction;
+    atUnix: number;
+    by: string;
+    entry: QueueEntry;
+    id: string;
+}
+/** MENGER-39: a queued ticket snoozed until its entry's
+`snoozed_until_unix` — `snooze`'s answer, and on `watch`. */
+export interface TicketsEventSnoozed {
+    type: 'snoozed';
+    entry: QueueEntry;
+    ticket: TicketSummary;
+}
+/** MENGER-39: `unqueue` of a ticket that is not queued — nothing written. */
+export interface TicketsEventNotQueued {
+    type: 'not_queued';
+    id: string;
+}
+/** MENGER-39: one row of `queued` — the entry and its ticket's row, most
+urgent first, then the oldest. */
+export interface TicketsEventQueueRow {
+    type: 'queue_row';
+    entry: QueueEntry;
+    ticket: TicketSummary;
+}
+/** MENGER-39: the last event of `queued` — how many rows it sent, how
+many of them are snoozed, and the server's clock (a snooze's end is
+read against it). */
+export interface TicketsEventQueueEnd {
+    type: 'queue_end';
+    count: number;
+    nowUnix: number;
+    snoozed: number;
+}
+/** MENGER-39: a line of the ticket's queue history (yielded by `history`
+after its transitions, oldest first): who queued it, why and at what
+urgency; who snoozed it until when; who took it out. */
+export interface TicketsEventQueueRecord {
+    type: 'queue_record';
+    record: QueueRecord;
+}
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -1012,6 +1111,13 @@ export declare function isTicketsEventHit(e: TicketsEvent): e is TicketsEventHit
 export declare function isTicketsEventSearched(e: TicketsEvent): e is TicketsEventSearched;
 export declare function isTicketsEventTransition(e: TicketsEvent): e is TicketsEventTransition;
 export declare function isTicketsEventHistoryEnd(e: TicketsEvent): e is TicketsEventHistoryEnd;
+export declare function isTicketsEventQueued(e: TicketsEvent): e is TicketsEventQueued;
+export declare function isTicketsEventUnqueued(e: TicketsEvent): e is TicketsEventUnqueued;
+export declare function isTicketsEventSnoozed(e: TicketsEvent): e is TicketsEventSnoozed;
+export declare function isTicketsEventNotQueued(e: TicketsEvent): e is TicketsEventNotQueued;
+export declare function isTicketsEventQueueRow(e: TicketsEvent): e is TicketsEventQueueRow;
+export declare function isTicketsEventQueueEnd(e: TicketsEvent): e is TicketsEventQueueEnd;
+export declare function isTicketsEventQueueRecord(e: TicketsEvent): e is TicketsEventQueueRecord;
 /** ACT-5: what a delete keeps of a ticket — its tombstone. The ticket is
 gone (off every read, its number never reused); this says which it was
 (`id`, `title`), who deleted it (`by`, the caller's principal; `name` their
@@ -1069,3 +1175,5 @@ which says so), `api` (synapse, an agent, a script: the default),
 `pipeline` (the merge, which says so), `cascade` (the store itself: a
 cancellation carried down a canceled ticket's subtree, or undone). */
 export type TransitionSource = "app" | "api" | "pipeline" | "cascade";
+/** How soon the owner should look — in rising order, so `max` raises. */
+export type Urgency = "whenever" | "today" | "now" | "blocking";

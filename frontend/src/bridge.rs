@@ -502,6 +502,12 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         // ticket of its own (a frame does not read `history`).
         E::Transition { ref transition } => reach.holds_id(&transition.ticket).then_some(ev),
         E::HistoryEnd { .. } => None,
+        // MENGER-39: a queue write, row or record is its ticket's; the
+        // queue's end and `not_queued` say nothing a frame reads.
+        E::Queued { ref entry, .. } | E::Snoozed { ref entry, .. } | E::QueueRow { ref entry, .. } => reach.holds_id(&entry.ticket).then_some(ev),
+        E::Unqueued { ref id, .. } => reach.holds_id(id).then_some(ev),
+        E::QueueRecord { ref record } => reach.holds_id(&record.ticket).then_some(ev),
+        E::QueueEnd { .. } | E::NotQueued { .. } => None,
         E::Group { group } => inside(&group.epic).then(|| E::Group { group: top(group) }),
         E::GroupChanged { group } => inside(&group.epic).then(|| E::GroupChanged { group: top(group) }),
         E::Extent { ref epic, .. }

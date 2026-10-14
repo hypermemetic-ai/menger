@@ -80,6 +80,9 @@
     --err-bg: #fdecec; /* a failure: its ground */
     --err-fg: #a23; /* a failure: its text */
     --err-line: #f3c5c5; /* a failure: its edge */
+    --urgent: #c4262e; /* urgent: the queue's now and blocking */
+    --urgent-bg: #fbe3e1; /* urgent: its ground (the tray's loud tab) */
+    --urgent-ink: #fff; /* text on --urgent (the chip) */
     /* colour.status */
     --st-pending-bg: #f3e8c8; /* Pending */
     --st-pending-fg: #7a5d00; /* Pending */
@@ -191,6 +194,9 @@
       --err-bg: #2b1517; /* a failure: its ground */
       --err-fg: #e89393; /* a failure: its text */
       --err-line: #5a2626; /* a failure: its edge */
+      --urgent: #ff6b6b; /* urgent: the queue's now and blocking */
+      --urgent-bg: #3d1a1d; /* urgent: its ground (the tray's loud tab) */
+      --urgent-ink: #101014; /* text on --urgent (the chip) */
       /* colour.status */
       --st-pending-bg: #3a3115; /* Pending */
       --st-pending-fg: #e8cf7a; /* Pending */
@@ -268,6 +274,9 @@
     --err-bg: #2b1517; /* a failure: its ground */
     --err-fg: #e89393; /* a failure: its text */
     --err-line: #5a2626; /* a failure: its edge */
+    --urgent: #ff6b6b; /* urgent: the queue's now and blocking */
+    --urgent-bg: #3d1a1d; /* urgent: its ground (the tray's loud tab) */
+    --urgent-ink: #101014; /* text on --urgent (the chip) */
     /* colour.status */
     --st-pending-bg: #3a3115; /* Pending */
     --st-pending-fg: #e8cf7a; /* Pending */
@@ -2400,6 +2409,114 @@
   #settings-motion label.radio b { min-width: 4.5em; font-family: var(--mono); font-weight: var(--weight-medium); }
   /* DESIGN-43: Typed text, under Motion's choices, ruled off from them. */
   #settings-motion .typing { margin-top: 14px; padding-top: 12px; border-top: var(--border) solid var(--line); }
+  /* ── MENGER-39: the tray — the owner's queue as tabs along the main
+     column's bottom edge (MENGER-40, variant C; src/queue.rs). A grid item
+     over the content's cell, so it spans the main column whether or not the
+     nav shows; only its tabs and its sheet take the pointer. ── */
+  #qtray {
+    grid-column: -2 / -1; grid-row: 1; align-self: end; z-index: 900; min-width: 0;
+    display: flex; flex-direction: column; margin-right: 14px;
+    padding: 0 calc(20px * var(--space)); pointer-events: none;
+  }
+  #qtray.empty { display: none; }
+  #app .content { grid-row: 1; grid-column: -2 / -1; }
+  #app:has(#qtray:not(.empty)) .content { padding-bottom: 56px; }
+  #qtray .qtabs, #qtray .qsheet { pointer-events: auto; }
+  #qtray .qtabs {
+    display: flex; gap: 3px; align-items: flex-end; padding-top: 10px;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  }
+  #qtray .qtab {
+    background: var(--panel); color: var(--ink); font-family: var(--mono); font-size: calc(11.5px * var(--text-scale));
+    border: var(--border) solid var(--tree-line); border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    padding: 7px 12px 8px; display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; max-width: 290px;
+    cursor: pointer; box-shadow: 0 -2px 6px var(--shadow);
+    animation: menger-tab-in .45s cubic-bezier(.2, .9, .25, 1.2) both;
+    transition: transform .2s var(--ease), background-color var(--motion-fast) var(--ease);
+  }
+  #qtray .qtab:hover { transform: translateY(-3px); }
+  #qtray .qtab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #qtray .qtab .id { color: var(--accent); font-weight: var(--weight-medium); white-space: nowrap; }
+  #qtray .qtab .t {
+    font-family: var(--sans); font-size: calc(12.5px * var(--text-scale));
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  }
+  #qtray .qtab .u {
+    font-size: calc(9.5px * var(--text-scale)); letter-spacing: .12em; text-transform: uppercase; white-space: nowrap;
+    padding: 1px 5px; border-radius: var(--radius-sm); background: var(--st-doc-bg); color: var(--st-doc-fg);
+  }
+  #qtray .qtab.today .u { background: var(--st-coding-bg); color: var(--st-coding-fg); }
+  /* Now and blocking: taller, red, and nudging until opened. */
+  #qtray .qtab.loud {
+    background: var(--urgent-bg); border-color: var(--urgent); padding-bottom: 12px;
+    animation: menger-tab-in .45s cubic-bezier(.2, .9, .25, 1.2) both, menger-nudge 4s ease-in-out 1s infinite;
+  }
+  #qtray .qtab.loud.seen { animation: menger-tab-in .45s cubic-bezier(.2, .9, .25, 1.2) both; }
+  #qtray .qtab.loud .u { background: var(--urgent); color: var(--urgent-ink); }
+  #qtray .qtab.open { background: var(--card); }
+  @keyframes menger-tab-in { from { transform: translateY(100%); } }
+  @keyframes menger-nudge {
+    0%, 86%, 100% { transform: none; }
+    89% { transform: translateY(-5px) rotate(-1.2deg); }
+    93% { transform: translateY(-5px) rotate(1.2deg); }
+    96% { transform: translateY(-2px); }
+  }
+  /* The sheet: raised above the tabs by the open one; as tall as it says. */
+  #qtray .qsheet {
+    display: grid; grid-template-rows: 0fr; background: var(--card);
+    border: var(--border) solid transparent; border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    transition: grid-template-rows .4s cubic-bezier(.7, 0, .2, 1);
+  }
+  #qtray .qsheet.open { grid-template-rows: 1fr; border-color: var(--tree-line); box-shadow: 0 -12px 40px var(--shadow); }
+  #qtray .qsheet.open.loud { border-color: var(--urgent); }
+  #qtray .qsheet-clip { overflow: hidden; min-height: 0; }
+  #qtray .qsheet-in { padding: 18px 22px; max-height: 60vh; overflow: auto; font-family: var(--sans); }
+  #qtray .qhd {
+    font-family: var(--mono); font-weight: var(--weight-medium); font-size: calc(10.5px * var(--text-scale));
+    letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+  }
+  #qtray .qhd.now, #qtray .qhd.blocking { color: var(--urgent); }
+  #qtray .qhd.today { color: var(--st-coding-fg); }
+  #qtray .qsheet h4 { font-size: calc(18px * var(--text-scale)); font-weight: var(--weight-strong); margin: 6px 0; }
+  #qtray .qsheet h4 .code { font-family: var(--mono); font-weight: var(--weight-medium); color: var(--accent); background: transparent; border: 0; padding: 0; }
+  #qtray .qwhy { color: var(--muted); margin: 0 0 12px; max-width: 760px; }
+  #qtray .qq { margin: 0 0 10px; }
+  #qtray .qq.muted { color: var(--muted); }
+  #qtray .qopts { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 260px)); gap: 10px; margin: 0 0 14px; }
+  #qtray .qopt {
+    position: relative; display: flex; align-items: center; gap: 10px; text-align: left;
+    font-family: var(--sans); font-size: calc(13.5px * var(--text-scale)); font-weight: var(--weight-strong);
+    padding: 12px 14px; border: var(--border) solid var(--tree-line); border-radius: var(--radius-lg);
+    background: var(--card); color: var(--ink); cursor: pointer;
+    transition: transform .2s var(--ease), border-color .2s var(--ease);
+  }
+  #qtray .qopt:hover { transform: translateY(-2px); border-color: var(--accent); }
+  #qtray .qopt.rec { background: var(--sel); border-color: var(--accent); }
+  #qtray .qopt .r { width: 12px; height: 12px; flex: none; border: var(--border) solid var(--ink); border-radius: var(--radius-pill); }
+  #qtray .qopt.rec .r { background: var(--accent); border-color: var(--accent); }
+  #qtray .qopt .rl {
+    position: absolute; top: -1px; right: -1px; padding: 2px 7px; border-radius: 0 var(--radius-lg) 0 var(--radius);
+    font-family: var(--mono); font-weight: var(--weight-normal); font-size: calc(10px * var(--text-scale));
+    letter-spacing: .12em; text-transform: uppercase; background: var(--accent); color: var(--bg);
+  }
+  #qtray .qopts.multi, #qtray .qopts.text { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+  #qtray .qopts.text textarea { flex: 1 1 320px; min-height: 3em; font-family: var(--sans); }
+  #qtray .qtick { display: inline-flex; align-items: center; gap: 6px; }
+  #qtray .qdone { color: var(--live); margin: 0 0 12px; }
+  #qtray .qacts { display: flex; flex-wrap: wrap; gap: 8px; }
+  #qtray .qbtn {
+    font-family: var(--mono); font-size: calc(11px * var(--text-scale)); letter-spacing: .08em; text-transform: uppercase;
+    padding: 7px 12px; border: var(--border) solid var(--ink); border-radius: var(--radius);
+    background: transparent; color: var(--ink); cursor: pointer; text-decoration: none;
+    transition: transform var(--motion-fast) var(--ease);
+  }
+  #qtray .qbtn:hover { transform: translateY(-1px); }
+  #qtray .qbtn.fill { background: var(--ink); color: var(--bg); }
+  #qtray .qbtn:disabled { opacity: .5; cursor: default; }
+  #qtray .qproblem { color: var(--err-fg); margin: 10px 0 0; }
+  /* Motion: calm keeps the slide and drops the nudge (none stops both,
+     with everything else, below). */
+  html[data-motion="calm"] #qtray .qtab.loud { animation: menger-tab-in .45s cubic-bezier(.2, .9, .25, 1.2) both; }
   /* Motion: none — nothing the app animates moves; calm — the state
      changes stay, the ambient moves (the breathe, the pulse) go (the boot
      and the counters are the script's to skip). */
@@ -2412,6 +2529,7 @@
   @media (prefers-reduced-motion: reduce) {
     html:not([data-motion]) :is(#conn.live .cell, #nav .carpet.pip) { animation: none; }
     html:not([data-motion]) :is(tbody#board td, #nav .row) { transition: none; }
+    html:not([data-motion]) #qtray .qtab.loud { animation: none; }
   }
 </style>
 </head>

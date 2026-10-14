@@ -267,6 +267,12 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.clear_answer", Today::Editor, Some("ticket")),
     ("tickets.close_input", Today::Editor, Some("ticket")),
     ("tickets.reopen_input", Today::Editor, Some("ticket")),
+    // MENGER-39: the owner's queue — a write an editor's, on the ticket; the
+    // queue itself a read.
+    ("tickets.queue", Today::Editor, Some("id")),
+    ("tickets.unqueue", Today::Editor, Some("id")),
+    ("tickets.snooze", Today::Editor, Some("id")),
+    ("tickets.queued", Today::Viewer, None),
     ("comments.add", Today::Viewer, None),
     ("comments.list", Today::Viewer, None),
     ("comments.watch", Today::Viewer, None),

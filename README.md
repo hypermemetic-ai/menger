@@ -406,7 +406,7 @@ open, and an older build cannot open it after.
 **Needs you** (MENGER-12): the first thing on Home is a panel of what
 waits on the owner — the live result of the saved filter named "Needs you"
 (`VIEW/_MENGER/view/needs-you`; until one is saved, the default
-`(asking or label needs-you)`). Its header says "Needs you · N", and the
+`(queued or asking or label needs-you)` — MENGER-39's queue first). Its header says "Needs you · N", and the
 header nav's **needs you N** link goes to it; each row is the ticket (id,
 title, status chip, label chips) and what it needs: each open input's
 question, with **answer ›** opening the ticket's frame at that input. It
@@ -1879,6 +1879,53 @@ Under login a note is any member's — `add`, `list` and `get` are a viewer's,
 held anywhere — and `upgrade` is an editor's that also needs
 `tickets.create` where the ticket lands (the parent, else the shortcode's
 root, else `*`).
+
+### Queue (MENGER-39)
+
+A ticket is **queued for the owner** with an urgency and a reason — one
+write, by anyone with the editor role, agents included — and every open app
+shows it at once in **the tray**: a tab per queued ticket along the bottom
+edge of the main column, most urgent first, then the oldest. A tab is the
+id, the title and an urgency chip (`today` in the Coding colours; `now` and
+`blocking` in the contract's `--urgent` red, taller, nudging every few
+seconds until opened); a new one slides up into place. A click raises a
+sheet above the tray — the urgency, who queued it and when, the reason, the
+named input's question answerable in place (recorded with source `app`;
+answering takes the ticket out of the queue, the input stays the agent's to
+close), *open the ticket*, *snooze 10m* and *done with it*. A hidden tab's
+title carries the count, `(2) menger`. Motion follows the setting: `calm`
+keeps the slide and drops the nudge, `none` moves nothing.
+
+```sh
+synapse -P 4455 menger tickets queue --id RETURNS-13 --urgency blocking --input landing --reason "idle until decided"
+synapse -P 4455 menger tickets queue --id MENGER-41 --urgency today --reason "the promote rolled back" --source pipeline
+synapse -P 4455 menger tickets queued --snoozed false
+synapse -P 4455 menger tickets snooze --id MENGER-41 --minutes 10
+synapse -P 4455 menger tickets unqueue --id MENGER-41
+```
+
+| method | yields |
+| -- | -- |
+| `tickets.queue { id, urgency, reason, input?, source? }` | `queued { entry, ticket, action }` — the entry as the write leaves it (`ticket`, `urgency`, `reason`, `input`, `by`, `name`, `source`, `queued_unix` — when first queued —, `asked_unix`, `snoozed_until_unix`), its ticket's row, and `action`: `queued`, `raised` (a higher urgency) or `requeued` (the urgency kept: never lowered; the reason and an input given are the new ones; a snooze ends). `blocking` requires `input`, an input the ticket declares and has not closed. A blank reason, an unknown urgency, an input the ticket does not hold or has closed is one `error`; a ticket that is none `not_found` |
+| `tickets.unqueue { id, source? }` | `unqueued { id, entry, action: unqueued, by, at_unix }`, or `not_queued { id }` (nothing written) |
+| `tickets.snooze { id, minutes, source? }` | `snoozed { entry, ticket }` — off the tray until `snoozed_until_unix` (1 minute to a week), still queued (`queued` holds). Not queued: one `error` |
+| `tickets.queued { snoozed? }` | a `queue_row { entry, ticket }` per entry in the caller's reach, most urgent first, then the oldest — without the snoozed ones when `snoozed: false` — then `queue_end { count, snoozed, now_unix }` |
+
+A `close_input` of the input an entry names takes it out in the same write:
+`watch` hears `input_changed`, then `unqueued` with `action: closed` and `by:
+system`. `watch` carries `queued`, `unqueued` and `snoozed` as they happen.
+`queued` and `queued <urgency>` are filter cells (FILTER-3's language),
+answered from the queue's kept entries — a snoozed ticket is still queued —
+on every filtered read and watch; Home's Needs you is `queued or asking or
+label needs-you`. `history { id }` yields the ticket's **queue records**
+after its transitions — `queue_record { record }`: `action` (queued,
+raised, requeued, snoozed, unqueued, closed), `urgency`, `reason`, `input`,
+`actor`, `name`, `source`, `at_unix`, `until_unix` for a snooze. They are a
+log of their own (`queue_log`), not transitions: `changed` and `by` do not
+read them, and an older release, which never looks at the queue's tables
+(`queue`, `queue_log`, gained empty on open), still opens the file. Under
+login `queue`, `unqueue` and `snooze` are an editor's, on the ticket;
+`queued` a viewer's, answering only from where it is held.
 
 ### Deployments (DEPLOY-11)
 

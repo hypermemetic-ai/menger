@@ -287,6 +287,7 @@ mod nav;
 mod notes;
 mod present;
 mod promote;
+mod queue;
 
 mod mermaid;
 mod motion;
@@ -2139,6 +2140,8 @@ fn App() -> impl IntoView {
     // MENGER-12: Needs you — its saved filter and its live count, for the
     // header's link and Home's panel.
     needs::NeedsYou::install();
+    // MENGER-39: a hidden tab's title carries the queue's count.
+    queue::install_title();
     let route = use_route(lens);
     // COMMENT-3: annotation mode — its state, its listeners, its layer.
     let annot = annotate::install(route);
@@ -2476,6 +2479,9 @@ fn App() -> impl IntoView {
                     }}
                 </main>
             </div>
+            // MENGER-39: the tray — the owner's queue along the main
+            // column's bottom edge (a grid item over the content's cell).
+            {move || can_view.get().then(|| view! { <queue::Tray /> })}
             // AGS-16: mounted once, outside every ticket element, so a
             // right-click inside the menu itself never re-targets it.
             <menu::TicketMenu last_error />
