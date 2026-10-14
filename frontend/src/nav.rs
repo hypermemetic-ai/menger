@@ -4098,6 +4098,7 @@ fn leaf_row(
     let on_toggle = toggle.clone();
     let (click_id, dbl_id, leave_id) = (id.clone(), id.clone(), id.clone());
     let click_toggle = toggle.clone();
+    let glyph_id = id.clone();
 
     view! {
         <a
@@ -4137,7 +4138,7 @@ fn leaf_row(
                     return;
                 }
                 let (at, parent) = (ev.time_stamp(), expanded_attr().is_some());
-                match rowclick::feed(rowclick::Ev::Click { row: &click_id, at, count: ev.detail(), parent }) {
+                match rowclick::click(&click_id, at, ev.detail(), parent) {
                     rowclick::Act::Hold => {
                         ev.prevent_default();
                         spawn_local(async move {
@@ -4186,7 +4187,7 @@ fn leaf_row(
                     ev.stop_propagation();
                     // AGS-29: the latest click wins — a held one is dropped.
                     rowclick::feed(rowclick::Ev::Other);
-                    if rowclick::glyph_toggles(ev.detail()) {
+                    if rowclick::glyph(&glyph_id, ev.time_stamp(), ev.detail()) {
                         on_toggle();
                     }
                 }
