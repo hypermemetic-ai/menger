@@ -23,6 +23,14 @@
 //! lost. The `▸` toggles on every odd click, so each double-click there is
 //! one toggle too.
 //!
+//! AGS-32: the run is **menger's own count**, not the event's `detail`:
+//! Chromium on Linux counts no further than three (a 4th quick click is
+//! `detail` 1 again), so the second double-click's second click looked like
+//! a fresh click, was held, and opened the ticket. A click on the same row
+//! (or the same `▸`) within [`RUN_GAP_MS`] of the run's last click is its
+//! next; anything else starts a run ([`next_count`]). `detail` is read only
+//! for 0 — a click no pointer made.
+//!
 //! The rule is [`step`], a pure function over what is held and what just
 //! happened (the native tests below); [`feed`] keeps the one held click for
 //! the page and says what to do.
@@ -41,9 +49,9 @@ pub(crate) struct Held {
 /// What happened to a nav row.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Ev<'a> {
-    /// A plain click (`select.only`) on `row`: `count` is its `detail` (2
-    /// for a double-click's second click, 0 for one no pointer made), `parent` whether the row has
-    /// children to open or close.
+    /// A plain click (`select.only`) on `row`: `count` its place in the run
+    /// (AGS-32's own count: 2 for a double-click's second click; 0 for one no
+    /// pointer made), `parent` whether the row has children to open or close.
     Click { row: &'a str, at: f64, count: i32, parent: bool },
     /// The `dblclick` event (`nav.toggle`) on `row` — nothing of its own
     /// since AGS-30: the run's even click toggles.
@@ -108,8 +116,57 @@ pub(crate) fn glyph_toggles(detail: i32) -> bool {
     detail <= 0 || detail % 2 == 1
 }
 
+/// AGS-32: how close a click must follow the run's last to be its next —
+/// the usual system double-click time.
+pub(crate) const RUN_GAP_MS: f64 = 500.0;
+
+/// AGS-32: the last click of a run — on what (a row's id, or `▸` and its id),
+/// when, and its place in the run.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Run {
+    pub(crate) on: String,
+    pub(crate) at: f64,
+    pub(crate) n: i32,
+}
+
+/// AGS-32: a click on `on` at `at`'s place in its run.
+pub(crate) fn next_count(last: Option<&Run>, on: &str, at: f64) -> i32 {
+    match last {
+        Some(r) if r.on == on && at >= r.at && at - r.at <= RUN_GAP_MS => r.n + 1,
+        _ => 1,
+    }
+}
+
 thread_local! {
     static HELD: RefCell<Option<Held>> = const { RefCell::new(None) };
+    static RUN: RefCell<Option<Run>> = const { RefCell::new(None) };
+}
+
+/// AGS-32: counts a click on `on` into the page's run and says its place —
+/// 0 for a click no pointer made (`detail` 0), which starts no run.
+fn counted(on: &str, at: f64, detail: i32) -> i32 {
+    if detail <= 0 {
+        RUN.with(|r| *r.borrow_mut() = None);
+        return 0;
+    }
+    RUN.with(|r| {
+        let mut r = r.borrow_mut();
+        let n = next_count(r.as_ref(), on, at);
+        *r = Some(Run { on: on.to_string(), at, n });
+        n
+    })
+}
+
+/// A plain click on a nav row: counted into its run (AGS-32), then [`step`].
+pub(crate) fn click(row: &str, at: f64, detail: i32, parent: bool) -> Act {
+    let count = counted(row, at, detail);
+    feed(Ev::Click { row, at, count, parent })
+}
+
+/// AGS-32: whether a click on a row's `▸` toggles — every odd click of its
+/// own run ([`glyph_toggles`]).
+pub(crate) fn glyph(row: &str, at: f64, detail: i32) -> bool {
+    glyph_toggles(counted(&["▸", row].concat(), at, detail))
 }
 
 /// [`step`] over the page's one held click.
@@ -183,6 +240,29 @@ mod tests {
             assert_eq!(acts.iter().filter(|a| matches!(a, Act::Toggle(_))).count(), (n / 2) as usize, "{n} clicks");
             assert!(!acts.iter().any(|a| matches!(a, Act::Open(_) | Act::Follow)), "{n} clicks never navigate");
         }
+    }
+
+    /// AGS-32: menger counts the run — Chromium's wrapped details (1, 2, 3,
+    /// 1) and Firefox's (1, 2, 3, 4) are the same run of four; a pause past
+    /// the gap, or another row, starts a new one.
+    #[test]
+    fn the_run_is_counted_by_time_and_row_not_detail() {
+        use super::{next_count, Run, RUN_GAP_MS};
+        let mut last: Option<Run> = None;
+        let mut ns = vec![];
+        for at in [0.0, 120.0, 260.0, 380.0] {
+            let n = next_count(last.as_ref(), "A-1", at);
+            last = Some(Run { on: "A-1".into(), at, n });
+            ns.push(n);
+        }
+        assert_eq!(ns, [1, 2, 3, 4]);
+        // The four as a row's acts: two toggles, no navigation.
+        let acts = run(&ns.iter().enumerate().map(|(i, n)| click("A-1", i as f64 * 120.0, *n, true)).collect::<Vec<_>>());
+        assert_eq!(acts.iter().filter(|a| matches!(a, Act::Toggle(_))).count(), 2);
+        assert!(!acts.iter().any(|a| matches!(a, Act::Open(_) | Act::Follow)));
+        // A pause past the gap, another row: a new run.
+        assert_eq!(next_count(last.as_ref(), "A-1", 380.0 + RUN_GAP_MS + 1.0), 1);
+        assert_eq!(next_count(last.as_ref(), "B-1", 400.0), 1);
     }
 
     /// AGS-30: the `▸`'s rule — every odd click of a run toggles.
