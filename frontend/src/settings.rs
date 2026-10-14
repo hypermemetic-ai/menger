@@ -217,6 +217,9 @@ pub(crate) struct Settings {
     /// DESIGN-39: how much the app moves (`System`: follow
     /// `prefers-reduced-motion` — the default).
     pub(crate) motion: crate::motion::Pref,
+    /// DESIGN-43: how fast framed code types itself in (`Normal`: the
+    /// default).
+    pub(crate) typing: crate::motion::Typing,
 }
 
 /// The record as stored. Its own type, so the stored shape is one place.
@@ -235,6 +238,10 @@ struct Record {
     /// system, so a record without it reads and writes as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     motion: Option<String>,
+    /// DESIGN-43: `off`, `slow` or `fast`; omitted while it is `normal`,
+    /// so a record without it reads and writes as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    typing: Option<String>,
 }
 
 /// Only the version — read first, so a record of another version reads as
@@ -270,7 +277,8 @@ impl Settings {
             .and_then(|u| validate_link(&u).ok())
             .filter(|u| u != TEST_URL_DEFAULT);
         let motion = crate::motion::Pref::parse(record.motion.as_deref());
-        Settings { ws_url, recent, test_url, motion }
+        let typing = crate::motion::Typing::parse(record.typing.as_deref());
+        Settings { ws_url, recent, test_url, motion, typing }
     }
 
     /// The stored string.
@@ -281,6 +289,7 @@ impl Settings {
             recent: self.recent.clone(),
             test_url: self.test_url.clone(),
             motion: self.motion.word().map(str::to_string),
+            typing: self.typing.word().map(str::to_string),
         })
         .expect("a record of strings serializes")
     }
@@ -304,6 +313,12 @@ impl Settings {
     /// DESIGN-39: the record with the Motion setting `p`.
     pub(crate) fn with_motion(mut self, p: crate::motion::Pref) -> Self {
         self.motion = p;
+        self
+    }
+
+    /// DESIGN-43: the record with the Typed text speed `t`.
+    pub(crate) fn with_typing(mut self, t: crate::motion::Typing) -> Self {
+        self.typing = t;
         self
     }
 
@@ -810,8 +825,60 @@ fn MotionGroup() -> impl IntoView {
                     })
                     .collect_view()}
             </div>
+            // DESIGN-43: how fast a ticket's code types itself in.
+            <TypingField />
             {move || problem.get().map(|p| view! { <p class="problem" role="alert">{p}</p> })}
         </fieldset>
+    }
+}
+
+/// DESIGN-43: Settings → Motion → Typed text — off, slow, normal or fast:
+/// how a ticket's code blocks type themselves in. Kept in the record at
+/// once, and stamped on `<html>` as `data-typing` (src/motion.rs), which
+/// every frame wears (src/frame.rs).
+#[component]
+fn TypingField() -> impl IntoView {
+    use crate::motion::{self, Typing};
+    let chosen = RwSignal::new(motion::typing());
+    let problem = RwSignal::new(None::<String>);
+    let pick = move |t: Typing| {
+        chosen.set(t);
+        motion::set_typing(t);
+        problem.set(store(&load().with_typing(t)).err());
+    };
+    let label = |t: Typing| match t {
+        Typing::Off => "code appears at once",
+        Typing::Slow => "45 ms a character",
+        Typing::Normal => "22 ms a character",
+        Typing::Fast => "8 ms a character; longer blocks type too",
+    };
+    view! {
+        <div class="typing" id="settings-typing">
+            <p class="now">"Typed text — how a ticket's code types itself in. Motion none still stops it."</p>
+            <div class="field motion-choices" role="radiogroup" aria-label="typed text">
+                {Typing::ALL
+                    .map(|t| {
+                        let id = format!("typing-{}", t.as_str());
+                        let for_id = id.clone();
+                        view! {
+                            <label class="radio" for=for_id>
+                                <input
+                                    type="radio"
+                                    name="typing"
+                                    id=id
+                                    value=t.as_str()
+                                    prop:checked=move || chosen.get() == t
+                                    on:change=move |_| pick(t)
+                                />
+                                <b>{t.as_str()}</b>
+                                <span class="muted">{label(t)}</span>
+                            </label>
+                        }
+                    })
+                    .collect_view()}
+            </div>
+            {move || problem.get().map(|p| view! { <p class="problem" role="alert">{p}</p> })}
+        </div>
     }
 }
 
@@ -931,6 +998,17 @@ mod tests {
         assert_eq!(calm.encode(), r#"{"version":1,"ws_url":null,"recent":[],"motion":"calm"}"#);
         assert_eq!(Settings::decode(Some(&calm.encode())), calm);
         assert_eq!(Settings::decode(Some(r#"{"version":1,"motion":"wild"}"#)).motion, crate::motion::Pref::System);
+        // DESIGN-43: and Typed text beside it, omitted while it is normal.
+        let fast = calm.clone().with_typing(crate::motion::Typing::Fast);
+        assert_eq!(fast.encode(), r#"{"version":1,"ws_url":null,"recent":[],"motion":"calm","typing":"fast"}"#);
+        assert_eq!(Settings::decode(Some(&fast.encode())), fast);
+        let normal = Settings::default().with_typing(crate::motion::Typing::Normal);
+        assert_eq!(normal.encode(), r#"{"version":1,"ws_url":null,"recent":[]}"#);
+        for t in crate::motion::Typing::ALL {
+            let s = Settings::default().with_typing(t);
+            assert_eq!(Settings::decode(Some(&s.encode())).typing, t, "{t:?} is restored");
+        }
+        assert_eq!(Settings::decode(Some(r#"{"version":1,"typing":"warp"}"#)).typing, crate::motion::Typing::Normal);
 
         for raw in [
             None,

@@ -178,7 +178,10 @@
  *                 — and (1.18) `motion`, the app's Motion setting
  *   host → frame  menger:motion { motion }                the app's Motion
  *                 setting moved (DESIGN-40): `full`, `calm` or `none`, worn
- *                 as html[data-motion]
+ *                 as html[data-motion]; (1.19) `typing` on menger:theme too
+ *   host → frame  menger:typing { typing }                the app's Typed
+ *                 text setting moved (DESIGN-43): `off`, `slow`, `normal`
+ *                 or `fast`, worn as html[data-typing]
  *   host → frame  menger:components { components }        on ready, and
  *                 whenever the app (re)fetches the registry — the whole
  *                 registry (`[{ name, source, owner, references }]`); what
@@ -257,9 +260,10 @@
  *                 such section — `height` 0).
  *
  * The init block (#menger-init, JSON) carries
- * `{ channel, version, scheme, theme, mermaid: { url, config }, highlight: { url, unlabeled, detect, plain, aliases, min_relevance }, components, ticket, cite, motion, entered }`
+ * `{ channel, version, scheme, theme, mermaid: { url, config }, highlight: { url, unlabeled, detect, plain, aliases, min_relevance }, components, ticket, cite, motion, entered, typing }`
  * — (1.18) `motion` the app's Motion setting and `entered` true on a
- * re-render, worn as html[data-motion] and html[data-entered]; and
+ * re-render, worn as html[data-motion] and html[data-entered]; (1.19)
+ * `typing` the app's Typed text setting, worn as html[data-typing]; and
  * html[data-settled] once the first paint is complete (the host shows the
  * frame then: entrance moves start from it)
  * — `components` the registry as the app held it (null: not yet), `ticket`
@@ -272,7 +276,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.18.0";
+  var VERSION = "1.19.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -311,6 +315,20 @@
   function motionNow() {
     var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     return reduce ? "none" : doc.documentElement.getAttribute("data-motion") || "full";
+  }
+  // DESIGN-43 (1.19): the app's Typed text setting, worn as html[data-typing]
+  // (off | slow | normal | fast) before the body is parsed — how fast the
+  // house's code blocks type themselves in.
+  function setTyping(v) {
+    var t = v === "off" || v === "slow" || v === "fast" ? v : "normal";
+    if (doc.documentElement.getAttribute("data-typing") !== t) doc.documentElement.setAttribute("data-typing", t);
+  }
+  setTyping(init.typing);
+  // How fast code types now: the setting, and `off` while nothing moves.
+  function typingNow() {
+    if (motionNow() === "none") return "off";
+    var t = doc.documentElement.getAttribute("data-typing");
+    return t === "off" || t === "slow" || t === "fast" ? t : "normal";
   }
   // MENGER-22: the highlighter and its rules (src/highlight.rs).
   var highlightInit = init.highlight && init.highlight.url ? init.highlight : null;
@@ -917,6 +935,8 @@
   Object.defineProperty(api, "theme", { enumerable: true, get: function () { return worn(); } });
   // DESIGN-40 (1.18): what moves now — "full", "calm" or "none".
   Object.defineProperty(api, "motion", { enumerable: true, get: function () { return motionNow(); } });
+  // DESIGN-43 (1.19): how fast code types now — "off", "slow", "normal" or "fast".
+  Object.defineProperty(api, "typing", { enumerable: true, get: function () { return typingNow(); } });
   api = Object.freeze(api);
   try {
     Object.defineProperty(window, "menger", { value: api, enumerable: true, writable: false, configurable: false });
@@ -1126,8 +1146,11 @@
     if (!m || typeof m !== "object" || m.channel !== channel) return;
     if (m.type === "menger:motion") {
       setMotion(m.motion);
+    } else if (m.type === "menger:typing") {
+      setTyping(m.typing);
     } else if (m.type === "menger:theme") {
       if (typeof m.motion === "string") setMotion(m.motion);
+      if (typeof m.typing === "string") setTyping(m.typing);
       if (paintedKey === null) paintedKey = paintedNow(); // the srcdoc's own
       if (typeof m.theme === "string" && m.theme) themeName = m.theme;
       applyTheme(m.scheme === "dark" ? "dark" : "light", m.tokens && typeof m.tokens === "object" ? m.tokens : {});
