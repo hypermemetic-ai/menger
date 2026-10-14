@@ -17,6 +17,12 @@
 //! pointer leaving the row, or a click on another row drops a held click —
 //! the latest click wins.
 //!
+//! AGS-30: the toggle is **every even click of a quick run** (`detail` 2, 4,
+//! 6 …), read off the `click` event — the browser fires `dblclick` only when
+//! a run reaches 2, so a second double-click straight after the first was
+//! lost. The `▸` toggles on every odd click, so each double-click there is
+//! one toggle too.
+//!
 //! The rule is [`step`], a pure function over what is held and what just
 //! happened (the native tests below); [`feed`] keeps the one held click for
 //! the page and says what to do.
@@ -39,7 +45,8 @@ pub(crate) enum Ev<'a> {
     /// for a double-click's second click, 0 for one no pointer made), `parent` whether the row has
     /// children to open or close.
     Click { row: &'a str, at: f64, count: i32, parent: bool },
-    /// A double-click (`nav.toggle`) on `row`.
+    /// The `dblclick` event (`nav.toggle`) on `row` — nothing of its own
+    /// since AGS-30: the run's even click toggles.
     DoubleClick { row: &'a str, parent: bool },
     /// The window of the click at `at` ran out.
     Lapse { at: f64 },
@@ -60,7 +67,7 @@ pub(crate) enum Act {
     Swallow,
     /// Open this ticket now (the window ran out).
     Open(String),
-    /// Open or close this row (prevent the double-click's default).
+    /// Open or close this row (an even click of a run; prevent its default).
     Toggle(String),
     /// Nothing.
     Nothing,
@@ -74,11 +81,14 @@ pub(crate) fn step(held: Option<&Held>, ev: Ev<'_>) -> (Option<Held>, Act) {
         // No pointer pressed it (a `click()` from a script, a screen
         // reader's activation): nothing can follow, so nothing waits.
         Ev::Click { count: 0, .. } => (None, Act::Follow),
-        // The second (or third) click of a double-click: never a navigation
-        // — the toggle is the double-click's.
-        Ev::Click { count, .. } if count > 1 => (None, Act::Swallow),
+        // A run of quick clicks never navigates. AGS-30: every even click of
+        // the run toggles — the browser fires `dblclick` only when a run
+        // reaches 2 (`click:1 click:2 dblclick click:3 click:4`), so a quick
+        // second double-click is clicks 3 and 4 and no `dblclick` at all.
+        Ev::Click { row, count, .. } if count > 1 => (None, if count % 2 == 0 { Act::Toggle(row.to_string()) } else { Act::Swallow }),
         Ev::Click { row, at, .. } => (Some(Held { row: row.to_string(), at }), Act::Hold),
-        Ev::DoubleClick { row, parent } => (None, if parent { Act::Toggle(row.to_string()) } else { Act::Nothing }),
+        // The `dblclick` itself: its toggle was the even click's (AGS-30).
+        Ev::DoubleClick { .. } => (None, Act::Nothing),
         Ev::Lapse { at } => match held {
             Some(h) if h.at == at => (None, Act::Open(h.row.clone())),
             // A dropped click's window, or an older one's: the held click stays.
@@ -90,6 +100,12 @@ pub(crate) fn step(held: Option<&Held>, ev: Ev<'_>) -> (Option<Held>, Act) {
         },
         Ev::Other => (None, Act::Nothing),
     }
+}
+
+/// AGS-30: whether a click on the `▸` with this `detail` toggles — every odd
+/// click of a run (and one no pointer made), so each double-click is one.
+pub(crate) fn glyph_toggles(detail: i32) -> bool {
+    detail <= 0 || detail % 2 == 1
 }
 
 thread_local! {
@@ -139,7 +155,7 @@ mod tests {
             Ev::DoubleClick { row: "A-1", parent: true },
             Ev::Lapse { at: 10.0 },
         ]);
-        assert_eq!(acts, [Act::Hold, Act::Swallow, Act::Toggle("A-1".into()), Act::Nothing]);
+        assert_eq!(acts, [Act::Hold, Act::Toggle("A-1".into()), Act::Nothing, Act::Nothing]);
         assert!(!acts.iter().any(|a| matches!(a, Act::Open(_) | Act::Follow)), "a double-click never navigates");
     }
 
@@ -154,7 +170,27 @@ mod tests {
             click("A-1", 300.0, 2, true),
             Ev::DoubleClick { row: "A-1", parent: true },
         ]);
-        assert_eq!(acts, [Act::Hold, Act::Open("A-1".into()), Act::Swallow, Act::Toggle("A-1".into())]);
+        assert_eq!(acts, [Act::Hold, Act::Open("A-1".into()), Act::Toggle("A-1".into()), Act::Nothing]);
+    }
+
+    /// AGS-30: a quick run of 2, 4, 6 clicks toggles 1, 2, 3 times and never
+    /// navigates — no `dblclick` comes after the first.
+    #[test]
+    fn every_even_click_of_a_run_toggles() {
+        for n in [2, 4, 6] {
+            let evs: Vec<Ev<'_>> = (1..=n).map(|c| click("A-1", 10.0 * c as f64, c, true)).chain([Ev::Lapse { at: 10.0 }]).collect();
+            let acts = run(&evs);
+            assert_eq!(acts.iter().filter(|a| matches!(a, Act::Toggle(_))).count(), (n / 2) as usize, "{n} clicks");
+            assert!(!acts.iter().any(|a| matches!(a, Act::Open(_) | Act::Follow)), "{n} clicks never navigate");
+        }
+    }
+
+    /// AGS-30: the `▸`'s rule — every odd click of a run toggles.
+    #[test]
+    fn the_toggle_glyph_turns_on_every_odd_click() {
+        let turns = |n: i32| (1..=n).filter(|d| super::glyph_toggles(*d)).count();
+        assert_eq!((turns(1), turns(2), turns(4), turns(6)), (1, 1, 2, 3));
+        assert!(super::glyph_toggles(0), "a click no pointer made");
     }
 
     #[test]
