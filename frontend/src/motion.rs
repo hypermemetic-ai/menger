@@ -148,11 +148,86 @@ pub(crate) fn pref() -> Pref {
     PREF.with(Cell::get)
 }
 
+// ---------------------------------------------------------------------
+// DESIGN-43: Typed text
+
+/// What the reader chose in `#/settings` → Motion → Typed text: how fast a
+/// framed code block types itself in (ART-9's `m-code`), or `Off` — it
+/// appears at once. Stamped on `<html>` as `data-typing` beside
+/// `data-motion` and relayed into every frame (src/frame.rs, SDK 1.19's
+/// `menger.typing`). It alone decides whether code types: Motion `calm`
+/// no longer stops it, though Motion `none` (or reduced motion) still
+/// stops every move, typing with it — the components read that from
+/// `data-motion`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Typing {
+    Off,
+    Slow,
+    #[default]
+    Normal,
+    Fast,
+}
+
+impl Typing {
+    pub(crate) const ALL: [Typing; 4] = [Typing::Off, Typing::Slow, Typing::Normal, Typing::Fast];
+
+    /// The attribute's value and the radio's.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Typing::Off => "off",
+            Typing::Slow => "slow",
+            Typing::Normal => "normal",
+            Typing::Fast => "fast",
+        }
+    }
+
+    /// The stored word (`None` for the default, which is not stored).
+    pub(crate) fn word(self) -> Option<&'static str> {
+        (self != Typing::Normal).then(|| self.as_str())
+    }
+
+    /// A stored word or an attribute's value, read back; anything else (or
+    /// none) is the default, `Normal`.
+    pub(crate) fn parse(raw: Option<&str>) -> Self {
+        match raw.map(str::trim) {
+            Some("off") => Typing::Off,
+            Some("slow") => Typing::Slow,
+            Some("fast") => Typing::Fast,
+            _ => Typing::Normal,
+        }
+    }
+}
+
+thread_local! {
+    static TYPING: Cell<Typing> = const { Cell::new(Typing::Normal) };
+}
+
+fn apply_typing() {
+    if let Some(r) = root() {
+        let _ = r.set_attribute("data-typing", TYPING.with(Cell::get).as_str());
+    }
+}
+
+/// The reader's Typed text choice, from `#/settings`: kept by the caller,
+/// stamped here.
+pub(crate) fn set_typing(t: Typing) {
+    TYPING.with(|c| c.set(t));
+    apply_typing();
+}
+
+pub(crate) fn typing() -> Typing {
+    TYPING.with(Cell::get)
+}
+
 /// Once, first thing in the app: the stored choice and the system's
 /// preference (followed live), stamped on `<html>`; the clicks a ticket
 /// opens from, noted.
 pub(crate) fn install() {
-    PREF.with(|c| c.set(crate::settings::load().motion));
+    let stored = crate::settings::load();
+    PREF.with(|c| c.set(stored.motion));
+    // DESIGN-43: and the Typed text speed, stamped beside it.
+    TYPING.with(|c| c.set(stored.typing));
+    apply_typing();
     if let Some(mql) = dom::window().match_media("(prefers-reduced-motion: reduce)").ok().flatten() {
         REDUCE.with(|c| c.set(mql.matches()));
         let cb = Closure::<dyn FnMut(web_sys::MediaQueryList)>::new(move |m: web_sys::MediaQueryList| {
@@ -627,6 +702,22 @@ mod tests {
             assert_eq!(Pref::parse(p.word()), p, "{p:?} round-trips");
         }
         assert_eq!(Pref::parse(Some("wild")), Pref::System);
+    }
+
+    /// DESIGN-43: Typed text — four speeds, `normal` the default (not
+    /// stored), each round-tripping through the record and the attribute.
+    #[test]
+    fn typed_text_reads_back_and_defaults_to_normal() {
+        assert_eq!(Typing::default(), Typing::Normal);
+        assert_eq!(Typing::Normal.word(), None);
+        for t in Typing::ALL {
+            assert_eq!(Typing::parse(t.word()), t, "{t:?} round-trips as stored");
+            assert_eq!(Typing::parse(Some(t.as_str())), t, "{t:?} round-trips as stamped");
+        }
+        assert_eq!(Typing::parse(None), Typing::Normal);
+        assert_eq!(Typing::parse(Some(" fast ")), Typing::Fast);
+        assert_eq!(Typing::parse(Some("ludicrous")), Typing::Normal);
+        assert_eq!(Typing::ALL.map(Typing::as_str), ["off", "slow", "normal", "fast"]);
     }
 
     #[test]

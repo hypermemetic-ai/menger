@@ -2120,10 +2120,24 @@ A re-rendered body (an amend, a preview's keystroke) also wears
 components play their entrance moves once, as each comes into the reader's
 view, from a shown frame — a figure drawing itself, code typing, an option
 settling in, a stat counting up — and a step's glow loops; `calm` keeps
-only the count, `none` nothing. The frame's document also declares the
+only the count (and code typing, which has its own setting, below),
+`none` nothing. The frame's document also declares the
 house faces (`<style id="menger-fonts">`, Geist and Geist Mono from the
 app's `/app/fonts/`, named absolutely: its own origin is opaque), which the
 shell answers with `Access-Control-Allow-Origin: *` and outside a session.
+
+**Typed text in a frame** (DESIGN-43, SDK 1.19): `#/settings` → Motion →
+Typed text (`off`, `slow`, `normal` — the default —, `fast`; kept in the
+settings record as `typing`, omitted while `normal`) is stamped on the
+app's `<html>` as `data-typing` and reaches every frame as Motion does —
+`typing` in the init block, `menger:typing { typing }` from the same
+observer, `typing` on `menger:theme` — worn as the frame's own
+`html[data-typing]` (absent is `normal`). `menger.typing` reads it, `off`
+while `menger.motion` is `none`. ART-9's `m-code` types at slow 45 ms,
+normal 22 ms, fast 8 ms a character (comments and a session's output at a
+third of that), blocks up to 600 / 1,200 / 3,600 characters; `off` shows
+the code at once. Motion `calm` no longer stops typing — this setting
+alone decides; Motion `none` and reduced motion still do.
 
 **The sweep test** (`scripts/theme-sweep.mjs`, Playwright from
 `perf/node_modules`) proves it on a throwaway server. It seeds its own

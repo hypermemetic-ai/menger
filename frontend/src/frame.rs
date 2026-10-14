@@ -180,8 +180,11 @@ use crate::{anchor, annotate, board, bridge, cite, dom, gesture, highlight, insp
 /// DESIGN-40's 1.18 carries the app's Motion setting into the frame
 /// (`motion` and `entered` in the init block, `menger:motion`, `motion` on
 /// `menger:theme`) as `html[data-motion]` / `html[data-entered]`, adds
-/// `menger.motion`, and declares the house faces (`<style id="menger-fonts">`).
-pub(crate) const SDK_VERSION: &str = "1.18.0";
+/// `menger.motion`, and declares the house faces (`<style id="menger-fonts">`);
+/// DESIGN-43's 1.19 carries the app's Typed text setting the same way
+/// (`typing` in the init block, `menger:typing`, `typing` on `menger:theme`)
+/// as `html[data-typing]`, and adds `menger.typing`.
+pub(crate) const SDK_VERSION: &str = "1.19.0";
 
 /// Where the app serves the SDK shell (index.html copy-files
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
@@ -245,6 +248,14 @@ impl Motion {
         }
     }
 }
+
+/// DESIGN-43: the app's Typed text setting (src/motion.rs: `html[data-typing]`
+/// on the app's document — absent is `normal`): how fast a framed code
+/// block types itself in, or `off`. A frame wears it as its own
+/// `html[data-typing]` (from the init block, and from `menger:typing` /
+/// `menger:theme` when it changes), which ART-9's `m-code` reads. One
+/// vocabulary with the setting's.
+pub(crate) use crate::motion::Typing;
 
 /// DESIGN-40: the house faces in a framed body — the contract's families
 /// (`--mono`, `--sans`: "Geist Mono", "Geist"), declared as index.html
@@ -359,6 +370,9 @@ pub(crate) struct Shell<'a> {
     /// DESIGN-40: the app's Motion setting as painted now
     /// (`html[data-motion]`: [`Motion`]).
     pub(crate) motion: Motion,
+    /// DESIGN-43: the app's Typed text setting as stamped now
+    /// (`html[data-typing]`: [`Typing`]).
+    pub(crate) typing: Typing,
     /// DESIGN-40: this body was already shown here (a re-render after an
     /// amend, a keystroke in a preview): its entrance moves do not play again.
     pub(crate) entered: bool,
@@ -439,6 +453,8 @@ pub(crate) fn init_json(shell: &Shell) -> String {
         // DESIGN-40: the Motion setting, and a re-render's "already shown".
         "motion": shell.motion.as_str(),
         "entered": shell.entered,
+        // DESIGN-43: the Typed text speed.
+        "typing": shell.typing.as_str(),
     });
     init.to_string().replace('<', "\\u003c")
 }
@@ -752,7 +768,29 @@ fn theme_message(frame: &web_sys::HtmlIFrameElement, channel: &str) -> JsValue {
     // DESIGN-40: and the Motion setting, so a frame that loaded across a
     // change wears the one painted now.
     set(&msg, "motion", &host_motion().as_str().into());
+    // DESIGN-43: and the Typed text speed, the same way.
+    set(&msg, "typing", &host_typing().as_str().into());
     msg.into()
+}
+
+/// DESIGN-43: the app's Typed text setting as stamped now —
+/// `html[data-typing]` on the app's document; absent is `normal`.
+fn host_typing() -> Typing {
+    let v = dom::window().document().and_then(|d| d.document_element()).and_then(|e| e.get_attribute("data-typing"));
+    Typing::parse(v.as_deref())
+}
+
+/// DESIGN-43: `menger:typing { typing }` to every open frame — the app's
+/// Typed text setting moved (src/motion.rs sets `html[data-typing]`).
+fn retype_all() {
+    let typing = host_typing();
+    for f in frames() {
+        if let Some(channel) = f.get_attribute("data-channel") {
+            let msg = message("menger:typing", &channel);
+            set(&msg, "typing", &typing.as_str().into());
+            post(&f, &msg.into());
+        }
+    }
 }
 
 /// DESIGN-40: the app's Motion setting as painted now — DESIGN-39's
@@ -776,15 +814,31 @@ fn remotion_all() {
 }
 
 /// DESIGN-40: the Motion setting reaches every frame the moment it moves —
-/// one observer on the app's `<html>`, for the app's lifetime.
+/// one observer on the app's `<html>`, for the app's lifetime. DESIGN-43:
+/// the same observer carries the Typed text setting (`data-typing`), each
+/// attribute that moved posting its own message.
 fn watch_motion() {
     let Some(root) = dom::window().document().and_then(|d| d.document_element()) else { return };
-    let cb = Closure::<dyn FnMut(js_sys::Array, web_sys::MutationObserver)>::new(|_: js_sys::Array, _: web_sys::MutationObserver| remotion_all());
+    let cb = Closure::<dyn FnMut(js_sys::Array, web_sys::MutationObserver)>::new(|records: js_sys::Array, _: web_sys::MutationObserver| {
+        let (mut motion, mut typing) = (false, false);
+        for r in records.iter() {
+            match r.dyn_ref::<web_sys::MutationRecord>().and_then(|r| r.attribute_name()).as_deref() {
+                Some("data-typing") => typing = true,
+                _ => motion = true,
+            }
+        }
+        if motion {
+            remotion_all();
+        }
+        if typing {
+            retype_all();
+        }
+    });
     let Ok(observer) = web_sys::MutationObserver::new(cb.as_ref().unchecked_ref()) else { return };
     cb.forget();
     let opts = web_sys::MutationObserverInit::new();
     opts.set_attributes(true);
-    let filter = js_sys::Array::of1(&JsValue::from_str("data-motion"));
+    let filter = js_sys::Array::of2(&JsValue::from_str("data-motion"), &JsValue::from_str("data-typing"));
     opts.set_attribute_filter(&filter);
     let _ = observer.observe_with_options(&root, &opts);
 }
@@ -1557,6 +1611,7 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     // re-render: its entrance moves are not played again).
     let fonts_url = format!("{}{}", w.location().origin().unwrap_or_default(), FONTS_URL);
     let motion = host_motion();
+    let typing = host_typing();
     let entered = container.query_selector(":scope > iframe:not([data-state=\"pending\"])").ok().flatten().is_some();
     let components = registry::snapshot();
     // MENGER-15: a whole document follows the app's mode unless a mockup
@@ -1575,6 +1630,7 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
             highlight_url: &highlight_url,
             fonts_url: &fonts_url,
             motion,
+            typing,
             entered,
             components: components.as_deref(),
             ticket: init_ticket,
@@ -1734,7 +1790,7 @@ mod tests {
     fn the_csp_comes_first_and_closes_connections_and_forms() {
         assert_eq!(CSP, "connect-src 'none'; form-action 'none'");
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f9", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, entered: false, components: None, ticket: Some("A-1"), cite: None, emulate: None };
+        let shell = Shell { channel: "f9", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: None, ticket: Some("A-1"), cite: None, emulate: None };
         let doc = srcdoc("<script>fetch('https://x')</script><form action=\"https://x\"></form>", &shell);
         let head = "<!doctype html><html lang=\"en\" data-theme=\"light\"><head>";
         assert!(
@@ -1759,7 +1815,7 @@ mod tests {
     #[test]
     fn the_srcdoc_is_the_shell_then_the_body() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", highlight_url: "http://h:1/app/vendor/hl.js", fonts_url: "http://h:1/app/fonts/", motion: Motion::Calm, entered: true, components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "http://h:1/app/vendor/m.js", highlight_url: "http://h:1/app/vendor/hl.js", fonts_url: "http://h:1/app/fonts/", motion: Motion::Calm, typing: Typing::Normal, entered: true, components: None, ticket: None, cite: None, emulate: None };
         let doc = srcdoc("<details><summary>s</summary><p>x</p></details>", &shell);
         assert!(doc.starts_with("<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta http-equiv=\"Content-Security-Policy\""), "{doc}");
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
@@ -1778,7 +1834,7 @@ mod tests {
     #[test]
     fn a_frame_declares_the_house_faces_and_wears_the_motion_setting() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "http://h:1/app/fonts/", motion: Motion::Calm, entered: true, components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f7", scheme: Scheme::Dark, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "http://h:1/app/fonts/", motion: Motion::Calm, typing: Typing::Normal, entered: true, components: None, ticket: None, cite: None, emulate: None };
         let doc = srcdoc("<p>x</p>", &shell);
         let at = |needle: &str| doc.find(needle).unwrap_or_else(|| panic!("missing {needle}"));
         assert!(at("<base target=\"_blank\">") < at("<style id=\"menger-fonts\">"));
@@ -1802,12 +1858,27 @@ mod tests {
         assert_eq!(Motion::None.as_str(), "none");
     }
 
+    /// DESIGN-43: a frame is told the Typed text setting as the app stamps
+    /// it — `normal` when nothing is stamped.
+    #[test]
+    fn a_frame_is_told_the_typed_text_setting() {
+        let tokens = shell_tokens();
+        let shell = |typing| Shell { channel: "f8", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Calm, typing, entered: false, components: None, ticket: None, cite: None, emulate: None };
+        let v: serde_json::Value = serde_json::from_str(&init_json(&shell(Typing::Fast))).unwrap();
+        assert_eq!((v["motion"].as_str(), v["typing"].as_str()), (Some("calm"), Some("fast")));
+        for t in Typing::ALL {
+            let v: serde_json::Value = serde_json::from_str(&init_json(&shell(t))).unwrap();
+            assert_eq!(Typing::parse(v["typing"].as_str()), t);
+        }
+        assert_eq!(Typing::parse(None), Typing::Normal);
+    }
+
     /// The init block parses back to what the SDK reads, and nothing in it
     /// can close its script element.
     #[test]
     fn the_init_block_is_json_that_cannot_close_its_script() {
         let tokens = shell_tokens();
-        let shell = Shell { channel: "f1", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", highlight_url: "http://h/hl.js", fonts_url: "", motion: Motion::Full, entered: false, components: None, ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f1", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "http://h/</script><script>alert(1)//", highlight_url: "http://h/hl.js", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: None, ticket: None, cite: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1848,7 +1919,7 @@ mod tests {
             theme: "default",
             tokens: &tokens,
             mermaid_url: "u", highlight_url: "h",
-            fonts_url: "", motion: Motion::Full, entered: false,
+            fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false,
             components: None,
             ticket: Some("AUTH-10"),
             cite: Some(&field),
@@ -1905,7 +1976,7 @@ mod tests {
             Component { name: "m-a".into(), source: source.into(), owner: Some("A-2".into()), references: vec!["A-3".into()], docs: None, preview: vec![] },
             Component { name: "m-b".into(), source: "<i>b</i>".into(), owner: None, references: vec!["m-a".into()], docs: None, preview: vec![] },
         ];
-        let shell = Shell { channel: "f2", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, entered: false, components: Some(&components), ticket: None, cite: None, emulate: None };
+        let shell = Shell { channel: "f2", scheme: Scheme::Light, theme: "default", tokens: &tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: Some(&components), ticket: None, cite: None, emulate: None };
         let json = init_json(&shell);
         assert!(!json.contains('<'), "{json}");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2175,7 +2246,7 @@ mod tests {
     }
 
     fn page_shell(tokens: &[(String, String)], emulate: Option<Emulate>) -> Shell<'_> {
-        Shell { channel: "f5", scheme: Scheme::Dark, theme: "default", tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, entered: false, components: None, ticket: Some("MENGER-16"), cite: None, emulate }
+        Shell { channel: "f5", scheme: Scheme::Dark, theme: "default", tokens, mermaid_url: "u", highlight_url: "h", fonts_url: "", motion: Motion::Full, typing: Typing::Normal, entered: false, components: None, ticket: Some("MENGER-16"), cite: None, emulate }
     }
 
     /// MENGER-15: a whole document renders as itself — its own head, styles

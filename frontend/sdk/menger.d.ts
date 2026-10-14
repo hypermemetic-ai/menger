@@ -200,6 +200,15 @@ export interface Menger {
   readonly motion: 'full' | 'calm' | 'none';
 
   /**
+   * DESIGN-43 (1.19): how fast code types itself in now — the app's Typed
+   * text setting, worn as `html[data-typing]` (followed live; absent is
+   * `normal`), or `off` while `motion` is `none`. ART-9's `m-code` types at
+   * slow 45 ms, normal 22 ms, fast 8 ms a character; `off` shows it at once.
+   * Motion `calm` does not stop typing: this setting alone decides.
+   */
+  readonly typing: 'off' | 'slow' | 'normal' | 'fast';
+
+  /**
    * COMP-9: move the app to an app route — `#/ticket/<id>` (with
    * `?component=<tag>` to scroll to and flash that docs card),
    * `#/components`, `#/components/<tag>` (a component's help page),
