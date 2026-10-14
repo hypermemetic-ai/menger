@@ -258,6 +258,7 @@ mod bridge;
 mod calendar;
 mod cache;
 mod card;
+mod carpet;
 mod cite;
 mod comments;
 mod comments_page;
@@ -1015,7 +1016,7 @@ fn Board(
                                     // MENGER-12: its labels, after the title.
                                     {labels::row_chips(move || ticket.with(|t| t.labels.clone()))}
                                 </td>
-                                <td class="kind">
+                                <td class="kind" data-kind=move || ticket.with(|t| t.kind.to_string())>
                                     <span data-tag=move || ticket.with(|t| tags::Tag::kind(t.kind).attr())>{move || ticket.with(|t| t.kind.to_string())}</span>
                                 </td>
                                 <td class="status">
@@ -2245,7 +2246,18 @@ fn App() -> impl IntoView {
                             </button>
                         })
                     }}
-                    <h1><a href="#/">"menger"</a></h1>
+                    // DESIGN-38: the wordmark — the carpet in the lifecycle's
+                    // colours, then the name in the display face.
+                    <h1><a href="#/" class="wordmark"><carpet::Carpet class="mark" /><span>"menger"</span></a></h1>
+                    // DESIGN-38: the board and a ticket, the bar's first word.
+                    <a
+                        class="hlink"
+                        id="tickets-link"
+                        href="#/"
+                        aria-current=move || matches!(route.get(), Route::Board | Route::Ticket(_)).then_some("page")
+                    >
+                        "tickets"
+                    </a>
                     // WAVE-5: the wave boards, beside the board.
                     <a
                         class="hlink"
@@ -2339,20 +2351,6 @@ fn App() -> impl IntoView {
                     // FILTER-12: while the global filter is non-empty, what
                     // it admits of every ticket — `n of N`, live.
                     <counts::GlobalCount board />
-                    <span class="tag">
-                        {move || match route.get() {
-                            Route::Board => "the live board (MFE-3)",
-                            Route::Ticket(_) => "ticket (MFE-7)",
-                            Route::Waves(_) => "the wave board (WAVE-5)",
-                            Route::WavesOf(_) => "a ticket's wave board (MENGER-31)",
-                            Route::Components(_) => "components (COMP-6)",
-                            Route::Inputs => "inputs (INPUT-6)",
-                            Route::Settings => "settings (MFE-21)",
-                            Route::Comments => "comments (COMMENT-3)",
-                            Route::Members => "members (IDENTITY-22)",
-                            Route::Deployments(_) => "deployments (DEPLOY-13)",
-                        }}
-                    </span>
                     // IDENTITY-15: who this connection is, or `sign in`.
                     <signin::Who />
                     // MFE-21: `override` marks a backend other than this
@@ -2362,6 +2360,9 @@ fn App() -> impl IntoView {
                         class=conn_class
                         title=overridden.then_some("not this page's server — set in #/settings")
                     >
+                        // DESIGN-38: the live mark — a cell in the state's
+                        // colour, pulsing slowly while live.
+                        <i class="cell" aria-hidden="true"></i>
                         {conn_words}
                     </span>
                     // COMMENT-3: annotation mode (a).
@@ -2382,7 +2383,25 @@ fn App() -> impl IntoView {
                 <lens::LensBar applies=Signal::derive(move || lens::applies(&route.get())) />
                 </div>
                 <main>
-                    <div id="health">{health_view}</div>
+                    // DESIGN-38: the page's name sits on the health line (the
+                    // mock's crumb), which keeps the bar to one line.
+                    <div id="health">
+                        {health_view}
+                        <span class="tag">
+                            {move || match route.get() {
+                                Route::Board => "the live board (MFE-3)",
+                                Route::Ticket(_) => "ticket (MFE-7)",
+                                Route::Waves(_) => "the wave board (WAVE-5)",
+                                Route::WavesOf(_) => "a ticket's wave board (MENGER-31)",
+                                Route::Components(_) => "components (COMP-6)",
+                                Route::Inputs => "inputs (INPUT-6)",
+                                Route::Settings => "settings (MFE-21)",
+                                Route::Comments => "comments (COMMENT-3)",
+                                Route::Members => "members (IDENTITY-22)",
+                                Route::Deployments(_) => "deployments (DEPLOY-13)",
+                            }}
+                        </span>
+                    </div>
                     {move || {
                         last_error.get().map(|msg| view! {
                             <div id="error" role="alert">

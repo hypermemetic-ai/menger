@@ -2929,6 +2929,9 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
             <div class="brand">
                 "menger"
                 <span class="muted">"· tickets"</span>
+                // DESIGN-38: the carpet pip, breathing — decoration until
+                // DESIGN-39 gives its cells the live counts.
+                <crate::carpet::Carpet class="pip" />
                 // FILTER-20: the nav's view — the tree, or every ticket its
                 // filter admits as one list.
                 <span class="nview" role="group" aria-label="the nav's view">

@@ -2275,9 +2275,11 @@ rewrites them, and the gate fails while they differ.
 and a percentage are shapes) written anywhere but the contract: index.html's
 stylesheet, the frame SDK (`sdk/menger-sdk.js`) and `frontend/src`. Test
 modules are exempt; a line that parses a colour the browser computed says
-`tokens-lint:` at its end. The default theme is the contract's values:
-today's look, pixel for pixel (THEME-2's screenshot diff of the board, ticket
-pages, framed bodies and the house components, light and dark). House
+`tokens-lint:` at its end; an `@font-face` line declares a family and is
+not a face written. The default theme is the contract's values (THEME-2's
+look; since DESIGN-38 its faces are Geist and Geist Mono, self-hosted from
+`frontend/fonts/` at `/app/fonts/` — OFL, `fonts/OFL.txt` — with the system
+stacks as fallbacks; a frame's document falls back to those stacks). House
 components (ART-9's, DESIGN's) paint with the same tokens — no private
 palette.
 
