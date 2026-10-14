@@ -1419,6 +1419,8 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
             hits.with_untracked(|h| h.get(j).map(|h| h.summary.id.clone()))
         });
         if let Some(id) = row {
+            // DESIGN-39: the jump moves the id from the palette's row.
+            crate::motion::note_origin(&id);
             close_overlay(overlay);
             navigate_to_ticket(&id);
         } else if under && i == len + hits.with_untracked(Vec::len) {

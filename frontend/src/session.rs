@@ -953,6 +953,12 @@ async fn session(
                 | TicketsEvent::SeverityChanged { .. }),
             ) => {
                 upsert(&ev);
+                // DESIGN-39: a status moved — its cell sweeps, its row
+                // flashes, the nav's pip is counted again.
+                if let TicketsEvent::StatusChanged { ticket, .. } = &ev {
+                    crate::motion::changed(ticket.id.clone());
+                    crate::nav::pip_stale();
+                }
             }
             // SCALE-4: the parent's id, the child and the new count — the
             // child's own row arrived with its `created`.

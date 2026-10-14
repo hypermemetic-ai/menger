@@ -194,6 +194,8 @@ pub(crate) fn go() {
 #[component]
 pub(crate) fn HeaderLink() -> impl IntoView {
     let needs = use_needs();
+    // DESIGN-39: the count ticks when it moves.
+    crate::motion::tick_on_change("#needs-link .hbadge", move || needs.count.n());
     view! {
         <a
             class="hlink"

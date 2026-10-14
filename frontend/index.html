@@ -2335,9 +2335,81 @@
   #nav .row:not(.sel):not(.pending):hover { background: var(--ink); color: var(--bg); }
   #nav .row:not(.sel):not(.pending):hover :is(.toggle, .label, .code, .tag.roll) { color: var(--bg); }
   #nav .row:not(.sel):not(.pending):hover .prefix { color: color-mix(in srgb, var(--bg) 55%, transparent); }
+  /* ── DESIGN-39: the chrome in motion (DESIGN-35's moves, as DESIGN-34's
+     first screen plays them; src/motion.rs). How much moves is the Motion
+     setting, stamped on <html> as data-motion="full|calm|none" (absent:
+     full) — the contract the house components key on too. ── */
+  /* The boot: a sheet over the app as the socket connects — the carpet's
+     cells light in the lifecycle's colours while the count runs up, then the
+     sheet wipes upward and is removed. Never in the way of a click. */
+  #boot {
+    position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center;
+    background: var(--bg); pointer-events: none;
+  }
+  #boot .boot-in { display: grid; justify-items: center; gap: 18px; }
+  #boot .carpet.boot-mark { width: 54px; height: 54px; }
+  #boot .boot-mark rect { transition: fill .18s var(--ease); }
+  #boot .boot-mark rect:not(.on) { fill: var(--line); }
+  #boot .boot-count {
+    margin: 0; font-family: var(--mono); font-size: calc(12px * var(--text-scale));
+    letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+  }
+  #boot .boot-count b { color: var(--ink); font-weight: var(--weight-medium); font-variant-numeric: tabular-nums; }
+  #boot.done { animation: menger-wipe .6s cubic-bezier(.7, 0, .2, 1) forwards; }
+  @keyframes menger-wipe { to { clip-path: inset(0 0 100% 0); } }
+  /* Counters keep their width while they run. */
+  .count-up { font-variant-numeric: tabular-nums; }
+  /* A change: the status cell sweeps (a translucent bar of its own colour
+     across it), the row flashes from the selection tint back to its own. */
+  #nav .tag.swap { position: relative; overflow: hidden; }
+  #nav .tag.swap::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: currentColor; opacity: .3; transform: translateX(-100%);
+    animation: menger-sweep .6s ease-out;
+  }
+  @keyframes menger-sweep { to { transform: translateX(100%); } }
+  /* The board's cell is a <select>, which draws no ::after: the same bar
+     is a background layer swept across it. */
+  tbody#board .status.swap {
+    background-image: linear-gradient(90deg, transparent, color-mix(in srgb, currentColor 32%, transparent) 35% 65%, transparent);
+    background-size: 60% 100%; background-repeat: no-repeat;
+    animation: menger-sweep-bg .6s ease-out;
+  }
+  @keyframes menger-sweep-bg { from { background-position: -150% 0; } to { background-position: 250% 0; } }
+  tbody#board tr.flash td, #nav .row.flash { animation: menger-flash 1.6s ease-out; }
+  @keyframes menger-flash { from { background-color: var(--row-sel); } }
+  /* A header count that moves ticks. */
+  header .hlink .hbadge.tick { display: inline-block; animation: menger-tick .5s cubic-bezier(.2, .8, .2, 1); }
+  @keyframes menger-tick { 30% { transform: translateY(-4px) scale(1.15); } }
+  /* A ticket opening: the id comes from its row (a FLIP, inline from
+     motion.rs), the title rises out of its line, the body develops. */
+  #ticket-page article.ticket.opening > h2 .t { animation: menger-rise .5s cubic-bezier(.2, .8, .2, 1) backwards; }
+  @keyframes menger-rise { from { transform: translateY(110%); clip-path: inset(0 0 100% 0); } to { transform: none; clip-path: inset(0 0 0 0); } }
+  #ticket-page article.ticket.opening > .mscope-frame { animation: menger-develop .5s ease-out .08s backwards; }
+  @keyframes menger-develop { from { filter: blur(8px); opacity: 0; } to { filter: none; opacity: 1; } }
+  /* The pip: its cells the lifecycle's mix among what the nav shows. */
+  #nav .carpet.pip rect { transition: fill .6s var(--ease); }
+  .carpet rect.s-pending { fill: var(--st-pending-fg); }
+  .carpet rect.s-ready { fill: var(--st-ready-fg); }
+  .carpet rect.s-coding { fill: var(--st-coding-fg); }
+  .carpet rect.s-in-review { fill: var(--st-in-review-fg); }
+  .carpet rect.s-complete { fill: var(--st-complete-fg); }
+  /* Settings → Motion: one choice a line, its name then what it does. */
+  #settings-motion .motion-choices { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  #settings-motion label.radio { display: flex; align-items: baseline; gap: 8px; width: auto; font-weight: normal; }
+  #settings-motion label.radio b { min-width: 4.5em; font-family: var(--mono); font-weight: var(--weight-medium); }
+  /* Motion: none — nothing the app animates moves; calm — the state
+     changes stay, the ambient moves (the breathe, the pulse) go (the boot
+     and the counters are the script's to skip). */
+  html[data-motion="none"] *, html[data-motion="none"] *::before, html[data-motion="none"] *::after {
+    animation: none !important; transition: none !important;
+  }
+  html[data-motion="none"] #boot { display: none; }
+  html[data-motion="calm"] :is(#conn.live .cell, #nav .carpet.pip) { animation: none; }
+  /* Before the script has stamped the setting, the system's preference. */
   @media (prefers-reduced-motion: reduce) {
-    #conn.live .cell, #nav .carpet.pip { animation: none; }
-    tbody#board td, #nav .row { transition: none; }
+    html:not([data-motion]) :is(#conn.live .cell, #nav .carpet.pip) { animation: none; }
+    html:not([data-motion]) :is(tbody#board td, #nav .row) { transition: none; }
   }
 </style>
 </head>

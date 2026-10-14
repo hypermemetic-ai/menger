@@ -130,6 +130,12 @@ web-sys = { version = "0.3", features = [
   "Response",
   # IDENTITY-22: the no-access page copies the person's id.
   "Clipboard",
+  # DESIGN-39: one-shot animation classes (classList, a once listener for
+  # animationend) and the counters' clock.
+  "DomTokenList",
+  "Event",
+  "AddEventListenerOptions",
+  "Performance",
 ] }
 
 console_error_panic_hook = "0.1"

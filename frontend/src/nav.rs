@@ -2733,6 +2733,55 @@ async fn drawn_chain(ctx: Ctx, filter: &str, leaf: &str, steps: Vec<(Node, Optio
     Some((out, at))
 }
 
+thread_local! {
+    /// DESIGN-39: moves on every status change `watch` carries — the pip's
+    /// counts are asked again a moment after a burst settles.
+    /// Reference-counted, not owned by whichever view first asked: it
+    /// outlives every mount of the nav.
+    static PIP_GEN: ArcRwSignal<u32> = ArcRwSignal::new(0);
+}
+
+/// DESIGN-39: a status moved somewhere; the pip counts again.
+pub(crate) fn pip_stale() {
+    PIP_GEN.with(|g| g.update(|n| *n = n.wrapping_add(1)));
+}
+
+/// DESIGN-39: the pip's cells — the lifecycle's mix among the tickets the
+/// nav's filter admits (`facets`' status counts: one ask on each connect,
+/// on each change of the nav's filter, and 1.2 s after a burst of status
+/// changes settles).
+fn pip_mix(tree: Tree, lens: Lens) -> RwSignal<Option<[usize; 8]>> {
+    let mix = RwSignal::new(None::<[usize; 8]>);
+    let filter = lens.effective(Level::Nav);
+    Effect::new(move |_| {
+        tree.epoch.track();
+        let gen = PIP_GEN.with(|g| g.get());
+        let text = filter.with(|f| (!f.groups.is_empty()).then(|| wire_text(f)));
+        spawn_local(async move {
+            if gen > 0 {
+                dom::sleep_ms(1_200).await;
+                if PIP_GEN.with(|g| g.get_untracked()) != gen {
+                    return;
+                }
+            }
+            let Some(client) = session::client() else { return };
+            let Ok(events) = client.facets_all(text, None, session::tz()).await else { return };
+            let mut counts = [0u64; 5];
+            for ev in events {
+                if let TicketsEvent::Facet { field, value, held } = ev {
+                    if field == "status" {
+                        if let Some(i) = crate::motion::LIFECYCLE.iter().position(|s| *s == value) {
+                            counts[i] = held;
+                        }
+                    }
+                }
+            }
+            mix.try_set(crate::motion::pip_cells(counts));
+        });
+    });
+    mix
+}
+
 /// The left panel: brand header + the tree. Always mounted; the App hides
 /// it with a class so its DOM (and every row's identity) survives a
 /// hide/reveal.
@@ -2929,9 +2978,9 @@ pub(crate) fn Nav(tree: Tree, route: RwSignal<Route>, hidden: RwSignal<bool>) ->
             <div class="brand">
                 "menger"
                 <span class="muted">"· tickets"</span>
-                // DESIGN-38: the carpet pip, breathing — decoration until
-                // DESIGN-39 gives its cells the live counts.
-                <crate::carpet::Carpet class="pip" />
+                // DESIGN-38: the carpet pip, breathing; DESIGN-39: its cells
+                // the lifecycle's mix among what the nav shows, live.
+                <crate::carpet::Pip cells=pip_mix(tree, lens) />
                 // FILTER-20: the nav's view — the tree, or every ticket its
                 // filter admits as one list.
                 <span class="nview" role="group" aria-label="the nav's view">
