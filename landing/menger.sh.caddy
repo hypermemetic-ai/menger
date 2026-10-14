@@ -35,7 +35,7 @@ menger.sh {
 
 	# their assets: names are not fingerprinted, so an hour, then revalidate
 	# in the background for a day
-	@assets path /style.css /main.js /favicon.svg
+	@assets path /style.css /main.js /favicon.svg /grain.svg
 	header @assets Cache-Control "public, max-age=3600, stale-while-revalidate=86400"
 	# the faces (DESIGN-37: Geist and Geist Mono, self-hosted under fonts/):
 	# a day, then revalidate in the background for a week — woff2 is
