@@ -214,6 +214,9 @@ pub(crate) struct Settings {
     /// MFE-22: the test environment's URL when it is not
     /// [`TEST_URL_DEFAULT`] (`None`: the default).
     pub(crate) test_url: Option<String>,
+    /// DESIGN-39: how much the app moves (`System`: follow
+    /// `prefers-reduced-motion` — the default).
+    pub(crate) motion: crate::motion::Pref,
 }
 
 /// The record as stored. Its own type, so the stored shape is one place.
@@ -228,6 +231,10 @@ struct Record {
     /// as it was before MFE-22.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     test_url: Option<String>,
+    /// DESIGN-39: `full`, `calm` or `none`; omitted while it follows the
+    /// system, so a record without it reads and writes as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    motion: Option<String>,
 }
 
 /// Only the version — read first, so a record of another version reads as
@@ -262,7 +269,8 @@ impl Settings {
             .test_url
             .and_then(|u| validate_link(&u).ok())
             .filter(|u| u != TEST_URL_DEFAULT);
-        Settings { ws_url, recent, test_url }
+        let motion = crate::motion::Pref::parse(record.motion.as_deref());
+        Settings { ws_url, recent, test_url, motion }
     }
 
     /// The stored string.
@@ -272,6 +280,7 @@ impl Settings {
             ws_url: self.ws_url.clone(),
             recent: self.recent.clone(),
             test_url: self.test_url.clone(),
+            motion: self.motion.word().map(str::to_string),
         })
         .expect("a record of strings serializes")
     }
@@ -289,6 +298,12 @@ impl Settings {
     /// when it is the default.
     pub(crate) fn with_test_url(mut self, url: &str) -> Self {
         self.test_url = (url != TEST_URL_DEFAULT).then(|| url.to_string());
+        self
+    }
+
+    /// DESIGN-39: the record with the Motion setting `p`.
+    pub(crate) fn with_motion(mut self, p: crate::motion::Pref) -> Self {
+        self.motion = p;
         self
     }
 
@@ -742,9 +757,61 @@ pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
             </fieldset>
             // MENGER-14: the sites links open without asking, revocable.
             <crate::links::TrustGroup />
+            // DESIGN-39: how much the app moves.
+            <MotionGroup />
             // AGS-28: every key and gesture — the table the `?` sheet draws.
             <KeyboardGroup />
         </section>
+    }
+}
+
+/// DESIGN-39: Settings → Motion — full, calm or none, or the system's
+/// (`prefers-reduced-motion`). Kept in the record at once, and stamped on
+/// `<html>` as `data-motion` (src/motion.rs).
+#[component]
+fn MotionGroup() -> impl IntoView {
+    use crate::motion::{self, Pref};
+    let chosen = RwSignal::new(motion::pref());
+    let problem = RwSignal::new(None::<String>);
+    let pick = move |p: Pref| {
+        chosen.set(p);
+        motion::set_pref(p);
+        problem.set(store(&load().with_motion(p)).err());
+    };
+    let label = |p: Pref| match p {
+        Pref::System => ("system", "follow the system: none when it asks for reduced motion, else full"),
+        Pref::Full => ("full", "the boot, a change's sweep and flash, counters, the pip breathing"),
+        Pref::Calm => ("calm", "a change still sweeps and flashes; no boot, breathing, pulse or counters"),
+        Pref::None => ("none", "nothing the app animates moves"),
+    };
+    view! {
+        <fieldset class="group" id="settings-motion">
+            <legend>"Motion"</legend>
+            <p class="now">"How much the app moves. Now: " <b>{move || { chosen.track(); motion::current().as_str() }}</b></p>
+            <div class="field motion-choices" role="radiogroup" aria-label="motion">
+                {Pref::ALL
+                    .map(|p| {
+                        let id = format!("motion-{}", p.value());
+                        let for_id = id.clone();
+                        view! {
+                            <label class="radio" for=for_id>
+                                <input
+                                    type="radio"
+                                    name="motion"
+                                    id=id
+                                    value=p.value()
+                                    prop:checked=move || chosen.get() == p
+                                    on:change=move |_| pick(p)
+                                />
+                                <b>{label(p).0}</b>
+                                <span class="muted">{label(p).1}</span>
+                            </label>
+                        }
+                    })
+                    .collect_view()}
+            </div>
+            {move || problem.get().map(|p| view! { <p class="problem" role="alert">{p}</p> })}
+        </fieldset>
     }
 }
 
@@ -847,6 +914,7 @@ mod tests {
             ws_url: Some("ws://127.0.0.1:4450".into()),
             recent: vec!["ws://127.0.0.1:4450".into(), "ws://127.0.0.1:4460".into()],
             test_url: None,
+            ..Default::default()
         };
         let raw = s.encode();
         assert_eq!(
@@ -857,6 +925,12 @@ mod tests {
         let none = Settings::default();
         assert_eq!(Settings::decode(Some(&none.encode())), none);
         assert_eq!(none.encode(), r#"{"version":1,"ws_url":null,"recent":[]}"#);
+        // DESIGN-39: Motion rides in the same record, omitted while it
+        // follows the system.
+        let calm = Settings::default().with_motion(crate::motion::Pref::Calm);
+        assert_eq!(calm.encode(), r#"{"version":1,"ws_url":null,"recent":[],"motion":"calm"}"#);
+        assert_eq!(Settings::decode(Some(&calm.encode())), calm);
+        assert_eq!(Settings::decode(Some(r#"{"version":1,"motion":"wild"}"#)).motion, crate::motion::Pref::System);
 
         for raw in [
             None,
@@ -890,10 +964,10 @@ mod tests {
     #[test]
     fn the_effective_url_is_the_override_else_the_page_s_server() {
         assert_eq!(Settings::default().effective(PAGE), PAGE);
-        let over = Settings { ws_url: Some("ws://127.0.0.1:4450".into()), recent: vec![], test_url: None };
+        let over = Settings { ws_url: Some("ws://127.0.0.1:4450".into()), recent: vec![], test_url: None, ..Default::default() };
         assert_eq!(over.effective(PAGE), "ws://127.0.0.1:4450");
         // An override that does not validate is no override.
-        let bad = Settings { ws_url: Some("http://127.0.0.1:4450".into()), recent: vec![], test_url: None };
+        let bad = Settings { ws_url: Some("http://127.0.0.1:4450".into()), recent: vec![], test_url: None, ..Default::default() };
         assert_eq!(bad.effective(PAGE), PAGE);
         // Through storage: what was saved is what is connected to.
         let saved = Settings::default().saved("ws://127.0.0.1:4472", PAGE);
@@ -930,7 +1004,7 @@ mod tests {
     /// that are not it.
     #[test]
     fn the_fills_offer_the_page_s_server_then_the_recent_ones() {
-        let s = Settings { ws_url: None, recent: vec!["ws://127.0.0.1:4450".into(), PAGE.into()], test_url: None };
+        let s = Settings { ws_url: None, recent: vec!["ws://127.0.0.1:4450".into(), PAGE.into()], test_url: None, ..Default::default() };
         assert_eq!(s.fills(PAGE), vec![(PAGE.to_string(), true), ("ws://127.0.0.1:4450".to_string(), false)]);
         assert_eq!(Settings::default().fills(PAGE), vec![(PAGE.to_string(), true)]);
     }

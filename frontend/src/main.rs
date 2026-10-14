@@ -289,6 +289,7 @@ mod present;
 mod promote;
 
 mod mermaid;
+mod motion;
 mod needs;
 mod registry;
 mod rowclick;
@@ -491,6 +492,8 @@ fn use_route(lens: lens::Lens) -> RwSignal<Route> {
 }
 
 pub(crate) fn navigate_to_ticket(id: &str) {
+    // DESIGN-39: where the id stands now, for the page's head to move from.
+    motion::note_origin(id);
     let _ = dom::window().location().set_hash(&format!("/ticket/{id}"));
 }
 
@@ -1475,21 +1478,26 @@ fn ticket_view(
         }));
         (ids.len(), done, total, docs)
     });
-    let roll_view = move || {
+    // DESIGN-39: one span for the page's life — its numbers count up when
+    // it first shows and move in place after.
+    let roll_shown = Memo::new(move |_| roll.with(|&(_, _, total, docs)| total + docs > 0));
+    let roll_tip = move || {
         let (held, done, total, docs) = roll.get();
-        (total + docs > 0).then(|| {
-            let docs_word = format!("{docs} doc{}", if docs == 1 { "" } else { "s" });
-            let mut tip = match (total, docs) {
-                (0, _) => docs_word,
-                (_, 0) => format!("{done} of {total} done"),
-                _ => format!("{done} of {total} done · {docs_word}"),
-            };
-            let unshown = unshown.get();
-            if unshown > 0 {
-                tip.push_str(&format!(" — of the {held} shown; {unshown} more"));
-            }
-            view! { <span class="roll" title=tip>{nav::roll_label(done, total, docs)}</span> }
-        })
+        let docs_word = format!("{docs} doc{}", if docs == 1 { "" } else { "s" });
+        let mut tip = match (total, docs) {
+            (0, _) => docs_word,
+            (_, 0) => format!("{done} of {total} done"),
+            _ => format!("{done} of {total} done · {docs_word}"),
+        };
+        let unshown = unshown.get();
+        if unshown > 0 {
+            tip.push_str(&format!(" — of the {held} shown; {unshown} more"));
+        }
+        tip
+    };
+    let roll_text = Signal::derive(move || roll.with(|&(_, done, total, docs)| nav::roll_label(done, total, docs)));
+    let roll_view = move || {
+        roll_shown.get().then(|| view! { <span class="roll" title=roll_tip><motion::Count text=roll_text /></span> })
     };
     // MFE-9: the body is not a row field — it arrives with this page's own
     // `get` and lives here. `None` is "not fetched yet"; an empty string is a
@@ -1540,9 +1548,14 @@ fn ticket_view(
     // A doc is never blocked and never a blocker (SDLC-11): its relations
     // are not drawn while they are empty, which they always are.
     let no_relations = move || is_doc.get() && blocked_by.with(Vec::is_empty) && unlocks_ids.with(Vec::is_empty);
+    // DESIGN-39: the head in, the page opens — from the row it was opened
+    // from, when it was.
+    let head = NodeRef::<leptos::html::H2>::new();
+    let opened = header_id.clone();
+    head.on_load(move |h2: web_sys::HtmlHeadingElement| motion::open_page(h2.into(), opened));
     view! {
         <article class="ticket">
-            <h2 data-ticket-id=header_id>
+            <h2 data-ticket-id=header_id node_ref=head>
                 <span class="id code" data-tag=move || ticket.with(|t| tags::Tag::ticket(&t.id).attr())>{move || ticket.with(|t| t.id.clone())}</span>
                 <span class="t">{move || ticket.with(|t| t.title.clone())}</span>
             </h2>
@@ -2095,6 +2108,10 @@ fn TicketPage(
 
 #[component]
 fn App() -> impl IntoView {
+    // DESIGN-39: the Motion setting on <html> first, then the boot's sheet
+    // over the app until the first `health`.
+    motion::install();
+    motion::boot_begin(&settings::effective_ws_url());
     // SCALE-26: the board's model of the store — the extents, the window's
     // rows it holds — asked for by the session and kept by its own effect.
     let board = board::Board::new();
@@ -2160,21 +2177,37 @@ fn App() -> impl IntoView {
         };
         settings::conn_text(state, live, over.as_deref())
     };
+    // DESIGN-39: the first `health` plays the boot (once — a reconnect's
+    // finds it done).
+    Effect::new(move |_| {
+        if let Some(h) = dock.get() {
+            motion::boot_live(h.ticket_count);
+        }
+    });
     // SCALE-26: the count is the board's extent once the extents are in —
     // kept by every `created` and asked again after a `lagged`, so it is the
     // store's; `health`'s until then.
-    let health_view = move || {
-        dock.get().map(|h| {
-            // FILTER-12: under a filter the board's extent is its matches —
-            // of the store's tickets.
-            if board.filtered() {
-                let n = if board.ready() { board.n().to_string() } else { "…".to_string() };
-                let all = board.store_n().map_or(h.ticket_count, |n| n as u64);
-                return format!("menger v{} · {} of {} tickets", h.version, n, all);
-            }
-            let count = if board.ready() { board.n() as u64 } else { h.ticket_count };
-            format!("menger v{} · {} tickets", h.version, count)
+    // DESIGN-39: the version, then the count as one span whose numbers
+    // count up (the text is what it was).
+    let version = Memo::new(move |_| dock.with(|d| d.as_ref().map(|h| h.version.clone())));
+    let count_words = Signal::derive(move || {
+        dock.with(|d| {
+            d.as_ref().map(|h| {
+                // FILTER-12: under a filter the board's extent is its matches —
+                // of the store's tickets.
+                if board.filtered() {
+                    let n = if board.ready() { board.n().to_string() } else { "…".to_string() };
+                    let all = board.store_n().map_or(h.ticket_count, |n| n as u64);
+                    return format!("{n} of {all} tickets");
+                }
+                let count = if board.ready() { board.n() as u64 } else { h.ticket_count };
+                format!("{count} tickets")
+            })
         })
+        .unwrap_or_default()
+    });
+    let health_view = move || {
+        version.get().map(|v| view! { {format!("menger v{v} · ")}<motion::Count text=count_words /> })
     };
     // SCALE-26: how many rows the client holds, for the harnesses.
     let held = cache::held_signal();
@@ -2212,6 +2245,10 @@ fn App() -> impl IntoView {
         let held = comments::signal();
         Memo::new(move |_| held.with(comments_page::open_count))
     };
+
+    // DESIGN-39: a header count that moves ticks.
+    motion::tick_on_change("#inputs-link .hbadge", move || open_inputs.get());
+    motion::tick_on_change("#comments-link .hbadge", move || open_comments.get());
 
     // IDENTITY-22: whether the views may show — a memo, so the nav is
     // mounted again only when the answer changes, not on every connect.

@@ -36,6 +36,44 @@ pub(crate) fn Carpet(class: &'static str) -> impl IntoView {
     }
 }
 
+/// DESIGN-39: the lifecycle's five as the pip's classes (`s-<slug>`),
+/// in `motion::LIFECYCLE`'s order.
+pub(crate) const SLUGS: [&str; 5] = ["pending", "ready", "coding", "in-review", "complete"];
+
+/// DESIGN-39: the nav's pip — the carpet whose eight cells take the live
+/// mix of the lifecycle among what the nav shows (`cells`: each cell's
+/// index into [`SLUGS`]); the plain carpet until the counts are in.
+#[component]
+pub(crate) fn Pip(#[prop(into)] cells: Signal<Option<[usize; 8]>>) -> impl IntoView {
+    let mix = move || {
+        cells.get().map(|m| {
+            let mut out: Vec<String> = Vec::new();
+            for (k, slug) in SLUGS.iter().enumerate() {
+                let n = m.iter().filter(|&&i| i == k).count();
+                if n > 0 {
+                    out.push(format!("{slug}:{n}"));
+                }
+            }
+            out.join(" ")
+        })
+    };
+    view! {
+        <svg class="carpet pip" data-mix=mix viewBox="0 0 27 27" aria-hidden="true" focusable="false">
+            {CELLS
+                .iter()
+                .enumerate()
+                .map(|(i, &(c, x, y))| {
+                    let class = move || match cells.get() {
+                        Some(m) => format!("{c} s-{}", SLUGS[m[i].min(SLUGS.len() - 1)]),
+                        None => c.to_string(),
+                    };
+                    view! { <rect class=class x=x.to_string() y=y.to_string() width="9" height="9" /> }
+                })
+                .collect_view()}
+        </svg>
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -226,6 +226,8 @@ function probe({ app, waitFor }) {
     const conn = document.getElementById('conn');
     if (!conn) pending.push('the app (no #conn yet — still loading, or not the app: --page)');
     else if (!/^live\b/.test(conn.textContent.trim())) pending.push(`the socket (#conn reads "${conn.textContent.trim()}")`);
+    // DESIGN-39: the boot's sheet removes itself (≤ 1.3 s after health).
+    if (document.getElementById('boot')) pending.push('the boot sheet');
     const nav = document.getElementById('nav');
     if (nav && !nav.closest('.nonav') && !nav.querySelector('[data-nav-id], [data-node-key]')) pending.push('the nav');
     if (!main) pending.push('the route (no <main>)');
