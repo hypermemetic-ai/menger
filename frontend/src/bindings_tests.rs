@@ -209,6 +209,12 @@ fn chords_are_spelled_for_the_platform() {
     assert_eq!(show("Space", false), "Space");
     assert_eq!(show("Click", false), "Click");
     assert_eq!(show("RightClick", false), "Right-click");
+    // AGS-29: the nav row's double-click is a gesture like the others.
+    assert_eq!(show("DoubleClick", false), "Double-click");
+    let dbl = Press { button: Some(Button::DoubleClick), ..Press::default() };
+    assert_eq!(pick_single(&t(), &dbl, Context::Nav, false), Some("nav.toggle"));
+    assert_eq!(pick_single(&t(), &dbl, Context::Board, false), None, "the board has nothing to double-click");
+    assert_eq!(pick_single(&t(), &click(), Context::Nav, false), Some("select.only"), "a click is not a double-click");
     assert_eq!(show("Shift+F10", false), "Shift+F10");
     let palette = t().into_iter().find(|e| e.binding.id == "palette.toggle").unwrap();
     assert_eq!(keys_text(&palette, true), "⌘K");
