@@ -290,6 +290,7 @@ mod promote;
 mod mermaid;
 mod needs;
 mod registry;
+mod rowclick;
 mod saved;
 mod scopes;
 mod selection;

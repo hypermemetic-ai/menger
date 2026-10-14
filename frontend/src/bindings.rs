@@ -46,9 +46,12 @@
 //! same keydown seen by several listeners arms once and disarms nothing.
 //!
 //! **Gestures are bindings.** A click, Shift+click, Ctrl/⌘+click, Alt+click
-//! (FILTER-25's chip filter), a middle-click and a right-click are steps
-//! like keys ([`Button`]), listed with them — a `contextmenu` event is a
-//! right-click whatever its button says.
+//! (FILTER-25's chip filter), a middle-click, a right-click and a
+//! double-click are steps like keys ([`Button`]), listed with them — a
+//! `contextmenu` event is a right-click whatever its button says, a
+//! `dblclick` a double-click. AGS-29: the nav's row waits
+//! [`DOUBLE_CLICK_MS`] on a plain click before it opens, so that a
+//! double-click can open or close it without opening its ticket.
 //!
 //! **Later, rebinding** (not this ticket): matching reads the chords from
 //! [`table`], which is [`BINDINGS`] with a layer of overrides applied
@@ -60,6 +63,12 @@ use std::cell::{OnceCell, RefCell};
 
 /// How long the first key of a sequence (`g` of `g h`) stays armed.
 pub(crate) const SEQUENCE_MS: f64 = 1500.0;
+
+/// AGS-29: how long a plain click on a nav row with children waits for a
+/// second before it opens the ticket — a double-click (`nav.toggle`) opens
+/// or closes the row instead. Under the system's double-click time (~500
+/// ms), so a held click feels quick; src/rowclick.rs holds the rule.
+pub(crate) const DOUBLE_CLICK_MS: f64 = 250.0;
 
 /// What [`hit`] answers for the first key of a sequence the context owns:
 /// taken (the handler swallows it), nothing done yet.
@@ -269,13 +278,14 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("link.follow", &[C::Link], &["Click", "Mod+Click", "Shift+Click", "MiddleClick"], G::Open, "inside menger, go there; anywhere else, a dialog names the destination first"),
     b("menu.open", &[C::Ticket, C::Chip], &["RightClick", "ContextMenu", "Shift+F10"], G::Open, "the menu of what is under the pointer, or of the focused ticket: a ticket's actions, a chip's filters"),
     // -- Select
-    b("select.only", &[C::Nav, C::Board], &["Click"], G::Select, "open a ticket; the selection becomes its row"),
+    b("select.only", &[C::Nav, C::Board], &["Click"], G::Select, "open a ticket; the selection becomes its row — in the nav, a row with children opens after 250 ms, the double-click window"),
     b("select.range", &[C::Nav, C::Board], &["Shift+Click", "Shift+Mod+Click"], G::Select, "select from the last click to this row, in the order drawn"),
     b("select.toggle", &[C::Nav, C::Board], &["Mod+Click", "Space"], G::Select, "add or remove this row — by key, the focused one — from the selection"),
     b("select.extend-down", &[C::Nav, C::Board], &["Shift+j", "Shift+ArrowDown"], G::Select, "extend the selection a row down from the focused one"),
     b("select.extend-up", &[C::Nav, C::Board], &["Shift+k", "Shift+ArrowUp"], G::Select, "extend the selection a row up from the focused one"),
     b("select.all", &[C::Nav, C::Board], &["Mod+a"], G::Select, "select every row drawn"),
     // -- Nav
+    b("nav.toggle", &[C::Nav], &["DoubleClick"], G::Nav, "open or close a row with children; its ticket does not open (a click waits 250 ms for the second)"),
     b("nav.expand", &[C::Nav], &["l"], G::Nav, "expand a group, or step into it"),
     b("nav.collapse", &[C::Nav], &["h"], G::Nav, "collapse a group, or step out to it"),
     b("nav.expand-subtree", &[C::Nav], &["*"], G::Nav, "expand the focused row's subtree, at every depth"),
@@ -343,6 +353,8 @@ pub(crate) enum Button {
     Click,
     MiddleClick,
     RightClick,
+    /// AGS-29: a `dblclick`.
+    DoubleClick,
 }
 
 /// What a step presses.
@@ -410,6 +422,7 @@ impl Step {
                 "Click" => Key::Mouse(Button::Click),
                 "MiddleClick" => Key::Mouse(Button::MiddleClick),
                 "RightClick" => Key::Mouse(Button::RightClick),
+                "DoubleClick" => Key::Mouse(Button::DoubleClick),
                 k if k.starts_with("Numpad") && k.chars().count() == 7 => Key::Numpad(k.chars().last().unwrap_or('*')),
                 k => Key::Named(NAMED.iter().find(|n| **n == k).ok_or_else(|| format!("{spec:?}: {k:?} names no key"))?),
             },
@@ -481,6 +494,7 @@ impl Step {
                     Button::Click => "click",
                     Button::MiddleClick => "middle-click",
                     Button::RightClick => "right-click",
+                    Button::DoubleClick => "double-click",
                 };
                 if plain {
                     let mut w = word.to_string();
@@ -756,10 +770,13 @@ pub(crate) fn key_hit(key: &str, ctx: Context) -> Option<&'static str> {
 }
 
 /// The mouse press an event is: a `contextmenu` a right-click whatever its
-/// button; `auxclick` and the rest by their button.
+/// button, a `dblclick` a double-click (of the main button); `auxclick` and
+/// the rest by their button.
 fn mouse_press(ev: &web_sys::MouseEvent) -> Press {
     let button = if ev.type_() == "contextmenu" {
         Button::RightClick
+    } else if ev.type_() == "dblclick" && ev.button() == 0 {
+        Button::DoubleClick
     } else {
         match ev.button() {
             1 => Button::MiddleClick,

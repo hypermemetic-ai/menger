@@ -35,10 +35,14 @@
 //! the open row is now the *current* one, and selected is a set — below.)
 //!
 //! AGS-25: **a double-click opens or closes a row** that has children —
-//! one toggle per double-click, on its text and on its `▸` alike. A single
-//! click is unchanged (a ticket row follows its link, so a double-click's
-//! first click still opens the ticket's page), and a double-click selects
-//! no text.
+//! one toggle per double-click, on its text and on its `▸` alike — and
+//! selects no text. AGS-29 (reversing AGS-25's "the first click still opens
+//! the ticket's page"): **a double-click opens nothing.** A plain click on a
+//! ticket row with children waits out the double-click window
+//! (`bindings::DOUBLE_CLICK_MS`) before it opens the ticket, and a second
+//! click within it makes the gesture a toggle; a leaf opens at once. The
+//! rule is src/rowclick.rs's; modifiers, the `▸` and the keys are immediate,
+//! as before.
 //!
 //! AGS-20: **children nest.** The forest is no longer epic → tickets but
 //! a recursive tree, derived in one pure pass (`plan()`, until SCALE-24)
@@ -339,7 +343,7 @@ use crate::lens::{use_lens, Lens, Level};
 use crate::session::Member;
 use crate::selection::{self, Gesture, Picked};
 use crate::shape::{Op, Place, Shape};
-use crate::{cache, dom, keys, session, st_class, tags, Route};
+use crate::{cache, dom, keys, rowclick, session, st_class, tags, Route};
 use menger_tickets_api::filter::{Field, Filter, Group as FGroup, Predicate};
 use menger_tickets_api::{Group, Kind, Status, TicketSummary, TicketsEvent};
 
@@ -4092,6 +4096,7 @@ fn leaf_row(
     // node, so they share the one closure.
     let toggle = std::sync::Arc::new(toggle);
     let on_toggle = toggle.clone();
+    let (click_id, dbl_id, leave_id) = (id.clone(), id.clone(), id.clone());
 
     view! {
         <a
@@ -4121,13 +4126,45 @@ fn leaf_row(
             data-shortcode=shortcode
             data-kind=move || kind.get()
             href=href
-            // AGS-25: a double-click on a row with children opens or closes
-            // it. Its first click still follows the link; it selects no text.
+            // AGS-29: a plain click on a row with children is held for the
+            // double-click window, then opens the ticket; a leaf follows its
+            // link at once. Any other click drops a held one (ACT-3's
+            // selection runs in `tree_click`, as before).
+            on:click=move |ev: web_sys::MouseEvent| {
+                if bindings::hit_mouse(&ev, Context::Nav) != Some("select.only") {
+                    rowclick::feed(rowclick::Ev::Other);
+                    return;
+                }
+                let (at, parent) = (ev.time_stamp(), expanded_attr().is_some());
+                match rowclick::feed(rowclick::Ev::Click { row: &click_id, at, count: ev.detail(), parent }) {
+                    rowclick::Act::Hold => {
+                        ev.prevent_default();
+                        spawn_local(async move {
+                            dom::sleep_ms(bindings::DOUBLE_CLICK_MS as i32).await;
+                            if let rowclick::Act::Open(id) = rowclick::feed(rowclick::Ev::Lapse { at }) {
+                                crate::navigate_to_ticket(&id);
+                            }
+                        });
+                    }
+                    rowclick::Act::Swallow => ev.prevent_default(),
+                    _ => {}
+                }
+            }
+            // AGS-25, AGS-29: a double-click on a row with children opens or
+            // closes it, and opens nothing; it selects no text.
             on:dblclick=move |ev: web_sys::MouseEvent| {
-                if expanded_attr().is_some() {
+                if bindings::hit_mouse(&ev, Context::Nav) != Some("nav.toggle") {
+                    return;
+                }
+                let parent = expanded_attr().is_some();
+                if let rowclick::Act::Toggle(_) = rowclick::feed(rowclick::Ev::DoubleClick { row: &dbl_id, parent }) {
                     ev.prevent_default();
                     toggle();
                 }
+            }
+            // AGS-29: the pointer leaving the row drops its held click.
+            on:mouseleave=move |_| {
+                rowclick::feed(rowclick::Ev::Leave { row: &leave_id });
             }
             on:mousedown=no_select_on_multi_click
         >
@@ -4140,6 +4177,8 @@ fn leaf_row(
                 on:click=move |ev: web_sys::MouseEvent| {
                     ev.prevent_default();
                     ev.stop_propagation();
+                    // AGS-29: the latest click wins — a held one is dropped.
+                    rowclick::feed(rowclick::Ev::Other);
                     if ev.detail() <= 1 {
                         on_toggle();
                     }
