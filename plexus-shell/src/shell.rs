@@ -3,7 +3,7 @@
 use crate::app::{App, Asset};
 use crate::AppSource;
 use axum::extract::{Path as AxumPath, Request, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -24,6 +24,9 @@ use std::sync::Arc;
 ///
 /// The entrypoint and the pages are stamped with `{{WS_PORT}}` (the hub's
 /// WebSocket port), `{{TITLE}}` ([`Self::title`]) and [`Self::stamps`].
+/// Every page the shell serves — the entrypoint, any HTML file of the
+/// build, the pages, the fallback and "not built" — goes out under
+/// [`Self::csp`], filled for that page (ACCESS-28).
 #[derive(Clone)]
 pub struct ShellConfig {
     /// Where the app's build is read from.
@@ -47,6 +50,12 @@ pub struct ShellConfig {
     pub not_built: Option<String>,
     /// The app's own routes, merged in as they are.
     pub routes: Router,
+    /// ACCESS-28: the pages' Content-Security-Policy, a template —
+    /// `{{SCRIPTS}}` becomes the page's inline-script hashes, `{{HUB}}` the
+    /// hub's WebSocket origins at the name the page was asked for
+    /// ([`crate::csp`]). Default [`crate::DEFAULT_CSP`]. The app's own
+    /// [`Self::routes`] set their own.
+    pub csp: String,
 }
 
 impl ShellConfig {
@@ -61,6 +70,7 @@ impl ShellConfig {
             root_fallback: None,
             not_built: None,
             routes: Router::new(),
+            csp: crate::DEFAULT_CSP.into(),
         }
     }
 
@@ -82,6 +92,7 @@ impl std::fmt::Debug for ShellConfig {
             .field("stamps", &self.stamps)
             .field("pages", &self.pages.iter().map(|(route, _)| route).collect::<Vec<_>>())
             .field("root_fallback", &self.root_fallback.is_some())
+            .field("csp", &self.csp)
             .finish_non_exhaustive()
     }
 }
@@ -101,9 +112,46 @@ pub fn not_built_page(title: &str) -> String {
 
 struct ShellState {
     app: App,
-    root_fallback: Option<String>,
-    not_built: String,
+    root_fallback: Option<Page>,
+    not_built: Page,
     mount: String,
+    policy: Policy,
+}
+
+/// A stamped page and its inline-script hashes (ACCESS-28).
+struct Page {
+    html: String,
+    scripts: String,
+}
+
+impl Page {
+    fn of(html: String) -> Self {
+        let scripts = crate::csp::script_hashes(&html);
+        Self { html, scripts }
+    }
+}
+
+/// ACCESS-28: how a page's policy is filled — the template and the hub's port.
+#[derive(Clone)]
+struct Policy {
+    template: Arc<str>,
+    ws_port: u16,
+}
+
+impl Policy {
+    /// `r` (a page whose inline scripts hash to `scripts`) under its policy,
+    /// as asked for with `headers`.
+    fn apply(&self, mut r: Response, scripts: &str, headers: &HeaderMap) -> Response {
+        let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+        if let Ok(v) = HeaderValue::from_str(&crate::csp::page_policy(&self.template, scripts, host, self.ws_port)) {
+            r.headers_mut().insert(header::CONTENT_SECURITY_POLICY, v);
+        }
+        r
+    }
+
+    fn page(&self, page: &Page, headers: &HeaderMap) -> Response {
+        self.apply(Html(page.html.clone()).into_response(), &page.scripts, headers)
+    }
 }
 
 /// The shell's router for a hub on `ws_port`: the app's routes, the pages
@@ -117,11 +165,13 @@ pub async fn router(cfg: ShellConfig, ws_port: u16) -> Router {
         m if m.starts_with('/') => m.to_string(),
         m => format!("/{m}"),
     };
+    let policy = Policy { template: cfg.csp.as_str().into(), ws_port };
     let state = Arc::new(ShellState {
-        root_fallback: cfg.root_fallback.as_deref().map(|t| crate::stamp(t, &stamps)),
-        not_built: cfg.not_built.clone().unwrap_or_else(|| not_built_page(&cfg.title)),
+        root_fallback: cfg.root_fallback.as_deref().map(|t| Page::of(crate::stamp(t, &stamps))),
+        not_built: Page::of(cfg.not_built.clone().unwrap_or_else(|| not_built_page(&cfg.title))),
         app: App::new(cfg.app.clone(), stamps.clone()).await,
         mount: mount.clone(),
+        policy: policy.clone(),
     });
     let mut r = Router::new().route("/", get(root_index));
     if mount.is_empty() {
@@ -134,8 +184,9 @@ pub async fn router(cfg: ShellConfig, ws_port: u16) -> Router {
     }
     let mut r = r.with_state(state);
     for (route, template) in &cfg.pages {
-        let page = crate::stamp(template, &stamps);
-        r = r.route(route, get(move || async move { Html(page) }));
+        let page = Arc::new(Page::of(crate::stamp(template, &stamps)));
+        let policy = policy.clone();
+        r = r.route(route, get(move |headers: HeaderMap| async move { policy.page(&page, &headers) }));
     }
     tracing::info!("App:       {} ({:?})", if mount.is_empty() { "/" } else { &mount }, cfg.app);
     r.merge(cfg.routes)
@@ -161,7 +212,12 @@ pub async fn serve_on(
 
 /// Every answer the shell gives refuses to be framed, is read as the type
 /// it says, and sends no path to another origin (menger's IDENTITY-38). A
-/// response that set its own keeps it.
+/// response that set its own keeps it — a page its whole policy (ACCESS-28),
+/// which says `frame-ancestors 'none'` too.
+///
+/// `same-origin`, not `no-referrer`: both send nothing to another origin,
+/// but under `no-referrer` a browser sends `Origin: null` on a same-origin
+/// form POST, and a sign-in's or sign-out's Origin check then refuses it.
 pub async fn harden(req: Request, next: axum::middleware::Next) -> Response {
     let mut r = next.run(req).await;
     let h = r.headers_mut();
@@ -178,29 +234,34 @@ pub async fn harden(req: Request, next: axum::middleware::Next) -> Response {
     r
 }
 
-fn asset_response(asset: &Asset) -> Response {
-    ([(header::CONTENT_TYPE, asset.mime)], asset.bytes.clone()).into_response()
+/// A file of the build as served — a page (an HTML file) under its policy.
+fn asset_response(st: &ShellState, asset: &Asset, headers: &HeaderMap) -> Response {
+    let r = ([(header::CONTENT_TYPE, asset.mime)], asset.bytes.clone()).into_response();
+    match &asset.scripts {
+        Some(scripts) => st.policy.apply(r, scripts, headers),
+        None => r,
+    }
 }
 
 /// The root is the app; with no build, the fallback page (or "not built").
-async fn root_index(State(st): State<Arc<ShellState>>) -> Response {
+async fn root_index(State(st): State<Arc<ShellState>>, headers: HeaderMap) -> Response {
     match st.app.current().await.get("index.html") {
-        Some(index) => asset_response(index),
+        Some(index) => asset_response(&st, index, &headers),
         None => {
             tracing::debug!("no app build at {:?}: / serves the fallback", st.app.source);
-            Html(st.root_fallback.clone().unwrap_or_else(|| st.not_built.clone())).into_response()
+            st.policy.page(st.root_fallback.as_ref().unwrap_or(&st.not_built), &headers)
         }
     }
 }
 
-async fn app_index(State(st): State<Arc<ShellState>>) -> Response {
+async fn app_index(State(st): State<Arc<ShellState>>, headers: HeaderMap) -> Response {
     match st.app.current().await.get("index.html") {
-        Some(index) => asset_response(index),
-        None => Html(st.not_built.clone()).into_response(),
+        Some(index) => asset_response(&st, index, &headers),
+        None => st.policy.page(&st.not_built, &headers),
     }
 }
 
-async fn app_asset(State(st): State<Arc<ShellState>>, AxumPath(path): AxumPath<String>) -> Response {
+async fn app_asset(State(st): State<Arc<ShellState>>, headers: HeaderMap, AxumPath(path): AxumPath<String>) -> Response {
     let key = if path.is_empty() || path.ends_with('/') { format!("{path}index.html") } else { path };
     // A miss asks whether the build changed before it is a 404: a page
     // loaded from a rebuilt entrypoint names assets the old table lacks.
@@ -211,11 +272,11 @@ async fn app_asset(State(st): State<Arc<ShellState>>, AxumPath(path): AxumPath<S
     match table.get(&key) {
         Some(asset) => {
             tracing::debug!("app asset served: {}/{key} ({} bytes)", st.mount, asset.bytes.len());
-            asset_response(asset)
+            asset_response(&st, asset, &headers)
         }
         // The entrypoint missing means "not built"; a missing asset next
         // to a present index.html is an ordinary 404 (stale link, typo).
-        None if key == "index.html" => Html(st.not_built.clone()).into_response(),
+        None if key == "index.html" => st.policy.page(&st.not_built, &headers),
         None => (StatusCode::NOT_FOUND, "no such asset").into_response(),
     }
 }

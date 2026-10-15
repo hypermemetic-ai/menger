@@ -2102,9 +2102,11 @@ version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "jsonrpsee",
  "plexus-core",
  "plexus-transport",
+ "sha2",
  "tempfile",
  "tokio",
  "tracing",

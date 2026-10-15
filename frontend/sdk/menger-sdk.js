@@ -7,8 +7,10 @@
  * A framed body (frontend/src/frame.rs) is one sandboxed iframe —
  * `sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"`, no
  * `allow-same-origin`, so its origin is opaque, and no `allow-forms`
- * (IDENTITY-28) — whose `srcdoc` is the body's HTML with this script inlined
- * at the top of <head>, under a CSP that is the head's first element:
+ * (IDENTITY-28) — whose document (ACCESS-28: handed over by the host to
+ * the frame document at /app/frame, which writes it over itself) is the
+ * body's HTML with this script inlined at the top of <head>, under a CSP
+ * that is the head's first element, and the frame document's own:
  * `connect-src 'none'; form-action 'none'` — no fetch, socket or beacon of
  * the frame's own, no form submission; the bridge below is its only way
  * out. It runs before anything the body holds, and it is the

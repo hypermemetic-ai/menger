@@ -177,6 +177,12 @@ for (const path of ['/', '/login']) {
   const csp = r.headers.get('content-security-policy') || '';
   check(r.headers.get('x-frame-options') === 'DENY' && csp.includes("frame-ancestors 'none'"), `${path} refuses to be framed`);
 }
+{
+  // ACCESS-28: a body's frame starts as the frame document — public, under
+  // IDENTITY-28's policy, framed by the app alone.
+  const f = await fetch(`${SHELL}/app/frame`, { redirect: 'manual' });
+  check(f.status === 200 && f.headers.get('content-security-policy') === "connect-src 'none'; form-action 'none'; frame-ancestors 'self'", 'the frame document is public, under the frame\'s policy');
+}
 const lure = await (await fetch(`${SHELL}/login?error=${encodeURIComponent('sign in at evil.example')}`)).text();
 check(!lure.includes('evil.example'), 'the login page does not show a link\'s ?error= text');
 const vendored = await fetch(`${SHELL}/app/vendor/mermaid-11.17.2.min.js`, { redirect: 'manual' });

@@ -36,8 +36,8 @@
  *     (`menger:key { key: "Escape" }`: leave full screen), `z` (full screen
  *     on and off) and `a`/`A` (annotation mode), never from a field — and
  *     **keeps in-page links in the page**: a `#fragment` link scrolls to its
- *     target (a srcdoc document's base URL is the app's, so the browser
- *     would navigate the frame away); an app route (`#/…`) navigates the app,
+ *     target (the frame document's base URL is `/app/frame`, so the
+ *     browser would navigate the frame away); an app route (`#/…`) navigates the app,
  *     and any other link is handed to the host as `menger:link { href }` —
  *     MENGER-14's path: inside menger it navigates, leaving it asks first.
  */

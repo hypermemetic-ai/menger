@@ -88,7 +88,8 @@ impl LocalServer {
         }
         let hub = crate::build_rpc(&cfg.db_path).await?;
         let mut app = shell::app_shell(cfg.env.as_deref(), cfg.app);
-        app.routes = shell::favicon_routes();
+        // ACCESS-28: and the document a ticket body's frame starts as.
+        app.routes = shell::favicon_routes().merge(shell::frame_routes());
         let local = plexus_shell::LocalConfig {
             ws_port: cfg.ws_port,
             shell_port: cfg.shell_port,
