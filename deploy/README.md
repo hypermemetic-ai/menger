@@ -169,6 +169,43 @@ prod runs — the pictures show exactly what prod serves) and lists the changed
 files under `landing/media/`; commit them, merge, then `landing`. Infra is
 found at `MENGER_INFRA_DIR` (default `../hypermemetic-infra`).
 
+**Link previews** (DESIGN-52, DESIGN-53). A link to menger.sh unfurls from
+the tags in each page's `<head>`: `og:*` (title, description, url, site
+name, image with its type, size and alt) and `twitter:card
+summary_large_image` with `twitter:title`, `twitter:description` and
+`twitter:image` — X reads its own tags first. Every image URL is absolute
+(`https://menger.sh/media/og.jpg`). The image is the page's foot under the
+promise, 1200×630 JPEG (keep it under 1 MB; X takes 300×157 to 5 MB, no
+SVG, no animation), made from the page itself:
+
+```sh
+PLAYWRIGHT_FROM=perf node scripts/landing-og.mjs   # → landing/media/og.jpg; commit it, then landing
+```
+
+Rerun it when the foot, the promise or the look changes. After `landing`,
+check what a crawler gets, from here and from outside:
+
+```sh
+for ua in Twitterbot/1.0 facebookexternalhit/1.1 Slackbot-LinkExpanding Discordbot/2.0 LinkedInBot/1.0; do
+  curl -s -A "$ua" https://menger.sh/ | grep -c 'og:image\|twitter:image'          # the tags
+  curl -s -A "$ua" -o /dev/null -w '%{http_code} %{content_type}\n' https://menger.sh/media/og.jpg
+done
+curl -s 'https://api.microlink.io/?url=https%3A%2F%2Fmenger.sh%2F' | jq .data   # a fetch from another cloud
+echo | openssl s_client -connect menger.sh:443 -servername menger.sh -showcerts 2>/dev/null | grep -E '^ *[0-9] s:|^ *i:'
+```
+
+The chain must be RSA to ISRG Root X1 (`EE ← YR1|YR2 ← Root YR ← ISRG Root
+X1`): `landing/menger.sh.caddy` asks for `key_type rsa2048`. Left to its
+default, Caddy takes ECDSA, whose chain (`YE1 ← Root YE ← X2 ← X1`) X's
+crawler did not follow — every other fetcher showed the card, X showed none.
+
+A preview is cached by the app that drew it, per URL: X about a week, Slack,
+Discord and LinkedIn hours to days. To see a change at once, share a URL it
+has not seen (`https://menger.sh/?v=3`); X has no validator any more, and its
+composer often draws no card until the post is published. The edge logs
+every request to menger.sh (Caddy `log`, the edge container's output), so
+whether a crawler came, and what it was answered, can be read there.
+
 ## Hardening (ACCESS-27)
 
 Both units run with the least the OS gives a service, `systemd --user` as on
