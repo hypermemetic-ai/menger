@@ -14,6 +14,23 @@
 # media/ on this origin (img-src, media-src).
 
 menger.sh {
+	# DESIGN-53: an access log, to the container's output (docker logs), so a
+	# crawler's fetch can be seen — what x.com's Twitterbot asks and is answered
+	log {
+		output stderr
+		format json
+	}
+
+	# DESIGN-53: an RSA certificate. Since 2026-05-13 Let's Encrypt issues
+	# ECDSA from YE1/YE2, whose chain to a root every store trusts is four
+	# deep (EE ← YE1 ← Root YE ← X2 ← X1, the cross-signs reissued in May);
+	# browsers build it, some fetchers do not — x.com's card crawler showed
+	# no card while every other one did. RSA issues from YR1/YR2 on
+	# EE ← YR1 ← Root YR ← X1, RSA all the way to the oldest root.
+	tls {
+		key_type rsa2048
+	}
+
 	encode zstd gzip
 	root * /srv/menger.sh
 	file_server
