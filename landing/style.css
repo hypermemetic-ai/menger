@@ -397,3 +397,25 @@ tbody th { font-weight: 600; white-space: nowrap; }
   .sq, .cell-label, .btn, .mini .row, .chapters a, .pin .step, .pin .left { transition: none; }
   .cmdline code.caret::after, .mini .chip.swap::before { animation: none; }
 }
+
+/* ── DESIGN-45: the story's three moves, the get row's install line, a portrait still ── */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border: 1px solid var(--line); border-radius: var(--r); background: var(--card); margin-top: 20px; }
+.steps > article { padding: 22px 22px 20px; border-right: 1px solid var(--line); }
+.steps > article:last-child { border-right: 0; }
+.steps .num { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--tone); margin-bottom: 10px; }
+.steps h3 { margin: 0 0 6px; font-size: 18px; }
+.steps p { margin: 0 0 12px; color: var(--muted); font-size: 14.5px; line-height: 1.5; }
+.steps .chips { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.steps .chips .chip { font-size: 10.5px; }
+.steps .chips i { font-style: normal; }
+.get .cards .cmdline { margin: 0 0 10px; font-size: 12.5px; }
+.get .cards .cmdline code { white-space: pre-wrap; word-break: break-word; }
+.get .fine { margin-top: 22px; text-align: center; }
+.term pre.cmd code { white-space: pre-wrap; word-break: break-word; }
+/* a portrait still sits in its window at its own width, the whole tree in view */
+.p-visual .window img.portrait { max-height: 520px; width: auto; display: block; margin: 0 auto; }
+@media (max-width: 859px) {
+  .steps { grid-template-columns: 1fr; }
+  .steps > article { border-right: 0; border-bottom: 1px solid var(--line); }
+  .steps > article:last-child { border-bottom: 0; }
+}

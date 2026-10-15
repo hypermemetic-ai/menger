@@ -1,15 +1,15 @@
-// menger.sh — DESIGN-37 (MENGER-7, MENGER-10 beneath). Progressive enhancement
-// only: the page reads whole without this file. It (1) points the Log in links
-// at the app named by <html data-app-url>, (2) runs the boot, (3) lights the
-// wall — the Menger carpet in the lifecycle's colours — and leans its cells
-// toward the cursor, (4) types the install line, (5) reveals sections on view
-// and develops pictures as they arrive, (6) runs the pinned story, (7) counts
-// the counters and types the terminal, (8) offers the visitor's OS first in
-// the Download section, (9) adds copy buttons to commands, (10) plays the
-// clips beside the principles while they are on screen, (11) runs the tour's
-// chapters. Shared by the landing page and guide/. It requests nothing but
-// the page's own media, and only as it nears the screen. No inline style:
-// every value it sets goes through the CSSOM (the CSP allows no attribute).
+// menger.sh — DESIGN-45 (DESIGN-37, MENGER-10, MENGER-7 beneath). Progressive
+// enhancement only: the page reads whole without this file. It (1) points the
+// Log in links at the app named by <html data-app-url>, (2) runs the boot,
+// (3) lights the wall — the Menger carpet in the lifecycle's colours — and
+// leans its cells toward the cursor, (4) types the install line as it comes
+// into view, (5) reveals sections on view and develops pictures as they
+// arrive, (6) types the terminal, (7) offers the visitor's OS first in the
+// Download section, (8) adds copy buttons to commands, (9) plays the clip
+// while it is on screen. Shared by the landing page and guide/. It requests
+// nothing but the page's own media, and only as it nears the screen. No
+// inline style: every value it sets goes through the CSSOM (the CSP allows
+// no attribute).
 (function () {
   "use strict";
   var root = document.documentElement;
@@ -140,12 +140,14 @@
     }
   }
 
-  // (4) the install line types itself ---------------------------------------
+  // (4) the install line types itself as it comes into view -----------------
   var typed = document.getElementById("typed");
   if (typed && !reduce.matches) {
     var line = typed.getAttribute("data-line") || typed.textContent, i = 0;
     typed.textContent = ""; typed.classList.add("caret");
-    setTimeout(function step() { typed.textContent = line.slice(0, ++i); if (i < line.length) setTimeout(step, 28 + Math.random() * 40); else setTimeout(function () { typed.classList.remove("caret"); }, 1800); }, 2300);
+    once(typed, function () {
+      setTimeout(function step() { typed.textContent = line.slice(0, ++i); if (i < line.length) setTimeout(step, 28 + Math.random() * 40); else setTimeout(function () { typed.classList.remove("caret"); }, 1800); }, 300);
+    }, "0px", 0.5);
   }
 
   // (5) reveal on view; pictures develop as they arrive ----------------------
@@ -157,39 +159,7 @@
     reveals.forEach(function (el) { el.classList.add("in"); });
   }
 
-  // (6) the pinned story: the step follows the scroll; OFFLINE-10 moves ------
-  var pin = document.getElementById("pin");
-  if (pin) {
-    var steps = pin.querySelectorAll(".step"), prog = document.getElementById("prog"), st = document.getElementById("st"), cap = document.getElementById("cap"), hot = pin.querySelector("[data-ticket]");
-    var STATES = [
-      ["st-pending", "Pending", "the board — <b>OFFLINE-10</b> is Pending: filed, not yet promoted"],
-      ["st-ready", "Ready", "<b>OFFLINE-10</b> promoted to Ready by the owner; an agent claims it: Coding"],
-      ["st-complete", "Complete", "the commit linked, the review merged — <b>OFFLINE-10</b> is Complete on every screen"]
-    ];
-    var TONES = ["var(--pending)", "var(--ready)", "var(--complete)"], cur = 0;
-    pin.style.setProperty("--step-tone", TONES[0]);
-    function setStep(k) {
-      if (k === cur) return; cur = k;
-      pin.style.setProperty("--step-tone", TONES[k]);
-      steps.forEach(function (s, i) { s.classList.toggle("on", i === k); });
-      st.className = "chip " + STATES[k][0] + " swap"; st.textContent = STATES[k][1]; cap.innerHTML = STATES[k][2];
-      hot.classList.add("hot");
-      setTimeout(function () { hot.classList.remove("hot"); st.classList.remove("swap"); }, 700);
-    }
-    function onScroll() {
-      var r = pin.getBoundingClientRect(), total = r.height - window.innerHeight; if (total <= 0) return;
-      var p = Math.min(1, Math.max(0, (-r.top) / total));
-      prog.style.width = (p * 100) + "%";
-      setStep(p < 0.34 ? 0 : p < 0.67 ? 1 : 2);
-    }
-    if (window.matchMedia("(min-width: 860px)").matches) { window.addEventListener("scroll", onScroll, { passive: true }); onScroll(); }
-    else { steps.forEach(function (s) { s.classList.add("on"); }); }
-  }
-
-  // (7) counters count up; the terminal types as it comes into view ----------
-  document.querySelectorAll(".stats").forEach(function (el) {
-    once(el, function () { el.querySelectorAll("[data-count]").forEach(function (b) { count(b, +b.getAttribute("data-count"), 1200); }); }, "0px", 0.2);
-  });
+  // (6) the terminal types as it comes into view ------------------------------
   document.querySelectorAll("pre.cmd[data-type]").forEach(function (pre) {
     var code = pre.querySelector("code"); if (!code) return;
     pre.setAttribute("data-full", code.textContent);
@@ -208,7 +178,7 @@
     }, "0px", 0.3);
   });
 
-  // (8) the visitor's OS first in Download -----------------------------------
+  // (7) the visitor's OS first in Download -----------------------------------
   function detectOS() {
     var p = ((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "").toLowerCase();
     var ua = (navigator.userAgent || "").toLowerCase();
@@ -242,7 +212,7 @@
     hint.textContent = "The desktop app is for Linux, macOS and Windows; mobile apps are coming.";
   }
 
-  // (9) copy buttons ----------------------------------------------------------
+  // (8) copy buttons ----------------------------------------------------------
   if (navigator.clipboard && window.isSecureContext) {
     document.querySelectorAll("pre.cmd").forEach(function (pre) {
       var b = document.createElement("button");
@@ -262,8 +232,8 @@
     });
   }
 
-  // (10) the principles' clips ---------------------------------------------------
-  // Each has controls and no poster in the HTML (a poster is fetched at once,
+  // (9) the clip ---------------------------------------------------------------
+  // It has controls and no poster in the HTML (a poster is fetched at once,
   // wherever the video is): the poster is set as it nears the screen, and
   // with motion allowed it plays, muted and looping, while on screen —
   // without controls. Under reduced motion it keeps its controls and waits.
@@ -276,44 +246,10 @@
     v.controls = false;
     near(v, function (on) { v.inView = on; if (on && !document.hidden) play(v); else v.pause(); }, "0px 0px -15% 0px");
   });
-
-  // (11) the tour ----------------------------------------------------------------
-  // The chapters are links to the clips (what a reader without JavaScript
-  // follows); here a chapter loads its clip into the stage. With motion
-  // allowed the stage plays while on screen and moves on to the next chapter
-  // when a clip ends, back to the first after the last.
-  var stageV = document.getElementById("tour-video");
-  var chapters = Array.prototype.slice.call(document.querySelectorAll(".chapters a[data-clip]"));
-  var title = document.getElementById("tour-title"), tcap = document.getElementById("tour-cap");
-  var current = 0, tourOn = false;
-  function load(i, autoplay) {
-    var a = chapters[i], name = a.getAttribute("data-clip");
-    current = i;
-    chapters.forEach(function (c, j) { c.setAttribute("aria-current", j === i ? "true" : "false"); });
-    stageV.setAttribute("poster", "media/" + name + ".poster.webp");
-    stageV.setAttribute("width", a.getAttribute("data-w")); stageV.setAttribute("height", a.getAttribute("data-h"));
-    stageV.querySelectorAll("source").forEach(function (src) { src.src = /webm/.test(src.type) ? "media/" + name + ".webm" : "media/" + name + ".mp4"; });
-    stageV.load();
-    if (title) title.textContent = "tour · " + (i + 1) + " of " + chapters.length + " · " + a.querySelector("b").textContent.toLowerCase();
-    if (tcap) tcap.innerHTML = a.getAttribute("data-cap");
-    if (autoplay) play(stageV);
-  }
-  if (stageV && chapters.length) {
-    if (title) title.textContent = "tour · 1 of " + chapters.length + " · " + chapters[0].querySelector("b").textContent.toLowerCase();
-    chapters.forEach(function (a, i) { a.addEventListener("click", function (ev) { ev.preventDefault(); load(i, true); }); });
-    if (!reduce.matches) {
-      stageV.controls = false;
-      stageV.addEventListener("click", function () { if (stageV.paused) play(stageV); else stageV.pause(); });
-      stageV.addEventListener("ended", function () { load((current + 1) % chapters.length, tourOn); });
-      near(stageV, function (on) { stageV.inView = on; tourOn = on && !document.hidden; if (tourOn) play(stageV); else stageV.pause(); }, "0px 0px -20% 0px");
-    }
-  }
   // a hidden tab plays nothing; back in view, what is on screen resumes
   document.addEventListener("visibilitychange", function () {
-    var all = clips.concat(stageV ? [stageV] : []);
-    if (document.hidden) { tourOn = false; all.forEach(function (v) { v.pause(); }); return; }
+    if (document.hidden) { clips.forEach(function (v) { v.pause(); }); return; }
     if (reduce.matches) return;
-    all.forEach(function (v) { if (v.inView) play(v); });
-    tourOn = !!(stageV && stageV.inView);
+    clips.forEach(function (v) { if (v.inView) play(v); });
   });
 })();
