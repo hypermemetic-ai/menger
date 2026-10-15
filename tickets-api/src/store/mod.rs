@@ -1050,6 +1050,8 @@ pub enum StoreError {
     /// MNG-16: an `amend` asked for a title that is empty after trimming.
     /// A ticket always has one; nothing was written.
     EmptyTitle { id: String },
+    /// ACCESS-29: a title past [`crate::limits::TITLE_MAX`]; nothing written.
+    TitleTooLong { id: Option<String>, bytes: usize },
     /// SDLC-9: a `link_commits` or `unlink_commits` named entries that are
     /// not commit references ([`commits::reference`]) — every one of them,
     /// as given. A call is all or nothing: nothing was written.
@@ -1312,6 +1314,7 @@ impl std::fmt::Display for StoreError {
                  its own shortcode — only a shortcode's scope root may hang under another \
                  shortcode (nothing changed for '{id}')"
             ),
+            Self::TitleTooLong { id, bytes } => f.write_str(&crate::limits::title_too_long(id.as_deref(), *bytes)),
             Self::EmptyTitle { id } => write!(
                 f,
                 "a ticket's title cannot be empty: the title given for '{id}' is blank \
@@ -2937,6 +2940,14 @@ impl Store {
         Ok(())
     }
 
+    /// ACCESS-29: refuse a title past [`crate::limits::TITLE_MAX`], as a body.
+    fn check_title(&self, id: Option<&str>, title: &str) -> Result<(), StoreError> {
+        if title.len() > crate::limits::TITLE_MAX {
+            return Err(StoreError::TitleTooLong { id: id.map(str::to_string), bytes: title.len() });
+        }
+        Ok(())
+    }
+
     /// The cache from the file `conn` holds, every migration made — the
     /// derived state read (or built, once), the placements, and every
     /// record beside the tickets. MENGER-13: also what a batch write whose
@@ -3269,6 +3280,7 @@ impl Store {
             return Err(StoreError::InvalidEpic(new.epic));
         }
         self.check_body(None, &new.body)?;
+        self.check_title(None, &new.title)?;
         if !new.kind.has_lifecycle() && !new.blocked_by.is_empty() {
             return Err(StoreError::DocBlocked {
                 epic,
@@ -4413,6 +4425,9 @@ impl Store {
         let id = id.trim().to_ascii_uppercase();
         if title.as_deref().is_some_and(|t| t.trim().is_empty()) {
             return Err(StoreError::EmptyTitle { id });
+        }
+        if let Some(title) = &title {
+            self.check_title(Some(&id), title)?;
         }
         if let Some(body) = &body {
             self.check_body(Some(&id), body)?;

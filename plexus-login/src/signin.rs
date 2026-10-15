@@ -683,7 +683,7 @@ impl SignInPage {
         self.restart(flow_id, next, "Sign-in is unavailable right now. Try again in a little while.", StatusCode::SERVICE_UNAVAILABLE)
     }
 
-    fn wait_words(secs: i64) -> String {
+    pub(crate) fn wait_words(secs: i64) -> String {
         let mins = (secs + 59) / 60;
         if mins <= 1 {
             "Too many attempts. Wait a minute and try again.".into()

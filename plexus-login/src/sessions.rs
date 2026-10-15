@@ -19,8 +19,16 @@
 //!
 //! In memory for now: a restart signs everyone out. IDENTITY-18's G2 asks
 //! whether sessions should live in the database instead.
+//!
+//! ACCESS-29: every table here is bounded and kept by when its entries end
+//! ([`Ending`]): an insert drops what has ended and makes room in O(log n),
+//! never by a scan of the table — so a flood of anonymous
+//! `GET /login/start`s costs each one its own entry and nothing more. A
+//! browser's session also ends when it goes unused for
+//! [`IDLE_SECS_DEFAULT`] (`--session-idle-minutes`): no socket open on it
+//! and no page loaded with it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -36,9 +44,17 @@ use crate::names::LoginNames;
 
 /// IDENTITY-38: at most this many login transactions wait at once — each
 /// is one anonymous `GET /login/start` — and at most this many sessions
-/// live; past either, the one nearest its end makes room.
-const MAX_PENDING: usize = 10_000;
-const MAX_LIVE: usize = 100_000;
+/// live; past either, the one nearest its end makes room (ACCESS-29: found
+/// by the index, not a scan). The loopback sign-ins and their one-time codes
+/// are held to [`MAX_PENDING`] each too.
+pub const MAX_PENDING: usize = 10_000;
+pub const MAX_LIVE: usize = 100_000;
+
+/// ACCESS-29 (ACCESS-4 L2): a browser's session ends after this long unused
+/// — no socket open on it (an open socket asks after it every second) and no
+/// page loaded with it — as well as at its expiry. Two hours; 0 turns it
+/// off. A minted token (`session.login`, an agent's) keeps only its expiry.
+pub const IDLE_SECS_DEFAULT: i64 = 2 * 3600;
 
 /// IDENTITY-42: what a session token `session.login` mints starts with.
 pub const TOKEN_PREFIX: &str = "mgs_";
@@ -71,7 +87,71 @@ pub fn cookie<'a>(header: &'a str, name: &str) -> Option<&'a str> {
 #[derive(Clone)]
 struct Session {
     ctx: AuthContext,
-    expires: i64,
+    /// ACCESS-29: a browser's session, which ends when unused
+    /// ([`Sessions::with_idle`]); a minted token is not.
+    idles: bool,
+    /// When it was last presented or asked after.
+    seen: i64,
+}
+
+/// ACCESS-29: a table of entries that end, kept beside an index by when —
+/// an insert drops the ended from the index's front and, at its cap, the
+/// entry nearest its end: O(log n), never a scan of the table.
+struct Ending<V> {
+    map: HashMap<String, (V, i64)>,
+    by_end: BTreeSet<(i64, String)>,
+}
+
+impl<V> Ending<V> {
+    fn new() -> Self {
+        Self { map: HashMap::new(), by_end: BTreeSet::new() }
+    }
+
+    /// Keeps `v` under `key` until `ends`, `cap` entries at most.
+    fn insert(&mut self, key: String, v: V, ends: i64, cap: usize) {
+        self.purge(now());
+        self.remove(&key);
+        while self.map.len() >= cap.max(1) {
+            let Some((_, k)) = self.by_end.pop_first() else { break };
+            self.map.remove(&k);
+        }
+        self.by_end.insert((ends, key.clone()));
+        self.map.insert(key, (v, ends));
+    }
+
+    /// Drops every entry ended by `t`, from the front of the index.
+    fn purge(&mut self, t: i64) {
+        while self.by_end.first().is_some_and(|(e, _)| *e <= t) {
+            let (_, k) = self.by_end.pop_first().expect("checked");
+            self.map.remove(&k);
+        }
+    }
+
+    /// The entry under `key`, while it lasts.
+    fn get_mut(&mut self, key: &str) -> Option<&mut V> {
+        self.map.get_mut(key).filter(|(_, e)| *e > now()).map(|(v, _)| v)
+    }
+
+    fn get(&self, key: &str) -> Option<&V> {
+        self.map.get(key).filter(|(_, e)| *e > now()).map(|(v, _)| v)
+    }
+
+    /// Takes the entry under `key` out, ended or not: it and when it ends.
+    fn remove(&mut self, key: &str) -> Option<(V, i64)> {
+        let (v, e) = self.map.remove(key)?;
+        self.by_end.remove(&(e, key.to_string()));
+        Some((v, e))
+    }
+
+    /// Takes the entry under `key` out, if it still lasts.
+    fn take(&mut self, key: &str) -> Option<V> {
+        self.remove(key).filter(|(_, e)| *e > now()).map(|(v, _)| v)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.map.len()
+    }
 }
 
 /// A login on its way out to an IdP and back: what the callback needs to
@@ -94,7 +174,6 @@ pub const CLI_CODE_SECS: i64 = 60;
 #[derive(Clone, Debug)]
 struct CliPending {
     redirect: String,
-    expires: i64,
 }
 
 /// AUTH-7: the one-time code a finished loopback sign-in hands the
@@ -103,18 +182,19 @@ struct CliPending {
 struct CliCode {
     state: String,
     ctx: AuthContext,
-    expires: i64,
 }
 
 /// The session table. See the module docs.
 pub struct Sessions {
-    live: Mutex<HashMap<String, Session>>,
-    pending: Mutex<HashMap<String, Pending>>,
+    live: Mutex<Ending<Session>>,
+    pending: Mutex<Ending<Pending>>,
     /// AUTH-7: loopback sign-ins, by state.
-    cli: Mutex<HashMap<String, CliPending>>,
+    cli: Mutex<Ending<CliPending>>,
     /// AUTH-7: their codes, by the code's hash.
-    codes: Mutex<HashMap<String, CliCode>>,
+    codes: Mutex<Ending<CliCode>>,
     ttl_secs: i64,
+    /// ACCESS-29: how long a browser's session may go unused (0: forever).
+    idle_secs: i64,
     /// The session cookie's name (this shell's, IDENTITY-38).
     cookie: String,
     /// The login transaction cookie's name (this shell's).
@@ -138,15 +218,23 @@ impl Sessions {
 
     fn build(ttl_secs: i64, names: &LoginNames, cookie: String, login_cookie: String) -> Self {
         Self {
-            live: Mutex::new(HashMap::new()),
-            pending: Mutex::new(HashMap::new()),
-            cli: Mutex::new(HashMap::new()),
-            codes: Mutex::new(HashMap::new()),
+            live: Mutex::new(Ending::new()),
+            pending: Mutex::new(Ending::new()),
+            cli: Mutex::new(Ending::new()),
+            codes: Mutex::new(Ending::new()),
             ttl_secs,
+            idle_secs: IDLE_SECS_DEFAULT,
             cookie,
             login_cookie,
             names: names.clone(),
         }
+    }
+
+    /// ACCESS-29: a browser's session ends after `secs` unused
+    /// ([`IDLE_SECS_DEFAULT`] unless said; 0: only at its expiry).
+    pub fn with_idle(mut self, secs: i64) -> Self {
+        self.idle_secs = secs.max(0);
+        self
     }
 
     /// The session cookie's name.
@@ -176,34 +264,45 @@ impl Sessions {
     /// to set and when it ends. The identity is stamped with the session's
     /// key and expiry, so a call can ask whether it still stands.
     pub fn create(&self, ctx: AuthContext) -> (String, i64) {
-        self.start(random_token(), ctx, self.ttl_secs)
+        self.start(random_token(), ctx, self.ttl_secs, true)
     }
 
     /// IDENTITY-42: mints a session token (`mgs_…`) for an identity, lasting
     /// `ttl_secs`: the token and when it ends. Kept hashed, as a cookie's
     /// session is; it ends at its expiry or [`Sessions::end_key`].
     pub fn mint(&self, ctx: AuthContext, ttl_secs: i64) -> (String, i64) {
-        self.start(format!("{TOKEN_PREFIX}{}", random_token()), ctx, ttl_secs)
+        self.start(format!("{TOKEN_PREFIX}{}", random_token()), ctx, ttl_secs, false)
     }
 
-    fn start(&self, id: String, mut ctx: AuthContext, ttl_secs: i64) -> (String, i64) {
+    fn start(&self, id: String, mut ctx: AuthContext, ttl_secs: i64, idles: bool) -> (String, i64) {
         let key = hash(&id);
         let expires = now() + ttl_secs;
         if let Some(meta) = ctx.metadata.as_object_mut() {
             meta.insert(self.names.session_key.clone(), key.clone().into());
             meta.insert("expires_at".into(), expires.into());
         }
-        let mut live = self.live.lock().unwrap();
-        live.retain(|_, s| s.expires > now());
-        make_room(&mut live, MAX_LIVE, |s| s.expires);
-        live.insert(key, Session { ctx, expires });
+        self.live.lock().unwrap().insert(key, Session { ctx, idles, seen: now() }, expires, MAX_LIVE);
         (id, expires)
+    }
+
+    /// The session under `key` while it stands — before its expiry and, a
+    /// browser's, used within [`Sessions::with_idle`]'s time — marked used
+    /// now. One gone idle is dropped.
+    fn used(&self, key: &str) -> Option<AuthContext> {
+        let mut live = self.live.lock().unwrap();
+        let t = now();
+        let s = live.get_mut(key)?;
+        if s.idles && self.idle_secs > 0 && t - s.seen > self.idle_secs {
+            live.remove(key);
+            return None;
+        }
+        s.seen = t;
+        Some(s.ctx.clone())
     }
 
     /// The identity a session id stands for, while it lasts.
     pub fn get(&self, id: &str) -> Option<AuthContext> {
-        let live = self.live.lock().unwrap();
-        live.get(&hash(id)).filter(|s| s.expires > now()).map(|s| s.ctx.clone())
+        self.used(&hash(id))
     }
 
     /// Ends a session (sign-out). Its sockets stop answering on their next
@@ -215,27 +314,26 @@ impl Sessions {
     /// IDENTITY-42: ends the session whose key (the hash its identity
     /// carries under [`Sessions::session_key`]) this is; whether it stood.
     pub fn end_key(&self, key: &str) -> bool {
-        self.live.lock().unwrap().remove(key).is_some_and(|s| s.expires > now())
+        self.live.lock().unwrap().take(key).is_some()
     }
 
     /// Whether the session a connection's identity names still stands.
     pub fn alive(&self, key: &str) -> bool {
-        self.live.lock().unwrap().get(key).is_some_and(|s| s.expires > now())
+        self.used(key).is_some()
     }
 
     /// Keeps a login transaction for ten minutes; its state.
     pub fn begin(&self, provider: &str, verifier: String, next: String) -> String {
         let state = random_token();
-        let mut pending = self.pending.lock().unwrap();
-        pending.retain(|_, p| p.expires > now());
-        make_room(&mut pending, MAX_PENDING, |p| p.expires);
-        pending.insert(state.clone(), Pending { provider: provider.into(), verifier, next, expires: now() + 600 });
+        let expires = now() + 600;
+        let p = Pending { provider: provider.into(), verifier, next, expires };
+        self.pending.lock().unwrap().insert(state.clone(), p, expires, MAX_PENDING);
         state
     }
 
     /// Takes a login transaction back, once.
     pub fn finish(&self, state: &str) -> Option<Pending> {
-        self.pending.lock().unwrap().remove(state).filter(|p| p.expires > now())
+        self.pending.lock().unwrap().take(state)
     }
 
     /// AUTH-7: how long a browser's sign-in lasts.
@@ -247,16 +345,14 @@ impl Sessions {
     /// for ten minutes; its state.
     pub fn begin_cli(&self, redirect: String) -> String {
         let state = format!("s_{}", random_token());
-        let mut cli = self.cli.lock().unwrap();
-        cli.retain(|_, p| p.expires > now());
-        make_room(&mut cli, MAX_PENDING, |p| p.expires);
-        cli.insert(state.clone(), CliPending { redirect, expires: now() + CLI_STATE_SECS });
+        let expires = now() + CLI_STATE_SECS;
+        self.cli.lock().unwrap().insert(state.clone(), CliPending { redirect }, expires, MAX_PENDING);
         state
     }
 
     /// AUTH-7: whether `state` names a loopback sign-in still waiting.
     pub fn cli_waiting(&self, state: &str) -> bool {
-        self.cli.lock().unwrap().get(state).is_some_and(|p| p.expires > now())
+        self.cli.lock().unwrap().get(state).is_some()
     }
 
     /// AUTH-7: the person signed in as `ctx`: the loopback sign-in `state`
@@ -264,20 +360,18 @@ impl Sessions {
     /// [`CLI_CODE_SECS`] — the redirect to send the browser to, and the
     /// code. `None`: no such sign-in waits.
     pub fn finish_cli(&self, state: &str, ctx: AuthContext) -> Option<(String, String)> {
-        let pending = self.cli.lock().unwrap().remove(state).filter(|p| p.expires > now())?;
+        let pending = self.cli.lock().unwrap().take(state)?;
         let code = format!("c_{}", random_token());
-        let mut codes = self.codes.lock().unwrap();
-        codes.retain(|_, c| c.expires > now());
-        make_room(&mut codes, MAX_PENDING, |c| c.expires);
-        codes.insert(hash(&code), CliCode { state: state.to_string(), ctx, expires: now() + CLI_CODE_SECS });
+        let c = CliCode { state: state.to_string(), ctx };
+        self.codes.lock().unwrap().insert(hash(&code), c, now() + CLI_CODE_SECS, MAX_PENDING);
         Some((pending.redirect, code))
     }
 
     /// AUTH-7, `auth.login {code {code, state}}`: who signed in, once — the
     /// code must be the one issued for `state`, and fresh.
     pub fn take_code(&self, code: &str, state: &str) -> Option<AuthContext> {
-        let c = self.codes.lock().unwrap().remove(&hash(code))?;
-        (c.expires > now() && c.state == state).then_some(c.ctx)
+        let c = self.codes.lock().unwrap().take(&hash(code))?;
+        (c.state == state).then_some(c.ctx)
     }
 }
 
@@ -295,14 +389,6 @@ pub fn loopback_redirect(text: &str) -> Result<String, String> {
         return Err(refuse());
     }
     Ok(u.to_string())
-}
-
-/// Drops the entry nearest its end while `map` is at `cap`.
-fn make_room<V>(map: &mut HashMap<String, V>, cap: usize, expires: impl Fn(&V) -> i64) {
-    while map.len() >= cap {
-        let Some(k) = map.iter().min_by_key(|(_, v)| expires(v)).map(|(k, _)| k.clone()) else { return };
-        map.remove(&k);
-    }
 }
 
 /// A minted session token a value the transport offers carries: the bearer
@@ -445,6 +531,56 @@ mod tests {
         }
         assert_eq!(s.pending.lock().unwrap().len(), MAX_PENDING);
         let _ = first;
+    }
+
+    #[test]
+    fn a_flood_of_logins_is_held_to_the_cap_without_a_scan_per_insert() {
+        // ACCESS-29: ten times the cap, each insert O(log n) — the scan the
+        // table did before made this a billion steps.
+        let s = Sessions::new(3600, &names());
+        let started = std::time::Instant::now();
+        let first = s.begin("auth0", "v".into(), "/".into());
+        for _ in 0..MAX_PENDING * 10 {
+            s.begin("auth0", "v".into(), "/".into());
+        }
+        let p = s.pending.lock().unwrap();
+        assert_eq!((p.len(), p.by_end.len()), (MAX_PENDING, MAX_PENDING), "the index and the table agree");
+        drop(p);
+        assert!(s.finish(&first).is_none(), "the oldest made room");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_browser_session_unused_past_its_idle_time_ends_and_a_minted_token_does_not() {
+        // ACCESS-29 (ACCESS-4 L2).
+        let s = Sessions::new(3600, &names()).with_idle(60);
+        let (id, _) = s.create(alice());
+        let (token, _) = s.mint(alice(), 3600);
+        let key = s.get(&id).unwrap().metadata["menger_session"].as_str().unwrap().to_string();
+        let minted = s.get(&token).unwrap().metadata["menger_session"].as_str().unwrap().to_string();
+        assert!(s.alive(&key), "used: it stands");
+        // An hour unused.
+        for k in [&key, &minted] {
+            s.live.lock().unwrap().get_mut(k).unwrap().seen -= 3000;
+        }
+        assert!(!s.alive(&key) && s.get(&id).is_none(), "idle: ended");
+        assert!(s.alive(&minted) && s.get(&token).is_some(), "a minted token keeps only its expiry");
+        let off = Sessions::new(3600, &names()).with_idle(0);
+        let (id, _) = off.create(alice());
+        let key = off.get(&id).unwrap().metadata["menger_session"].as_str().unwrap().to_string();
+        off.live.lock().unwrap().get_mut(&key).unwrap().seen -= 3000;
+        assert!(off.get(&id).is_some(), "0: no idle end");
+    }
+
+    #[test]
+    fn asking_after_a_session_keeps_it_in_use() {
+        let s = Sessions::new(3600, &names()).with_idle(60);
+        let (id, _) = s.create(alice());
+        let key = s.get(&id).unwrap().metadata["menger_session"].as_str().unwrap().to_string();
+        s.live.lock().unwrap().get_mut(&key).unwrap().seen -= 50;
+        assert!(s.alive(&key), "an open socket's ask is a use");
+        s.live.lock().unwrap().get_mut(&key).unwrap().seen -= 50;
+        assert!(s.get(&id).is_some(), "the ask moved its last use to now");
     }
 
     #[tokio::test]

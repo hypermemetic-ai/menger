@@ -1568,7 +1568,7 @@ for await (const ev of this.menger.tickets.inputs(undefined, undefined, undefine
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
 | `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent?, path? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Pending`; `kind` defaults to `build`, one outside the six is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12) **or a doc** (SDLC-11): the first ticket of a prefix must be `kind: scope` or `kind: doc`, anything else is an in-band `error` naming the rule and nothing is allocated; a `doc` starts — and stays — in `Doc`, and a doc with a `blocked_by`, a `blocked_by` naming a doc, or a doc born as an id a `blocked_by` already names is an in-band `error` (SDLC-11); **`parent` defaults to the shortcode's scope root and must stay inside the shortcode** (MNG-14): omitted, a non-root hangs under its prefix's root; named, it must be in the same prefix, else an in-band `error` — the scope root itself is the exception, its parent (if any) is the shortcode it hangs under, a sub-shortcode; **`path`** (WAVE-10) gives the ticket a path address in its shortcode — only `_MENGER/…` with something after it, only on a `doc`, only with the shortcode's scope root as `parent` (the default); one another ticket of the shortcode holds is an in-band `error` naming it, as is each other refusal, and nothing is allocated; COMP-3: the body's ` ```component ` blocks register components — a block whose tag is not a component name, a name defined twice, or a name another ticket defines is an in-band `error` (the last naming that ticket) and nothing is allocated; COMP-8: so is a malformed `<docs>`, naming the problem; MENGER-15: a body past the cap (`--max-body-bytes`, 8 MiB by default) is the typed `body_too_large { id: null, bytes, max, message }` and nothing is allocated |
 | `tickets.get { id }` | `ticket` or `not_found` — `id` is an `EPIC-N`, or (WAVE-10) a path address `SHORTCODE/path` (`PLEXUS/_MENGER/board`; the shortcode case-insensitive, the path exact), and `not_found` carries the id or address as given; ACT-5: a deleted ticket's id answers `deleted { ids: [id], tombstones: [tombstone] }` |
-| `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children — the one way to read them (SCALE-4), from an index the store keeps, so a page of a root's 163,530 children costs the page (1.3 ms at 10⁶ over REST, first page or deep) and its `remaining` is arithmetic; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page — `after` naming no ticket is one in-band `error` |
+| `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children — the one way to read them (SCALE-4), from an index the store keeps, so a page of a root's 163,530 children costs the page (1.3 ms at 10⁶ over REST, first page or deep) and its `remaining` is arithmetic; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page (ACCESS-29: 1,000 rows unless given, never more than 10,000 — page with `next`) — `after` naming no ticket is one in-band `error` |
 | `tickets.ready_set { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete, Superseded or Canceled — never a doc), ordered (epic, seq), then one `page { next, remaining }` |
 | `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
 | `tickets.search { query, filter?, limit?, offset? }` | SEARCH-2: search inside tickets — one `hit { summary, title, snippet, corrected }` per ticket whose title or body's text holds every word of `query`, best first, then one `searched { matched, next, words }`. Each word also matches as a prefix; a misspelt one (unknown to the index, or rare in it) of four letters or more also matches the index's words one edit away (two from eight letters); `FILTER-23`, `set_status` and `"a phrase"` are phrases. Uncorrected matches first, then corrected; BM25 within, the title weighing 4 to the body's 1. `title` and `snippet` are `[{ text, hit }]` stretches, the matched words marked. `filter` as `find`'s; `limit` 20 by default, at most 100; `offset` skips matches — `next` is the next page's. A blank query is no hits and `matched: 0`. See "Search" below |
@@ -1694,7 +1694,7 @@ ticket's write does touches a comment.
 | method | yields |
 |---|---|
 | `comments.add { anchor, body, author? }` | `comment { id, state, author, at, anchor, body }` — the comment as kept: the next id, `open`, the time (unix seconds), `owner` unless `author` is given. An empty body, a blank author, a malformed anchor (a `route`, `path` or `label` left out or blank, a route not beginning `#/`, a `ticket` that is none, a field past its bound) is one in-band `error` naming it, and nothing is kept |
-| `comments.list { ticket?, under?, route?, path?, state?, author?, text?, after?, limit? }` | one `comment` per match, newest first, then one `page { next }` — `next` the id to pass as `after`, `null` when nothing more matches. Every filter given holds: `ticket`; `under` — a ticket or a shortcode in the comment's ticket's lineage (itself, its ancestors, its shortcode, the shortcodes hosting it: the filter language's `under`, as the tree stands); `route` exactly; `path` a prefix; `state` `open` / `resolved`; `author` exactly; `text` in the body, the label or the excerpt (any ASCII case). Blank is none. An unknown state, or an `after` naming no comment, is one in-band `error` |
+| `comments.list { ticket?, under?, route?, path?, state?, author?, text?, after?, limit? }` | one `comment` per match, newest first, then one `page { next }` — `next` the id to pass as `after`, `null` when nothing more matches. Every filter given holds: `ticket`; `under` — a ticket or a shortcode in the comment's ticket's lineage (itself, its ancestors, its shortcode, the shortcodes hosting it: the filter language's `under`, as the tree stands); `route` exactly; `path` a prefix; `state` `open` / `resolved`; `author` exactly; `text` in the body, the label or the excerpt (any ASCII case). Blank is none. A page is 500 unless `limit` says, never more than 1,000 (ACCESS-29). An unknown state, or an `after` naming no comment, is one in-band `error` |
 | `comments.resolve { id }` · `comments.reopen { id }` | `comment` — the state flipped; already there, the comment as it is (nothing written or broadcast); an id naming no comment is an in-band `error` |
 | `comments.watch {}` | open-ended stream of `added { comment }`, `resolved { comment }`, `reopened { comment }`; `lagged { missed }` as `tickets.watch` |
 
@@ -2700,6 +2700,41 @@ synapse -P 4460 -t "$ADMIN" menger auth role_set --role viewer --grants tickets.
 `tests/auth_protocol.rs` runs it over the built binary (and pins the method →
 role table against IDENTITY-21's); `tests/login_page.rs` runs the loopback
 sign-in end to end.
+
+### Limits and caps (ACCESS-29)
+
+Nothing a caller does — anonymous or signed in — grows menger's memory
+without bound or starves the others (ACCESS-4 M1, M2, L1, L2, L5). Each
+limit is a flag (and its `MENGER_*` variable) or a named constant:
+
+| what | limit (default) | past it |
+|---|---|---|
+| WebSocket connections, in all | `--max-connections` (1,024) | upgrade refused 429 + `Retry-After` (AUTH-12, plexus-transport) |
+| … from one IP (the peer's) | `--max-connections-per-ip` (256) | 429 |
+| … held by one signed-in principal | `--max-connections-per-principal` (64) | 429 |
+| … anonymous, in all / per IP | `--max-anonymous-connections` (128) / `--max-anonymous-connections-per-ip` (32) | 429 ("sign in") |
+| calls open on one connection (each call is a subscription while it runs; a `watch`, for its life) | `--max-calls-per-connection` (256; `menger::calls`) | one error item `{error_kind: too_many_calls, max, recoverable: true}`; a watch let go of gives its place back at once |
+| a connection with no call open | `--idle-timeout-secs` (900; 0: never) | closed by the server |
+| a browser's sign-in, unused (no socket open on it, no page loaded) | `--session-idle-minutes` (120; 0: never) | the session ends; its sockets close (AUTH-11). A minted `mgs_` token keeps only its expiry |
+| sign-ins live / login transactions waiting / loopback sign-ins and codes | `MAX_LIVE` 100,000 / `MAX_PENDING` 10,000 / 10,000 each (`plexus-login/src/sessions.rs`) | the one nearest its end makes room — found by an index, never a scan |
+| the waiting list | `WAITING_MAX` 1,000 (`tickets-api/src/access.rs`) | the one waiting longest is forgotten |
+| `/login/start`, `POST /login`, `POST /login/nostr`, from one client | a sign-in flow each — 60 per 10 min per /32 (/64), 600 per /24 (/48), 3,000 per /16 (/32) (AUTH-22's `flows_per_client`) | 429 + `Retry-After`, the page's own words ("Too many attempts…") |
+| passwords tried at `POST /login` | reserved before the IdP sees them: 5 per account per neighbourhood, 30 per client, then a backoff (AUTH-22's `try_per_user_network`, `try_per_client`) | 429; a right answer forgives the account, an IdP that is down gives the guess back |
+| a ticket's title | `TITLE_MAX` 1,024 bytes (`tickets-api/src/limits.rs`) | in-band `error`, nothing written |
+| a ticket's body | `--max-body-bytes` (8 MiB, MENGER-15) | typed `body_too_large` |
+| a comment's or a note's body | 64 KiB (`comments::BODY_MAX`, `notes::BODY_MAX`) | in-band `error` |
+| a filter's text | `FILTER_MAX` 4,096 bytes | in-band `error` |
+| `tickets.list`'s page | 1,000 unless `limit`, at most 10,000 (`LIST_PAGE_DEFAULT`, `LIST_PAGE_MAX`) | the `page` event's `next` carries on |
+| `comments.list`'s page | 500 unless `limit`, at most 1,000 | `page.next` |
+
+The login page shows only its own words — never a link's `?error=` or a
+provider's `error_description` (IDENTITY-38; ACCESS-4 L1). The dev sign-in
+(`/login/dev`, test only) is not throttled. Behind a proxy, the throttles
+read the client from `X-Forwarded-For` only from a `--trusted-proxy`; the
+WebSocket's per-IP quotas see the proxy (the transport reads no proxy
+header yet — ACCESS-29's divergence note). `perf/flood.mjs` floods a
+throwaway menger with upgrades and logins from a spread of addresses and
+checks its memory settles.
 
 ## Diagrams — the `diagrams` service (COMPILE-4)
 

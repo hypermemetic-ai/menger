@@ -21,6 +21,16 @@
 //! The page is self-contained (web/login.html), so it can later be handed
 //! to an IdP as its hosted login page.
 //!
+//! ACCESS-29 (ACCESS-4 M2): the routes that do work for a caller nobody has
+//! proved — `/login/start` (a login transaction kept), `POST /login` (a
+//! password relayed to the IdP), `/login/nostr` (an event checked, a
+//! session started) — take a sign-in flow from the client's network first
+//! (AUTH-22's [`Throttles::flow`]: per /32, /24, /16 and IPv6's /64, /48,
+//! /32), and a password is reserved against its account and the client
+//! before it reaches the IdP ([`Throttles::reserve_password`]); past either,
+//! 429 with `Retry-After` and the page's own words. The dev sign-in (test
+//! only, anyone can be anyone) is not throttled.
+//!
 //! AUTH-22: with an identity backend (`--identity`), the page's ways in are
 //! [`crate::signin::SignInPage`]'s — our own page over the backend, its
 //! routes merged here — and its sign-ins end in the app's session through
@@ -43,14 +53,14 @@ use sha2::{Digest, Sha256};
 
 use crate::access::{Branding, LoginAccess};
 use crate::app_session::{AppContinuation, TokenStore};
-use crate::client_ip::{Peer, TrustedProxies};
+use crate::client_ip::{peer_ip, Peer, TrustedProxies};
 use crate::dev_login::{self, DevLogin};
 use crate::identity::IdentityBackend;
 use crate::login::{LoginButton, Provider};
 use crate::page::{self, esc, Body, Chrome};
 use crate::sessions::{self, Sessions};
 use crate::signin::{PageConfig, ReturnTo, SignInPage};
-use crate::throttle::Limits;
+use crate::throttle::{Limits, Outcome, Throttles, Verdict};
 
 /// What the shell's login is configured with (main's flags).
 pub struct LoginConfig<A: LoginAccess> {
@@ -126,6 +136,10 @@ pub struct Login<A: LoginAccess> {
     /// AUTH-22: the backend's tokens, beside the sessions.
     tokens: Option<Arc<TokenStore>>,
     return_to: ReturnTo,
+    /// ACCESS-29: the flows and password guesses of the page's own routes
+    /// (the module docs), and whose `X-Forwarded-For` names the client.
+    throttles: Throttles,
+    trusted: TrustedProxies,
 }
 
 impl<A: LoginAccess> Login<A> {
@@ -192,6 +206,7 @@ impl<A: LoginAccess> Login<A> {
         origins.extend(cfg.also.iter().map(|o| origin_of(o)));
         let return_to = ReturnTo::new(origins.iter().chain(cfg.return_origins.iter()));
         let secure = public_url.starts_with("https://");
+        let (throttles, trusted) = (Throttles::new(cfg.limits), cfg.trusted_proxies.clone());
         let (signin, tokens) = match cfg.identity {
             Some(backend) => {
                 let tokens = TokenStore::new(sessions.clone());
@@ -245,7 +260,26 @@ impl<A: LoginAccess> Login<A> {
             branding: cfg.branding,
             dev: cfg.dev,
             access: cfg.access,
+            throttles,
+            trusted,
         })
+    }
+
+    /// ACCESS-29: the client a request comes from (the peer, or behind a
+    /// trusted proxy the hop it names).
+    fn client(&self, peer: &Peer, headers: &HeaderMap) -> Option<std::net::IpAddr> {
+        self.trusted.client_ip(peer_ip(peer), headers)
+    }
+
+    /// ACCESS-29: a flow for this client, or the page that says to wait.
+    fn flow(&self, peer: &Peer, headers: &HeaderMap, next: &str) -> Result<(), Response> {
+        match self.throttles.flow(self.client(peer, headers)) {
+            Verdict::Allow => Ok(()),
+            Verdict::Wait(w) => {
+                tracing::info!("login routes throttled for a client ({w} s)");
+                Err(too_many(page_response(self, next, Some(&SignInPage::wait_words(w)), StatusCode::TOO_MANY_REQUESTS), w))
+            }
+        }
     }
 
     /// The `Host` values the public URL and the other origins name: `host`
@@ -289,10 +323,10 @@ impl<A: LoginAccess> Login<A> {
             .get(&url)
             .send()
             .await
-            .map_err(|_| "the sign-in service is unreachable".to_string())?
+            .map_err(|_| UNREACHABLE.to_string())?
             .json()
             .await
-            .map_err(|_| "the sign-in service answered oddly".to_string())?;
+            .map_err(|_| ODD.to_string())?;
         let s = |k: &str| doc.get(k).and_then(Value::as_str).map(str::to_string);
         let d = Discovery {
             authorization_endpoint: s("authorization_endpoint"),
@@ -313,8 +347,8 @@ impl<A: LoginAccess> Login<A> {
             .body(body)
             .send()
             .await
-            .map_err(|_| "the sign-in service is unreachable".to_string())?;
-        let v: Value = resp.json().await.map_err(|_| "the sign-in service answered oddly".to_string())?;
+            .map_err(|_| UNREACHABLE.to_string())?;
+        let v: Value = resp.json().await.map_err(|_| ODD.to_string())?;
         if let Some(t) = v.get("access_token").and_then(Value::as_str) {
             return Ok((t.to_string(), v.clone()));
         }
@@ -607,7 +641,7 @@ pub struct PasswordForm {
     next: Option<String>,
 }
 
-pub async fn password<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Form(f): Form<PasswordForm>) -> Response {
+pub async fn password<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, peer: Peer, Form(f): Form<PasswordForm>) -> Response {
     let next = safe_next(f.next.as_deref());
     if login.foreign(&headers) {
         return (StatusCode::FORBIDDEN, format!("Forbidden: sign in from {}'s own page", login.branding.app)).into_response();
@@ -615,11 +649,45 @@ pub async fn password<A: LoginAccess>(State(login): State<Arc<Login<A>>>, header
     let Some(name) = login.password.clone() else {
         return page_response(&login, &next, Some("Passwords are not taken here."), StatusCode::NOT_FOUND);
     };
-    match login.password_grant(&name, &f.username, &f.password).await {
+    if let Err(r) = login.flow(&peer, &headers, &next) {
+        return r;
+    }
+    // ACCESS-29: the guess is counted against its account and the client
+    // before the IdP sees it; only the IdP's verdict settles it.
+    let client = login.client(&peer, &headers);
+    let reserved = match login.throttles.reserve_password(f.username.trim(), client) {
+        Ok(r) => r,
+        Err(w) => return too_many(page_response(&login, &next, Some(&SignInPage::wait_words(w)), StatusCode::TOO_MANY_REQUESTS), w),
+    };
+    let answer = login.password_grant(&name, &f.username, &f.password).await;
+    login.throttles.settle(reserved, guess_outcome(&answer));
+    match answer {
         Ok(ctx) => login.sign_in(ctx, &next),
         Err(e) => page_response(&login, &next, Some(&e), StatusCode::UNAUTHORIZED),
     }
 }
+
+/// ACCESS-29: how a password the IdP was asked about ended: right, wrong,
+/// or (the IdP unreachable or answering oddly) no verdict, given back.
+fn guess_outcome(answer: &Result<AuthContext, String>) -> Outcome {
+    match answer {
+        Ok(_) => Outcome::Right,
+        Err(e) if e == UNREACHABLE || e == ODD => Outcome::NoVerdict,
+        Err(_) => Outcome::Wrong,
+    }
+}
+
+/// ACCESS-29: a refusal to wait, with when to come back.
+fn too_many(mut r: Response, wait: i64) -> Response {
+    if let Ok(v) = HeaderValue::from_str(&wait.max(1).to_string()) {
+        r.headers_mut().insert(header::RETRY_AFTER, v);
+    }
+    r
+}
+
+/// The words for an IdP that could not be asked, or answered oddly.
+const UNREACHABLE: &str = "the sign-in service is unreachable";
+const ODD: &str = "the sign-in service answered oddly";
 
 #[derive(Deserialize)]
 pub struct StartQuery {
@@ -630,7 +698,7 @@ pub struct StartQuery {
     signup: Option<String>,
 }
 
-pub async fn start<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Query(q): Query<StartQuery>) -> Response {
+pub async fn start<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, peer: Peer, Query(q): Query<StartQuery>) -> Response {
     let next = safe_next(q.next.as_deref());
     // IDENTITY-35: with the checkbox ticked, every way in is plexus-idp.
     if login.dev_on(&headers) {
@@ -639,6 +707,10 @@ pub async fn start<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: 
     let Some(b) = login.buttons.iter().chain(login.email.iter()).find(|b| b.label == q.button).cloned() else {
         return page_response(&login, &next, Some("That sign-in is not offered here."), StatusCode::NOT_FOUND);
     };
+    // ACCESS-29: each start keeps a login transaction — a flow first.
+    if let Err(r) = login.flow(&peer, &headers, &next) {
+        return r;
+    }
     begin(&login, &b, q.login_hint.as_deref(), q.signup.is_some(), next).await
 }
 
@@ -791,7 +863,7 @@ pub struct NextQuery {
     next: Option<String>,
 }
 
-pub async fn nostr<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, Query(q): Query<NextQuery>) -> Response {
+pub async fn nostr<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: HeaderMap, peer: Peer, Query(q): Query<NextQuery>) -> Response {
     let next = safe_next(q.next.as_deref());
     if login.foreign(&headers) {
         tracing::warn!("nostr sign-in refused: a POST from another page's origin {:?}", headers.get(header::ORIGIN));
@@ -816,6 +888,12 @@ pub async fn nostr<A: LoginAccess>(State(login): State<Arc<Login<A>>>, headers: 
     // The page's own script asks for JSON (IDENTITY-30): where to go, or
     // why not, in words it shows beside the button.
     let json = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|a| a.contains("application/json"));
+    // ACCESS-29: a fresh key is a fresh session — a flow first.
+    if let Verdict::Wait(w) = login.throttles.flow(login.client(&peer, &headers)) {
+        tracing::warn!("nostr sign-in throttled for a client ({w} s) — {detail}");
+        let words = SignInPage::wait_words(w);
+        return too_many((StatusCode::TOO_MANY_REQUESTS, axum::Json(json!({ "error": words }))).into_response(), w);
+    }
     let outcome = adapter.authenticate(&Presentation::Bearer { token }).await;
     match &outcome {
         Ok(_) => tracing::info!("nostr sign-in: {detail}"),

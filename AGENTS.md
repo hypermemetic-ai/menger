@@ -267,6 +267,23 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   method gets a role by being listed in its activation's `roles(...)` —
   unlisted, only admin holds it. README "The AUTH protocol" has the rest.
 
+  **Limits** (ACCESS-29): connections in all, per IP, per principal and
+  anonymous (`--max-connections` 1,024, `--max-connections-per-ip` 256,
+  `--max-connections-per-principal` 64, `--max-anonymous-connections` 128,
+  `--max-anonymous-connections-per-ip` 32 — 429 past them), calls open on one
+  connection (`--max-calls-per-connection` 256 — `error_kind:
+  too_many_calls`), a connection idle with none (`--idle-timeout-secs` 900),
+  a browser sign-in unused (`--session-idle-minutes` 120), the `/login/*`
+  routes and password guesses per client and account (AUTH-22's throttles,
+  429), titles (1 KiB), filters (4 KiB), and `list` / `comments list` pages
+  (1,000 / 500 unless `--limit`, at most 10,000 / 1,000 — page with the
+  `page` event's `next`). README "Limits and caps" has the table; a script
+  that wants everything pages:
+
+  ```sh
+  synapse -P 4455 menger tickets list --epic MENGER --summary true --limit 1000 --after MENGER-1000
+  ```
+
   **Params are individual flags, not a JSON blob** — treat synapse as a
   normal CLI: `--kebab-case-flag value` after the method path, and
   `<method> --help` prints each parameter's name and type. **A list

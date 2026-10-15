@@ -48,6 +48,9 @@ pub mod inputs;
 /// reference evaluator. Wasm-safe, with no feature gate: the server
 /// compiles it against its cells, the app parses what a reader types.
 pub mod filter;
+/// ACCESS-29: the sizes a request is held to — a title, a filter's text,
+/// `list`'s and `comments.list`'s pages. Wasm-safe.
+pub mod limits;
 /// MENGER-12: a ticket's labels — what a label is, and how `label` moves a
 /// ticket's set. Wasm-safe: the app checks what a reader types with it.
 pub mod labels;

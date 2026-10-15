@@ -159,6 +159,9 @@ impl Store {
         if update.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
             refusals.push(StoreError::EmptyTitle { id: id.clone() });
         }
+        if let Some(Err(e)) = update.title.as_deref().map(|t| self.check_title(Some(&id), t)) {
+            refusals.push(e);
+        }
         if let Some(body) = &update.body {
             if let Err(e) = self.check_body(Some(&id), body) {
                 refusals.push(e);
