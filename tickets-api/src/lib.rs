@@ -26,6 +26,11 @@
 //! ```
 
 pub mod types;
+/// ORG-3: what names a shortcode and a ticket — [`OrgId`], [`Code`],
+/// [`ShortcodeId`], [`Namespace`], [`Shortcode`], [`TicketId`] — and
+/// [`Address::parse`], the one parser from text to an address. Wasm-safe.
+pub mod address;
+pub use address::{Address, At, Code, Namespace, OrgId, Shortcode, ShortcodeId, TicketId};
 /// COMP-8: a component's help — its source's `<docs>` and its block's
 /// preview line, parsed. Wasm-safe: the store reads definitions with it, and
 /// the app renders a definition's card (COMP-9) from the block it shows.

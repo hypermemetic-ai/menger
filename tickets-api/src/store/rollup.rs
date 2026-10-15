@@ -1,5 +1,6 @@
 use super::stored::{Changes, CrossRow, GroupRow, Mark};
 use super::{Group, Row, Rows, Status};
+use crate::address::{Code, ShortcodeId};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Tickets counted: how many, and how many `Complete` (the nav's
@@ -87,7 +88,7 @@ struct Shortcode {
     host: Option<String>,
     /// Settled: the group whose subtree holds `host`, i.e. the row this
     /// one is drawn inside.
-    up: Option<String>,
+    up: Option<ShortcodeId>,
     /// The tickets drawn under this row before any nested group: `base`
     /// plus the cross trees homed here. Empty — no work and no doc — means
     /// the nav draws no row for this shortcode.
@@ -100,14 +101,14 @@ struct Shortcode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Cross {
     tally: Tally,
-    home: String,
+    home: ShortcodeId,
 }
 
 /// Where a tree's tally is kept: a shortcode's pool, or a cross top's
 /// own entry.
 #[derive(Debug, PartialEq, Eq)]
 enum Bucket {
-    Base(String),
+    Base(ShortcodeId),
     Cross(String),
 }
 
@@ -115,18 +116,18 @@ impl Bucket {
     fn of(top: &Row, exit: Option<&Row>) -> Self {
         match exit {
             Some(_) => Self::Cross(top.id.clone()),
-            None => Self::Base(top.epic.clone()),
+            None => Self::Base(top.shortcode.clone()),
         }
     }
 }
 
 /// SCALE-28: the roll-ups as stored ([`Rollups::stored`]): a row per
 /// shortcode, one per cross top, one per mark.
-pub(super) type Stored = (BTreeMap<String, GroupRow>, BTreeMap<String, CrossRow>, BTreeSet<(Mark, String)>);
+pub(super) type Stored = (BTreeMap<ShortcodeId, GroupRow>, BTreeMap<String, CrossRow>, BTreeSet<(Mark, String)>);
 
 /// The groups drawn before a reshaping write, with their depth, to
 /// diff the settled shape against.
-type Snapshot = BTreeMap<String, (Group, usize)>;
+type Snapshot = BTreeMap<ShortcodeId, (Group, usize)>;
 
 /// What [`Rollups::reparenting`] decided before the rows changed, for
 /// [`Rollups::reparented`] to finish once they have.
@@ -146,7 +147,7 @@ pub(super) struct Reparenting {
 pub(super) struct Rollups {
     /// In shortcode order — plan()'s order, which decides between two
     /// sub-shortcodes that would nest inside each other.
-    shortcodes: BTreeMap<String, Shortcode>,
+    shortcodes: BTreeMap<ShortcodeId, Shortcode>,
     cross: HashMap<String, Cross>,
     /// Tickets on a parent cycle (hand-edited only; almost always empty).
     on_cycle: HashSet<String>,
@@ -174,13 +175,13 @@ impl Rollups {
         };
         type Top<'a> = (&'a Row, Option<&'a Row>);
         let mut sibling: Option<(&Row, Top<'_>)> = None;
-        let mut here: Option<(&str, Shortcode)> = None;
+        let mut here: Option<(&ShortcodeId, Shortcode)> = None;
         for t in rows.tickets() {
-            if here.as_ref().is_none_or(|(epic, _)| *epic != t.epic) {
+            if here.as_ref().is_none_or(|(epic, _)| **epic != t.shortcode) {
                 if let Some((epic, s)) = here.take() {
-                    r.shortcodes.insert(epic.to_string(), s);
+                    r.shortcodes.insert(epic.clone(), s);
                 }
-                here = Some((&t.epic, Shortcode::default()));
+                here = Some((&t.shortcode, Shortcode::default()));
             }
             let parent = match t.parent.as_deref() {
                 None => None,
@@ -205,7 +206,7 @@ impl Rollups {
             // `top`, unrolled by one step around the memo.
             let (top, exit) = match parent {
                 Some(_) if r.on_cycle.contains(t.id.as_str()) => (t, None),
-                Some((p, _)) if p.epic != t.epic => (t, Some(p)),
+                Some((p, _)) if p.shortcode != t.shortcode => (t, Some(p)),
                 Some((_, top)) => top,
                 None => (t, None),
             };
@@ -219,7 +220,7 @@ impl Rollups {
                             top.id.clone(),
                             Cross {
                                 tally,
-                                home: String::new(),
+                                home: ShortcodeId::default(),
                             },
                         );
                     }
@@ -238,7 +239,7 @@ impl Rollups {
             }
         }
         if let Some((epic, s)) = here {
-            r.shortcodes.insert(epic.to_string(), s);
+            r.shortcodes.insert(epic.clone(), s);
         }
         r.settle(rows);
         r
@@ -287,7 +288,7 @@ impl Rollups {
     /// group a row is drawn inside, each roll-up), so nothing is settled
     /// again: what was kept is what is read.
     pub(super) fn from_stored(
-        groups: BTreeMap<String, GroupRow>,
+        groups: BTreeMap<ShortcodeId, GroupRow>,
         cross: BTreeMap<String, CrossRow>,
         marks: BTreeSet<(Mark, String)>,
     ) -> Self {
@@ -396,20 +397,20 @@ impl Rollups {
 
     /// `epic`'s scope root — its lowest-seq `scope` — drawn or not (SCALE-3:
     /// where `create` and `set_parent` find it).
-    pub(super) fn root(&self, epic: &str) -> Option<&str> {
+    pub(super) fn root(&self, epic: &ShortcodeId) -> Option<&str> {
         self.shortcodes.get(epic)?.root.as_deref()
     }
 
     /// FILTER-13: the ticket `epic`'s row nests under — its settled host,
     /// drawn or not — or `None` for a top-level shortcode: what a lineage's
     /// "shortcodes hosting it" follow.
-    pub(super) fn host(&self, epic: &str) -> Option<&str> {
+    pub(super) fn host(&self, epic: &ShortcodeId) -> Option<&str> {
         self.shortcodes.get(epic)?.host.as_deref()
     }
 
     /// AGS-23: `epic`'s row as it stands, if the nav draws one — what a
     /// write reports that moves no count but changes the root's own row.
-    pub(super) fn group(&self, epic: &str) -> Option<Group> {
+    pub(super) fn group(&self, epic: &ShortcodeId) -> Option<Group> {
         self.view(epic)
     }
 
@@ -433,9 +434,9 @@ impl Rollups {
         // MNG-14 allows that only to a new shortcode's root, i.e. a new
         // sub-shortcode: a reshaping, settled whole.
         let before = parent
-            .is_some_and(|p| p.epic != t.epic)
+            .is_some_and(|p| p.shortcode != t.shortcode)
             .then(|| self.snapshot());
-        let s = self.shortcodes.entry(t.epic.clone()).or_default();
+        let s = self.shortcodes.entry(t.shortcode.clone()).or_default();
         let new_root = t.kind.roots_a_shortcode() && s.root.is_none();
         if new_root {
             s.root = Some(t.id.clone());
@@ -446,7 +447,7 @@ impl Rollups {
                 t.id.clone(),
                 Cross {
                     tally,
-                    home: String::new(),
+                    home: ShortcodeId::default(),
                 },
             );
             self.settle(rows);
@@ -456,15 +457,15 @@ impl Rollups {
         if parent.is_none() {
             // Born with no parent: the top of a new tree in the pool.
             self.shortcodes
-                .get_mut(&t.epic)
+                .get_mut(&t.shortcode)
                 .expect("entered above")
                 .base_tops += 1;
         }
         let mut moved = self.carry(&home, tally, true);
         // A new root moves no count outside its own tree, but the
         // shortcode's row now names it.
-        if new_root && !moved.iter().any(|g| g.epic == t.epic) {
-            moved.extend(self.view(&t.epic));
+        if new_root && !moved.iter().any(|g| g.shortcode == t.shortcode) {
+            moved.extend(self.view(&t.shortcode));
         }
         moved
     }
@@ -510,11 +511,11 @@ impl Rollups {
     /// rebuilt from the rows, which is right by definition.
     pub(super) fn kind_changed(&mut self, rows: Rows<'_>, old: &Row, t: &Row) -> Option<Vec<Group>> {
         let (was, now) = (Tally::of(old), Tally::of(t));
-        let root = self.shortcodes.get(&t.epic).and_then(|s| s.root.clone());
+        let root = self.shortcodes.get(&t.shortcode).and_then(|s| s.root.clone());
         let roots_it = root.as_deref() == Some(t.id.as_str());
         if roots_it && !t.kind.roots_a_shortcode() {
             let before = self.snapshot();
-            let why = format!("{} rooted {} and became a {}", t.id, t.epic, t.kind.as_str());
+            let why = format!("{} rooted {} and became a {}", t.id, t.shortcode, t.kind.as_str());
             return Some(self.rebuild(rows, before, &why));
         }
         let reroot = !roots_it
@@ -526,7 +527,7 @@ impl Rollups {
         let before = self.snapshot();
         self.count(rows, t, was, false);
         self.count(rows, t, now, true);
-        self.shortcodes.get_mut(&t.epic).expect("every epic has a shortcode").root = Some(t.id.clone());
+        self.shortcodes.get_mut(&t.shortcode).expect("every epic has a shortcode").root = Some(t.id.clone());
         self.settle(rows);
         Some(self.diff(before))
     }
@@ -573,7 +574,7 @@ impl Rollups {
         // parent's tree (whose top is not the child: that would be the
         // cycle `set_parent` refuses); under one in another shortcode
         // it is a cross top of its own.
-        let to = if new_parent.epic == child.epic {
+        let to = if new_parent.shortcode == child.shortcode {
             let (top, exit) = self.top(rows, new_parent);
             Bucket::of(top, exit)
         } else {
@@ -588,7 +589,7 @@ impl Rollups {
                     .expect("a cross top has an entry")
                     .tally
             } else {
-                let pool = &self.shortcodes[&child.epic];
+                let pool = &self.shortcodes[&child.shortcode];
                 let tally = if base_top && pool.base_tops == 1 {
                     pool.base
                 } else {
@@ -603,7 +604,7 @@ impl Rollups {
                         id.clone(),
                         Cross {
                             tally,
-                            home: String::new(),
+                            home: ShortcodeId::default(),
                         },
                     );
                 }
@@ -613,7 +614,7 @@ impl Rollups {
         if base_top {
             // It has a parent now: no longer a top of the pool.
             self.shortcodes
-                .get_mut(&child.epic)
+                .get_mut(&child.shortcode)
                 .expect("every epic has a shortcode")
                 .base_tops -= 1;
         }
@@ -647,7 +648,7 @@ impl Rollups {
             }
             match x.parent.as_deref().and_then(|p| rows.get(p)) {
                 None => return (x, None),
-                Some(p) if p.epic != x.epic => return (x, Some(p)),
+                Some(p) if p.shortcode != x.shortcode => return (x, Some(p)),
                 Some(p) => x = p,
             }
         }
@@ -659,7 +660,7 @@ impl Rollups {
     /// tree is drawn in its own row rather than under the host.
     fn cut(&self, top: &Row, parent: &Row) -> bool {
         self.shortcodes
-            .get(&top.epic)
+            .get(&top.shortcode)
             .and_then(|s| s.host.as_deref())
             == Some(parent.id.as_str())
     }
@@ -667,7 +668,7 @@ impl Rollups {
     /// The shortcode whose row `t` is drawn under: up to its tree's
     /// top, and across into the next shortcode for as long as the top
     /// nests under a ticket there.
-    fn home<'a>(&self, rows: Rows<'a>, t: &'a Row) -> &'a str {
+    fn home<'a>(&self, rows: Rows<'a>, t: &'a Row) -> &'a ShortcodeId {
         let mut x = t;
         // Each step crosses a parent edge out of a distinct cross top,
         // and the parent graph is acyclic: this ends within that many.
@@ -675,15 +676,15 @@ impl Rollups {
             let (top, exit) = self.top(rows, x);
             match exit {
                 Some(p) if !self.cut(top, p) => x = p,
-                _ => return &top.epic,
+                _ => return &top.shortcode,
             }
         }
-        &x.epic
+        &x.shortcode
     }
 
     /// Counts `by` into (or out of) the bucket `t`'s tree is kept in,
     /// and says which group that tree is drawn in.
-    fn count(&mut self, rows: Rows<'_>, t: &Row, by: Tally, gain: bool) -> String {
+    fn count(&mut self, rows: Rows<'_>, t: &Row, by: Tally, gain: bool) -> ShortcodeId {
         let (top, exit) = self.top(rows, t);
         if exit.is_some() {
             let c = self
@@ -694,11 +695,11 @@ impl Rollups {
             return c.home.clone();
         }
         self.shortcodes
-            .get_mut(&top.epic)
+            .get_mut(&top.shortcode)
             .expect("every epic has a shortcode")
             .base
             .shift(by, gain);
-        top.epic.clone()
+        top.shortcode.clone()
     }
 
     fn bucket(&mut self, b: &Bucket) -> &mut Tally {
@@ -723,7 +724,7 @@ impl Rollups {
     /// Moves `by` into (or out of) `home`'s own count and the roll-up
     /// of `home` and every group it is drawn inside; returns each as it
     /// now stands, innermost first.
-    fn carry(&mut self, home: &str, by: Tally, gain: bool) -> Vec<Group> {
+    fn carry(&mut self, home: &ShortcodeId, by: Tally, gain: bool) -> Vec<Group> {
         let chain = self.chain(home);
         for (i, epic) in chain.iter().enumerate() {
             let s = self.shortcodes.get_mut(epic).expect("in the chain");
@@ -737,8 +738,8 @@ impl Rollups {
 
     /// `epic`, then the group its row is drawn inside, and so on out to
     /// a top-level row.
-    fn chain(&self, epic: &str) -> Vec<String> {
-        let mut out = vec![epic.to_string()];
+    fn chain(&self, epic: &ShortcodeId) -> Vec<ShortcodeId> {
+        let mut out = vec![epic.clone()];
         // Acyclic by settle's nesting check; bounded regardless.
         while out.len() <= self.shortcodes.len() {
             let last = out.last().expect("starts non-empty");
@@ -781,7 +782,7 @@ impl Rollups {
         // shortcode makes its shortcode a sub-shortcode hosted there —
         // unless, with the ones accepted before it, that would draw the
         // group inside itself.
-        let epics: Vec<String> = self.shortcodes.keys().cloned().collect();
+        let epics: Vec<ShortcodeId> = self.shortcodes.keys().cloned().collect();
         for epic in &epics {
             let Some(root) = self.shortcodes[epic]
                 .root
@@ -797,7 +798,7 @@ impl Rollups {
             let Some(host) = root.parent.as_deref().and_then(|p| rows.get(p)) else {
                 continue;
             };
-            if host.epic == *epic {
+            if host.shortcode == *epic {
                 continue; // ordinary nesting inside the shortcode
             }
             self.shortcodes.get_mut(epic).expect("listed").host = Some(host.id.clone());
@@ -811,7 +812,7 @@ impl Rollups {
         let tops: Vec<String> = self.cross.keys().cloned().collect();
         for id in &tops {
             let top = rows.get(id).expect("a cross top is a ticket");
-            let home = self.home(rows, top).to_string();
+            let home = self.home(rows, top).clone();
             let tally = self.cross[id].tally;
             self.shortcodes
                 .get_mut(&home)
@@ -829,7 +830,7 @@ impl Rollups {
             else {
                 continue;
             };
-            let up = self.home(rows, host).to_string();
+            let up = self.home(rows, host).clone();
             self.shortcodes.get_mut(epic).expect("listed").up = Some(up);
         }
         for s in self.shortcodes.values_mut() {
@@ -854,7 +855,7 @@ impl Rollups {
     /// put the group inside itself? Walks the drawn tree up from
     /// `host`, a tree top at a time; meeting a row of `epic` is the
     /// loop.
-    fn nests_inside<'a>(&self, rows: Rows<'a>, host: &'a Row, epic: &str) -> bool {
+    fn nests_inside<'a>(&self, rows: Rows<'a>, host: &'a Row, epic: &ShortcodeId) -> bool {
         let mut cur = host;
         let mut seen: HashSet<&str> = HashSet::new();
         loop {
@@ -865,12 +866,12 @@ impl Rollups {
             match exit {
                 Some(p) if !self.cut(top, p) => cur = p,
                 _ => {
-                    if top.epic == epic {
+                    if top.shortcode == *epic {
                         return true;
                     }
                     match self
                         .shortcodes
-                        .get(&top.epic)
+                        .get(&top.shortcode)
                         .and_then(|s| s.host.as_deref())
                         .and_then(|h| rows.get(h))
                     {
@@ -885,10 +886,14 @@ impl Rollups {
     /// The group `epic`'s row shows, or `None` when the nav draws no
     /// row for it (every one of its tickets is drawn under another
     /// shortcode's). SDLC-11: a row of docs alone is a row.
-    fn view(&self, epic: &str) -> Option<Group> {
+    fn view(&self, epic: &ShortcodeId) -> Option<Group> {
         let s = self.shortcodes.get(epic)?;
         (!s.own.is_empty()).then(|| Group {
-            epic: epic.to_string(),
+            // ORG-3: its letters and address are the registry's — the
+            // cache dresses every group that leaves it (`Cache::dress`).
+            epic: Code::stored(epic.as_str()),
+            shortcode: epic.clone(),
+            address: String::new(),
             total: s.roll.total,
             done: s.roll.done,
             docs: s.roll.docs,
@@ -923,7 +928,9 @@ impl Rollups {
                 (Some((_, depth)), None) => moved.push((
                     *depth,
                     Group {
-                        epic: epic.clone(),
+                        epic: Code::stored(epic.as_str()),
+                        shortcode: epic.clone(),
+                        address: String::new(),
                         total: 0,
                         done: 0,
                         docs: 0,
@@ -935,7 +942,7 @@ impl Rollups {
                 (None, None) => {}
             }
         }
-        moved.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.epic.cmp(&b.1.epic)));
+        moved.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.shortcode.cmp(&b.1.shortcode)));
         moved.into_iter().map(|(_, group)| group).collect()
     }
 

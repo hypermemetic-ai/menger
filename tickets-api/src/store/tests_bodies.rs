@@ -265,7 +265,7 @@ async fn the_cache_only_answers_read_no_database() {
     assert_eq!(store.ready_page(None, None, Some(5)).unwrap().tickets[0].id, "CO-2");
     assert_eq!(store.find_page("co-2", None, None).unwrap().tickets.len(), 1);
     assert_eq!(store.groups().len(), 1);
-    assert_eq!(store.extents(), [("CO".to_string(), 2)]);
+    assert_eq!(store.extents_text(), [("CO".to_string(), 2)]);
     assert_eq!(store.count(), 2);
     assert!(matches!(store.get("CO-2").await, Err(StoreError::Db(_))), "and the trap is real");
     assert!(matches!(store.get("CO-9").await, Err(StoreError::NotFound(_))), "a miss is the cache's answer");

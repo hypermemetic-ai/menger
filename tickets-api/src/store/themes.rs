@@ -245,7 +245,19 @@ impl Store {
     pub async fn set_theme(&self, scope: &str, theme: Option<&str>, reach: Option<ThemeReach>, takeover: Option<Takeover>) -> Result<ThemeSetting, StoreError> {
         let raw = scope.trim();
         let site = raw.eq_ignore_ascii_case(SITE);
-        let scope = if site { SITE.to_string() } else { raw.to_ascii_uppercase() };
+        // ORG-3: a shortcode by any short form of its address, kept by its
+        // identity (its code, for every shortcode before ORG-3: the settings
+        // stored then name it already); one naming several is refused.
+        let scope = match site {
+            true => SITE.to_string(),
+            false => {
+                let cache = self.tickets.read().expect("store lock poisoned");
+                match cache.shortcode_named(raw)? {
+                    Some(sc) => sc.as_str().to_string(),
+                    None => raw.to_ascii_uppercase(),
+                }
+            }
+        };
         let theme = match theme.map(str::trim).filter(|t| !t.is_empty()) {
             None => None,
             Some(t) => Some(themes::name_of(t).map_err(StoreError::Invalid)?).filter(|t| t != DEFAULT_THEME),
@@ -260,7 +272,7 @@ impl Store {
             if let Some(t) = setting.theme.as_deref().filter(|t| !cache.themes.by_name.contains_key(*t)) {
                 return Err(StoreError::Invalid(no_theme(t, &cache.themes)));
             }
-            if !site && !cache.rollups.groups().iter().any(|g| g.epic == setting.scope) {
+            if !site && !cache.rollups.groups().iter().any(|g| g.shortcode.as_str() == setting.scope) {
                 return Err(StoreError::Invalid(format!("no shortcode {}: a theme is set on `site` or on a shortcode that holds a ticket", setting.scope)));
             }
         }
@@ -314,7 +326,9 @@ impl Store {
         let declared = themes::declared(&ticket.body);
         let levels = {
             let cache = self.tickets.read().expect("store lock poisoned");
-            let chain = std::iter::once(ticket.epic.clone()).chain(lineage::host_chain(&cache, &ticket.epic));
+            let chain = std::iter::once(ticket.shortcode.clone())
+                .chain(lineage::host_chain(&cache, &ticket.shortcode))
+                .map(|sc| sc.as_str().to_string());
             Levels {
                 site: cache.themes.settings.get(SITE).and_then(|s| s.theme.clone()),
                 shortcode: cache.themes.nearest(chain),

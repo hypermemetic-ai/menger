@@ -1630,6 +1630,74 @@ know is unaffected; one that keeps a copy should treat it as "fetch again
 what you show" — the Leptos app asks `extents` and its board's window again
 (SCALE-26), as after a reconnect.
 
+### Addresses and namespaces (ORG-3)
+
+A shortcode is unique only within its **namespace** — its organization and
+the shortcode it is hosted under (none for a root). Two shortcodes named
+THEME, one under MENGER and one under PLEXUS, both exist; a second THEME
+under MENGER is refused. Every ticket and every group carries:
+
+- `epic` — the shortcode's letters (`THEME`), what a reader types and a row
+  shows; never identity (in Rust it is `Code`, which keys no map);
+- `shortcode` — the store's identity of it (`ShortcodeId`): the code itself
+  for every shortcode made before ORG-3, `CODE.N` for a namesake made since;
+  a ticket's key (`id`) is `{shortcode}-{seq}`, so every id that existed
+  before ORG-3 is unchanged;
+- `address` — the full address, `org:ROOT/…/SC-N` (a group's without
+  `-N`): `hypermemetic:MENGER/ACCESS/ORG-3`.
+
+Events that name a shortcode (`extent`, `count`, `entered`, `left`,
+`recount`) carry `shortcode` beside `epic`.
+
+**Naming a ticket.** Every method that takes a ticket or a shortcode takes
+any short form of its address — the full one, any subsequence of its hosts
+(`MENGER/ORG-3`, `ACCESS/ORG-3`), the org alone (`hypermemetic:ORG-3`), the
+bare id, a path address (`PLX/_MENGER/board`) — case-blind in the codes. An
+id that existed when the file met ORG-3 is **pinned**: it names that ticket
+forever, whatever namesake is made later. A name that fits two is refused
+in-band, nothing read or written:
+
+```json
+{"type": "ambiguous", "id": "THEME-1", "candidates": ["hypermemetic:MENGER/THEME-1", "hypermemetic:PLEXUS/THEME-1"]}
+```
+
+**Writes that make or move a shortcode** check (namespace, code) and refuse
+a clash naming the one there (`hypermemetic:MENGER/THEME is already
+there: a shortcode is unique in its namespace, and hypermemetic:MENGER holds
+a THEME — give another code, or another place (nothing was created)`): `create` of a scope or a
+doc under another shortcode's ticket (it starts a new shortcode there,
+hosted where its parent is — a namesake if the letters are taken
+elsewhere); `set_parent` / `update --parent` of a root (the shortcode's
+namespace moves with it, and so does every address under it — each moved
+group is a `group_changed`); `set_kind` (a ticket that becomes its
+shortcode's root); `notes upgrade`; `undelete`. A build or an execution
+never starts a shortcode: it files into the one its `--epic` names.
+
+```sh
+synapse -P 4455 menger tickets create --epic THEME --kind scope --parent PLEXUS-1 --title "the platform's themes"
+synapse -P 4455 menger tickets create --epic PLEXUS/THEME --title "a build in it"
+synapse -P 4455 menger tickets get --id PLEXUS/THEME-1
+```
+
+**Filters and search.** `in THEME` matches the letters, wherever hosted
+(every THEME); `under X` binds one: a shortcode whose identity is `X` first
+(so a filter written before a namesake keeps its meaning), else the one
+shortcode or ticket the address names — a name that fits several is
+refused (`under THEME/CSS` names more than one). `find` and the palette
+also match the shortcode's letters alone, partial (`the` finds every
+THEME), and an address (`MENGER/ACCESS/ORG`); every hit shows its full
+address. `search` (SEARCH-2) still indexes titles and bodies only.
+
+**Stored.** Form 11 adds three tables beside the tickets: `orgs`
+(`hypermemetic` is 1), `shortcodes (id, org, host, code, pinned)` with a
+unique index on `(org, host, code)`, and `pins (text, ticket)`. A form-10
+file gains them at its first open, in place, with nothing built again:
+every shortcode its code, in hypermemetic, in the namespace where its root
+hangs; every id and tombstone pinned. `--verify-derived` checks the index:
+every ticket's shortcode registered, no two of one code in one namespace,
+each stored host where its root hangs, every full address distinct, every
+pin a ticket or a tombstone.
+
 ### Search (SEARCH-2)
 
 `find` jumps to a ticket by its id or title; **`search`** looks inside

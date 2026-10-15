@@ -43,8 +43,10 @@ pub(super) fn waves_answer(store: &Store, admitted: Result<Caller, String>, epic
     if epics.is_empty() {
         return vec![TicketsEvent::Error { message: "waves: epics is empty — name at least one shortcode, e.g. [\"MNG\"]".into() }];
     }
+    // ORG-3: each name is letters, as `in`'s — every shortcode with them
+    // must be in reach.
     if let Some(v) = &visible {
-        if let Some(hidden) = epics.iter().find(|e| !v.contains(&e.to_ascii_uppercase())) {
+        if let Some(hidden) = epics.iter().find(|e| store.shortcodes_in(e).iter().any(|sc| !v.contains(sc))) {
             return vec![TicketsEvent::Error { message: format!("waves: no access to {hidden}") }];
         }
     }
@@ -63,7 +65,7 @@ pub(super) fn waves_under_answer(store: &Store, admitted: Result<Caller, String>
     match store.waves_under(&id, &kinds, visible.as_ref()) {
         Ok(answer) => wave_events(answer, Vec::new()),
         Err(StoreError::NotFound(_)) => vec![TicketsEvent::NotFound { id }],
-        Err(e) => vec![TicketsEvent::Error { message: e.to_string() }],
+        Err(e) => vec![refusal(e)],
     }
 }
 
@@ -80,12 +82,12 @@ pub(super) fn waves_to_answer(store: &Store, admitted: Result<Caller, String>, i
         Err(StoreError::DocHasNoLifecycle { .. }) => {
             vec![TicketsEvent::Error { message: format!("waves_to: {id} is a doc — a doc has no place in the order of work") }]
         }
-        Err(e) => vec![TicketsEvent::Error { message: e.to_string() }],
+        Err(e) => vec![refusal(e)],
     }
 }
 
 /// The shortcodes a caller sees (`None`: all).
-type Visible = Option<std::collections::HashSet<String>>;
+type Visible = Option<std::collections::HashSet<crate::address::ShortcodeId>>;
 
 /// The kinds asked (`default` with none), or the `Error` naming the bad one.
 fn kinds_of(kinds: Option<Vec<String>>, default: &[Kind]) -> Result<Vec<Kind>, Vec<TicketsEvent>> {

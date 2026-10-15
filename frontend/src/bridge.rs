@@ -323,8 +323,8 @@ impl Reach {
         let mut reach = Self::only(epic);
         for ev in events {
             match ev {
-                TicketsEvent::Count { epic, held } if held > 0 => {
-                    reach.epics.insert(epic.to_ascii_uppercase());
+                TicketsEvent::Count { shortcode: epic, held, .. } if held > 0 => {
+                    reach.epics.insert(epic.to_string());
                     reach.tickets += held;
                 }
                 TicketsEvent::Error { message } => return Err(message),
@@ -372,7 +372,7 @@ pub(crate) fn note_group(group: &menger_tickets_api::Group) -> Vec<String> {
 
 /// [`note_group`] on `reaches`.
 pub(crate) fn moved(reaches: &mut HashMap<String, Reach>, group: &menger_tickets_api::Group) -> Vec<String> {
-    let epic = group.epic.to_ascii_uppercase();
+    let epic = group.shortcode.to_string();
     let mut ask = Vec::new();
     for (scope, reach) in reaches.iter_mut() {
         if *scope == epic {
@@ -490,9 +490,9 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::SeverityChanged { ref ticket, .. }
         | E::Updated { ref ticket, .. }
         | E::ParentChanged { ref ticket, .. }
-        | E::Blocker { ref ticket } => inside(&ticket.epic).then_some(ev),
+        | E::Blocker { ref ticket } => inside(ticket.shortcode.as_str()).then_some(ev),
         E::Summary { ref summary } | E::Placed { ref summary, .. } | E::Node { ref summary, .. } | E::Hit { ref summary, .. } => {
-            inside(&summary.epic).then_some(ev)
+            inside(summary.shortcode.as_str()).then_some(ev)
         }
         E::ChildrenChanged { ref id, .. } | E::ChildRemoved { ref id, .. } | E::Member { ref id, .. } => {
             reach.holds_id(id).then_some(ev)
@@ -502,13 +502,13 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         // ticket of its own (a frame does not read `history`).
         E::Transition { ref transition } => reach.holds_id(&transition.ticket).then_some(ev),
         E::HistoryEnd { .. } => None,
-        E::Group { group } => inside(&group.epic).then(|| E::Group { group: top(group) }),
-        E::GroupChanged { group } => inside(&group.epic).then(|| E::GroupChanged { group: top(group) }),
-        E::Extent { ref epic, .. }
-        | E::Count { ref epic, .. }
-        | E::Entered { ref epic, .. }
-        | E::Left { ref epic, .. }
-        | E::Recount { ref epic, .. } => inside(epic).then_some(ev),
+        E::Group { group } => inside(group.shortcode.as_str()).then(|| E::Group { group: top(group) }),
+        E::GroupChanged { group } => inside(group.shortcode.as_str()).then(|| E::GroupChanged { group: top(group) }),
+        E::Extent { ref shortcode, .. }
+        | E::Count { ref shortcode, .. }
+        | E::Entered { ref shortcode, .. }
+        | E::Left { ref shortcode, .. }
+        | E::Recount { ref shortcode, .. } => inside(shortcode.as_str()).then_some(ev),
         E::PlacementsChanged { changes } => {
             let changes: Vec<_> = changes.into_iter().filter(|c| reach.holds_id(&c.id)).collect();
             (!changes.is_empty()).then_some(E::PlacementsChanged { changes })
@@ -521,7 +521,7 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         // ACT-2: a write over many tickets, of those the frame reaches.
         E::UpdatedMany { ids, changed, tickets, unchanged } => {
             let ids: Vec<_> = ids.into_iter().filter(|id| reach.holds_id(id)).collect();
-            let tickets: Vec<_> = tickets.into_iter().filter(|t| inside(&t.epic)).collect();
+            let tickets: Vec<_> = tickets.into_iter().filter(|t| inside(t.shortcode.as_str())).collect();
             let unchanged: Vec<_> = unchanged.into_iter().filter(|id| reach.holds_id(id)).collect();
             (!ids.is_empty() || !tickets.is_empty()).then_some(E::UpdatedMany { ids, changed, tickets, unchanged })
         }
@@ -533,7 +533,7 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         }
         E::Undeleted { ids, tickets } => {
             let ids: Vec<_> = ids.into_iter().filter(|id| reach.holds_id(id)).collect();
-            let tickets: Vec<_> = tickets.into_iter().filter(|t| inside(&t.epic)).collect();
+            let tickets: Vec<_> = tickets.into_iter().filter(|t| inside(t.shortcode.as_str())).collect();
             (!ids.is_empty()).then_some(E::Undeleted { ids, tickets })
         }
         // The reach's own count, never the viewer's whole store.
@@ -545,6 +545,7 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         | E::Lagged { .. }
         | E::NotFound { .. }
         | E::Error { .. }
+        | E::Ambiguous { .. }
         | E::BodyTooLarge { .. }
         | E::Component { .. }
         | E::ComponentChanged { .. }
@@ -1129,7 +1130,7 @@ mod tests {
         Ticket {
             labels: Vec::new(),
             id: id.to_string(),
-            epic: epic.to_string(),
+            epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
             title: format!("the title of {id}"),
             status: Status::Ready,
@@ -1153,7 +1154,7 @@ mod tests {
     }
 
     fn group(epic: &str, host: Option<&str>) -> Group {
-        Group { epic: epic.into(), total: 3, done: 1, docs: 0, root: Some(format!("{epic}-1")), root_row: None, host: host.map(Into::into) }
+        Group { epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(), total: 3, done: 1, docs: 0, root: Some(format!("{epic}-1")), root_row: None, host: host.map(Into::into) }
     }
 
     /// AREA: its own shortcode and SUB, hosted under it — what `counts {
@@ -1162,9 +1163,9 @@ mod tests {
         Reach::from_counts(
             "area",
             vec![
-                TicketsEvent::Count { epic: "AREA".into(), held: 4 },
-                TicketsEvent::Count { epic: "SUB".into(), held: 2 },
-                TicketsEvent::Count { epic: "EMPTY".into(), held: 0 },
+                TicketsEvent::Count { epic: menger_tickets_api::Code::stored("AREA"), shortcode: menger_tickets_api::ShortcodeId::new("AREA"), held: 4 },
+                TicketsEvent::Count { epic: menger_tickets_api::Code::stored("SUB"), shortcode: menger_tickets_api::ShortcodeId::new("SUB"), held: 2 },
+                TicketsEvent::Count { epic: menger_tickets_api::Code::stored("EMPTY"), shortcode: menger_tickets_api::ShortcodeId::new("EMPTY"), held: 0 },
             ],
         )
         .unwrap()
@@ -1333,11 +1334,11 @@ mod tests {
             TicketsEvent::InputChanged { input: input("OTHER-7", "d1", InputKind::Choice, &["a"], InputState::Answered) },
             TicketsEvent::Group { group: group("OTHER", None) },
             TicketsEvent::GroupChanged { group: group("OTHER", Some("AREA-1")) },
-            TicketsEvent::Extent { epic: "OTHER".into(), last_seq: 9, holes: Vec::new() },
-            TicketsEvent::Count { epic: "OTHER".into(), held: 9 },
-            TicketsEvent::Entered { id: "OTHER-7".into(), epic: "OTHER".into(), seq: 7 },
-            TicketsEvent::Left { id: "OTHER-7".into(), epic: "OTHER".into(), seq: 7 },
-            TicketsEvent::Recount { epic: "OTHER".into(), held: 9 },
+            TicketsEvent::Extent { epic: menger_tickets_api::Code::stored("OTHER"), shortcode: menger_tickets_api::ShortcodeId::new("OTHER"), last_seq: 9, holes: Vec::new() },
+            TicketsEvent::Count { epic: menger_tickets_api::Code::stored("OTHER"), shortcode: menger_tickets_api::ShortcodeId::new("OTHER"), held: 9 },
+            TicketsEvent::Entered { id: "OTHER-7".into(), epic: menger_tickets_api::Code::stored("OTHER"), shortcode: menger_tickets_api::ShortcodeId::new("OTHER"), seq: 7 },
+            TicketsEvent::Left { id: "OTHER-7".into(), epic: menger_tickets_api::Code::stored("OTHER"), shortcode: menger_tickets_api::ShortcodeId::new("OTHER"), seq: 7 },
+            TicketsEvent::Recount { epic: menger_tickets_api::Code::stored("OTHER"), shortcode: menger_tickets_api::ShortcodeId::new("OTHER"), held: 9 },
             TicketsEvent::PlacementsChanged { changes: vec![PlacementChange { id: "OTHER-7".into(), placement: Placement::Done }] },
             TicketsEvent::Facet { field: "status".into(), value: "Ready".into(), held: 40 },
             TicketsEvent::Searched { matched: 40, next: None, words: vec![] },
@@ -1394,7 +1395,7 @@ mod tests {
     fn a_frame_with_no_scope_hears_components_alone() {
         let none = Reach::none();
         assert!(admit_event(TicketsEvent::Ticket { ticket: tkt("AREA-1") }, &none).is_none());
-        assert!(admit_event(TicketsEvent::Count { epic: "AREA".into(), held: 1 }, &none).is_none());
+        assert!(admit_event(TicketsEvent::Count { epic: menger_tickets_api::Code::stored("AREA"), shortcode: menger_tickets_api::ShortcodeId::new("AREA"), held: 1 }, &none).is_none());
         assert!(admit_event(TicketsEvent::ComponentRemoved { name: "m-x".into() }, &none).is_some());
     }
 

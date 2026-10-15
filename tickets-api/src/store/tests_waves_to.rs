@@ -154,7 +154,7 @@ async fn a_scope_gathers_its_open_descendants() {
     assert!(!w.waves.placed.iter().any(|p| p.summary.id == kid));
 
     // Only what the caller sees is yielded; the rest still counts.
-    let visible: std::collections::HashSet<String> = ["SC".to_string()].into();
+    let visible: std::collections::HashSet<ShortcodeId> = [ShortcodeId::from("SC")].into();
     let seen = store.waves_to(&s, &EVERY, Some(&visible)).unwrap();
     assert!(!seen.waves.placed.iter().any(|p| p.summary.id == ext));
     assert_eq!(seen.waves.placed.last().unwrap().placement, wave(4));

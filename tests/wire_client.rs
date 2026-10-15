@@ -117,7 +117,7 @@ fn apply(
             return "child_removed";
         }
         TicketsEvent::GroupChanged { group } => {
-            groups.insert(group.epic.clone(), group.clone());
+            groups.insert(group.epic.to_string(), group.clone());
             return "group_changed";
         }
         // WAVE-6: each kept placement a write moved, on the row the mirror
@@ -566,13 +566,13 @@ async fn the_wire_assertions_through_the_generated_client() {
         .expect("extents")
         .into_iter()
         .map(|event| match event {
-            TicketsEvent::Extent { epic, last_seq, .. } => (epic, last_seq),
+            TicketsEvent::Extent { epic, last_seq, .. } => (epic.to_string(), last_seq),
             other => panic!("extents yields only `extent`, got {other:?}"),
         })
         .collect();
     let mut from_mirror: BTreeMap<String, u32> = BTreeMap::new();
     for t in mirror.values() {
-        let last = from_mirror.entry(t.epic.clone()).or_default();
+        let last = from_mirror.entry(t.epic.to_string()).or_default();
         *last = (*last).max(t.seq);
     }
     assert_eq!(

@@ -486,7 +486,7 @@ async fn extents_yields_each_shortcodes_last_seq_in_shortcode_order() {
     let extents: Vec<(String, u32)> = evs
         .into_iter()
         .map(|ev| match ev {
-            TicketsEvent::Extent { epic, last_seq, .. } => (epic, last_seq),
+            TicketsEvent::Extent { epic, last_seq, .. } => (epic.to_string(), last_seq),
             other => panic!("extents yields only `extent` events, got {other:?}"),
         })
         .collect();
@@ -500,8 +500,8 @@ async fn extents_yields_each_shortcodes_last_seq_in_shortcode_order() {
         TicketsEvent::Health { ticket_count, .. } => assert_eq!(ticket_count, total),
         other => panic!("expected Health, got {other:?}"),
     }
-    let wire = serde_json::to_value(TicketsEvent::Extent { epic: "AB".into(), last_seq: 1, holes: Vec::new() }).unwrap();
-    assert_eq!(wire, serde_json::json!({"type": "extent", "epic": "AB", "last_seq": 1}));
+    let wire = serde_json::to_value(TicketsEvent::Extent { epic: "AB".into(), shortcode: "AB".into(), last_seq: 1, holes: Vec::new() }).unwrap();
+    assert_eq!(wire, serde_json::json!({"type": "extent", "epic": "AB", "shortcode": "AB", "last_seq": 1}));
 }
 
 /// Ids of a `list` / `ready_set` stream, in order — asserting the

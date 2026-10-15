@@ -685,8 +685,17 @@ async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkil
     for (want, got) in expected.iter_mut().zip(&tickets) {
         assert!(got["placement"]["type"].is_string(), "{} is placed: {got}", got["id"]);
         want["placement"] = got["placement"].clone();
+        // ORG-3: and its shortcode's identity and its full address — every
+        // shortcode of that age is its code, in hypermemetic; PRESUB is
+        // hosted under PRE-1.
+        let (epic, seq) = (want["epic"].as_str().unwrap().to_string(), want["seq"].clone());
+        let host = if epic == "PRESUB" { "PRE/" } else { "" };
+        want["shortcode"] = json!(epic);
+        want["address"] = json!(format!("hypermemetic:{host}{epic}-{seq}"));
     }
-    assert_eq!(tickets, expected, "every ticket exactly as the seven-status binary answered it");
+    for (got, want) in tickets.iter().zip(&expected) {
+        assert_eq!(got, want, "{} exactly as the seven-status binary answered it", want["id"]);
+    }
     let log = s1.startup_output();
     // Nothing of SDLC-7's to migrate. The one migration a database of that
     // age does meet is SCALE-4's (the `children` column goes), which says so.

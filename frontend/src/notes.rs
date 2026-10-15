@@ -523,7 +523,7 @@ pub(crate) fn BoardNotes(
             // Written elsewhere (or by this panel's own first save) while
             // none was here.
             TicketsEvent::Created { ticket }
-                if ticket.epic == root && ticket.path.as_deref() == Some(BOARD_PATH) && id.try_get_untracked().flatten().is_none() =>
+                if ticket.shortcode.as_str() == root.as_str() && ticket.path.as_deref() == Some(BOARD_PATH) && id.try_get_untracked().flatten().is_none() =>
             {
                 id.try_set(Some(ticket.id.clone()));
                 body.try_set(Some(ticket.body.clone()));

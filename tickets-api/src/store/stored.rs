@@ -4,6 +4,7 @@ use super::{children::Children, db, ids::Ids, ready::Ready, rollup::Rollups, Cac
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
+use crate::address::ShortcodeId;
 
 /// Which form of the stored derived state this build writes and reads.
 /// One table more (B3's edges, say) is a new form: a file holding an older
@@ -72,12 +73,26 @@ use std::path::Path;
 /// reads the table without the columns, so an asking cell reads as its
 /// quiet twin — a file holding both is refused as interning one cell twice
 /// (`promote`'s rollback restores the backup it took first).
-const FORM: i64 = 10;
+///
+/// ORG-3 is form 11: the shortcodes and their namespaces (`shortcodes`, with
+/// the unique index on `(org, ifnull(host, ''), code)`), the organizations
+/// (`orgs`, one: `hypermemetic`) and the pins (`pins`, every id and
+/// tombstone the file held: today's ids name today's tickets for good) —
+/// identity, not derived state, filled from where each root hangs by the
+/// open that gains them ([`super::shortcodes::settle`]). Nothing derived
+/// moves: every table that names a shortcode names it by the text that is
+/// its id now (its code, for every shortcode before ORG-3) — the tickets'
+/// `epic` column, whose `UNIQUE (epic, seq)` is `(shortcode, seq)` as it
+/// stands, and every derived table — so no row is rewritten, and a file in
+/// form 10 gains form 11 in place. One way: an older build reads a form-11
+/// file as its own and never looks at the tables; it would file a namesake's
+/// tickets under its id as if it were a code.
+const FORM: i64 = 11;
 
 /// COMMENT-2, IDENTITY-21, AUTH-7: the forms [`upgrade`] takes to [`FORM`]
 /// in place. MENGER-12: none — form 10 moves the cells, so every older form
-/// is built again.
-const UPGRADES_FROM: [i64; 0] = [];
+/// is built again. ORG-3: form 10, which gains the shortcodes' tables.
+const UPGRADES_FROM: [i64; 1] = [10];
 
 /// IDENTITY-21: what form 8 adds beside the tables — a comment's signer.
 fn add_comment_principal(conn: &Connection) -> rusqlite::Result<()> {
@@ -322,7 +337,7 @@ pub(super) type RefKey = (String, OrderKey);
 pub(super) struct GroupRow {
     pub(super) root: Option<String>,
     pub(super) host: Option<String>,
-    pub(super) up: Option<String>,
+    pub(super) up: Option<ShortcodeId>,
     pub(super) base: (u64, u64, u64),
     pub(super) base_tops: u64,
     pub(super) own: (u64, u64, u64),
@@ -333,7 +348,7 @@ pub(super) struct GroupRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CrossRow {
     pub(super) tally: (u64, u64, u64),
-    pub(super) home: String,
+    pub(super) home: ShortcodeId,
 }
 
 /// What a hand edit can leave that the roll-ups must remember (MNG-17).
@@ -375,9 +390,9 @@ impl Mark {
 /// ([`read_ready`]) and compared as a set.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(super) struct Form {
-    pub(super) runs: BTreeMap<String, RunRow>,
+    pub(super) runs: BTreeMap<ShortcodeId, RunRow>,
     pub(super) refs: BTreeMap<RefKey, String>,
-    pub(super) groups: BTreeMap<String, GroupRow>,
+    pub(super) groups: BTreeMap<ShortcodeId, GroupRow>,
     pub(super) cross: BTreeMap<String, CrossRow>,
     pub(super) marks: BTreeSet<(Mark, String)>,
     /// Each ticket whose `child_count` is not 0, with it.
@@ -386,9 +401,9 @@ pub(super) struct Form {
     /// with it.
     pub(super) unsatisfied: BTreeMap<String, u32>,
     /// SCALE-32: each shortcode's count of each status it holds.
-    pub(super) statuses: BTreeMap<(String, &'static str), u64>,
+    pub(super) statuses: BTreeMap<(ShortcodeId, &'static str), u64>,
     /// SCALE-32: each shortcode's share of the ready set, where it has one.
-    pub(super) ready: BTreeMap<String, u64>,
+    pub(super) ready: BTreeMap<ShortcodeId, u64>,
     /// FILTER-4: the cell table, every container and every count, by the
     /// ids the cells were interned with.
     pub(super) cells: cells::Stored,
@@ -402,7 +417,7 @@ pub(super) struct Form {
 /// the write-serial lock, nothing else moves it) and from nothing else.
 #[derive(Debug, Default)]
 pub(super) struct Changes {
-    pub(super) runs: Vec<(String, RunRow)>,
+    pub(super) runs: Vec<(ShortcodeId, RunRow)>,
     /// Ids born: every reference that named them leaves.
     pub(super) refs_born: Vec<String>,
     pub(super) refs_named: Vec<(RefKey, String)>,
@@ -412,7 +427,7 @@ pub(super) struct Changes {
     /// Each ticket whose `child_count` moves, with the count it moves to.
     pub(super) counts: Vec<(String, u64)>,
     /// `None`: the row goes.
-    pub(super) groups: Vec<(String, Option<GroupRow>)>,
+    pub(super) groups: Vec<(ShortcodeId, Option<GroupRow>)>,
     pub(super) cross: Vec<(String, Option<CrossRow>)>,
     /// `true`: the mark is made; `false`: it goes.
     pub(super) marks: Vec<((Mark, String), bool)>,
@@ -421,29 +436,31 @@ pub(super) struct Changes {
     pub(super) unsatisfied: Vec<(String, u32)>,
     /// SCALE-32: each shortcode's count of a status that moves, with what it
     /// moves to; 0: the row goes.
-    pub(super) statuses: Vec<((String, &'static str), u64)>,
+    pub(super) statuses: Vec<((ShortcodeId, &'static str), u64)>,
     /// SCALE-32: each shortcode's share of the ready set that moves; 0: the
     /// row goes.
-    pub(super) ready: Vec<(String, u64)>,
+    pub(super) ready: Vec<(ShortcodeId, u64)>,
     /// FILTER-4: each cell interned by the write, with its id.
     pub(super) cells: Vec<(u32, Key)>,
     /// FILTER-4: each container a cell move rewrites, `(epic, cell, hi)`, as
     /// it is after the write — `None`: left empty, the row goes.
-    pub(super) cell_bits: Vec<((String, u32, u32), Option<(u64, Vec<u8>)>)>,
+    pub(super) cell_bits: Vec<((ShortcodeId, u32, u32), Option<(u64, Vec<u8>)>)>,
     /// FILTER-4: each `(epic, cell)` count that moves; 0: the row goes.
-    pub(super) cell_counts: Vec<((String, u32), u64)>,
+    pub(super) cell_counts: Vec<((ShortcodeId, u32), u64)>,
     /// FILTER-13: the whole kept tree, written over what is stored — a move
     /// off a hand-edited cycle, which builds it again.
     pub(super) tree_all: Option<tree::Stored>,
     /// FILTER-13: each list whose stored holders all go, `(parent, kids)`,
     /// before any holder row is written.
-    pub(super) tree_cleared: Vec<(String, String)>,
+    pub(super) tree_cleared: Vec<(String, ShortcodeId)>,
     /// FILTER-13: each holder container a write rewrites, as it is after —
     /// `None`: left empty, the row goes.
     pub(super) tree_holders: Vec<(tree::HolderKey, Option<(u64, Vec<u8>)>)>,
     /// FILTER-13: each tally entry that moves, `(parent, epic, cell)`, with
     /// its count after; 0: the row goes.
-    pub(super) tree_tallies: Vec<((String, String, u32), u32)>,
+    pub(super) tree_tallies: Vec<((String, ShortcodeId, u32), u32)>,
+    /// ORG-3: each shortcode a write mints or rehomes, as the write leaves it.
+    pub(super) namespaces: Option<super::shortcodes::Moves>,
 }
 
 impl Changes {
@@ -458,7 +475,7 @@ impl Changes {
         }
         for (id, key) in &self.refs_unnamed {
             conn.prepare_cached("DELETE FROM forward_refs WHERE id = ?1 AND epic = ?2 AND seq = ?3")?
-                .execute(params![id, key.epic, key.seq])?;
+                .execute(params![id, key.shortcode, key.seq])?;
         }
         for (key, referrer) in &self.refs_named {
             put_ref(conn, key, referrer)?;
@@ -471,7 +488,7 @@ impl Changes {
                 Some(row) => put_group(conn, epic, row)?,
                 None => {
                     conn.prepare_cached("DELETE FROM rollup_groups WHERE epic = ?1")?
-                        .execute([epic])?;
+                        .execute(params![epic])?;
                 }
             }
         }
@@ -539,12 +556,15 @@ impl Changes {
         for (at, held) in &self.tree_tallies {
             put_tally(conn, at, *held)?;
         }
+        if let Some(moves) = &self.namespaces {
+            moves.write(conn)?;
+        }
         Ok(())
     }
 }
 
 /// FILTER-13: one tally entry; 0 is no row.
-fn put_tally(conn: &Connection, (parent, epic, cell): &(String, String, u32), held: u32) -> rusqlite::Result<()> {
+fn put_tally(conn: &Connection, (parent, epic, cell): &(String, ShortcodeId, u32), held: u32) -> rusqlite::Result<()> {
     if held == 0 {
         conn.prepare_cached("DELETE FROM tree_tallies WHERE parent = ?1 AND epic = ?2 AND cell = ?3")?
             .execute(params![parent, epic, cell])?;
@@ -611,7 +631,7 @@ fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
 }
 
 /// FILTER-4: one container as a write leaves it; `None` is no row.
-fn put_bits(conn: &Connection, (epic, cell, hi): &(String, u32, u32), row: Option<&(u64, Vec<u8>)>) -> rusqlite::Result<()> {
+fn put_bits(conn: &Connection, (epic, cell, hi): &(ShortcodeId, u32, u32), row: Option<&(u64, Vec<u8>)>) -> rusqlite::Result<()> {
     match row {
         None => {
             conn.prepare_cached("DELETE FROM cell_bits WHERE epic = ?1 AND cell = ?2 AND hi = ?3")?
@@ -629,7 +649,7 @@ fn put_bits(conn: &Connection, (epic, cell, hi): &(String, u32, u32), row: Optio
 }
 
 /// FILTER-4: an `(epic, cell)` count; 0 is no row.
-fn put_cell_count(conn: &Connection, (epic, cell): &(String, u32), held: u64) -> rusqlite::Result<()> {
+fn put_cell_count(conn: &Connection, (epic, cell): &(ShortcodeId, u32), held: u64) -> rusqlite::Result<()> {
     if held == 0 {
         conn.prepare_cached("DELETE FROM cell_counts WHERE epic = ?1 AND cell = ?2")?
             .execute(params![epic, cell])?;
@@ -652,7 +672,7 @@ fn put_unsatisfied(conn: &Connection, id: &str, open: u32) -> rusqlite::Result<(
 }
 
 /// SCALE-32: a shortcode's count of a status; 0 is no row.
-fn put_status(conn: &Connection, (epic, status): &(String, &'static str), held: u64) -> rusqlite::Result<()> {
+fn put_status(conn: &Connection, (epic, status): &(ShortcodeId, &'static str), held: u64) -> rusqlite::Result<()> {
     if held == 0 {
         conn.prepare_cached("DELETE FROM status_counts WHERE epic = ?1 AND status = ?2")?
             .execute(params![epic, status])?;
@@ -667,9 +687,9 @@ fn put_status(conn: &Connection, (epic, status): &(String, &'static str), held: 
 }
 
 /// SCALE-32: a shortcode's share of the ready set; 0 is no row.
-fn put_ready(conn: &Connection, epic: &str, held: u64) -> rusqlite::Result<()> {
+fn put_ready(conn: &Connection, epic: &ShortcodeId, held: u64) -> rusqlite::Result<()> {
     if held == 0 {
-        conn.prepare_cached("DELETE FROM ready_counts WHERE epic = ?1")?.execute([epic])?;
+        conn.prepare_cached("DELETE FROM ready_counts WHERE epic = ?1")?.execute(params![epic])?;
     } else {
         conn.prepare_cached(
             "INSERT INTO ready_counts (epic, held) VALUES (?1, ?2)
@@ -680,7 +700,7 @@ fn put_ready(conn: &Connection, epic: &str, held: u64) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn put_run(conn: &Connection, epic: &str, (first, last, held): &RunRow) -> rusqlite::Result<()> {
+fn put_run(conn: &Connection, epic: &ShortcodeId, (first, last, held): &RunRow) -> rusqlite::Result<()> {
     conn.prepare_cached(
         "INSERT INTO shortcode_runs (epic, first, last, held) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (epic) DO UPDATE SET
@@ -692,7 +712,7 @@ fn put_run(conn: &Connection, epic: &str, (first, last, held): &RunRow) -> rusql
 
 fn put_ref(conn: &Connection, (id, key): &RefKey, referrer: &str) -> rusqlite::Result<()> {
     conn.prepare_cached("INSERT INTO forward_refs (id, epic, seq, referrer) VALUES (?1, ?2, ?3, ?4)")?
-        .execute(params![id, key.epic, key.seq, referrer])?;
+        .execute(params![id, key.shortcode, key.seq, referrer])?;
     Ok(())
 }
 
@@ -704,7 +724,7 @@ fn put_count(conn: &Connection, id: &str, count: u64) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn put_group(conn: &Connection, epic: &str, g: &GroupRow) -> rusqlite::Result<()> {
+fn put_group(conn: &Connection, epic: &ShortcodeId, g: &GroupRow) -> rusqlite::Result<()> {
     conn.prepare_cached(
         "INSERT INTO rollup_groups
                  (epic, root, host, up, base_total, base_done, base_tops,
@@ -834,6 +854,9 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     add_comment_principal(&tx)?;
     // AUTH-7: form 9's roles table.
     tx.execute_batch(super::roles::TABLE)?;
+    // ORG-3: form 11's shortcodes, orgs and pins — empty; the open that
+    // built this fills them ([`super::shortcodes::settle`]).
+    tx.execute_batch(super::shortcodes::TABLES)?;
     // MENGER-12: the inputs say which tickets are `asking` — read before
     // the cells are built (`inputs::migrate` made the tables before this).
     let cache = Cache::new(db::load_rows(&tx)?, super::inputs::load(&tx)?);
@@ -893,13 +916,14 @@ pub(super) fn upgrade(conn: &mut Connection, form: i64) -> anyhow::Result<bool> 
     tx.execute_batch(super::members::TABLE)?;
     add_comment_principal(&tx)?;
     tx.execute_batch(super::roles::TABLE)?;
-    let held = super::comments::count(&tx)?;
+    // ORG-3: form 11's tables, filled by the open's settle.
+    tx.execute_batch(super::shortcodes::TABLES)?;
     mark_stale(&tx, false)?;
     tx.commit()?;
     tracing::warn!(
-        "AUTH-7: the file gained stored form {FORM} — the comments table ({held} comments), the members \
-         table, comment signers and the roles table — in {:.1} ms, durably; it was in form {form}, whose derived \
-         state is form {FORM}'s, so nothing was built again; every later open reads it",
+        "ORG-3: the file gained stored form {FORM} — the shortcodes, orgs and pins tables — in {:.1} ms, durably; \
+         it was in form {form}, whose derived state is form {FORM}'s (every shortcode is named by its id already), \
+         so nothing was built again; every later open reads it",
         started.elapsed().as_secs_f64() * 1000.0
     );
     Ok(true)
@@ -1029,10 +1053,11 @@ fn load_tree(conn: &Connection, children: &mut Children) -> anyhow::Result<(usiz
         kids.tally = t;
         Ok(())
     };
+    let mut ids = super::shortcodes::Ids::default();
     while let Some(r) = rows.next()? {
         let parent = r.get_ref(0)?.as_str()?;
         let (epic, cell, held): (&str, u32, u32) = (r.get_ref(1)?.as_str()?, r.get(2)?, r.get(3)?);
-        let gg = tree::g(children.names_mut().intern(epic), cell);
+        let gg = tree::g(children.names_mut().intern(&ids.of(epic)), cell);
         match &mut current {
             Some((p, t)) if p == parent => t.push((gg, held)),
             _ => {
@@ -1050,8 +1075,8 @@ fn load_tree(conn: &Connection, children: &mut Children) -> anyhow::Result<(usiz
     let mut stmt = conn.prepare("SELECT parent, kids, epic, cell, hi, card, bits FROM tree_holders ORDER BY parent, kids, epic, cell, hi")?;
     let mut rows = stmt.query([])?;
     let mut bitmaps = 0;
-    let mut current: Option<((String, String, u32), roaring::RoaringBitmap)> = None;
-    let place = |children: &mut Children, ((parent, kids, gg), bm): ((String, String, u32), roaring::RoaringBitmap)| -> anyhow::Result<()> {
+    let mut current: Option<((String, ShortcodeId, u32), roaring::RoaringBitmap)> = None;
+    let place = |children: &mut Children, ((parent, kids, gg), bm): ((String, ShortcodeId, u32), roaring::RoaringBitmap)| -> anyhow::Result<()> {
         let many = children
             .kids_mut(&parent)
             .and_then(|k| k.list_mut(&kids))
@@ -1065,14 +1090,14 @@ fn load_tree(conn: &Connection, children: &mut Children) -> anyhow::Result<(usiz
         let (cell, hi, card): (u32, u32, u64) = (r.get(3)?, r.get(4)?, r.get(5)?);
         let lows = cells::decode(card, r.get_ref(6)?.as_blob()?)
             .map_err(|e| anyhow::anyhow!("tree_holders {parent} {kids} {epic} cell {cell} container {hi}: {e}"))?;
-        let gg = tree::g(children.names_mut().intern(epic), cell);
-        let same = matches!(&current, Some(((p, k, x), _)) if p == parent && k == kids && *x == gg);
+        let gg = tree::g(children.names_mut().intern(&ids.of(epic)), cell);
+        let same = matches!(&current, Some(((p, k, x), _)) if p == parent && k.as_str() == kids && *x == gg);
         if !same {
             if let Some(done) = current.take() {
                 place(children, done)?;
             }
             bitmaps += 1;
-            current = Some(((parent.to_string(), kids.to_string(), gg), roaring::RoaringBitmap::new()));
+            current = Some(((parent.to_string(), ids.of(kids), gg), roaring::RoaringBitmap::new()));
         }
         let bm = &mut current.as_mut().expect("set above").1;
         bm.extend(lows.into_iter().map(|low| (hi << 16) | u32::from(low)));
@@ -1110,7 +1135,7 @@ fn read_tables(conn: &Connection) -> rusqlite::Result<Form> {
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let key = OrderKey {
-            epic: r.get(1)?,
+            shortcode: r.get(1)?,
             seq: r.get(2)?,
         };
         form.refs.insert((r.get(0)?, key), r.get(3)?);
@@ -1245,25 +1270,25 @@ fn load_cells(conn: &Connection) -> anyhow::Result<Cells> {
 /// index's own two terms, which is what lets SQLite answer from it; `INDEXED
 /// BY` makes that the index or an error, never a scan of the tickets. What a
 /// start reads the ready set from, and what B4's `ready_set` is a range of.
-pub(super) fn read_ready(conn: &Connection) -> rusqlite::Result<BTreeMap<String, BTreeSet<u32>>> {
+pub(super) fn read_ready(conn: &Connection) -> rusqlite::Result<BTreeMap<ShortcodeId, BTreeSet<u32>>> {
     let mut stmt = conn.prepare(
         "SELECT epic, seq FROM tickets INDEXED BY tickets_ready
              WHERE status = 'Ready' AND unsatisfied = 0 ORDER BY epic, seq",
     )?;
     let mut rows = stmt.query([])?;
-    let mut members: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
-    let mut here: Option<(String, BTreeSet<u32>)> = None;
+    let mut members: BTreeMap<ShortcodeId, BTreeSet<u32>> = BTreeMap::new();
+    let mut here: Option<(ShortcodeId, BTreeSet<u32>)> = None;
     while let Some(r) = rows.next()? {
         let (epic, seq) = (r.get_ref(0)?.as_str()?, r.get(1)?);
         match &mut here {
-            Some((e, seqs)) if e == epic => {
+            Some((e, seqs)) if e.as_str() == epic => {
                 seqs.insert(seq);
             }
             _ => {
                 if let Some((e, seqs)) = here.take() {
                     members.insert(e, seqs);
                 }
-                here = Some((epic.to_string(), BTreeSet::from([seq])));
+                here = Some((ShortcodeId::new(epic), BTreeSet::from([seq])));
             }
         }
     }
@@ -1284,8 +1309,9 @@ pub(super) fn read_children(conn: &Connection) -> rusqlite::Result<Children> {
     )?;
     let mut rows = stmt.query([])?;
     let mut children = Children::filling();
+    let mut ids = super::shortcodes::Ids::default();
     while let Some(r) = rows.next()? {
-        children.push(r.get_ref(0)?.as_str()?, r.get_ref(1)?.as_str()?, r.get(2)?);
+        children.push(r.get_ref(0)?.as_str()?, &ids.of(r.get_ref(1)?.as_str()?), r.get(2)?);
     }
     Ok(children)
 }
@@ -1372,6 +1398,9 @@ pub enum Verdict {
         /// DEPLOY-11: the deployments the file holds — `None` when it has
         /// no table yet (the next open makes it).
         deployments: Option<usize>,
+        /// ORG-3: the shortcodes the file holds, their namespaces each the
+        /// one its root's host gives it — `None` when it has no table yet.
+        shortcodes: Option<usize>,
     },
     /// Where they differ, one line each, naming the structure and the key.
     Differs(Vec<String>),
@@ -1408,7 +1437,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         State::Older(form) if UPGRADES_FROM.contains(&form) => {
             return Ok(Verdict::NotStored(format!(
                 "the derived state is stored in form {form}; this build reads {FORM} (the next open \
-                 adds the comments, members and roles tables, and builds nothing again)"
+                 adds the shortcodes, orgs and pins tables, and builds nothing again)"
             )))
         }
         State::Older(form) => {
@@ -1466,6 +1495,11 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         out.extend(differs);
         n
     });
+    // ORG-3: the shortcodes — the five checks.
+    let shortcodes = super::shortcodes::check(&tx, &scanned)?.map(|(n, differs)| {
+        out.extend(differs);
+        n
+    });
     tx.commit()?;
     if !out.is_empty() {
         return Ok(Verdict::Differs(out));
@@ -1486,17 +1520,18 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         transitions,
         tombstones,
         deployments,
+        shortcodes,
     })
 }
 
 /// SCALE-32: each ticket the ready set's index holds and a scan does not, or
 /// a scan holds and the index does not — one line each, in the store's order.
 pub(super) fn ready_differences(
-    stored: &BTreeMap<String, BTreeSet<u32>>,
-    scanned: &BTreeMap<String, BTreeSet<u32>>,
+    stored: &BTreeMap<ShortcodeId, BTreeSet<u32>>,
+    scanned: &BTreeMap<ShortcodeId, BTreeSet<u32>>,
 ) -> Vec<String> {
-    let all = |m: &BTreeMap<String, BTreeSet<u32>>| -> BTreeSet<(String, u32)> {
-        m.iter().flat_map(|(e, seqs)| seqs.iter().map(move |s| (e.clone(), *s))).collect()
+    let all = |m: &BTreeMap<ShortcodeId, BTreeSet<u32>>| -> BTreeSet<(String, u32)> {
+        m.iter().flat_map(|(e, seqs)| seqs.iter().map(move |s| (e.as_str().to_string(), *s))).collect()
     };
     let (stored, scanned) = (all(stored), all(scanned));
     let mut out: Vec<(&(String, u32), &str)> = stored
@@ -1519,7 +1554,7 @@ pub(super) fn compare(stored: &Form, scanned: &Form) -> Vec<String> {
     });
     let refs = |m: &BTreeMap<RefKey, String>| -> BTreeMap<String, String> {
         m.iter()
-            .map(|((id, key), referrer)| (format!("{id} named by {referrer}"), format!("{}-{}", key.epic, key.seq)))
+            .map(|((id, key), referrer)| (format!("{id} named by {referrer}"), key.shortcode.key(key.seq)))
             .collect()
     };
     diff(&mut out, "dangling forward reference", &refs(&stored.refs), &refs(&scanned.refs), |at| {
@@ -1533,8 +1568,8 @@ pub(super) fn compare(stored: &Form, scanned: &Form) -> Vec<String> {
     diff(&mut out, "roll-up mark", &marks(&stored.marks), &marks(&scanned.marks), |()| "made".into());
     diff(&mut out, "child_count of", &stored.counts, &scanned.counts, |n| n.to_string());
     diff(&mut out, "unsatisfied blockers of", &stored.unsatisfied, &scanned.unsatisfied, |n| n.to_string());
-    let statuses = |m: &BTreeMap<(String, &'static str), u64>| -> BTreeMap<String, u64> {
-        m.iter().map(|((epic, status), n)| (format!("{epic} {status}"), *n)).collect()
+    let statuses = |m: &BTreeMap<(ShortcodeId, &'static str), u64>| -> BTreeMap<String, u64> {
+        m.iter().map(|((epic, status), n)| (format!("{} {status}", epic.as_str()), *n)).collect()
     };
     diff(&mut out, "status count", &statuses(&stored.statuses), &statuses(&scanned.statuses), |n| n.to_string());
     diff(&mut out, "ready count", &stored.ready, &scanned.ready, |n| n.to_string());
@@ -1566,7 +1601,7 @@ pub(super) fn cell_differences(stored: &cells::Stored, scanned: &cells::Stored) 
         keys.get(&cell).copied().ok_or_else(|| format!("cell {cell}, which the cell table does not hold"))
     };
     // (epic, cell, block) → what the row says, and the id it is under.
-    let mut bits: BTreeMap<(String, Key, u32), ((u64, &[u8]), u32)> = BTreeMap::new();
+    let mut bits: BTreeMap<(ShortcodeId, Key, u32), ((u64, &[u8]), u32)> = BTreeMap::new();
     for ((epic, cell, hi), (card, raw)) in &stored.bits {
         match name(&stored.keys, *cell) {
             Ok(key) => {
@@ -1575,7 +1610,7 @@ pub(super) fn cell_differences(stored: &cells::Stored, scanned: &cells::Stored) 
             Err(e) => out.push(format!("cell_bits {epic} {e}, container {hi}: stored {card} members")),
         }
     }
-    let mut want: BTreeMap<(String, Key, u32), (u64, &[u8])> = BTreeMap::new();
+    let mut want: BTreeMap<(ShortcodeId, Key, u32), (u64, &[u8])> = BTreeMap::new();
     for ((epic, cell, hi), (card, raw)) in &scanned.bits {
         want.insert((epic.clone(), scanned.keys[cell], *hi), (*card, raw.as_slice()));
     }
@@ -1600,7 +1635,7 @@ pub(super) fn cell_differences(stored: &cells::Stored, scanned: &cells::Stored) 
             out.push(format!("cell_bits {epic} {key} container {hi}: none stored; a scan gives {}", show(*w)));
         }
     }
-    let mut counts: BTreeMap<(String, Key), (u64, u32)> = BTreeMap::new();
+    let mut counts: BTreeMap<(ShortcodeId, Key), (u64, u32)> = BTreeMap::new();
     for ((epic, cell), held) in &stored.counts {
         match name(&stored.keys, *cell) {
             Ok(key) => {
@@ -1609,7 +1644,7 @@ pub(super) fn cell_differences(stored: &cells::Stored, scanned: &cells::Stored) 
             Err(e) => out.push(format!("cell_counts {epic} {e}: stored {held}")),
         }
     }
-    let want: BTreeMap<(String, Key), u64> =
+    let want: BTreeMap<(ShortcodeId, Key), u64> =
         scanned.counts.iter().map(|((epic, cell), n)| ((epic.clone(), scanned.keys[cell]), *n)).collect();
     for ((epic, key), (held, id)) in &counts {
         match want.get(&(epic.clone(), *key)) {
@@ -1626,21 +1661,40 @@ pub(super) fn cell_differences(stored: &cells::Stored, scanned: &cells::Stored) 
     out
 }
 
-fn diff<V: PartialEq>(
+fn diff<K: Ord + Named, V: PartialEq>(
     out: &mut Vec<String>,
     what: &str,
-    stored: &BTreeMap<String, V>,
-    scanned: &BTreeMap<String, V>,
+    stored: &BTreeMap<K, V>,
+    scanned: &BTreeMap<K, V>,
     show: impl Fn(&V) -> String,
 ) {
     for (key, s) in stored {
-        match scanned.get(key) {
+        let key_ = key;
+        let key = key_.named();
+        match scanned.get(key_) {
             Some(w) if w == s => {}
             Some(w) => out.push(format!("{what} {key}: stored {}; a scan gives {}", show(s), show(w))),
             None => out.push(format!("{what} {key}: stored {}; a scan gives none", show(s))),
         }
     }
     for (key, w) in scanned.iter().filter(|(k, _)| !stored.contains_key(*k)) {
-        out.push(format!("{what} {key}: none stored; a scan gives {}", show(w)));
+        out.push(format!("{what} {}: none stored; a scan gives {}", key.named(), show(w)));
+    }
+}
+
+/// A key as a difference names it.
+trait Named {
+    fn named(&self) -> &str;
+}
+
+impl Named for String {
+    fn named(&self) -> &str {
+        self
+    }
+}
+
+impl Named for ShortcodeId {
+    fn named(&self) -> &str {
+        self.as_str()
     }
 }

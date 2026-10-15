@@ -146,7 +146,7 @@ async fn non_docs_wrong_parents_and_unreserved_paths_are_refused() {
         other => panic!("expected PathNoRoot, got {other:?}"),
     }
     assert_eq!(store.count(), before, "nothing stored");
-    assert!(store.extents().iter().all(|(e, _)| e != "NEW"), "no shortcode started");
+    assert!(store.extents_text().iter().all(|(e, _)| e != "NEW"), "no shortcode started");
 }
 
 /// A path survives a reopen — the column in the file, the address answered

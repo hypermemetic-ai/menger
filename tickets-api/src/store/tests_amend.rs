@@ -139,7 +139,7 @@ async fn an_amend_changes_the_title_body_and_updated_unix_and_nothing_else() {
     store.set_status("ED-3", Status::Coding).await.unwrap();
     let before: Vec<Ticket> = store.list(None, None, None).await.unwrap();
     let groups = store.groups();
-    let extents = store.extents();
+    let extents = store.extents_text();
     let created_before = chrono::Utc::now().timestamp();
 
     let (t, _) = amended(
@@ -163,7 +163,7 @@ async fn an_amend_changes_the_title_body_and_updated_unix_and_nothing_else() {
         }
     }
     assert_eq!(store.groups(), groups, "no roll-up moved");
-    assert_eq!(store.extents(), extents, "no sequence moved");
+    assert_eq!(store.extents_text(), extents, "no sequence moved");
     // The id index kept ED-3's forward reference: ED-9, when born, unlocks it.
     for _ in 5..=9 {
         store.create(ticket("ED", Kind::Build, None, &[])).await.unwrap();

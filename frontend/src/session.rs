@@ -507,9 +507,9 @@ fn pump(client: Client, filter: &str, then: Option<futures::future::AbortHandle>
         }
         while let Some(ev) = stream.next().await {
             let member = match ev {
-                Ok(ClientEvent::Data(TicketsEvent::Entered { id, epic, seq })) => Member::Entered { id, epic, seq },
-                Ok(ClientEvent::Data(TicketsEvent::Left { id, epic, seq })) => Member::Left { id, epic, seq },
-                Ok(ClientEvent::Data(TicketsEvent::Recount { epic, held })) => Member::Recount { epic, held },
+                Ok(ClientEvent::Data(TicketsEvent::Entered { id, shortcode, seq, .. })) => Member::Entered { id, epic: shortcode.to_string(), seq },
+                Ok(ClientEvent::Data(TicketsEvent::Left { id, shortcode, seq, .. })) => Member::Left { id, epic: shortcode.to_string(), seq },
+                Ok(ClientEvent::Data(TicketsEvent::Recount { shortcode, held, .. })) => Member::Recount { epic: shortcode.to_string(), held },
                 Ok(ClientEvent::Data(TicketsEvent::Lagged { missed })) => {
                     leptos::logging::log!("membership watch lagged: {missed} change(s) missed; counting again");
                     Member::Lagged
@@ -1071,7 +1071,7 @@ async fn extents(client: &Client, board: board::Board, last_error: RwSignal<Opti
     let mut runs = Vec::new();
     for ev in client.extents_all().await.map_err(|e| describe(&e))? {
         match ev {
-            TicketsEvent::Extent { epic, last_seq, holes } => runs.push((epic, last_seq, holes)),
+            TicketsEvent::Extent { shortcode: epic, last_seq, holes, .. } => runs.push((epic.to_string(), last_seq, holes)),
             TicketsEvent::Error { message } => last_error.set(Some(format!("extents: {message}"))),
             _ => {}
         }
@@ -1487,7 +1487,7 @@ mod tests {
         Ticket {
             labels: Vec::new(),
             id: id.to_string(),
-            epic: epic.to_string(),
+            epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
             title: format!("the title of {id}"),
             status,

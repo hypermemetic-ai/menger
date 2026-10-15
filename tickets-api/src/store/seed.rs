@@ -48,7 +48,7 @@ impl Store {
             let next_seq = cache
                 .ids
                 .last_seqs()
-                .map(|(epic, seq)| (epic.to_string(), seq))
+                .map(|(epic, seq)| (epic.as_str().to_string(), seq))
                 .collect();
             (next_seq, cache.len())
         };
@@ -174,8 +174,12 @@ impl Store {
             );
             // WAVE-6: and every placement, over the seeded store.
             tickets.place_all();
-            tickets.form()
+            // ORG-3: and every shortcode the seed made, registered with the
+            // namespace its root gives it, every row given its address.
+            let minted = tickets.adopt_shortcodes();
+            (tickets.form(), minted, tickets.shortcodes.clone())
         });
+        let (form, minted, registry) = form;
         // SCALE-28: and all of it stored, in one transaction, which also
         // says the stored state is the tickets' again.
         {
@@ -185,6 +189,13 @@ impl Store {
             stored::write_all(&tx, &form)?;
             stored::create_ready_index(&tx)?;
             stored::mark_stale(&tx, false)?;
+            tx.execute_batch(shortcodes::TABLES)?;
+            if tx.query_row("SELECT count(*) FROM orgs", [], |r| r.get::<_, i64>(0))? == 0 {
+                tx.execute("INSERT INTO orgs (id, name) VALUES (1, ?1)", [crate::address::OrgId::HYPERMEMETIC])?;
+            }
+            for sc in &minted {
+                shortcodes::put(&tx, &registry, sc)?;
+            }
             tx.commit()?;
         }
         Ok(SeedReport {

@@ -56,8 +56,8 @@ pub(super) fn kind_refusal(cache: &Cache, row: &Row, blocked_by: &[String], kind
             id: row.id.clone(),
         });
     }
-    if !kind.roots_a_shortcode() && cache.rollups.root(&row.epic) == Some(row.id.as_str()) {
-        return Err(StoreError::RootKind { id: row.id.clone(), epic: row.epic.clone(), kind });
+    if !kind.roots_a_shortcode() && cache.rollups.root(&row.shortcode) == Some(row.id.as_str()) {
+        return Err(StoreError::RootKind { id: row.id.clone(), epic: row.epic.to_string(), kind });
     }
     if let (Some(path), true) = (&row.path, kind.has_lifecycle()) {
         return Err(StoreError::PathKind { path: path.clone(), id: row.id.clone(), kind });
@@ -84,8 +84,8 @@ pub(super) fn parent_refusal(cache: &Cache, child: &Row, parent: &str) -> Result
     let Some(parent_ticket) = cache.get(parent) else {
         return Err(StoreError::ParentNotFound { id: child.id.clone(), parent: parent.to_string() });
     };
-    let is_root = shortcode_root(cache, &child.epic).is_some_and(|r| r.id == child.id);
-    if !is_root && parent_ticket.epic != child.epic {
+    let is_root = shortcode_root(cache, &child.shortcode).is_some_and(|r| r.id == child.id);
+    if !is_root && parent_ticket.shortcode != child.shortcode {
         return Err(StoreError::ParentOutsideShortcode { id: child.id.clone(), parent: parent.to_string() });
     }
     if let Some(path) = find_parent_cycle(cache, &child.id, parent) {

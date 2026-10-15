@@ -22,7 +22,7 @@
 //! or `text`, is FILTER-4's in-band refusal.
 
 use super::cells::View;
-use super::filtered::view;
+use super::filtered::{view, view_lenient};
 use super::*;
 use crate::filter::{Field, Filter, Group, Predicate};
 use roaring::{MultiOps, RoaringBitmap};
@@ -79,13 +79,14 @@ fn everywhere(lens: &Lens) -> Filtered {
     }
 }
 
-/// Where `id` sits in the store's order: a path address (`SHORTCODE/path`,
-/// WAVE-10) through the paths; an id as given, else ASCII upper-cased (a
-/// hand edit may write a lower-case one, which `get` names as it is).
+/// Where `id` sits in the store's order — ORG-3: any address the resolver
+/// takes to one ticket (a short form, a full address, a path address,
+/// today's pinned ids); else an id as given, else ASCII upper-cased (a hand
+/// edit may write a lower-case one, which `get` names as it is). One that
+/// names several sits nowhere.
 fn locate<'c>(cache: &'c Cache, id: &str) -> Option<&'c OrderKey> {
-    if let Some((epic, path)) = path_address(id) {
-        let id = cache.paths.get(&(epic, path.to_string()))?;
-        return cache.at.get(id);
+    if let shortcodes::Found::One(key) = cache.find_ticket(id, shortcodes::OrgReach::All) {
+        return cache.at.get(&key);
     }
     let id = id.trim();
     cache.at.get(id).or_else(|| cache.at.get(&id.to_ascii_uppercase()))
@@ -108,12 +109,12 @@ const DENSE: u64 = 4;
 /// and no row is read twice.
 fn candidates<'c>(cache: &'c Cache, view: &View<'c>, after: Option<&OrderKey>, mut visit: impl FnMut(&'c Row)) {
     let mut key = OrderKey {
-        epic: String::new(),
+        shortcode: ShortcodeId::default(),
         seq: 0,
     };
-    for (epic, bms) in view.shortcodes_from(after.map(|k| k.epic.as_str())) {
+    for (epic, bms) in view.shortcodes_from(after.map(|k| &k.shortcode)) {
         let lo = match after {
-            Some(k) if k.epic == *epic => match k.seq.checked_add(1) {
+            Some(k) if k.shortcode == **epic => match k.seq.checked_add(1) {
                 Some(seq) => seq,
                 None => continue,
             },
@@ -123,12 +124,11 @@ fn candidates<'c>(cache: &'c Cache, view: &View<'c>, after: Option<&OrderKey>, m
             [one] => Cow::Borrowed(one.as_ref()),
             many => Cow::Owned(many.iter().map(|b| b.as_ref()).union()),
         };
-        key.epic.clear();
-        key.epic.push_str(epic);
+        key.shortcode = (*epic).clone();
         if merged.len().saturating_mul(DENSE) >= cache.ids.held(epic) {
             key.seq = lo;
             let end = OrderKey {
-                epic: key.epic.clone(),
+                shortcode: key.shortcode.clone(),
                 seq: u32::MAX,
             };
             // The run and the members, both ascending: a merge, which stops
@@ -178,7 +178,7 @@ impl Store {
             Some(id) => Some(cache.at.get(id).cloned().ok_or_else(|| StoreError::CursorNotFound(id.to_string()))?),
             None => None,
         };
-        let view = view(&cache, &q);
+        let view = view(&cache, &q)?;
         let take = limit.map_or(usize::MAX, |n| n as usize);
         let mut tickets: Vec<Row> = Vec::with_capacity(take.min(1024));
         let mut remaining = 0u64;
@@ -225,15 +225,13 @@ impl Store {
         state: Option<InputState>,
         lens: &Lens,
     ) -> Result<Vec<Input>, StoreError> {
-        let ticket = ticket.map(|t| t.trim().to_ascii_uppercase());
-        let epic = epic.map(|e| e.trim().to_ascii_uppercase());
         let cache = self.tickets.read().expect("store lock poisoned");
-        if let Some(t) = ticket.as_ref().filter(|t| cache.get(t).is_none()) {
-            return Err(StoreError::NotFound(t.clone()));
-        }
-        let view = view(&cache, &everywhere(lens));
-        let admitted = |id: &str| cache.at.get(id).is_some_and(|k| view.contains(&k.epic, k.seq));
-        Ok(cache.inputs.query_where(ticket.as_deref(), epic.as_deref(), state, admitted))
+        // ORG-3: as [`Store::inputs`] resolves them.
+        let ticket = ticket.map(|t| cache.resolve(t)).transpose()?;
+        let epic = epic.map(|e| span_shortcode(&cache, Some(e))).transpose()?.flatten();
+        let view = view(&cache, &everywhere(lens))?;
+        let admitted = |id: &str| cache.at.get(id).is_some_and(|k| view.contains(&k.shortcode, k.seq));
+        Ok(cache.inputs.query_where(ticket.as_deref(), epic.as_ref(), state, admitted))
     }
 
     /// FILTER-15: `member { ids, filter }` — for each of `ids`, in the order
@@ -244,9 +242,9 @@ impl Store {
     /// wire's to hold.
     pub fn member(&self, ids: &[String], lens: &Lens) -> Vec<bool> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        let view = view(&cache, &everywhere(lens));
+        let view = view_lenient(&cache, &everywhere(lens));
         ids.iter()
-            .map(|id| locate(&cache, id).is_some_and(|k| view.contains(&k.epic, k.seq)))
+            .map(|id| locate(&cache, id).is_some_and(|k| view.contains(&k.shortcode, k.seq)))
             .collect()
     }
 

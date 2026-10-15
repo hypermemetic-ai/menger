@@ -50,6 +50,7 @@
 
 use super::waves::{place, Behind};
 use super::{satisfied, OrderKey, Row, Rows};
+use crate::address::ShortcodeId;
 use crate::types::{Placement, PlacementChange};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -65,9 +66,9 @@ pub(super) struct Shift {
 impl Shift {
     /// As `placements_changed` carries it, with the shortcode `watch { epic
     /// }` filters it by.
-    pub(super) fn change(&self) -> (String, PlacementChange) {
+    pub(super) fn change(&self) -> (ShortcodeId, PlacementChange) {
         (
-            self.key.epic.clone(),
+            self.key.shortcode.clone(),
             PlacementChange {
                 id: self.id.clone(),
                 placement: self.placement,

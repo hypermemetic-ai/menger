@@ -154,9 +154,10 @@
 //! (`stored::upgrade`).
 
 use crate::types::{
-    is_menger_path, path_address, AnswerSource, Component, Input, InputState, InputValue, Placement, PlacementChange,
-    TicketSummary, MENGER_PATH_PREFIX,
+    is_menger_path, AnswerSource, Component, Input, InputState, InputValue, Placement, PlacementChange, TicketSummary,
+    MENGER_PATH_PREFIX,
 };
+use crate::address::{Address, At, Shortcode, ShortcodeId};
 use rusqlite::{Connection, OpenFlags};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -191,6 +192,8 @@ fn whole(row: Row, body: String) -> Ticket {
     let Row {
         id,
         epic,
+        shortcode,
+        address,
         seq,
         title,
         status,
@@ -210,6 +213,8 @@ fn whole(row: Row, body: String) -> Ticket {
     Ticket {
         id,
         epic,
+        shortcode,
+        address,
         seq,
         title,
         status,
@@ -322,16 +327,21 @@ impl Broadcast {
 /// `limit` tickets after this id" needs no state beyond the id itself.
 /// Derived `Ord` is epic-then-seq, byte-lexicographic on the epic — the
 /// same comparison `list` sorted with before the index existed.
+///
+/// ORG-3: the shortcode by its identity ([`ShortcodeId`]), never its code —
+/// two THEMEs' `THEME-3` are two keys. Its order is the id's text, which for
+/// every shortcode before ORG-3 is the code: today's order, unchanged, with
+/// a namesake right after the code it shares.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OrderKey {
-    pub epic: String,
+    pub shortcode: ShortcodeId,
     pub seq: u32,
 }
 
 impl OrderKey {
     fn of(ticket: &Row) -> Self {
         Self {
-            epic: ticket.epic.clone(),
+            shortcode: ticket.shortcode.clone(),
             seq: ticket.seq,
         }
     }
@@ -343,6 +353,7 @@ impl OrderKey {
 /// cursor — `remaining` counts under the same filters.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PageQuery<'a> {
+    /// ORG-3: a shortcode as a reader names it — resolved by the store.
     pub epic: Option<&'a str>,
     pub status: Option<Status>,
     pub parent: Option<&'a str>,
@@ -391,17 +402,17 @@ struct Span {
 }
 
 impl Span {
-    fn of(cache: &Cache, after: Option<&str>, epic: Option<&str>) -> Result<Self, StoreError> {
+    fn of(cache: &Cache, after: Option<&str>, epic: Option<&ShortcodeId>) -> Result<Self, StoreError> {
         use std::ops::Bound::{Excluded, Included, Unbounded};
         let (mut start, end) = match epic {
             None => (Unbounded, Unbounded),
             Some(e) => (
                 Included(OrderKey {
-                    epic: e.to_string(),
+                    shortcode: e.clone(),
                     seq: 0,
                 }),
                 Included(OrderKey {
-                    epic: e.to_string(),
+                    shortcode: e.clone(),
                     seq: u32::MAX,
                 }),
             ),
@@ -460,7 +471,7 @@ impl Span {
         let rest_of_run = |key: &OrderKey| {
             cache.ids.after_in_run(key).unwrap_or_else(|| {
                 let end = OrderKey {
-                    epic: key.epic.clone(),
+                    shortcode: key.shortcode.clone(),
                     seq: u32::MAX,
                 };
                 cache.order.range((Excluded(key), Included(&end))).count() as u64
@@ -470,9 +481,9 @@ impl Span {
             // The whole store.
             (Unbounded, Unbounded) => cache.len() as u64,
             // After a cursor, to the end of the store.
-            (Excluded(key), Unbounded) => rest_of_run(key) + cache.ids.held_after(&key.epic),
+            (Excluded(key), Unbounded) => rest_of_run(key) + cache.ids.held_after(&key.shortcode),
             // One epic, whole — the cursor below it, or none.
-            (Included(first), Included(_)) => cache.ids.held(&first.epic),
+            (Included(first), Included(_)) => cache.ids.held(&first.shortcode),
             // One epic, after a cursor inside it.
             (Excluded(key), Included(_)) => rest_of_run(key),
             // No other shape is cut (`Span::of`); were one, the walk is
@@ -493,7 +504,7 @@ impl Span {
         }
         let rest_of_run = |key: &OrderKey| {
             let end = OrderKey {
-                epic: key.epic.clone(),
+                shortcode: key.shortcode.clone(),
                 seq: u32::MAX,
             };
             cache
@@ -504,8 +515,8 @@ impl Span {
         };
         match (&self.start, &self.end) {
             (Unbounded, Unbounded) => cache.ready.held_after(None, status),
-            (Excluded(key), Unbounded) => rest_of_run(key) + cache.ready.held_after(Some(&key.epic), status),
-            (Included(first), Included(_)) => cache.ready.held(&first.epic, status),
+            (Excluded(key), Unbounded) => rest_of_run(key) + cache.ready.held_after(Some(&key.shortcode), status),
+            (Included(first), Included(_)) => cache.ready.held(&first.shortcode, status),
             (Excluded(key), Included(_)) => rest_of_run(key),
             _ => self
                 .range(cache)
@@ -738,11 +749,12 @@ pub enum Change {
     /// AGS-19: the ticket `id` gained the child `added` — born naming it
     /// as `parent`, or moved under it. SCALE-4: the parent's id and new
     /// `child_count`, not the full parent (whose list of children made the
-    /// event as large as the shortcode). `epic` is the parent's shortcode,
-    /// what `watch { epic }` filters on; it does not cross the wire.
+    /// event as large as the shortcode). `shortcode` is the parent's
+    /// (ORG-3: its identity), what `watch { epic }` filters on; it does not
+    /// cross the wire.
     ChildrenChanged {
         id: String,
-        epic: String,
+        shortcode: ShortcodeId,
         added: String,
         child_count: u64,
     },
@@ -757,7 +769,7 @@ pub enum Change {
     /// as with `ChildrenChanged`.
     ChildRemoved {
         id: String,
-        epic: String,
+        shortcode: ShortcodeId,
         removed: String,
         child_count: u64,
     },
@@ -770,7 +782,7 @@ pub enum Change {
     /// shortcode (what `watch { epic }` filters by; it does not cross the
     /// wire) — broadcast last, after the write's other events, once per
     /// write that moved any.
-    PlacementsChanged { changes: Vec<(String, PlacementChange)> },
+    PlacementsChanged { changes: Vec<(ShortcodeId, PlacementChange)> },
     /// COMP-3: a component a write registered or moved — its source, owner
     /// or references — as the write leaves it; one per component, in name
     /// order, after every other event of the write (placements included).
@@ -780,14 +792,14 @@ pub enum Change {
     ComponentRemoved { name: String },
     /// INPUT-3: an input a write moved — answered, cleared, closed, reopened;
     /// or declared, re-declared, removed or restored by a body — as it leaves
-    /// it, after every other event of the write. `epic` is its ticket's
-    /// shortcode, what `watch { epic }` filters by; it does not cross the wire.
-    InputChanged { epic: String, input: Input },
+    /// it, after every other event of the write. `shortcode` is its ticket's,
+    /// what `watch { epic }` filters by; it does not cross the wire.
+    InputChanged { shortcode: ShortcodeId, input: Input },
     /// MENGER-13: a transition the write made — right after the event of the
-    /// change it records (`Created`, `StatusChanged`, `KindChanged`). `epic`
-    /// is its ticket's shortcode, what `watch { epic }` filters by; it does
+    /// change it records (`Created`, `StatusChanged`, `KindChanged`).
+    /// `shortcode` is its ticket's, what `watch { epic }` filters by; it does
     /// not cross the wire.
-    Transition { epic: String, transition: crate::types::Transition },
+    Transition { shortcode: ShortcodeId, transition: crate::types::Transition },
     /// ACT-2: an `update_many` changed `ids` (each in the write's own
     /// events before it) — `changed` the aspects that moved, in any of them.
     UpdatedMany { ids: Vec<String>, changed: Vec<String> },
@@ -820,8 +832,9 @@ impl Change {
     /// on. A ticket change belongs to its ticket's epic; a roll-up change
     /// to the group's own shortcode (MNG-10), so a watcher of `PLEXUS`
     /// hears PLEXUS's count move when a sub-shortcode's ticket completes,
-    /// without hearing the ticket itself.
-    pub fn epic(&self) -> &str {
+    /// without hearing the ticket itself. ORG-3: by identity — `None` for a
+    /// change in no one shortcode.
+    pub fn shortcode(&self) -> Option<&ShortcodeId> {
         match self {
             Self::Created { ticket }
             | Self::StatusChanged { ticket, .. }
@@ -834,24 +847,24 @@ impl Change {
             | Self::UnlocksRemoved { ticket, .. }
             | Self::BlockersChanged { ticket, .. }
             | Self::SeverityChanged { ticket, .. }
-            | Self::ParentChanged { ticket, .. } => &ticket.epic,
-            Self::ChildrenChanged { epic, .. } | Self::ChildRemoved { epic, .. } => epic,
-            Self::GroupChanged { group } => &group.epic,
+            | Self::ParentChanged { ticket, .. } => Some(&ticket.shortcode),
+            Self::ChildrenChanged { shortcode, .. } | Self::ChildRemoved { shortcode, .. } => Some(shortcode),
+            Self::GroupChanged { group } => Some(&group.shortcode),
             // WAVE-6: one per change, not per event — see `in_epic`.
-            Self::PlacementsChanged { .. } => "",
+            Self::PlacementsChanged { .. } => None,
             // COMP-3: in no shortcode — see `in_epic`.
-            Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => "",
+            Self::ComponentChanged { .. } | Self::ComponentRemoved { .. } => None,
             // INPUT-3: its ticket's.
-            Self::InputChanged { epic, .. } => epic,
+            Self::InputChanged { shortcode, .. } => Some(shortcode),
             // MENGER-13: its ticket's.
-            Self::Transition { epic, .. } => epic,
+            Self::Transition { shortcode, .. } => Some(shortcode),
             // FILTER-4: one per write, its moves in any shortcode.
-            Self::CellsMoved { .. } => "",
+            Self::CellsMoved { .. } => None,
             // FILTER-13: one per write, each watch's events already in its epic.
             // ACT-2: one per write, its ids in any shortcode — see `in_epic`.
-            Self::UnderMoved { .. } | Self::UpdatedMany { .. } => "",
+            Self::UnderMoved { .. } | Self::UpdatedMany { .. } => None,
             // ACT-5: its ids in any shortcode — see `in_epic`.
-            Self::Deleted { .. } | Self::Undeleted { .. } => "",
+            Self::Deleted { .. } | Self::Undeleted { .. } => None,
         }
     }
 
@@ -859,8 +872,9 @@ impl Change {
     /// when it is in `epic` (or no epic is asked for) — WAVE-6: and of a
     /// `PlacementsChanged`, the changes in `epic`, when any is. COMP-3: a
     /// component's change whatever the epic — a component belongs to no
-    /// shortcode, and a ticket of any shortcode may use it.
-    pub fn in_epic(self, epic: Option<&str>) -> Option<Change> {
+    /// shortcode, and a ticket of any shortcode may use it. ORG-3: `epic` the
+    /// shortcode's identity, resolved from what the watcher named.
+    pub fn in_epic(self, epic: Option<&ShortcodeId>) -> Option<Change> {
         let Some(epic) = epic else { return Some(self) };
         match self {
             Self::PlacementsChanged { changes } => {
@@ -872,7 +886,7 @@ impl Change {
             Self::Deleted { .. } | Self::Undeleted { .. } => delete::in_epic(self, epic),
             // FILTER-4: each move filtered where it is turned into events.
             Self::CellsMoved { .. } | Self::UnderMoved { .. } => Some(self),
-            other => (other.epic() == epic).then_some(other),
+            other => (other.shortcode() == Some(epic)).then_some(other),
         }
     }
 
@@ -889,11 +903,11 @@ impl Change {
     /// INPUT-3: a write's input events, in the order they are sent — the
     /// plan's: the body's inputs it moved, in the body's order, then the ones
     /// it removed.
-    fn inputs(epic: &str, plan: inputs::Plan) -> Vec<Change> {
+    fn inputs(shortcode: &ShortcodeId, plan: inputs::Plan) -> Vec<Change> {
         plan.changed
             .into_iter()
             .map(|input| Self::InputChanged {
-                epic: epic.to_string(),
+                shortcode: shortcode.clone(),
                 input,
             })
             .collect()
@@ -928,6 +942,10 @@ pub enum BlockerRef {
 }
 
 pub struct NewTicket {
+    /// ORG-3: the shortcode as a reader names it — its code, or any short
+    /// form of its address (`THEME`, `MENGER/THEME`, `hypermemetic:THEME`):
+    /// text, resolved by `create` against the namespace `parent` gives
+    /// (the parsing boundary — no store key is ever this).
     pub epic: String,
     pub title: String,
     pub kind: Kind,
@@ -1175,6 +1193,17 @@ pub enum StoreError {
     /// ACT-2: an `update_many` refused — each refused ticket with its
     /// reasons, in the order selected. Nothing was written.
     RefusedMany { refusals: Vec<(String, Vec<StoreError>)> },
+    /// ORG-3: `text` names more than one ticket or shortcode in the reader's
+    /// reach — `candidates` each one's full address. Nothing was read or
+    /// written.
+    Ambiguous { text: String, candidates: Vec<String> },
+    /// ORG-3: `text` names no shortcode in the reader's reach.
+    NoShortcode(String),
+    /// ORG-3: a write would put a shortcode `code` into `namespace` (`org:`
+    /// for an org's roots, else its host's full address), which already holds
+    /// one: `there`, its full address. `id` the ticket whose write it was.
+    /// Nothing was written.
+    ShortcodeTaken { id: Option<String>, code: String, namespace: String, there: String },
 }
 
 impl StoreError {
@@ -1467,6 +1496,21 @@ impl std::fmt::Display for StoreError {
             Self::NoteNotFound { id, newest: Some(n) } => write!(f, "no note {id}: note ids run from 1 to {n} (nothing changed)"),
             Self::NoteUpgraded { id, ticket } => write!(f, "note {id} is already a ticket: {ticket} (nothing changed)"),
             Self::NoteCursor(id) => write!(f, "after: no note {id} to resume after"),
+            Self::Ambiguous { text, candidates } => write!(
+                f,
+                "'{text}' names more than one: {} — name one in full, or by a short form only it has (nothing was read \
+                 or written)",
+                candidates.join(", ")
+            ),
+            Self::NoShortcode(text) => write!(f, "no shortcode '{text}'"),
+            Self::ShortcodeTaken { id, code, namespace, there } => {
+                let whose = id.as_deref().map_or_else(|| "nothing was created".to_string(), |i| format!("nothing changed for '{i}'"));
+                write!(
+                    f,
+                    "{there} is already there: a shortcode is unique in its namespace, and {namespace} holds a {code} — \
+                     give another code, or another place ({whose})"
+                )
+            }
         }
     }
 }
@@ -1547,8 +1591,29 @@ fn find_parent_cycle(
 /// its first scope. That walk was one step for every prefix made since MNG-12, but
 /// the whole prefix for a legacy one that never had a scope — and `create`
 /// took it, under the write lock, for every ticket filed there.
-fn shortcode_root<'a>(tickets: &'a Cache, epic: &str) -> Option<&'a Row> {
+fn shortcode_root<'a>(tickets: &'a Cache, epic: &ShortcodeId) -> Option<&'a Row> {
     tickets.rollups.root(epic).and_then(|id| tickets.get(id))
+}
+
+/// ORG-3: the shortcode a page's `epic` names, resolved — one naming none is
+/// a shortcode with no tickets (its span holds nothing, as before); one
+/// naming several is refused, naming each.
+fn span_shortcode(cache: &Cache, epic: Option<&str>) -> Result<Option<ShortcodeId>, StoreError> {
+    epic.map(|e| Ok(cache.shortcode_named(e)?.unwrap_or_else(|| ShortcodeId::new(&e.trim().to_ascii_uppercase()))))
+        .transpose()
+}
+
+/// ORG-3: the ticket a page's `parent` names, resolved — one naming none
+/// stays as given, upper-cased (an id only a hand edit names as a parent
+/// has children all the same); one naming several is refused.
+fn page_parent(cache: &Cache, parent: Option<&str>) -> Result<Option<String>, StoreError> {
+    parent
+        .map(|p| match cache.find_ticket(p, shortcodes::OrgReach::All) {
+            shortcodes::Found::One(key) => Ok(key),
+            shortcodes::Found::Many(candidates) => Err(StoreError::Ambiguous { text: p.trim().to_string(), candidates }),
+            shortcodes::Found::None => Ok(p.trim().to_ascii_uppercase()),
+        })
+        .transpose()
 }
 
 /// SCALE-4: every parent's `child_count`, from a freshly built children
@@ -1592,6 +1657,9 @@ struct Needle {
     /// The trimmed query, ASCII-lowercased once — so a window compares a
     /// folded byte against a folded byte without folding the query again.
     folded: Vec<u8>,
+    /// ORG-3: the query writes an address (an org's `:`, a host's `/`):
+    /// it is matched against each ticket's full address as well.
+    addressed: bool,
 }
 
 impl Needle {
@@ -1600,11 +1668,19 @@ impl Needle {
         let query = query.trim();
         (!query.is_empty()).then(|| Self {
             folded: query.as_bytes().to_ascii_lowercase(),
+            addressed: query.contains([':', '/']),
         })
     }
 
+    /// ORG-3: and the shortcode's letters alone, partial (`the` finds every
+    /// THEME, wherever it is hosted — a namesake's id is `THEME.62-3`, which
+    /// holds them too), and — a query that writes an address, with an org
+    /// or a host — the ticket's full address.
     fn matches(&self, t: &Row) -> bool {
-        self.within(&t.id) || self.within(&t.title)
+        self.within(&t.id)
+            || self.within(&t.title)
+            || self.within(t.epic.as_str())
+            || (self.addressed && self.within(&t.address))
     }
 
     /// The palette's `h.windows(n).any(|w| w.eq_ignore_ascii_case(n))`,
@@ -1716,6 +1792,11 @@ struct Cache {
     /// ([`deployments::Deploys`]) — read at open, moved by a record and by
     /// every row written (its links).
     deploys: deployments::Deploys,
+    /// ORG-3: every shortcode with its namespace, the orgs and the pins
+    /// ([`shortcodes::Registry`]) — read at open (made once, for a file from
+    /// before ORG-3), moved by a write that mints a shortcode or moves a
+    /// root, and the one place text becomes an identity.
+    shortcodes: shortcodes::Registry,
     written: u64,
 }
 
@@ -1762,12 +1843,12 @@ impl<'a> Rows<'a> {
         debug_assert!(self.patch.is_none(), "the children index does not see a patch");
         let order = self.order;
         self.children
-            .in_shortcode(&t.id, &t.epic)
+            .in_shortcode(&t.id, &t.shortcode)
             .into_iter()
             .flat_map(|seqs| seqs.iter())
             .filter_map(move |seq| {
                 order.get(&OrderKey {
-                    epic: t.epic.clone(),
+                    shortcode: t.shortcode.clone(),
                     seq,
                 })
             })
@@ -1843,6 +1924,9 @@ struct Moved {
     /// FILTER-13: what those moves, and a `set_parent`, do to the kept
     /// tree's tallies and holders.
     tree: Option<tree::Move>,
+    /// ORG-3: the namespaces a minting or a root's move changes — the
+    /// registry as the write leaves it ([`Cache::namespaces`]).
+    namespaces: Option<shortcodes::Moves>,
 }
 
 impl Moved {
@@ -1878,6 +1962,7 @@ impl Derived {
                 placed: None,
                 cells: None,
                 tree: None,
+                namespaces: None,
             },
         }
     }
@@ -1908,6 +1993,16 @@ impl Derived {
         self
     }
 
+    /// ORG-3: and what it does to the namespaces — the shortcodes' rows
+    /// stored in the same transaction, the registry taken with the rest.
+    fn namespaced(mut self, moves: Option<shortcodes::Moves>) -> Self {
+        if let Some(m) = &moves {
+            self.stored.namespaces = Some(m.clone());
+        }
+        self.moved.namespaces = moves;
+        self
+    }
+
     /// FILTER-4: what the write's broadcast says of its cell moves.
     fn announced(&self) -> Option<std::sync::Arc<cells::Moves>> {
         self.moved.cells.as_ref().and_then(cells::Move::announced)
@@ -1928,7 +2023,7 @@ fn ordered(loaded: HashMap<String, Row>) -> (BTreeMap<OrderKey, Row>, HashMap<St
         .values()
         .map(|t| {
             if let Some(p) = &t.path {
-                paths.insert((t.epic.clone(), p.clone()), t.id.clone());
+                paths.insert((t.shortcode.clone(), p.clone()), t.id.clone());
             }
             (t.id.clone(), OrderKey::of(t))
         })
@@ -1939,8 +2034,9 @@ fn ordered(loaded: HashMap<String, Row>) -> (BTreeMap<OrderKey, Row>, HashMap<St
 /// WAVE-10: every path address the store holds — `(shortcode, path)` to
 /// the id that holds it. Only menger's own documents carry a path, so this
 /// is a few entries a shortcode at most; a path is set at birth and never
-/// moves, so only a birth adds one and nothing takes one away.
-type Paths = HashMap<(String, String), String>;
+/// moves, so only a birth adds one and nothing takes one away. ORG-3: by
+/// the shortcode's identity — a namesake's `_MENGER/board` is its own.
+type Paths = HashMap<(ShortcodeId, String), String>;
 
 impl Cache {
     /// Builds the cache from the tickets alone: their rows put in order
@@ -2065,6 +2161,8 @@ impl Cache {
             themes: themes::Themes::default(),
             tombstones: Default::default(),
             deploys,
+            // ORG-3: read beside the cache ([`shortcodes::settle`]).
+            shortcodes: Default::default(),
             written: 0,
         }
     }
@@ -2145,6 +2243,8 @@ impl Cache {
             themes: themes::Themes::default(),
             tombstones: Default::default(),
             deploys,
+            // ORG-3: read beside the cache ([`shortcodes::settle`]).
+            shortcodes: Default::default(),
             written: 0,
         }
     }
@@ -2250,21 +2350,28 @@ impl Cache {
     ///
     /// MENGER-12: `asking` — whether the newborn's body asks (an input born
     /// open): its cell says so from birth.
-    fn birth(&self, newborn: &Row, asking: bool) -> Derived {
+    ///
+    /// ORG-3: `minted`, the shortcode the newborn is the first ticket of
+    /// when the write makes it — registered with its namespace in the same
+    /// write ([`Cache::namespaces`], which refuses a root's host moving into
+    /// a namespace that holds its code).
+    fn birth(&self, newborn: &Row, asking: bool, minted: Option<&Shortcode>) -> Result<Derived, StoreError> {
         let rows = self.rows().with(newborn);
         let birth = self.ids.birth(rows, newborn);
         let mut rollups = self.rollups.clone();
         let groups = rollups.created(rows, newborn);
+        let namespaces = self.namespaces(rows, &rollups, minted, Some(&newborn.id))?;
         let (ready, touched) = self.ready.born_touching(rows, newborn);
         let (cells, tree) = self.recell(rows, newborn, true, &touched, Some(asking));
-        let mut derived = Derived::rolled(self, rollups, groups).readied(ready).celled(cells).treed(tree);
+        let mut derived =
+            Derived::rolled(self, rollups, groups).readied(ready).celled(cells).treed(tree).namespaced(namespaces);
         birth.store(&mut derived.stored);
         if let Some(p) = &newborn.parent {
             derived.stored.counts.push((p.clone(), self.children.count(p) + 1));
         }
         derived.moved.birth = Some(birth);
         derived.moved.placed = Some(Self::replace(rows, newborn, true));
-        derived
+        Ok(derived)
     }
 
     /// WAVE-6: the re-placement pass of a write ([`placements::replace`]),
@@ -2303,7 +2410,7 @@ impl Cache {
         // WAVE-10: its address, if it has one — checked free under the
         // write-serial lock before the commit.
         if let Some(p) = &ticket.path {
-            self.paths.insert((ticket.epic.clone(), p.clone()), ticket.id.clone());
+            self.paths.insert((ticket.shortcode.clone(), p.clone()), ticket.id.clone());
         }
         self.insert(ticket);
         let count = parent.map(|p| {
@@ -2436,10 +2543,10 @@ impl Cache {
     /// as the innermost, when the crossing did not already report it.
     fn status_changed(&mut self, ticket: Row, previous: Status, moved: Moved) -> Vec<Group> {
         let changed = ticket.status != previous;
-        let (epic, id) = (ticket.epic.clone(), ticket.id.clone());
+        let (epic, id) = (ticket.shortcode.clone(), ticket.id.clone());
         self.insert(ticket);
         let mut groups = self.take(moved);
-        if changed && !groups.iter().any(|g| g.epic == epic) {
+        if changed && !groups.iter().any(|g| g.shortcode == epic) {
             if let Some(g) = self.root_group(&epic, &id) {
                 groups.insert(0, g);
             }
@@ -2466,11 +2573,18 @@ impl Cache {
     /// - its placement — none for a doc, placed by the rule for anything
     ///   else ([`placements::replace`]) — and every one downstream that moves,
     ///   across the doc line or the satisfied line.
-    fn kind_change(&self, row: &Row, old: &Row, asking: Option<bool>) -> Derived {
+    ///
+    /// ORG-3: a ticket that now roots its shortcode decides where the
+    /// shortcode hangs, so its namespace may move — refused, naming the one
+    /// there, into a namespace that holds its code ([`Cache::namespaces`]).
+    fn kind_change(&self, row: &Row, old: &Row, asking: Option<bool>) -> Result<Derived, StoreError> {
         let rows = self.rows().with(row);
         let mut rollups = self.rollups.clone();
         let derived = match rollups.kind_changed(rows, old, row) {
-            Some(groups) => Derived::rolled(self, rollups, groups),
+            Some(groups) => {
+                let namespaces = self.namespaces(rows, &rollups, None, Some(&row.id))?;
+                Derived::rolled(self, rollups, groups).namespaced(namespaces)
+            }
             None => Derived::none(),
         };
         let (ready, touched) = self.ready.status_changed_touching(rows, row, old.status);
@@ -2479,7 +2593,7 @@ impl Cache {
         if satisfied(old.status) != satisfied(row.status) || old.kind.has_lifecycle() != row.kind.has_lifecycle() {
             derived.moved.placed = Some(Self::replace(rows, row, false));
         }
-        derived
+        Ok(derived)
     }
 
     /// SDLC-13: a `set_kind`, once it has committed — the row, then what
@@ -2488,10 +2602,10 @@ impl Cache {
     /// either moves that group — first, as the innermost, when the roll-ups
     /// did not already report it.
     fn kind_changed(&mut self, ticket: Row, moved: Moved) -> Vec<Group> {
-        let (epic, id) = (ticket.epic.clone(), ticket.id.clone());
+        let (epic, id) = (ticket.shortcode.clone(), ticket.id.clone());
         self.insert(ticket);
         let mut groups = self.take(moved);
-        if !groups.iter().any(|g| g.epic == epic) {
+        if !groups.iter().any(|g| g.shortcode == epic) {
             if let Some(g) = self.root_group(&epic, &id) {
                 groups.insert(0, g);
             }
@@ -2503,7 +2617,7 @@ impl Cache {
     /// roll-up and indexed by no id index. AGS-23: but a shortcode root's
     /// title is on its group's row, so a new one moves that group.
     fn amended(&mut self, row: Row, title_changed: bool) -> Vec<Group> {
-        let (epic, id) = (row.epic.clone(), row.id.clone());
+        let (epic, id) = (row.shortcode.clone(), row.id.clone());
         self.insert(row);
         if !title_changed {
             return Vec::new();
@@ -2513,7 +2627,7 @@ impl Cache {
 
     /// AGS-23: `epic`'s group as it stands, dressed — when `id` is the
     /// shortcode's root and the nav draws it a row.
-    fn root_group(&self, epic: &str, id: &str) -> Option<Group> {
+    fn root_group(&self, epic: &ShortcodeId, id: &str) -> Option<Group> {
         if self.rollups.root(epic) != Some(id) {
             return None;
         }
@@ -2525,6 +2639,9 @@ impl Cache {
     /// as they stand. The roll-ups keep no ticket's fields; every group
     /// leaving the cache passes through here.
     fn dress(&self, mut g: Group) -> Group {
+        // ORG-3: its letters and its full address, as the registry says.
+        g.epic = self.shortcodes.code(&g.shortcode);
+        g.address = self.shortcodes.address(&g.shortcode);
         g.root_row = g.root.as_deref().and_then(|r| self.get(r)).map(|t| RootRow {
             title: t.title.clone(),
             status: t.status,
@@ -2541,7 +2658,11 @@ impl Cache {
     /// SCALE-4: each parent's count moves by one — the child leaves the old
     /// parent's children, where it was, and joins the new one's, where it
     /// was not (the parent it already has is no write).
-    fn reparent(&self, child: &Row, previous: Option<&str>) -> Derived {
+    ///
+    /// ORG-3: moving a shortcode's root rehomes the shortcode — its namespace
+    /// moves with it, and a move into a namespace that holds its code is
+    /// refused, naming the one there ([`Cache::namespaces`]).
+    fn reparent(&self, child: &Row, previous: Option<&str>) -> Result<Derived, StoreError> {
         let parent = child.parent.as_deref().expect("set_parent sets a parent");
         let rows = self.rows();
         let mut rollups = self.rollups.clone();
@@ -2551,12 +2672,13 @@ impl Cache {
             rows.get(parent).expect("the parent exists"),
         );
         let groups = rollups.reparented(rows.with(child), moving);
-        let mut derived = Derived::rolled(self, rollups, groups);
+        let namespaces = self.namespaces(rows.with(child), &rollups, None, Some(&child.id))?;
+        let mut derived = Derived::rolled(self, rollups, groups).namespaced(namespaces);
         derived.stored.counts.push((parent.to_string(), self.children.count(parent) + 1));
         if let Some(p) = previous {
             derived.stored.counts.push((p.to_string(), self.children.count(p).saturating_sub(1)));
         }
-        derived.treed(self.regraft(child, previous))
+        Ok(derived.treed(self.regraft(child, previous)))
     }
 
     /// FILTER-13: what moving `child` (as the move leaves it) off `previous`
@@ -2640,7 +2762,20 @@ impl Cache {
         if let Some(tree) = moved.tree {
             tree::take(&mut self.children, tree);
         }
-        moved.groups.into_iter().map(|g| self.dress(g)).collect()
+        // ORG-3: after the write's rows went in, so every row of a shortcode
+        // whose address moved takes its new one.
+        // A shortcode hosted under one that moved has a new address and the
+        // same counts: its row moved too, after the ones the counts moved.
+        let mut groups = moved.groups;
+        if let Some(namespaces) = moved.namespaces {
+            for sc in &namespaces.readdressed {
+                if !groups.iter().any(|g| g.shortcode == *sc) {
+                    groups.extend(self.rollups.group(sc));
+                }
+            }
+            self.take_namespaces(namespaces);
+        }
+        groups.into_iter().map(|g| self.dress(g)).collect()
     }
 
     fn get(&self, id: &str) -> Option<&Row> {
@@ -2993,6 +3128,10 @@ impl Store {
         themes::load(conn, &mut cache.themes)?;
         // DEPLOY-11: the deployments, folded, over the rows' links.
         cache.deploys.load(conn)?;
+        // ORG-3: the shortcodes, their namespaces and the pins — made once,
+        // for a file from before ORG-3 (stored form 11), from where each
+        // root hangs; every row given its letters and its full address.
+        shortcodes::settle(conn, &mut cache)?;
         Ok(cache)
     }
 
@@ -3153,6 +3292,10 @@ impl Store {
                             .map(|row| {
                                 let mut t = db::ticket(&tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
                                 t.placement = row.placement;
+                                // ORG-3: and so are its letters and address —
+                                // the registry's, as the row has them.
+                                t.epic = row.epic.clone();
+                                t.address = row.address.clone();
                                 Ok(t)
                             })
                             .collect::<Result<Vec<Ticket>, StoreError>>()?
@@ -3175,13 +3318,10 @@ impl Store {
 
     /// SCALE-14: a row of the cache and the cache's count of writes, read
     /// together; [`StoreError::NotFound`] when `id` names no ticket.
+    ///
+    /// ORG-3: `id` by any address ([`Cache::resolve`]).
     fn row(&self, id: &str) -> Result<(Row, u64), StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let row = cache
-            .get(id)
-            .cloned()
-            .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
-        Ok((row, cache.written))
+        self.addressed(id)
     }
 
     /// SCALE-14: the commit of a write after birth that changes a ticket's
@@ -3261,415 +3401,6 @@ impl Store {
         Ok((ticket, note.expect("a note was named, so one was marked")))
     }
 
-    /// [`Store::create`], and — NOTE-2 — the note `from` (if any) marked as
-    /// the ticket it became, in the same write.
-    async fn create_from(&self, new: NewTicket, from: Option<u64>, act: Act) -> Result<(Ticket, Option<crate::notes::Note>), StoreError> {
-        let epic = new.epic.trim().to_ascii_uppercase();
-        if epic.is_empty() || !epic.chars().all(|c| c.is_ascii_alphanumeric()) {
-            return Err(StoreError::InvalidEpic(new.epic));
-        }
-        self.check_body(None, &new.body)?;
-        if !new.kind.has_lifecycle() && !new.blocked_by.is_empty() {
-            return Err(StoreError::DocBlocked {
-                epic,
-                blocked_by: new.blocked_by,
-            });
-        }
-        // WAVE-10: a path is an address menger keeps for its own documents —
-        // `_MENGER/…`, on a doc; where it lives and whether it is free are
-        // checked under the lock, with the rest.
-        if let Some(path) = &new.path {
-            if !is_menger_path(path) {
-                return Err(StoreError::PathNotReserved { path: path.clone() });
-            }
-            if new.kind != Kind::Doc {
-                return Err(StoreError::PathOnWork {
-                    path: path.clone(),
-                    kind: new.kind,
-                });
-            }
-        }
-        let requested_parent = new
-            .parent
-            .map(|p| p.trim().to_ascii_uppercase())
-            .filter(|p| !p.is_empty());
-        // COMP-3: what the body defines and references — read here, from the
-        // body in hand, before the lock; a malformed ```component block is
-        // refused now. Whether a name it defines is another ticket's is the
-        // registry's to say, under the lock.
-        let (uses, problems) = components::read(&new.body);
-        if let Some(problem) = problems.into_iter().next() {
-            return Err(StoreError::component(None, problem));
-        }
-        // INPUT-3: and the inputs it declares — refused now, naming the input,
-        // when the markup is malformed or two share an id.
-        let (declared, problems) = crate::inputs::read(&new.body);
-        if let Some(problem) = problems.into_iter().next() {
-            return Err(StoreError::InputMarkup { id: None, problem });
-        }
-
-        let serial = self.serial().await;
-        // NOTE-2: the note a ticket is made from — open, read under the lock
-        // so no other upgrade can take it first — or nothing happens.
-        let note = match from {
-            None => None,
-            Some(id) => {
-                let cache = self.tickets.read().expect("store lock poisoned");
-                let n = cache.notes.get(id).cloned().ok_or_else(|| StoreError::NoteNotFound {
-                    id,
-                    newest: cache.notes.next_id().checked_sub(1).filter(|n| *n > 0),
-                })?;
-                if let Some(ticket) = n.ticket {
-                    return Err(StoreError::NoteUpgraded { id, ticket });
-                }
-                Some(n)
-            }
-        };
-        // Under the write-serial lock the cache mirrors the database
-        // exactly, so the shortcode's highest seq + 1 is the next id —
-        // monotonic across restarts (the cache was loaded from the
-        // database) and race-free (writers are serialized). SCALE-3: that
-        // highest seq is kept in the cache, beside the tickets and moved
-        // by every birth, so allocating is a lookup rather than a walk of
-        // every ticket in the store. This read phase computes everything
-        // and mutates nothing: a rejection leaves no trace, in the
-        // tickets or in what is kept about them.
-        let (ticket, touched, unlocks_added, parent_epic, derived, registered, asked, under) = {
-            let cache = self.tickets.read().expect("store lock poisoned");
-            let tickets = &cache;
-            // ACT-5: past every deleted number too — a number is never reused;
-            // and the first of a shortcode is the one born into none held.
-            let (seq, first) = (tickets.next_seq(&epic), tickets.ids.held(&epic) == 0);
-            let id = format!("{epic}-{seq}");
-
-            // MNG-12: every shortcode starts with a scope. `seq == 1` is
-            // exactly "this prefix has no tickets yet" (ids are never
-            // reused), so the newborn would be the shortcode's root.
-            // SDLC-11: or a doc — a doc collection's root.
-            if first && !new.kind.roots_a_shortcode() {
-                return Err(StoreError::FirstMustBeScope {
-                    epic,
-                    kind: new.kind,
-                });
-            }
-
-            // SDLC-11: a doc never completes, so nothing may wait on one —
-            // neither by naming a doc that exists, nor by having named, before
-            // it was born, the id a doc would now take.
-            let docs = rules::docs_among(tickets, &new.blocked_by);
-            if !docs.is_empty() {
-                return Err(StoreError::BlockedByDoc { id, docs });
-            }
-            if !new.kind.has_lifecycle() {
-                let by = tickets.ids.waiting_on(&id);
-                if !by.is_empty() {
-                    return Err(StoreError::DocAwaited { id, by });
-                }
-            }
-
-            if let Some(path) = find_cycle(tickets, &id, &new.blocked_by) {
-                return Err(StoreError::Cycle { id, path });
-            }
-            // ACT-5: nor on a deleted ticket — it is never born again.
-            tickets.tombstones.refuse_blockers(&id, &new.blocked_by)?;
-            // MNG-14 (owner, 2026-09-06): a parent named must exist; a
-            // non-root's parent must be inside its own shortcode, and when
-            // omitted it defaults to the shortcode's scope root. The root
-            // itself (seq == 1) is the exception: its parent, if any, is
-            // the shortcode it hangs under — a sub-shortcode — in any
-            // prefix; omitted, it stays a top-level root.
-            let parent = match (&requested_parent, first) {
-                (Some(p), _) => {
-                    let Some(pt) = tickets.get(p) else {
-                        return Err(StoreError::ParentNotFound {
-                            id,
-                            parent: p.clone(),
-                        });
-                    };
-                    if !first && pt.epic != epic {
-                        return Err(StoreError::ParentOutsideShortcode {
-                            id,
-                            parent: p.clone(),
-                        });
-                    }
-                    if let Some(path) = find_parent_cycle(tickets, &id, p) {
-                        return Err(StoreError::ParentCycle { id, path });
-                    }
-                    Some(p.clone())
-                }
-                (None, true) => None,
-                (None, _) => shortcode_root(tickets, &epic).map(|r| r.id.clone()),
-            };
-
-            // WAVE-10: a `_MENGER/` document lives directly under its
-            // shortcode's scope root — which it cannot be itself (`seq == 1`)
-            // — and its path is one no ticket of the shortcode holds yet.
-            if let Some(path) = &new.path {
-                let Some(root) = (!first).then(|| shortcode_root(tickets, &epic)).flatten() else {
-                    return Err(StoreError::PathNoRoot {
-                        epic,
-                        path: path.clone(),
-                    });
-                };
-                if parent.as_deref() != Some(root.id.as_str()) {
-                    return Err(StoreError::PathParent {
-                        path: path.clone(),
-                        parent: parent.unwrap_or_default(),
-                        root: root.id.clone(),
-                    });
-                }
-                if let Some(holder) = tickets.paths.get(&(epic.clone(), path.clone())) {
-                    return Err(StoreError::PathTaken {
-                        epic,
-                        path: path.clone(),
-                        holder: holder.clone(),
-                    });
-                }
-            }
-
-            // COMP-3: what the body does to the registry — refused, nothing
-            // stored and no id spent, when it defines a name another ticket
-            // owns. Last of the checks: a body without components is refused
-            // for nothing it was not refused for before.
-            let registered = tickets.plan_registry(&id, &uses, None)?;
-            // INPUT-3: the newborn's inputs, born open.
-            let asked = tickets.inputs.plan(&id, declared);
-
-            // Dangling forward references to this id resolve now: their
-            // owners are the newborn's `unlocks` from birth. SCALE-3: the
-            // cache keeps them by the id they name, already in (epic, seq)
-            // order — only ids that do not exist yet, so it holds the few
-            // forward references there are, never every edge.
-            let unlocks = tickets.ids.waiting_on(&id);
-
-            let now = chrono::Utc::now().timestamp();
-            let mut ticket = Ticket {
-                id: id.clone(),
-                epic,
-                seq,
-                title: new.title,
-                // SDLC-11: `Doc` for a doc, which it never leaves.
-                status: Status::at_birth(new.kind),
-                kind: new.kind,
-                severity: new.severity,
-                blocked_by: new.blocked_by,
-                unlocks,
-                parent: parent.clone(),
-                // SCALE-4: none, unless a hand-edited database already
-                // names this id as some ticket's parent — the index has
-                // kept those under the id, as `list { parent }` finds them.
-                child_count: tickets.children.count(&id),
-                // SDLC-9: linked after birth, by `link_commits`.
-                commits: Vec::new(),
-                // MENGER-12: labelled after birth, by `label`.
-                labels: Vec::new(),
-                // WAVE-10: checked above.
-                path: new.path,
-                // WAVE-6: placed below, with the derived state.
-                placement: None,
-                body: new.body,
-                created_unix: now,
-                updated_unix: now,
-            };
-
-            // Symmetry, in one place: every existing ticket this create
-            // touches is cloned once and updated in place, so a ticket
-            // that is blocker twice over is written once. Updated clones
-            // only — the cache changes after the database commit.
-            // SCALE-4: the parent is not one of them — its edge is the
-            // newborn's `parent`, and the count is the cache's.
-            let mut touched: HashMap<String, Row> = HashMap::new();
-            let mut unlocks_added: Vec<String> = Vec::new();
-            for blocker_id in &ticket.blocked_by {
-                let mirrored = touched
-                    .get(blocker_id)
-                    .or_else(|| tickets.get(blocker_id))
-                    .map(|b| b.unlocks.contains(&id));
-                // None: a dangling blocker — nothing exists to update.
-                if mirrored != Some(false) {
-                    continue;
-                }
-                let updated = touched
-                    .entry(blocker_id.clone())
-                    .or_insert_with(|| {
-                        tickets.get(blocker_id).expect("blocker resolved above").clone()
-                    });
-                updated.unlocks.push(id.clone());
-                updated.updated_unix = now;
-                unlocks_added.push(blocker_id.clone());
-            }
-            // A parent that is also a blocker rides out whole in its
-            // `UnlocksChanged`, after the `ChildrenChanged` that counts the
-            // newborn: it carries the count it is about to have, or a
-            // client applying the two in order would undo the first.
-            if let Some(both) = parent.as_ref().and_then(|p| touched.get_mut(p)) {
-                both.child_count += 1;
-            }
-            // The parent's shortcode, which `watch { epic }` files its
-            // `ChildrenChanged` under — another one only for a scope root
-            // hosted by another shortcode.
-            let parent_epic = parent
-                .as_deref()
-                .map(|p| tickets.get(p).expect("parent checked above").epic.clone());
-            // SCALE-28: and what the birth does to the derived state — its
-            // shortcode's run, the forward references, its parent's count,
-            // the roll-ups — worked out now, while nothing has changed.
-            let newborn = Row::from(&ticket);
-            // MENGER-12: an input born open makes the newborn `asking`.
-            let derived = tickets.birth(&newborn, asked.list.as_deref().is_some_and(inputs::asking_in));
-            // WAVE-6: born placed — `created` carries it.
-            ticket.placement = derived.moved.placement().flatten();
-            // FILTER-13: what an open `watch { filter }` asking `under` sees
-            // of it — the newborn, and (a hand edit's) the subtree that named
-            // its id as a parent, and any shortcode it re-hosts.
-            let under = self.under_before(tickets, || {
-                // FILTER-30: and each blocker whose `unlocks` it writes.
-                let mut t = touched.values().fold(lineage::Touched::of_moves(derived.announced().as_deref()), |t, b| t.row(b));
-                if tickets.children.kids(&newborn.id).is_some() {
-                    t.subtree(tickets, &newborn.id, None);
-                }
-                if let Some(after) = &derived.moved.rollups {
-                    t.hosts(tickets, after, tickets.rows().with(&newborn), Some(&newborn.epic));
-                }
-                t
-            });
-            (ticket, touched, unlocks_added, parent_epic, derived, registered, asked, under)
-        };
-
-        // MENGER-13: its first status, a transition from nothing — recorded
-        // with the birth, appended with its row, said after its `Created`.
-        let first = {
-            let cache = self.tickets.read().expect("store lock poisoned");
-            crate::types::Transition {
-                id: cache.log.next_id(),
-                ticket: ticket.id.clone(),
-                field: crate::types::TransitionField::Status,
-                from: None,
-                to: ticket.status.as_str().to_string(),
-                at_unix: ticket.created_unix,
-                actor: act.actor,
-                name: act.name,
-                source: act.source,
-                message: act.message,
-                cause: None,
-                cause_ticket: None,
-            }
-        };
-        let (logged, appended, said) = (first.clone(), first.clone(), first);
-        let born_key = OrderKey { epic: ticket.epic.clone(), seq: ticket.seq };
-
-        // SCALE-14: the newborn is written whole — the one ticket a write
-        // holds with its body, the caller's — and each blocker it touched
-        // as its row, the body left as stored. The blockers ride out whole
-        // in their `UnlocksChanged`, so their bodies are read back in the
-        // same transaction. SCALE-28: and the derived state it moves, in
-        // that transaction too.
-        let born = ticket.clone();
-        let newborn = Row::from(&ticket);
-        let rows: Vec<Row> = touched.values().cloned().collect();
-        // FILTER-4: the newborn's cell, said last of all.
-        let announced = derived.announced();
-        let Derived { stored, moved } = derived;
-        // WAVE-6: the placements it moved, said last.
-        let placed = moved.placed.as_ref().and_then(Change::placed);
-        // COMP-3: and the registry it moved — stored in the transaction,
-        // taken by the cache with the rows, said after everything else.
-        let mut registered = registered;
-        let registry_moves = std::mem::take(&mut registered.moves);
-        let registry_rows = registry_moves.clone();
-        // INPUT-3: and its inputs — stored, taken, said last of all.
-        let mut asked = asked;
-        let input_list = asked.list.take();
-        let input_rows = input_list.clone();
-        let born_id = ticket.id.clone();
-        // NOTE-2: and the note it was made from, pointing at it.
-        let upgraded = note.map(|n| crate::notes::Note {
-            ticket: Some(ticket.id.clone()),
-            upgraded_at: Some(ticket.created_unix),
-            ..n
-        });
-        let (note_row, note_kept) = (upgraded.clone(), upgraded.clone());
-        let cache = Arc::clone(&self.tickets);
-        self.write(
-            serial,
-            move |tx| {
-                db::upsert(tx, &born)?;
-                history::record(tx, &logged)?;
-                if let Some(n) = &note_row {
-                    notes::store(tx, n)?;
-                }
-                // SEARCH-2: and its row in the search index.
-                search::put(tx, &born.id, &born.title, &born.body)?;
-                if let Some(list) = &input_rows {
-                    inputs::store(tx, &born.id, list)?;
-                }
-                let blockers = rows
-                    .into_iter()
-                    .map(|row| {
-                        db::update_row(tx, &row)?;
-                        let body = db::body(tx, &row.id)?.ok_or_else(|| missing(&row.id))?;
-                        Ok((row.id.clone(), whole(row, body)))
-                    })
-                    .collect::<Result<HashMap<String, Ticket>, StoreError>>()?;
-                stored.write(tx)?;
-                components::store(tx, &registry_rows)?;
-                Ok(blockers)
-            },
-            move |cache, _| {
-                let out = cache.created(newborn, touched.into_values(), moved);
-                cache.log.append(&appended, &born_key);
-                if let Some(n) = note_kept {
-                    cache.notes.put(n);
-                }
-                cache.take_registry(registry_moves);
-                if let Some(list) = input_list {
-                    cache.inputs.take(&born_id, list);
-                }
-                out
-            },
-            move |blockers, (groups, child_count), tx| {
-                let _ = tx.send(Change::Created {
-                    ticket: ticket.clone(),
-                });
-                let _ = tx.send(Change::Transition { epic: ticket.epic.clone(), transition: said });
-                if let (Some(parent_id), Some(epic), Some(child_count)) =
-                    (&ticket.parent, parent_epic, child_count)
-                {
-                    let _ = tx.send(Change::ChildrenChanged {
-                        id: parent_id.clone(),
-                        epic,
-                        added: ticket.id.clone(),
-                        child_count,
-                    });
-                }
-                for blocker_id in unlocks_added {
-                    let _ = tx.send(Change::UnlocksChanged {
-                        ticket: blockers[&blocker_id].clone(),
-                        added: ticket.id.clone(),
-                    });
-                }
-                broadcast_groups(tx, groups);
-                if let Some(placed) = placed {
-                    let _ = tx.send(placed);
-                }
-                for change in Change::components(registered) {
-                    let _ = tx.send(change);
-                }
-                for change in Change::inputs(&ticket.epic, asked) {
-                    let _ = tx.send(change);
-                }
-                if let Some(moves) = announced {
-                    let _ = tx.send(Change::CellsMoved { moves });
-                }
-                if let Some(change) = under.and_then(|u| u.after(&cache)) {
-                    let _ = tx.send(change);
-                }
-                (ticket, upgraded)
-            },
-        )
-        .await
-    }
-
     /// MNG-10: one roll-up per shortcode row the nav draws, in shortcode
     /// order — `total`, `done`, `root` and `host` exactly as AGS-20's
     /// `plan()` computes them from every row. Answered from the roll-ups
@@ -3694,13 +3425,13 @@ impl Store {
     /// shortcode's sequences are dense and it holds exactly that many
     /// tickets. A database edited by hand can hold a hole; the answer is
     /// still the highest sequence, never a count.
-    pub fn extents(&self) -> Vec<(String, u32)> {
+    pub fn extents(&self) -> Vec<(ShortcodeId, u32)> {
         self.tickets
             .read()
             .expect("store lock poisoned")
             .ids
             .last_seqs()
-            .map(|(epic, seq)| (epic.to_string(), seq))
+            .map(|(epic, seq)| (epic.clone(), seq))
             .collect()
     }
 
@@ -3712,9 +3443,13 @@ impl Store {
     /// board shows it. Rows only, under the read lock and nothing else —
     /// no await, no body, no write — memoized for the call, so the cost is
     /// the yielded tickets and their blocker closure.
+    ///
+    /// ORG-3: each of `epics` names letters, as `in` does — every shortcode
+    /// with them (`waves --epics THEME` is every THEME's board), or one an
+    /// address names.
     pub fn waves(&self, epics: &[String], kinds: &[Kind]) -> waves::Waves {
-        let epics: std::collections::BTreeSet<String> = epics.iter().map(|e| e.to_ascii_uppercase()).collect();
         let cache = self.tickets.read().expect("store lock poisoned");
+        let epics: std::collections::BTreeSet<ShortcodeId> = epics.iter().flat_map(|e| cache.shortcodes.in_set(e)).collect();
         waves::waves(cache.rows(), &epics, kinds)
     }
 
@@ -3728,15 +3463,16 @@ impl Store {
         &self,
         id: &str,
         kinds: &[Kind],
-        visible: Option<&std::collections::HashSet<String>>,
+        visible: Option<&std::collections::HashSet<ShortcodeId>>,
     ) -> Result<waves::Waves, StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        let row = cache.get(id).ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+        let id = cache.resolve(id)?;
+        let row = cache.get(&id).ok_or_else(|| StoreError::NotFound(id.to_string()))?;
         let sub = lineage::subtree(&cache, &row.id, Some(row));
         let tickets = sub
             .iter()
-            .flat_map(|(epic, seqs)| seqs.iter().filter_map(|seq| cache.order.get(&OrderKey { epic: epic.clone(), seq })));
-        let admit = |t: &Row| visible.is_none_or(|v| v.contains(&t.epic));
+            .flat_map(|(epic, seqs)| seqs.iter().filter_map(|seq| cache.order.get(&OrderKey { shortcode: epic.clone(), seq })));
+        let admit = |t: &Row| visible.is_none_or(|v| v.contains(&t.shortcode));
         Ok(waves::of(cache.rows(), tickets, kinds, &admit))
     }
 
@@ -3751,19 +3487,20 @@ impl Store {
         &self,
         id: &str,
         kinds: &[Kind],
-        visible: Option<&std::collections::HashSet<String>>,
+        visible: Option<&std::collections::HashSet<ShortcodeId>>,
     ) -> Result<waves::WavesTo, StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        let row = cache.get(id).ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+        let id = cache.resolve(id)?;
+        let row = cache.get(&id).ok_or_else(|| StoreError::NotFound(id.to_string()))?;
         if row.kind == Kind::Doc {
             return Err(StoreError::DocHasNoLifecycle { id: row.id.clone() });
         }
         let sub = lineage::subtree(&cache, &row.id, None);
         let descendants = sub
             .iter()
-            .flat_map(|(epic, seqs)| seqs.iter().filter_map(|seq| cache.order.get(&OrderKey { epic: epic.clone(), seq })))
+            .flat_map(|(epic, seqs)| seqs.iter().filter_map(|seq| cache.order.get(&OrderKey { shortcode: epic.clone(), seq })))
             .filter(|t| t.id != row.id);
-        let admit = |t: &Row| visible.is_none_or(|v| v.contains(&t.epic));
+        let admit = |t: &Row| visible.is_none_or(|v| v.contains(&t.shortcode));
         Ok(waves::to(cache.rows(), row, descendants, kinds, &admit))
     }
 
@@ -3774,25 +3511,97 @@ impl Store {
     /// WAVE-10: `id` may be a path address, `<SHORTCODE>/<path>` (the
     /// shortcode case-insensitive, the path exact) — the one ticket of that
     /// shortcode that holds the path; `NotFound` names the address as given.
+    ///
+    /// ORG-3: `id` is any address ([`Cache::resolve`]) — the full one, a
+    /// short form that names one ticket, today's id (pinned), a path address
+    /// with or without an org; one naming several is
+    /// [`StoreError::Ambiguous`], each by its full address.
     pub async fn get(&self, id: &str) -> Result<Ticket, StoreError> {
-        let (row, written) = match path_address(id) {
-            Some((epic, path)) => self.addressed(&epic, path, id)?,
-            None => self.row(id)?,
-        };
+        let (row, written) = self.addressed(id)?;
         self.full_one(row, written).await
     }
 
-    /// WAVE-10: the row a path address names, and the cache's count of
-    /// writes — [`Store::row`] by address.
-    fn addressed(&self, epic: &str, path: &str, address: &str) -> Result<(Row, u64), StoreError> {
+    /// ORG-3: the row any address names, and the cache's count of writes —
+    /// [`Store::row`] through the resolver.
+    fn addressed(&self, address: &str) -> Result<(Row, u64), StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        let row = cache
-            .paths
-            .get(&(epic.to_string(), path.to_string()))
-            .and_then(|id| cache.get(id))
-            .cloned()
-            .ok_or_else(|| StoreError::NotFound(address.to_string()))?;
+        let key = cache.resolve(address)?;
+        let row = cache.get(&key).cloned().ok_or_else(|| StoreError::NotFound(address.trim().to_string()))?;
         Ok((row, cache.written))
+    }
+
+    /// ORG-3: the key any address names — what a caller that names a ticket
+    /// by text resolves it to, once, before it asks the rest
+    /// ([`Cache::resolve`]): [`StoreError::NotFound`] or
+    /// [`StoreError::Ambiguous`] as `get` answers.
+    pub fn resolve(&self, address: &str) -> Result<String, StoreError> {
+        self.tickets.read().expect("store lock poisoned").resolve(address)
+    }
+
+    /// ORG-3: the key each of `addresses` names, in order — a name that
+    /// names none stays as given (a forward reference, or a ticket a caller
+    /// is told is not found by the write it asks); one naming several is
+    /// refused, naming each.
+    pub fn resolve_all(&self, addresses: &[String]) -> Result<Vec<String>, StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        addresses.iter().map(|a| cache.name_ticket(a)).collect()
+    }
+
+    /// ORG-3: the shortcode an address names — its identity, letters and
+    /// full address; `None` when it names none; [`StoreError::Ambiguous`]
+    /// when several in reach.
+    pub fn shortcode(&self, address: &str) -> Result<Option<Shortcode>, StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        Ok(cache.shortcode_named(address)?.and_then(|sc| cache.shortcodes.get(&sc).cloned()))
+    }
+
+    /// [`Store::extents`] with each shortcode's id as text — the tests'.
+    #[cfg(test)]
+    pub(crate) fn extents_text(&self) -> Vec<(String, u32)> {
+        self.extents().into_iter().map(|(sc, n)| (sc.as_str().to_string(), n)).collect()
+    }
+
+    /// [`Store::counts`] with each shortcode's id as text — the tests'.
+    #[cfg(test)]
+    pub(crate) fn counts_text(&self, lens: &Lens) -> Vec<(String, u64)> {
+        self.counts(lens).into_iter().map(|(sc, n)| (sc.as_str().to_string(), n)).collect()
+    }
+
+    /// ORG-3: the root of the shortcode `epic` names — `None` for one with
+    /// none, or naming none; [`StoreError::Ambiguous`] for several in reach.
+    pub fn root_of(&self, epic: &str) -> Result<Option<String>, StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        Ok(cache.shortcode_named(epic)?.and_then(|sc| cache.rollups.root(&sc).map(str::to_string)))
+    }
+
+    /// ORG-3: the shortcode a ticket's address names it in — the ticket's
+    /// own when it names one, else the shortcode its address names (a
+    /// hidden ticket and one naming none are placed alike, IDENTITY-37),
+    /// else its letters as an id. `None` for text that is no address.
+    pub fn shortcode_of(&self, text: &str) -> Option<ShortcodeId> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        if let shortcodes::Found::One(key) = cache.find_ticket(text, shortcodes::OrgReach::All) {
+            return cache.get(&key).map(|r| r.shortcode.clone());
+        }
+        let a = Address::parse(text).ok()?;
+        let shortcode = Address { at: At::Shortcode, ..a.clone() }.to_string();
+        match cache.shortcodes.find_shortcode(&shortcode, shortcodes::OrgReach::All) {
+            shortcodes::Found::One(sc) => Some(sc),
+            _ => Some(ShortcodeId::new(a.code.as_str())),
+        }
+    }
+
+    /// ORG-3: the shortcodes letters (or an address) name, as `in` reads
+    /// them — every shortcode with those letters.
+    pub fn shortcodes_in(&self, letters: &str) -> Vec<ShortcodeId> {
+        self.tickets.read().expect("store lock poisoned").shortcodes.in_set(letters)
+    }
+
+    /// ORG-3: every shortcode, in the store's order, each with its full
+    /// address.
+    pub fn shortcodes(&self) -> Vec<(Shortcode, String)> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        cache.shortcodes.all().map(|s| (s.clone(), cache.shortcodes.address(&s.id))).collect()
     }
 
     /// Tickets ordered by (epic, seq), optionally filtered. The `parent`
@@ -3822,25 +3631,11 @@ impl Store {
     /// SCALE-14: a walk of whole tickets — `select`, after the `after`
     /// cursor, at most `limit` of them — never more than [`BODIES_AT_ONCE`]
     /// bodies held. Nothing is read here: [`Walk::next`] reads each step.
+    ///
+    /// ORG-3: the selection's `epic` and `parent` are addresses, resolved at
+    /// each cut ([`span_shortcode`], [`page_parent`]) — never upper-cased
+    /// whole, which would make an org name a code.
     pub fn walk(&self, select: Select, after: Option<&str>, limit: Option<u32>) -> Walk {
-        let up = |s: Option<String>| s.map(|s| s.to_ascii_uppercase());
-        let select = match select {
-            Select::List {
-                epic,
-                status,
-                parent,
-            } => Select::List {
-                epic: up(epic),
-                status,
-                parent: up(parent),
-            },
-            Select::Ready { epic } => Select::Ready { epic: up(epic) },
-            Select::Filtered(q) => Select::Filtered(Filtered {
-                epic: up(q.epic),
-                parent: up(q.parent),
-                ..q
-            }),
-        };
         Walk {
             select,
             after: after.map(str::to_ascii_uppercase),
@@ -3888,9 +3683,9 @@ impl Store {
     /// it a range; nothing keeps one yet.
     pub fn page(&self, q: PageQuery<'_>) -> Result<Page, StoreError> {
         let select = Select::List {
-            epic: q.epic.map(str::to_ascii_uppercase),
+            epic: q.epic.map(str::to_string),
             status: q.status,
-            parent: q.parent.map(str::to_ascii_uppercase),
+            parent: q.parent.map(str::to_string),
         };
         let after = q.after.map(str::to_ascii_uppercase);
         let cache = self.tickets.read().expect("store lock poisoned");
@@ -3908,7 +3703,7 @@ impl Store {
         limit: Option<u32>,
     ) -> Result<Page, StoreError> {
         let select = Select::Ready {
-            epic: epic.map(str::to_ascii_uppercase),
+            epic: epic.map(str::to_string),
         };
         let after = after.map(str::to_ascii_uppercase);
         let cache = self.tickets.read().expect("store lock poisoned");
@@ -3931,8 +3726,10 @@ impl Store {
                 status,
                 parent,
             } => {
-                let span = Span::of(cache, after, epic.as_deref())?;
+                let epic = span_shortcode(cache, epic.as_deref())?;
+                let span = Span::of(cache, after, epic.as_ref())?;
                 let keep = |t: &Row| status.is_none_or(|s| t.status == s);
+                let parent = page_parent(cache, parent.as_deref())?;
                 // The epic is already spent — it bounded the span rather than
                 // filtering inside it — so with no status asked for, there is
                 // nothing left to test on the way through.
@@ -3951,7 +3748,8 @@ impl Store {
                 })
             }
             Select::Ready { epic } => {
-                let span = Span::of(cache, after, epic.as_deref())?;
+                let epic = span_shortcode(cache, epic.as_deref())?;
+                let span = Span::of(cache, after, epic.as_ref())?;
                 Ok(Self::walk_ready(cache, span, limit, rest))
             }
             // FILTER-4: from the bitmaps the filter admits.
@@ -4187,7 +3985,7 @@ impl Store {
             // nothing has changed. FILTER-13: and what an open `watch { filter
             // }` asking `under` sees of it: the cells it moves, and — when it
             // re-roots a shortcode — every shortcode whose hosts that moves.
-            let derived = cache.kind_change(&row, &old, cache.inputs.asking_after(&row.id, &moved_inputs));
+            let derived = cache.kind_change(&row, &old, cache.inputs.asking_after(&row.id, &moved_inputs))?;
             let under = self.under_before(&cache, || {
                 let mut t = lineage::Touched::of_moves(derived.announced().as_deref()).row(&row);
                 if let Some(after) = &derived.moved.rollups {
@@ -4195,6 +3993,11 @@ impl Store {
                 }
                 t
             });
+            // ORG-3: a ticket that now roots its shortcode may move its
+            // namespace — its event carries the address the write leaves.
+            if let Some(m) = &derived.moved.namespaces {
+                row = Cache::dressed(&m.after, row);
+            }
             (derived, under, made, moved_inputs)
         };
         let announced = derived.announced();
@@ -4207,7 +4010,7 @@ impl Store {
         }
         let placed = moved.placed.as_ref().and_then(Change::placed);
         let key = OrderKey::of(&row);
-        let epic = row.epic.clone();
+        let epic = row.shortcode.clone();
         let commit = Self::row_commit(row);
         let cache = Arc::clone(&self.tickets);
         let (logged, appended) = (made.clone(), made);
@@ -4242,14 +4045,14 @@ impl Store {
                 };
                 let _ = tx.send(change.clone());
                 for transition in made {
-                    let _ = tx.send(Change::Transition { epic: epic.clone(), transition });
+                    let _ = tx.send(Change::Transition { shortcode: epic.clone(), transition });
                 }
                 broadcast_groups(tx, groups);
                 if let Some(placed) = placed {
                     let _ = tx.send(placed);
                 }
                 for (input, _) in kept_inputs {
-                    let _ = tx.send(Change::InputChanged { epic: epic.clone(), input });
+                    let _ = tx.send(Change::InputChanged { shortcode: epic.clone(), input });
                 }
                 if let Some(moves) = announced {
                     let _ = tx.send(Change::CellsMoved { moves });
@@ -4277,9 +4080,24 @@ impl Store {
     /// `ChildRemoved` (the old one's, when it names a ticket). Setting the
     /// parent a ticket already has writes nothing and emits nothing: the
     /// returned `ParentChanged` then shows `previous == Some(parent)`.
+    ///
+    /// ORG-3: both by any address. Moving a shortcode's root rehomes the
+    /// shortcode: its namespace moves with it, and a move into a namespace
+    /// holding its code is [`StoreError::ShortcodeTaken`], naming the one
+    /// there; every row of it, and of each shortcode hosted under it, takes
+    /// its new address.
     pub async fn set_parent(&self, id: &str, parent: &str) -> Result<Change, StoreError> {
-        let id = id.trim().to_ascii_uppercase();
-        let parent = parent.trim().to_ascii_uppercase();
+        let id = self.resolve(id)?;
+        let parent = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            match cache.find_ticket(parent, shortcodes::OrgReach::All) {
+                shortcodes::Found::One(key) => key,
+                shortcodes::Found::Many(candidates) => {
+                    return Err(StoreError::Ambiguous { text: parent.trim().to_string(), candidates })
+                }
+                shortcodes::Found::None => parent.trim().to_ascii_uppercase(),
+            }
+        };
         let serial = self.serial().await;
         // The parent it already has: no write. SCALE-14: the answer still
         // carries the child whole, so its body is read — after the lock on
@@ -4320,17 +4138,17 @@ impl Store {
             let old_epic = previous
                 .as_deref()
                 .and_then(|p| tickets.get(p))
-                .map(|t| t.epic.clone());
-            (child, parent_ticket.epic.clone(), old_epic, previous)
+                .map(|t| t.shortcode.clone());
+            (child, parent_ticket.shortcode.clone(), old_epic, previous)
         };
 
         // SCALE-28: both parents' counts and the roll-ups it moves, stored
         // with the child's row. FILTER-13: and what an open `watch { filter
         // }` asking `under` sees of it — the moved subtree, and any
         // shortcode it re-hosts.
-        let (Derived { stored, moved }, under) = {
+        let (Derived { stored, moved }, under, child) = {
             let cache = self.tickets.read().expect("store lock poisoned");
-            let derived = cache.reparent(&child, previous.as_deref());
+            let derived = cache.reparent(&child, previous.as_deref())?;
             let under = self.under_before(&cache, || {
                 let mut t = lineage::Touched::default();
                 t.subtree(&cache, &child.id, cache.get(&child.id));
@@ -4339,7 +4157,12 @@ impl Store {
                 }
                 t
             });
-            (derived, under)
+            // ORG-3: a rehomed root's event carries its new address.
+            let child = match &derived.moved.namespaces {
+                Some(m) => Cache::dressed(&m.after, child),
+                None => child,
+            };
+            (derived, under, child)
         };
         let left_behind = previous.clone();
         let commit = Self::row_commit(child);
@@ -4360,14 +4183,14 @@ impl Store {
                 let _ = tx.send(change.clone());
                 let _ = tx.send(Change::ChildrenChanged {
                     id: parent,
-                    epic: new_epic,
+                    shortcode: new_epic,
                     added: id.clone(),
                     child_count: joined,
                 });
                 if let (Some(old), Some(epic)) = (previous, old_epic) {
                     let _ = tx.send(Change::ChildRemoved {
                         id: old,
-                        epic,
+                        shortcode: epic,
                         removed: id,
                         child_count: left,
                     });
@@ -4410,7 +4233,8 @@ impl Store {
         title: Option<String>,
         body: Option<String>,
     ) -> Result<Change, StoreError> {
-        let id = id.trim().to_ascii_uppercase();
+        // ORG-3: as the store spells it — `get` below resolves it.
+        let id = crate::address::folded(id);
         if title.as_deref().is_some_and(|t| t.trim().is_empty()) {
             return Err(StoreError::EmptyTitle { id });
         }
@@ -4496,7 +4320,7 @@ impl Store {
             // FILTER-30: no cell moves, but the ticket is touched.
             None => {
                 let cache = self.tickets.read().expect("store lock poisoned");
-                (None, self.touch_before(&cache, &[(&row.epic, row.seq)]))
+                (None, self.touch_before(&cache, &[(&row.shortcode, row.seq)]))
             }
         };
         let announced = derived.as_ref().and_then(Derived::announced);
@@ -4543,7 +4367,7 @@ impl Store {
                 groups
             },
             move |_, groups, tx| {
-                let asked = Change::inputs(&ticket.epic, asked);
+                let asked = Change::inputs(&ticket.shortcode, asked);
                 let change = Change::Amended { ticket, changed };
                 let _ = tx.send(change.clone());
                 broadcast_groups(tx, groups);
@@ -4584,13 +4408,12 @@ impl Store {
         epic: Option<&str>,
         state: Option<InputState>,
     ) -> Result<Vec<Input>, StoreError> {
-        let ticket = ticket.map(|t| t.trim().to_ascii_uppercase());
-        let epic = epic.map(|e| e.trim().to_ascii_uppercase());
         let cache = self.tickets.read().expect("store lock poisoned");
-        if let Some(t) = ticket.as_ref().filter(|t| cache.get(t).is_none()) {
-            return Err(StoreError::NotFound(t.clone()));
-        }
-        Ok(cache.inputs.query(ticket.as_deref(), epic.as_deref(), state))
+        // ORG-3: the ticket by any address; the shortcode by its letters or
+        // address, one naming several refused.
+        let ticket = ticket.map(|t| cache.resolve(t)).transpose()?;
+        let epic = epic.map(|e| span_shortcode(&cache, Some(e))).transpose()?.flatten();
+        Ok(cache.inputs.query(ticket.as_deref(), epic.as_ref(), state))
     }
 
     /// INPUT-3: records `value` as the answer to `ticket`'s input `input` —
@@ -4640,7 +4463,8 @@ impl Store {
     /// committed, the cache moved, `InputChanged` broadcast. A change that
     /// changes nothing writes and says nothing.
     async fn input_write(&self, ticket: &str, input: &str, op: inputs::Op) -> Result<InputWrite, StoreError> {
-        let ticket = ticket.trim().to_ascii_uppercase();
+        // ORG-3: by any address.
+        let ticket = self.resolve(ticket)?;
         let input = input.trim().to_string();
         let serial = self.serial().await;
         let (epic, current, row) = {
@@ -4651,7 +4475,7 @@ impl Store {
                 input: input.clone(),
                 known: cache.inputs.of(&ticket).iter().map(|i| i.id.clone()).collect(),
             })?;
-            (row.epic.clone(), current, row.clone())
+            (row.shortcode.clone(), current, row.clone())
         };
         let moved = inputs::apply(&current, op, chrono::Utc::now().timestamp()).map_err(|refused| match refused {
             inputs::Refused::Removed => StoreError::InputRemoved { ticket, input },
@@ -4677,7 +4501,7 @@ impl Store {
             }
             false if touches => {
                 let cache = self.tickets.read().expect("store lock poisoned");
-                (None, self.touch_before(&cache, &[(&row.epic, row.seq)]))
+                (None, self.touch_before(&cache, &[(&row.shortcode, row.seq)]))
             }
             false => (None, None),
         };
@@ -4701,7 +4525,7 @@ impl Store {
             move |cache, _| {
                 cache.inputs.put(kept);
                 if touches {
-                    cache.log.touch(&row.epic, row.seq, at);
+                    cache.log.touch(&row.shortcode, row.seq, at);
                 }
                 if let Some(moved) = moved {
                     let groups = cache.take(moved);
@@ -4710,7 +4534,7 @@ impl Store {
             },
             move |(), (), tx| {
                 let _ = tx.send(Change::InputChanged {
-                    epic,
+                    shortcode: epic,
                     input: next.clone(),
                 });
                 if let Some(moves) = announced {
@@ -4751,7 +4575,13 @@ impl Store {
         let comment = {
             let cache = self.tickets.read().expect("store lock poisoned");
             if let Some(id) = anchor.ticket.take() {
-                let row = cache.get(&id).ok_or_else(|| StoreError::CommentTicket { ticket: id.clone() })?;
+                // ORG-3: by any address; kept by its key.
+                let row = match cache.resolve(&id) {
+                    Ok(key) => cache.get(&key),
+                    Err(StoreError::Ambiguous { text, candidates }) => return Err(StoreError::Ambiguous { text, candidates }),
+                    Err(_) => None,
+                };
+                let row = row.ok_or_else(|| StoreError::CommentTicket { ticket: id.clone() })?;
                 anchor.ticket = Some(row.id.clone());
                 anchor.version = Some(row.updated_unix);
             }
@@ -4769,7 +4599,7 @@ impl Store {
         let (on, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let on = comment.anchor.ticket.as_deref().and_then(|t| cache.at.get(t)).cloned();
-            let under = on.as_ref().and_then(|k| self.touch_before(&cache, &[(&k.epic, k.seq)]));
+            let under = on.as_ref().and_then(|k| self.touch_before(&cache, &[(&k.shortcode, k.seq)]));
             (on, under)
         };
         let (stored, kept) = (comment.clone(), comment.clone());
@@ -4779,7 +4609,7 @@ impl Store {
             move |tx| Ok(comments::store(tx, &stored)?),
             move |cache, _| {
                 if let Some(k) = &on {
-                    cache.log.touch(&k.epic, k.seq, kept.at);
+                    cache.log.touch(&k.shortcode, k.seq, kept.at);
                 }
                 cache.comments.put(kept);
             },
@@ -4920,48 +4750,54 @@ impl Store {
     /// missing one resolve alike (IDENTITY-37). `None`: `target` names
     /// nothing a scope could hold (blank, or not a shortcode's spelling).
     /// `*` is the caller's to add.
+    ///
+    /// ORG-3: `target` is any address, resolved by the store's one resolver
+    /// ([`Cache::find_ticket`], the shortcodes' registry) — a ticket by any
+    /// short form (today's ids pinned), a shortcode by its letters or path,
+    /// with an org or without — and the chain is of identities: a ticket's
+    /// key and its ancestors', its shortcode's id and its hosts'. A target
+    /// naming several in reach names nothing (`None`): the gate never decides
+    /// on a namesake's chain. A ticket the store does not hold is placed by
+    /// the shortcode its address names, as before.
     pub fn scope_chain(&self, target: &str) -> Option<Vec<String>> {
         let t = target.trim();
-        let code_ok = |c: &str| !c.is_empty() && c.len() <= 32 && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let hosts = |epic: &str| lineage::host_chain(&cache, epic);
-        if let Some((code, _path)) = t.split_once('/') {
-            if !code_ok(code) {
-                return None;
-            }
-            let code = code.to_ascii_uppercase();
-            let mut out = vec![code.clone()];
-            out.extend(hosts(&code));
-            return Some(out);
+        if t.is_empty() {
+            return None;
         }
-        let ticket = t.rsplit_once('-').filter(|(c, n)| code_ok(c) && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-        match ticket {
-            Some((code, n)) => {
-                let code = code.to_ascii_uppercase();
-                let id = format!("{code}-{n}");
-                let mut out = vec![code.clone()];
-                if let Some(row) = cache.get(&id) {
-                    out.push(row.id.clone());
-                    for a in tree::ancestors(cache.rows(), &row.id, row.parent.as_deref()) {
-                        if !out.iter().any(|o| o == a) {
-                            out.push(a.to_string());
-                        }
-                    }
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let shortcode_chain = |sc: &ShortcodeId| -> Vec<String> {
+            std::iter::once(sc.as_str().to_string()).chain(lineage::host_chain(&cache, sc).into_iter().map(|h| h.as_str().to_string())).collect()
+        };
+        let ticket_chain = |key: &str| -> Option<Vec<String>> {
+            let row = cache.get(key)?;
+            let mut out = vec![row.shortcode.as_str().to_string(), row.id.clone()];
+            for a in tree::ancestors(cache.rows(), &row.id, row.parent.as_deref()) {
+                if !out.iter().any(|o| o == a) {
+                    out.push(a.to_string());
                 }
-                for h in hosts(&code) {
-                    if !out.contains(&h) {
-                        out.push(h);
-                    }
+            }
+            for h in lineage::host_chain(&cache, &row.shortcode) {
+                if !out.iter().any(|o| o == h.as_str()) {
+                    out.push(h.as_str().to_string());
                 }
-                Some(out)
             }
-            None if code_ok(t) => {
-                let code = t.to_ascii_uppercase();
-                let mut out = vec![code.clone()];
-                out.extend(hosts(&code));
-                Some(out)
+            Some(out)
+        };
+        let parsed = Address::parse(t).ok();
+        if parsed.as_ref().is_none_or(Address::names_ticket) {
+            match cache.find_ticket(t, shortcodes::OrgReach::All) {
+                shortcodes::Found::One(key) => return ticket_chain(&key),
+                shortcodes::Found::Many(_) => return None,
+                shortcodes::Found::None => {}
             }
-            None => None,
+        }
+        let a = parsed?;
+        let shortcode = Address { at: At::Shortcode, ..a.clone() }.to_string();
+        match cache.shortcodes.find_shortcode(&shortcode, shortcodes::OrgReach::All) {
+            shortcodes::Found::One(sc) => Some(shortcode_chain(&sc)),
+            shortcodes::Found::Many(_) => None,
+            // A shortcode no ticket is in: its own name, as before.
+            shortcodes::Found::None => Some(vec![a.code.as_str().to_string()]),
         }
     }
 
@@ -5043,7 +4879,7 @@ impl Store {
     /// then the cache, then one `CommitsLinked`. Like `amend`, it moves no
     /// roll-up and no index, so the row goes into the cache and that is all.
     pub async fn link_commits(&self, id: &str, entries: Vec<String>) -> Result<Change, StoreError> {
-        let id = id.trim().to_ascii_uppercase();
+        let id = crate::address::folded(id);
         let refs = Self::references(&id, &entries)?;
         let serial = self.serial().await;
         let (mut row, written) = self.row(&id)?;
@@ -5127,7 +4963,7 @@ impl Store {
     /// set makes (`label <name>`), then the cache, then one
     /// `LabelsChanged`, then the cell moves.
     pub async fn label(&self, id: &str, add: Vec<String>, remove: Vec<String>) -> Result<Change, StoreError> {
-        let id = id.trim().to_ascii_uppercase();
+        let id = crate::address::folded(id);
         let serial = self.serial().await;
         let (mut row, written) = self.row(&id)?;
         let (after, added, removed) =
@@ -5183,7 +5019,7 @@ impl Store {
     /// commits and `updated_unix`), then the cache, then one
     /// `CommitsUnlinked`.
     pub async fn unlink_commits(&self, id: &str, entries: Vec<String>) -> Result<Change, StoreError> {
-        let id = id.trim().to_ascii_uppercase();
+        let id = crate::address::folded(id);
         let refs = Self::references(&id, &entries)?;
         let serial = self.serial().await;
         let (mut row, written) = self.row(&id)?;
@@ -5580,6 +5416,17 @@ pub use lineage::{Node, TreePage, TreeQuery, UnderMoves, UNDERS_MAX};
 /// (filter)`. Never a walk of the store.
 mod lensed;
 pub use lensed::{narrowing, narrowing_lens, ready_and, MEMBER_MAX};
+
+/// ORG-3: the shortcodes — each one's namespace, stored; the orgs; the pins;
+/// and the one resolver from what a reader writes to what the store keys on.
+mod shortcodes;
+// The create write, in a module of its own (MENGER-29).
+mod create;
+pub use shortcodes::OrgReach;
+/// ORG-3: two shortcodes of one code in two namespaces, through every write
+/// that mints or moves one; the resolver; a file from before ORG-3.
+#[cfg(test)]
+mod tests_shortcodes;
 
 /// SCALE-28: the derived state, stored — the tables beside the tickets,
 /// what a write's transaction writes to them ([`stored::Changes`]), a start

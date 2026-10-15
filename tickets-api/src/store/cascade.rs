@@ -45,7 +45,7 @@ pub(super) fn to_cancel<'c>(cache: &'c Cache, root: &Row) -> Vec<&'c Row> {
     let mut out = Vec::new();
     for (epic, bm) in lineage::subtree(cache, &root.id, Some(root)) {
         for seq in bm {
-            if let Some(t) = cache.order.get(&OrderKey { epic: epic.clone(), seq }) {
+            if let Some(t) = cache.order.get(&OrderKey { shortcode: epic.clone(), seq }) {
                 if t.id != root.id && open_work(t) {
                     out.push(t);
                 }
@@ -63,7 +63,7 @@ pub(super) fn restorable<'c>(cache: &'c Cache, row: &Row) -> Vec<(&'c Row, Statu
         return Vec::new();
     }
     let log = &cache.log;
-    let Some(cancel) = log.latest(&row.epic, row.seq, TransitionField::Status) else { return Vec::new() };
+    let Some(cancel) = log.latest(&row.shortcode, row.seq, TransitionField::Status) else { return Vec::new() };
     if log.mark(cancel).status_after() != Some(Status::Canceled) {
         return Vec::new();
     }
@@ -75,7 +75,7 @@ pub(super) fn restorable<'c>(cache: &'c Cache, row: &Row) -> Vec<(&'c Row, Statu
         }
         let key = log.key_of(p);
         let Some(t) = cache.order.get(&key) else { continue };
-        if t.status != Status::Canceled || log.latest(&key.epic, key.seq, TransitionField::Status) != Some(p) {
+        if t.status != Status::Canceled || log.latest(&key.shortcode, key.seq, TransitionField::Status) != Some(p) {
             continue;
         }
         if let Some(from) = m.status_before() {
@@ -191,15 +191,21 @@ impl Store {
     /// back. From the cache alone. [`StoreError::NotFound`] for an id that
     /// names no ticket.
     pub fn history(&self, id: &str) -> Result<HistoryAnswer, StoreError> {
-        let id = id.trim().to_ascii_uppercase();
         let cache = self.tickets.read().expect("store lock poisoned");
+        // ORG-3: by any address — a deleted ticket's by its pinned id or key.
+        let id = match cache.find_ticket(id, shortcodes::OrgReach::All) {
+            shortcodes::Found::One(key) => key,
+            shortcodes::Found::Many(candidates) => return Err(StoreError::Ambiguous { text: id.trim().to_string(), candidates }),
+            shortcodes::Found::None => crate::address::folded(id),
+        };
         // ACT-5: a deleted ticket's history is kept — answered from its id.
         let row = cache.get(&id);
+        // ORG-3: where its tombstone says it was — never parsed from the id.
         let (epic, seq) = match row {
-            Some(r) => (r.epic.clone(), r.seq),
-            None => match (cache.tombstones.get(&id), id.rsplit_once('-').and_then(|(e, s)| Some((e, s.parse::<u32>().ok()?)))) {
-                (Some(_), Some((e, s))) => (e.to_string(), s),
-                _ => return Err(StoreError::NotFound(id.clone())),
+            Some(r) => (r.shortcode.clone(), r.seq),
+            None => match cache.tombstones.place_of(&id) {
+                Some((e, s)) => (e.clone(), s),
+                None => return Err(StoreError::NotFound(id.clone())),
             },
         };
         let log = &cache.log;
@@ -289,7 +295,7 @@ impl Store {
         }
         let placed = moved.placed.as_ref().and_then(Change::placed);
         let key = OrderKey::of(&row);
-        let epic = row.epic.clone();
+        let epic = row.shortcode.clone();
         let commit = Self::row_commit(row);
         let cache = Arc::clone(&self.tickets);
         let (logged, kept_inputs) = (transition.clone(), moved_inputs.clone());
@@ -323,14 +329,14 @@ impl Store {
                 };
                 tx.send(change.clone());
                 if let Some(transition) = transition {
-                    tx.send(Change::Transition { epic: epic.clone(), transition });
+                    tx.send(Change::Transition { shortcode: epic.clone(), transition });
                 }
                 broadcast_groups(tx, groups);
                 if let Some(placed) = placed {
                     tx.send(placed);
                 }
                 for (input, _) in kept_inputs {
-                    tx.send(Change::InputChanged { epic: epic.clone(), input });
+                    tx.send(Change::InputChanged { shortcode: epic.clone(), input });
                 }
                 if let Some(moves) = announced {
                     tx.send(Change::CellsMoved { moves });
@@ -462,7 +468,7 @@ pub(super) fn status_step(
     }
     let body = db::body(txn, &row.id)?.ok_or_else(|| missing(&row.id))?;
     let key = OrderKey::of(&row);
-    let epic = row.epic.clone();
+    let epic = row.shortcode.clone();
     let moved_groups = cache.status_changed(row.clone(), previous, moved);
     if let Some(t) = &step.transition {
         cache.log.append(t, &key);
@@ -472,11 +478,11 @@ pub(super) fn status_step(
     }
     out.tickets.push(Change::StatusChanged { ticket: whole(row, body), previous });
     if let Some(transition) = step.transition {
-        out.tickets.push(Change::Transition { epic: epic.clone(), transition });
+        out.tickets.push(Change::Transition { shortcode: epic.clone(), transition });
     }
     out.groups(moved_groups);
     out.placed(placed);
-    out.inputs.extend(step.inputs.into_iter().map(|(input, _)| Change::InputChanged { epic: epic.clone(), input }));
+    out.inputs.extend(step.inputs.into_iter().map(|(input, _)| Change::InputChanged { shortcode: epic.clone(), input }));
     out.filtered(announced, under.and_then(|u| u.after_in(cache)));
     Ok(())
 }
@@ -491,7 +497,7 @@ pub(super) fn status_step(
 pub(super) struct Gathered {
     pub(super) tickets: Vec<Change>,
     groups: Vec<Group>,
-    placements: Vec<(String, crate::types::PlacementChange)>,
+    placements: Vec<(ShortcodeId, crate::types::PlacementChange)>,
     pub(super) components: Vec<Change>,
     pub(super) inputs: Vec<Change>,
     filtered: Vec<Change>,
@@ -501,7 +507,7 @@ impl Gathered {
     /// Groups a step moved — each kept once, as the latest step left it.
     pub(super) fn groups(&mut self, moved: Vec<Group>) {
         for g in moved {
-            match self.groups.iter_mut().find(|h| h.epic == g.epic) {
+            match self.groups.iter_mut().find(|h| h.shortcode == g.shortcode) {
                 Some(h) => *h = g,
                 None => self.groups.push(g),
             }

@@ -243,7 +243,7 @@ impl LiveCounts {
             let mut runs = Vec::new();
             for ev in events {
                 match ev {
-                    TicketsEvent::Count { epic, held } => runs.push((epic, held)),
+                    TicketsEvent::Count { shortcode: epic, held, .. } => runs.push((epic.to_string(), held)),
                     TicketsEvent::Error { message } => {
                         leptos::logging::log!("counts: {message}");
                         return;

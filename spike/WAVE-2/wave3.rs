@@ -288,6 +288,7 @@ async fn measure(path: &Path, samples: usize) {
     let epics: Vec<(String, u32)> = store
         .extents()
         .into_iter()
+        .map(|(e, n)| (e.as_str().to_string(), n))
         .filter(|(e, _)| !["CHN", "FNX", "DIA"].contains(&e.as_str()))
         .collect();
     let mut rng = Rng(42);

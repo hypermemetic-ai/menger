@@ -336,11 +336,11 @@ async fn input_changed_comes_after_the_writes_other_events() {
     let changes = drain(&mut rx);
     assert_eq!(changes.len(), 1, "{changes:?}");
     match &changes[0] {
-        Change::InputChanged { epic, input } => {
+        Change::InputChanged { shortcode: epic, input } => {
             assert_eq!((epic.as_str(), input.ticket.as_str(), input.state), ("Q", id.as_str(), InputState::Answered));
             assert_eq!(input.answer.as_ref().map(|a| a.source), Some(AnswerSource::App));
-            assert!(changes[0].clone().in_epic(Some("Q")).is_some());
-            assert!(changes[0].clone().in_epic(Some("OTHER")).is_none(), "filtered by its ticket's shortcode");
+            assert!(changes[0].clone().in_epic(Some(&ShortcodeId::from("Q"))).is_some());
+            assert!(changes[0].clone().in_epic(Some(&ShortcodeId::from("OTHER"))).is_none(), "filtered by its ticket's shortcode");
         }
         other => panic!("{other:?}"),
     }

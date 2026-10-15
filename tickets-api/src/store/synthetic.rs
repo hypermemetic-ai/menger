@@ -343,7 +343,12 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
         out.push(Ticket {
             labels: Vec::new(),
             id,
-            epic,
+            // ORG-3: a seed's codes are shortcodes of their own, each its
+            // code's first — its id is its code; the store registers them
+            // and gives every row its address when the seed lands.
+            shortcode: crate::address::ShortcodeId::new(&epic),
+            epic: crate::address::Code::stored(&epic),
+            address: String::new(),
             seq: seq[e],
             title: title_s,
             status,

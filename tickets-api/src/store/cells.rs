@@ -33,6 +33,7 @@
 //! more as the 8 KiB bitmap of the block — and `cell_counts (epic, cell,
 //! held)`.
 
+use crate::address::ShortcodeId;
 use super::stored::Changes;
 use super::{Kind, OrderKey, Row, Rows, Severity, Status};
 use roaring::RoaringBitmap;
@@ -250,7 +251,7 @@ pub(super) struct Cells {
     /// Cell → id.
     ids: HashMap<Key, u32>,
     /// Per shortcode, in the store's (shortcode) order.
-    held: BTreeMap<String, Held>,
+    held: BTreeMap<ShortcodeId, Held>,
 }
 
 /// One ticket whose cell a write moved: its position — its shortcode
@@ -260,7 +261,7 @@ pub(super) struct Cells {
 /// [`RECOUNT_OVER`] a write).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CellMove {
-    pub epic: Arc<str>,
+    pub shortcode: ShortcodeId,
     pub seq: u32,
     pub from: Option<u32>,
     pub to: u32,
@@ -275,7 +276,7 @@ pub struct CellMove {
 pub struct Moves {
     pub moves: Vec<CellMove>,
     /// Shortcode → each cell it holds after the write, with its count.
-    pub counts: Option<BTreeMap<String, Vec<(u32, u64)>>>,
+    pub counts: Option<BTreeMap<ShortcodeId, Vec<(u32, u64)>>>,
 }
 
 /// More membership moves than this for one subscriber in one write, and it
@@ -296,16 +297,16 @@ pub(super) struct Move {
     interned: Vec<(u32, Key)>,
     /// Per (shortcode, cell) the write touches: who leaves it and who joins
     /// it — what the cache applies, as two set operations a bitmap.
-    groups: Vec<(String, u32, RoaringBitmap, RoaringBitmap)>,
+    groups: Vec<(ShortcodeId, u32, RoaringBitmap, RoaringBitmap)>,
     /// Each ticket whose cell changes, in the store's order — and, past
     /// [`RECOUNT_OVER`], the counts after: what the write's broadcast
     /// carries.
     shared: Arc<Moves>,
     /// Each container the moves rewrite, as it is after them: `None` when
     /// it is left empty (its row goes).
-    bits: Vec<((String, u32, u32), Option<(u64, Vec<u8>)>)>,
+    bits: Vec<((ShortcodeId, u32, u32), Option<(u64, Vec<u8>)>)>,
     /// Each (shortcode, cell) count the moves change, with its new value.
-    counts: Vec<((String, u32), u64)>,
+    counts: Vec<((ShortcodeId, u32), u64)>,
 }
 
 impl Move {
@@ -338,8 +339,8 @@ impl Move {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(super) struct Stored {
     pub(super) keys: BTreeMap<u32, Key>,
-    pub(super) bits: BTreeMap<(String, u32, u32), (u64, Vec<u8>)>,
-    pub(super) counts: BTreeMap<(String, u32), u64>,
+    pub(super) bits: BTreeMap<(ShortcodeId, u32, u32), (u64, Vec<u8>)>,
+    pub(super) counts: BTreeMap<(ShortcodeId, u32), u64>,
 }
 
 /// A container's members (their low 16 bits, ascending) as `cell_bits`
@@ -410,8 +411,8 @@ pub(super) fn decode(card: u64, bits: &[u8]) -> Result<Vec<u16>, String> {
 /// past its bitmap: what a start keeps of the cells is the bitmaps.
 #[derive(Default)]
 pub(super) struct Filling {
-    held: BTreeMap<String, Held>,
-    epic: String,
+    held: BTreeMap<ShortcodeId, Held>,
+    epic: ShortcodeId,
     here: Held,
     cell: Option<u32>,
     /// The current bitmap's containers: `(hi, card)` and their bodies.
@@ -430,13 +431,13 @@ impl Filling {
         if hi > u32::from(u16::MAX) {
             return Err(at("a block is at most 65535".into()));
         }
-        if epic != self.epic {
+        if epic != self.epic.as_str() {
             self.flush()?;
             let held = std::mem::take(&mut self.here);
-            if !self.epic.is_empty() || !held.is_empty() {
+            if !self.epic.as_str().is_empty() || !held.is_empty() {
                 self.held.insert(std::mem::take(&mut self.epic), held);
             }
-            self.epic = epic.to_string();
+            self.epic = ShortcodeId::new(epic);
         } else if self.cell != Some(cell) {
             self.flush()?;
         }
@@ -472,7 +473,7 @@ impl Filling {
     }
 
     /// Every shortcode's bitmaps.
-    pub(super) fn finish(mut self) -> Result<BTreeMap<String, Held>, String> {
+    pub(super) fn finish(mut self) -> Result<BTreeMap<ShortcodeId, Held>, String> {
         self.flush()?;
         if !self.here.is_empty() {
             self.held.insert(self.epic, self.here);
@@ -527,14 +528,14 @@ impl Cells {
         for k in seed {
             c.intern(*k);
         }
-        let mut here: Option<(String, Held)> = None;
+        let mut here: Option<(ShortcodeId, Held)> = None;
         for t in rows.tickets() {
             let id = c.intern(Key::of(t, unsatisfied(&t.id), asking(&t.id)));
-            if here.as_ref().is_none_or(|(e, _)| *e != t.epic) {
+            if here.as_ref().is_none_or(|(e, _)| *e != t.shortcode) {
                 if let Some((e, held)) = here.take() {
                     c.held.insert(e, held);
                 }
-                here = Some((t.epic.clone(), Vec::new()));
+                here = Some((t.shortcode.clone(), Vec::new()));
             }
             let held = &mut here.as_mut().expect("set above").1;
             let at = match held.binary_search_by_key(&id, |(c, _)| *c) {
@@ -568,7 +569,7 @@ impl Cells {
     /// SCALE-28's read at start: the cell table, and each shortcode's
     /// bitmaps as [`Filling`] made them from the stored containers. The ids
     /// are the file's.
-    pub(super) fn from_stored(keys: BTreeMap<u32, Key>, held: BTreeMap<String, Held>) -> Result<Self, String> {
+    pub(super) fn from_stored(keys: BTreeMap<u32, Key>, held: BTreeMap<ShortcodeId, Held>) -> Result<Self, String> {
         let mut c = Self::default();
         for (id, key) in keys {
             if id as usize != c.keys.len() {
@@ -616,14 +617,14 @@ impl Cells {
     }
 
     /// FILTER-13: `epic`'s cells and their bitmaps.
-    pub(super) fn held_in(&self, epic: &str) -> Option<&Held> {
+    pub(super) fn held_in(&self, epic: &ShortcodeId) -> Option<&Held> {
         self.held.get(epic)
     }
 
     /// Each shortcode that holds a ticket, in the store's order, with each
     /// cell it holds and its bitmap.
-    pub(super) fn shortcodes(&self) -> impl Iterator<Item = (&str, &Held)> {
-        self.held.iter().map(|(e, h)| (e.as_str(), h))
+    pub(super) fn shortcodes(&self) -> impl Iterator<Item = (&ShortcodeId, &Held)> {
+        self.held.iter()
     }
 
     /// How many (shortcode, cell) bitmaps there are — for the logs.
@@ -664,7 +665,6 @@ impl Cells {
     pub(super) fn moved<'a>(&self, touched: impl IntoIterator<Item = (&'a Row, Option<Key>, Key)>) -> Move {
         let mut m = Move::default();
         let mut moves: Vec<CellMove> = Vec::new();
-        let mut epics: HashMap<&'a str, Arc<str>> = HashMap::new();
         // The cells a write moves between are few; the last seen are kept
         // beside the table's lookup.
         let mut seen: Vec<(Key, u32)> = Vec::new();
@@ -682,9 +682,8 @@ impl Cells {
             };
             let from = before.map(|k| id_of(k, &mut m.interned));
             let to = id_of(after, &mut m.interned);
-            let epic = epics.entry(t.epic.as_str()).or_insert_with(|| Arc::from(t.epic.as_str()));
             moves.push(CellMove {
-                epic: Arc::clone(epic),
+                shortcode: t.shortcode.clone(),
                 seq: t.seq,
                 from,
                 to,
@@ -694,14 +693,14 @@ impl Cells {
             return m;
         }
         // Mostly in order already (a blocker's `unlocks` is): a pass.
-        moves.sort_by(|a, b| (&*a.epic, a.seq).cmp(&(&*b.epic, b.seq)));
+        moves.sort_by(|a, b| (&a.shortcode, a.seq).cmp(&(&b.shortcode, b.seq)));
         // Per (shortcode, cell): who leaves it and who joins it, ascending.
-        let mut patch: BTreeMap<(&str, u32), (Vec<u32>, Vec<u32>)> = BTreeMap::new();
+        let mut patch: BTreeMap<(&ShortcodeId, u32), (Vec<u32>, Vec<u32>)> = BTreeMap::new();
         for mv in &moves {
             if let Some(from) = mv.from {
-                patch.entry((&*mv.epic, from)).or_default().0.push(mv.seq);
+                patch.entry((&mv.shortcode, from)).or_default().0.push(mv.seq);
             }
-            patch.entry((&*mv.epic, mv.to)).or_default().1.push(mv.seq);
+            patch.entry((&mv.shortcode, mv.to)).or_default().1.push(mv.seq);
         }
         let empty = RoaringBitmap::new();
         for ((epic, cell), (leave, join)) in patch {
@@ -723,18 +722,18 @@ impl Cells {
             after |= &join;
             let mut rows: BTreeMap<u32, (u64, Vec<u8>)> = containers(&after).into_iter().map(|(hi, card, bits)| (hi, (card, bits))).collect();
             for hi in blocks {
-                m.bits.push(((epic.to_string(), cell, hi), rows.remove(&hi)));
+                m.bits.push(((epic.clone(), cell, hi), rows.remove(&hi)));
             }
             let held = bm.len() - bm.intersection_len(&leave) + join.difference_len(bm);
-            m.counts.push(((epic.to_string(), cell), held));
-            m.groups.push((epic.to_string(), cell, leave, join));
+            m.counts.push(((epic.clone(), cell), held));
+            m.groups.push((epic.clone(), cell, leave, join));
         }
-        let mut snapshot: Option<BTreeMap<String, Vec<(u32, u64)>>> = None;
+        let mut snapshot: Option<BTreeMap<ShortcodeId, Vec<(u32, u64)>>> = None;
         if moves.len() > RECOUNT_OVER {
             // Every count of each shortcode moved, as the write leaves it.
-            let mut counts_after: BTreeMap<String, Vec<(u32, u64)>> = BTreeMap::new();
-            let moved: BTreeMap<(&str, u32), u64> = m.counts.iter().map(|((e, c), n)| ((e.as_str(), *c), *n)).collect();
-            for epic in moves.iter().map(|mv| &*mv.epic).collect::<BTreeSet<_>>() {
+            let mut counts_after: BTreeMap<ShortcodeId, Vec<(u32, u64)>> = BTreeMap::new();
+            let moved: BTreeMap<(&ShortcodeId, u32), u64> = m.counts.iter().map(|((e, c), n)| ((e, *c), *n)).collect();
+            for epic in moves.iter().map(|mv| &mv.shortcode).collect::<BTreeSet<_>>() {
                 let mut counts: BTreeMap<u32, u64> = self
                     .held
                     .get(epic)
@@ -743,7 +742,7 @@ impl Cells {
                 for ((_, c), n) in moved.range((epic, 0)..=(epic, u32::MAX)) {
                     counts.insert(*c, *n);
                 }
-                counts_after.insert(epic.to_string(), counts.into_iter().filter(|(_, n)| *n > 0).collect());
+                counts_after.insert(epic.clone(), counts.into_iter().filter(|(_, n)| *n > 0).collect());
             }
             snapshot = Some(counts_after);
         }
@@ -788,7 +787,7 @@ impl Cells {
     #[cfg(test)]
     pub(super) fn cell_of(&self, key: &OrderKey) -> Option<Key> {
         self.held
-            .get(&key.epic)?
+            .get(&key.shortcode)?
             .iter()
             .find(|(_, b)| b.contains(key.seq))
             .map(|(c, _)| self.keys[*c as usize])
@@ -801,7 +800,7 @@ impl Cells {
         for (epic, held) in &self.held {
             for (cell, bm) in held {
                 for seq in bm {
-                    let prev = out.insert(OrderKey { epic: epic.clone(), seq }, self.keys[*cell as usize]);
+                    let prev = out.insert(OrderKey { shortcode: epic.clone(), seq }, self.keys[*cell as usize]);
                     assert!(prev.is_none(), "{epic}-{seq} is in two cells");
                 }
             }
@@ -823,33 +822,28 @@ pub(super) struct Admit {
     /// The cells admitted in a shortcode the filter does not name, by id.
     others: Vec<bool>,
     /// The cells admitted in each shortcode it names.
-    named: BTreeMap<String, Vec<bool>>,
+    named: BTreeMap<ShortcodeId, Vec<bool>>,
 }
 
 impl Admit {
     /// `eval(shortcode, cell)` once per cell of the table for each shortcode
     /// in `named` and once for the rest (`""`, which no `in` names). Never
     /// once per ticket.
-    pub(super) fn compile(keys: &[Key], named: impl IntoIterator<Item = String>, eval: impl Fn(&str, Key) -> bool) -> Self {
-        let table = |epic: &str| keys.iter().map(|k| eval(epic, *k)).collect::<Vec<bool>>();
-        let named: BTreeMap<String, Vec<bool>> = named.into_iter().map(|e| {
+    pub(super) fn compile(keys: &[Key], named: impl IntoIterator<Item = ShortcodeId>, eval: impl Fn(&ShortcodeId, Key) -> bool) -> Self {
+        let table = |epic: &ShortcodeId| keys.iter().map(|k| eval(epic, *k)).collect::<Vec<bool>>();
+        let named: BTreeMap<ShortcodeId, Vec<bool>> = named.into_iter().map(|e| {
             let t = table(&e);
             (e, t)
         }).collect();
-        Self { others: table(""), named }
+        Self { others: table(&ShortcodeId::default()), named }
     }
 
     /// The cells `epic` admits, by id. A cell past the table (interned
-    /// after the compile) is not admitted: compile again to see it. A
-    /// shortcode is named whatever its case — `in` reads it as the language
-    /// does, case-insensitively (only a hand edit writes a lower-case one).
-    pub(super) fn of(&self, epic: &str) -> &[bool] {
-        let named = match self.named.get(epic) {
-            Some(t) => Some(t),
-            None if epic.bytes().any(|b| b.is_ascii_lowercase()) => self.named.get(&epic.to_ascii_uppercase()),
-            None => None,
-        };
-        named.map_or(&self.others, Vec::as_slice)
+    /// after the compile) is not admitted: compile again to see it. ORG-3:
+    /// a shortcode by its identity — the language's names (`in THEME`, any
+    /// case) were resolved to identities before the compile.
+    pub(super) fn of(&self, epic: &ShortcodeId) -> &[bool] {
+        self.named.get(epic).map_or(&self.others, Vec::as_slice)
     }
 
     /// How many cells were compiled — one past the highest id it knows.
@@ -858,7 +852,7 @@ impl Admit {
     }
 
     /// Whether `cell` of `epic` is admitted; `None` past the table.
-    pub(super) fn admits(&self, epic: &str, cell: u32) -> Option<bool> {
+    pub(super) fn admits(&self, epic: &ShortcodeId, cell: u32) -> Option<bool> {
         self.of(epic).get(cell as usize).copied()
     }
 }
@@ -868,19 +862,19 @@ impl Admit {
 /// one cell), so a count is a sum of lengths and a rank a sum of ranks; a
 /// restriction (a parent's children) is one bitmap of its own.
 pub(super) struct View<'a> {
-    by_epic: Vec<(&'a str, Vec<std::borrow::Cow<'a, RoaringBitmap>>)>,
+    by_epic: Vec<(&'a ShortcodeId, Vec<std::borrow::Cow<'a, RoaringBitmap>>)>,
 }
 
 impl<'a> View<'a> {
     /// FILTER-13: a view made elsewhere — per shortcode, in the store's
     /// order, the disjoint bitmaps whose union is its matches.
-    pub(super) fn from_parts(by_epic: Vec<(&'a str, Vec<std::borrow::Cow<'a, RoaringBitmap>>)>) -> Self {
+    pub(super) fn from_parts(by_epic: Vec<(&'a ShortcodeId, Vec<std::borrow::Cow<'a, RoaringBitmap>>)>) -> Self {
         Self { by_epic }
     }
 
     /// The same, inside the sequences `within` gives each shortcode (a
     /// parent's children): one bitmap a shortcode, their intersection.
-    pub(super) fn within(self, within: impl Fn(&str) -> Option<RoaringBitmap>) -> View<'a> {
+    pub(super) fn within(self, within: impl Fn(&ShortcodeId) -> Option<RoaringBitmap>) -> View<'a> {
         let by_epic = self
             .by_epic
             .into_iter()
@@ -900,7 +894,7 @@ impl<'a> View<'a> {
     /// FILTER-24: the same, with the ticket at `seq` of `epic` a match too —
     /// one bitmap of its own beside the shortcode's (disjoint: added only
     /// when no bitmap holds it).
-    pub(super) fn keeping(mut self, epic: &'a str, seq: u32) -> View<'a> {
+    pub(super) fn keeping(mut self, epic: &'a ShortcodeId, seq: u32) -> View<'a> {
         let one = std::borrow::Cow::Owned(RoaringBitmap::from_iter([seq]));
         match self.by_epic.binary_search_by(|(e, _)| (*e).cmp(epic)) {
             Ok(i) if self.by_epic[i].1.iter().any(|b| b.contains(seq)) => {}
@@ -911,7 +905,7 @@ impl<'a> View<'a> {
     }
 
     /// Each shortcode with a match, and how many.
-    pub(super) fn counts(&self) -> impl Iterator<Item = (&'a str, u64)> + '_ {
+    pub(super) fn counts(&self) -> impl Iterator<Item = (&'a ShortcodeId, u64)> + '_ {
         self.by_epic
             .iter()
             .map(|(e, bms)| (*e, bms.iter().map(|b| b.len()).sum::<u64>()))
@@ -928,7 +922,7 @@ impl<'a> View<'a> {
     pub(super) fn rank(&self, key: &OrderKey) -> u64 {
         let mut n = 0;
         for (epic, bms) in &self.by_epic {
-            match (*epic).cmp(key.epic.as_str()) {
+            match (*epic).cmp(&key.shortcode) {
                 std::cmp::Ordering::Less => n += bms.iter().map(|b| b.len()).sum::<u64>(),
                 std::cmp::Ordering::Equal => n += bms.iter().map(|b| b.rank(key.seq)).sum::<u64>(),
                 std::cmp::Ordering::Greater => break,
@@ -938,7 +932,7 @@ impl<'a> View<'a> {
     }
 
     /// The `p`-th match (0-based), or `None` past the last.
-    pub(super) fn select(&self, p: u64) -> Option<(&'a str, u32)> {
+    pub(super) fn select(&self, p: u64) -> Option<(&'a ShortcodeId, u32)> {
         let mut left = p;
         for (epic, bms) in &self.by_epic {
             let n: u64 = bms.iter().map(|b| b.len()).sum();
@@ -953,7 +947,7 @@ impl<'a> View<'a> {
 
     /// At most `limit` matches from `from` on (inclusive), in the store's
     /// order — a merge of the admitted bitmaps, a shortcode at a time.
-    pub(super) fn page(&self, from: Option<(&str, u32)>, limit: usize) -> Vec<(&'a str, u32)> {
+    pub(super) fn page(&self, from: Option<(&ShortcodeId, u32)>, limit: usize) -> Vec<(&'a ShortcodeId, u32)> {
         let start = match from {
             None => 0,
             Some((epic, _)) => self.by_epic.partition_point(|(e, _)| *e < epic),
@@ -962,17 +956,17 @@ impl<'a> View<'a> {
     }
 
     /// At most `limit` matches strictly after `key`, which need not match.
-    pub(super) fn page_after(&self, key: &OrderKey, limit: usize) -> Vec<(&'a str, u32)> {
+    pub(super) fn page_after(&self, key: &OrderKey, limit: usize) -> Vec<(&'a ShortcodeId, u32)> {
         match key.seq.checked_add(1) {
-            Some(seq) => self.page(Some((key.epic.as_str(), seq)), limit),
+            Some(seq) => self.page(Some((&key.shortcode, seq)), limit),
             None => {
-                let start = self.by_epic.partition_point(|(e, _)| *e <= key.epic.as_str());
+                let start = self.by_epic.partition_point(|(e, _)| *e <= &key.shortcode);
                 self.page_from(start, None, limit)
             }
         }
     }
 
-    fn page_from(&self, start: usize, from: Option<(&str, u32)>, limit: usize) -> Vec<(&'a str, u32)> {
+    fn page_from(&self, start: usize, from: Option<(&ShortcodeId, u32)>, limit: usize) -> Vec<(&'a ShortcodeId, u32)> {
         let mut out = Vec::with_capacity(limit.min(1024));
         if limit == 0 {
             return out;
@@ -1052,7 +1046,7 @@ impl<'a> View<'a> {
     /// Whether the ticket at `seq` of `epic` is a match: its shortcode found
     /// by a binary search, then a lookup in each bitmap admitted there — the
     /// cells are disjoint, so the first that holds it answers.
-    pub(super) fn contains(&self, epic: &str, seq: u32) -> bool {
+    pub(super) fn contains(&self, epic: &ShortcodeId, seq: u32) -> bool {
         match self.by_epic.binary_search_by(|(e, _)| (*e).cmp(epic)) {
             Ok(i) => self.by_epic[i].1.iter().any(|b| b.contains(seq)),
             Err(_) => false,
@@ -1061,7 +1055,7 @@ impl<'a> View<'a> {
 
     /// Each shortcode with a match from `epic` on (every one without it), in
     /// the store's order, with the bitmaps admitted there.
-    pub(super) fn shortcodes_from(&self, epic: Option<&str>) -> &[(&'a str, Vec<std::borrow::Cow<'a, RoaringBitmap>>)] {
+    pub(super) fn shortcodes_from(&self, epic: Option<&ShortcodeId>) -> &[(&'a ShortcodeId, Vec<std::borrow::Cow<'a, RoaringBitmap>>)] {
         let start = epic.map_or(0, |e| self.by_epic.partition_point(|(x, _)| *x < e));
         &self.by_epic[start..]
     }

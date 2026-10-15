@@ -306,7 +306,7 @@ async fn count(client: &Client, filter: &str, keep: Option<String>) -> Counted {
             let mut runs = Vec::new();
             for ev in events {
                 match ev {
-                    TicketsEvent::Count { epic, held } => runs.push((epic, held)),
+                    TicketsEvent::Count { shortcode: epic, held, .. } => runs.push((epic.to_string(), held)),
                     TicketsEvent::Error { message } => return Counted::Refused(message),
                     _ => {}
                 }
@@ -639,13 +639,13 @@ impl Flat {
         if !in_id_order(rows.iter().map(|t| t.id.as_str())) {
             return Err(Stale);
         }
-        let keys: Vec<Key> = rows.iter().map(|t| (t.epic.clone(), t.seq)).collect();
+        let keys: Vec<Key> = rows.iter().map(|t| (t.shortcode.to_string(), t.seq)).collect();
         self.matches.with_untracked(|m| Ranked::<Row>::fits(m.as_ref().ok_or(Stale)?, first, Some(total), &keys))?;
         self.resyncs.set_value(0);
         if !self.holder.with_value(|h| h.hold_page(rows.clone())) {
             return Ok(false);
         }
-        let page: Vec<(Key, Row)> = rows.into_iter().filter_map(|t| cache::get(&t.id).map(|sig| ((t.epic, t.seq), (t.id, sig)))).collect();
+        let page: Vec<(Key, Row)> = rows.into_iter().filter_map(|t| cache::get(&t.id).map(|sig| ((t.shortcode.to_string(), t.seq), (t.id, sig)))).collect();
         let placed = self.matches.with_untracked(|m| {
             let m = m.as_ref()?;
             self.ranked.try_update(|r| r.place(m, first, Some(total), page))
@@ -1024,7 +1024,7 @@ fn flat_row(
     // A ticket's place in the order is fixed at birth; SDLC-13: its kind is
     // not (`set_kind`), so the row follows it.
     let kind = Memo::new(move |_| ticket.with(|t| t.kind.as_str()));
-    let key: Key = ticket.with_untracked(|t| (t.epic.clone(), t.seq));
+    let key: Key = ticket.with_untracked(|t| (t.shortcode.to_string(), t.seq));
     let posinset = Memo::new(move |_| f.matches.with(|m| f.ranked.with(|r| r.pos_of(m.as_ref()?, &key))).map(|p| p + 1));
     let href = format!("#/ticket/{id}");
     // FILTER-24: the open ticket, listed though the filter excludes it.
@@ -1199,7 +1199,7 @@ mod tests {
         TicketSummary {
             labels: Vec::new(),
             id: id.to_string(),
-            epic: epic.to_string(),
+            epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
             title: String::new(),
             status: Status::Pending,

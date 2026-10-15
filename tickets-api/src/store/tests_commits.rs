@@ -180,7 +180,7 @@ async fn a_link_moves_the_commits_and_updated_unix_and_nothing_else() {
     store.set_status("ED-3", Status::Coding).await.unwrap();
     store.set_status("ED-2", Status::Complete).await.unwrap();
     let before: Vec<Ticket> = store.list(None, None, None).await.unwrap();
-    let (groups, extents) = (store.groups(), store.extents());
+    let (groups, extents) = (store.groups(), store.extents_text());
     let started = chrono::Utc::now().timestamp();
 
     let (t, _) = linked(store.link_commits("ED-3", strings(&["77df9a0", "ought@1a2b3c4"])).await.unwrap());
@@ -203,7 +203,7 @@ async fn a_link_moves_the_commits_and_updated_unix_and_nothing_else() {
     }
     assert_eq!(store.get("ED-2").await.unwrap().commits, Vec::<String>::new(), "Complete with no commit");
     assert_eq!(store.groups(), groups, "no roll-up moved");
-    assert_eq!(store.extents(), extents, "no sequence moved");
+    assert_eq!(store.extents_text(), extents, "no sequence moved");
     for _ in 5..=9 {
         store.create(ticket("ED", Kind::Build, None, &[])).await.unwrap();
     }

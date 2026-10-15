@@ -801,7 +801,7 @@ async fn count(client: &Client, filter: &str) -> Counted {
             let mut runs = Vec::new();
             for ev in events {
                 match ev {
-                    TicketsEvent::Count { epic, held } => runs.push((epic, held)),
+                    TicketsEvent::Count { shortcode: epic, held, .. } => runs.push((epic.to_string(), held)),
                     TicketsEvent::Error { message } => return Counted::Refused(message),
                     _ => {}
                 }
@@ -1094,19 +1094,19 @@ impl Board {
     /// held if it lands inside a stretch the board holds (next to a row it
     /// holds); anywhere else nothing is fetched and nothing is held.
     pub(crate) fn created(self, t: &TicketSummary) {
-        let grew = self.ext.with_untracked(|e| e.as_ref().is_some_and(|e| e.pos(&t.epic, t.seq).is_none()));
+        let grew = self.ext.with_untracked(|e| e.as_ref().is_some_and(|e| e.pos(t.shortcode.as_str(), t.seq).is_none()));
         if grew {
             self.ext.update(|e| {
                 if let Some(e) = e {
-                    e.born(&t.epic, t.seq);
+                    e.born(t.shortcode.as_str(), t.seq);
                 }
             });
         }
         let near = self.ext.with_untracked(|e| {
             let e = e.as_ref()?;
-            let p = e.pos(&t.epic, t.seq)?;
+            let p = e.pos(t.shortcode.as_str(), t.seq)?;
             self.held.with_untracked(|h| {
-                if h.has((t.epic.as_str(), t.seq)) {
+                if h.has((t.shortcode.as_str(), t.seq)) {
                     return Some(false); // held already: `put` below is the whole story
                 }
                 let beside = |q: usize| e.key_at(q).is_some_and(|k| h.has(k));
@@ -1116,7 +1116,7 @@ impl Board {
         if near == Some(true) {
             if let Some(sig) = self.holder.with_value(|h| h.hold(t.clone())) {
                 self.held.update(|h| {
-                    h.rows.insert((t.epic.clone(), t.seq), (t.id.clone(), sig));
+                    h.rows.insert((t.shortcode.to_string(), t.seq), (t.id.clone(), sig));
                 });
             }
         } else {
@@ -1151,7 +1151,7 @@ impl Board {
     /// note the rows it passed over. True when it told the board anything.
     fn place(self, rows: Vec<TicketSummary>, after: Option<&str>) -> bool {
         let past: Vec<(String, u32)> = self.ext.with_untracked(|e| {
-            e.as_ref().map_or_else(Vec::new, |e| rows.iter().filter(|t| e.pos(&t.epic, t.seq).is_none()).map(|t| (t.epic.clone(), t.seq)).collect())
+            e.as_ref().map_or_else(Vec::new, |e| rows.iter().filter(|t| e.pos(t.shortcode.as_str(), t.seq).is_none()).map(|t| (t.shortcode.to_string(), t.seq)).collect())
         });
         if !past.is_empty() {
             self.ext.update(|e| {
@@ -1162,7 +1162,7 @@ impl Board {
                 }
             });
         }
-        let keys: Vec<(Key, String)> = rows.iter().map(|t| ((t.epic.clone(), t.seq), t.id.clone())).collect();
+        let keys: Vec<(Key, String)> = rows.iter().map(|t| ((t.shortcode.to_string(), t.seq), t.id.clone())).collect();
         let fresh = self.held.with_untracked(|h| keys.iter().any(|(k, _)| !h.rows.contains_key(k)));
         let page: Vec<Key> = keys.iter().map(|(k, _)| k.clone()).collect();
         let gaps = self.ext.with_untracked(|e| e.as_ref().map_or_else(Vec::new, |e| holes(e, after, &page)));
@@ -1535,13 +1535,13 @@ impl Board {
     /// it, and the rows it displaced given back — `Ok(true)` when it told
     /// the board anything; [`Stale`] (nothing held) when it does not fit.
     fn place_lensed(self, rows: Vec<TicketSummary>, first: usize, total: usize) -> Result<bool, Stale> {
-        let keys: Vec<Key> = rows.iter().map(|t| (t.epic.clone(), t.seq)).collect();
+        let keys: Vec<Key> = rows.iter().map(|t| (t.shortcode.to_string(), t.seq)).collect();
         self.matches.with_untracked(|m| Ranked::<Row>::fits(m.as_ref().ok_or(Stale)?, first, Some(total), &keys))?;
         self.resyncs.set_value(0);
         if !self.holder.with_value(|h| h.hold_page(rows.clone())) {
             return Ok(false);
         }
-        let page: Vec<(Key, Row)> = rows.into_iter().filter_map(|t| cache::get(&t.id).map(|sig| ((t.epic, t.seq), (t.id, sig)))).collect();
+        let page: Vec<(Key, Row)> = rows.into_iter().filter_map(|t| cache::get(&t.id).map(|sig| ((t.shortcode.to_string(), t.seq), (t.id, sig)))).collect();
         let placed = self.matches.with_untracked(|m| {
             let m = m.as_ref()?;
             self.ranked.try_update(|r| r.place(m, first, Some(total), page))
@@ -1902,7 +1902,7 @@ mod tests {
         TicketSummary {
             labels: Vec::new(),
             id: id.to_string(),
-            epic: epic.to_string(),
+            epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().expect("seq"),
             title: String::new(),
             status: Status::Pending,
@@ -1924,7 +1924,7 @@ mod tests {
         let mut h = Held::default();
         for id in ids {
             let t = row(id);
-            h.rows.insert((t.epic.clone(), t.seq), (t.id.clone(), ArcRwSignal::new(t)));
+            h.rows.insert((t.shortcode.to_string(), t.seq), (t.id.clone(), ArcRwSignal::new(t)));
         }
         h
     }

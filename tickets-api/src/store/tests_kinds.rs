@@ -12,6 +12,7 @@
 //! [`random_set_kind`], which holds each call to the rules written out here.
 
 use super::*;
+use crate::address::ShortcodeId;
 use super::tests::Changes;
 use std::collections::BTreeSet;
 
@@ -300,7 +301,7 @@ async fn a_lower_seq_ticket_made_a_scope_or_a_doc_becomes_the_root() {
     let moved: Vec<String> = sent
         .iter()
         .filter_map(|c| match c {
-            Change::GroupChanged { group } => Some(group.epic.clone()),
+            Change::GroupChanged { group } => Some(group.epic.to_string()),
             _ => None,
         })
         .collect();
@@ -422,7 +423,7 @@ async fn every_pair_of_kinds_with_and_without_a_status() {
                 let moved: BTreeSet<OrderKey> = drained(&mut rx)
                     .into_iter()
                     .flat_map(|c| match c {
-                        Change::CellsMoved { moves } => moves.moves.iter().map(|m| OrderKey { epic: m.epic.to_string(), seq: m.seq }).collect(),
+                        Change::CellsMoved { moves } => moves.moves.iter().map(|m| OrderKey { shortcode: ShortcodeId::from(m.shortcode.clone()), seq: m.seq }).collect(),
                         _ => Vec::new(),
                     })
                     .collect();
@@ -583,7 +584,7 @@ pub(super) async fn random_set_kind(store: &Store, below: &mut dyn FnMut(usize) 
                 was.map(|r| r.id.clone())
             };
             assert_eq!(now, expected, "{what}: the shortcode's root by its definition");
-            assert_eq!(store.tickets.read().unwrap().rollups.root(&t.epic).map(str::to_string), now, "{what}: the root kept");
+            assert_eq!(store.tickets.read().unwrap().rollups.root(&t.shortcode).map(str::to_string), now, "{what}: the root kept");
             let reroot = now.as_deref() != was.map(|r| r.id.as_str());
             REROOTS.with(|r| r.set(r.get() + usize::from(reroot)));
             KindWrite::Changed { reroot }

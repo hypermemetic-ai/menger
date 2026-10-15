@@ -484,8 +484,8 @@ impl Node {
 /// root, its shortcode row (and flat list) when it has none.
 pub(crate) fn shortcode_node(g: &Group) -> Node {
     match &g.root {
-        Some(root) => Node::Root(root.clone(), g.epic.clone()),
-        None => Node::Group(g.epic.clone()),
+        Some(root) => Node::Root(root.clone(), g.shortcode.to_string()),
+        None => Node::Group(g.shortcode.to_string()),
     }
 }
 
@@ -498,14 +498,18 @@ pub(crate) fn shortcode_node(g: &Group) -> Node {
 /// its root.
 pub(crate) fn face(g: &Group) -> Option<TicketSummary> {
     let (id, row) = (g.root.as_ref()?, g.root_row.as_ref()?);
-    Some(root_summary(id, &g.epic, g.host.clone(), row.title.clone(), row.status, row.kind))
+    Some(root_summary(id, g.shortcode.as_str(), g.host.clone(), row.title.clone(), row.status, row.kind))
 }
 
 fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, status: Status, kind: Kind) -> TicketSummary {
     TicketSummary {
         labels: Vec::new(),
         id: id.to_string(),
-        epic: epic.to_string(),
+        // ORG-3: `epic` is the shortcode's identity (THEME, or a namesake's
+        // THEME.5); its letters are what precedes a namesake's dot.
+        epic: menger_tickets_api::Code::stored(epic.split('.').next().unwrap_or(epic)),
+        shortcode: menger_tickets_api::ShortcodeId::new(epic),
+        address: String::new(),
         seq: key(id).map_or(0, |(_, s)| s),
         title,
         status,
@@ -569,7 +573,7 @@ pub(crate) fn climb(g: Option<&Group>, cur: &TicketSummary) -> Climb {
             Some(h) => Climb::Host(h.clone()),
             None => Climb::Top,
         },
-        Some(g) if g.root.is_none() => Climb::Flat(g.epic.clone()),
+        Some(g) if g.root.is_none() => Climb::Flat(g.shortcode.to_string()),
         _ => match &cur.parent {
             Some(p) => Climb::Parent(p.clone()),
             None => Climb::Lost,
@@ -1261,7 +1265,7 @@ impl Tree {
         // `group_changed`.
         let top = Memo::new(move |_| {
             groups.with(|m| {
-                m.iter().flat_map(|m| m.values()).filter(|g| g.host.is_none()).map(|g| g.epic.clone()).collect::<Vec<_>>()
+                m.iter().flat_map(|m| m.values()).filter(|g| g.host.is_none()).map(|g| g.shortcode.to_string()).collect::<Vec<_>>()
             })
         });
         let hosted = Memo::new(move |_| {
@@ -1269,7 +1273,7 @@ impl Tree {
             groups.with(|m| {
                 for g in m.iter().flat_map(|m| m.values()) {
                     if let Some(h) = &g.host {
-                        out.entry(h.clone()).or_default().push(g.epic.clone());
+                        out.entry(h.clone()).or_default().push(g.shortcode.to_string());
                     }
                 }
             });
@@ -1280,7 +1284,7 @@ impl Tree {
                 m.iter()
                     .flat_map(|m| m.values())
                     .filter(|g| g.host.is_some())
-                    .filter_map(|g| g.root.clone().map(|r| (r, g.epic.clone())))
+                    .filter_map(|g| g.root.clone().map(|r| (r, g.shortcode.to_string())))
                     .collect::<BTreeMap<_, _>>()
             })
         });
@@ -1300,7 +1304,7 @@ impl Tree {
     /// is drawn by no one — SDLC-11: and `docs: 0`; a row of docs alone (a
     /// doc collection) is a row ([`Group::drawn`]).
     pub(crate) fn set_groups(self, all: Vec<Group>) {
-        let map = all.into_iter().filter(Group::drawn).map(|g| (g.epic.clone(), g)).collect();
+        let map = all.into_iter().filter(Group::drawn).map(|g| (g.shortcode.to_string(), g)).collect();
         self.groups.set(Some(map));
         self.epoch.update(|e| *e += 1);
     }
@@ -1309,16 +1313,16 @@ impl Tree {
     /// move in place, a changed `host` moves the row; `total: 0` (SDLC-11:
     /// with `docs: 0`) is a row no longer drawn.
     pub(crate) fn group_changed(self, g: Group) {
-        let same = self.groups.with_untracked(|m| m.as_ref().and_then(|m| m.get(&g.epic)) == Some(&g));
+        let same = self.groups.with_untracked(|m| m.as_ref().and_then(|m| m.get(g.shortcode.as_str())) == Some(&g));
         if same {
             return;
         }
         self.groups.update(|m| {
             if let Some(m) = m {
                 if !g.drawn() {
-                    m.remove(&g.epic);
+                    m.remove(g.shortcode.as_str());
                 } else {
-                    m.insert(g.epic.clone(), g);
+                    m.insert(g.shortcode.to_string(), g);
                 }
             }
         });
@@ -1523,7 +1527,7 @@ pub(crate) fn arrived(t: &TicketSummary, born: bool) {
     if !born {
         return;
     }
-    for (list, holder) in lists(|s| matches!(s, Source::Epic(e) if *e == t.epic)) {
+    for (list, holder) in lists(|s| matches!(s, Source::Epic(e) if *e == t.shortcode.as_str())) {
         holder.hold(t.clone());
         list.try_update(|l| {
             let n = l.n + 1;
@@ -1860,7 +1864,7 @@ pub(crate) fn at(el: &web_sys::Element) -> Option<At> {
         .or_else(|| crate::kids::key(&key).map(|(e, _)| e.to_string()))
         .unwrap_or_else(|| key.clone());
     let root = h.ctx.tree.groups.with_untracked(|m| {
-        m.as_ref().and_then(|m| m.get(&epic)).map(|g| g.root.clone().unwrap_or_else(|| g.epic.clone()))
+        m.as_ref().and_then(|m| m.get(&epic)).map(|g| g.root.clone().unwrap_or_else(|| g.shortcode.to_string()))
     });
     let has_kids = row.has_attribute("aria-expanded");
     let place = Place::Row { label: key.clone(), has_kids, shortcode: root.as_ref().map(|_| epic) };
@@ -2597,7 +2601,7 @@ async fn chain_to(tree: Tree, leaf: &str) -> Option<Vec<(Node, Option<TicketSumm
     let mut steps = Vec::new();
     let mut cur = get_summary(leaf).await?;
     for _ in 0..64 {
-        let g = tree.groups.with_untracked(|m| m.as_ref().and_then(|m| m.get(&cur.epic)).cloned());
+        let g = tree.groups.with_untracked(|m| m.as_ref().and_then(|m| m.get(cur.shortcode.as_str())).cloned());
         match climb(g.as_ref(), &cur) {
             Climb::Top => return Some(steps),
             Climb::Host(h) => {
@@ -2703,7 +2707,7 @@ async fn drawn_chain(ctx: Ctx, filter: &str, leaf: &str, steps: Vec<(Node, Optio
     let roots: HashMap<String, String> = ctx
         .tree
         .groups
-        .with_untracked(|m| m.iter().flat_map(|m| m.values()).filter_map(|g| g.root.clone().map(|r| (r, g.epic.clone()))).collect());
+        .with_untracked(|m| m.iter().flat_map(|m| m.values()).filter_map(|g| g.root.clone().map(|r| (r, g.shortcode.to_string()))).collect());
     let every = ctx.under.show_hidden.get_untracked();
     // FILTER-24: the shortcodes leading to the open ticket are drawn, and so
     // is the open ticket itself — kept whatever the filter.
@@ -4319,7 +4323,7 @@ mod tests {
     /// A group as `groups {}` sends it (AGS-23: with its root's row).
     fn group(epic: &str, total: u64, done: u64, docs: u64, root: Option<(&str, &str, Status, Kind)>, host: Option<&str>) -> Group {
         Group {
-            epic: epic.into(),
+            epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             total,
             done,
             docs,
@@ -4341,7 +4345,7 @@ mod tests {
             group("SUP", 11, 2, 0, Some(("SUP-1", "Superproject", Status::Coding, Kind::Scope)), None),
         ]
         .into_iter()
-        .map(|g| (g.epic.clone(), g))
+        .map(|g| (g.shortcode.to_string(), g))
         .collect()
     }
 
@@ -4350,7 +4354,7 @@ mod tests {
         TicketSummary {
             labels: Vec::new(),
             id: id.into(),
-            epic: epic.into(),
+            epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().unwrap(),
             title: id.into(),
             status: Status::Pending,
@@ -4490,7 +4494,7 @@ mod tests {
             let mut out = Vec::new();
             let mut cur = rows[leaf].clone();
             loop {
-                match climb(g.get(&cur.epic), &cur) {
+                match climb(g.get(cur.shortcode.as_str()), &cur) {
                     Climb::Top => return Some(out),
                     Climb::Host(h) | Climb::Parent(h) => {
                         out.push(Node::Ticket(h.clone()));
@@ -4555,7 +4559,7 @@ mod tests {
     /// it holds; a row of docs alone counts its docs.
     #[test]
     fn a_rollup_shows_the_works_done_over_total_and_a_doc_collection_its_docs() {
-        let g = |total, done, docs| Group { epic: "G".into(), total, done, docs, root: None, root_row: None, host: None };
+        let g = |total, done, docs| Group { epic: menger_tickets_api::Code::stored("G"), shortcode: menger_tickets_api::ShortcodeId::new("G"), address: String::new(), total, done, docs, root: None, root_row: None, host: None };
         assert_eq!(rollup_label(&g(5, 2, 0)), "2/5");
         assert_eq!(rollup_label(&g(4, 4, 3)), "4/4", "docs do not hold a row open");
         assert_eq!(rollup_label(&g(0, 0, 1)), "1 doc");

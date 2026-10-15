@@ -1,6 +1,7 @@
 use super::stored::Changes;
 use super::{satisfied, OrderKey, Row, Rows, Status};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use crate::address::ShortcodeId;
 use std::ops::Bound;
 
 /// How many statuses there are — one count each per shortcode.
@@ -56,11 +57,11 @@ pub(super) struct Ready {
     /// a sorted vector as the children's are: a blocker that is completed
     /// can move a hundred thousand tickets in at once, anywhere in their
     /// shortcodes, and each is one descent rather than a shift of the rest.
-    members: BTreeMap<String, BTreeSet<u32>>,
+    members: BTreeMap<ShortcodeId, BTreeSet<u32>>,
     /// Per shortcode, how many of its tickets hold each status, in
     /// [`Status::ALL`]'s order — what `list { status }` counts whole
     /// shortcodes with.
-    statuses: BTreeMap<String, [u64; STATUSES]>,
+    statuses: BTreeMap<ShortcodeId, [u64; STATUSES]>,
 }
 
 /// SCALE-32: what one write does to the counts, the ready set and the
@@ -75,9 +76,9 @@ pub(super) struct Move {
     members: Vec<(OrderKey, bool)>,
     /// Each shortcode whose share of the ready set moves, with what it
     /// moves to — the stored count; the cache's is the set's length.
-    ready: Vec<(String, u64)>,
+    ready: Vec<(ShortcodeId, u64)>,
     /// Each shortcode's count of a status that moves, with what it moves to.
-    statuses: Vec<(String, Status, u64)>,
+    statuses: Vec<(ShortcodeId, Status, u64)>,
 }
 
 impl Move {
@@ -104,8 +105,8 @@ impl Move {
 /// ready set.
 pub(super) type Stored = (
     BTreeMap<String, u32>,
-    BTreeMap<(String, &'static str), u64>,
-    BTreeMap<String, u64>,
+    BTreeMap<(ShortcodeId, &'static str), u64>,
+    BTreeMap<ShortcodeId, u64>,
 );
 
 impl Ready {
@@ -124,9 +125,9 @@ impl Ready {
                 r.unsatisfied.insert(t.id.clone(), open);
             }
             if t.status == Status::Ready && open == 0 {
-                r.members.entry(t.epic.clone()).or_default().insert(t.seq);
+                r.members.entry(t.shortcode.clone()).or_default().insert(t.seq);
             }
-            r.statuses.entry(t.epic.clone()).or_insert([0; STATUSES])[slot(t.status)] += 1;
+            r.statuses.entry(t.shortcode.clone()).or_insert([0; STATUSES])[slot(t.status)] += 1;
         }
         r
     }
@@ -136,10 +137,10 @@ impl Ready {
     /// file's index holds it, and the status counts' rows.
     pub(super) fn from_stored(
         unsatisfied: HashMap<String, u32>,
-        members: BTreeMap<String, BTreeSet<u32>>,
-        statuses: BTreeMap<(String, &'static str), u64>,
+        members: BTreeMap<ShortcodeId, BTreeSet<u32>>,
+        statuses: BTreeMap<(ShortcodeId, &'static str), u64>,
     ) -> Self {
-        let mut by_epic: BTreeMap<String, [u64; STATUSES]> = BTreeMap::new();
+        let mut by_epic: BTreeMap<ShortcodeId, [u64; STATUSES]> = BTreeMap::new();
         for ((epic, status), held) in statuses {
             let status: Status = status.parse().expect("parsed from a status when it was read");
             by_epic.entry(epic).or_insert([0; STATUSES])[slot(status)] = held;
@@ -171,7 +172,7 @@ impl Ready {
 
     /// The ready set, per shortcode — what `--verify-derived` and the tests
     /// compare with the file's index.
-    pub(super) fn members(&self) -> &BTreeMap<String, BTreeSet<u32>> {
+    pub(super) fn members(&self) -> &BTreeMap<ShortcodeId, BTreeSet<u32>> {
         &self.members
     }
 
@@ -197,7 +198,7 @@ impl Ready {
     }
 
     fn contains(&self, key: &OrderKey) -> bool {
-        self.members.get(&key.epic).is_some_and(|seqs| seqs.contains(&key.seq))
+        self.members.get(&key.shortcode).is_some_and(|seqs| seqs.contains(&key.seq))
     }
 
     /// A ticket is born (`rows` hold it): its own count, from its blockers
@@ -287,13 +288,13 @@ impl Ready {
     /// `t`'s status counted in its shortcode — moved from `previous`, or
     /// new.
     fn restatus(&self, t: &Row, previous: Option<Status>, m: &mut Move) {
-        let mut held = self.statuses.get(&t.epic).copied().unwrap_or([0; STATUSES]);
+        let mut held = self.statuses.get(&t.shortcode).copied().unwrap_or([0; STATUSES]);
         if let Some(p) = previous {
             held[slot(p)] = held[slot(p)].saturating_sub(1);
-            m.statuses.push((t.epic.clone(), p, held[slot(p)]));
+            m.statuses.push((t.shortcode.clone(), p, held[slot(p)]));
         }
         held[slot(t.status)] += 1;
-        m.statuses.push((t.epic.clone(), t.status, held[slot(t.status)]));
+        m.statuses.push((t.shortcode.clone(), t.status, held[slot(t.status)]));
     }
 
     /// Each ticket in `t`'s `unlocks` that names it gains one unsatisfied
@@ -321,7 +322,7 @@ impl Ready {
     /// the ready set or leaves it where that is not where it stands; then
     /// each shortcode whose share moved, with its new count.
     fn settle(&self, touched: &[Touched<'_>], m: &mut Move) {
-        let mut shares: BTreeMap<&str, u64> = BTreeMap::new();
+        let mut shares: BTreeMap<&ShortcodeId, u64> = BTreeMap::new();
         for (r, _, open) in touched {
             let key = OrderKey::of(r);
             let now = r.status == Status::Ready && *open == 0;
@@ -329,12 +330,12 @@ impl Ready {
                 continue;
             }
             let share = shares
-                .entry(r.epic.as_str())
-                .or_insert_with(|| self.members.get(&r.epic).map_or(0, |s| s.len() as u64));
+                .entry(&r.shortcode)
+                .or_insert_with(|| self.members.get(&r.shortcode).map_or(0, |s| s.len() as u64));
             *share = if now { *share + 1 } else { share.saturating_sub(1) };
             m.members.push((key, now));
         }
-        m.ready.extend(shares.into_iter().map(|(epic, n)| (epic.to_string(), n)));
+        m.ready.extend(shares.into_iter().map(|(epic, n)| (epic.clone(), n)));
     }
 
     /// …and once it has committed, the cache takes it.
@@ -348,11 +349,11 @@ impl Ready {
         }
         for (key, join) in m.members {
             if join {
-                self.members.entry(key.epic).or_default().insert(key.seq);
-            } else if let Some(seqs) = self.members.get_mut(&key.epic) {
+                self.members.entry(key.shortcode).or_default().insert(key.seq);
+            } else if let Some(seqs) = self.members.get_mut(&key.shortcode) {
                 seqs.remove(&key.seq);
                 if seqs.is_empty() {
-                    self.members.remove(&key.epic);
+                    self.members.remove(&key.shortcode);
                 }
             }
         }
@@ -371,29 +372,29 @@ impl Ready {
         &'a self,
         start: Bound<&'a OrderKey>,
         end: Bound<&'a OrderKey>,
-    ) -> impl Iterator<Item = (&'a str, &'a BTreeSet<u32>, u32, u32)> + 'a {
+    ) -> impl Iterator<Item = (&'a ShortcodeId, &'a BTreeSet<u32>, u32, u32)> + 'a {
         use Bound::{Excluded, Included, Unbounded};
         let epic = |b: Bound<&'a OrderKey>| match b {
             Unbounded => Unbounded,
-            Included(k) | Excluded(k) => Included(k.epic.as_str()),
+            Included(k) | Excluded(k) => Included(&k.shortcode),
         };
         let inverted = matches!(
             (start, end),
-            (Included(a) | Excluded(a), Included(b) | Excluded(b)) if a.epic > b.epic
+            (Included(a) | Excluded(a), Included(b) | Excluded(b)) if a.shortcode > b.shortcode
         );
-        let epics = (!inverted).then(|| self.members.range::<str, _>((epic(start), epic(end))));
+        let epics = (!inverted).then(|| self.members.range::<ShortcodeId, _>((epic(start), epic(end))));
         epics.into_iter().flatten().filter_map(move |(e, seqs)| {
             let from = match start {
-                Included(k) if k.epic == *e => Some(k.seq),
-                Excluded(k) if k.epic == *e => k.seq.checked_add(1),
+                Included(k) if k.shortcode == *e => Some(k.seq),
+                Excluded(k) if k.shortcode == *e => k.seq.checked_add(1),
                 _ => Some(0),
             }?;
             let to = match end {
-                Included(k) if k.epic == *e => Some(k.seq),
-                Excluded(k) if k.epic == *e => k.seq.checked_sub(1),
+                Included(k) if k.shortcode == *e => Some(k.seq),
+                Excluded(k) if k.shortcode == *e => k.seq.checked_sub(1),
                 _ => Some(u32::MAX),
             }?;
-            (from <= to).then_some((e.as_str(), seqs, from, to))
+            (from <= to).then_some((e, seqs, from, to))
         })
     }
 
@@ -406,7 +407,7 @@ impl Ready {
     ) -> impl Iterator<Item = OrderKey> + 'a {
         self.cut(start, end).flat_map(|(epic, seqs, from, to)| {
             seqs.range(from..=to).map(move |&seq| OrderKey {
-                epic: epic.to_string(),
+                shortcode: epic.clone(),
                 seq,
             })
         })
@@ -427,18 +428,18 @@ impl Ready {
     }
 
     /// How many tickets of `epic` hold `status`.
-    pub(super) fn held(&self, epic: &str, status: Status) -> u64 {
+    pub(super) fn held(&self, epic: &ShortcodeId, status: Status) -> u64 {
         self.statuses.get(epic).map_or(0, |held| held[slot(status)])
     }
 
     /// How many tickets hold `status` in the shortcodes after `epic` — or
     /// in every shortcode, with none. A step per shortcode, whatever each
     /// holds.
-    pub(super) fn held_after(&self, epic: Option<&str>, status: Status) -> u64 {
+    pub(super) fn held_after(&self, epic: Option<&ShortcodeId>, status: Status) -> u64 {
         use Bound::{Excluded, Unbounded};
         let from = epic.map_or(Unbounded, Excluded);
         self.statuses
-            .range::<str, _>((from, Unbounded))
+            .range::<ShortcodeId, _>((from, Unbounded))
             .map(|(_, held)| held[slot(status)])
             .sum()
     }

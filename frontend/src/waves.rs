@@ -286,19 +286,19 @@ pub(crate) enum Heard {
 /// the missing lane arrive in the `placements_changed` behind it.
 pub(crate) fn heard(ev: &TicketsEvent, epics: &BTreeSet<String>) -> Heard {
     match ev {
-        TicketsEvent::Created { ticket } if epics.contains(&ticket.epic) => Heard::Ask,
+        TicketsEvent::Created { ticket } if epics.contains(ticket.shortcode.as_str()) => Heard::Ask,
         // SDLC-13: a kind changed in one of its shortcodes — a doc made work
         // is a card it has not got, work made a doc a card it must not show,
         // and a kind the board filters on may let it in or out. Elsewhere, it
         // is a status change to the cards that wait on it.
-        TicketsEvent::KindChanged { ticket, .. } if epics.contains(&ticket.epic) => Heard::Ask,
+        TicketsEvent::KindChanged { ticket, .. } if epics.contains(ticket.shortcode.as_str()) => Heard::Ask,
         // MENGER-30: a card's blockers moved — what it waits on is asked
         // again (its placement, and the ones downstream, follow in the
         // `placements_changed` behind it). Elsewhere, nothing a card shows.
-        TicketsEvent::BlockersChanged { ticket, .. } if epics.contains(&ticket.epic) => Heard::Ask,
+        TicketsEvent::BlockersChanged { ticket, .. } if epics.contains(ticket.shortcode.as_str()) => Heard::Ask,
         TicketsEvent::Lagged { .. } => Heard::Ask,
         // MENGER-30: a severity is on the card's row.
-        TicketsEvent::SeverityChanged { ticket, .. } if epics.contains(&ticket.epic) => Heard::Apply,
+        TicketsEvent::SeverityChanged { ticket, .. } if epics.contains(ticket.shortcode.as_str()) => Heard::Apply,
         TicketsEvent::PlacementsChanged { .. } | TicketsEvent::StatusChanged { .. } | TicketsEvent::KindChanged { .. } => {
             Heard::Apply
         }
@@ -332,7 +332,7 @@ fn yield_order(a: &Card, b: &Card) -> Ordering {
     };
     key(a)
         .cmp(&key(b))
-        .then_with(|| a.summary.epic.cmp(&b.summary.epic))
+        .then_with(|| a.summary.shortcode.cmp(&b.summary.shortcode))
         .then_with(|| a.summary.seq.cmp(&b.summary.seq))
 }
 
@@ -561,9 +561,9 @@ pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&s
         at = parent_of(&p);
         lineage.push(p);
     }
-    lineage.push(s.epic.clone());
+    lineage.push(s.shortcode.to_string());
     if let Some(t) = tree {
-        lineage.extend(t.hosting(&s.epic));
+        lineage.extend(t.hosting(s.shortcode.as_str()));
     }
     Facts {
         // MENGER-12: a card does not say whether its ticket asks — [`narrow`]
@@ -572,7 +572,7 @@ pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&s
         asking: false,
         labels: s.labels.clone(),
         id: s.id.clone(),
-        epic: s.epic.clone(),
+        epic: s.epic.to_string(),
         title: s.title.clone(),
         status: s.status,
         kind: s.kind,
@@ -594,7 +594,7 @@ pub(crate) fn value_of(c: Cat, card: &Card, off: bool) -> Option<String> {
     let s = &card.summary;
     let flag = |b: bool| Some(if b { "yes" } else { "no" }.to_string());
     match c {
-        Cat::Shortcode => Some(s.epic.clone()),
+        Cat::Shortcode => Some(s.epic.to_string()),
         Cat::Status => Some(s.status.as_str().into()),
         Cat::Kind => Some(s.kind.as_str().into()),
         Cat::Severity => Some(s.severity.map_or("none".to_string(), |v| v.as_str().to_ascii_lowercase())),
@@ -1552,7 +1552,7 @@ mod tests {
         TicketSummary {
             labels: Vec::new(),
             id: id.into(),
-            epic: epic.into(),
+            epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
             seq: seq.parse().unwrap(),
             title: id.into(),
             status,
@@ -1675,6 +1675,8 @@ mod tests {
             labels: Vec::new(),
             id: s.id,
             epic: s.epic,
+            shortcode: s.shortcode,
+            address: s.address,
             seq: s.seq,
             title: s.title,
             status: s.status,

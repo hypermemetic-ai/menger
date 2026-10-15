@@ -73,10 +73,11 @@ pub(super) fn update_reach(store: &Store, caller: &Caller, id: &str, update: &Up
     }
     let named = update.block.iter().chain(&update.unblock).map(|b| b.trim()).filter(|b| !b.is_empty());
     let visible = sight_epics(store, caller)?;
-    let home = shortcode_of(id.trim()).to_ascii_uppercase();
+    // ORG-3: each by the shortcode its address names it in.
+    let home = store.shortcode_of(id.trim());
     for b in named {
-        let epic = shortcode_of(b).to_ascii_uppercase();
-        if visible.as_ref().is_some_and(|v| !v.contains(&epic)) {
+        let epic = store.shortcode_of(b);
+        if visible.as_ref().is_some_and(|v| epic.as_ref().is_none_or(|e| !v.contains(e))) {
             return Err(format!("blocked_by: {}", caller.lacks(&Grant::new(crate::access::SEES), Some(b))));
         }
         if let (true, Some(g), Some(ticket)) = (epic != home, caller.grant.as_ref(), store.ticket_id(b)) {
@@ -143,7 +144,7 @@ pub(super) fn cells_stream(
         match written {
             Ok(change) => yield change_event(change),
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-            Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            Err(e) => yield refusal(e),
         }
     }
 }

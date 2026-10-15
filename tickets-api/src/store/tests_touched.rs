@@ -8,6 +8,7 @@
 //! body, a comment or an answer, none of which moves a cell.
 
 use super::filtered::Membership;
+use crate::address::ShortcodeId;
 use super::history::Clock;
 use super::*;
 use crate::comments::Anchor;
@@ -193,7 +194,7 @@ async fn a_watch_hears_a_touched_ticket_leave() {
         }
         out
     };
-    let left = |id: &str| Membership::Left { id: id.into(), epic: "T".into(), seq: id[2..].parse().unwrap() };
+    let left = |id: &str| Membership::Left { id: id.into(), shortcode: ShortcodeId::from("T"), seq: id[2..].parse().unwrap() };
     store.amend("T-6", None, Some("rewritten".into())).await.unwrap();
     assert_eq!(heard(&mut rx), [left("T-6")], "a body");
     store.add_comment(anchor("T-7"), "is this still wanted?".into(), None).await.unwrap();
@@ -221,7 +222,7 @@ async fn a_touch_ages_out_of_a_relative_window() {
     let clock = |t: i64| Clock { fixed: Some(t), ..Clock::default() };
     let lens = Lens::parse("kind build and not touched within 1h").unwrap().with_clock(clock(at));
     assert!(store.aged(&lens, at, at + 3_600, None).is_empty(), "not yet an hour");
-    assert_eq!(store.aged(&lens, at, at + 3_601, None), [Membership::Entered { id: "T-2".into(), epic: "T".into(), seq: 2 }]);
+    assert_eq!(store.aged(&lens, at, at + 3_601, None), [Membership::Entered { id: "T-2".into(), shortcode: ShortcodeId::from("T"), seq: 2 }]);
     let next = store.next_boundary(&lens).unwrap();
     assert!(next > at && next <= at + 3_601, "{next} vs {at}");
 }

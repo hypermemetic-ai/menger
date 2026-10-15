@@ -1069,12 +1069,12 @@ impl Store {
                             parent: None,
                             keep: None,
                         };
-                        let admits = view(&cache, &lensed);
+                        let admits = view(&cache, &lensed)?;
                         let mut page: Vec<(i64, Row, bool)> = Vec::new();
                         let mut matched = 0usize;
                         for (row, id, corrected) in all {
                             let Some(key) = cache.at.get(&id) else { continue };
-                            if !admits.contains(&key.epic, key.seq) {
+                            if !admits.contains(&key.shortcode, key.seq) {
                                 continue;
                             }
                             if matched >= offset && page.len() < limit {

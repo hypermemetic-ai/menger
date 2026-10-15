@@ -27,6 +27,7 @@
 //! cycle (whose subtree holds its own ancestors) is answered by looking at
 //! every ticket of each child's subtree.
 
+use crate::address::ShortcodeId;
 use super::cells::{self, Admit, View};
 use super::children::Names;
 use super::filtered::{self, Lens};
@@ -49,7 +50,7 @@ struct Atom<'c> {
     tally: &'c [(u32, u32)],
     /// Its subtree, itself included, per shortcode — taken when a
     /// shortcode holds part of it.
-    sub: OnceCell<BTreeMap<String, RoaringBitmap>>,
+    sub: OnceCell<BTreeMap<ShortcodeId, RoaringBitmap>>,
 }
 
 /// How the atoms hold across one shortcode's tickets.
@@ -70,16 +71,21 @@ pub(super) struct Compiled<'c> {
     atoms: Vec<Atom<'c>>,
     /// The shortcodes judged on their own: `in`'s, and every one `under`
     /// reaches through its own name or a host's.
-    named: Vec<String>,
+    named: Vec<ShortcodeId>,
     /// The shortcodes hosting each shortcode, innermost first — the lineage
     /// past a ticket's own shortcode (only kept when the filter asks
     /// `under`).
-    hosts: HashMap<String, Vec<String>>,
+    hosts: HashMap<ShortcodeId, Vec<ShortcodeId>>,
+    /// ORG-3: what each `under` name was resolved to — the identity's text
+    /// (a ticket's key, a shortcode's id) to the names as the filter wrote
+    /// them — so the language's evaluator, which compares names, sees in a
+    /// ticket's lineage the names it is under.
+    aliases: HashMap<String, Vec<String>>,
     admits: RefCell<HashMap<u64, Rc<Admit>>>,
     /// FILTER-23: a shortcode's tickets whose cell the tables for a set of
     /// atoms admit, as one bitmap — built once per read, however many lists
     /// of that shortcode a walk reads.
-    admitted: RefCell<HashMap<(u64, String), Rc<RoaringBitmap>>>,
+    admitted: RefCell<HashMap<(u64, ShortcodeId), Rc<RoaringBitmap>>>,
     /// FILTER-24: `tree`'s `keep` — a ticket the filter does not admit,
     /// answered as if it did ([`Compiled::keep`]).
     kept: Option<&'c Row>,
@@ -103,23 +109,23 @@ pub(super) struct Compiled<'c> {
 struct Hist {
     /// Each predicate's canonical text, and the tickets it holds for.
     keys: Vec<String>,
-    sets: Vec<BTreeMap<String, RoaringBitmap>>,
+    sets: Vec<BTreeMap<ShortcodeId, RoaringBitmap>>,
     /// The tickets any holds for, per shortcode.
-    any: BTreeMap<String, RoaringBitmap>,
+    any: BTreeMap<ShortcodeId, RoaringBitmap>,
     /// Per ticket id, how many more matches are below it than its tally
     /// says (worked out once a read needs it).
     delta: OnceCell<HashMap<String, i64>>,
     /// Per parent id, its children whose node may differ from the base:
     /// those the log speaks of, and their ancestors.
-    affected: OnceCell<HashMap<String, Vec<(String, u32)>>>,
+    affected: OnceCell<HashMap<String, Vec<(ShortcodeId, u32)>>>,
 }
 
 impl Hist {
-    fn holds(&self, epic: &str, seq: u32) -> bool {
+    fn holds(&self, epic: &ShortcodeId, seq: u32) -> bool {
         self.any.get(epic).is_some_and(|b| b.contains(seq))
     }
 
-    fn truths(&self, epic: &str, seq: u32) -> Vec<&str> {
+    fn truths(&self, epic: &ShortcodeId, seq: u32) -> Vec<&str> {
         self.keys
             .iter()
             .zip(&self.sets)
@@ -129,37 +135,87 @@ impl Hist {
     }
 }
 
-/// The ticket an `under` name names, and its entry in the children index —
-/// as the language compares names, whatever the case: the name as given
-/// (the language upper-cases it), else, for `EPIC-SEQ`, the id in the
-/// shortcode of that name in whatever case a hand edit wrote it.
+/// The ticket an `under` name names — ORG-3: a key, the name already
+/// resolved ([`Bound`]) — and its entry in the children index (an id a hand
+/// edit names as a parent has the one without the other).
 fn named_id<'c>(cache: &'c Cache, name: &str) -> (Option<&'c Row>, Option<&'c children::Kids>) {
-    let (row, kids) = (cache.get(name), cache.children.kids(name));
-    if row.is_some() || kids.is_some() {
-        return (row, kids);
-    }
-    let Some((epic, seq)) = name.rsplit_once('-') else { return (None, None) };
-    let Some((actual, _)) = cache.cells.shortcodes().find(|(e, _)| e.eq_ignore_ascii_case(epic) && *e != epic) else {
-        return (None, None);
-    };
-    let id = format!("{actual}-{seq}");
-    (cache.get(&id), cache.children.kids(&id))
+    (cache.get(name), cache.children.kids(name))
 }
 
 /// The shortcodes hosting `epic`, innermost first — its settled host's
 /// shortcode, that one's, and so on.
-pub(super) fn host_chain(cache: &Cache, epic: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut cur = epic.to_string();
+pub(super) fn host_chain(cache: &Cache, epic: &ShortcodeId) -> Vec<ShortcodeId> {
+    let mut out: Vec<ShortcodeId> = Vec::new();
+    let mut cur = epic.clone();
     while let Some(h) = cache.rollups.host(&cur) {
         let Some(row) = cache.get(h) else { break };
-        if row.epic == epic || out.contains(&row.epic) {
+        if row.shortcode == *epic || out.contains(&row.shortcode) {
             break;
         }
-        out.push(row.epic.clone());
-        cur = row.epic.clone();
+        out.push(row.shortcode.clone());
+        cur = row.shortcode.clone();
     }
     out
+}
+
+/// ORG-3: what a filter's `under` names resolve to in the store as it
+/// stands — the one parse of them into identities. A name that *is* an
+/// identity — a ticket's key, a shortcode's id, in any case — is that one:
+/// the gate decides on chains of identities (`scope_chain`), and a grant's
+/// reach (`under <scope>`) must agree with it (ORG-6, W5). Any other name
+/// that is an address resolves to the one ticket or shortcode it names (a
+/// ticket first, when it names a number or a path); one naming nothing
+/// stays as written, uppercased (it may be an id a hand edit names as a
+/// parent, or a ticket not born yet: it holds where it holds, as before);
+/// one naming several is refused by a read (`strict`), and holds nowhere
+/// for a watch already open — a namesake made while it watched never
+/// widens it.
+pub(super) struct Bound {
+    /// Each name's identity text (a ticket's key, a shortcode's id), and
+    /// the name as written.
+    pub(super) names: Vec<(String, String)>,
+}
+
+impl Bound {
+    pub(super) fn of(cache: &Cache, lens: &Lens, strict: bool) -> Result<Self, StoreError> {
+        let mut names = Vec::new();
+        for u in lens.unders() {
+            let exact = u.trim().to_ascii_uppercase();
+            if cache.at.contains_key(&exact) || cache.shortcodes.get(&ShortcodeId::new(&exact)).is_some() {
+                names.push((exact, u.clone()));
+                continue;
+            }
+            // A hand-edited lower-case shortcode (`low`) is `under LOW`, as
+            // the language reads a shortcode whatever its case.
+            if let Some(id) = cache.shortcodes.ids().find(|id| id.as_str().eq_ignore_ascii_case(u.trim())) {
+                names.push((id.as_str().to_string(), u.clone()));
+                continue;
+            }
+            let parsed = crate::address::Address::parse(u).ok();
+            let ticket_first = parsed.as_ref().is_none_or(crate::address::Address::names_ticket);
+            let found = if ticket_first {
+                match cache.find_ticket(u, shortcodes::OrgReach::All) {
+                    shortcodes::Found::None => cache.shortcodes.find_shortcode(u, shortcodes::OrgReach::All),
+                    shortcodes::Found::One(key) => shortcodes::Found::One(ShortcodeId::new(&key)),
+                    shortcodes::Found::Many(c) => shortcodes::Found::Many(c),
+                }
+            } else {
+                cache.shortcodes.find_shortcode(u, shortcodes::OrgReach::All)
+            };
+            match found {
+                shortcodes::Found::One(id) => names.push((id.as_str().to_string(), u.clone())),
+                shortcodes::Found::None => names.push((u.to_ascii_uppercase(), u.clone())),
+                shortcodes::Found::Many(candidates) if strict => {
+                    return Err(StoreError::Filter(format!(
+                        "`under {u}` names more than one: {} — name one in full",
+                        candidates.join(", ")
+                    )))
+                }
+                shortcodes::Found::Many(_) => {}
+            }
+        }
+        Ok(Self { names })
+    }
 }
 
 /// The subtree of `name` — the ticket `row` (when it is one) and every
@@ -167,17 +223,17 @@ pub(super) fn host_chain(cache: &Cache, epic: &str) -> Vec<String> {
 /// each internal descendant's lists OR-ed in. A list kept as a bitmap names
 /// its internal children by its holders; a vector's are looked at (at most
 /// [`super::children::HOLD_OVER`]).
-pub(super) fn subtree(cache: &Cache, name: &str, row: Option<&Row>) -> BTreeMap<String, RoaringBitmap> {
-    let mut out: BTreeMap<String, RoaringBitmap> = BTreeMap::new();
+pub(super) fn subtree(cache: &Cache, name: &str, row: Option<&Row>) -> BTreeMap<ShortcodeId, RoaringBitmap> {
+    let mut out: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
     if let Some(r) = row {
-        out.entry(r.epic.clone()).or_default().insert(r.seq);
+        out.entry(r.shortcode.clone()).or_default().insert(r.seq);
     }
     let mut stack = vec![name.to_string()];
     let mut seen: HashSet<String> = HashSet::from([name.to_string()]);
     while let Some(p) = stack.pop() {
         let Some(kids) = cache.children.kids(&p) else { continue };
         for (e, seqs) in kids.lists() {
-            *out.entry(e.to_string()).or_default() |= &*seqs.bitmap();
+            *out.entry(e.clone()).or_default() |= &*seqs.bitmap();
             let inner: Box<dyn Iterator<Item = u32>> = match seqs.many() {
                 Some(many) => {
                     let mut u = RoaringBitmap::new();
@@ -189,7 +245,7 @@ pub(super) fn subtree(cache: &Cache, name: &str, row: Option<&Row>) -> BTreeMap<
                 None => seqs.iter(),
             };
             for s in inner {
-                let Some(c) = cache.order.get(&OrderKey { epic: e.to_string(), seq: s }) else { continue };
+                let Some(c) = cache.order.get(&OrderKey { shortcode: e.clone(), seq: s }) else { continue };
                 if cache.children.kids(&c.id).is_some() && seen.insert(c.id.clone()) {
                     stack.push(c.id.clone());
                 }
@@ -230,32 +286,54 @@ impl<'x> Tables<'x> {
 }
 
 impl<'c> Compiled<'c> {
-    /// `lens` against the cache as it stands, `list`'s `status` folded in.
+    /// `lens` against the cache as it stands, `list`'s `status` folded in —
+    /// for a watch already open: an `under` name that has come to name more
+    /// than one holds nowhere ([`Bound`]).
     pub(super) fn new(cache: &'c Cache, lens: &Lens, status: Option<Status>) -> Self {
+        Self::bound(cache, lens, status, false).expect("a lenient bind refuses nothing")
+    }
+
+    /// ORG-3: [`Compiled::new`] for a read — an `under` name that names more
+    /// than one ticket or shortcode in reach is refused, naming each.
+    pub(super) fn read(cache: &'c Cache, lens: &Lens, status: Option<Status>) -> Result<Self, StoreError> {
+        Self::bound(cache, lens, status, true)
+    }
+
+    fn bound(cache: &'c Cache, lens: &Lens, status: Option<Status>, strict: bool) -> Result<Self, StoreError> {
+        let bound = Bound::of(cache, lens, strict)?;
+        let mut aliases: HashMap<String, Vec<String>> = HashMap::new();
+        for (id, name) in &bound.names {
+            aliases.entry(id.clone()).or_default().push(name.clone());
+        }
         let mut atoms = Vec::new();
-        for u in lens.unders() {
-            let (row, kids) = named_id(cache, u);
+        for (id, _) in &bound.names {
+            let (row, kids) = named_id(cache, id);
             if row.is_none() && kids.is_none() {
                 continue;
             }
+            if atoms.iter().any(|a: &Atom<'_>| a.name == *id) {
+                continue;
+            }
             atoms.push(Atom {
-                name: u.clone(),
+                name: id.clone(),
                 row,
                 tally: kids.map_or(&[][..], |k| &k.tally[..]),
                 sub: OnceCell::new(),
             });
         }
-        let mut named: BTreeSet<String> = lens.named().iter().cloned().collect();
+        // ORG-3: `in` matches a shortcode's letters — every shortcode of a
+        // code it names is judged on its own.
+        let mut named: BTreeSet<ShortcodeId> = lens.named().iter().flat_map(|code| cache.shortcodes.in_set(code)).collect();
         let mut hosts = HashMap::new();
         if !lens.unders().is_empty() {
+            let reach: HashSet<&str> = bound.names.iter().map(|(id, _)| id.as_str()).collect();
             for (epic, _) in cache.cells.shortcodes() {
                 let chain = host_chain(cache, epic);
-                let reached = |u: &String| u.eq_ignore_ascii_case(epic) || chain.iter().any(|h| h.eq_ignore_ascii_case(u));
-                if lens.unders().iter().any(reached) {
-                    named.insert(epic.to_string());
+                if reach.contains(epic.as_str()) || chain.iter().any(|h| reach.contains(h.as_str())) {
+                    named.insert(epic.clone());
                 }
                 if !chain.is_empty() {
-                    hosts.insert(epic.to_string(), chain);
+                    hosts.insert(epic.clone(), chain);
                 }
             }
         }
@@ -263,8 +341,8 @@ impl<'c> Compiled<'c> {
         let hist = lens.has_history().then(|| {
             let clock = lens.clock();
             let keys: Vec<String> = lens.history().iter().map(crate::filter::History::format).collect();
-            let sets: Vec<BTreeMap<String, RoaringBitmap>> = lens.history().iter().map(|h| cache.holds(h, clock)).collect();
-            let mut any: BTreeMap<String, RoaringBitmap> = BTreeMap::new();
+            let sets: Vec<BTreeMap<ShortcodeId, RoaringBitmap>> = lens.history().iter().map(|h| cache.holds(h, clock)).collect();
+            let mut any: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
             for s in &sets {
                 for (e, b) in s {
                     *any.entry(e.clone()).or_default() |= b;
@@ -272,23 +350,43 @@ impl<'c> Compiled<'c> {
             }
             Hist { keys, sets, any, delta: OnceCell::new(), affected: OnceCell::new() }
         });
-        Self {
+        Ok(Self {
             cache,
             lens: lens.clone(),
             status,
             atoms,
             named: named.into_iter().collect(),
             hosts,
+            aliases,
             admits: RefCell::new(HashMap::new()),
             admitted: RefCell::new(HashMap::new()),
             kept: None,
             hist,
+        })
+    }
+
+    /// ORG-3: a lineage as the language reads it — each identity in it (a
+    /// key, a shortcode's id), and every `under` name that resolved to it.
+    fn as_named<'x>(&'x self, ids: impl IntoIterator<Item = &'x str>) -> Vec<&'x str> {
+        let mut out = Vec::new();
+        for id in ids {
+            out.push(id);
+            if let Some(names) = self.aliases.get(id) {
+                out.extend(names.iter().map(String::as_str));
+            }
         }
+        out
+    }
+
+    /// ORG-3: what `in` reads of a shortcode — its letters (`""` for the
+    /// shortcodes no `in` names, judged as one).
+    fn letters(&self, epic: &ShortcodeId) -> crate::address::Code {
+        self.cache.shortcodes.code(epic)
     }
 
     /// MENGER-13: the tickets some history predicate holds for, per
     /// shortcode — the only ones time can move.
-    pub(super) fn history_candidates(&self) -> BTreeMap<String, RoaringBitmap> {
+    pub(super) fn history_candidates(&self) -> BTreeMap<ShortcodeId, RoaringBitmap> {
         self.hist.as_ref().map(|h| h.any.clone()).unwrap_or_default()
     }
 
@@ -300,7 +398,7 @@ impl<'c> Compiled<'c> {
 
     /// MENGER-13: whether the log speaks of `t` (a history predicate holds).
     fn spoken(&self, t: &Row) -> bool {
-        self.hist.as_ref().is_some_and(|h| h.holds(&t.epic, t.seq))
+        self.hist.as_ref().is_some_and(|h| h.holds(&t.shortcode, t.seq))
     }
 
     /// MENGER-13: how many more matches are strictly below each ticket than
@@ -313,7 +411,7 @@ impl<'c> Compiled<'c> {
             let mut d: HashMap<String, i64> = HashMap::new();
             for (e, bm) in &h.any {
                 for seq in bm {
-                    let Some(t) = self.cache.order.get(&OrderKey { epic: e.clone(), seq }) else { continue };
+                    let Some(t) = self.cache.order.get(&OrderKey { shortcode: e.clone(), seq }) else { continue };
                     let diff = i64::from(self.judge_row(t)) - i64::from(self.base_alone(t));
                     if diff == 0 {
                         continue;
@@ -329,21 +427,21 @@ impl<'c> Compiled<'c> {
 
     /// MENGER-13: the children of `p` in `epic` whose node may differ from
     /// the base — those the log speaks of, and their ancestors.
-    fn affected(&self, p: &str, epic: &str) -> Vec<u32> {
+    fn affected(&self, p: &str, epic: &ShortcodeId) -> Vec<u32> {
         let Some(h) = self.hist.as_ref() else { return Vec::new() };
         let by = h.affected.get_or_init(|| {
             let rows = self.cache.rows();
-            let mut by: HashMap<String, Vec<(String, u32)>> = HashMap::new();
-            let mut seen: HashSet<(String, u32)> = HashSet::new();
+            let mut by: HashMap<String, Vec<(ShortcodeId, u32)>> = HashMap::new();
+            let mut seen: HashSet<(ShortcodeId, u32)> = HashSet::new();
             for (e, bm) in &h.any {
                 for seq in bm {
-                    let Some(t) = self.cache.order.get(&OrderKey { epic: e.clone(), seq }) else { continue };
+                    let Some(t) = self.cache.order.get(&OrderKey { shortcode: e.clone(), seq }) else { continue };
                     let mut chain: Vec<&Row> = vec![t];
                     chain.extend(tree::ancestors(rows, &t.id, t.parent.as_deref()).into_iter().filter_map(|a| self.cache.get(a)));
                     for x in chain {
                         if let Some(parent) = x.parent.as_deref() {
-                            if seen.insert((x.epic.clone(), x.seq)) {
-                                by.entry(parent.to_string()).or_default().push((x.epic.clone(), x.seq));
+                            if seen.insert((x.shortcode.clone(), x.seq)) {
+                                by.entry(parent.to_string()).or_default().push((x.shortcode.clone(), x.seq));
                             }
                         }
                     }
@@ -366,8 +464,8 @@ impl<'c> Compiled<'c> {
 
     /// FILTER-23: `epic`'s tickets whose cell `admit(mask)` admits, as one
     /// bitmap (the union of those cells' bitmaps) — once per read.
-    fn admitted_in(&self, mask: u64, epic: &str) -> Rc<RoaringBitmap> {
-        let key = (mask, epic.to_string());
+    fn admitted_in(&self, mask: u64, epic: &ShortcodeId) -> Rc<RoaringBitmap> {
+        let key = (mask, epic.clone());
         if let Some(m) = self.admitted.borrow().get(&key) {
             return Rc::clone(m);
         }
@@ -391,33 +489,34 @@ impl<'c> Compiled<'c> {
             if self.status.is_some_and(|s| key.status() != s) {
                 return false;
             }
-            let mut lineage: Vec<&str> = Vec::new();
-            if !epic.is_empty() {
-                lineage.push(epic);
-                lineage.extend(self.hosts.get(epic).into_iter().flatten().map(String::as_str));
+            let mut ids: Vec<&str> = Vec::new();
+            if !epic.as_str().is_empty() {
+                ids.push(epic.as_str());
+                ids.extend(self.hosts.get(epic).into_iter().flatten().map(ShortcodeId::as_str));
             }
-            lineage.extend(self.atoms.iter().enumerate().filter(|(i, _)| mask & (1 << i) != 0).map(|(_, a)| a.name.as_str()));
-            self.lens.judge(epic, key, &lineage)
+            ids.extend(self.atoms.iter().enumerate().filter(|(i, _)| mask & (1 << i) != 0).map(|(_, a)| a.name.as_str()));
+            let lineage = self.as_named(ids);
+            self.lens.judge(self.letters(epic).as_str(), key, &lineage)
         }));
         self.admits.borrow_mut().insert(mask, Rc::clone(&a));
         a
     }
 
     /// How many tickets `epic` holds.
-    fn held(&self, epic: &str) -> u64 {
+    fn held(&self, epic: &ShortcodeId) -> u64 {
         self.cache.cells.held_in(epic).map_or(0, |h| h.iter().map(|(_, b)| b.len()).sum())
     }
 
     /// How many of `epic`'s tickets are in the atom's subtree — from its
     /// tally and itself.
-    fn count_in(&self, a: &Atom<'_>, epic: &str) -> u64 {
-        let mine = u64::from(a.row.is_some_and(|r| r.epic == epic));
+    fn count_in(&self, a: &Atom<'_>, epic: &ShortcodeId) -> u64 {
+        let mine = u64::from(a.row.is_some_and(|r| r.shortcode == *epic));
         let Some(ix) = self.cache.children.names().get(epic) else { return mine };
         mine + a.tally.iter().filter(|(g, _)| g_epic(*g) == ix).map(|(_, n)| u64::from(*n)).sum::<u64>()
     }
 
     /// How the atoms hold across `epic`.
-    pub(super) fn mode(&self, epic: &str) -> Mode {
+    pub(super) fn mode(&self, epic: &ShortcodeId) -> Mode {
         if self.atoms.is_empty() {
             return Mode::Constant(0);
         }
@@ -433,7 +532,7 @@ impl<'c> Compiled<'c> {
         Mode::Constant(whole)
     }
 
-    fn sub<'a>(&self, a: &'a Atom<'c>) -> &'a BTreeMap<String, RoaringBitmap> {
+    fn sub<'a>(&self, a: &'a Atom<'c>) -> &'a BTreeMap<ShortcodeId, RoaringBitmap> {
         a.sub.get_or_init(|| subtree(self.cache, a.row.map_or(a.name.as_str(), |r| r.id.as_str()), a.row))
     }
 
@@ -441,7 +540,7 @@ impl<'c> Compiled<'c> {
     /// atoms that hold there. Subtrees are nested or apart, so a region is
     /// a subtree less the subtrees inside it, and its atoms are those whose
     /// subtree holds it; outside them all, only the atoms whole here hold.
-    fn regions(&self, epic: &str) -> Vec<(u64, RoaringBitmap)> {
+    fn regions(&self, epic: &ShortcodeId) -> Vec<(u64, RoaringBitmap)> {
         let Some(held) = self.cache.cells.held_in(epic) else { return Vec::new() };
         let n = self.held(epic);
         let mut whole = 0u64;
@@ -489,12 +588,12 @@ impl<'c> Compiled<'c> {
     /// The matches in `epic`, per cell: `(cell, how many)`. MENGER-13: the
     /// base's, each ticket the log speaks of moved from its base answer to
     /// its own.
-    pub(super) fn cell_counts(&self, epic: &str) -> Vec<(u32, u64)> {
+    pub(super) fn cell_counts(&self, epic: &ShortcodeId) -> Vec<(u32, u64)> {
         let base = self.base_cell_counts(epic);
         let Some(spoken) = self.hist.as_ref().and_then(|h| h.any.get(epic)) else { return base };
         let mut by: BTreeMap<u32, i64> = base.into_iter().map(|(c, n)| (c, n as i64)).collect();
         for seq in spoken {
-            let Some(t) = self.cache.order.get(&OrderKey { epic: epic.to_string(), seq }) else { continue };
+            let Some(t) = self.cache.order.get(&OrderKey { shortcode: epic.clone(), seq }) else { continue };
             let c = self.cell(t);
             *by.entry(c).or_insert(0) += i64::from(self.judge_row(t)) - i64::from(self.base_alone(t));
         }
@@ -502,7 +601,7 @@ impl<'c> Compiled<'c> {
     }
 
     /// The base's matches in `epic`, per cell.
-    fn base_cell_counts(&self, epic: &str) -> Vec<(u32, u64)> {
+    fn base_cell_counts(&self, epic: &ShortcodeId) -> Vec<(u32, u64)> {
         let Some(held) = self.cache.cells.held_in(epic) else { return Vec::new() };
         match self.mode(epic) {
             Mode::Constant(m) => {
@@ -527,12 +626,12 @@ impl<'c> Compiled<'c> {
     /// The matches in `epic`, as one bitmap. MENGER-13: the base's, less the
     /// tickets the log speaks of, and those of them that match with their
     /// truths.
-    pub(super) fn matches_in(&self, epic: &str) -> RoaringBitmap {
+    pub(super) fn matches_in(&self, epic: &ShortcodeId) -> RoaringBitmap {
         let base = self.base_matches_in(epic);
         let Some(spoken) = self.hist.as_ref().and_then(|h| h.any.get(epic)) else { return base };
         let mut out = base - spoken;
         for seq in spoken {
-            if let Some(t) = self.cache.order.get(&OrderKey { epic: epic.to_string(), seq }) {
+            if let Some(t) = self.cache.order.get(&OrderKey { shortcode: epic.clone(), seq }) {
                 if self.judge_row(t) {
                     out.insert(seq);
                 }
@@ -542,7 +641,7 @@ impl<'c> Compiled<'c> {
     }
 
     /// The base's matches in `epic`, as one bitmap.
-    fn base_matches_in(&self, epic: &str) -> RoaringBitmap {
+    fn base_matches_in(&self, epic: &ShortcodeId) -> RoaringBitmap {
         let Some(held) = self.cache.cells.held_in(epic) else { return RoaringBitmap::new() };
         let admitted = |mask: u64, within: Option<&RoaringBitmap>| -> RoaringBitmap {
             let admit = self.admit(mask);
@@ -572,7 +671,7 @@ impl<'c> Compiled<'c> {
     /// a [`View`]: a shortcode the atoms hold for whole or not at all is
     /// its admitted cells' bitmaps, as FILTER-4's; one they cut is one
     /// bitmap of its own.
-    pub(super) fn view(&self, only: Option<&str>) -> View<'c> {
+    pub(super) fn view(&self, only: Option<&ShortcodeId>) -> View<'c> {
         let by_epic = self
             .cache
             .cells
@@ -608,8 +707,8 @@ impl<'c> Compiled<'c> {
     }
 
     /// The lineage of `t` past its ids: its shortcode, then those hosting it.
-    fn shortcode_lineage<'t>(&'t self, epic: &'t str) -> impl Iterator<Item = &'t str> + 't {
-        std::iter::once(epic).chain(self.hosts.get(epic).into_iter().flatten().map(String::as_str))
+    fn shortcode_lineage<'t>(&'t self, epic: &'t ShortcodeId) -> impl Iterator<Item = &'t str> + 't {
+        std::iter::once(epic.as_str()).chain(self.hosts.get(epic).into_iter().flatten().map(ShortcodeId::as_str))
     }
 
     /// `t`'s cell id.
@@ -620,7 +719,7 @@ impl<'c> Compiled<'c> {
     /// Whether the filter admits `t`, by its whole lineage — the reference
     /// evaluator's question, asked of one ticket (a hand-edited cycle's).
     fn judge_row(&self, t: &Row) -> bool {
-        let truths = self.hist.as_ref().map(|h| h.truths(&t.epic, t.seq)).unwrap_or_default();
+        let truths = self.hist.as_ref().map(|h| h.truths(&t.shortcode, t.seq)).unwrap_or_default();
         self.judge_row_holding(t, &truths)
     }
 
@@ -632,10 +731,11 @@ impl<'c> Compiled<'c> {
             return false;
         }
         let rows = self.cache.rows();
-        let mut lineage: Vec<&str> = vec![t.id.as_str()];
-        lineage.extend(tree::ancestors(rows, &t.id, t.parent.as_deref()));
-        lineage.extend(self.shortcode_lineage(&t.epic));
-        self.lens.judge_holding(&t.epic, key, &lineage, holds)
+        let mut ids: Vec<&str> = vec![t.id.as_str()];
+        ids.extend(tree::ancestors(rows, &t.id, t.parent.as_deref()));
+        ids.extend(self.shortcode_lineage(&t.shortcode));
+        let lineage = self.as_named(ids);
+        self.lens.judge_holding(t.epic.as_str(), key, &lineage, holds)
     }
 
     /// `t`'s node by looking at every ticket of its subtree — for a ticket
@@ -644,10 +744,10 @@ impl<'c> Compiled<'c> {
         let mut below = 0;
         for (e, bm) in subtree(self.cache, &t.id, Some(t)) {
             for s in bm {
-                if e == t.epic && s == t.seq {
+                if e == t.shortcode && s == t.seq {
                     continue;
                 }
-                if let Some(r) = self.cache.order.get(&OrderKey { epic: e.clone(), seq: s }) {
+                if let Some(r) = self.cache.order.get(&OrderKey { shortcode: e.clone(), seq: s }) {
                     below += u64::from(self.judge_row(r));
                 }
             }
@@ -690,7 +790,7 @@ impl<'c> Compiled<'c> {
     fn node(&self, t: &Row, held: u64, inside: &[(usize, Vec<&'c str>)]) -> (bool, u64) {
         let names = self.cache.children.names();
         let admit = self.admit(held);
-        let matched = admit.admits(&t.epic, self.cell(t)).unwrap_or(false);
+        let matched = admit.admits(&t.shortcode, self.cell(t)).unwrap_or(false);
         let tally_of = |id: &str| -> BTreeMap<u32, i64> {
             self.cache.children.kids(id).map_or_else(BTreeMap::new, |k| k.tally.iter().map(|(g, n)| (*g, i64::from(*n))).collect())
         };
@@ -702,7 +802,7 @@ impl<'c> Compiled<'c> {
         let whole = |i: usize| -> BTreeMap<u32, i64> {
             let x = self.atoms[i].row.expect("an atom below a ticket is a ticket");
             let mut s = tally_of(&x.id);
-            let ix = names.get(&x.epic).expect("a ticket below another has its shortcode interned");
+            let ix = names.get(&x.shortcode).expect("a ticket below another has its shortcode interned");
             *s.entry(tree::g(ix, self.cell(x))).or_insert(0) += 1;
             s
         };
@@ -771,7 +871,7 @@ impl<'c> Compiled<'c> {
         }
         let mut ids: Vec<&str> = vec![t.id.as_str()];
         ids.extend(tree::ancestors(rows, &t.id, t.parent.as_deref()));
-        self.admit(self.holding(&ids)).admits(&t.epic, self.cell(t)).unwrap_or(false)
+        self.admit(self.holding(&ids)).admits(&t.shortcode, self.cell(t)).unwrap_or(false)
     }
 }
 
@@ -782,6 +882,9 @@ impl<'c> Compiled<'c> {
 /// FILTER-24: `keep` — with `matches_only`, a ticket drawn as if it matched
 /// (the nav's open ticket, whatever the filter): placed where a match would
 /// be, its nearest matches answered under it.
+///
+/// ORG-3: `parent` and `epic` as a reader names them — addresses, resolved
+/// by the store.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TreeQuery {
     pub parent: Option<String>,
@@ -819,9 +922,9 @@ pub struct TreePage {
 /// (`alone`: each row's node is then worked out by its own lineage).
 #[derive(Default)]
 struct Rowed<'c> {
-    by_epic: Vec<(&'c str, RoaringBitmap)>,
-    known: HashMap<(&'c str, u32), (bool, u64)>,
-    hit: HashMap<&'c str, RoaringBitmap>,
+    by_epic: Vec<(&'c ShortcodeId, RoaringBitmap)>,
+    known: HashMap<(&'c ShortcodeId, u32), (bool, u64)>,
+    hit: HashMap<&'c ShortcodeId, RoaringBitmap>,
     tail: Vec<&'c Row>,
     alone: bool,
 }
@@ -834,7 +937,7 @@ struct Rowed<'c> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Place<'c> {
     Ticket(&'c str),
-    Top(&'c str),
+    Top(&'c ShortcodeId),
 }
 
 impl Store {
@@ -868,18 +971,30 @@ impl Store {
     /// the one without it.
     pub fn tree_page(&self, q: &TreeQuery, after: Option<&str>, limit: Option<u32>) -> Result<TreePage, StoreError> {
         let up = |s: Option<&str>| s.map(|s| s.trim().to_ascii_uppercase());
-        let (parent, epic) = (up(q.parent.as_deref()), up(q.epic.as_deref()));
         let after = up(after);
         let cache = self.tickets.read().expect("store lock poisoned");
+        // ORG-3: the address, resolved — a parent by any short form (or, as
+        // before, an id a hand edit names as a parent), a shortcode by its
+        // letters or path; one naming several is refused, naming each.
+        let parent = q.parent.as_deref().map(|p| match cache.find_ticket(p, shortcodes::OrgReach::All) {
+            shortcodes::Found::One(key) => Ok(key),
+            shortcodes::Found::Many(candidates) => Err(StoreError::Ambiguous { text: p.trim().to_string(), candidates }),
+            shortcodes::Found::None => Ok(p.trim().to_ascii_uppercase()),
+        });
+        let parent = parent.transpose()?;
+        let epic = match q.epic.as_deref() {
+            None => None,
+            Some(e) => Some(cache.shortcode_named(e)?.unwrap_or_else(|| ShortcodeId::new(&e.trim().to_ascii_uppercase()))),
+        };
         let cursor = match after.as_deref() {
             None => None,
             Some(id) => Some(cache.at.get(id).cloned().ok_or_else(|| StoreError::CursorNotFound(id.to_string()))?),
         };
-        let mut c = Compiled::new(&cache, &q.lens, None);
+        let mut c = Compiled::read(&cache, &q.lens, None)?;
         if let Some(id) = q.keep.as_deref().filter(|_| q.matches_only) {
             c.keep(id);
         }
-        let rowed = match (parent.as_deref(), epic.as_deref(), q.matches_only) {
+        let rowed = match (parent.as_deref(), epic.as_ref(), q.matches_only) {
             (Some(p), None, false) => c.children_rows(p),
             (None, Some(e), false) => c.top_rows(e),
             (Some(p), None, true) => c.nearest_rows(p, &c.placed()),
@@ -910,7 +1025,7 @@ impl<'c> Compiled<'c> {
         chain.extend(tree::ancestors(rows, p, pparent));
         let held = self.holding(&chain);
         // The children on the way down to an atom below the parent.
-        let mut special: BTreeMap<(&'c str, u32), (&'c Row, u64)> = BTreeMap::new();
+        let mut special: BTreeMap<(&'c ShortcodeId, u32), (&'c Row, u64)> = BTreeMap::new();
         for (i, a) in self.atoms.iter().enumerate() {
             if held & (1 << i) != 0 {
                 continue;
@@ -919,7 +1034,7 @@ impl<'c> Compiled<'c> {
             let xchain = tree::ancestors(rows, &x.id, x.parent.as_deref());
             let Some(at) = xchain.iter().position(|id| *id == p) else { continue };
             let q = if at == 0 { x } else { cache.get(xchain[at - 1]).expect("an ancestor below a ticket is a ticket") };
-            let entry = special.entry((q.epic.as_str(), q.seq)).or_insert((q, 0));
+            let entry = special.entry((&q.shortcode, q.seq)).or_insert((q, 0));
             if at == 0 {
                 entry.1 |= 1 << i;
             }
@@ -928,7 +1043,7 @@ impl<'c> Compiled<'c> {
         let admit = self.admit(held);
         let tables = Tables::new(&admit, names);
         let bulk = |r: &Row| -> (bool, u64) {
-            let matched = tables.admits(tree::g(names.get(&r.epic).expect("a child's shortcode is interned"), self.cell(r)));
+            let matched = tables.admits(tree::g(names.get(&r.shortcode).expect("a child's shortcode is interned"), self.cell(r)));
             let below = cache.children.kids(&r.id).map_or(0, |k| tables.sum(k.tally.iter().map(|(g, n)| (*g, u64::from(*n)))));
             (matched, below)
         };
@@ -951,7 +1066,7 @@ impl<'c> Compiled<'c> {
                         if special.contains_key(&(e, s)) {
                             continue;
                         }
-                        let Some(r) = cache.order.get(&OrderKey { epic: e.to_string(), seq: s }) else { continue };
+                        let Some(r) = cache.order.get(&OrderKey { shortcode: e.clone(), seq: s }) else { continue };
                         let node = if cycle { self.node_by_looking(r) } else { bulk(r) };
                         if node.0 || node.1 > 0 {
                             q.insert(s);
@@ -979,7 +1094,7 @@ impl<'c> Compiled<'c> {
             // and their ancestors — each the base's node, corrected.
             if !cycle {
                 for s in self.affected(p, e) {
-                    let Some(r) = cache.order.get(&OrderKey { epic: e.to_string(), seq: s }) else { continue };
+                    let Some(r) = cache.order.get(&OrderKey { shortcode: e.clone(), seq: s }) else { continue };
                     let base = match rowed.known.get(&(e, s)) {
                         Some(n) => *n,
                         None => bulk(r),
@@ -1039,8 +1154,8 @@ impl<'c> Compiled<'c> {
             self.place_tail(&mut rowed, placed, |at| matches!(at, Place::Ticket(id) if id == p));
             return rowed;
         }
-        let mut by: BTreeMap<&'c str, RoaringBitmap> = BTreeMap::new();
-        let mut known: HashMap<(&'c str, u32), (bool, u64)> = HashMap::new();
+        let mut by: BTreeMap<&'c ShortcodeId, RoaringBitmap> = BTreeMap::new();
+        let mut known: HashMap<(&'c ShortcodeId, u32), (bool, u64)> = HashMap::new();
         let mut stack: Vec<&str> = vec![p];
         let mut seen: HashSet<&str> = HashSet::from([p]);
         while let Some(x) = stack.pop() {
@@ -1057,7 +1172,7 @@ impl<'c> Compiled<'c> {
                 }
                 *by.entry(*e).or_default() |= hit;
                 for s in &down {
-                    let Some(r) = cache.order.get(&OrderKey { epic: e.to_string(), seq: s }) else { continue };
+                    let Some(r) = cache.order.get(&OrderKey { shortcode: (*e).clone(), seq: s }) else { continue };
                     if seen.insert(r.id.as_str()) {
                         stack.push(r.id.as_str());
                     }
@@ -1081,18 +1196,18 @@ impl<'c> Compiled<'c> {
     /// all its own children (its tally's admitted sum is how many of them
     /// match) is not looked into. Each ticket it goes through costs its tally
     /// and its lists, never a lineage.
-    fn nearest_fast(&self, p: &str, held: u64, hosted: &HashMap<&'c str, RoaringBitmap>) -> BTreeMap<&'c str, RoaringBitmap> {
+    fn nearest_fast(&self, p: &str, held: u64, hosted: &HashMap<&'c ShortcodeId, RoaringBitmap>) -> BTreeMap<&'c ShortcodeId, RoaringBitmap> {
         let cache = self.cache;
         let admit = self.admit(held);
         let tables = Tables::new(&admit, cache.children.names());
         let none = RoaringBitmap::new();
-        let mut memo: HashMap<&'c str, Rc<RoaringBitmap>> = HashMap::new();
-        let mut by: BTreeMap<&'c str, RoaringBitmap> = BTreeMap::new();
+        let mut memo: HashMap<&'c ShortcodeId, Rc<RoaringBitmap>> = HashMap::new();
+        let mut by: BTreeMap<&'c ShortcodeId, RoaringBitmap> = BTreeMap::new();
         let mut stack: Vec<&'c children::Kids> = cache.children.kids(p).into_iter().collect();
         while let Some(kids) = stack.pop() {
             let below = tables.sum(kids.tally.iter().map(|(g, n)| (*g, u64::from(*n))));
             let mut mine = 0u64;
-            let mut hits: Vec<(&'c str, &'c children::Seqs, RoaringBitmap)> = Vec::new();
+            let mut hits: Vec<(&'c ShortcodeId, &'c children::Seqs, RoaringBitmap)> = Vec::new();
             for (e, seqs) in kids.lists() {
                 let m = Rc::clone(memo.entry(e).or_insert_with(|| self.admitted_in(held, e)));
                 let boundary = hosted.get(e).unwrap_or(&none);
@@ -1118,7 +1233,7 @@ impl<'c> Compiled<'c> {
                         }
                         None => seqs.iter().filter(|s| !hit.contains(*s) && !boundary.contains(*s)).collect(),
                     };
-                    let mut key = OrderKey { epic: e.to_string(), seq: 0 };
+                    let mut key = OrderKey { shortcode: e.clone(), seq: 0 };
                     for s in down {
                         key.seq = s;
                         let Some(k) = cache.order.get(&key).and_then(|r| cache.children.kids(&r.id)) else { continue };
@@ -1139,7 +1254,7 @@ impl<'c> Compiled<'c> {
     /// root when the root matches; else what the root's address answers; a
     /// shortcode with no root, its tickets that match, then the shortcodes
     /// drawn at its top.
-    fn top_matches(&self, epic: &str) -> Rowed<'c> {
+    fn top_matches(&self, epic: &ShortcodeId) -> Rowed<'c> {
         let cache = self.cache;
         let Some((name, _)) = cache.cells.shortcodes().find(|(e, _)| *e == epic) else { return Rowed::default() };
         let placed = self.placed();
@@ -1173,7 +1288,7 @@ impl<'c> Compiled<'c> {
     pub(super) fn keep(&mut self, id: &str) {
         let cache = self.cache;
         let Some(k) = filtered::keep_row(cache, id) else { return };
-        if cache.rollups.root(&k.epic) == Some(k.id.as_str())
+        if cache.rollups.root(&k.shortcode) == Some(k.id.as_str())
             || tree::on_cycle(cache.rows(), &k.id, k.parent.as_deref())
             || self.matches_alone(k)
         {
@@ -1199,7 +1314,7 @@ impl<'c> Compiled<'c> {
         let Some(k) = self.kept else { return };
         match here {
             Place::Top(e) => {
-                if k.epic != e {
+                if k.shortcode != *e {
                     return;
                 }
             }
@@ -1220,7 +1335,7 @@ impl<'c> Compiled<'c> {
                     }
                     // What the walk down from `p` stops at: a match, or a
                     // hosted shortcode's root (its shortcode's row).
-                    let hosted = cache.rollups.host(&t.epic).is_some() && cache.rollups.root(&t.epic) == Some(t.id.as_str());
+                    let hosted = cache.rollups.host(&t.shortcode).is_some() && cache.rollups.root(&t.shortcode) == Some(t.id.as_str());
                     if hosted || self.matches_alone(t) {
                         return;
                     }
@@ -1235,26 +1350,26 @@ impl<'c> Compiled<'c> {
                 rowed.by_epic.retain(|(_, b)| !b.is_empty());
             }
         }
-        match rowed.by_epic.binary_search_by(|(e, _)| (*e).cmp(k.epic.as_str())) {
+        match rowed.by_epic.binary_search_by(|(e, _)| (*e).cmp(&k.shortcode)) {
             Ok(i) => {
                 rowed.by_epic[i].1.insert(k.seq);
             }
-            Err(i) => rowed.by_epic.insert(i, (k.epic.as_str(), RoaringBitmap::from_iter([k.seq]))),
+            Err(i) => rowed.by_epic.insert(i, (&k.shortcode, RoaringBitmap::from_iter([k.seq]))),
         }
-        rowed.known.insert((k.epic.as_str(), k.seq), self.node_alone(k));
+        rowed.known.insert((&k.shortcode, k.seq), self.node_alone(k));
     }
 
     /// FILTER-23: the hosted shortcodes' roots, by shortcode — each its
     /// shortcode's row, never a match among another's.
-    fn hosted_roots(&self) -> HashMap<&'c str, RoaringBitmap> {
+    fn hosted_roots(&self) -> HashMap<&'c ShortcodeId, RoaringBitmap> {
         let cache = self.cache;
-        let mut out: HashMap<&'c str, RoaringBitmap> = HashMap::new();
+        let mut out: HashMap<&'c ShortcodeId, RoaringBitmap> = HashMap::new();
         for (epic, _) in cache.cells.shortcodes() {
             if cache.rollups.host(epic).is_none() {
                 continue;
             }
             if let Some(root) = cache.rollups.root(epic).and_then(|r| cache.get(r)) {
-                out.entry(root.epic.as_str()).or_default().insert(root.seq);
+                out.entry(&root.shortcode).or_default().insert(root.seq);
             }
         }
         out
@@ -1279,11 +1394,11 @@ impl<'c> Compiled<'c> {
                 if !seen.insert(t.id.as_str()) {
                     break None;
                 }
-                if cache.rollups.root(&t.epic) == Some(t.id.as_str()) || self.is_kept(t) || self.matches_alone(t) {
+                if cache.rollups.root(&t.shortcode) == Some(t.id.as_str()) || self.is_kept(t) || self.matches_alone(t) {
                     break Some(Place::Ticket(t.id.as_str()));
                 }
                 match t.parent.as_deref() {
-                    None => break Some(Place::Top(t.epic.as_str())),
+                    None => break Some(Place::Top(&t.shortcode)),
                     Some(p) => cur = cache.get(p),
                 }
             };
@@ -1299,7 +1414,7 @@ impl<'c> Compiled<'c> {
     fn place_tail(&self, rowed: &mut Rowed<'c>, placed: &[(&'c Row, Place<'c>)], here: impl Fn(Place<'c>) -> bool) {
         for (root, at) in placed {
             if here(*at) {
-                rowed.known.insert((root.epic.as_str(), root.seq), self.node_alone(root));
+                rowed.known.insert((&root.shortcode, root.seq), self.node_alone(root));
                 rowed.tail.push(root);
             }
         }
@@ -1307,15 +1422,15 @@ impl<'c> Compiled<'c> {
 
     /// A shortcode's top level: its root, when it has one; its tickets in
     /// the store's order, when it has none (a store from before MNG-12).
-    fn top_rows(&self, epic: &str) -> Rowed<'c> {
+    fn top_rows(&self, epic: &ShortcodeId) -> Rowed<'c> {
         let cache = self.cache;
         let mut rowed = Rowed::default();
         let Some((name, _)) = cache.cells.shortcodes().find(|(e, _)| *e == epic) else { return rowed };
         let tops: Vec<&'c Row> = match cache.rollups.root(epic).and_then(|r| cache.get(r)) {
             Some(root) => vec![root],
             None => {
-                let from = OrderKey { epic: epic.to_string(), seq: 0 };
-                let to = OrderKey { epic: epic.to_string(), seq: u32::MAX };
+                let from = OrderKey { shortcode: epic.clone(), seq: 0 };
+                let to = OrderKey { shortcode: epic.clone(), seq: u32::MAX };
                 cache.order.range(from..=to).map(|(_, t)| t).collect()
             }
         };
@@ -1337,15 +1452,15 @@ impl<'c> Compiled<'c> {
     /// with its node; `remaining` the rows after it; `next` as `list`'s.
     fn page(&self, rowed: Rowed<'c>, cursor: Option<&OrderKey>, after: Option<String>, limit: Option<u32>) -> TreePage {
         let take = limit.map_or(usize::MAX, |n| n as usize);
-        let mut picked: Vec<(&'c str, u32)> = Vec::new();
+        let mut picked: Vec<(&'c ShortcodeId, u32)> = Vec::new();
         let mut total: u64 = 0;
         // FILTER-23: a cursor that is one of the tail's roots is a place in
         // the tail, after every row.
-        let in_tail = cursor.and_then(|k| rowed.tail.iter().position(|r| r.epic == k.epic && r.seq == k.seq));
+        let in_tail = cursor.and_then(|k| rowed.tail.iter().position(|r| r.shortcode == k.shortcode && r.seq == k.seq));
         for (e, q) in rowed.by_epic.iter().filter(|_| in_tail.is_none()) {
             let lo = match cursor {
-                Some(k) if k.epic.as_str() > *e => continue,
-                Some(k) if k.epic == *e => match k.seq.checked_add(1) {
+                Some(k) if k.shortcode > **e => continue,
+                Some(k) if k.shortcode == **e => match k.seq.checked_add(1) {
                     Some(lo) => lo,
                     None => continue,
                 },
@@ -1359,18 +1474,18 @@ impl<'c> Compiled<'c> {
         }
         let tail = &rowed.tail[in_tail.map_or(0, |i| i + 1)..];
         total += tail.len() as u64;
-        picked.extend(tail.iter().take(take.saturating_sub(picked.len())).map(|r| (r.epic.as_str(), r.seq)));
+        picked.extend(tail.iter().take(take.saturating_sub(picked.len())).map(|r| (&r.shortcode, r.seq)));
         let names = self.cache.children.names();
         let rows: Vec<&'c Row> = picked
             .iter()
-            .filter_map(|(e, s)| self.cache.order.get(&OrderKey { epic: e.to_string(), seq: *s }))
+            .filter_map(|(e, s)| self.cache.order.get(&OrderKey { shortcode: (*e).clone(), seq: *s }))
             .collect();
         // A long list's rows were not each worked out: they are under the
         // atoms over their parent — one parent for every such row.
         let mask = rows
             .iter()
             .filter(|_| !rowed.alone)
-            .find(|r| !rowed.known.contains_key(&(r.epic.as_str(), r.seq)))
+            .find(|r| !rowed.known.contains_key(&(&r.shortcode, r.seq)))
             .and_then(|r| r.parent.as_deref())
             .map_or(0, |p| {
                 let mut chain: Vec<&str> = vec![p];
@@ -1381,12 +1496,12 @@ impl<'c> Compiled<'c> {
         let tables = Tables::new(&admit, names);
         let mut nodes = Vec::with_capacity(rows.len());
         for r in rows {
-            let (matched, below) = match rowed.known.get(&(r.epic.as_str(), r.seq)) {
+            let (matched, below) = match rowed.known.get(&(&r.shortcode, r.seq)) {
                 Some(n) => *n,
                 // FILTER-23: rows from many parents — each by its lineage.
                 None if rowed.alone => self.node_alone(r),
                 None => {
-                    let matched = tables.admits(tree::g(names.get(&r.epic).expect("a child's shortcode is interned"), self.cell(r)));
+                    let matched = tables.admits(tree::g(names.get(&r.shortcode).expect("a child's shortcode is interned"), self.cell(r)));
                     let below = self.cache.children.kids(&r.id).map_or(0, |k| tables.sum(k.tally.iter().map(|(g, n)| (*g, u64::from(*n)))));
                     // MENGER-13: corrected by the log (a no-op without one).
                     self.corrected(r, (matched, below))
@@ -1412,7 +1527,7 @@ impl<'c> Compiled<'c> {
 pub struct UnderWatch {
     id: u64,
     lens: Lens,
-    epic: Option<String>,
+    epic: Option<ShortcodeId>,
 }
 
 impl UnderWatch {
@@ -1431,7 +1546,7 @@ pub(crate) struct UnderWatches {
 
 impl UnderWatches {
     /// Registers a watch of `lens` (in `epic` alone, when one is asked).
-    pub(super) fn open(&self, lens: Lens, epic: Option<String>) -> Arc<UnderWatch> {
+    pub(super) fn open(&self, lens: Lens, epic: Option<ShortcodeId>) -> Arc<UnderWatch> {
         let id = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let w = Arc::new(UnderWatch { id, lens, epic });
         self.open.lock().expect("watches lock poisoned").push(Arc::downgrade(&w));
@@ -1458,8 +1573,8 @@ pub struct UnderMoves {
 /// whose hosts it changes (every ticket of those).
 #[derive(Default)]
 pub(super) struct Touched {
-    by_epic: BTreeMap<String, RoaringBitmap>,
-    whole: BTreeSet<String>,
+    by_epic: BTreeMap<ShortcodeId, RoaringBitmap>,
+    whole: BTreeSet<ShortcodeId>,
 }
 
 impl Touched {
@@ -1467,7 +1582,7 @@ impl Touched {
     pub(super) fn of_moves(moves: Option<&cells::Moves>) -> Self {
         let mut t = Self::default();
         for m in moves.into_iter().flat_map(|m| &m.moves) {
-            t.by_epic.entry(m.epic.to_string()).or_default().insert(m.seq);
+            t.by_epic.entry(m.shortcode.clone()).or_default().insert(m.seq);
         }
         t
     }
@@ -1475,13 +1590,13 @@ impl Touched {
     /// FILTER-30: and the ticket `r` itself — a write to its row touches it
     /// (`touched` asks of it) whether or not its cell moves.
     pub(super) fn row(mut self, r: &Row) -> Self {
-        self.ticket(&r.epic, r.seq);
+        self.ticket(&r.shortcode, r.seq);
         self
     }
 
     /// FILTER-30: and the ticket `(epic, seq)`.
-    pub(super) fn ticket(&mut self, epic: &str, seq: u32) {
-        self.by_epic.entry(epic.to_string()).or_default().insert(seq);
+    pub(super) fn ticket(&mut self, epic: &ShortcodeId, seq: u32) {
+        self.by_epic.entry(epic.clone()).or_default().insert(seq);
     }
 
     /// And the subtree of `name` (the ticket `row`, when it is one), as it
@@ -1495,32 +1610,32 @@ impl Touched {
     /// And every shortcode whose chain of hosts differs between the
     /// roll-ups before (the cache's) and `after` over `rows` (the rows as the
     /// write leaves them) — of the shortcodes the store holds, and `extra`.
-    pub(super) fn hosts(&mut self, cache: &Cache, after: &rollup::Rollups, rows: Rows<'_>, extra: Option<&str>) {
-        let chain = |r: &rollup::Rollups, rows: Rows<'_>, epic: &str| -> Vec<String> {
-            let mut out: Vec<String> = Vec::new();
-            let mut cur = epic.to_string();
+    pub(super) fn hosts(&mut self, cache: &Cache, after: &rollup::Rollups, rows: Rows<'_>, extra: Option<&ShortcodeId>) {
+        let chain = |r: &rollup::Rollups, rows: Rows<'_>, epic: &ShortcodeId| -> Vec<ShortcodeId> {
+            let mut out: Vec<ShortcodeId> = Vec::new();
+            let mut cur = epic.clone();
             while let Some(h) = r.host(&cur) {
                 let Some(row) = rows.get(h) else { break };
-                if row.epic == epic || out.contains(&row.epic) {
+                if row.shortcode == *epic || out.contains(&row.shortcode) {
                     break;
                 }
-                out.push(row.epic.clone());
-                cur = row.epic.clone();
+                out.push(row.shortcode.clone());
+                cur = row.shortcode.clone();
             }
             out
         };
-        let epics: BTreeSet<&str> = cache.cells.shortcodes().map(|(e, _)| e).chain(extra).collect();
+        let epics: BTreeSet<&ShortcodeId> = cache.cells.shortcodes().map(|(e, _)| e).chain(extra).collect();
         for e in epics {
             if chain(&cache.rollups, cache.rows(), e) != chain(after, rows, e) {
-                self.whole.insert(e.to_string());
+                self.whole.insert(e.clone());
             }
         }
     }
 
     /// Each shortcode touched, and what of it — `None`: all of it.
-    fn areas(&self) -> Vec<(&str, Option<&RoaringBitmap>)> {
-        let mut out: Vec<(&str, Option<&RoaringBitmap>)> = Vec::new();
-        let epics: BTreeSet<&str> = self.by_epic.keys().map(String::as_str).chain(self.whole.iter().map(String::as_str)).collect();
+    fn areas(&self) -> Vec<(&ShortcodeId, Option<&RoaringBitmap>)> {
+        let mut out: Vec<(&ShortcodeId, Option<&RoaringBitmap>)> = Vec::new();
+        let epics: BTreeSet<&ShortcodeId> = self.by_epic.keys().chain(self.whole.iter()).collect();
         for e in epics {
             out.push((e, if self.whole.contains(e) { None } else { self.by_epic.get(e) }));
         }
@@ -1533,7 +1648,7 @@ impl Touched {
 pub(super) struct UnderBefore {
     watches: Vec<Arc<UnderWatch>>,
     touched: Touched,
-    before: Vec<BTreeMap<String, RoaringBitmap>>,
+    before: Vec<BTreeMap<ShortcodeId, RoaringBitmap>>,
 }
 
 impl Store {
@@ -1557,7 +1672,7 @@ pub(super) fn under_before_with(unders: &UnderWatches, cache: &Cache, touched: i
 /// tickets at `keys`, before it. `None`, and nothing worked out, when no
 /// such watch is open (a watch that does not ask `touched` cannot see such
 /// a write).
-pub(super) fn touch_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&str, u32)]) -> Option<UnderBefore> {
+pub(super) fn touch_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
     let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_touched()).collect();
     before_of(watches, cache, || {
         let mut t = Touched::default();
@@ -1571,7 +1686,7 @@ pub(super) fn touch_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&
 /// DEPLOY-11: what a recorded deployment does to the open watches whose
 /// filter asks `deployed`: the tickets at `keys` (each whose cell it moves),
 /// before it. `None` when no such watch is open.
-pub(super) fn deployed_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&str, u32)]) -> Option<UnderBefore> {
+pub(super) fn deployed_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
     let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_deployed()).collect();
     before_of(watches, cache, || {
         let mut t = Touched::default();
@@ -1584,7 +1699,7 @@ pub(super) fn deployed_before_with(unders: &UnderWatches, cache: &Cache, keys: &
 
 impl Store {
     /// FILTER-30: [`touch_before_with`] over the store's watches.
-    pub(super) fn touch_before(&self, cache: &Cache, keys: &[(&str, u32)]) -> Option<UnderBefore> {
+    pub(super) fn touch_before(&self, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
         touch_before_with(&self.unders, cache, keys)
     }
 }
@@ -1604,7 +1719,7 @@ fn before_of(watches: Vec<Arc<UnderWatch>>, cache: &Cache, touched: impl FnOnce(
                     .into_iter()
                     .map(|(e, area)| {
                         let m = c.matches_in(e);
-                        (e.to_string(), match area {
+                        (e.clone(), match area {
                             Some(a) => m & a,
                             None => m,
                         })
@@ -1633,10 +1748,10 @@ impl UnderBefore {
         let mut by: HashMap<u64, Vec<Membership>> = HashMap::new();
         for (w, before) in self.watches.iter().zip(&self.before) {
             let c = Compiled::new(cache, &w.lens, None);
-            let mut moved: Vec<(&str, u32, bool)> = Vec::new();
-            let mut epics: Vec<&str> = Vec::new();
+            let mut moved: Vec<(&ShortcodeId, u32, bool)> = Vec::new();
+            let mut epics: Vec<&ShortcodeId> = Vec::new();
             for (e, area) in self.touched.areas() {
-                if w.epic.as_deref().is_some_and(|x| x != e) {
+                if w.epic.as_ref().is_some_and(|x| x != e) {
                     continue;
                 }
                 let m = c.matches_in(e);
@@ -1659,18 +1774,18 @@ impl UnderBefore {
                 continue;
             }
             let events = if moved.len() > cells::RECOUNT_OVER {
-                epics.into_iter().map(|e| Membership::Recount { epic: e.to_string(), held: c.matches_in(e).len() }).collect()
+                epics.into_iter().map(|e| Membership::Recount { shortcode: e.clone(), held: c.matches_in(e).len() }).collect()
             } else {
                 moved
                     .into_iter()
                     .map(|(e, seq, inn)| {
-                        let key = OrderKey { epic: e.to_string(), seq };
-                        let id = cache.order.get(&key).map_or_else(|| format!("{e}-{seq}"), |t| t.id.clone());
-                        let epic = e.to_string();
+                        let key = OrderKey { shortcode: e.clone(), seq };
+                        let id = cache.order.get(&key).map_or_else(|| e.key(seq), |t| t.id.clone());
+                        let shortcode = e.clone();
                         if inn {
-                            Membership::Entered { id, epic, seq }
+                            Membership::Entered { id, shortcode, seq }
                         } else {
-                            Membership::Left { id, epic, seq }
+                            Membership::Left { id, shortcode, seq }
                         }
                     })
                     .collect()

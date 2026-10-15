@@ -9,6 +9,7 @@
 //! ([`cells::View`]): no ticket is tested. A filtered page's rows are looked
 //! up by position, as a page of the ready set's are.
 
+use crate::address::ShortcodeId;
 use super::cells::{Admit, Key, View, SEVERITIES};
 use super::lineage::{Compiled, UNDERS_MAX};
 use super::*;
@@ -132,7 +133,7 @@ impl Lens {
             .collect();
         let unders: BTreeSet<String> = preds()
             .filter_map(|p| match &p.field {
-                Field::Under(x) => Some(x.to_ascii_uppercase()),
+                Field::Under(x) => Some(crate::address::folded(x)),
                 _ => None,
             })
             .collect();
@@ -173,7 +174,8 @@ impl Lens {
         &self.unders
     }
 
-    /// The shortcodes `in` names, upper case.
+    /// The codes `in` names, upper case — ORG-3: letters, each naming every
+    /// shortcode that has them.
     pub(super) fn named(&self) -> &[String] {
         &self.named
     }
@@ -181,14 +183,17 @@ impl Lens {
     /// FILTER-13: whether the lens admits a ticket of `epic` in cell `key`
     /// whose lineage holds `lineage` (the shortcodes hosting `epic`, and the
     /// `under` names it is under).
-    pub(super) fn judge(&self, epic: &str, key: Key, lineage: &[&str]) -> bool {
-        (self.judge)(epic, key, lineage, &[])
+    ///
+    /// ORG-3: `letters`, the shortcode's code — what `in` matches; the
+    /// lineage holds identities and the `under` names bound to them.
+    pub(super) fn judge(&self, letters: &str, key: Key, lineage: &[&str]) -> bool {
+        (self.judge)(letters, key, lineage, &[])
     }
 
     /// MENGER-13: [`Lens::judge`] with the history predicates `holds` names
     /// holding — a ticket's own truths, which no cell carries.
-    pub(super) fn judge_holding(&self, epic: &str, key: Key, lineage: &[&str], holds: &[&str]) -> bool {
-        (self.judge)(epic, key, lineage, holds)
+    pub(super) fn judge_holding(&self, letters: &str, key: Key, lineage: &[&str], holds: &[&str]) -> bool {
+        (self.judge)(letters, key, lineage, holds)
     }
 
     /// The filter's text.
@@ -203,11 +208,15 @@ impl Lens {
     /// FILTER-13: a lens with `under` is compiled with its lineage
     /// ([`super::lineage::Compiled`]); this is the lens without it, where
     /// the lineage holds nothing a judge reads.
-    pub(super) fn admit(&self, keys: &[Key], status: Option<Status>) -> Admit {
+    ///
+    /// ORG-3: `in` names letters — every shortcode of `r` with them is judged
+    /// on its own, by its letters.
+    pub(super) fn admit(&self, r: &super::shortcodes::Registry, keys: &[Key], status: Option<Status>) -> Admit {
         debug_assert!(self.unders.is_empty(), "a lens with `under` is compiled with its lineage");
         debug_assert!(self.history.is_empty(), "a lens with history is compiled with the log");
-        Admit::compile(keys, self.named.iter().cloned(), |e, k| {
-            status.is_none_or(|s| k.status() == s) && (self.judge)(e, k, &[], &[])
+        let named: BTreeSet<ShortcodeId> = self.named.iter().flat_map(|code| r.in_set(code)).collect();
+        Admit::compile(keys, named, |e, k| {
+            status.is_none_or(|s| k.status() == s) && (self.judge)(r.code(e).as_str(), k, &[], &[])
         })
     }
 }
@@ -216,11 +225,12 @@ impl Lens {
 /// ticket's id and title — which only `text` reads, and it is not compiled.
 /// FILTER-13: the lineage `under` reads is what the compile hands it: the
 /// shortcode, the shortcodes hosting it, and the `under` names that hold.
-/// MENGER-13: and the history predicates that hold, by their text.
-fn facts(epic: &str, key: Key, lineage: &[&str], holds: &[&str]) -> Facts {
+/// MENGER-13: and the history predicates that hold, by their text. ORG-3:
+/// `letters`, the shortcode's code — what `in` matches.
+fn facts(letters: &str, key: Key, lineage: &[&str], holds: &[&str]) -> Facts {
     Facts {
         id: String::new(),
-        epic: epic.to_string(),
+        epic: letters.to_string(),
         title: String::new(),
         status: key.status(),
         kind: key.kind(),
@@ -332,7 +342,8 @@ impl std::fmt::Debug for Lens {
 /// parameters, which are sugar beside it: `epic` for `in`, `status` for a
 /// status, `parent` for a parent's page. FILTER-24: and `keep`, a ticket
 /// held as a match whatever the filter says of it (the nav's open ticket) —
-/// when it is inside the sugar.
+/// when it is inside the sugar. ORG-3: `epic`, `parent` and `keep` as a
+/// reader names them — resolved by the store when it cuts the page.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Filtered {
     pub lens: Lens,
@@ -346,12 +357,12 @@ pub struct Filtered {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Membership {
     /// The write moved the ticket into the filter.
-    Entered { id: String, epic: String, seq: u32 },
+    Entered { id: String, shortcode: ShortcodeId, seq: u32 },
     /// …or out of it.
-    Left { id: String, epic: String, seq: u32 },
+    Left { id: String, shortcode: ShortcodeId, seq: u32 },
     /// The write moved more than [`RECOUNT_OVER`] memberships: the filter's
     /// count of each shortcode it moved, as the write left it.
-    Recount { epic: String, held: u64 },
+    Recount { shortcode: ShortcodeId, held: u64 },
 }
 
 /// FILTER-4: one `watch { filter }`'s filter, compiled — and compiled again
@@ -365,39 +376,89 @@ pub struct Watcher {
     under: Option<Arc<super::lineage::UnderWatch>>,
     /// MENGER-13: the moment its relative windows were last read at.
     read_at: i64,
+    /// ORG-3: how many shortcodes the registry held when `admit` was
+    /// compiled — a shortcode minted since may be one an `in` names.
+    shortcodes: usize,
 }
 
 /// The matches of `q` under the read lock: the admitted bitmaps, and — for
 /// a parent's page — inside its children. FILTER-13: compiled with the
 /// lineage `under` reads — so every read through here (FILTER-15's too)
 /// answers `under`.
-pub(super) fn view<'c>(cache: &'c Cache, q: &Filtered) -> View<'c> {
-    let view = Compiled::new(cache, &q.lens, q.status).view(q.epic.as_deref());
-    let view = match q.parent.as_deref() {
+///
+/// ORG-3: `q`'s `epic` and `parent` resolved first ([`Sugar::of`]) — a
+/// name that is ambiguous is refused, naming each.
+pub(super) fn view<'c>(cache: &'c Cache, q: &Filtered) -> Result<View<'c>, StoreError> {
+    view_of(cache, q, Sugar::of(cache, q)?, Compiled::read(cache, &q.lens, q.status)?)
+}
+
+/// ORG-3: [`view`] for a reach's own question (a grant's lens, `member`
+/// asked by the gate) — a name that has come to name several holds nowhere,
+/// never refusing the read it narrows.
+pub(super) fn view_lenient<'c>(cache: &'c Cache, q: &Filtered) -> View<'c> {
+    let sugar = Sugar::of(cache, q).unwrap_or(Sugar { epic: Some(ShortcodeId::new("")), parent: None });
+    view_of(cache, q, sugar, Compiled::new(cache, &q.lens, q.status)).expect("a lenient view refuses nothing")
+}
+
+fn view_of<'c>(cache: &'c Cache, q: &Filtered, sugar: Sugar, c: Compiled<'c>) -> Result<View<'c>, StoreError> {
+    let view = c.view(sugar.epic.as_ref());
+    let view = match sugar.parent.as_deref() {
         None => view,
         Some(parent) => view.within(|epic| cache.children.in_shortcode(parent, epic).map(|seqs| seqs.bitmap().into_owned())),
     };
-    match kept(cache, q) {
-        Some(t) => view.keeping(&t.epic, t.seq),
+    Ok(match kept(cache, q, &sugar) {
+        Some(t) => view.keeping(&t.shortcode, t.seq),
         None => view,
+    })
+}
+
+/// ORG-3: a filtered read's sugar, resolved — the shortcode `epic` names
+/// (one that names none is a shortcode with no tickets: nothing matches),
+/// the ticket `parent` names (one that names none stays as written: a
+/// parent only a hand edit names has children all the same).
+pub(super) struct Sugar {
+    pub(super) epic: Option<ShortcodeId>,
+    pub(super) parent: Option<String>,
+}
+
+impl Sugar {
+    pub(super) fn of(cache: &Cache, q: &Filtered) -> Result<Self, StoreError> {
+        let epic = match q.epic.as_deref() {
+            None => None,
+            Some(e) => Some(cache.shortcode_named(e)?.unwrap_or_else(|| ShortcodeId::new(&e.trim().to_ascii_uppercase()))),
+        };
+        let parent = match q.parent.as_deref() {
+            None => None,
+            Some(p) => Some(match cache.find_ticket(p, super::shortcodes::OrgReach::All) {
+                super::shortcodes::Found::One(key) => key,
+                super::shortcodes::Found::Many(candidates) => {
+                    return Err(StoreError::Ambiguous { text: p.trim().to_string(), candidates })
+                }
+                super::shortcodes::Found::None => p.trim().to_ascii_uppercase(),
+            }),
+        };
+        Ok(Self { epic, parent })
     }
 }
 
-/// FILTER-24: the ticket a `keep` names — as given, else upper-cased (as
-/// `member` takes an id).
+/// FILTER-24: the ticket a `keep` names — ORG-3: by any short form, or as
+/// given, else upper-cased (as `member` takes an id).
 pub(super) fn keep_row<'c>(cache: &'c Cache, id: &str) -> Option<&'c Row> {
     let id = id.trim();
-    cache.get(id).or_else(|| cache.get(&id.to_ascii_uppercase()))
+    match cache.find_ticket(id, super::shortcodes::OrgReach::All) {
+        super::shortcodes::Found::One(key) => cache.get(&key),
+        _ => cache.get(id).or_else(|| cache.get(&id.to_ascii_uppercase())),
+    }
 }
 
 /// FILTER-24: the ticket `q.keep` names, when it is inside `q`'s sugar —
 /// its shortcode, its status, its parent — and so a match of `q` whatever
 /// the filter says of it.
-fn kept<'c>(cache: &'c Cache, q: &Filtered) -> Option<&'c Row> {
+fn kept<'c>(cache: &'c Cache, q: &Filtered, sugar: &Sugar) -> Option<&'c Row> {
     let t = keep_row(cache, q.keep.as_deref()?)?;
-    let inside = q.epic.as_deref().is_none_or(|e| e == t.epic)
+    let inside = sugar.epic.as_ref().is_none_or(|e| *e == t.shortcode)
         && q.status.is_none_or(|s| s == t.status)
-        && q.parent.as_deref().is_none_or(|p| cache.children.in_shortcode(p, &t.epic).is_some_and(|seqs| seqs.bitmap().contains(t.seq)));
+        && sugar.parent.as_deref().is_none_or(|p| cache.children.in_shortcode(p, &t.shortcode).is_some_and(|seqs| seqs.bitmap().contains(t.seq)));
     inside.then_some(t)
 }
 
@@ -405,22 +466,45 @@ impl Store {
     /// FILTER-4: `counts { filter }` — each shortcode that holds a match,
     /// with how many, in shortcode order: the sum of the counts of the cells
     /// the filter admits there. The empty lens is each shortcode's tickets.
-    pub fn counts(&self, lens: &Lens) -> Vec<(String, u64)> {
+    ///
+    /// ORG-3: by the shortcode's identity — two THEMEs are two counts.
+    pub fn counts(&self, lens: &Lens) -> Vec<(ShortcodeId, u64)> {
         self.counts_keeping(lens, None)
     }
 
     /// FILTER-24: [`Store::counts`] with `keep` — a ticket counted as a
     /// match whatever the filter says of it (once: a match is counted as it
     /// was).
-    pub fn counts_keeping(&self, lens: &Lens, keep: Option<&str>) -> Vec<(String, u64)> {
+    pub fn counts_keeping(&self, lens: &Lens, keep: Option<&str>) -> Vec<(ShortcodeId, u64)> {
         let cache = self.tickets.read().expect("store lock poisoned");
         let view = Compiled::new(&cache, lens, None).view(None);
         let view = match keep.and_then(|id| keep_row(&cache, id)) {
-            Some(t) => view.keeping(&t.epic, t.seq),
+            Some(t) => view.keeping(&t.shortcode, t.seq),
             None => view,
         };
-        let out = view.counts().map(|(e, n)| (e.to_string(), n)).collect();
+        let out = view.counts().map(|(e, n)| (e.clone(), n)).collect();
         out
+    }
+
+    /// ORG-3: [`Store::counts_keeping`] for a read — an `under` name that
+    /// names more than one in reach is refused, naming each.
+    pub fn counts_read(&self, lens: &Lens, keep: Option<&str>) -> Result<Vec<(ShortcodeId, u64)>, StoreError> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let view = Compiled::read(&cache, lens, None)?.view(None);
+        let view = match keep.and_then(|id| keep_row(&cache, id)) {
+            Some(t) => view.keeping(&t.shortcode, t.seq),
+            None => view,
+        };
+        let out = view.counts().map(|(e, n)| (e.clone(), n)).collect();
+        Ok(out)
+    }
+
+    /// ORG-3: a shortcode's letters and full address, as the registry says
+    /// — what an event that names a shortcode by its identity carries beside
+    /// it.
+    pub fn shortcode_named_by(&self, sc: &ShortcodeId) -> (crate::address::Code, String) {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        (cache.shortcodes.code(sc), cache.shortcodes.address(sc))
     }
 
     /// FILTER-4: `facets { filter, base }` — the counts behind every menu
@@ -468,8 +552,8 @@ impl Store {
         let mut labels: BTreeMap<String, u64> = BTreeMap::new();
         for (rest, fields) in &distinct {
             let both = Lens::of(&base.and(rest))?.with_clock(clock.clone());
-            let compiled = Compiled::new(&cache, &both, None);
-            let mut by_epic: Vec<(&str, u64)> = Vec::new();
+            let compiled = Compiled::read(&cache, &both, None)?;
+            let mut by_epic: Vec<(&ShortcodeId, u64)> = Vec::new();
             for (epic, _) in cache.cells.shortcodes() {
                 let mut in_epic = 0;
                 for (cell, n) in compiled.cell_counts(epic) {
@@ -491,7 +575,16 @@ impl Store {
                 }
             }
             if fields.contains(&"in") {
-                shortcodes = by_epic.into_iter().map(|(e, n)| (e.to_string(), n)).collect();
+                // ORG-3: `in` names letters, so its menu counts each code —
+                // namesakes summed, in the order the first of each comes.
+                shortcodes = Vec::new();
+                for (e, n) in by_epic {
+                    let code = cache.shortcodes.code(e).as_str().to_string();
+                    match shortcodes.iter_mut().find(|(c, _)| *c == code) {
+                        Some((_, held)) => *held += n,
+                        None => shortcodes.push((code, n)),
+                    }
+                }
             }
         }
         *tallies.last_mut().expect("`in` is the last field") = shortcodes;
@@ -520,11 +613,6 @@ impl Store {
         at: Option<u64>,
         limit: Option<u32>,
     ) -> Result<Page, StoreError> {
-        let q = Filtered {
-            epic: q.epic.as_deref().map(str::to_ascii_uppercase),
-            parent: q.parent.as_deref().map(str::to_ascii_uppercase),
-            ..q.clone()
-        };
         let after = after.map(str::to_ascii_uppercase);
         let cache = self.tickets.read().expect("store lock poisoned");
         Self::cut_filtered(&cache, &q, after.as_deref(), at, limit, Rest::Count)
@@ -545,7 +633,7 @@ impl Store {
             (Some(id), None) => Some(cache.at.get(id).cloned().ok_or_else(|| StoreError::CursorNotFound(id.to_string()))?),
             _ => None,
         };
-        let view = view(cache, q);
+        let view = view(cache, q)?;
         let take = limit.map_or(usize::MAX, |n| n as usize);
         let (first, keys) = match (&cursor, at) {
             (Some(key), _) => (view.rank(key), view.page_after(key, take)),
@@ -557,7 +645,7 @@ impl Store {
         };
         let tickets: Vec<Row> = keys
             .into_iter()
-            .filter_map(|(epic, seq)| cache.order.get(&OrderKey { epic: epic.to_string(), seq }).cloned())
+            .filter_map(|(epic, seq)| cache.order.get(&OrderKey { shortcode: epic.clone(), seq }).cloned())
             .collect();
         let remaining = match rest {
             Rest::Count => view.total().saturating_sub(first).saturating_sub(tickets.len() as u64),
@@ -574,7 +662,7 @@ impl Store {
                 (None, 0) => None,
                 (None, p) => view
                     .select(p - 1)
-                    .and_then(|(epic, seq)| cache.order.get(&OrderKey { epic: epic.to_string(), seq }))
+                    .and_then(|(epic, seq)| cache.order.get(&OrderKey { shortcode: epic.clone(), seq }))
                     .map(|t| t.id.clone()),
             })
         };
@@ -595,24 +683,31 @@ impl Store {
     /// FILTER-13: [`Store::watcher`] for a watch in `epic` alone (when one
     /// is asked) — which a filter asking `under` registers with the store, so
     /// each write works out its membership.
-    pub fn watcher_in(&self, lens: Lens, epic: Option<&str>) -> Watcher {
+    pub fn watcher_in(&self, lens: Lens, epic: Option<&ShortcodeId>) -> Watcher {
         // MENGER-13: a filter asking the log is a ticket's own truth as well
         // as its cell's — each write works it out, as it does `under`'s.
         if !lens.unders().is_empty() || lens.has_history() {
             let read_at = lens.clock().now();
-            let under = self.unders.open(lens.clone(), epic.map(str::to_string));
+            let under = self.unders.open(lens.clone(), epic.cloned());
             return Watcher {
                 lens,
                 admit: Admit::compile(&[], std::iter::empty(), |_, _| false),
                 under: Some(under),
                 read_at,
+                shortcodes: 0,
             };
         }
-        let admit = {
+        let (admit, shortcodes) = {
             let cache = self.tickets.read().expect("store lock poisoned");
-            lens.admit(cache.cells.keys(), None)
+            (lens.admit(&cache.shortcodes, cache.cells.keys(), None), cache.shortcodes.len())
         };
-        Watcher { lens, admit, under: None, read_at: 0 }
+        Watcher { lens, admit, under: None, read_at: 0, shortcodes }
+    }
+
+    /// ORG-3: how many shortcodes the registry holds — what a watcher's
+    /// compile is current with.
+    fn shortcodes_held(&self) -> usize {
+        self.tickets.read().expect("store lock poisoned").shortcodes.len()
     }
 
     /// FILTER-27: the next moment after the lens's now at which time alone
@@ -632,7 +727,7 @@ impl Store {
     /// `Recount` per shortcode they are in. A write between the two moments
     /// was said by the write itself; a ticket it moved is only said again
     /// here when time moved it too.
-    pub fn aged(&self, lens: &Lens, then: i64, now: i64, epic: Option<&str>) -> Vec<Membership> {
+    pub fn aged(&self, lens: &Lens, then: i64, now: i64, epic: Option<&ShortcodeId>) -> Vec<Membership> {
         if !lens.relative() || now <= then {
             return Vec::new();
         }
@@ -644,17 +739,17 @@ impl Store {
         let (before, after) = (at(then), at(now));
         let cache = self.tickets.read().expect("store lock poisoned");
         let (b, a) = (Compiled::new(&cache, &before, None), Compiled::new(&cache, &after, None));
-        let mut candidates: BTreeMap<String, roaring::RoaringBitmap> = b.history_candidates();
+        let mut candidates: BTreeMap<ShortcodeId, roaring::RoaringBitmap> = b.history_candidates();
         for (e, bm) in a.history_candidates() {
             *candidates.entry(e).or_default() |= bm;
         }
-        let mut moved: Vec<(String, u32, bool)> = Vec::new();
+        let mut moved: Vec<(ShortcodeId, u32, bool)> = Vec::new();
         for (e, cand) in candidates {
-            if epic.is_some_and(|x| x != e) {
+            if epic.is_some_and(|x| *x != e) {
                 continue;
             }
             for seq in cand {
-                let Some(t) = cache.order.get(&OrderKey { epic: e.clone(), seq }) else { continue };
+                let Some(t) = cache.order.get(&OrderKey { shortcode: e.clone(), seq }) else { continue };
                 let (was, is) = (b.matches_row(t), a.matches_row(t));
                 if was != is {
                     moved.push((e.clone(), seq, is));
@@ -662,18 +757,18 @@ impl Store {
             }
         }
         if moved.len() > RECOUNT_OVER {
-            let mut epics: Vec<&String> = moved.iter().map(|(e, _, _)| e).collect();
+            let mut epics: Vec<&ShortcodeId> = moved.iter().map(|(e, _, _)| e).collect();
             epics.dedup();
-            return epics.into_iter().map(|e| Membership::Recount { epic: e.clone(), held: a.matches_in(e).len() }).collect();
+            return epics.into_iter().map(|e| Membership::Recount { shortcode: e.clone(), held: a.matches_in(e).len() }).collect();
         }
         moved
             .into_iter()
-            .map(|(epic, seq, now)| {
-                let id = cache.order.get(&OrderKey { epic: epic.clone(), seq }).map_or_else(|| format!("{epic}-{seq}"), |t| t.id.clone());
+            .map(|(shortcode, seq, now)| {
+                let id = cache.order.get(&OrderKey { shortcode: shortcode.clone(), seq }).map_or_else(|| shortcode.key(seq), |t| t.id.clone());
                 if now {
-                    Membership::Entered { id, epic, seq }
+                    Membership::Entered { id, shortcode, seq }
                 } else {
-                    Membership::Left { id, epic, seq }
+                    Membership::Left { id, shortcode, seq }
                 }
             })
             .collect()
@@ -700,7 +795,7 @@ impl Watcher {
 
     /// MENGER-13: what time did to this watch's filter since it was last
     /// read — [`Store::aged`] from then to now; the moment read is now.
-    pub fn tick(&mut self, store: &Store, epic: Option<&str>) -> Vec<Membership> {
+    pub fn tick(&mut self, store: &Store, epic: Option<&ShortcodeId>) -> Vec<Membership> {
         let now = self.lens.clock().now();
         let out = store.aged(&self.lens, self.read_at, now, epic);
         self.read_at = now;
@@ -717,25 +812,27 @@ impl Watcher {
     /// of it (`Left`), in the store's order; or, when there are more than
     /// [`RECOUNT_OVER`] of those, one `Recount` per shortcode they are in,
     /// with the filter's count there as the write left it.
-    pub fn membership(&mut self, store: &Store, moves: &Moves, epic: Option<&str>) -> Vec<Membership> {
+    pub fn membership(&mut self, store: &Store, moves: &Moves, epic: Option<&ShortcodeId>) -> Vec<Membership> {
         if self.under.is_some() {
             return Vec::new(); // the write's own `UnderMoved` says it
         }
         // ACT-5: a deleted ticket's `to` is no cell (`GONE`), never admitted.
         let highest = moves.moves.iter().flat_map(|m| m.from.into_iter().chain([m.to])).filter(|c| *c != super::cells::GONE).max();
-        if highest.is_some_and(|c| c as usize >= self.admit.len()) {
+        if highest.is_some_and(|c| c as usize >= self.admit.len()) || store.shortcodes_held() != self.shortcodes {
             // A cell interned after the compile: compile again — the table
-            // only grows, and every id it held means what it meant.
-            self.admit = store.watcher(self.lens.clone()).admit;
+            // only grows, and every id it held means what it meant. ORG-3:
+            // or a shortcode minted since, which an `in` may name.
+            let again = store.watcher(self.lens.clone());
+            (self.admit, self.shortcodes) = (again.admit, again.shortcodes);
         }
-        let admits = |e: &str, c: u32| self.admit.admits(e, c).unwrap_or(false);
+        let admits = |e: &ShortcodeId, c: u32| self.admit.admits(e, c).unwrap_or(false);
         let moved: Vec<(&CellMove, bool)> = moves
             .moves
             .iter()
-            .filter(|m| epic.is_none_or(|e| e == &*m.epic))
+            .filter(|m| epic.is_none_or(|e| *e == m.shortcode))
             .filter_map(|m| {
-                let was = m.from.is_some_and(|c| admits(&m.epic, c));
-                let now = admits(&m.epic, m.to);
+                let was = m.from.is_some_and(|c| admits(&m.shortcode, c));
+                let now = admits(&m.shortcode, m.to);
                 (was != now).then_some((m, now))
             })
             .collect();
@@ -748,25 +845,25 @@ impl Watcher {
             return moved
                 .into_iter()
                 .map(|(m, now)| {
-                    let (epic, seq) = (m.epic.to_string(), m.seq);
-                    let key = OrderKey { epic, seq };
-                    let id = cache.order.get(&key).map_or_else(|| format!("{}-{}", key.epic, seq), |t| t.id.clone());
-                    let epic = key.epic;
+                    let (shortcode, seq) = (m.shortcode.clone(), m.seq);
+                    let key = OrderKey { shortcode, seq };
+                    let id = cache.order.get(&key).map_or_else(|| key.shortcode.key(seq), |t| t.id.clone());
+                    let shortcode = key.shortcode;
                     if now {
-                        Membership::Entered { id, epic, seq }
+                        Membership::Entered { id, shortcode, seq }
                     } else {
-                        Membership::Left { id, epic, seq }
+                        Membership::Left { id, shortcode, seq }
                     }
                 })
                 .collect();
         }
         let counts = moves.counts.as_ref().expect("a write past the threshold carries its counts");
-        let mut epics: Vec<&str> = moved.iter().map(|(m, _)| &*m.epic).collect();
+        let mut epics: Vec<&ShortcodeId> = moved.iter().map(|(m, _)| &m.shortcode).collect();
         epics.dedup();
         epics
             .into_iter()
             .map(|e| Membership::Recount {
-                epic: e.to_string(),
+                shortcode: e.clone(),
                 held: counts
                     .get(e)
                     .map_or(0, |held| held.iter().filter(|(c, _)| admits(e, *c)).map(|(_, n)| n).sum()),

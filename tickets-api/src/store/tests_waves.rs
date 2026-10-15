@@ -387,6 +387,8 @@ fn a_chain_longer_than_any_call_stack_is_placed() {
         labels: Vec::new(),
         id: format!("LONG-{seq}"),
         epic: "LONG".into(),
+        shortcode: "LONG".into(),
+        address: String::new(),
         seq,
         title: String::new(),
         status: Status::Pending,
@@ -406,7 +408,7 @@ fn a_chain_longer_than_any_call_stack_is_placed() {
     let (order, at, _) = ordered(loaded);
     let children = children::Children::build(order.values());
     let rows = Rows { order: &order, at: &at, children: &children, patch: None };
-    let epics: std::collections::BTreeSet<String> = ["LONG".to_string()].into();
+    let epics: std::collections::BTreeSet<ShortcodeId> = [ShortcodeId::from("LONG")].into();
 
     // Run where the stack is small, so a recursive walk could not pass.
     let answer = std::thread::scope(|s| {

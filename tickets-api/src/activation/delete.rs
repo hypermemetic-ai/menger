@@ -71,7 +71,7 @@ pub(super) fn undelete_stream(store: Arc<Store>, admitted: Result<Caller, String
         let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);
         match store.undelete_by(&ids, act, may).await {
             Ok(Undeleted { ids, tickets }) => yield TicketsEvent::Undeleted { ids, tickets },
-            Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            Err(e) => yield refusal(e),
         }
     }
 }

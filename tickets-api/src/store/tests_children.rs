@@ -52,12 +52,12 @@ pub(super) fn children(store: &Store, id: &str) -> Vec<String> {
 /// Every parent's children as a scan of the store finds them: each
 /// ticket's `(epic, seq)` under the id its `parent` names, in the store's
 /// order.
-pub(super) fn scanned(store: &Store) -> BTreeMap<String, Vec<(String, u32)>> {
+pub(super) fn scanned(store: &Store) -> BTreeMap<String, Vec<(ShortcodeId, u32)>> {
     let cache = store.tickets.read().unwrap();
-    let mut out: BTreeMap<String, Vec<(String, u32)>> = BTreeMap::new();
+    let mut out: BTreeMap<String, Vec<(ShortcodeId, u32)>> = BTreeMap::new();
     for t in cache.order.values() {
         if let Some(p) = &t.parent {
-            out.entry(p.clone()).or_default().push((t.epic.clone(), t.seq));
+            out.entry(p.clone()).or_default().push((t.shortcode.clone(), t.seq));
         }
     }
     out
@@ -103,7 +103,7 @@ fn old_page(store: &Store, q: &PageQuery<'_>) -> Result<Answer, String> {
     };
     let matching: Vec<&String> = all
         .iter()
-        .filter(|(_, k, ..)| epic.as_deref().is_none_or(|e| k.epic == e))
+        .filter(|(_, k, ..)| epic.as_deref().is_none_or(|e| k.shortcode.as_str() == e))
         .filter(|(_, k, ..)| cursor.as_ref().is_none_or(|c| k > c))
         .filter(|(_, _, p, _)| parent.is_none() || p.as_deref() == parent.as_deref())
         .filter(|(.., s)| q.status.is_none_or(|want| *s == want))
@@ -134,7 +134,7 @@ fn answered(store: &Store, q: &PageQuery<'_>) -> Result<Answer, String> {
 fn assert_every_page_is_the_old_filters(store: &Store, parent: &str) {
     let ids: Vec<String> = store.page(PageQuery::default()).unwrap().tickets.into_iter().map(|t| t.id).collect();
     let mut epics: Vec<Option<String>> = vec![None];
-    epics.extend(store.extents().into_iter().map(|(e, _)| Some(e)));
+    epics.extend(store.extents_text().into_iter().map(|(e, _)| Some(e.as_str().to_string())));
     let cursors = std::iter::once(None).chain(ids.iter().map(|id| Some(id.as_str())));
     for after in cursors {
         for limit in [Some(0), Some(1), Some(2), Some(3), Some(5), None] {
@@ -231,14 +231,14 @@ async fn a_page_deep_in_a_large_parents_children_is_cut_by_position() {
     let kids = &all[&root];
     for at in [0, 1, kids.len() / 2, kids.len() - 201, kids.len() - 1] {
         let (epic, seq) = &kids[at];
-        let key = OrderKey { epic: epic.clone(), seq: *seq };
+        let key = OrderKey { shortcode: epic.clone(), seq: *seq };
         use std::ops::Bound::{Excluded, Unbounded};
         let walked: Vec<OrderKey> =
             cache.children.range(&root, Excluded(&key), Unbounded).take(200).collect();
         let want: Vec<OrderKey> = kids[at + 1..]
             .iter()
             .take(200)
-            .map(|(e, s)| OrderKey { epic: e.clone(), seq: *s })
+            .map(|(e, s)| OrderKey { shortcode: e.clone(), seq: *s })
             .collect();
         assert_eq!(walked, want, "the page after child {at}");
         assert_eq!(
@@ -276,6 +276,8 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
                     labels: Vec::new(),
                     id: id.into(),
                     epic: epic.into(),
+                    shortcode: epic.into(),
+                    address: String::new(),
                     seq: seq.parse().unwrap(),
                     title: id.into(),
                     status: Status::Pending,
@@ -410,7 +412,7 @@ async fn a_birth_and_a_move_broadcast_the_parents_id_and_count() {
         .unwrap(); // EV-2 → EV-1, blocked by it
     assert!(matches!(rx.try_change().unwrap(), Change::Created { .. }));
     match rx.try_change().unwrap() {
-        Change::ChildrenChanged { id, epic, added, child_count } => {
+        Change::ChildrenChanged { id, shortcode: epic, added, child_count } => {
             assert_eq!((id.as_str(), epic.as_str(), added.as_str(), child_count), ("EV-1", "EV", "EV-2", 1));
         }
         other => panic!("expected ChildrenChanged, got {other:?}"),
@@ -428,7 +430,7 @@ async fn a_birth_and_a_move_broadcast_the_parents_id_and_count() {
     store.create(new_ticket("HOSTED", Kind::Scope, Some("EV-3"))).await.unwrap();
     let parents: Vec<(String, String, u64)> = std::iter::from_fn(|| rx.try_change().ok())
         .filter_map(|c| match c {
-            Change::ChildrenChanged { id, epic, child_count, .. } => Some((id, epic, child_count)),
+            Change::ChildrenChanged { id, shortcode: epic, child_count, .. } => Some((id, epic.as_str().to_string(), child_count)),
             _ => None,
         })
         .collect();
