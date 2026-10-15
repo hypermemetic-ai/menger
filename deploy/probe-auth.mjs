@@ -20,6 +20,11 @@
 const [wsPort = '4450', shellPort = '4451'] = process.argv.slice(2);
 const SHELL = `http://127.0.0.1:${shellPort}`;
 const HOME = process.env.PROBE_HOME || 'MENGER';
+// ORG-7: a grant carries its organization since ORG-4 (`hypermemetic:MENGER`);
+// a release before it says the bare shortcode, and promote's rollback smokes
+// one — so a scope is read either way.
+const ORG = process.env.PROBE_ORG || 'hypermemetic';
+const scoped = (s, sc) => s === sc || s === `${ORG}:${sc}`;
 const AWAY = process.env.PROBE_AWAY || 'IDENTITY';
 const WANT_COOKIE = `menger_session_${shellPort}`;
 let COOKIE = WANT_COOKIE; // what the server actually sets, learnt at the first sign-in
@@ -227,7 +232,9 @@ check(errorOf(sneak), `an editor of ${AWAY} cannot name a ${HOME} ticket it cann
 // Writes.
 {
   const r = refusalOf(await call(v, 'tickets.set_status', { id: homeId, status: 'Ready' }));
-  check(r.error_kind === 'forbidden' && r.grant === 'tickets.set_status' && r.scope === HOME
+  // ORG-4: the gate's chain starts at the target as written, so the refusal
+  // names the ticket; before it, the shortcode.
+  check(r.error_kind === 'forbidden' && r.grant === 'tickets.set_status' && (scoped(r.scope, HOME) || r.scope === homeId)
     && (r.roles || []).includes('editor') && (r.roles || []).includes('admin') && Array.isArray(r.held_on),
     `a viewer cannot set a status: refused, typed — grant, scope, roles, held_on (${JSON.stringify(r)})`);
 }
@@ -273,12 +280,12 @@ check(errorOf(await call(e, 'members.requests')), 'only an admin of * sees who h
   check(ev.tickets?.includes('set_status') && !ev.members?.includes('grant'), 'an editor\'s schema lists the writes, not the admin\'s methods');
   const vs = (await call(v, 'tickets.schema'))[0];
   const list = (vs?.methods || []).find((m) => m.name === 'list');
-  check(list?.grant === 'tickets.list' && JSON.stringify(list?.held_on) === JSON.stringify([HOME]), `a method in a view says its grant and where it is held (${JSON.stringify(list?.held_on)})`);
+  check(list?.grant === 'tickets.list' && (list?.held_on || []).length === 1 && scoped(list.held_on[0], HOME), `a method in a view says its grant and where it is held (${JSON.stringify(list?.held_on)})`);
   const hashes = await Promise.all([a, n, v, e].map(async (s) => (await info(s)).view_hash));
   check(hashes.every(Boolean) && new Set(hashes).size === 4, `view hashes differ by holdings (${hashes.join(', ')})`);
   // who am I, what does this need.
   const me = (await call(v, 'auth.whoami'))[0] || {};
-  check(me.type === 'whoami' && (me.memberships || []).some((m) => m.role === 'viewer' && m.scope === HOME), `auth.whoami says the viewer's membership (${JSON.stringify(me.memberships)})`);
+  check(me.type === 'whoami' && (me.memberships || []).some((m) => m.role === 'viewer' && scoped(m.scope, HOME)), `auth.whoami says the viewer's membership (${JSON.stringify(me.memberships)})`);
   const req = (await call(v, 'auth.requires', { method: 'tickets.set_status' }))[0] || {};
   check(req.grant === 'tickets.set_status' && req.target === 'id' && (req.roles || []).includes('editor'), `auth.requires says what set_status needs (${JSON.stringify(req)})`);
   check(refusalOf(await call(v, 'auth.role_set', { role: 'viewer', grants: ['tickets.get'] })).grant === 'auth.role_set', 'a viewer cannot edit a role');
