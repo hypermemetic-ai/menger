@@ -30,7 +30,17 @@ fn ctx(meta: serde_json::Value) -> AuthContext {
 }
 
 fn grant(principal: &str, scope: &str, role: Role) -> Grant {
-    Grant { principal: principal.into(), scope: scope.into(), role, granted_by: "test".into(), at: 1 }
+    Grant { principal: principal.parse().unwrap(), scope: kept_scope(scope), role, granted_by: crate::vocab::GrantedBy::AuthGrant, at: 1 }
+}
+
+/// ACCESS-48: a scope as kept — a bare shortcode (`IDENTITY`) as ORG-4's
+/// open keeps one from before organizations, in the first organization.
+fn kept_scope(text: &str) -> crate::members::Scope {
+    let kept = match text.contains(':') || text == "*" {
+        true => text.to_string(),
+        false => format!("hypermemetic:{text}"),
+    };
+    crate::members::Scope::stored(&kept).unwrap_or_else(|| panic!("a test's scope: {text}"))
 }
 
 /// The default roles, as tickets declares them (a part of them).
@@ -178,7 +188,7 @@ async fn an_operator_admin_is_admin_everywhere() {
     let me = ctx(json!({}));
     let c = a.verify_call(Some(&me), &reach_of(&a, &me, "tickets.list")).unwrap();
     assert!(c.administers("*"));
-    assert_eq!(a.grants_of(ALICE)[0].granted_by, OPERATOR);
+    assert_eq!(a.grants_of(ALICE)[0].granted_by, crate::vocab::GrantedBy::Operator);
     assert_eq!(c.reach_filter().unwrap(), None);
 }
 
@@ -541,7 +551,7 @@ async fn the_generation_moves_on_every_grant_revoke_and_team_change() {
     moved("a grant replacing a role");
     s.grant(SYS, grant("idp:00000000-0000-0000-0000-000000000000", "*", Role::Viewer)).await.unwrap();
     moved("someone else's grant");
-    s.revoke(SYS, ALICE.into(), "hypermemetic:OUGHT".into()).await.unwrap();
+    s.revoke(SYS, ALICE.parse().unwrap(), kept_scope("hypermemetic:OUGHT")).await.unwrap();
     moved("a revoke");
     s.set_team_for_tests(ALICE, crate::vocab::TeamName::stored("crew"), true);
     moved("a team joined");
@@ -549,7 +559,7 @@ async fn the_generation_moves_on_every_grant_revoke_and_team_change() {
     moved("a team left");
     // Nothing that changes no one's grants moves it.
     let before = a.generation();
-    assert!(!s.revoke(SYS, ALICE.into(), "hypermemetic:OUGHT".into()).await.unwrap());
+    assert!(!s.revoke(SYS, ALICE.parse().unwrap(), kept_scope("hypermemetic:OUGHT")).await.unwrap());
     s.set_team_for_tests(ALICE, crate::vocab::TeamName::stored("crew"), false);
     assert_eq!(a.generation(), before);
 }
@@ -677,8 +687,8 @@ async fn a_followed_caller_is_verified_again_only_when_the_grants_move() {
     assert!(wakes(&mut f, 500).await);
     assert!(matches!(f.again(), Ok(Followed::Same)), "the same reach: nothing to recompute");
     // Every grant revoked: the watch ends, typed.
-    s.revoke(SYS, ALICE.into(), "OUGHT".into()).await.unwrap();
-    s.revoke(SYS, ALICE.into(), "IDENTITY".into()).await.unwrap();
+    s.revoke(SYS, ALICE.parse().unwrap(), kept_scope("OUGHT")).await.unwrap();
+    s.revoke(SYS, ALICE.parse().unwrap(), kept_scope("IDENTITY")).await.unwrap();
     assert!(wakes(&mut f, 500).await);
     let closed = f.again().unwrap_err();
     assert_eq!(closed.reason, crate::types::WatchEnd::Revoked, "{closed:?}");

@@ -146,7 +146,7 @@ pub(crate) async fn delete(ids: Vec<String>, children: Option<String>, unblock: 
         .find_map(|e| match e {
             TicketsEvent::Deleted { ids, tombstones } => {
                 session::remember_tombstones(tombstones);
-                Some(ids)
+                Some(ids.into_iter().map(String::from).collect())
             }
             _ => None,
         })

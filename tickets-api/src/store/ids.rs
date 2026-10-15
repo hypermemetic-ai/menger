@@ -1,6 +1,6 @@
 use super::stored::{Changes, RefKey, RunRow};
 use super::{OrderKey, Row, Rows};
-use crate::address::ShortcodeId;
+use crate::address::{ShortcodeId, TicketId, TicketName};
 use std::collections::{BTreeMap, HashMap};
 
 pub(super) struct Ids {
@@ -16,7 +16,7 @@ pub(super) struct Ids {
     /// → those tickets, in the store's order. An entry leaves when its id
     /// is born; one that can never be (`RT-0`, a malformed id) stays, as
     /// it would in a scan.
-    unborn: HashMap<String, BTreeMap<OrderKey, String>>,
+    unborn: HashMap<TicketName, BTreeMap<OrderKey, TicketId>>,
 }
 
 /// SCALE-19: one shortcode's stretch of the store's order — what its
@@ -103,10 +103,10 @@ impl Ids {
 
     /// The tickets whose `blocked_by` already names `id`, in the store's
     /// order — a newborn's `unlocks` from birth.
-    pub(super) fn waiting_on(&self, id: &str) -> Vec<String> {
+    pub(super) fn waiting_on(&self, id: &str) -> Vec<TicketName> {
         self.unborn
             .get(id)
-            .map(|waiting| waiting.values().cloned().collect())
+            .map(|waiting| waiting.values().map(TicketName::from).collect())
             .unwrap_or_default()
     }
 
@@ -173,7 +173,7 @@ impl Ids {
             },
         };
         // A ticket naming one id twice is one entry, as a scan finds it once.
-        let mut named: Vec<String> = Vec::new();
+        let mut named: Vec<TicketName> = Vec::new();
         for b in &t.blocked_by {
             if !rows.contains(b) && !named.contains(b) {
                 named.push(b.clone());
@@ -182,11 +182,11 @@ impl Ids {
         Birth {
             epic: t.shortcode.clone(),
             run,
-            id: t.id.to_string(),
+            id: t.id.clone(),
             resolves: self.unborn.contains_key(t.id.as_str()),
             names: named
                 .into_iter()
-                .map(|b| ((b, OrderKey::of(t)), t.id.to_string()))
+                .map(|b| ((b, OrderKey::of(t)), t.id.clone()))
                 .collect(),
         }
     }
@@ -194,7 +194,7 @@ impl Ids {
     /// …and once it has committed, the cache takes it.
     pub(super) fn born(&mut self, birth: Birth) {
         self.runs.insert(birth.epic, birth.run);
-        self.unborn.remove(&birth.id);
+        self.unborn.remove(birth.id.as_str());
         for ((id, key), referrer) in birth.names {
             self.unborn.entry(id).or_default().insert(key, referrer);
         }
@@ -204,13 +204,13 @@ impl Ids {
     /// `added` and `removed`, each that names no ticket is kept as a forward
     /// reference from now on, or no longer. Worked out before the write
     /// commits, moved by [`Self::reblocked`] after.
-    pub(super) fn reblock(&self, rows: Rows<'_>, t: &Row, added: &[String], removed: &[String]) -> Reblock {
+    pub(super) fn reblock(&self, rows: Rows<'_>, t: &Row, added: &[TicketName], removed: &[TicketName]) -> Reblock {
         let key = OrderKey::of(t);
-        let dangling = |ids: &[String]| -> Vec<RefKey> {
+        let dangling = |ids: &[TicketName]| -> Vec<RefKey> {
             ids.iter().filter(|b| !rows.contains(b)).map(|b| (b.clone(), key.clone())).collect()
         };
         Reblock {
-            id: t.id.to_string(),
+            id: t.id.clone(),
             named: dangling(added),
             unnamed: dangling(removed),
         }
@@ -232,8 +232,8 @@ impl Ids {
     }
 
     /// SCALE-28: from what is stored — at start, instead of [`Self::build`].
-    pub(super) fn from_stored(runs: BTreeMap<ShortcodeId, RunRow>, refs: BTreeMap<RefKey, String>) -> Self {
-        let mut unborn: HashMap<String, BTreeMap<OrderKey, String>> = HashMap::new();
+    pub(super) fn from_stored(runs: BTreeMap<ShortcodeId, RunRow>, refs: BTreeMap<RefKey, TicketId>) -> Self {
+        let mut unborn: HashMap<TicketName, BTreeMap<OrderKey, TicketId>> = HashMap::new();
         for ((id, key), referrer) in refs {
             unborn.entry(id).or_default().insert(key, referrer);
         }
@@ -248,7 +248,7 @@ impl Ids {
 
     /// SCALE-28: as stored — each shortcode's run, and each dangling forward
     /// reference keyed by the id it names and the naming ticket's position.
-    pub(super) fn stored(&self) -> (BTreeMap<ShortcodeId, RunRow>, BTreeMap<RefKey, String>) {
+    pub(super) fn stored(&self) -> (BTreeMap<ShortcodeId, RunRow>, BTreeMap<RefKey, TicketId>) {
         let runs = self
             .runs
             .iter()
@@ -274,7 +274,7 @@ impl Ids {
                 self.unborn
                     .entry(b.clone())
                     .or_default()
-                    .insert(OrderKey::of(t), t.id.to_string());
+                    .insert(OrderKey::of(t), t.id.clone());
             }
         }
     }
@@ -285,7 +285,7 @@ impl Ids {
     pub(super) fn unborn(&self) -> BTreeMap<String, Vec<String>> {
         self.unborn
             .iter()
-            .map(|(id, waiting)| (id.clone(), waiting.values().cloned().collect()))
+            .map(|(id, waiting)| (id.to_string(), waiting.values().map(TicketId::to_string).collect()))
             .collect()
     }
 
@@ -306,10 +306,10 @@ impl Ids {
 pub(super) struct Birth {
     epic: ShortcodeId,
     run: Run,
-    id: String,
+    id: TicketId,
     /// Some ticket named the newborn's id before it existed.
     resolves: bool,
-    names: Vec<(RefKey, String)>,
+    names: Vec<(RefKey, TicketId)>,
 }
 
 impl Birth {
@@ -329,7 +329,7 @@ impl Birth {
 /// forward references ([`Ids::reblock`]) — the ones it makes and the ones it
 /// drops, each keyed by the id it names and the ticket's position.
 pub(super) struct Reblock {
-    id: String,
+    id: TicketId,
     named: Vec<RefKey>,
     unnamed: Vec<RefKey>,
 }

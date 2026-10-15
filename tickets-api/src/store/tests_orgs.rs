@@ -32,9 +32,9 @@ async fn two_orgs(path: &Path) -> Store {
     store.create(SYS, new("MENGER", Kind::Scope, None)).await.unwrap();
     store.create(SYS, new("MENGER", Kind::Build, None)).await.unwrap();
     store.create(SYS, new("IDENTITY", Kind::Scope, Some("MENGER-1"))).await.unwrap();
-    let (org, admin) = store.create_org(SYS, "acme", Some((ADA.into(), "--admin".into()))).await.unwrap();
+    let (org, admin) = store.create_org(SYS, "acme", Some((ADA.parse().unwrap(), crate::vocab::GrantedBy::Operator))).await.unwrap();
     assert_eq!((org.name.as_str(), org.tickets, org.roots.len()), ("acme", 0, 0), "an organization is born empty");
-    assert_eq!(admin.unwrap().scope, "acme:");
+    assert_eq!(admin.unwrap().scope.text(), "acme:");
     let root = store.create(SYS, new("acme:MENGER", Kind::Scope, None)).await.unwrap();
     assert_eq!(root.address, "acme:MENGER-1");
     store.create(SYS, new("acme:MENGER", Kind::Build, None)).await.unwrap();
@@ -100,15 +100,15 @@ async fn a_scope_is_kept_by_its_org_and_its_identity() {
     let dir = tempfile::tempdir().unwrap();
     let store = two_orgs(&dir.path().join("t.db")).await;
     let acme_menger = store.get(SYS, "acme:MENGER-1").await.unwrap().shortcode;
-    assert_eq!(store.scope_named("*").unwrap(), "*");
-    assert_eq!(store.scope_named("identity").unwrap(), "hypermemetic:IDENTITY");
-    assert_eq!(store.scope_named("MENGER/IDENTITY").unwrap(), "hypermemetic:IDENTITY");
-    assert_eq!(store.scope_named("acme:").unwrap(), "acme:");
-    assert_eq!(store.scope_named("acme:MENGER").unwrap(), format!("acme:{acme_menger}"));
-    assert_eq!(store.scope_named(&format!("acme:{acme_menger}")).unwrap(), format!("acme:{acme_menger}"));
+    assert_eq!(store.scope_named("*").unwrap().text(), "*");
+    assert_eq!(store.scope_named("identity").unwrap().text(), "hypermemetic:IDENTITY");
+    assert_eq!(store.scope_named("MENGER/IDENTITY").unwrap().text(), "hypermemetic:IDENTITY");
+    assert_eq!(store.scope_named("acme:").unwrap().text(), "acme:");
+    assert_eq!(store.scope_named("acme:MENGER").unwrap().text(), format!("acme:{acme_menger}"));
+    assert_eq!(store.scope_named(&format!("acme:{acme_menger}")).unwrap().text(), format!("acme:{acme_menger}"));
     // A shortcode not born yet: its code in the org it names, else the first.
-    assert_eq!(store.scope_named("acme:LATER").unwrap(), "acme:LATER");
-    assert_eq!(store.scope_named("LATER").unwrap(), "hypermemetic:LATER");
+    assert_eq!(store.scope_named("acme:LATER").unwrap().text(), "acme:LATER");
+    assert_eq!(store.scope_named("LATER").unwrap().text(), "hypermemetic:LATER");
     assert!(matches!(store.scope_named("nope:"), Err(StoreError::NoOrg(_))));
     assert!(matches!(store.scope_named("MENGER"), Err(StoreError::Ambiguous { .. })));
     assert!(store.scope_named("MENGER-1").is_err(), "a ticket is no grant's scope yet (ACCESS-21)");
@@ -138,14 +138,14 @@ async fn a_rename_keeps_every_address_and_grant_and_the_old_name() {
     let path = dir.path().join("t.db");
     {
         let store = two_orgs(&path).await;
-        store.grant(SYS, Grant { principal: ADA.into(), scope: store.scope_named("acme:MENGER").unwrap(), role: Role::Editor, granted_by: "t".into(), at: 1 }).await.unwrap();
+        store.grant(SYS, Grant { principal: ADA.parse().unwrap(), scope: store.scope_named("acme:MENGER").unwrap(), role: Role::Editor, granted_by: crate::vocab::GrantedBy::AuthGrant, at: 1 }).await.unwrap();
         let renamed = store.rename_org(SYS, "acme", "acme-co").await.unwrap();
         assert_eq!((renamed.name.as_str(), renamed.aliases.clone()), ("acme-co", vec!["acme".to_string()]));
         assert_eq!(store.get(SYS, "acme:MENGER-2").await.unwrap().address, "acme-co:MENGER-2", "the old name resolves");
-        let scopes: Vec<String> = store.grants_of(SYS, ADA).into_iter().map(|g| g.scope).collect();
+        let scopes: Vec<String> = store.grants_of(SYS, ADA).into_iter().map(|g| g.scope.text()).collect();
         assert!(scopes.iter().all(|s| s.starts_with("acme-co:")), "{scopes:?}");
         assert!(store.create_org(SYS, "acme", None).await.is_err(), "an old name still names it");
-        assert_eq!(store.scope_named("acme:").unwrap(), "acme-co:");
+        assert_eq!(store.scope_named("acme:").unwrap().text(), "acme-co:");
         assert!(store.rename_org(SYS, "acme-co", "hypermemetic").await.is_err());
     }
     let store = Store::open(&path).unwrap();
@@ -164,10 +164,10 @@ async fn a_delete_is_refused_while_the_org_holds_a_ticket_and_takes_its_grants()
     let refused = store.delete_org(SYS, "acme").await.unwrap_err().to_string();
     assert!(refused.contains("holds 1 shortcode(s) and 2 ticket(s)"), "{refused}");
     assert!(store.delete_org(SYS, "hypermemetic").await.unwrap_err().to_string().contains("first organization"));
-    store.create_org(SYS, "beta", Some((ADA.into(), "t".into()))).await.unwrap();
+    store.create_org(SYS, "beta", Some((ADA.parse().unwrap(), crate::vocab::GrantedBy::AuthGrant))).await.unwrap();
     assert_eq!(store.delete_org(SYS, "beta").await.unwrap(), (crate::address::OrgId::new("beta").unwrap(), 1));
     assert!(store.org("beta").is_none());
-    assert!(!store.grants_of(SYS, ADA).iter().any(|g| g.scope.starts_with("beta:")));
+    assert!(!store.grants_of(SYS, ADA).iter().any(|g| g.scope.text().starts_with("beta:")));
     assert!(matches!(store.delete_org(SYS, "beta").await, Err(StoreError::NoOrg(_))));
 }
 
@@ -180,13 +180,16 @@ fn a_file_s_grants_from_before_orgs_move_into_hypermemetic_once() {
         let store = Store::open(&path).unwrap();
         rt.block_on(store.create(SYS, new("MENGER", Kind::Scope, None))).unwrap();
         rt.block_on(store.create(SYS, new("IDENTITY", Kind::Scope, Some("MENGER-1")))).unwrap();
-        // As an ORG-3 build kept them: a bare shortcode, and `*`.
+    }
+    // As an ORG-3 build kept them: a bare shortcode, and `*` — rows no
+    // `Grant` holds (ACCESS-48), so written as that build wrote them.
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
         for (scope, role) in [("IDENTITY", Role::Editor), ("*", Role::Admin), ("LATER", Role::Viewer)] {
-            let g = Grant { principal: ADA.into(), scope: scope.into(), role, granted_by: "t".into(), at: 1 };
-            rt.block_on(store.grant(SYS, g)).unwrap();
+            super::members::store_row(&conn, ADA, scope, role, "auth.grant", 1).unwrap();
         }
     }
-    let scopes = |s: &Store| -> Vec<String> { s.grants_of(SYS, ADA).into_iter().map(|g| g.scope).collect() };
+    let scopes = |s: &Store| -> Vec<String> { s.grants_of(SYS, ADA).into_iter().map(|g| g.scope.text()).collect() };
     let store = Store::open(&path).unwrap();
     assert_eq!(scopes(&store), ["*", "hypermemetic:IDENTITY", "hypermemetic:LATER"]);
     drop(store);

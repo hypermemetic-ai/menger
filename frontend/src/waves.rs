@@ -400,8 +400,8 @@ pub(crate) fn apply(a: &mut Answer, ev: &TicketsEvent) -> bool {
                         // Back in `blocked_by` order, distinct.
                         let mut next: Vec<String> = Vec::new();
                         for b in &card.summary.blocked_by {
-                            if (*b == ticket.id || card.waiting_on.contains(b)) && !next.contains(b) {
-                                next.push(b.clone());
+                            if (*b == ticket.id || card.waiting_on.iter().any(|w| b == w)) && !next.iter().any(|n| b == n) {
+                                next.push(b.to_string());
                             }
                         }
                         card.waiting_on = next;
@@ -483,7 +483,7 @@ pub(crate) fn answer_of(events: Vec<TicketsEvent>) -> Result<Answer, String> {
     let mut a = Answer::default();
     for ev in events {
         match ev {
-            TicketsEvent::Placed { summary, placement, waiting_on } => a.cards.push(Card { summary, placement, waiting_on }),
+            TicketsEvent::Placed { summary, placement, waiting_on } => a.cards.push(Card { summary, placement, waiting_on: waiting_on.into_iter().map(String::from).collect() }),
             TicketsEvent::WaveCounts { waves, missing, done } => {
                 a.waves = waves;
                 a.missing = missing;
@@ -570,7 +570,7 @@ pub(crate) fn facts_of(card: &Card, tree: Option<&ScTree>, parent_of: &dyn Fn(&s
         // reads it from the app's inputs when the filter asks; its labels
         // are on its row.
         asking: false,
-        labels: s.labels.clone(),
+        labels: s.labels.iter().map(ToString::to_string).collect(),
         id: s.id.to_string(),
         epic: s.epic.to_string(),
         title: s.title.clone(),
@@ -707,7 +707,7 @@ pub(crate) fn counts(a: &Answer, asked: &BTreeSet<String>) -> Counts {
             }
         }
         for l in &card.summary.labels {
-            *out.entry(Cat::Label).or_default().entry(l.clone()).or_default() += 1;
+            *out.entry(Cat::Label).or_default().entry(l.to_string()).or_default() += 1;
         }
     }
     out.remove(&Cat::Title);
@@ -1263,7 +1263,7 @@ pub(crate) fn cycles_of(events: &[TicketsEvent]) -> Vec<Vec<String>> {
     events
         .iter()
         .filter_map(|ev| match ev {
-            TicketsEvent::WaveCycle { ids } => Some(ids.clone()),
+            TicketsEvent::WaveCycle { ids } => Some(ids.iter().map(ToString::to_string).collect()),
             _ => None,
         })
         .collect()
@@ -1586,7 +1586,7 @@ mod tests {
     /// A card as `waves` answers it — what it waits on among what it names.
     fn card(id: &str, status: Status, placement: Placement, waiting_on: &[&str]) -> Card {
         let waiting_on: Vec<String> = waiting_on.iter().map(|s| s.to_string()).collect();
-        let summary = TicketSummary { blocked_by: waiting_on.clone(), placement: Some(placement), ..summary(id, status) };
+        let summary = TicketSummary { blocked_by: waiting_on.iter().map(menger_tickets_api::TicketName::new).collect(), placement: Some(placement), ..summary(id, status) };
         Card { summary, placement, waiting_on }
     }
 
@@ -1732,15 +1732,15 @@ mod tests {
         assert_eq!(heard(&placed, &epics), Heard::Apply);
         let amended = TicketsEvent::Amended { ticket: ticket("PLEXUS-3"), changed: vec![menger_tickets_api::vocab::AmendedField::Title] };
         assert_eq!(heard(&amended, &epics), Heard::Nothing, "a new title moves no card (its row repaints in place)");
-        let unlocks = TicketsEvent::UnlocksChanged { ticket: ticket("PLEXUS-3"), added: "PLEXUS-9".into() };
+        let unlocks = TicketsEvent::UnlocksChanged { ticket: ticket("PLEXUS-3"), added: menger_tickets_api::TicketName::new("PLEXUS-9") };
         assert_eq!(heard(&unlocks, &epics), Heard::Nothing);
         // MENGER-30: a card's blockers moved on the board asks again (what
         // it waits on); elsewhere, and a blocker's side, nothing — their
         // placements follow; a severity is the card's row.
-        let reblocked = |id: &str| TicketsEvent::BlockersChanged { ticket: ticket(id), added: vec!["PLEXUS-9".into()], removed: vec![] };
+        let reblocked = |id: &str| TicketsEvent::BlockersChanged { ticket: ticket(id), added: vec![menger_tickets_api::TicketName::new("PLEXUS-9")], removed: vec![] };
         assert_eq!(heard(&reblocked("PLEXUS-3"), &epics), Heard::Ask);
         assert_eq!(heard(&reblocked("MNG-4"), &epics), Heard::Nothing);
-        let unlocked = TicketsEvent::UnlocksRemoved { ticket: ticket("PLEXUS-3"), removed: "PLEXUS-9".into() };
+        let unlocked = TicketsEvent::UnlocksRemoved { ticket: ticket("PLEXUS-3"), removed: menger_tickets_api::TicketName::new("PLEXUS-9") };
         assert_eq!(heard(&unlocked, &epics), Heard::Nothing);
         let severe = TicketsEvent::SeverityChanged { ticket: ticket("PLEXUS-3"), previous: None };
         assert_eq!(heard(&severe, &epics), Heard::Apply);
@@ -1821,7 +1821,7 @@ mod tests {
     fn a_status_change_moves_the_stage_and_what_a_card_waits_on() {
         use Placement::Wave;
         let mut c = card("B-3", Status::Pending, Wave { n: 2 }, &["B-9"]);
-        c.summary.blocked_by = vec!["B-1".into(), "B-9".into()];
+        c.summary.blocked_by = vec![menger_tickets_api::TicketName::new("B-1"), menger_tickets_api::TicketName::new("B-9")];
         let mut a = answer(vec![
             card("B-2", Status::Pending, Wave { n: 1 }, &[]),
             card("B-4", Status::Ready, Wave { n: 1 }, &[]),
@@ -1929,7 +1929,7 @@ mod tests {
             rich("RETURNS-2", Status::Complete, Kind::Build, None, Done, &[], "old envelope"),
             rich("CONTEXT-1", Status::Superseded, Kind::Spike, None, Done, &[], "first try"),
         ];
-        cards[0].summary.commits = vec!["abc1234".into()];
+        cards[0].summary.commits = vec!["abc1234".parse().unwrap()];
         cards[2].summary.parent = Some(menger_tickets_api::TicketId::new("RETURNS-4"));
         let mut a = Answer { cards, ..Answer::default() };
         retally(&mut a);
@@ -2176,7 +2176,7 @@ mod tests {
         assert_eq!(ids(&shown_scoped(&a, &Scope::Under("A-1".into()), Some("A-4"))), ["A-3", "A-4"]);
         assert_eq!(shown_scoped(&a, &Scope::Under("A-1".into()), Some("A-4")).waves, vec![2]);
         assert_eq!(ids(&shown_scoped(&a, &Scope::To("A-3".into()), None)), ["A-2", "A-3", "A-4"]);
-        let cyc = vec![TicketsEvent::WaveCycle { ids: vec!["A-2".into(), "A-3".into()] }, TicketsEvent::WaveCounts { waves: vec![], missing: 2, done: 0 }];
+        let cyc = vec![TicketsEvent::WaveCycle { ids: vec![menger_tickets_api::TicketId::new("A-2"), menger_tickets_api::TicketId::new("A-3")] }, TicketsEvent::WaveCounts { waves: vec![], missing: 2, done: 0 }];
         assert_eq!(cycles_of(&cyc), vec![vec!["A-2".to_string(), "A-3".to_string()]]);
         assert!(answer_of(cyc).is_ok(), "a cycle is not an error");
     }

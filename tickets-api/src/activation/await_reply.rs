@@ -50,7 +50,7 @@ pub(super) fn await_reply_stream(
         let caller = following.user();
         // The ticket as kept — or a deleted one's id.
         let held = store.ticket_id(&ask.id);
-        let ticket = match held.clone().or_else(|| store.tombstone(caller, &ask.id).map(|t| t.id)) {
+        let ticket = match held.clone().or_else(|| store.tombstone(caller, &ask.id).map(|t| t.id.into_string())) {
             Some(t) if held.is_none() || sees_id(&store, caller, &t) => t,
             _ => return None,
         };
@@ -73,7 +73,7 @@ pub(super) fn await_reply_stream(
         let (w, mut following, before) = match prepared {
             Ok(Some(p)) => p,
             Ok(None) => {
-                yield TicketsEvent::NotFound { id: ask.id.trim().to_ascii_uppercase() };
+                yield TicketsEvent::NotFound { id: Asked::stored(ask.id.trim().to_ascii_uppercase()) };
                 return;
             }
             Err(message) => {

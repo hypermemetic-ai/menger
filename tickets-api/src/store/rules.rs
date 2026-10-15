@@ -6,7 +6,7 @@
 use super::*;
 
 /// The distinct ids of `ids`, in the order first named.
-pub(super) fn distinct(ids: &[String]) -> Vec<String> {
+pub(super) fn distinct<T: Clone + PartialEq>(ids: &[T]) -> Vec<T> {
     ids.iter().fold(Vec::new(), |mut seen, i| {
         if !seen.contains(i) {
             seen.push(i.clone());
@@ -17,8 +17,8 @@ pub(super) fn distinct(ids: &[String]) -> Vec<String> {
 
 /// SDLC-11: of `ids`, the distinct ones that name a doc — a doc never
 /// completes, so nothing may wait on one.
-pub(super) fn docs_among(cache: &Cache, ids: &[String]) -> Vec<String> {
-    let docs: Vec<String> = ids.iter().filter(|b| cache.get(b).is_some_and(|bt| !bt.kind.has_lifecycle())).cloned().collect();
+pub(super) fn docs_among(cache: &Cache, ids: &[TicketName]) -> Vec<TicketName> {
+    let docs: Vec<TicketName> = ids.iter().filter(|b| cache.get(b).is_some_and(|bt| !bt.kind.has_lifecycle())).cloned().collect();
     distinct(&docs)
 }
 
@@ -48,7 +48,7 @@ pub(super) fn kind_status(id: &str, previous: Kind, current: Status, kind: Kind,
 /// own, or what the write leaves it): a doc is never in the `blocked_by`
 /// graph at either end; a shortcode's root stays a kind that roots one; a
 /// path holder stays a doc.
-pub(super) fn kind_refusal(cache: &Cache, row: &Row, blocked_by: &[String], kind: Kind) -> Result<(), StoreError> {
+pub(super) fn kind_refusal(cache: &Cache, row: &Row, blocked_by: &[TicketName], kind: Kind) -> Result<(), StoreError> {
     if !kind.has_lifecycle() && (!blocked_by.is_empty() || !row.unlocks.is_empty()) {
         return Err(StoreError::DocInGraph {
             blocked_by: distinct(blocked_by),

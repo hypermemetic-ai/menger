@@ -588,7 +588,7 @@ pub(crate) fn tombstone(id: &str) -> Option<Tombstone> {
 
 /// ACT-5: tombstones heard — a `deleted`, or `get` answering one.
 pub(crate) fn remember_tombstones(tombstones: Vec<Tombstone>) {
-    TOMBSTONES.with(|t| t.update(|t| t.extend(tombstones.into_iter().map(|x| (x.id.clone(), x)))));
+    TOMBSTONES.with(|t| t.update(|t| t.extend(tombstones.into_iter().map(|x| (x.id.to_string(), x)))));
 }
 
 /// ACT-5: `deleted`: the tickets out of every view — the row cache (an open
@@ -1050,7 +1050,9 @@ async fn session(
                 nav::child_removed(&id, &removed, child_count);
             }
             // ACT-5: tickets gone for good, and back.
-            ClientEvent::Data(TicketsEvent::Deleted { ids, tombstones }) => deleted(&ids, tombstones, board),
+            ClientEvent::Data(TicketsEvent::Deleted { ids, tombstones }) => {
+                deleted(&ids.into_iter().map(String::from).collect::<Vec<_>>(), tombstones, board)
+            }
             ClientEvent::Data(TicketsEvent::Undeleted { tickets, .. }) => undeleted(tickets, board),
             // ACT-6: tickets moved into another shortcode, renumbered.
             ClientEvent::Data(TicketsEvent::Reshortcoded { moves, tickets }) => reshortcoded(&moves, tickets, board),
@@ -1467,7 +1469,7 @@ pub(crate) async fn member(ids: Vec<String>, filter: String) -> Result<Vec<(Stri
     for part in ids.chunks(MEMBER_MAX) {
         for ev in client.member_all(crate::typed::many(part)?, filter.clone(), crate::session::zone()).await.map_err(|e| describe(&e))? {
             match ev {
-                TicketsEvent::Member { id, matched } => out.push((id, matched)),
+                TicketsEvent::Member { id, matched } => out.push((id.to_string(), matched)),
                 TicketsEvent::Error { message } => return Err(message),
                 _ => {}
             }

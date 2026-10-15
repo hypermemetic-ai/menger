@@ -28,6 +28,9 @@ use crate::vocab::{
     Query, Reason, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
+// ACCESS-48: what `not_found` / `ambiguous` echo.
+#[cfg(feature = "server")]
+use crate::vocab::Asked;
 #[cfg(feature = "server")]
 use crate::store::{
     BlockerRef, Change, Filtered, InputWrite, Lens, Membership, NewTicket, Page, PageQuery, Select, Step, Store, StoreError, Walk,
@@ -247,7 +250,6 @@ impl Tickets {
         path: Option<MengerPath>,
         org: Option<OrgId>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let blocked_by = blocked_by.map(texts);
         let store = self.store.clone();
         let admitted = self.access.verify_call(auth, &reach);
         stream! {
@@ -525,7 +527,7 @@ impl Tickets {
             };
             match store.set_status_by(on, status, act, restore_children.unwrap_or(false)).await {
                 Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into() },
                 Err(e) => yield veiled(&caller, e),
             }
         }
@@ -594,7 +596,7 @@ impl Tickets {
             };
             match store.set_kind_by(on, kind, status, act).await {
                 Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into() },
                 // ACCESS-11: DocInGraph and the rest name only what it sees.
                 Err(e @ StoreError::Ambiguous { .. }) => yield veiled(&caller, e),
                 Err(e) => yield said(&store, &caller, e),
@@ -661,7 +663,7 @@ impl Tickets {
             };
             match store.set_parent(mv).await {
                 Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into() },
                 Err(e @ StoreError::Ambiguous { .. }) => yield veiled(&caller, e),
                 Err(e) => yield said(&store, &caller, e),
             }
@@ -712,7 +714,7 @@ impl Tickets {
             };
             match store.amend(on, title.map(String::from), body.map(String::from)).await {
                 Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into() },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
                 Err(e) => yield said(&store, &caller, e),
             }
@@ -790,9 +792,9 @@ impl Tickets {
                     return;
                 }
             };
-            match store.unlink_commits(on, texts(commits)).await {
+            match store.unlink_commits(on, commits).await {
                 Ok(change) => yield change_event(change),
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into() },
                 Err(e) => yield refusal(e),
             }
         }
@@ -903,7 +905,7 @@ impl Tickets {
             };
             match store.update_by(at, asked, act).await {
                 Ok(crate::store::Updated { ticket, changed }) => yield TicketsEvent::Updated { ticket, changed },
-                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
+                Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into() },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
                 Err(e) => yield said(&store, &caller, e),
             }
@@ -959,7 +961,7 @@ impl Tickets {
         // AUTH-7: the gate held the grant on each of `ids`; a filter's
         // tickets, and a parent or blocker beyond them, are asked there.
         let mut asked = update_of(None, None, kind, status, parent, severity, block, unblock);
-        (asked.label, asked.unlabel) = (texts(label.unwrap_or_default()), texts(unlabel.unwrap_or_default()));
+        (asked.label, asked.unlabel) = (label.unwrap_or_default(), unlabel.unwrap_or_default());
         update_many_stream(self.store.clone(), self.access.verify_call(auth, &reach), ids, filter, max, tz, asked, source, message)
     }
 
@@ -1307,7 +1309,8 @@ impl Tickets {
         )
     )]
     pub async fn member(&self, auth: Option<&AuthContext>, reach: Reach, ids: Vec<TicketRef>, filter: FilterText, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let ids = texts(ids);
+        // ACCESS-48: each echoed as asked, a `TicketRef`.
+        let (named, ids) = (ids.clone(), texts(ids));
         let store = self.store.clone();
         let admitted = self.access.verify_call(auth, &reach);
         stream! {
@@ -1339,7 +1342,7 @@ impl Tickets {
                 }
             };
             let matched = store.member(&caller, &ids, &lens);
-            for (id, matched) in ids.into_iter().zip(matched) {
+            for (id, matched) in named.into_iter().zip(matched) {
                 yield TicketsEvent::Member { id, matched };
             }
         }
@@ -1495,7 +1498,7 @@ impl Tickets {
                     }
                 }
                 // ACCESS-10: a ticket out of reach is not found, as one not there.
-                Err(StoreError::NotFound(id)) => yield TicketsEvent::NotFound { id: ticket.map_or(id, String::from) },
+                Err(StoreError::NotFound(id)) => yield TicketsEvent::NotFound { id: ticket.map_or_else(|| Asked::stored(id), Asked::from) },
                 Err(e) => yield veiled(&caller, e),
             }
         }

@@ -22,7 +22,7 @@ pub(super) fn get_stream(store: Arc<Store>, admitted: Result<VerifiedUser, Strin
         match store.get(&caller, &named).await {
             Ok(ticket) => yield TicketsEvent::Ticket { ticket },
             // ACT-5: a deleted ticket answers its tombstone.
-            Err(StoreError::NotFound(_)) => yield store.tombstone(&caller, &id).map_or(TicketsEvent::NotFound { id }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
+            Err(StoreError::NotFound(_)) => yield store.tombstone(&caller, &id).map_or(TicketsEvent::NotFound { id: Asked::stored(id.as_str()) }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
             Err(e) => yield veiled(&caller, e),
         }
     }
@@ -49,7 +49,7 @@ pub(super) fn blockers_stream(store: Arc<Store>, admitted: Result<VerifiedUser, 
                     };
                 }
             }
-            Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+            Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: Asked::stored(id.as_str()) },
             Err(e) => yield veiled(&caller, e),
         }
     }
@@ -82,7 +82,7 @@ pub(super) fn history_stream(store: Arc<Store>, admitted: Result<VerifiedUser, S
                 let (status_since_unix, status_since_exact) = (h.since.map(|s| s.0), h.since.map(|s| s.1));
                 yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable: h.restorable, status_since_unix, status_since_exact, deletions: h.deletions };
             }
-            Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+            Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: Asked::stored(id.as_str()) },
             Err(e) => yield veiled(&caller, e),
         }
     }

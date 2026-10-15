@@ -40,6 +40,7 @@ use roaring::RoaringBitmap;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::{Arc, LazyLock, RwLock};
+use crate::vocab::Label;
 
 /// MENGER-12: a set of labels as a cell holds it — a handle on the set,
 /// interned once per process ([`LabelSet::of`]), so a cell stays small and
@@ -50,10 +51,10 @@ use std::sync::{Arc, LazyLock, RwLock};
 pub struct LabelSet(u32);
 
 /// Every label set a cell has named in this process: id → set, set → id.
-type Interned = (Vec<Arc<[String]>>, HashMap<Arc<[String]>, u32>);
+type Interned = (Vec<Arc<[Label]>>, HashMap<Arc<[Label]>, u32>);
 
 static LABEL_SETS: LazyLock<RwLock<Interned>> = LazyLock::new(|| {
-    let none: Arc<[String]> = Arc::from(Vec::new());
+    let none: Arc<[Label]> = Arc::from(Vec::new());
     RwLock::new((vec![Arc::clone(&none)], HashMap::from([(none, 0)])))
 });
 
@@ -64,13 +65,13 @@ impl LabelSet {
     /// The set `labels` names — sorted and each once, as a row keeps them
     /// ([`crate::labels::apply`]); sorted and deduplicated here too, so a
     /// hand edit's order cannot make two cells of one set.
-    pub fn of(labels: &[String]) -> Self {
+    pub fn of(labels: &[Label]) -> Self {
         if labels.is_empty() {
             return Self::NONE;
         }
         let sorted = labels.windows(2).all(|w| w[0] < w[1]);
         let owned;
-        let set: &[String] = if sorted {
+        let set: &[Label] = if sorted {
             labels
         } else {
             let mut v = labels.to_vec();
@@ -87,14 +88,14 @@ impl LabelSet {
             return Self(*id);
         }
         let id = sets.0.len() as u32;
-        let arc: Arc<[String]> = Arc::from(set.to_vec());
+        let arc: Arc<[Label]> = Arc::from(set.to_vec());
         sets.0.push(Arc::clone(&arc));
         sets.1.insert(arc, id);
         Self(id)
     }
 
     /// The labels, sorted.
-    pub fn labels(self) -> Arc<[String]> {
+    pub fn labels(self) -> Arc<[Label]> {
         Arc::clone(&LABEL_SETS.read().expect("label sets poisoned").0[self.0 as usize])
     }
 
@@ -221,7 +222,7 @@ impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let labels = match self.labels.is_empty() {
             true => String::new(),
-            false => format!(", labels {}", self.labels.labels().join(" ")),
+            false => format!(", labels {}", self.labels.labels().iter().map(Label::as_str).collect::<Vec<_>>().join(" ")),
         };
         write!(
             f,

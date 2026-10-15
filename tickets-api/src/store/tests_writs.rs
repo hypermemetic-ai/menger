@@ -10,6 +10,8 @@ use crate::address::{OrgId, TicketId};
 use crate::members::{Role, Scope};
 
 const WRITER: &str = "idp:0b0e1d2c-60aa-4534-b2e3-83634591fee2";
+/// ACCESS-48: a grant is to a principal — one in its grammar.
+const SOMEONE: &str = "idp:0b0e1d2c-60aa-4534-b2e3-83634591fee3";
 
 /// A user holding `role` on each of `shortcodes` (and those hosted there).
 fn holding(role: Role, shortcodes: &[&str]) -> VerifiedUser {
@@ -27,7 +29,7 @@ fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> New
         title: format!("{epic} {}", kind.as_str()),
         kind,
         severity: None,
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: parent.map(str::to_string),
         path: None,
         body: String::new(),
@@ -196,20 +198,20 @@ async fn a_write_over_many_takes_a_permit_per_ticket() {
 #[tokio::test]
 async fn a_grant_takes_admin_on_its_scope_minted_with_login_on() {
     let s = tracker().await;
-    let g = |scope: &Scope| crate::members::Grant { principal: "idp:someone".into(), scope: scope.text(), role: Role::Editor, granted_by: "test".into(), at: 0 };
+    let g = |scope: &Scope| crate::members::Grant { principal: SOMEONE.parse().unwrap(), scope: scope.clone(), role: Role::Editor, granted_by: crate::vocab::GrantedBy::AuthGrant, at: 0 };
     let open = scope(&s, "OPEN");
     let anyone = Access::open().verify_call(None, &plexus_core::plexus::Reach::everywhere()).unwrap();
     let planted = anyone.admin_of(&open, &s).unwrap();
     assert!(planted.anyone());
     let e = s.grant(planted, g(&open)).await.unwrap_err();
     assert!(e.to_string().contains("login is off"), "{e}");
-    assert!(s.grants_of(SYS, "idp:someone").is_empty(), "nothing planted");
+    assert!(s.grants_of(SYS, SOMEONE).is_empty(), "nothing planted");
     // Admin on another scope: refused; on this one: kept.
     assert!(mismatched(&s.grant(AdminOf::for_tests(scope(&s, "OTHER")), g(&open)).await.unwrap_err()));
     let admin = holding(Role::Admin, &["OPEN"]).admin_of(&open, &s).unwrap();
     s.grant(admin, g(&open)).await.unwrap();
-    assert_eq!(s.grants_of(SYS, "idp:someone").len(), 1);
-    let e = s.revoke(Access::open().verify_call(None, &plexus_core::plexus::Reach::everywhere()).unwrap().admin_of(&open, &s).unwrap(), "idp:someone".into(), open.text()).await.unwrap_err();
+    assert_eq!(s.grants_of(SYS, SOMEONE).len(), 1);
+    let e = s.revoke(Access::open().verify_call(None, &plexus_core::plexus::Reach::everywhere()).unwrap().admin_of(&open, &s).unwrap(), SOMEONE.parse().unwrap(), open.clone()).await.unwrap_err();
     assert!(e.to_string().contains("login is off"), "{e}");
 }
 

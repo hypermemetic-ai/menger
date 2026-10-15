@@ -116,6 +116,13 @@ macro_rules! text_type {
             }
         }
 
+        /// ACCESS-48: keyed by its text — a map of these is asked with `&str`.
+        impl std::borrow::Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                &self.0
+            }
+        }
+
         /// Its text against written text — `field == "status"`.
         impl PartialEq<str> for $name {
             fn eq(&self, other: &str) -> bool {

@@ -484,7 +484,7 @@ impl Node {
 /// root, its shortcode row (and flat list) when it has none.
 pub(crate) fn shortcode_node(g: &Group) -> Node {
     match &g.root {
-        Some(root) => Node::Root(root.clone(), g.shortcode.to_string()),
+        Some(root) => Node::Root(root.to_string(), g.shortcode.to_string()),
         None => Node::Group(g.shortcode.to_string()),
     }
 }
@@ -498,7 +498,7 @@ pub(crate) fn shortcode_node(g: &Group) -> Node {
 /// its root.
 pub(crate) fn face(g: &Group) -> Option<TicketSummary> {
     let (id, row) = (g.root.as_ref()?, g.root_row.as_ref()?);
-    Some(root_summary(id, g.shortcode.as_str(), g.host.clone(), row.title.clone(), row.status, row.kind))
+    Some(root_summary(id, g.shortcode.as_str(), g.host.clone().map(String::from), row.title.clone(), row.status, row.kind))
 }
 
 fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, status: Status, kind: Kind) -> TicketSummary {
@@ -573,7 +573,7 @@ pub(crate) enum Climb {
 pub(crate) fn climb(g: Option<&Group>, cur: &TicketSummary) -> Climb {
     match g {
         Some(g) if g.root.as_deref() == Some(cur.id.as_str()) => match &g.host {
-            Some(h) => Climb::Host(h.clone()),
+            Some(h) => Climb::Host(h.to_string()),
             None => Climb::Top,
         },
         Some(g) if g.root.is_none() => Climb::Flat(g.shortcode.to_string()),
@@ -592,7 +592,7 @@ pub(crate) fn climb(g: Option<&Group>, cur: &TicketSummary) -> Climb {
 /// is left as it is (it moves when its group arrives). `None` when nothing
 /// moves. ACT-7: on the shape's marks, each keeping what it says.
 pub(crate) fn migrate_expanded(expanded: &Shape, groups: &BTreeMap<String, Group>) -> Option<Shape> {
-    expanded.rekeyed(|code| groups.get(code).and_then(|g| g.root.clone()))
+    expanded.rekeyed(|code| groups.get(code).and_then(|g| g.root.clone().map(String::from)))
 }
 
 // ---------------------------------------------------------------------
@@ -1276,7 +1276,7 @@ impl Tree {
             groups.with(|m| {
                 for g in m.iter().flat_map(|m| m.values()) {
                     if let Some(h) = &g.host {
-                        out.entry(h.clone()).or_default().push(g.shortcode.to_string());
+                        out.entry(h.to_string()).or_default().push(g.shortcode.to_string());
                     }
                 }
             });
@@ -1287,7 +1287,7 @@ impl Tree {
                 m.iter()
                     .flat_map(|m| m.values())
                     .filter(|g| g.host.is_some())
-                    .filter_map(|g| g.root.clone().map(|r| (r, g.shortcode.to_string())))
+                    .filter_map(|g| g.root.clone().map(|r| (String::from(r), g.shortcode.to_string())))
                     .collect::<BTreeMap<_, _>>()
             })
         });
@@ -1874,7 +1874,7 @@ pub(crate) fn at(el: &web_sys::Element) -> Option<At> {
         .or_else(|| crate::kids::key(&key).map(|(e, _)| e.to_string()))
         .unwrap_or_else(|| key.clone());
     let root = h.ctx.tree.groups.with_untracked(|m| {
-        m.as_ref().and_then(|m| m.get(&epic)).map(|g| g.root.clone().unwrap_or_else(|| g.shortcode.to_string()))
+        m.as_ref().and_then(|m| m.get(&epic)).map(|g| g.root.clone().map_or_else(|| g.shortcode.to_string(), String::from))
     });
     let has_kids = row.has_attribute("aria-expanded");
     let place = Place::Row { label: key.clone(), has_kids, shortcode: root.as_ref().map(|_| epic) };
@@ -2462,7 +2462,7 @@ fn widen(lens: Lens, tree: Tree) {
             }
         } else {
             let sc = t.to_ascii_uppercase();
-            match tree.groups.with_untracked(|m| m.as_ref().map(|m| m.get(&sc).and_then(|g| g.host.clone()))) {
+            match tree.groups.with_untracked(|m| m.as_ref().map(|m| m.get(&sc).and_then(|g| g.host.clone().map(String::from)))) {
                 Some(host) => host,
                 None => return, // no groups yet
             }
@@ -2718,7 +2718,7 @@ async fn drawn_chain(ctx: Ctx, filter: &str, leaf: &str, steps: Vec<(Node, Optio
     let roots: HashMap<String, String> = ctx
         .tree
         .groups
-        .with_untracked(|m| m.iter().flat_map(|m| m.values()).filter_map(|g| g.root.clone().map(|r| (r, g.shortcode.to_string()))).collect());
+        .with_untracked(|m| m.iter().flat_map(|m| m.values()).filter_map(|g| g.root.clone().map(|r| (String::from(r), g.shortcode.to_string()))).collect());
     let every = ctx.under.show_hidden.get_untracked();
     // FILTER-24: the shortcodes leading to the open ticket are drawn, and so
     // is the open ticket itself — kept whatever the filter.
@@ -4339,9 +4339,9 @@ mod tests {
             total,
             done,
             docs,
-            root: root.map(|r| r.0.into()),
+            root: root.map(|r| menger_tickets_api::TicketId::new(r.0)),
             root_row: root.map(|(_, title, status, kind)| RootRow { title: title.into(), status, kind }),
-            host: host.map(Into::into),
+            host: host.map(menger_tickets_api::TicketId::new),
         }
     }
 

@@ -20,6 +20,8 @@ pub const MAX_PER_TICKET: usize = 16;
 /// panel shows every ticket that holds it (beside every ticket `asking`).
 pub const NEEDS_YOU: &str = "needs-you";
 
+use crate::vocab::Label;
+
 /// `raw` as the label it names — trimmed, lower-cased — or why it is not
 /// one.
 pub fn normalize(raw: &str) -> Result<String, String> {
@@ -36,32 +38,27 @@ pub fn normalize(raw: &str) -> Result<String, String> {
     Ok(label)
 }
 
-/// `labels` with `add` added and `remove` taken off — each normalized,
-/// sorted, each once — and what moved: `(after, added, removed)`, `added`
-/// and `removed` in the order given, each once. A label named in both is
-/// added (the `remove` loses). Refused whole, naming every entry that is not
-/// a label, or a result past [`MAX_PER_TICKET`].
-pub fn apply(labels: &[String], add: &[String], remove: &[String]) -> Result<(Vec<String>, Vec<String>, Vec<String>), String> {
-    let mut bad = Vec::new();
-    let mut read = |raw: &[String]| -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        for r in raw {
-            match normalize(r) {
-                Ok(l) if !out.contains(&l) => out.push(l),
-                Ok(_) => {}
-                Err(why) => bad.push(why),
+/// `labels` with `add` added and `remove` taken off — sorted, each once —
+/// and what moved: `(after, added, removed)`, `added` and `removed` in the
+/// order given, each once. A label named in both is added (the `remove`
+/// loses). Refused whole for a result past [`MAX_PER_TICKET`]. ACCESS-48:
+/// each entry is a [`Label`] — normalized when it was read, so there is no
+/// entry here to refuse.
+pub fn apply(labels: &[Label], add: &[Label], remove: &[Label]) -> Result<(Vec<Label>, Vec<Label>, Vec<Label>), String> {
+    let once = |raw: &[Label]| -> Vec<Label> {
+        let mut out: Vec<Label> = Vec::new();
+        for l in raw {
+            if !out.contains(l) {
+                out.push(l.clone());
             }
         }
         out
     };
-    let (add, remove) = (read(add), read(remove));
-    if !bad.is_empty() {
-        return Err(bad.join("; "));
-    }
-    let mut after: Vec<String> = labels.to_vec();
-    let removed: Vec<String> = remove.into_iter().filter(|l| !add.contains(l) && after.contains(l)).collect();
+    let (add, remove) = (once(add), once(remove));
+    let mut after: Vec<Label> = labels.to_vec();
+    let removed: Vec<Label> = remove.into_iter().filter(|l| !add.contains(l) && after.contains(l)).collect();
     after.retain(|l| !removed.contains(l));
-    let added: Vec<String> = add.into_iter().filter(|l| !after.contains(l)).collect();
+    let added: Vec<Label> = add.into_iter().filter(|l| !after.contains(l)).collect();
     after.extend(added.iter().cloned());
     after.sort();
     if after.len() > MAX_PER_TICKET {
@@ -77,8 +74,8 @@ pub fn apply(labels: &[String], add: &[String], remove: &[String]) -> Result<(Ve
 mod tests {
     use super::*;
 
-    fn v(s: &[&str]) -> Vec<String> {
-        s.iter().map(|x| x.to_string()).collect()
+    fn v(s: &[&str]) -> Vec<Label> {
+        s.iter().map(|x| Label::from(*x)).collect()
     }
 
     #[test]
@@ -108,10 +105,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_refuses_a_bad_entry_or_too_many_whole() {
-        let err = apply(&[], &v(&["ok", "not ok", "nor_this"]), &[]).unwrap_err();
-        assert!(err.contains("`not ok`") && err.contains("`nor_this`"), "{err}");
-        let many: Vec<String> = (0..MAX_PER_TICKET).map(|i| format!("l{i}")).collect();
+    fn apply_refuses_too_many_whole() {
+        // ACCESS-48: a bad entry is no `Label` — refused where it is read.
+        assert!(["not ok", "nor_this"].iter().all(|t| t.parse::<Label>().is_err()));
+        let many: Vec<Label> = (0..MAX_PER_TICKET).map(|i| Label::from(format!("l{i}").as_str())).collect();
         assert!(apply(&many, &v(&["one-more"]), &[]).unwrap_err().contains("at most 16"));
         assert!(apply(&many, &v(&["one-more"]), &v(&["l0"])).is_ok());
     }

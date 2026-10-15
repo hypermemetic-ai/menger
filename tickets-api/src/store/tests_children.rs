@@ -228,7 +228,7 @@ async fn a_page_deep_in_a_large_parents_children_is_cut_by_position() {
     assert!(n > 1_000, "{root} has {n} children");
     let cache = store.tickets.read().unwrap();
     let all = scanned(&store);
-    let kids = &all[&root];
+    let kids = &all[root.as_str()];
     for at in [0, 1, kids.len() / 2, kids.len() - 201, kids.len() - 1] {
         let (epic, seq) = &kids[at];
         let key = OrderKey { shortcode: epic.clone(), seq: *seq };

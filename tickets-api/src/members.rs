@@ -15,6 +15,7 @@
 //! | `deployer` | read under the scope, and record its deployments — a CI's key (DEPLOY-14) |
 
 use crate::address::{Address, OrgId, ShortcodeId};
+use crate::vocab::{GrantedBy, Grantee};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -174,14 +175,19 @@ pub fn scope_of(text: &str) -> Result<String, String> {
 /// One grant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Grant {
-    /// The Plexus principal: `idp:<uuid>`, `oidc:<provider>/<sub>`, `nostr:<hex>`.
-    pub principal: String,
+    /// The Plexus principal: `idp:<uuid>`, `oidc:<provider>/<sub>`, `nostr:<hex>`
+    /// — ACCESS-48: a [`Grantee`], so a team's grant (`team:<name>`,
+    /// ACCESS-9) is one too.
+    pub principal: Grantee,
     /// ORG-4: `*`, an organization (`acme:`), or a shortcode in one
-    /// (`acme:MENGER`, by its identity) — a [`Scope`]'s text.
-    pub scope: String,
+    /// (`acme:MENGER`, by its identity). ACCESS-48: a [`Scope`] — a grant
+    /// from before ORG-4 is a stored row the store's open rewrites before
+    /// it is ever one of these (`store::members::Row`).
+    pub scope: Scope,
     pub role: Role,
-    /// The principal who granted it, or `--admin` for the operator's.
-    pub granted_by: String,
+    /// The principal who granted it, or `--admin` for the operator's
+    /// (`dev-login`, `auth.grant`: the server's own writers).
+    pub granted_by: GrantedBy,
     /// When, unix seconds.
     pub at: i64,
 }
@@ -193,7 +199,7 @@ pub enum MembersEvent {
     /// A grant as it stands (`list`, `mine`, and `grant`'s answer).
     Grant { grant: Grant },
     /// `revoke`'s answer: the grant that was removed, or `existed: false`.
-    Revoked { principal: String, scope: String, existed: bool },
+    Revoked { principal: Grantee, scope: Scope, existed: bool },
     /// `requests`: someone signed in who holds no grant yet.
     Waiting {
         principal: String,

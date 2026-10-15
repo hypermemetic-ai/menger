@@ -13,7 +13,7 @@ fn ticket(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> 
         title: "the title it was born with".into(),
         kind,
         severity: Some(Severity::High),
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: parent.map(Into::into),
         body: "## Problem\n\nthe body it was born with".into(),
     }

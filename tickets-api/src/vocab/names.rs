@@ -105,6 +105,38 @@ text_type!(
     under
 );
 
+text_type!(
+    /// ACCESS-48: a ticket or a shortcode as a call named it, echoed back —
+    /// `not_found`'s and `ambiguous`'s `id`: what was asked, by any name
+    /// [`TicketRef`] or [`ShortcodeRef`] takes (the rule [`Under`] reads).
+    Asked,
+    under
+);
+
+impl From<TicketRef> for Asked {
+    fn from(r: TicketRef) -> Self {
+        Self(r.0)
+    }
+}
+
+impl From<&TicketRef> for Asked {
+    fn from(r: &TicketRef) -> Self {
+        Self(r.0.clone())
+    }
+}
+
+impl From<ShortcodeRef> for Asked {
+    fn from(r: ShortcodeRef) -> Self {
+        Self(r.0)
+    }
+}
+
+impl From<crate::TicketId> for Asked {
+    fn from(id: crate::TicketId) -> Self {
+        Self(id.into_string())
+    }
+}
+
 fn cursor(text: &str) -> Result<String, String> {
     word(text, "a cursor", "the `next` a page answered, e.g. MNG-9", ADDRESS_MAX).map(folded)
 }

@@ -205,7 +205,7 @@ pub(super) fn membership_event(store: &Store, m: Membership) -> TicketsEvent {
 /// in-band `error` for every other.
 pub(super) fn refusal(e: StoreError) -> TicketsEvent {
     match e {
-        StoreError::Ambiguous { text, candidates } => TicketsEvent::Ambiguous { id: text, candidates },
+        StoreError::Ambiguous { text, candidates } => TicketsEvent::Ambiguous { id: crate::vocab::Asked::stored(text), candidates },
         e => TicketsEvent::Error { message: e.to_string() },
     }
 }
@@ -223,7 +223,7 @@ pub(super) fn input_event(written: Result<InputWrite, StoreError>, ticket: Strin
     match written {
         Ok(InputWrite::Changed(input)) => TicketsEvent::InputChanged { input },
         Ok(InputWrite::Unchanged(input)) => TicketsEvent::Input { input },
-        Err(StoreError::NotFound(_)) => TicketsEvent::NotFound { id: ticket },
+        Err(StoreError::NotFound(_)) => TicketsEvent::NotFound { id: Asked::stored(ticket) },
         Err(e) => refusal(e),
     }
 }

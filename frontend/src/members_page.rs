@@ -138,21 +138,21 @@ pub(crate) fn MembersPage() -> impl IntoView {
                 <tbody>
                     {move || board.get().map(|b| b.grants.into_iter().map(|g| {
                         let (p, s) = (g.principal.clone(), g.scope.clone());
-                        let operator = g.granted_by == "--admin";
+                        let operator = g.granted_by == menger_tickets_api::vocab::GrantedBy::Operator;
                         let revoke = move |_| {
                             let (p, s) = (p.clone(), s.clone());
                             let Some(client) = session::members_client() else { return };
                             act(format!("revoked {p} on {s}"), Box::pin(async move {
-                                let (principal, scope) = (crate::typed::typed(&p)?, crate::typed::typed(&s)?);
+                                let (principal, scope) = (crate::typed::typed(&p.to_string())?, crate::typed::typed(&s.to_string())?);
                                 outcome(client.revoke_all(principal, scope).await)
                             }));
                         };
                         view! {
                             <tr>
-                                <td><code>{g.principal.clone()}</code></td>
-                                <td><code>{g.scope.clone()}</code></td>
+                                <td><code>{g.principal.to_string()}</code></td>
+                                <td><code>{g.scope.to_string()}</code></td>
                                 <td>{g.role.to_string()}</td>
-                                <td class="lbl">{g.granted_by.clone()}</td>
+                                <td class="lbl">{g.granted_by.to_string()}</td>
                                 <td>{(!operator).then(|| view! { <button class="link revoke" on:click=revoke>"revoke"</button> })}</td>
                             </tr>
                         }

@@ -40,6 +40,7 @@ use super::*;
 use crate::address::TicketId;
 use crate::members::Scope;
 use crate::vocab::Principal as Who;
+use crate::vocab::TicketRef;
 use std::marker::PhantomData;
 
 /// Why a call is turned away, when it is not [`Hidden`]: the sign-in, the
@@ -283,12 +284,13 @@ impl<R: RoleMark> On<R> {
 /// must be one answer ([`Hidden`]), so it names only what it may read.
 #[derive(Debug)]
 pub struct Forward {
-    name: String,
+    name: TicketRef,
 }
 
 impl Forward {
-    /// The name, as given.
-    pub fn name(&self) -> &str {
+    /// The name, as given — ACCESS-48: a [`TicketRef`], the store records
+    /// it as the [`crate::TicketName`] it settles to.
+    pub fn name(&self) -> &TicketRef {
         &self.name
     }
 }
@@ -320,8 +322,8 @@ impl System {
     }
 
     /// A forward reference to `name`.
-    pub fn forward(&self, name: impl Into<String>) -> Forward {
-        Forward { name: name.into() }
+    pub fn forward(&self, name: impl AsRef<str>) -> Forward {
+        Forward { name: TicketRef::stored(name.as_ref().trim()) }
     }
 }
 
@@ -480,9 +482,10 @@ impl VerifiedUser {
             }
             Err(_) => false,
         };
-        match ok {
-            true => Ok(Forward { name: name.trim().to_string() }),
-            false => Err(Hidden),
+        // ACCESS-48: a name no ticket could have is no forward reference.
+        match (ok, name.parse::<TicketRef>()) {
+            (true, Ok(name)) => Ok(Forward { name }),
+            _ => Err(Hidden),
         }
     }
 

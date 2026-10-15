@@ -24,7 +24,7 @@ pub(super) fn scanned(rows: &[Row], asking: &BTreeSet<String>) -> BTreeMap<Order
     let by_id: HashMap<&str, &Row> = rows.iter().map(|t| (t.id.as_str(), t)).collect();
     rows.iter()
         .map(|t| {
-            let named: BTreeSet<&str> = t.blocked_by.iter().map(String::as_str).collect();
+            let named: BTreeSet<&str> = t.blocked_by.iter().map(TicketName::as_str).collect();
             let blocked = named.iter().any(|b| !by_id.get(b).is_some_and(|bt| done(bt.status)));
             let menger = t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/"));
             let key = Key::new(t.status, t.kind, t.severity, blocked, !t.commits.is_empty(), menger)
@@ -358,10 +358,8 @@ async fn asking_and_labels_move_a_tickets_cell() {
     store.label(SYS.permit("AS-4"), vec!["P1".into(), "Needs-You".into()], vec![]).await.unwrap();
     let moved = announced(&mut rx, &store);
     assert_eq!(moved.iter().next().unwrap().2, to, "the same set, the same cell");
-    assert!(matches!(
-        store.label(SYS.permit("AS-4"), vec!["no way".into()], vec![]).await,
-        Err(StoreError::Labels { .. })
-    ));
+    // ACCESS-48: a bad label is no `Label` — refused where it is read.
+    assert!("no way".parse::<crate::vocab::Label>().is_err());
     store.label(SYS.permit("AS-4"), vec![], vec!["needs-you".into(), "p1".into()]).await.unwrap();
     assert!(announced(&mut rx, &store).iter().all(|(_, _, to)| to.labels().is_empty()));
     assert_cells_are_a_scan(&store, Some(&path), "the writes");

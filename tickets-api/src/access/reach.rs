@@ -154,17 +154,11 @@ impl Reach {
         let generation = book.store().map(|s| s.grants_generation()).unwrap_or(0);
         let mut grants: Vec<(Scope, Role)> = Vec::new();
         let mut held: Vec<(Held, Role)> = Vec::new();
+        // ACCESS-48: every grant's scope is a kept form — one written before
+        // ORG-4 is rewritten at the store's open, or held nowhere.
         for g in book.grants_of(who) {
-            match Scope::stored(&g.scope) {
-                Some(s) => {
-                    held.push((Held::of_scope(&s), g.role));
-                    grants.push((s, g.role));
-                }
-                // A scope in no kept form (one written before ORG-4, which
-                // the store's open rewrites): matched by name, as the gate
-                // matches it.
-                None => held.push((Held::Named(g.scope.trim().to_string()), g.role)),
-            }
+            held.push((Held::of_scope(&g.scope), g.role));
+            grants.push((g.scope, g.role));
         }
         let ceiling = GateCeiling::layers_of(ctx)
             .map_err(|e| Refusal::Ceiling(e.to_string()))?

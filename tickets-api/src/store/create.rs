@@ -114,7 +114,7 @@ impl Store {
             };
             // ORG-3: every blocker by any short form — one not born yet by the
             // key it will be born as; one naming several, refused.
-            let blocked_by: Vec<String> = new.blocked_by.iter().map(|b| tickets.name_ticket(b)).collect::<Result<_, _>>()?;
+            let blocked_by: Vec<TicketName> = new.blocked_by.iter().map(|b| tickets.name_ticket(b)).collect::<Result<_, _>>()?;
             // ACT-5: past every deleted number too — a number is never reused;
             // and the first of a shortcode is the one born into none held.
             let (seq, first) = (tickets.next_seq(&sc), tickets.ids.held(&sc) == 0);
@@ -274,13 +274,13 @@ impl Store {
             // only — the cache changes after the database commit.
             // SCALE-4: the parent is not one of them — its edge is the
             // newborn's `parent`, and the count is the cache's.
-            let mut touched: HashMap<String, Row> = HashMap::new();
-            let mut unlocks_added: Vec<String> = Vec::new();
+            let mut touched: HashMap<TicketName, Row> = HashMap::new();
+            let mut unlocks_added: Vec<TicketName> = Vec::new();
             for blocker_id in &ticket.blocked_by {
                 let mirrored = touched
                     .get(blocker_id)
                     .or_else(|| tickets.get(blocker_id))
-                    .map(|b| b.unlocks.contains(&id));
+                    .map(|b| b.unlocks.iter().any(|u| *u == id));
                 // None: a dangling blocker — nothing exists to update.
                 if mirrored != Some(false) {
                     continue;
@@ -290,7 +290,7 @@ impl Store {
                     .or_insert_with(|| {
                         tickets.get(blocker_id).expect("blocker resolved above").clone()
                     });
-                updated.unlocks.push(id.clone());
+                updated.unlocks.push(TicketName::new(id.clone()));
                 updated.updated_unix = now;
                 unlocks_added.push(blocker_id.clone());
             }
@@ -298,7 +298,7 @@ impl Store {
             // `UnlocksChanged`, after the `ChildrenChanged` that counts the
             // newborn: it carries the count it is about to have, or a
             // client applying the two in order would undo the first.
-            if let Some(both) = parent.as_ref().and_then(|p| touched.get_mut(p)) {
+            if let Some(both) = parent.as_ref().and_then(|p| touched.get_mut(p.as_str())) {
                 both.child_count += 1;
             }
             // The parent's shortcode, which `watch { epic }` files its
@@ -447,8 +447,8 @@ impl Store {
                 }
                 for blocker_id in unlocks_added {
                     let _ = tx.send(Change::UnlocksChanged {
-                        ticket: blockers[&blocker_id].clone(),
-                        added: ticket.id.to_string(),
+                        ticket: blockers[blocker_id.as_str()].clone(),
+                        added: TicketName::from(&ticket.id),
                     });
                 }
                 broadcast_groups(tx, groups);

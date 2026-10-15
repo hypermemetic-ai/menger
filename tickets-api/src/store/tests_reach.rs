@@ -36,7 +36,7 @@ pub(super) fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&s
         title: format!("{epic} {}", kind.as_str()),
         kind,
         severity: None,
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: parent.map(str::to_string),
         path: None,
         body: body.into(),
@@ -106,12 +106,12 @@ async fn a_visible_row_names_no_hidden_ticket() {
     let s = tracker().await;
     let v = viewer_of(&["OPEN"]);
     let t = s.get(&v, "OPEN-3").await.unwrap();
-    assert_eq!((t.blocked_by.clone(), t.hidden_blocked_by), (vec!["OPEN-2".to_string()], 1));
+    assert_eq!((t.blocked_by.clone(), t.hidden_blocked_by), (vec![TicketName::from("OPEN-2")], 1));
     let root = s.get(&v, "OPEN-1").await.unwrap();
     assert_eq!((root.parent.clone(), root.parent_hidden), (None, true), "a hidden parent is none, said");
     let page = s.page(&v, PageQuery { epic: Some("OPEN"), ..Default::default() }).unwrap();
     let row = page.tickets.iter().find(|r| r.id.as_str() == "OPEN-3").unwrap();
-    assert_eq!((row.blocked_by.clone(), row.hidden_blocked_by), (vec!["OPEN-2".to_string()], 1), "and on a page of rows");
+    assert_eq!((row.blocked_by.clone(), row.hidden_blocked_by), (vec![TicketName::from("OPEN-2")], 1), "and on a page of rows");
     // The system's: every id, nothing counted, nothing new on the wire.
     let all = s.get(SYS, "OPEN-3").await.unwrap();
     assert_eq!((all.blocked_by.len(), all.hidden_blocked_by), (2, 0));

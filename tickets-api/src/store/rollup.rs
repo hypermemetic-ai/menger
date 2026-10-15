@@ -1,6 +1,6 @@
 use super::stored::{Changes, CrossRow, GroupRow, Mark};
 use super::{Group, Row, Rows, Status};
-use crate::address::{Code, ShortcodeId};
+use crate::address::{Code, ShortcodeId, TicketId};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Tickets counted: how many, and how many `Complete` (the nav's
@@ -897,11 +897,11 @@ impl Rollups {
             total: s.roll.total,
             done: s.roll.done,
             docs: s.roll.docs,
-            root: s.root.clone(),
+            root: s.root.clone().map(TicketId::new),
             // AGS-23: the cache dresses it (`Cache::dress`) — the
             // roll-ups keep no ticket's fields.
             root_row: None,
-            host: s.host.clone(),
+            host: s.host.clone().map(TicketId::new),
         })
     }
 
@@ -934,7 +934,7 @@ impl Rollups {
                         total: 0,
                         done: 0,
                         docs: 0,
-                        root: s.root.clone(),
+                        root: s.root.clone().map(TicketId::new),
                         root_row: None,
                         host: None,
                     },

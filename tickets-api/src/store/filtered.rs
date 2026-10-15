@@ -285,7 +285,7 @@ fn facts(letters: &str, key: Key, lineage: &[&str], holds: &[&str]) -> Facts {
         has_commits: key.commits(),
         menger_doc: key.menger(),
         asking: key.asking(),
-        labels: key.labels().labels().to_vec(),
+        labels: key.labels().labels().iter().map(|l| l.to_string()).collect(),
         lineage: lineage.iter().map(|l| l.to_string()).collect(),
         history: holds.iter().map(|h| h.to_string()).collect(),
     }
@@ -588,7 +588,7 @@ impl Store {
                     for field in fields.iter().filter(|f| **f != "in") {
                         if *field == "label" {
                             for l in key.labels().labels().iter() {
-                                *labels.entry(l.clone()).or_default() += n;
+                                *labels.entry(l.to_string()).or_default() += n;
                             }
                             continue;
                         }

@@ -306,105 +306,168 @@ pub struct Shortcode {
     pub code: Code,
 }
 
-/// ORG-3: a ticket's key — the immutable, opaque identity a ticket keeps
-/// for good (ORG-6 finding 1): today's id text for today's tickets,
-/// [`ShortcodeId::key`] for a newborn. What every row that names a ticket
-/// names it by; an address resolves *to* one. Its JSON is the id string, as
-/// it always was.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
-#[serde(transparent)]
-pub struct TicketId(String);
+/// ACCESS-48: the shape a ticket's key and a ticket's recorded name share —
+/// a transparent `String` newtype the store mints (its JSON the text, as it
+/// always was; read back unchecked, as the store answered it), read as text
+/// (`&id` where the store takes `&str`), compared with text and with each
+/// other's kind, and stored as its text.
+macro_rules! ticket_text {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+        #[serde(transparent)]
+        pub struct $name(String);
 
-impl TicketId {
-    /// A key the store holds, read back.
-    pub fn new(key: impl Into<String>) -> Self {
-        Self(key.into())
-    }
+        impl $name {
+            /// One the store holds, read back.
+            pub fn new(text: impl Into<String>) -> Self {
+                Self(text.into())
+            }
 
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
 
-    pub fn into_string(self) -> String {
-        self.0
+            pub fn into_string(self) -> String {
+                self.0
+            }
+        }
+
+        /// ACCESS-8: its text, read as text, as [`Code`] is.
+        impl std::ops::Deref for $name {
+            type Target = str;
+            fn deref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl std::borrow::Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl PartialEq<str> for $name {
+            fn eq(&self, other: &str) -> bool {
+                self.0 == other
+            }
+        }
+
+        impl PartialEq<&str> for $name {
+            fn eq(&self, other: &&str) -> bool {
+                self.0 == *other
+            }
+        }
+
+        impl PartialEq<String> for $name {
+            fn eq(&self, other: &String) -> bool {
+                &self.0 == other
+            }
+        }
+
+        impl PartialEq<$name> for String {
+            fn eq(&self, other: &$name) -> bool {
+                *self == other.0
+            }
+        }
+
+        impl PartialEq<$name> for &str {
+            fn eq(&self, other: &$name) -> bool {
+                *self == other.0
+            }
+        }
+
+        impl PartialEq<$name> for str {
+            fn eq(&self, other: &$name) -> bool {
+                self == other.0
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(id: $name) -> String {
+                id.0
+            }
+        }
+
+        /// ACCESS-8: stored as its text.
+        #[cfg(feature = "server")]
+        impl rusqlite::ToSql for $name {
+            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+                self.0.to_sql()
+            }
+        }
+
+        #[cfg(feature = "server")]
+        impl rusqlite::types::FromSql for $name {
+            fn column_result(v: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+                String::column_result(v).map(Self)
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+    };
+}
+
+ticket_text!(
+    /// ORG-3: a ticket's key — the immutable, opaque identity a ticket keeps
+    /// for good (ORG-6 finding 1): today's id text for today's tickets,
+    /// [`ShortcodeId::key`] for a newborn. What every row that names a ticket
+    /// names it by; an address resolves *to* one. Its JSON is the id string, as
+    /// it always was.
+    TicketId
+);
+
+ticket_text!(
+    /// ACCESS-48: a ticket as a `blocked_by` / `unlocks` list records it —
+    /// its key ([`TicketId`]) when it is a ticket, or, for a forward
+    /// reference (a blocker not born yet) and a dangling one (a blocker
+    /// deleted, or never born), the name as the write recorded it: the key
+    /// it will take (`MNG-9`), or the address as written folded
+    /// (`MENGER/THEME-12`), which a birth of that name settles into its key
+    /// (`unlocks_changed`). Minted by the store alone
+    /// (`Store::name_ticket`); the JSON is the text, as it always was.
+    TicketName
+);
+
+impl From<TicketId> for TicketName {
+    fn from(id: TicketId) -> Self {
+        Self(id.0)
     }
 }
 
-/// ACCESS-8: its key, read as text (`&t.id` where the store takes `&str`),
-/// as [`Code`] is.
-impl std::ops::Deref for TicketId {
-    type Target = str;
-    fn deref(&self) -> &str {
-        &self.0
+impl From<&TicketId> for TicketName {
+    fn from(id: &TicketId) -> Self {
+        Self(id.0.clone())
     }
 }
 
-impl AsRef<str> for TicketId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::borrow::Borrow<str> for TicketId {
-    fn borrow(&self) -> &str {
-        &self.0
-    }
-}
-
-impl PartialEq<str> for TicketId {
-    fn eq(&self, other: &str) -> bool {
-        self.0 == other
-    }
-}
-
-impl PartialEq<&str> for TicketId {
-    fn eq(&self, other: &&str) -> bool {
-        self.0 == *other
-    }
-}
-
-impl PartialEq<String> for TicketId {
-    fn eq(&self, other: &String) -> bool {
-        &self.0 == other
-    }
-}
-
-impl PartialEq<TicketId> for String {
+impl PartialEq<TicketId> for TicketName {
     fn eq(&self, other: &TicketId) -> bool {
-        *self == other.0
+        self.0 == other.0
     }
 }
 
-impl PartialEq<TicketId> for &str {
-    fn eq(&self, other: &TicketId) -> bool {
-        *self == other.0
+impl PartialEq<TicketName> for TicketId {
+    fn eq(&self, other: &TicketName) -> bool {
+        self.0 == other.0
     }
 }
 
-impl From<TicketId> for String {
-    fn from(id: TicketId) -> String {
-        id.0
-    }
-}
-
-/// ACCESS-8: a key is stored as its text.
-#[cfg(feature = "server")]
-impl rusqlite::ToSql for TicketId {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        self.0.to_sql()
-    }
-}
-
-#[cfg(feature = "server")]
-impl rusqlite::types::FromSql for TicketId {
-    fn column_result(v: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        String::column_result(v).map(Self)
-    }
-}
-
-impl fmt::Display for TicketId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+impl TicketName {
+    /// The key this name is, read as one — for a name the store found to be
+    /// a ticket's (a name that is no ticket answers `get` as `not_found`).
+    pub fn as_key(&self) -> TicketId {
+        TicketId(self.0.clone())
     }
 }
 
@@ -615,7 +678,18 @@ mod tests {
 /// serves: there, text becomes an identity only through the resolver.
 #[cfg(test)]
 mod literals {
-    use super::{Code, ShortcodeId, TicketId};
+    use super::{Code, ShortcodeId, TicketId, TicketName};
+
+    impl From<&str> for TicketName {
+        fn from(s: &str) -> Self {
+            TicketName::new(s)
+        }
+    }
+    impl From<String> for TicketName {
+        fn from(s: String) -> Self {
+            TicketName::new(s)
+        }
+    }
 
     impl From<&str> for TicketId {
         fn from(s: &str) -> Self {

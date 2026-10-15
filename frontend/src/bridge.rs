@@ -454,7 +454,7 @@ pub(crate) fn scope_call(call: Call, reach: Option<&Reach>) -> Result<Scoped, St
         // ACT-6: a `get` is asked whatever its id's letters — an old id names
         // a ticket that moved, maybe into the reach — and its answer held to
         // the reach ([`held_to`]: outside it, `not_found`).
-        Call::Blockers { id } if !reach.holds_id(&id) => Scoped::Answer(vec![TicketsEvent::NotFound { id }]),
+        Call::Blockers { id } if !reach.holds_id(&id) => Scoped::Answer(vec![not_found(&id)]),
         Call::List { epic: e, status, parent, after, limit, summary, filter } => Scoped::Call(Call::List {
             epic: e,
             status,
@@ -519,9 +519,8 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         E::Summary { ref summary } | E::Placed { ref summary, .. } | E::Node { ref summary, .. } | E::Hit { ref summary, .. } => {
             inside(summary.shortcode.as_str()).then_some(ev)
         }
-        E::ChildrenChanged { ref id, .. } | E::ChildRemoved { ref id, .. } | E::Member { ref id, .. } => {
-            reach.holds_id(id).then_some(ev)
-        }
+        E::ChildrenChanged { ref id, .. } | E::ChildRemoved { ref id, .. } => reach.holds_id(id).then_some(ev),
+        E::Member { ref id, .. } => reach.holds_id(id).then_some(ev),
         E::Input { ref input } | E::InputChanged { ref input } => reach.holds_id(&input.ticket).then_some(ev),
         // MENGER-13: a transition is its ticket's; a history's end names no
         // ticket of its own (a frame does not read `history`).
@@ -601,10 +600,19 @@ pub(crate) fn held_to(events: Vec<TicketsEvent>, reach: &Reach, get: Option<Stri
     let mut held: Vec<TicketsEvent> = events.into_iter().filter_map(|ev| admit_event(ev, reach)).collect();
     if let Some(id) = get {
         if held.is_empty() {
-            held.push(TicketsEvent::NotFound { id });
+            held.push(not_found(&id));
         }
     }
     held
+}
+
+/// ACCESS-48: `not_found` for an id as a frame asked it — an [`Asked`]
+/// read by its rule; text that names no ticket is refused as such.
+fn not_found(id: &str) -> TicketsEvent {
+    match id.parse::<menger_tickets_api::vocab::Asked>() {
+        Ok(id) => TicketsEvent::NotFound { id },
+        Err(message) => TicketsEvent::Error { message },
+    }
 }
 
 /// A frame's read: `call` held to the reach of `scope` (the shortcode the
@@ -1076,12 +1084,12 @@ mod tests {
             recorded(vec![TicketsEvent::Error { message: "DEMO-1's 'd1' is closed".into() }]),
             Err("menger.input.submit: DEMO-1's 'd1' is closed".into())
         );
-        assert_eq!(recorded(vec![TicketsEvent::NotFound { id: "DEMO-1".into() }]), Err("menger.input.submit: DEMO-1 is not a ticket".into()));
+        assert_eq!(recorded(vec![TicketsEvent::NotFound { id: "DEMO-1".parse().unwrap() }]), Err("menger.input.submit: DEMO-1 is not a ticket".into()));
         assert!(recorded(vec![]).is_err());
         // `inputs { ticket }`: its inputs, or the server's refusal.
         let held = inputs_of(SUBMIT, held().into_iter().map(|input| TicketsEvent::Input { input }).collect()).unwrap();
         assert_eq!(held.len(), 6);
-        assert!(inputs_of(SUBMIT, vec![TicketsEvent::NotFound { id: "NOPE-1".into() }]).unwrap_err().contains("NOPE-1 is not a ticket"));
+        assert!(inputs_of(SUBMIT, vec![TicketsEvent::NotFound { id: "NOPE-1".parse().unwrap() }]).unwrap_err().contains("NOPE-1 is not a ticket"));
     }
 
     // -- INPUT-9: the second write -----------------------------------------------
@@ -1162,7 +1170,7 @@ mod tests {
             cleared(vec![TicketsEvent::Error { message: "DEMO-1's 'd1' is closed".into() }]),
             Err("menger.input.clear: DEMO-1's 'd1' is closed".into())
         );
-        assert_eq!(cleared(vec![TicketsEvent::NotFound { id: "DEMO-1".into() }]), Err("menger.input.clear: DEMO-1 is not a ticket".into()));
+        assert_eq!(cleared(vec![TicketsEvent::NotFound { id: "DEMO-1".parse().unwrap() }]), Err("menger.input.clear: DEMO-1 is not a ticket".into()));
         assert_eq!(cleared(vec![]), Err("menger.input.clear: the server cleared nothing".into()));
         assert!(inputs_of(CLEAR, vec![TicketsEvent::Error { message: "x".into() }]).unwrap_err().starts_with("menger.input.clear: x"));
     }
@@ -1204,7 +1212,7 @@ mod tests {
     }
 
     fn group(epic: &str, host: Option<&str>) -> Group {
-        Group { epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(), total: 3, done: 1, docs: 0, root: Some(format!("{epic}-1")), root_row: None, host: host.map(Into::into) }
+        Group { epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(), total: 3, done: 1, docs: 0, root: Some(menger_tickets_api::TicketId::new(format!("{epic}-1"))), root_row: None, host: host.map(menger_tickets_api::TicketId::new) }
     }
 
     /// AREA: its own shortcode and SUB, hosted under it — what `counts {
@@ -1371,8 +1379,8 @@ mod tests {
             TicketsEvent::Amended { ticket: outside(), changed: vec![menger_tickets_api::vocab::AmendedField::Body] },
             TicketsEvent::CommitsLinked { ticket: outside(), added: vec![] },
             TicketsEvent::CommitsUnlinked { ticket: outside(), removed: vec![] },
-            TicketsEvent::LabelsChanged { ticket: outside(), added: vec!["needs-you".into()], removed: vec![] },
-            TicketsEvent::UnlocksChanged { ticket: outside(), added: "AREA-2".into() },
+            TicketsEvent::LabelsChanged { ticket: outside(), added: vec!["needs-you".parse().unwrap()], removed: vec![] },
+            TicketsEvent::UnlocksChanged { ticket: outside(), added: menger_tickets_api::TicketName::new("AREA-2") },
             TicketsEvent::ParentChanged { ticket: outside(), previous: Some("AREA-1".into()) },
             TicketsEvent::Blocker { ticket: outside() },
             TicketsEvent::Summary { summary: row("OTHER-7") },
@@ -1381,7 +1389,7 @@ mod tests {
             TicketsEvent::Hit { summary: row("OTHER-7"), title: vec![], snippet: vec![], corrected: false },
             TicketsEvent::ChildrenChanged { id: "OTHER-1".into(), added: "OTHER-7".into(), child_count: 1 },
             TicketsEvent::ChildRemoved { id: "OTHER-1".into(), removed: "OTHER-7".into(), child_count: 0 },
-            TicketsEvent::Member { id: "OTHER-7".into(), matched: true },
+            TicketsEvent::Member { id: "OTHER-7".parse().unwrap(), matched: true },
             TicketsEvent::Input { input: input("OTHER-7", "d1", InputKind::Choice, &["a"], InputState::Answered) },
             TicketsEvent::InputChanged { input: input("OTHER-7", "d1", InputKind::Choice, &["a"], InputState::Answered) },
             TicketsEvent::Group { group: group("OTHER", None) },
@@ -1433,9 +1441,9 @@ mod tests {
             TicketsEvent::ComponentRemoved { name: "m-x".into() },
             TicketsEvent::Page { next: None, remaining: 0, first: None },
             TicketsEvent::Lagged { missed: 3 },
-            TicketsEvent::NotFound { id: "OTHER-1".into() },
+            TicketsEvent::NotFound { id: "OTHER-1".parse().unwrap() },
             TicketsEvent::Error { message: "x".into() },
-            TicketsEvent::DanglingBlocker { id: "NOPE-1".into() },
+            TicketsEvent::DanglingBlocker { id: menger_tickets_api::TicketName::new("NOPE-1") },
             TicketsEvent::WaveCounts { waves: vec![1], missing: 0, done: 0 },
         ] {
             assert!(kept(ev).is_some());
@@ -1463,7 +1471,7 @@ mod tests {
             vec![
                 TicketsEvent::Blocker { ticket: tkt("AREA-3") },
                 TicketsEvent::Blocker { ticket: tkt("OTHER-4") },
-                TicketsEvent::DanglingBlocker { id: "GONE-1".into() },
+                TicketsEvent::DanglingBlocker { id: menger_tickets_api::TicketName::new("GONE-1") },
             ],
             &area(),
             None,
@@ -1472,7 +1480,7 @@ mod tests {
             .iter()
             .map(|e| match e {
                 TicketsEvent::Blocker { ticket } => ticket.id.to_string(),
-                TicketsEvent::DanglingBlocker { id } => id.clone(),
+                TicketsEvent::DanglingBlocker { id } => id.to_string(),
                 other => panic!("{other:?}"),
             })
             .collect();

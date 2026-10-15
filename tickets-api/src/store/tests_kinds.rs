@@ -23,7 +23,7 @@ fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> New
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
         severity: None,
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: parent.map(Into::into),
         body: format!("the body of a {} in {epic}", kind.as_str()),
     }
@@ -200,7 +200,7 @@ async fn to_a_doc_is_refused_with_a_blocker_or_an_unlock_naming_them() {
     let blocked = store.set_kind(SYS.permit("K-4"), Kind::Doc, None).await.unwrap_err();
     match &blocked {
         StoreError::DocInGraph { id, blocked_by, unlocks } => {
-            assert_eq!((id.as_str(), blocked_by.as_slice(), unlocks.is_empty()), ("K-4", &["K-2".to_string()][..], true))
+            assert_eq!((id.as_str(), blocked_by.as_slice(), unlocks.is_empty()), ("K-4", &[TicketName::from("K-2")][..], true))
         }
         other => panic!("expected DocInGraph, got {other:?}"),
     }
@@ -209,7 +209,7 @@ async fn to_a_doc_is_refused_with_a_blocker_or_an_unlock_naming_them() {
     let unlocks = store.set_kind(SYS.permit("K-2"), Kind::Doc, None).await.unwrap_err();
     match &unlocks {
         StoreError::DocInGraph { id, blocked_by, unlocks } => {
-            assert_eq!((id.as_str(), blocked_by.is_empty(), unlocks.as_slice()), ("K-2", true, &["K-4".to_string()][..]))
+            assert_eq!((id.as_str(), blocked_by.is_empty(), unlocks.as_slice()), ("K-2", true, &[TicketName::from("K-4")][..]))
         }
         other => panic!("expected DocInGraph, got {other:?}"),
     }

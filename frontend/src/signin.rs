@@ -317,7 +317,7 @@ pub(crate) fn AccountGroup() -> impl IntoView {
         } else {
             grants
                 .into_iter()
-                .map(|g| view! { <li><code>{g.scope}</code>" · "{g.role.to_string()}</li> })
+                .map(|g| view! { <li><code>{g.scope.to_string()}</code>" · "{g.role.to_string()}</li> })
                 .collect_view()
                 .into_any()
         };
@@ -414,7 +414,7 @@ mod tests {
     }
 
     fn grant(scope: &str, role: Role) -> Grant {
-        Grant { principal: "idp:c952acd3".into(), scope: scope.into(), role, granted_by: "ada".into(), at: 1 }
+        Grant { principal: "idp:c952acd3-0000-4000-8000-000000000001".parse().unwrap(), scope: scope.parse().unwrap(), role, granted_by: menger_tickets_api::vocab::GrantedBy::Operator, at: 1 }
     }
 
     #[test]
@@ -429,7 +429,7 @@ mod tests {
         assert!(no_login.may_view() && no_login.known(), "no login: as always");
         let waiting = Account { login: Some(true), me: Some(me()), grants: Some(vec![]), admin_everywhere: false };
         assert!(!waiting.may_view() && waiting.no_access(), "signed in, no grant: no views, the id instead");
-        let member = Account { grants: Some(vec![grant("OUGHT", Role::Viewer)]), ..waiting.clone() };
+        let member = Account { grants: Some(vec![grant("hypermemetic:OUGHT", Role::Viewer)]), ..waiting.clone() };
         assert!(member.may_view() && !member.no_access());
         let operator = Account { admin_everywhere: true, ..waiting };
         assert!(operator.may_view() && operator.is_admin());
@@ -469,9 +469,9 @@ mod tests {
 
     #[test]
     fn an_admin_is_admin_somewhere() {
-        let a = Account { login: Some(true), me: Some(me()), grants: Some(vec![grant("OUGHT", Role::Editor)]), admin_everywhere: false };
+        let a = Account { login: Some(true), me: Some(me()), grants: Some(vec![grant("hypermemetic:OUGHT", Role::Editor)]), admin_everywhere: false };
         assert!(!a.is_admin());
-        let b = Account { grants: Some(vec![grant("IDENTITY", Role::Admin)]), ..a.clone() };
+        let b = Account { grants: Some(vec![grant("hypermemetic:IDENTITY", Role::Admin)]), ..a.clone() };
         assert!(b.is_admin());
         // ACT-4: delete is an admin's; with login off, anyone's.
         assert!(!a.may_delete() && b.may_delete());

@@ -7,6 +7,7 @@
 //! database from before the column.
 
 use super::*;
+use crate::vocab::CommitRef;
 
 fn ticket(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> NewTicket {
     NewTicket {
@@ -15,24 +16,25 @@ fn ticket(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> 
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
         severity: Some(Severity::Low),
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: parent.map(Into::into),
         body: "## Problem\n\nünïcode ✓ 𝔘\r\n\tand no final newline".into(),
     }
 }
 
-fn strings(v: &[&str]) -> Vec<String> {
-    v.iter().map(|s| s.to_string()).collect()
+/// ACCESS-48: references, each read by its rule ([`CommitRef`]).
+fn strings(v: &[&str]) -> Vec<CommitRef> {
+    v.iter().map(|s| CommitRef::from(*s)).collect()
 }
 
-fn linked(change: Change) -> (Ticket, Vec<String>) {
+fn linked(change: Change) -> (Ticket, Vec<CommitRef>) {
     match change {
         Change::CommitsLinked { ticket, added } => (ticket, added),
         other => panic!("expected CommitsLinked, got {other:?}"),
     }
 }
 
-fn unlinked(change: Change) -> (Ticket, Vec<String>) {
+fn unlinked(change: Change) -> (Ticket, Vec<CommitRef>) {
     match change {
         Change::CommitsUnlinked { ticket, removed } => (ticket, removed),
         other => panic!("expected CommitsUnlinked, got {other:?}"),
@@ -120,21 +122,13 @@ async fn every_row_of_the_table() {
     assert_eq!(t.commits.len(), 4);
     linked(next(&mut rx));
 
-    // One malformed entry among valid ones: refused whole, naming it.
+    // One malformed entry among valid ones: ACCESS-48 — no `CommitRef`, so
+    // refused where the call is read (`invalid_params`), naming it; the
+    // store is never asked.
     let before = store.get(SYS, "CM-2").await.unwrap();
-    for entries in [vec!["499e3a0", "not-a-commit", "c8c5678"], vec!["499e3a0", "abc"]] {
-        match store.link_commits(SYS.permit("CM-2"), strings(&entries)).await {
-            Err(e @ StoreError::NotACommit { .. }) => {
-                let bad = entries[1];
-                assert!(e.to_string().contains(&format!("'{bad}'")) && e.to_string().contains("CM-2"), "{e}");
-                assert!(!e.to_string().contains("'499e3a0'"), "names only what is wrong: {e}");
-            }
-            other => panic!("{entries:?}: expected NotACommit, got {other:?}"),
-        }
-    }
-    match store.link_commits(SYS.permit("CM-2"), strings(&["xyz", "499e3a0", "HEAD"])).await {
-        Err(StoreError::NotACommit { entries, .. }) => assert_eq!(entries, ["xyz", "HEAD"], "every one, as given"),
-        other => panic!("expected NotACommit, got {other:?}"),
+    for bad in ["not-a-commit", "abc", "xyz", "HEAD"] {
+        let e = bad.parse::<CommitRef>().unwrap_err();
+        assert!(e.contains(bad), "{e}");
     }
     assert_eq!(store.get(SYS, "CM-2").await.unwrap(), before, "the refused links wrote nothing");
     assert!(rx.try_recv().is_err());
@@ -151,10 +145,7 @@ async fn every_row_of_the_table() {
         assert_eq!(got, t);
         assert!(rx.try_recv().is_err(), "{entries:?}: nothing removed, nothing said");
     }
-    assert!(matches!(
-        store.unlink_commits(SYS.permit("CM-2"), strings(&["5054a51", "nope"])).await,
-        Err(StoreError::NotACommit { entries, .. }) if entries == ["nope"]
-    ));
+    assert!("nope".parse::<CommitRef>().is_err(), "no reference, refused before the store");
     assert_eq!(store.get(SYS, "CM-2").await.unwrap(), t, "the refused unlink removed nothing");
 
     // An id naming no ticket, with entries or without.
@@ -201,7 +192,7 @@ async fn a_link_moves_the_commits_and_updated_unix_and_nothing_else() {
             assert_eq!(a, b, "{} untouched", a.id);
         }
     }
-    assert_eq!(store.get(SYS, "ED-2").await.unwrap().commits, Vec::<String>::new(), "Complete with no commit");
+    assert_eq!(store.get(SYS, "ED-2").await.unwrap().commits, Vec::<CommitRef>::new(), "Complete with no commit");
     assert_eq!(store.groups(SYS), groups, "no roll-up moved");
     assert_eq!(store.extents_text(), extents, "no sequence moved");
     for _ in 5..=9 {
@@ -218,8 +209,8 @@ async fn a_link_moves_the_commits_and_updated_unix_and_nothing_else() {
 async fn a_ticket_holds_at_most_256_commits() {
     let store = Store::new();
     store.create(SYS, ticket("BD", Kind::Scope, None, &[])).await.unwrap();
-    let hash = |i: usize| format!("{i:07x}");
-    let first: Vec<String> = (0..255).map(hash).collect();
+    let hash = |i: usize| CommitRef::from(format!("{i:07x}").as_str());
+    let first: Vec<CommitRef> = (0..255).map(hash).collect();
     let (t, added) = linked(store.link_commits(SYS.permit("BD-1"), first.clone()).await.unwrap());
     assert_eq!((added.len(), t.commits.len()), (255, 255));
     let mut rx = store.subscribe();
@@ -275,7 +266,7 @@ async fn commits_are_on_every_row_in_link_order_and_survive_a_reopen() {
     assert_eq!(got, linked_at, "the acknowledged ticket, whole, after a reopen");
     assert_eq!(store.list(SYS, None, None, None).await.unwrap()[1], got);
     let page = store.page(SYS, PageQuery::default()).unwrap();
-    assert_eq!(page.tickets[0].commits, Vec::<String>::new(), "never linked: []");
+    assert_eq!(page.tickets[0].commits, Vec::<CommitRef>::new(), "never linked: []");
     assert_eq!(page.tickets[1], TicketSummary::from(got.clone()), "the summary row carries them");
     assert_eq!(store.find_page(SYS, "RO-2", None, None).unwrap().tickets[0].commits, got.commits);
     let json = serde_json::to_value(&page.tickets[0]).unwrap();
@@ -311,7 +302,7 @@ async fn a_database_from_before_the_column_opens_with_none_linked_durably() {
     {
         let store = Store::open(&path).unwrap();
         for t in store.list(SYS, None, None, None).await.unwrap() {
-            assert_eq!(t.commits, Vec::<String>::new(), "{}", t.id);
+            assert_eq!(t.commits, Vec::<CommitRef>::new(), "{}", t.id);
         }
         let old2 = store.get(SYS, "OLD-2").await.unwrap();
         assert_eq!(
@@ -337,5 +328,5 @@ async fn a_database_from_before_the_column_opens_with_none_linked_durably() {
 
     let store = Store::open(&path).unwrap();
     assert_eq!(store.get(SYS, "OLD-2").await.unwrap().commits, ["77df9a0"]);
-    assert_eq!(store.get(SYS, "OLD-1").await.unwrap().commits, Vec::<String>::new());
+    assert_eq!(store.get(SYS, "OLD-1").await.unwrap().commits, Vec::<CommitRef>::new());
 }

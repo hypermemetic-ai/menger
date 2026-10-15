@@ -51,7 +51,8 @@ use plexus_core::plexus::{
 };
 
 use crate::filter::Filter;
-use crate::members::{Grant, Role, EVERYWHERE};
+use crate::members::{Grant, Role, Scope, EVERYWHERE};
+use crate::vocab::{GrantedBy, Grantee};
 use crate::store::{Lens, Store};
 
 pub mod reach;
@@ -70,12 +71,10 @@ pub use plexus_core::plexus::Reach as GateReach;
 /// The grantor named on `--admin` grants.
 pub use crate::vocab::OPERATOR;
 
-/// IDENTITY-35: `granted_by` of the grants the dev sign-in makes.
-pub const DEV_LOGIN: &str = "dev-login";
-
-/// AUTH-7: `granted_by` of a grant made through `auth.grant`, which does not
-/// say who asked.
-pub const AUTH_GRANT: &str = "auth.grant";
+/// IDENTITY-35: `granted_by` of the grants the dev sign-in makes; AUTH-7:
+/// of a grant made through `auth.grant`, which does not say who asked
+/// ([`crate::vocab::GrantedBy`]).
+pub use crate::vocab::{AUTH_GRANT, DEV_LOGIN};
 
 /// IDENTITY-37: the most principals [`Access::waiting`] keeps — past it,
 /// the one waiting longest is forgotten (it is listed again when it comes
@@ -250,7 +249,11 @@ impl Book {
             }
         }
         if self.admins.iter().any(|a| a == principal) {
-            grants.push(Grant { principal: principal.into(), scope: EVERYWHERE.into(), role: Role::Admin, granted_by: OPERATOR.into(), at: 0 });
+            // ACCESS-48: an operator's `--admin` is a principal (the command
+            // line refuses one that is not), so it is one here.
+            if let Ok(p) = principal.parse::<crate::vocab::Grantee>() {
+                grants.push(Grant { principal: p, scope: Scope::Everywhere, role: Role::Admin, granted_by: GrantedBy::Operator, at: 0 });
+            }
         }
         grants
     }
@@ -315,7 +318,7 @@ impl Memberships for Book {
     fn held(&self, who: &Principal) -> Vec<Membership> {
         self.grants_of(&who.to_string())
             .into_iter()
-            .map(|g| Membership { principal: who.clone(), role: RoleName::new(g.role.as_str()), scope: ScopeRef::parse(&g.scope) })
+            .map(|g| Membership { principal: who.clone(), role: RoleName::new(g.role.as_str()), scope: ScopeRef::parse(&g.scope.text()) })
             .collect()
     }
 }
@@ -332,10 +335,10 @@ impl MembershipStore for Book {
         })?;
         // ORG-4: kept as the store keeps a scope — the org, the identity.
         let scope = store.scope_named(m.scope.as_str()).map_err(|e| GateStoreError::new(e.to_string()))?;
-        let principal = m.principal.to_string();
-        let g = Grant { principal: principal.clone(), scope, role, granted_by: AUTH_GRANT.into(), at: now() };
+        let principal = crate::vocab::Principal::from(&m.principal);
+        let g = Grant { principal: Grantee::Principal(principal.clone()), scope, role, granted_by: GrantedBy::AuthGrant, at: now() };
         store.grant(system, g).await.map_err(|e| GateStoreError::new(e.to_string()))?;
-        self.granted(&principal);
+        self.granted(principal.as_str());
         Ok(())
     }
 
@@ -347,7 +350,7 @@ impl MembershipStore for Book {
         let Some(held) = held.filter(|g| role.is_none_or(|r| r.as_str() == g.role.as_str())) else {
             return Ok(Vec::new());
         };
-        store.revoke(system, who, scope).await.map_err(|e| GateStoreError::new(e.to_string()))?;
+        store.revoke(system, held.principal.clone(), scope).await.map_err(|e| GateStoreError::new(e.to_string()))?;
         Ok(vec![RoleName::new(held.role.as_str())])
     }
 }
@@ -515,7 +518,8 @@ impl Access {
     pub async fn dev_grant(&self, principal: &str, scope: &str, role: Role) -> Result<Grant, String> {
         let (store, system) = self.book.writer().map_err(|e| e.to_string())?;
         let scope = store.scope_named(scope).map_err(|e| e.to_string())?;
-        let g = Grant { principal: principal.into(), scope, role, granted_by: DEV_LOGIN.into(), at: now() };
+        let who = principal.parse::<crate::vocab::Grantee>()?;
+        let g = Grant { principal: who, scope, role, granted_by: GrantedBy::DevLogin, at: now() };
         let g = store.grant(system, g).await.map_err(|e| e.to_string())?;
         self.granted(principal);
         Ok(g)
@@ -525,10 +529,10 @@ impl Access {
     /// and every other stored grant of theirs revoked.
     pub async fn dev_set_grants(&self, principal: &str, grants: &[(Role, String)]) -> Result<(), String> {
         let (store, system) = self.book.writer().map_err(|e| e.to_string())?;
-        let named: Vec<String> = grants.iter().map(|(_, s)| store.scope_named(s).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
+        let named: Vec<Scope> = grants.iter().map(|(_, s)| store.scope_named(s).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
         for g in self.book.stored_grants(principal) {
             if !named.contains(&g.scope) {
-                store.revoke(system, principal.into(), g.scope).await.map_err(|e| e.to_string())?;
+                store.revoke(system, g.principal, g.scope).await.map_err(|e| e.to_string())?;
             }
         }
         for (role, scope) in grants {
@@ -651,7 +655,7 @@ impl Access {
         // the gate's chain holds it (a ticket stays its key-like spelling).
         let ticket = scope.split_once('-').is_some_and(|(_, n)| n.bytes().all(|b| b.is_ascii_digit()));
         let scope = match self.book.store() {
-            Some(store) if !ticket => store.scope_named(&scope).map_err(|e| e.to_string())?,
+            Some(store) if !ticket => store.scope_named(&scope).map_err(|e| e.to_string())?.text(),
             _ => scope,
         };
         if left.contains('.') {

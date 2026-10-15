@@ -526,7 +526,7 @@ async fn the_wire_assertions_through_the_generated_client() {
             .filter(|t| {
                 t.blocked_by.iter().all(|b| {
                     mirror
-                        .get(b)
+                        .get(b.as_str())
                         .is_some_and(|blocker| matches!(blocker.status, Status::Complete | Status::Superseded | Status::Canceled))
                 })
             })
@@ -635,7 +635,7 @@ async fn waves_decode_typed_through_the_generated_client() {
         .iter()
         .filter_map(|e| match e {
             TicketsEvent::Placed { summary, placement, waiting_on } => {
-                Some((summary.id.to_string(), *placement, waiting_on.clone()))
+                Some((summary.id.to_string(), *placement, waiting_on.iter().map(|w| w.to_string()).collect()))
             }
             _ => None,
         })
