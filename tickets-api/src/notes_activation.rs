@@ -99,7 +99,7 @@ impl Notes {
     )]
     pub async fn add(&self, auth: Option<&AuthContext>, reach: Reach, body: Body, author: Option<Author>) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted.and_then(|c| c.reach_filter().map(|_| c)) {
                 Ok(caller) => caller,
@@ -108,8 +108,8 @@ impl Notes {
                     return;
                 }
             };
-            let author = caller.name.clone().or(author.map(String::from));
-            yield answer(store.add_note_as(body.into_string(), author, caller.principal.clone()).await);
+            let author = caller.name().map(str::to_string).or(author.map(String::from));
+            yield answer(store.add_note_as(body.into_string(), author, caller.principal_text()).await);
         }
     }
 
@@ -143,7 +143,7 @@ impl Notes {
         limit: Option<u32>,
     ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             if let Err(message) = admitted.and_then(|c| c.reach_filter().map(|_| ())) {
                 yield NotesEvent::Error { message };
@@ -173,7 +173,7 @@ impl Notes {
     pub async fn get(&self, auth: Option<&AuthContext>, reach: Reach, id: NoteId) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let id = id.get();
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             if let Err(message) = admitted.and_then(|c| c.reach_filter().map(|_| ())) {
                 yield NotesEvent::Error { message };
@@ -219,7 +219,7 @@ impl Notes {
     ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (id, epic, parent) = (id.get(), epic.into_string(), parent.map(String::from));
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -242,7 +242,7 @@ impl Notes {
                     }
                 },
             };
-            if let Some(own) = caller.grant.clone() {
+            if let Some(own) = caller.grant().cloned() {
                 let create = Grant::new("tickets.create");
                 let allowed = match &anchor {
                     Some(a) => caller.check(&create, a).and_then(|()| caller.check(&own, a)),

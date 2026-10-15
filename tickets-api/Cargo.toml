@@ -51,6 +51,10 @@ server = [
     "dep:roaring",
     "dep:jiff",
 ]
+# ACCESS-9: the capabilities' test constructors (`VerifiedUser::for_tests`,
+# `System::for_tests`, …) for tests outside this crate's own `cfg(test)`.
+# Never enabled by anything that serves.
+test-support = ["server"]
 # WAVE-3, measurement only: a build of the store without WAVE-6's
 # re-placement pass and its startup placement — the "without" half of the
 # spike's comparison (spike/WAVE-2/). Never enabled by anything that serves.

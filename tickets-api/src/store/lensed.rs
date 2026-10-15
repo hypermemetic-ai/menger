@@ -40,13 +40,20 @@ pub const MEMBER_MAX: usize = 1_000;
 pub fn narrowing(text: Option<&str>) -> Result<Option<Filter>, StoreError> {
     let Some(text) = text else { return Ok(None) };
     let filter = Filter::parse(text).map_err(|e| StoreError::Filter(e.to_string()))?;
-    super::filtered::refuse(&filter)?;
-    Ok((!filter.groups.is_empty()).then_some(filter))
+    narrowing_of(Some(&filter))
 }
 
-/// FILTER-15: [`narrowing`], as the lens a read is answered under.
-pub fn narrowing_lens(text: Option<&str>) -> Result<Option<Lens>, StoreError> {
-    narrowing(text)?.map(|f| Lens::of(&f)).transpose()
+/// ACCESS-9: [`narrowing`] of a filter already read — what a read's filter
+/// ANDed with the caller's reach is (never formatted and read back).
+pub fn narrowing_of(filter: Option<&Filter>) -> Result<Option<Filter>, StoreError> {
+    let Some(filter) = filter else { return Ok(None) };
+    super::filtered::refuse(filter)?;
+    Ok((!filter.groups.is_empty()).then(|| filter.clone()))
+}
+
+/// FILTER-15: [`narrowing_of`], as the lens a read is answered under.
+pub fn narrowing_lens(filter: Option<&Filter>) -> Result<Option<Lens>, StoreError> {
+    narrowing_of(filter)?.map(|f| Lens::of(&f)).transpose()
 }
 
 /// FILTER-15: `ready_set { epic, filter }`'s selection — the ready set ∧ the

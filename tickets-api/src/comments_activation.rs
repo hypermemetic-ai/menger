@@ -21,7 +21,7 @@ use async_stream::stream;
 #[cfg(feature = "server")]
 use futures::Stream;
 #[cfg(feature = "server")]
-use crate::access::{Access, Caller};
+use crate::access::{Access, VerifiedUser};
 #[cfg(feature = "server")]
 use crate::store::Lens;
 #[cfg(feature = "server")]
@@ -55,7 +55,7 @@ impl Comments {
 /// AUTH-7: `under` where it holds the call's grant (`comments.list`,
 /// `comments.watch`).
 #[cfg(feature = "server")]
-fn reach_lens(caller: &Caller) -> Result<Option<Lens>, String> {
+fn reach_lens(caller: &VerifiedUser) -> Result<Option<Lens>, String> {
     caller.reach_filter()?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
 }
 
@@ -141,7 +141,7 @@ impl Comments {
     )]
     pub async fn add(&self, auth: Option<&AuthContext>, reach: Reach, anchor: Anchor, body: Body, author: Option<Author>) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -166,8 +166,8 @@ impl Comments {
             }
             // Signed by the caller's principal; the name is theirs, not
             // what `author` says.
-            let author = caller.name.clone().or(author.map(String::from));
-            yield answer(store.add_comment_as(anchor, body.into_string(), author, caller.principal.clone()).await);
+            let author = caller.name().map(str::to_string).or(author.map(String::from));
+            yield answer(store.add_comment_as(anchor, body.into_string(), author, caller.principal_text()).await);
         }
     }
 
@@ -218,7 +218,7 @@ impl Comments {
         limit: Option<u32>,
     ) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -273,7 +273,7 @@ impl Comments {
     pub async fn resolve(&self, auth: Option<&AuthContext>, reach: Reach, id: CommentId) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let id = id.get();
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -307,7 +307,7 @@ impl Comments {
     pub async fn reopen(&self, auth: Option<&AuthContext>, reach: Reach, id: CommentId) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let id = id.get();
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -350,7 +350,7 @@ impl Comments {
         let who = auth.cloned();
         let store = self.store.clone();
         stream! {
-            let (mut held, mut lens) = match access.admit(who.as_ref(), &reach).and_then(|c| Ok((c.reach_key()?, reach_lens(&c)?))) {
+            let (mut held, mut lens) = match access.verify_call(who.as_ref(), &reach).and_then(|c| Ok((c.reach_key()?, reach_lens(&c)?))) {
                 Ok(r) => r,
                 Err(message) => {
                     yield CommentsEvent::Error { message };
@@ -365,7 +365,7 @@ impl Comments {
                     yield CommentsEvent::Error { message: "your access changed: you hold this nowhere any more".into() };
                     return;
                 };
-                let caller = match access.admit(who.as_ref(), &now) {
+                let caller = match access.verify_call(who.as_ref(), &now) {
                     Ok(c) => c,
                     Err(message) => {
                         yield CommentsEvent::Error { message };

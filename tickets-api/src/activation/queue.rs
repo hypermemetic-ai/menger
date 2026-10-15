@@ -18,7 +18,7 @@ fn wire(change: QueueChange) -> TicketsEvent {
 
 /// A refused write as its one event: `not_found` for a ticket the store (or
 /// the caller) does not hold, else the store's words.
-fn refused(store: &Store, caller: &Caller, id: String, e: StoreError) -> TicketsEvent {
+fn refused(store: &Store, caller: &VerifiedUser, id: String, e: StoreError) -> TicketsEvent {
     match e {
         StoreError::NotFound(_) => TicketsEvent::NotFound { id },
         // ORG-3: a name that fits several, each by its full address.
@@ -41,7 +41,7 @@ pub(super) enum Ask {
 /// `id`), its act, the store's write; exactly one event.
 pub(super) fn queue_stream(
     store: Arc<Store>,
-    admitted: Result<Caller, String>,
+    admitted: Result<VerifiedUser, String>,
     id: String,
     ask: Ask,
     source: Option<CallerSource>,
@@ -74,7 +74,7 @@ pub(super) fn queue_stream(
 /// as `comments.add` signs: the caller's name, else `owner`.
 pub(super) fn request_changes_stream(
     store: Arc<Store>,
-    admitted: Result<Caller, String>,
+    admitted: Result<VerifiedUser, String>,
     id: String,
     body: String,
     source: Option<CallerSource>,
@@ -87,7 +87,7 @@ pub(super) fn request_changes_stream(
                 return;
             }
         };
-        match store.request_changes_by(&id, body, caller.name.clone(), caller.principal.clone(), act).await {
+        match store.request_changes_by(&id, body, caller.name().map(str::to_string), caller.principal_text(), act).await {
             Ok((comment, QueueChange::Unqueued { id, entry, by, at_unix, .. })) => yield TicketsEvent::ChangesRequested { id, comment, entry, by, at_unix },
             Ok((_, other)) => yield wire(other),
             Err(e) => yield refused(&store, &caller, id, e),
@@ -97,7 +97,7 @@ pub(super) fn request_changes_stream(
 
 /// MENGER-39: `queued` — the queue in the caller's reach, most urgent
 /// first, then the oldest; a `queue_row` each, then one `queue_end`.
-pub(super) fn queued_stream(store: Arc<Store>, admitted: Result<Caller, String>, snoozed: bool) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn queued_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, snoozed: bool) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let reach = match admitted.and_then(|c| view_lens(&c)) {
             Ok(r) => r,

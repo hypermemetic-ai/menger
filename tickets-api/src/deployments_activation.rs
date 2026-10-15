@@ -21,7 +21,7 @@ use crate::deployments::{DeploySource, DeployState, DeploymentsEvent};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
 use crate::vocab::{CommitRef, DeploymentId, EnvironmentName, Project, Release, TicketRef, Timestamp};
 #[cfg(feature = "server")]
-use crate::access::{Access, Caller};
+use crate::access::{Access, VerifiedUser};
 #[cfg(feature = "server")]
 use crate::deployments::Record;
 #[cfg(feature = "server")]
@@ -62,8 +62,8 @@ impl Deployments {
 /// The projects `caller` holds its call's grant on, of those deployments
 /// were recorded for — `None`: every one (login off, or held on `*`).
 #[cfg(feature = "server")]
-fn allowed(caller: &Caller, store: &Store) -> Result<Option<HashSet<String>>, String> {
-    let Some(grant) = caller.grant.clone() else { return Ok(None) };
+fn allowed(caller: &VerifiedUser, store: &Store) -> Result<Option<HashSet<String>>, String> {
+    let Some(grant) = caller.grant().cloned() else { return Ok(None) };
     if caller.reach_filter()?.is_none() {
         return Ok(None);
     }
@@ -156,7 +156,7 @@ impl Deployments {
     ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let texts = |v: Option<Vec<_>>| v.unwrap_or_default().into_iter().map(String::from).collect::<Vec<String>>();
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,
@@ -165,7 +165,7 @@ impl Deployments {
                     return;
                 }
             };
-            let by = caller.principal.clone().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string());
+            let by = caller.principal_text().unwrap_or_else(|| crate::types::ANONYMOUS_ACTOR.to_string());
             let rec = Record {
                 project: project.into_string(),
                 environment: environment.into_string(),
@@ -211,7 +211,7 @@ impl Deployments {
         limit: Option<u32>,
     ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let allowed = match admitted.and_then(|c| allowed(&c, &store)) {
                 Ok(a) => a,
@@ -250,7 +250,7 @@ impl Deployments {
     )]
     pub async fn environments(&self, auth: Option<&AuthContext>, reach: Reach, project: Option<Project>) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let allowed = match admitted.and_then(|c| allowed(&c, &store)) {
                 Ok(a) => a,
@@ -284,7 +284,7 @@ impl Deployments {
     )]
     pub async fn for_ticket(&self, auth: Option<&AuthContext>, reach: Reach, id: TicketRef) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let allowed = match admitted.and_then(|c| allowed(&c, &store)) {
                 Ok(a) => a,
@@ -329,7 +329,7 @@ impl Deployments {
     ) -> impl Stream<Item = DeploymentsEvent> + Send + 'static {
         let ids: Option<Vec<String>> = ids.map(|v| v.into_iter().map(String::from).collect());
         let store = self.store.clone();
-        let admitted = self.access.admit(auth, &reach);
+        let admitted = self.access.verify_call(auth, &reach);
         stream! {
             let allowed = match admitted.and_then(|c| allowed(&c, &store)) {
                 Ok(a) => a,
@@ -365,7 +365,7 @@ impl Deployments {
         let who = auth.cloned();
         let store = self.store.clone();
         stream! {
-            if let Err(message) = access.admit(who.as_ref(), &reach) {
+            if let Err(message) = access.verify_call(who.as_ref(), &reach) {
                 yield DeploymentsEvent::Error { message };
                 return;
             }
@@ -376,7 +376,7 @@ impl Deployments {
                     yield DeploymentsEvent::Error { message: "your access changed: you hold this nowhere any more".into() };
                     return;
                 };
-                let allowed = match access.admit(who.as_ref(), &now).and_then(|c| allowed(&c, &store)) {
+                let allowed = match access.verify_call(who.as_ref(), &now).and_then(|c| allowed(&c, &store)) {
                     Ok(a) => a,
                     Err(message) => {
                         yield DeploymentsEvent::Error { message };

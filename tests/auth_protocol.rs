@@ -206,7 +206,7 @@ fn tmp() -> tempfile::TempDir {
 // ── In process: the method → grant mapping ───────────────────────────────
 
 /// What IDENTITY-21/IDENTITY-37 asked of a caller, method by method, before
-/// AUTH-7 (`Access::admit` + `Caller::require`).
+/// AUTH-7 (`Access::verify_call` + `VerifiedUser::require`; ACCESS-9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Today {
     /// Any connection admitted at all (anonymous ones included when login

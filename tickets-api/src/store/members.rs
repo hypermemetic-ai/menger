@@ -11,8 +11,9 @@
 //! once, on its first open.
 
 use crate::members::{Grant, Role};
+use crate::vocab::TeamName;
 use rusqlite::{params, Connection};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const TABLE: &str = "
         CREATE TABLE IF NOT EXISTS members (
@@ -26,14 +27,23 @@ pub(super) const TABLE: &str = "
     ";
 
 /// The grants, by principal then scope.
+///
+/// ACCESS-9: and the **grants generation** — a count every change to who
+/// holds what moves (a grant, a revoke, a team joined or left), which a
+/// [`crate::access::Reach`] records when it is resolved and a watch
+/// compares (ACCESS-12) — and the teams each principal is in (ACCESS-22
+/// keeps them; none today, so a team's grants reach no one yet).
 #[derive(Debug, Clone, Default)]
 pub struct Members {
     by_principal: BTreeMap<String, BTreeMap<String, Grant>>,
+    teams: BTreeMap<String, BTreeSet<TeamName>>,
+    generation: u64,
 }
 
 impl Members {
     pub(super) fn put(&mut self, g: Grant) {
         self.by_principal.entry(g.principal.clone()).or_default().insert(g.scope.clone(), g);
+        self.generation += 1;
     }
 
     pub(super) fn remove(&mut self, principal: &str, scope: &str) -> Option<Grant> {
@@ -42,7 +52,36 @@ impl Members {
         if scopes.is_empty() {
             self.by_principal.remove(principal);
         }
+        if gone.is_some() {
+            self.generation += 1;
+        }
         gone
+    }
+
+    /// ACCESS-9: the grants generation ([`Members`]).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// ACCESS-9: the teams `principal` is in, by name — the input a reach
+    /// adds each team's grants from. Empty until ACCESS-22 keeps teams.
+    pub fn teams_of(&self, principal: &str) -> Vec<TeamName> {
+        self.teams.get(principal).map(|t| t.iter().cloned().collect()).unwrap_or_default()
+    }
+
+    /// ACCESS-9: `principal` in `team` (`true`) or out of it — the
+    /// generation moved when that changed anything. ACCESS-22 stores it;
+    /// until then, tests alone call it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn set_team(&mut self, principal: &str, team: TeamName, member: bool) {
+        let teams = self.teams.entry(principal.to_string()).or_default();
+        let moved = if member { teams.insert(team) } else { teams.remove(&team) };
+        if teams.is_empty() {
+            self.teams.remove(principal);
+        }
+        if moved {
+            self.generation += 1;
+        }
     }
 
     /// One principal's grants, by scope.
