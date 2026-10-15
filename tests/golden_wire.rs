@@ -225,7 +225,7 @@ fn script() -> Vec<(&'static str, Value)> {
         ("tickets.create", json!({"epic": "NEW", "title": "a build first"})),
         // The other activations.
         ("comments.add", json!({"anchor": {"route": "#/ticket/GOLD-2", "path": "main > h1", "label": "Title", "excerpt": "asks", "ticket": "GOLD-2"}, "body": "rename it"})),
-        ("comments.add", json!({"anchor": {"route": "#/", "path": "nav", "label": "Nav", "excerpt": ""}, "body": "slow", "author": "agent-1"})),
+        ("comments.add", json!({"anchor": {"route": "#/", "path": "nav", "label": "Nav", "excerpt": ""}, "body": "slow"})),
         ("comments.resolve", json!({"id": 1})),
         ("comments.reopen", json!({"id": 1})),
         ("comments.list", json!({})),

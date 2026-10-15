@@ -167,7 +167,9 @@ async fn start_with(port: u16, providers: &[Provider], require_login: bool, admi
         .await
         .expect("open database");
     let boundary = login::boundary(providers).expect("providers");
-    let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
+    // As main serves it (ACCESS-19): menger's own `menger.call`, which hands
+    // a call with no identity the anonymous one while login is off.
+    let conv = |arc: Arc<DynamicHub>| menger::calls::rpc_module(arc, menger::calls::CallLimits::default());
     tokio::spawn(async move {
         let _keep = dir;
         let mut builder = TransportServer::builder(hub, conv).with_websocket(port);
@@ -290,8 +292,10 @@ async fn with_no_provider_menger_is_as_it_was() {
     start(port, &[], false).await;
     let client = connect(port, &[("authorization", "Bearer whatever".into())]).await.unwrap();
     assert_eq!(whoami(&client).await, json!({ "type": "anonymous" }));
+    // ACCESS-19: a comment is signed by its caller, never named by the
+    // call — with login off, `owner`; the `author` sent is no parameter.
     let added = call(&client, "comments.add", comment_by("mallory")).await;
-    assert_eq!(added[0]["author"], "mallory", "{added:?}");
+    assert_eq!(added[0]["author"], "owner", "{added:?}");
 }
 
 #[tokio::test]

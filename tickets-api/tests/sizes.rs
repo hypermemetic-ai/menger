@@ -21,9 +21,11 @@ const BUDGETS: &[(&str, usize)] = &[
     // all of them the methods' and parameters' docs (the schema's
     // descriptions); every body a few lines. ACCESS-14..18 take methods out.
     ("tickets-api/src/activation/mod.rs", 1750),
-    ("tickets-api/src/comments_activation.rs", 450),
+    // ACCESS-19: comments, members and session on the frame — their logic
+    // beside each, in comments_activation/ and members_activation/.
+    ("tickets-api/src/comments_activation.rs", 250),
     ("tickets-api/src/notes_activation.rs", 330),
-    ("tickets-api/src/members_activation.rs", 280),
+    ("tickets-api/src/members_activation.rs", 180),
     ("tickets-api/src/orgs_activation.rs", 240),
     ("tickets-api/src/session_activation.rs", 250),
     ("diagrams/src/activation.rs", 140),
@@ -166,6 +168,18 @@ fn the_tickets_activation_is_declarations() {
     let path = root().join("tickets-api/src/activation/mod.rs");
     let found = off_the_frame(&std::fs::read_to_string(&path).unwrap());
     assert!(found.is_empty(), "tickets-api/src/activation/mod.rs is off the frame (ACCESS-13): {}\n{}", advice("activation/mod.rs"), found.join("\n"));
+}
+
+/// ACCESS-19: `comments`, `members` and `session` take the same frame.
+#[test]
+fn comments_members_and_session_are_declarations() {
+    for file in ["tickets-api/src/comments_activation.rs", "tickets-api/src/members_activation.rs", "tickets-api/src/session_activation.rs"] {
+        let text = std::fs::read_to_string(root().join(file)).unwrap();
+        let found = off_the_frame(&text);
+        assert!(found.is_empty(), "{file} is off the frame (ACCESS-19): {}\n{}", advice(file), found.join("\n"));
+        assert!(text.contains("auth = \"required\"") && text.contains("request = MengerRequest"), "{file}: the frame's attribute");
+        assert!(!text.contains("auth: Option<&AuthContext>") && !text.contains("reach: Reach"), "{file}: no method admits by hand");
+    }
 }
 
 #[test]

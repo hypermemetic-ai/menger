@@ -745,3 +745,110 @@ async fn a_write_s_refusal_names_nothing_out_of_reach() {
     let doc = call(&ada, "tickets.set_kind", json!({ "id": "IDENTITY-3", "kind": "doc" })).await;
     assert!(format!("{doc:?}").contains("OUGHT-2"), "{doc:?}");
 }
+
+// ── ACCESS-19: comments, members and session on the frame ──
+
+/// A connection as `sub` with no name in its token: a principal only.
+async fn as_unnamed(w: &World, sub: &str) -> WsClient {
+    let mut h = Header::new(Algorithm::RS256);
+    h.kid = Some("idp-1".into());
+    let token = encode(&h, &json!({ "iss": w.iss, "aud": "plexus:menger", "sub": sub, "exp": now() + 600, "iat": now() - 5 }), &EncodingKey::from_rsa_pem(KEY_2_PEM.as_bytes()).unwrap()).unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("authorization", HeaderValue::from_str(&format!("Bearer {token}")).unwrap());
+    WsClientBuilder::default().set_headers(headers).build(format!("ws://127.0.0.1:{}", w.port)).await.unwrap()
+}
+
+fn comment_ids(evs: &[Value]) -> Vec<u64> {
+    evs.iter().filter(|e| e["type"] == "comment").filter_map(|e| e["id"].as_u64()).collect()
+}
+
+/// ACCESS-3 #9: a comment is signed by its caller — a principal with no
+/// name is its author by its principal, whatever the call claims (it was
+/// `caller.name.or(author)`: the claim stood). The parameter is gone.
+#[tokio::test]
+async fn a_comment_is_signed_never_named_even_without_a_name() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.grant", grant(BOB, "OUGHT", "viewer")).await;
+    let bob = as_unnamed(&w, BOB).await;
+    let on = json!({ "anchor": { "route": "#/ticket/OUGHT-2", "path": "main", "label": "body", "excerpt": "", "ticket": "OUGHT-2" }, "body": "x", "author": "ada" });
+    let c = call(&bob, "comments.add", on).await;
+    let me = call(&bob, "session.whoami", json!({})).await;
+    assert_eq!(c[0]["principal"], format!("idp:{BOB}"), "{c:?}");
+    assert_ne!(c[0]["author"], "ada", "the claim is no author: {c:?}");
+    assert_eq!(c[0]["author"], me[0]["name"].as_str().map_or(json!(format!("idp:{BOB}")), |n| json!(n)), "its own name, else its principal: {c:?} {me:?}");
+    let schema = call(&ada, "comments.schema", json!({})).await;
+    let add = schema.iter().find_map(|s| s["methods"].as_array()?.iter().find(|m| m["name"] == "add").cloned()).expect("comments.add in the schema");
+    let params = add["params"]["properties"].as_object().expect("add's parameters");
+    assert!(params.contains_key("anchor") && !params.contains_key("author"), "no author parameter on add: {params:?}");
+}
+
+/// ACCESS-1's first question, as proposed: a comment on the app (naming no
+/// ticket) is its author's and the admins' of `*` — listed, watched,
+/// resolved by no one else, and to anyone else answered as one that is not
+/// there (ACCESS-3 #7: an id names nothing it should not).
+#[tokio::test]
+async fn an_app_comment_is_its_author_s_and_the_admins_and_an_id_names_nothing() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "editor")).await;
+    call(&ada, "members.grant", grant(BOB, "OUGHT", "editor")).await;
+    let (alice, bob) = (as_(&w, ALICE, "alice").await, as_(&w, BOB, "bob").await);
+    let mut bobs_watch = sub(&bob, "comments.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let app = |body: &str| json!({ "anchor": { "route": "#/comments", "path": "main", "label": "page", "excerpt": "" }, "body": body });
+    let alices = call(&alice, "comments.add", app("alice on the app")).await[0]["id"].as_u64().unwrap();
+    let bobs = call(&bob, "comments.add", app("bob on the app")).await[0]["id"].as_u64().unwrap();
+    let on_identity = call(&alice, "comments.add", json!({ "anchor": { "route": "#/ticket/IDENTITY-2", "path": "main", "label": "body", "excerpt": "", "ticket": "IDENTITY-2" }, "body": "on IDENTITY-2" })).await[0]["id"].as_u64().unwrap();
+
+    assert_eq!(comment_ids(&call(&alice, "comments.list", json!({})).await), vec![on_identity, alices], "her own, and her ticket's");
+    assert_eq!(comment_ids(&call(&bob, "comments.list", json!({})).await), vec![bobs], "his own only: alice's app comment is not his");
+    assert_eq!(comment_ids(&call(&ada, "comments.list", json!({})).await), vec![on_identity, bobs, alices], "an admin of * sees every one");
+
+    // Resolving: the author may, an admin of * may; anyone else is told
+    // what a missing id tells — word for word, but the id.
+    let missing = call(&bob, "comments.resolve", json!({ "id": 99 })).await;
+    for hidden in [alices, on_identity] {
+        let told = call(&bob, "comments.resolve", json!({ "id": hidden })).await;
+        assert_eq!(told[0]["type"], "error", "{told:?}");
+        let said = told[0]["message"].as_str().unwrap().replace(&format!("comment {hidden}:"), "comment #:");
+        assert_eq!(said, missing[0]["message"].as_str().unwrap().replace("comment 99:", "comment #:"), "ACCESS-3 #7: {told:?}");
+        assert!(!said.contains("IDENTITY"), "{said}");
+        let reopened = call(&bob, "comments.reopen", json!({ "id": hidden })).await;
+        assert_eq!(reopened[0]["message"].as_str().unwrap().replace(&format!("comment {hidden}:"), "comment #:"), said);
+    }
+    assert_eq!(call(&alice, "comments.resolve", json!({ "id": alices })).await[0]["state"], "resolved");
+    assert_eq!(call(&ada, "comments.reopen", json!({ "id": alices })).await[0]["state"], "open");
+
+    // Bob's watch heard his own, and nothing of alice's.
+    let (heard, _) = drain(&mut bobs_watch, Duration::from_millis(500)).await;
+    let bodies: Vec<&str> = heard.iter().filter_map(|e| e["comment"]["body"].as_str()).collect();
+    assert_eq!(bodies, vec!["bob on the app"], "{heard:?}");
+}
+
+/// ACCESS-1's second question, as proposed (ACCESS-3 #10): the waiting list
+/// is every sign-in, so only an admin of `*` reads it — an admin of a
+/// shortcode is refused; grants and revokes take admin on the scope as it
+/// stands (ACCESS-11's `AdminOf`).
+#[tokio::test]
+async fn the_waiting_list_is_for_admins_of_star_only() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    let _bob = as_(&w, BOB, "bob").await;
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "admin")).await;
+    let alice = as_(&w, ALICE, "alice").await;
+    let refused = call(&alice, "members.requests", json!({})).await;
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(refused[0]["message"].as_str().unwrap().contains("needs admin on *"), "{refused:?}");
+    let waiting = call(&ada, "members.requests", json!({})).await;
+    assert!(waiting.iter().any(|e| e["type"] == "waiting" && e["principal"] == format!("idp:{BOB}")), "{waiting:?}");
+    // Alice administers IDENTITY: she grants there, and nowhere else.
+    assert_eq!(call(&alice, "members.grant", grant(BOB, "IDENTITY", "viewer")).await[0]["type"], "grant");
+    assert_eq!(call(&alice, "members.grant", grant(BOB, "OUGHT", "viewer")).await[0]["type"], "error");
+    let listed: Vec<Value> = call(&alice, "members.list", json!({})).await;
+    assert!(listed.iter().all(|e| e["grant"]["scope"] == "hypermemetic:IDENTITY"), "the grants on what she administers: {listed:?}");
+}

@@ -372,17 +372,23 @@ async fn an_anonymous_connection_sees_only_the_door_and_can_call_nothing_else() 
 
     let i = info(&anon).await;
     assert_eq!(i["view"], "anonymous", "{i}");
-    assert_eq!(i["auth"]["methods"], json!(["auth.providers", "auth.login", "auth.signup"]), "{i}");
+    // ACCESS-19: and `session.providers`, the login page's need — public.
+    assert_eq!(i["auth"]["methods"], json!(["auth.providers", "auth.login", "auth.signup", "session.providers"]), "{i}");
     let metadata = format!("http://127.0.0.1:{}/.well-known/oauth-protected-resource", s.port);
     assert_eq!(i["auth"]["resource_metadata"], metadata, "{i}");
     assert!(i["view_hash"].as_str().unwrap().starts_with("v-anon-"), "{i}");
-    assert_eq!(view(&anon).await, BTreeMap::from([("auth".to_string(), names(&["providers", "login", "signup"]))]));
+    assert_eq!(
+        view(&anon).await,
+        BTreeMap::from([("auth".to_string(), names(&["providers", "login", "signup"])), ("session".to_string(), names(&["providers"]))])
+    );
 
     // RFC 9728's document, on the socket's port.
     let doc: Value = reqwest::get(&metadata).await.unwrap().json().await.unwrap();
     assert_eq!(doc["resource"], format!("http://127.0.0.1:{}", s.port), "{doc}");
 
     assert_eq!(one(&anon, "auth.providers", json!({})).await, json!({ "type": "provider", "name": "key", "kind": "key" }));
+    let offered = call(&anon, "session.providers", json!({})).await;
+    assert!(offered.iter().all(|e| e["type"] == "provider"), "public: answered to anyone: {offered:?}");
     for (method, params) in [
         ("tickets.list", json!({})),
         ("tickets.health", json!({})),

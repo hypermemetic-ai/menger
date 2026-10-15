@@ -5428,7 +5428,7 @@ pub use lineage::{Node, TreePage, TreeQuery, UnderMoves, UNDERS_MAX};
 /// (filter)`. Never a walk of the store.
 mod seen;
 use seen::Seen;
-pub use seen::Reader;
+pub use seen::{AppSight, Reader};
 /// ACCESS-12: what an open watch hears — every change classified, cut to
 /// the reach and redacted as a read is; a moved reach's entered and left.
 mod watching;

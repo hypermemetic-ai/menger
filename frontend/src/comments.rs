@@ -274,7 +274,7 @@ fn answer_of(what: &str, events: Result<Vec<CommentsEvent>, plexus_client::Clien
 /// `comments.add { anchor, body }` — the comment as kept.
 pub(crate) async fn add(anchor: Anchor, body: String) -> Result<Comment, String> {
     let client = session::comments_client().ok_or_else(|| "not connected — nothing was kept".to_string())?;
-    answer_of("add", client.add_all(anchor, crate::typed::typed(&body)?, None).await)
+    answer_of("add", client.add_all(anchor, crate::typed::typed(&body)?).await)
 }
 
 /// `comments.resolve { id }`.

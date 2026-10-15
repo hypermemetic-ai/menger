@@ -2955,7 +2955,7 @@
           "route": "#/"
         },
         "at": 0,
-        "author": "agent-1",
+        "author": "owner",
         "body": "slow",
         "id": 2,
         "state": "open",
@@ -2969,7 +2969,6 @@
         "path": "nav",
         "route": "#/"
       },
-      "author": "agent-1",
       "body": "slow"
     }
   },
@@ -3032,7 +3031,7 @@
           "route": "#/"
         },
         "at": 0,
-        "author": "agent-1",
+        "author": "owner",
         "body": "slow",
         "id": 2,
         "state": "open",
@@ -7034,7 +7033,7 @@
             "route": "#/"
           },
           "at": 0,
-          "author": "agent-1",
+          "author": "owner",
           "body": "slow",
           "id": 2,
           "state": "open"

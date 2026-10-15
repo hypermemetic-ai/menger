@@ -1991,8 +1991,9 @@ the socket.
 ### The frame (ACCESS-13)
 
 `tickets` is declared on **the frame** every activation takes from here
-(`tickets-api/src/activation/mod.rs`; comments, members and session follow
-in ACCESS-19):
+(`tickets-api/src/activation/mod.rs`; `comments`, `members` and `session`
+since ACCESS-19, their logic beside each in `comments_activation/` and
+`members_activation/`, `session.providers` `public`):
 
 ```rust
 /// Plans as data — create, query, and watch the work DAG.
@@ -2276,7 +2277,7 @@ ticket's write does touches a comment.
 
 | method | yields |
 |---|---|
-| `comments.add { anchor, body, author? }` | `comment { id, state, author, at, anchor, body }` — the comment as kept: the next id, `open`, the time (unix seconds), `owner` unless `author` is given. An empty body, a blank author, a malformed anchor (a `route`, `path` or `label` left out or blank, a route not beginning `#/`, a `ticket` that is none, a field past its bound) is one in-band `error` naming it, and nothing is kept |
+| `comments.add { anchor, body }` | `comment { id, state, author, at, anchor, body }` — the comment as kept: the next id, `open`, the time (unix seconds), signed by the caller (ACCESS-19: its name, its principal when it has none, `owner` with login off — no call names its author). A comment on the app (no ticket) is seen, listed, watched and resolved only by its author and the admins of `*`. An empty body, a malformed anchor (a `route`, `path` or `label` left out or blank, a route not beginning `#/`, a `ticket` that is none, a field past its bound) is one in-band `error` naming it, and nothing is kept |
 | `comments.list { ticket?, under?, route?, path?, state?, author?, text?, intent?, after?, limit? }` | one `comment` per match, newest first, then one `page { next }` — `next` the id to pass as `after`, `null` when nothing more matches. Every filter given holds: `ticket`; `intent` `comment` / `changes` (APP-23: a change request — a comment carries `intent: changes`, a plain one carries no `intent`); `under` — a ticket or a shortcode in the comment's ticket's lineage (itself, its ancestors, its shortcode, the shortcodes hosting it: the filter language's `under`, as the tree stands); `route` exactly; `path` a prefix; `state` `open` / `resolved`; `author` exactly; `text` in the body, the label or the excerpt (any ASCII case). Blank is none. A page is 500 unless `limit` says, never more than 1,000 (ACCESS-29). An unknown state, or an `after` naming no comment, is one in-band `error` |
 | `comments.resolve { id }` · `comments.reopen { id }` | `comment` — the state flipped; already there, the comment as it is (nothing written or broadcast); an id naming no comment is an in-band `error` |
 | `comments.watch {}` | open-ended stream of `added { comment }`, `resolved { comment }`, `reopened { comment }`; `lagged { missed }` as `tickets.watch` |
@@ -3083,12 +3084,15 @@ not `https://` off loopback, stops startup.
 
 | method | yields |
 |---|---|
-| `session.whoami {}` | `identity { principal, name, roles, tenant, provider }`, or `anonymous` (login off; under login, a signed-out session — AUTH-7: an anonymous connection asks `auth.*`) |
+| `session.whoami {}` | `identity { principal, name, roles, tenant, provider }`, or `anonymous` (login off). Under login a signed-out or expired session is refused `unauthenticated` (ACCESS-19), as an anonymous connection is (AUTH-7: it asks `auth.*`) |
 | `session.providers {}` | one `provider { name, kind, issuer, audience }` per `--auth-provider` (`kind` `oidc` or `nostr`), none when login is off: what a sign-in needs, nothing secret |
 
-`comments.add` by a signed-in connection is authored by its identity's
-name, whatever `author` says; anonymous, it keeps `author` as before. The
-schemas of `tickets` and `comments` are unchanged.
+`comments.add` is signed by its caller (ACCESS-19): authored by its
+identity's name (its principal when it has none), `owner` with login off;
+`add` has no `author` parameter. `session.whoami`, `login` and `logout`
+verify their caller as every method does — a signed-out or expired sign-in
+is refused `unauthenticated` — and `session.providers` is `public`: an
+anonymous connection's view holds it beside `auth.*`.
 
 ```sh
 # a dev server admitting plexus-idp, an Auth0 tenant and nostr keys
@@ -3268,7 +3272,7 @@ a reach"). `groups`, `extents`, `waves`, `health` and `watch` hear only
 what is in reach. A write needs the role on every ticket it touches — AUTH-7:
 refused by the gate, typed (`forbidden { grant: tickets.amend, scope: OUGHT,
 roles, held_on }`). A comment is signed with the
-caller's principal (`principal` beside `author`), whatever `author` says.
+caller's principal (`principal` beside `author`); no call names its author.
 Someone signed in with no grant reaches nothing and waits in
 `members.requests` for an admin. With login off, nothing here applies.
 
@@ -3278,7 +3282,7 @@ Someone signed in with no grant reaches nothing and waits in
 | `members.list { scope? }` | the grants on the scopes the caller administers |
 | `members.grant { principal, scope, role }` | the grant as kept; needs admin on the scope |
 | `members.revoke { principal, scope }` | `revoked { principal, scope, existed }` |
-| `members.requests {}` | `waiting { principal, name, provider, since }` per person without a grant |
+| `members.requests {}` | `waiting { principal, name, provider, since }` per person without a grant — an admin of `*` only (ACCESS-19: the list is every sign-in) |
 
 The first admin is the operator's: `--admin <principal>` (repeatable,
 `MENGER_ADMINS`) holds admin on `*`. Grants live in the `members` table,

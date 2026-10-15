@@ -446,6 +446,14 @@ impl Store {
         comments::page(&cache, q, after, limit, &|c: &Comment| sees.comment(c))
     }
 
+    /// ACCESS-19: whether `who` sees the comment `c` — a comments watch's
+    /// question at each change, as [`Store::comments`] asks it of a page.
+    pub fn sees_comment(&self, who: &(impl Reader + ?Sized), c: &Comment) -> bool {
+        let Ok(seen) = Seen::of(who) else { return false };
+        let cache = self.tickets.read().expect("store lock poisoned");
+        seen.sees(&cache).comment(c)
+    }
+
     /// COMMENT-2: one comment as the cache holds it — when `who` sees it;
     /// else [`StoreError::CommentNotFound`], the newest comment it sees
     /// beside it, as for an id that names none (ACCESS-3 #7).

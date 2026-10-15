@@ -1,4 +1,4 @@
-import type { Kind } from '../notes/types';
+import type { Kind, TicketRef } from '../notes/types';
 import type { WatchEnd } from '../themes/types';
 /** MNG-16: what an `amend` moved — its title, its body. */
 export type AmendedField = "title" | "body";
@@ -42,6 +42,10 @@ export interface Answer {
 viewer's click, which the host says on its `answer`; `api`, everything
 else (synapse, an agent). The only "who" until CONTEXT adds identity. */
 export type AnswerSource = never;
+/** ACCESS-48: a ticket or a shortcode as a call named it, echoed back —
+`not_found`'s and `ambiguous`'s `id`: what was asked, by any name
+[`TicketRef`] or [`ShortcodeRef`] takes (the rule [`Under`] reads). */
+export type Asked = string;
 /** COMP-8: one declared attribute — `<attr name="board" type="shortcode"
 required>The shortcode to count.</attr>`. `name` is lowercased (HTML
 folds attribute names); `kind` is the `type` (`string` when omitted);
@@ -103,7 +107,8 @@ export interface Comment {
     anchor: Anchor;
     /** When it was added, unix seconds. */
     at: number;
-    /** Who left it (`owner` unless `add` named someone). */
+    /** Who left it: its name (ACCESS-19: signed by the caller — its
+  principal when it has no name; `owner` with login off). */
     author: string;
     /** What it says (markdown, as written). */
     body: string;
@@ -256,8 +261,10 @@ export interface Group {
     /** The shortcode's letters, uppercase. ORG-3: what the row shows; two
   namesakes are told apart by `shortcode` and `address`. */
     epic: Code;
-    host?: string | null;
-    root?: string | null;
+    /** The ticket the shortcode is hosted under, if any. */
+    host?: TicketId | null;
+    /** ACCESS-48: the root's key. */
+    root?: TicketId | null;
     /** AGS-23: what the root's own row shows. */
     rootRow?: RootRow | null;
     /** ORG-3: the shortcode's identity — what a row of the nav is keyed by. */
@@ -493,7 +500,7 @@ export interface Ticket {
   and what a link may name it by. */
     address?: string;
     /** Ticket ids that must complete before this one starts. */
-    blockedBy: string[];
+    blockedBy: TicketName[];
     /** Markdown body (Problem / Required behavior / Acceptance criteria …). */
     body: string;
     /** SCALE-4: how many tickets name this one as their `parent` — derived
@@ -508,7 +515,7 @@ export interface Ticket {
   optionally `repository@` before it. `[]` when none. Recorded, not
   verified: the server has no repository. At most 256 (SCALE-4's
   lesson — a list on a row is bounded). */
-    commits: string[];
+    commits: CommitRef[];
     createdUnix: number;
     /** The shortcode's letters, upper case (e.g. `MNG`). ORG-3: what a row
   shows — two shortcodes of one code are told apart by `shortcode`
@@ -531,7 +538,7 @@ export interface Ticket {
   each once, at most 16; `[]` when none. Moved by `tickets.label`
   alone, and asked by the filter cell `label <name>`. `default`: a
   server from before MENGER-12 sends none. */
-    labels?: string[];
+    labels?: Label[];
     /** ACT-6: the ids this ticket had before a `reshortcode` moved it,
   sorted — each still names it (`get THEME-9` answers LOOK-3). Filled
   by `get` alone; omitted on the wire when there is none, and never on
@@ -571,7 +578,7 @@ export interface Ticket {
     status: Status;
     title: string;
     /** Ticket ids that can start once this one completes. */
-    unlocks: string[];
+    unlocks: TicketName[];
     updatedUnix: number;
 }
 /** ORG-3: a ticket's key — the immutable, opaque identity a ticket keeps
@@ -580,6 +587,15 @@ for good (ORG-6 finding 1): today's id text for today's tickets,
 names it by; an address resolves *to* one. Its JSON is the id string, as
 it always was. */
 export type TicketId = string;
+/** ACCESS-48: a ticket as a `blocked_by` / `unlocks` list records it —
+its key ([`TicketId`]) when it is a ticket, or, for a forward
+reference (a blocker not born yet) and a dangling one (a blocker
+deleted, or never born), the name as the write recorded it: the key
+it will take (`MNG-9`), or the address as written folded
+(`MENGER/THEME-12`), which a birth of that name settles into its key
+(`unlocks_changed`). Minted by the store alone
+(`Store::name_ticket`); the JSON is the text, as it always was. */
+export type TicketName = string;
 /** MNG-9: a ticket row without its body — every field of [`Ticket`]
 except `body`.
 
@@ -594,11 +610,11 @@ the same keys in every row. */
 export interface TicketSummary {
     /** ORG-3: as on [`Ticket`]. */
     address?: string;
-    blockedBy: string[];
+    blockedBy: TicketName[];
     childCount: number;
     /** SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
   the ticket page all have it without a `get`. */
-    commits: string[];
+    commits: CommitRef[];
     createdUnix: number;
     epic: Code;
     /** ACCESS-10: as on [`Ticket`]. */
@@ -609,7 +625,7 @@ export interface TicketSummary {
     kind: Kind;
     /** MENGER-12: as on [`Ticket`] — on the row, so the board, the nav and
   Home's "Needs you" draw a ticket's label chips without a `get`. */
-    labels?: string[];
+    labels?: Label[];
     parent?: TicketId | null;
     /** ACCESS-10: as on [`Ticket`] — omitted unless the reader may not see
   the parent. */
@@ -629,7 +645,7 @@ export interface TicketSummary {
     shortcode?: ShortcodeId;
     status: Status;
     title: string;
-    unlocks: string[];
+    unlocks: TicketName[];
     updatedUnix: number;
 }
 /** Heartbeat. */
@@ -714,7 +730,7 @@ entry was already linked, which `watch` never carries. The whole
 ticket rides along, as with every write after birth. */
 export interface TicketsEventCommitsLinked {
     type: 'commits_linked';
-    added: string[];
+    added: CommitRef[];
     ticket: Ticket;
 }
 /** SDLC-9: commits were unlinked from a ticket (yielded by
@@ -723,7 +739,7 @@ something). `removed` is what came off, in the order given; empty
 when none of it was linked, which `watch` never carries. */
 export interface TicketsEventCommitsUnlinked {
     type: 'commits_unlinked';
-    removed: string[];
+    removed: CommitRef[];
     ticket: Ticket;
 }
 /** MENGER-12: a ticket's labels moved (yielded by `label`, and by
@@ -734,8 +750,8 @@ never carries. The whole ticket rides along, its `labels` as the
 write left them. */
 export interface TicketsEventLabelsChanged {
     type: 'labels_changed';
-    added: string[];
-    removed: string[];
+    added: Label[];
+    removed: Label[];
     ticket: Ticket;
 }
 /** An existing ticket's `unlocks` gained `added`: a newly created
@@ -743,7 +759,7 @@ ticket named it in `blocked_by` (yielded by `watch`). Carries the
 full updated ticket so a watch-only client stays coherent. */
 export interface TicketsEventUnlocksChanged {
     type: 'unlocks_changed';
-    added: string;
+    added: TicketName;
     ticket: Ticket;
 }
 /** MENGER-30: an existing ticket's `unlocks` lost `removed`, which no
@@ -751,7 +767,7 @@ longer waits on it (`update { unblock }`; yielded by `watch`). The
 full updated ticket, as `unlocks_changed`. */
 export interface TicketsEventUnlocksRemoved {
     type: 'unlocks_removed';
-    removed: string;
+    removed: TicketName;
     ticket: Ticket;
 }
 /** MENGER-30: a ticket's `blocked_by` moved after birth (`update`;
@@ -760,8 +776,8 @@ ticket rides along; each blocker's side follows, `unlocks_changed` or
 `unlocks_removed`, then the placements it moved. */
 export interface TicketsEventBlockersChanged {
     type: 'blockers_changed';
-    added: string[];
-    removed: string[];
+    added: TicketName[];
+    removed: TicketName[];
     ticket: Ticket;
 }
 /** MENGER-30: a ticket's severity moved (`update`; yielded by `watch`);
@@ -805,7 +821,7 @@ blocker's `unlocks_removed`; after it the groups and placements that
 moved, and a filter's `left`. */
 export interface TicketsEventDeleted {
     type: 'deleted';
-    ids: string[];
+    ids: TicketId[];
     tombstones: Tombstone[];
 }
 /** ACT-5: `undelete`'s answer, and its write's event on `watch` — the
@@ -813,7 +829,7 @@ tickets brought back (whole), in the store's order, with their
 children and blocks put back where nothing has moved them since. */
 export interface TicketsEventUndeleted {
     type: 'undeleted';
-    ids: string[];
+    ids: TicketId[];
     tickets: Ticket[];
 }
 /** ACT-6: `reshortcode`'s answer, and its write's event on `watch` —
@@ -988,7 +1004,7 @@ export interface TicketsEventPlaced {
     type: 'placed';
     placement: Placement;
     summary: TicketSummary;
-    waitingOn: string[];
+    waitingOn: TicketName[];
 }
 /** WAVE-4: the tally that closes a `waves` answer, exactly once, after
 every `placed`: `waves[i]` is how many of the placed tickets sit in
@@ -1006,7 +1022,7 @@ cycle): its ids in the store's order. Every ticket on it — and the
 target behind it — is `missing_blocker`: no status change ends it. */
 export interface TicketsEventWaveCycle {
     type: 'wave_cycle';
-    ids: string[];
+    ids: TicketId[];
 }
 /** WAVE-6: the kept placements one write moved (yielded by `watch`) —
 one event per write that moved any, after that write's other events,
@@ -1077,7 +1093,7 @@ export interface TicketsEventBlocker {
 reference (yielded per-entry by `blockers`). */
 export interface TicketsEventDanglingBlocker {
     type: 'dangling_blocker';
-    id: string;
+    id: TicketName;
 }
 /** FILTER-15: whether a filter admits one ticket (yielded by `member`,
 one per id asked, in the order asked): `id` as it was asked,
@@ -1086,13 +1102,13 @@ for an id that names no ticket. One lookup in the filter's admitted
 cells, never a test of the ticket. */
 export interface TicketsEventMember {
     type: 'member';
-    id: string;
+    id: TicketRef;
     matched: boolean;
 }
 /** Lookup miss. */
 export interface TicketsEventNotFound {
     type: 'not_found';
-    id: string;
+    id: Asked;
 }
 /** ORG-3: `id` (an address as it was asked — a ticket or a shortcode)
 names more than one thing in the reader's reach: `candidates` are
@@ -1101,7 +1117,7 @@ written; name one of them in full, or by a short form only it has. */
 export interface TicketsEventAmbiguous {
     type: 'ambiguous';
     candidates: string[];
-    id: string;
+    id: Asked;
 }
 /** In-band error (bad enum value, invalid epic, blocked_by cycle, …).
 A *data* event: the call succeeded and the activation said no,
@@ -1357,14 +1373,14 @@ delete dropped (`unblock`) — what `undelete` puts back. */
 export interface Tombstone {
     atUnix: number;
     by: string;
-    id: string;
+    id: TicketId;
     message?: string | null;
     name?: string | null;
-    parent?: string | null;
-    reparented?: string[];
+    parent?: TicketId | null;
+    reparented?: TicketId[];
     restorableUntilUnix?: number | null;
     title: string;
-    unblocked?: string[];
+    unblocked?: TicketId[];
 }
 /** MENGER-13: one **transition** — a change of one ticket's status or kind,
 as the store keeps it, append-only: `id` (the log's own, from 1, in the
