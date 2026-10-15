@@ -34,7 +34,10 @@ fn surface(schema: PluginSchema) -> Surface {
                 .and_then(|p| p.as_object())
                 .and_then(|o| o.get("properties"))
                 .and_then(|p| p.as_object())
-                .map(|props| props.keys().cloned().collect())
+                // ACCESS-13: what the server injects (`auth`, the frame's
+                // `user`) is no parameter a client sends — the IR marks it
+                // with a `pdSource`, which the manifest drops too.
+                .map(|props| props.iter().filter(|(_, p)| p.get("x-plexus-source").is_none()).map(|(k, _)| k.clone()).collect())
                 .unwrap_or_default();
             params.sort();
             (format!("{}.{}", schema.namespace, m.name), params)

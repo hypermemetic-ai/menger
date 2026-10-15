@@ -97,6 +97,23 @@ impl Following {
         Ok(Self { access: access.clone(), store: Arc::clone(store), who: who.cloned(), reach: reach.clone(), user, key, grants, ended, expires, woke: false })
     }
 
+    /// ACCESS-13: the caller of a watch on the frame — verified by the
+    /// dispatch ([`Access::verify`]) before the method ran, so the wakes are
+    /// subscribed after it: a grants move in between is taken as a wake, and
+    /// the first [`Following::again`] verifies once more (a sign-out in
+    /// between, its liveness says).
+    pub fn of(access: &Access, store: &Arc<Store>, user: VerifiedUser) -> Result<Self, String> {
+        let (mut grants, mut ended) = (store.grants_moved(), access.ended.subscribe());
+        grants.mark_unchanged();
+        ended.mark_unchanged();
+        let key = user.reach_key()?;
+        let who = user.context().cloned();
+        let reach = user.gate_reach().cloned().unwrap_or_else(GateReach::everywhere);
+        let expires = who.as_ref().and_then(|c| c.metadata.get("expires_at")).and_then(|v| v.as_i64());
+        let woke = access.login() && store.grants_generation() != user.reach().generation();
+        Ok(Self { access: access.clone(), store: Arc::clone(store), who, reach, user, key, grants, ended, expires, woke })
+    }
+
     /// The caller, as it was last verified.
     pub fn user(&self) -> &VerifiedUser {
         &self.user
@@ -150,7 +167,7 @@ impl Following {
         // AUTH-7: the gate's live reach — held nowhere any more, the watch
         // ends.
         let reach = self.reach.current().ok_or_else(|| Closed::revoked("you hold this nowhere any more"))?;
-        let user = self.access.verify(ctx).map_err(Closed::of)?.for_call(reach.grant().cloned());
+        let user = self.access.verify_now(ctx).map_err(Closed::of)?.for_call(reach.grant().cloned());
         let key = user.reach_key().map_err(Closed::revoked)?;
         // A reach no read can narrow to reads nothing: the watch ends.
         user.read_filter().map_err(Closed::revoked)?;

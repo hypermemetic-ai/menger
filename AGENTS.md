@@ -697,6 +697,16 @@ is always loud is a queue the owner learns to ignore. menger-skills
   with an `#[plexus_macros::activation]`, and `store/mod.rs`, to a line
   budget: over it, the test says what to move out and where. Raise a
   budget only as a deliberate edit, never to make room for logic.
+- **The frame** (ACCESS-13; README "The frame"): `tickets` is declared
+  `auth = "required", request = MengerRequest, client, typed_params`;
+  every method takes `#[from_auth(self.access.verify)] user: VerifiedUser`
+  (never `auth: Option<&AuthContext>` / `reach: Reach`), its description
+  and each parameter's are `///` docs (no `description =`, no
+  `params(…)`), and its body is at most 15 lines — a permit or a scoped
+  read, then `answered!` or a `*_stream` beside it (`tests/sizes.rs`
+  holds both). A new activation, and comments / members / session in
+  ACCESS-19, take the same shape. With login off, menger's transports
+  hand a call with no identity the anonymous one (`menger::calls::caller`).
 - A ticket's outputs are tickets (owner, 2026-09-06): a report, spike
   result, checkpoint, or evaluation memo is filed as a CHILD ticket of
   the ticket that generated it (`parent:` in frontmatter; typed once

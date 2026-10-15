@@ -42,7 +42,7 @@ async fn start_server_at(db_path: std::path::PathBuf, keep: Option<tempfile::Tem
     let port = free_port().await;
     let hub = build_rpc(&db_path).await.expect("open database");
     let conv = |arc: Arc<DynamicHub>| {
-        DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"))
+        menger::calls::rpc_module(arc, Default::default()).map_err(|e| anyhow::anyhow!("{e}"))
     };
     tokio::spawn(async move {
         let _keep = keep;
@@ -219,6 +219,49 @@ async fn health_create_list_watch_over_the_wire() {
     let ev = content(sub.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "ticket");
     assert_eq!(ev["ticket"]["id"], "WIRE-1");
+}
+
+/// ACCESS-13: the frame, over the wire — every description in the schema
+/// comes from a `///` doc (the method's and each parameter's), a bad
+/// parameter is `invalid_params` naming the values it takes, and a call that
+/// reaches the dispatch with no identity at all is refused there, before
+/// the body runs.
+#[tokio::test]
+async fn the_frame_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+
+    let schema = content(call(&client, "tickets.schema", json!({})).await.next().await.unwrap().unwrap());
+    let methods = schema["methods"].as_array().expect("methods");
+    let set_status = methods.iter().find(|m| m["name"] == "set_status").expect("set_status");
+    assert!(set_status["description"].as_str().unwrap().starts_with("Set a ticket's status"), "{set_status}");
+    assert_eq!(set_status["params"]["properties"]["id"]["description"], "Ticket id, e.g. MNG-2.", "{set_status}");
+    for m in methods {
+        let d = m["description"].as_str().unwrap_or_default();
+        assert!(!d.trim().is_empty(), "{} has no description", m["name"]);
+        for (name, p) in m["params"]["properties"].as_object().into_iter().flatten() {
+            if p.get("x-plexus-source").is_none() {
+                assert!(p.get("description").is_some_and(|d| !d.as_str().unwrap_or_default().is_empty()), "{}.{name}: {p}", m["name"]);
+            }
+        }
+    }
+
+    let message = invalid(&client, "tickets.set_status", json!({"id": "X-1", "status": "wibble"})).await;
+    assert!(message.contains("status: unknown status 'wibble' (expected Pending, Ready, Coding"), "{message}");
+    let message = invalid(&client, "tickets.create", json!({"epic": "X", "title": "t", "kind": "bug"})).await;
+    assert!(message.contains("kind: unknown kind 'bug' (expected scope"), "{message}");
+
+    // The dispatch itself, with no identity: refused before the body runs.
+    let dir = tempfile::tempdir().unwrap();
+    let hub = build_rpc(&dir.path().join("t.db")).await.expect("open database");
+    let refused = match hub.route("tickets.health", json!({}), None).await {
+        Err(e) => e.to_string(),
+        Ok(mut s) => {
+            use futures::StreamExt;
+            format!("{:?}", s.next().await.expect("an item"))
+        }
+    };
+    assert!(refused.contains("Authentication required"), "{refused}");
 }
 
 #[tokio::test]

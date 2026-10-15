@@ -87,8 +87,8 @@ pub(super) struct Moved {
 impl Sight {
     /// The watch's caller, verified now; `Err` (in words) when it is
     /// refused or sees nothing.
-    pub(super) fn open(store: &Arc<Store>, access: &Access, who: Option<&AuthContext>, reach: &Reach) -> Result<Self, String> {
-        let following = Following::open(access, store, who, reach)?;
+    pub(super) fn open(store: &Arc<Store>, access: &Access, user: VerifiedUser) -> Result<Self, String> {
+        let following = Following::of(access, store, user)?;
         let sight = store.watch_sight(following.user()).map_err(|e| e.to_string())?;
         let shown = Self::shown(store, &following, &sight);
         Ok(Self { following, sight, shown })

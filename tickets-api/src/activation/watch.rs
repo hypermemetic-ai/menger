@@ -33,11 +33,11 @@ enum Woke {
 
 /// The stream. The caller is verified, and the channel subscribed, at the
 /// call — before the stream is first polled.
-pub(super) fn watch_stream(store: Arc<Store>, access: Access, who: Option<AuthContext>, reach: Reach, ask: WatchAsk) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser, ask: WatchAsk) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     let WatchAsk { epic, filter: asked, membership, tz } = ask;
     let (epic, ambiguous) = watched_shortcode(&store, epic.as_deref());
     // IDENTITY-19, IDENTITY-21: who is watching, and through what reach.
-    let opened = Sight::open(&store, &access, who.as_ref(), &reach).and_then(|sight| {
+    let opened = Sight::open(&store, &access, user).and_then(|sight| {
         if let Some(why) = &ambiguous {
             return Err(why.clone());
         }

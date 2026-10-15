@@ -106,6 +106,37 @@ cat >"$gen/synapse.config.json" <<EOF
   }
 }
 EOF
+# ACCESS-13: hub-codegen through a filter — a parameter the server injects
+# (an IR param with a pdSource: the frame's `auth` and resolved `user`) is
+# none a client sends, and left in it would take a place in the generated
+# methods' positional arguments (which are in name order), moving every
+# argument after it. The IR is the last argument hub-codegen is given.
+cat >"$gen/hub-codegen-sent" <<'WRAP'
+#!/bin/sh
+set -eu
+real="$(command -v hub-codegen)"
+last=""
+for a in "$@"; do last="$a"; done
+if [ -f "$last" ] && [ "${last%.json}" != "$last" ]; then
+  sent="${last%.json}.sent.json"
+  node -e '
+    const fs = require("fs");
+    const ir = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    for (const m of Object.values(ir.irMethods ?? {})) m.mdParams = (m.mdParams ?? []).filter((p) => !p.pdSource);
+    fs.writeFileSync(process.argv[2], JSON.stringify(ir));
+  ' "$last" "$sent"
+  n=$#
+  i=0
+  for a in "$@"; do
+    i=$((i + 1))
+    [ "$i" -lt "$n" ] && set -- "$@" "$a"
+  done
+  shift "$n"
+  exec "$real" "$@" "$sent"
+fi
+exec "$real" "$@"
+WRAP
+chmod +x "$gen/hub-codegen-sent"
 # The SDK's own types, checked against the generated ones: menger.d.ts
 # resolves, and a component script written against it typechecks.
 cat >"$gen/check.ts" <<'EOF'
@@ -158,7 +189,9 @@ const ir = JSON.parse(readFileSync('generated/ir.json', 'utf8'));
 const activations = {};
 for (const m of Object.values(ir.irMethods)) {
   if (!m.mdNamespace) continue;
-  (activations[m.mdNamespace] ??= {})[m.mdName] = m.mdParams.map((p) => p.pdName).sort();
+  // ACCESS-13: a parameter the server injects (pdSource: auth, the frame's
+  // user) is none a client sends.
+  (activations[m.mdNamespace] ??= {})[m.mdName] = m.mdParams.filter((p) => !p.pdSource).map((p) => p.pdName).sort();
 }
 const sorted = (o) => Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]]));
 const manifest = {
@@ -195,7 +228,7 @@ docker run --rm --network host \
   --user "$(id -u):$(id -g)" \
   -v "$gen:/work" -w /work \
   "$image" sh -euc '
-    synapse-cc build >&2
+    synapse-cc build --hub-codegen /work/hub-codegen-sent >&2
     tsc=/work/generated/node_modules/.bin/tsc
     (cd generated && "$tsc" -p tsconfig.json --noEmit false --declaration --emitDeclarationOnly --outDir ../decl)
     "$tsc" -p tsconfig.check.json

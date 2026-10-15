@@ -33,11 +33,10 @@ use super::*;
 /// `waves { epics, kinds }` (WAVE-4): `epics` empty is one `Error`.
 /// ACCESS-10: a shortcode the caller sees nothing of contributes nothing,
 /// as one with no tickets (it is not named as one out of reach).
-pub(super) fn waves_answer(store: &Store, admitted: Result<VerifiedUser, String>, epics: Vec<String>, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
-    let caller = match admitted.and_then(|c| c.read_filter().map(|_| c)) {
-        Ok(caller) => caller,
-        Err(message) => return vec![TicketsEvent::Error { message }],
-    };
+pub(super) fn waves_answer(store: &Store, caller: VerifiedUser, epics: Vec<String>, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
+    if let Err(message) = caller.read_filter() {
+        return vec![TicketsEvent::Error { message }];
+    }
     if epics.is_empty() {
         return vec![TicketsEvent::Error { message: "waves: epics is empty — name at least one shortcode, e.g. [\"MNG\"]".into() }];
     }
@@ -46,11 +45,7 @@ pub(super) fn waves_answer(store: &Store, admitted: Result<VerifiedUser, String>
 }
 
 /// `waves_under { id, kinds? }` (MENGER-31).
-pub(super) fn waves_under_answer(store: &Store, admitted: Result<VerifiedUser, String>, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
-    let caller = match admitted {
-        Ok(caller) => caller,
-        Err(message) => return vec![TicketsEvent::Error { message }],
-    };
+pub(super) fn waves_under_answer(store: &Store, caller: VerifiedUser, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
     let kinds = kinds.unwrap_or_else(|| crate::store::waves::DEFAULT_KINDS.to_vec());
     match store.waves_under(&caller, &id, &kinds) {
         Ok(answer) => wave_events(answer, Vec::new()),
@@ -60,11 +55,7 @@ pub(super) fn waves_under_answer(store: &Store, admitted: Result<VerifiedUser, S
 }
 
 /// `waves_to { id, kinds? }` (MENGER-31).
-pub(super) fn waves_to_answer(store: &Store, admitted: Result<VerifiedUser, String>, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
-    let caller = match admitted {
-        Ok(caller) => caller,
-        Err(message) => return vec![TicketsEvent::Error { message }],
-    };
+pub(super) fn waves_to_answer(store: &Store, caller: VerifiedUser, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
     let kinds = kinds.unwrap_or_else(|| vec![Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike]);
     match store.waves_to(&caller, &id, &kinds) {
         Ok(answer) => wave_events(answer.waves, answer.cycles),

@@ -17,7 +17,10 @@ use std::path::{Path, PathBuf};
 /// an activation that is not named here takes [`NEW_ACTIVATION`].
 const BUDGETS: &[(&str, usize)] = &[
     // MENGER-29: 4,074 lines before events, Sight and the tests moved out.
-    ("tickets-api/src/activation.rs", 2300),
+    // ACCESS-13: on the frame, as activation/mod.rs — 1,642 lines, nearly
+    // all of them the methods' and parameters' docs (the schema's
+    // descriptions); every body a few lines. ACCESS-14..18 take methods out.
+    ("tickets-api/src/activation/mod.rs", 1750),
     ("tickets-api/src/comments_activation.rs", 450),
     ("tickets-api/src/notes_activation.rs", 330),
     ("tickets-api/src/members_activation.rs", 280),
@@ -118,9 +121,62 @@ fn every_activation_and_the_store_stay_within_their_budgets() {
 }
 
 #[test]
-fn the_tickets_activation_is_under_2300_lines() {
-    let (_, lines, _) = held().into_iter().find(|(p, ..)| p == "tickets-api/src/activation.rs").expect("the tickets activation");
-    assert!(lines < 2300, "tickets-api/src/activation.rs is {lines} lines: {}", advice("activation.rs"));
+fn the_tickets_activation_is_under_1750_lines() {
+    let (_, lines, _) = held().into_iter().find(|(p, ..)| p == "tickets-api/src/activation/mod.rs").expect("the tickets activation");
+    assert!(lines < 1750, "tickets-api/src/activation/mod.rs is {lines} lines: {}", advice("activation/mod.rs"));
+}
+
+/// ACCESS-13: the most lines a method's body takes on the frame — a permit
+/// or a scoped read, then the one helper (`answered!`, a `*_stream`).
+const BODY_MAX: usize = 15;
+
+/// ACCESS-13: each method of an activation file whose body is over
+/// [`BODY_MAX`] lines, and each `description =` / `params(` left in a
+/// method's attribute (descriptions are `///` docs on the frame).
+fn off_the_frame(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let mut in_attr = false;
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("#[plexus_macros::method") {
+            in_attr = true;
+        }
+        if in_attr && (t.starts_with("description =") || t.contains("(description =") || t.contains(", description =") || t.starts_with("params(") || t.contains(", params(")) {
+            out.push(format!("line {}: `{}` — a description is the method's (or parameter's) `///` doc", i + 1, t));
+        }
+        if in_attr && t.starts_with("pub async fn ") {
+            in_attr = false;
+        }
+        // A body: from the signature's `{` to the method's closing `    }`.
+        if line.starts_with("    ") && !line.starts_with("     ") && t.starts_with(")") && t.ends_with('{') || (t.starts_with("pub async fn ") && t.ends_with('{')) {
+            let end = lines[i + 1..].iter().position(|l| *l == "    }").map(|p| i + 1 + p).unwrap_or(lines.len());
+            let body = end - i - 1;
+            if body > BODY_MAX {
+                let name = lines[..=i].iter().rev().find_map(|l| l.trim_start().strip_prefix("pub async fn ")).unwrap_or("?");
+                out.push(format!("line {}: `{}` has a body of {body} lines, over {BODY_MAX}", i + 1, name.split('(').next().unwrap_or(name)));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn the_tickets_activation_is_declarations() {
+    let path = root().join("tickets-api/src/activation/mod.rs");
+    let found = off_the_frame(&std::fs::read_to_string(&path).unwrap());
+    assert!(found.is_empty(), "tickets-api/src/activation/mod.rs is off the frame (ACCESS-13): {}\n{}", advice("activation/mod.rs"), found.join("\n"));
+}
+
+#[test]
+fn off_the_frame_names_a_long_body_and_a_description() {
+    let long = format!("    #[plexus_macros::method(group = \"read\", description = \"x\")]\n    pub async fn get(&self) -> X {{\n{}    }}\n", "        a;\n".repeat(16));
+    let found = off_the_frame(&long);
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found[0].contains("description ="), "{found:?}");
+    assert!(found[1].contains("`get` has a body of 16 lines"), "{found:?}");
+    let short = "    #[plexus_macros::method(group = \"read\")]\n    pub async fn get(\n        &self,\n    ) -> X {\n        a\n    }\n";
+    assert!(off_the_frame(short).is_empty());
 }
 
 #[test]
