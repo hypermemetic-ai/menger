@@ -572,4 +572,7 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
 - Wire protocol notes (envelope, `menger.call` subscription) are in
   README.md — `tests/wire.rs` is the executable reference.
 - Delegation (owner, 2026-09-06): implementation subagents run on Opus 5
-  (`model: opus`); worktree isolation; one commit per ticket.
+  (`model: opus`); worktree isolation; one commit per ticket. A worktree
+  builds into the shared `CARGO_TARGET_DIR=~/.cache/cargo-target/menger`
+  and is removed in the same pass as its merge (MENGER-41, owner
+  2026-10-15) — the building skill says how.
