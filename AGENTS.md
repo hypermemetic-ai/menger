@@ -196,7 +196,7 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
 
   **Comments** (COMMENT-2) are the `comments` activation beside `tickets`:
   a reader's notes on the app and on ticket bodies, kept as records of
-  their own — `add { anchor, body, author? }`, `list` (newest first; `ticket`,
+  their own — `add { anchor, body }` (signed by the caller, ACCESS-19), `list` (newest first; `ticket`,
   `under`, `route`, `path` prefix, `state` open/resolved, `author`, `text`;
   `after` + `limit`), `resolve`, `reopen`, `watch`. The anchor goes as
   `--anchor.route … --anchor.path …`; `list`'s `path` goes in `-p` (synapse

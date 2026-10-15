@@ -801,7 +801,7 @@ async fn the_comments_through_the_generated_client() {
         ticket: Some(p("DEMAND-2")),
         version: None,
     };
-    let added = one(comments.add_all(anchor.clone(), p("show the parent's title too"), None).await.expect("add"))
+    let added = one(comments.add_all(anchor.clone(), p("show the parent's title too")).await.expect("add"))
         .into_comment()
         .expect("a comment");
     assert_eq!(
@@ -817,7 +817,7 @@ async fn the_comments_through_the_generated_client() {
             intent: menger_tickets_api::CommentIntent::Comment,
         }
     );
-    let second = one(comments.add_all(Anchor { ticket: None, ..anchor.clone() }, p("on no ticket"), Some(p("agent"))).await.expect("add"))
+    let second = one(comments.add_all(Anchor { ticket: None, ..anchor.clone() }, p("on no ticket")).await.expect("add"))
         .into_comment()
         .expect("a comment");
 

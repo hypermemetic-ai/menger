@@ -1,4 +1,4 @@
-import type { Grant } from '../orgs/types';
+import type { Grant, Grantee, Scope } from '../orgs/types';
 /** A grant as it stands (`list`, `mine`, and `grant`'s answer). */
 export interface MembersEventGrant {
     type: 'grant';
@@ -8,8 +8,8 @@ export interface MembersEventGrant {
 export interface MembersEventRevoked {
     type: 'revoked';
     existed: boolean;
-    principal: string;
-    scope: string;
+    principal: Grantee;
+    scope: Scope;
 }
 /** `requests`: someone signed in who holds no grant yet. */
 export interface MembersEventWaiting {

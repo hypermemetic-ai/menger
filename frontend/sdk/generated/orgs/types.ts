@@ -5,15 +5,26 @@
 export interface Grant {
   /** When, unix seconds. */
   at: number;
-  /** The principal who granted it, or `--admin` for the operator's. */
-  grantedBy: string;
-  /** The Plexus principal: `idp:<uuid>`, `oidc:<provider>/<sub>`, `nostr:<hex>`. */
-  principal: string;
+  /** The principal who granted it, or `--admin` for the operator's
+(`dev-login`, `auth.grant`: the server's own writers). */
+  grantedBy: GrantedBy;
+  /** The Plexus principal: `idp:<uuid>`, `oidc:<provider>/<sub>`, `nostr:<hex>`
+— ACCESS-48: a [`Grantee`], so a team's grant (`team:<name>`,
+ACCESS-9) is one too. */
+  principal: Grantee;
   role: Role;
   /** ORG-4: `*`, an organization (`acme:`), or a shortcode in one
-(`acme:MENGER`, by its identity) — a [`Scope`]'s text. */
-  scope: string;
+(`acme:MENGER`, by its identity). ACCESS-48: a [`Scope`] — a grant
+from before ORG-4 is a stored row the store's open rewrites before
+it is ever one of these (`store::members::Row`). */
+  scope: Scope;
 }
+
+/** Who gave a grant: a Plexus principal, --admin (the operator), dev-login or auth.grant */
+export type GrantedBy = string;
+
+/** Who a grant is to: a Plexus principal, or team:<name> */
+export type Grantee = string;
 
 /** One organization, as a reader of it sees it. */
 export interface Org {
@@ -98,3 +109,6 @@ export type Principal = string;
 
 /** A role a grant gives (any case) */
 export type Role = "viewer" | "deployer" | "editor" | "admin";
+
+/** A grant's scope as kept: *, an organization (acme:), or a shortcode in one by its identity (acme:MENGER) */
+export type Scope = string;

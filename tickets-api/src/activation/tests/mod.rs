@@ -1434,7 +1434,7 @@ async fn comments_list_pages_by_default_and_never_past_the_most() {
         let next = evs.iter().find_map(|e| if let CommentsEvent::Page { next } = e { Some(*next) } else { None });
         (n, next.expect("a page"))
     };
-    let list = |limit| comments.list(None, plexus_core::plexus::Reach::everywhere(), None, None, None, None, None, None, None, None, None, limit);
+    let list = |limit| comments.list(anyone(), None, None, None, None, None, None, None, None, None, limit);
     let (n, next) = count(Box::pin(list(None).await).collect().await);
     assert_eq!((n, next.is_some()), (500, true));
     let (n, next) = count(Box::pin(list(Some(5_000)).await).collect().await);

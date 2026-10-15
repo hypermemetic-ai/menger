@@ -2972,10 +2972,12 @@ async fn comments_list_filters_and_pages_over_the_wire() {
         let ev = answer(&client, "tickets.create", json!({"epic": epic, "title": title, "kind": kind, "parent": parent})).await;
         assert_eq!(ev["type"], "created", "{ev}");
     }
-    let add = |anchor: Value, body: &'static str, author: Option<&'static str>| {
+    // ACCESS-19: a comment is signed by its caller, never named by the call
+    // — with login off, every one is `owner`'s.
+    let add = |anchor: Value, body: &'static str| {
         let client = &client;
         async move {
-            let ev = answer(client, "comments.add", json!({"anchor": anchor, "body": body, "author": author})).await;
+            let ev = answer(client, "comments.add", json!({"anchor": anchor, "body": body})).await;
             assert_eq!(ev["type"], "comment", "{ev}");
             ev["id"].as_u64().unwrap()
         }
@@ -2983,11 +2985,11 @@ async fn comments_list_filters_and_pages_over_the_wire() {
     let on = |ticket: Option<&str>, route: &str, path: &str, label: &str, excerpt: &str| {
         json!({"route": route, "path": path, "label": label, "excerpt": excerpt, "ticket": ticket})
     };
-    let c1 = add(on(Some("TOP-4"), "#/ticket/TOP-4", "main > h1", "Title", "under the execution"), "rename it", None).await;
-    let c2 = add(on(Some("SUB-2"), "#/ticket/SUB-2", "main > h1 > span", "Status pill", "Pending"), "should be Ready", Some("agent-1")).await;
-    let c3 = add(on(Some("APART-1"), "#/ticket/APART-1", "[data-tag=\"m-wave\"]", "Wave summary", "WAVE 2"), "numbers look off", None).await;
-    let c4 = add(on(Some("TOP-2"), "#/waves/TOP", "main > h1", "Title", "a TITLE"), "fine", Some("agent-1")).await;
-    let c5 = add(on(None, "#/", "nav > ul", "Nav", ""), "the nav is slow", None).await;
+    let c1 = add(on(Some("TOP-4"), "#/ticket/TOP-4", "main > h1", "Title", "under the execution"), "rename it").await;
+    let c2 = add(on(Some("SUB-2"), "#/ticket/SUB-2", "main > h1 > span", "Status pill", "Pending"), "should be Ready").await;
+    let c3 = add(on(Some("APART-1"), "#/ticket/APART-1", "[data-tag=\"m-wave\"]", "Wave summary", "WAVE 2"), "numbers look off").await;
+    let c4 = add(on(Some("TOP-2"), "#/waves/TOP", "main > h1", "Title", "a TITLE"), "fine").await;
+    let c5 = add(on(None, "#/", "nav > ul", "Nav", ""), "the nav is slow").await;
     assert_eq!(answer(&client, "comments.resolve", json!({"id": c2})).await["state"], "resolved");
 
     let ids = |params: Value| {
@@ -3005,8 +3007,8 @@ async fn comments_list_filters_and_pages_over_the_wire() {
     assert_eq!(ids(json!({"path": "main > h1 > "})).await, [c2]);
     assert_eq!(ids(json!({"state": "resolved"})).await, [c2]);
     assert_eq!(ids(json!({"state": "Open"})).await, [c5, c4, c3, c1]);
-    assert_eq!(ids(json!({"author": "agent-1"})).await, [c4, c2]);
-    assert_eq!(ids(json!({"author": "owner"})).await, [c5, c3, c1]);
+    assert_eq!(ids(json!({"author": "agent-1"})).await, Vec::<u64>::new(), "no call names its author");
+    assert_eq!(ids(json!({"author": "owner"})).await, [c5, c4, c3, c2, c1]);
     assert_eq!(ids(json!({"text": "TITLE"})).await, [c4, c1], "the label, the excerpt");
     assert_eq!(ids(json!({"text": "slow"})).await, [c5], "the body");
     assert_eq!(ids(json!({"text": "wave 2"})).await, [c3], "the excerpt");
@@ -3085,9 +3087,6 @@ async fn comment_refusals_are_in_band_and_keep_nothing_over_the_wire() {
         let evs = collect(call(&client, method, params.clone()).await).await;
         assert_eq!(evs, [json!({"type": "error", "message": says})], "{method} {params}");
     }
-    // ACCESS-8: a blank author is no `Author` — refused at dispatch.
-    let message = invalid(&client, "comments.add", json!({"anchor": chip("DEMAND-1"), "body": "x", "author": " "})).await;
-    assert!(message.contains("author: author is blank (leave it out for `owner`)"), "{message}");
     assert_eq!(comment_ids(&client, json!({})).await.0, Vec::<u64>::new(), "nothing kept");
     let kept = answer(&client, "comments.add", json!({"anchor": anchor_without("excerpt"), "body": "an excerpt may be left out"})).await;
     assert_eq!((kept["id"].as_u64(), kept["anchor"]["excerpt"].as_str()), (Some(1), Some("")));
@@ -3113,7 +3112,7 @@ async fn comments_watch_carries_added_resolved_reopened_over_the_wire() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let a = answer(&client, "comments.add", json!({"anchor": chip("DEMAND-2"), "body": "first"})).await;
-    let b = answer(&client, "comments.add", json!({"anchor": chip("DEMAND-1"), "body": "second", "author": "agent-1"})).await;
+    let b = answer(&client, "comments.add", json!({"anchor": chip("DEMAND-1"), "body": "second"})).await;
     let a_resolved = answer(&client, "comments.resolve", json!({"id": 1})).await;
     assert_eq!(answer(&client, "comments.resolve", json!({"id": 1})).await, a_resolved, "resolved already: the same answer");
     let a_reopened = answer(&client, "comments.reopen", json!({"id": 1})).await;

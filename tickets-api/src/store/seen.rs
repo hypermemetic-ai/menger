@@ -62,11 +62,41 @@ pub trait Reader: sealed::Sealed + Sync {
     /// system, login off, a grant on `*`); a refusal when it reaches
     /// nothing (held nowhere, or a reach no read can narrow to).
     fn reach(&self) -> Result<Option<Filter>, StoreError>;
+
+    /// ACCESS-19: which comments on the app (a comment naming no ticket)
+    /// it sees — every one, or only those its principal left.
+    fn app_comments(&self) -> AppSight;
+}
+
+/// ACCESS-19 (ACCESS-1's first question, as proposed): a comment on the app
+/// names no ticket, so no reach decides it — it is its author's and the
+/// admins' of `*`, and nobody else's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppSight {
+    /// The system, login off, an admin of `*`: every one.
+    All,
+    /// A signed-in principal: the ones it left.
+    By(String),
+}
+
+impl AppSight {
+    /// Whether it sees the app comment left by `principal` (`None`: left
+    /// with login off, by no one in particular).
+    fn admits(&self, principal: Option<&str>) -> bool {
+        match self {
+            AppSight::All => true,
+            AppSight::By(p) => principal == Some(p.as_str()),
+        }
+    }
 }
 
 impl Reader for System {
     fn reach(&self) -> Result<Option<Filter>, StoreError> {
         Ok(None)
+    }
+
+    fn app_comments(&self) -> AppSight {
+        AppSight::All
     }
 }
 
@@ -74,11 +104,24 @@ impl Reader for VerifiedUser {
     fn reach(&self) -> Result<Option<Filter>, StoreError> {
         self.read_filter().map_err(StoreError::Filter)
     }
+
+    fn app_comments(&self) -> AppSight {
+        // Login off, `administers` is everywhere; a principal-less user
+        // past it is none — it sees the ones left by no one.
+        match (self.administers("*"), self.principal_text()) {
+            (true, _) => AppSight::All,
+            (false, p) => AppSight::By(p.unwrap_or_default()),
+        }
+    }
 }
 
 impl Reader for ReadingAs<'_> {
     fn reach(&self) -> Result<Option<Filter>, StoreError> {
         self.read_filter().map_err(StoreError::Filter)
+    }
+
+    fn app_comments(&self) -> AppSight {
+        self.user().app_comments()
     }
 }
 
@@ -87,6 +130,8 @@ impl Reader for ReadingAs<'_> {
 #[derive(Clone)]
 pub(super) struct Seen {
     reach: Option<(Filter, Lens)>,
+    /// ACCESS-19: the comments on the app it sees.
+    app: AppSight,
 }
 
 impl std::fmt::Debug for Seen {
@@ -105,13 +150,13 @@ impl Seen {
                 Some((f, lens))
             }
         };
-        Ok(Self { reach })
+        Ok(Self { reach, app: who.app_comments() })
     }
 
     /// The system's sight: everything. What a walk whose reach could not
     /// be read holds beside its refusal (it reads nothing).
     pub(super) fn everything() -> Self {
-        Self { reach: None }
+        Self { reach: None, app: AppSight::All }
     }
 
     /// Everything: nothing is hidden.
@@ -167,7 +212,7 @@ impl Seen {
             let q = Filtered { lens: lens.clone(), epic: None, status: None, parent: None, keep: None };
             filtered::view_lenient(cache, &q)
         });
-        Sees { cache, view }
+        Sees { cache, view, app: self.app.clone() }
     }
 }
 
@@ -176,6 +221,8 @@ pub(super) struct Sees<'c> {
     cache: &'c Cache,
     /// `None`: everything.
     view: Option<View<'c>>,
+    /// ACCESS-19: the comments on the app it sees.
+    app: AppSight,
 }
 
 impl<'c> Sees<'c> {
@@ -207,14 +254,16 @@ impl<'c> Sees<'c> {
     }
 
     /// Whether the reach admits a comment (IDENTITY-37): every ticket it is
-    /// on — its anchor's, and the one whose page it was left on — or, a
-    /// comment on the app alone, any reach at all.
+    /// on — its anchor's, and the one whose page it was left on. ACCESS-19:
+    /// a comment on the app alone (naming no ticket), only its author and
+    /// the admins of `*` ([`AppSight`]) — no longer any reach at all.
     pub(super) fn comment(&self, c: &crate::comments::Comment) -> bool {
-        if self.all() {
-            return true;
-        }
         let route = c.anchor.route.trim().strip_prefix("#/ticket/").map(|r| r.split(['?', '#']).next().unwrap_or(r).trim()).filter(|r| !r.is_empty());
-        c.anchor.ticket.iter().map(String::as_str).chain(route).all(|t| self.cache.resolve(t).is_ok_and(|k| self.id(&k)))
+        let mut on = c.anchor.ticket.iter().map(String::as_str).chain(route).peekable();
+        if on.peek().is_none() {
+            return self.app.admits(c.principal.as_deref());
+        }
+        self.all() || on.all(|t| self.cache.resolve(t).is_ok_and(|k| self.id(&k)))
     }
 
     /// Whether the reach admits the ticket at `k`.
