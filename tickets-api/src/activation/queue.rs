@@ -24,8 +24,7 @@ fn refused(store: &Store, caller: &VerifiedUser, id: String, e: StoreError) -> T
         // ORG-3: a name that fits several, each by its full address.
         e @ StoreError::Ambiguous { .. } => refusal(e),
         e => {
-            let sight = sight_lens(caller).ok().flatten();
-            TicketsEvent::Error { message: redacted(e, |id| sees_id(store, sight.as_ref(), id)) }
+            TicketsEvent::Error { message: redacted(e, |id| sees_id(store, &caller.sight(), id)) }
         }
     }
 }
@@ -99,15 +98,15 @@ pub(super) fn request_changes_stream(
 /// first, then the oldest; a `queue_row` each, then one `queue_end`.
 pub(super) fn queued_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, snoozed: bool) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let reach = match admitted.and_then(|c| view_lens(&c)) {
-            Ok(r) => r,
+        let caller = match admitted.and_then(|c| c.read_filter().map(|_| c)) {
+            Ok(c) => c,
             Err(message) => {
                 yield TicketsEvent::Error { message };
                 return;
             }
         };
         let now = chrono::Utc::now().timestamp();
-        let rows = store.queued(snoozed, now, |id| sees_id(&store, reach.as_ref(), id));
+        let rows = store.queued(&caller, snoozed, now);
         let (count, asleep) = (rows.len() as u64, rows.iter().filter(|(e, _)| e.snoozed_at(now)).count() as u64);
         for (entry, ticket) in rows {
             yield TicketsEvent::QueueRow { entry, ticket };

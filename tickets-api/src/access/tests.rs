@@ -1,3 +1,4 @@
+use crate::store::SYS;
 use super::*;
 use crate::types::Kind;
 use serde_json::json;
@@ -383,7 +384,7 @@ fn readable(u: &VerifiedUser, s: &Store) -> Vec<&'static str> {
         None => Lens::all(),
         Some(f) => Lens::of(&f).unwrap(),
     };
-    EVERY.into_iter().zip(s.member(&ids, &lens)).filter(|(_, ok)| *ok).map(|(id, _)| id).collect()
+    EVERY.into_iter().zip(s.member(SYS, &ids, &lens)).filter(|(_, ok)| *ok).map(|(id, _)| id).collect()
 }
 
 #[tokio::test]

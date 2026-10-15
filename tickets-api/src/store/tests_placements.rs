@@ -230,7 +230,7 @@ async fn kept_placements_are_the_rule_after_any_sequence_of_births_and_status_ch
             }
             let epics: BTreeSet<String> = EPICS.iter().map(|e| e.to_string()).collect();
             for kinds in [&DEFAULT_KINDS[..], &Kind::ALL[..]] {
-                let mut answer = store.waves(&epics.iter().cloned().collect::<Vec<_>>(), kinds);
+                let mut answer = store.waves(SYS, &epics.iter().cloned().collect::<Vec<_>>(), kinds);
                 for p in &mut answer.placed {
                     p.summary.placement = None;
                 }
@@ -437,8 +437,8 @@ async fn placements_are_placed_again_at_open() {
     assert_eq!(after["RO-3"], Some(Placement::MissingBlocker));
     assert_kept_placements_are_the_rule(&store, "a reopen");
     // `get` and a page carry it.
-    assert_eq!(store.get("RO-5").await.unwrap().placement, Some(wave(1)));
-    let page = store.page(PageQuery { epic: Some("RO"), ..Default::default() }).unwrap();
+    assert_eq!(store.get(SYS, "RO-5").await.unwrap().placement, Some(wave(1)));
+    let page = store.page(SYS, PageQuery { epic: Some("RO"), ..Default::default() }).unwrap();
     assert_eq!(page.tickets[6].placement, Some(wave(2)), "RO-7");
 }
 

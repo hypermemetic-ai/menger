@@ -24,45 +24,35 @@
 //! (only a hand edit makes one), then one `WaveCounts`.
 //!
 //! Both: `NotFound` for an id that names no ticket (or one out of the
-//! caller's reach); a doc target (`waves_to`) or a kind outside the six is
-//! one in-band `Error`. Rows only; live through `watch` as every board is.
+//! caller's reach — ACCESS-10: the store's own answer); a doc target
+//! (`waves_to`) is one in-band `Error`. Rows only; live through `watch` as
+//! every board is.
 
 use super::*;
 
-/// `waves { epics, kinds }` (WAVE-4): `epics` empty, a shortcode out of
-/// reach or a kind outside the six is one `Error`.
+/// `waves { epics, kinds }` (WAVE-4): `epics` empty is one `Error`.
+/// ACCESS-10: a shortcode the caller sees nothing of contributes nothing,
+/// as one with no tickets (it is not named as one out of reach).
 pub(super) fn waves_answer(store: &Store, admitted: Result<VerifiedUser, String>, epics: Vec<String>, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
-    let caller = match admitted {
+    let caller = match admitted.and_then(|c| c.read_filter().map(|_| c)) {
         Ok(caller) => caller,
-        Err(message) => return vec![TicketsEvent::Error { message }],
-    };
-    let visible = match visible_epics(store, &caller) {
-        Ok(v) => v,
         Err(message) => return vec![TicketsEvent::Error { message }],
     };
     if epics.is_empty() {
         return vec![TicketsEvent::Error { message: "waves: epics is empty — name at least one shortcode, e.g. [\"MNG\"]".into() }];
     }
-    // ORG-3: each name is letters, as `in`'s — every shortcode with them
-    // must be in reach.
-    if let Some(v) = &visible {
-        if let Some(hidden) = epics.iter().find(|e| store.shortcodes_in(e).iter().any(|sc| !v.contains(sc))) {
-            return vec![TicketsEvent::Error { message: format!("waves: no access to {hidden}") }];
-        }
-    }
-    match kinds_of(kinds, &crate::store::waves::DEFAULT_KINDS) {
-        Ok(kinds) => wave_events(store.waves(&epics, &kinds), Vec::new()),
-        Err(evs) => evs,
-    }
+    let kinds = kinds.unwrap_or_else(|| crate::store::waves::DEFAULT_KINDS.to_vec());
+    wave_events(store.waves(&caller, &epics, &kinds), Vec::new())
 }
 
 /// `waves_under { id, kinds? }` (MENGER-31).
 pub(super) fn waves_under_answer(store: &Store, admitted: Result<VerifiedUser, String>, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
-    let (visible, kinds) = match waves_of_one(store, admitted, &id, kinds, &crate::store::waves::DEFAULT_KINDS) {
-        Ok(v) => v,
-        Err(evs) => return evs,
+    let caller = match admitted {
+        Ok(caller) => caller,
+        Err(message) => return vec![TicketsEvent::Error { message }],
     };
-    match store.waves_under(&id, &kinds, visible.as_ref()) {
+    let kinds = kinds.unwrap_or_else(|| crate::store::waves::DEFAULT_KINDS.to_vec());
+    match store.waves_under(&caller, &id, &kinds) {
         Ok(answer) => wave_events(answer, Vec::new()),
         Err(StoreError::NotFound(_)) => vec![TicketsEvent::NotFound { id }],
         Err(e) => vec![refusal(e)],
@@ -71,12 +61,12 @@ pub(super) fn waves_under_answer(store: &Store, admitted: Result<VerifiedUser, S
 
 /// `waves_to { id, kinds? }` (MENGER-31).
 pub(super) fn waves_to_answer(store: &Store, admitted: Result<VerifiedUser, String>, id: String, kinds: Option<Vec<Kind>>) -> Vec<TicketsEvent> {
-    let every = [Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike];
-    let (visible, kinds) = match waves_of_one(store, admitted, &id, kinds, &every) {
-        Ok(v) => v,
-        Err(evs) => return evs,
+    let caller = match admitted {
+        Ok(caller) => caller,
+        Err(message) => return vec![TicketsEvent::Error { message }],
     };
-    match store.waves_to(&id, &kinds, visible.as_ref()) {
+    let kinds = kinds.unwrap_or_else(|| vec![Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike]);
+    match store.waves_to(&caller, &id, &kinds) {
         Ok(answer) => wave_events(answer.waves, answer.cycles),
         Err(StoreError::NotFound(_)) => vec![TicketsEvent::NotFound { id }],
         Err(StoreError::DocHasNoLifecycle { .. }) => {
@@ -84,34 +74,6 @@ pub(super) fn waves_to_answer(store: &Store, admitted: Result<VerifiedUser, Stri
         }
         Err(e) => vec![refusal(e)],
     }
-}
-
-/// The shortcodes a caller sees (`None`: all).
-type Visible = Option<std::collections::HashSet<crate::address::ShortcodeId>>;
-
-/// The kinds asked, `default` with none (ACCESS-8: a kind outside the six
-/// is refused at dispatch).
-fn kinds_of(kinds: Option<Vec<Kind>>, default: &[Kind]) -> Result<Vec<Kind>, Vec<TicketsEvent>> {
-    Ok(kinds.unwrap_or_else(|| default.to_vec()))
-}
-
-/// What `waves_under` and `waves_to` share before they read — the caller
-/// admitted, the ticket in its reach (`NotFound` otherwise, as `get`
-/// answers), the shortcodes it sees, and the kinds asked parsed. Each
-/// refusal is the one event the call yields.
-fn waves_of_one(
-    store: &Store,
-    admitted: Result<VerifiedUser, String>,
-    id: &str,
-    kinds: Option<Vec<Kind>>,
-    default: &[Kind],
-) -> Result<(Visible, Vec<Kind>), Vec<TicketsEvent>> {
-    let caller = admitted.map_err(|message| vec![TicketsEvent::Error { message }])?;
-    if caller.require(&[id], store).is_err() {
-        return Err(vec![TicketsEvent::NotFound { id: id.to_string() }]);
-    }
-    let visible = visible_epics(store, &caller).map_err(|message| vec![TicketsEvent::Error { message }])?;
-    Ok((visible, kinds_of(kinds, default)?))
 }
 
 /// A wave answer as the wire carries it — each `Placed`, then each cycle

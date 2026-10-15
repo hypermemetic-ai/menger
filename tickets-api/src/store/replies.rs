@@ -74,7 +74,7 @@ impl Store {
     /// change request, a comment, an unqueue, a cancel, a delete).
     pub fn replies_since(&self, w: &Awaiting, sees: impl Fn(&str) -> bool) -> Vec<Reply> {
         // Its transitions, asked first (`history` takes the lock itself).
-        let transitions = self.history(&w.ticket).map(|h| h.own).unwrap_or_default();
+        let transitions = self.history_unscoped(&w.ticket).map(|h| h.own).unwrap_or_default();
         let cache = self.tickets.read().expect("store lock poisoned");
         let id = w.ticket.as_str();
         let mine = |who: &str| w.me.as_deref().is_some_and(|me| me == who);

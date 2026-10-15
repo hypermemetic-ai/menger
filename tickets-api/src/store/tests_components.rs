@@ -47,7 +47,7 @@ async fn amend(store: &Store, id: &str, body: &str) {
 }
 
 fn registry(store: &Store) -> BTreeMap<String, Component> {
-    store.components().into_iter().map(|c| (c.name.clone(), c)).collect()
+    store.components(SYS).into_iter().map(|c| (c.name.clone(), c)).collect()
 }
 
 fn component(name: &str, source: &str, owner: Option<&str>, references: &[&str]) -> Component {
@@ -88,7 +88,7 @@ async fn a_body_gaining_a_block_registers_the_component() {
     let body = format!("Defines one.\n\n{}\nprose after", def("m-x", "<template><b>x</b></template>"));
     let id = born(&store, &body).await;
     let want = component("m-x", &src("<template><b>x</b></template>"), Some(&id), &[]);
-    assert_eq!(store.components(), vec![want.clone()]);
+    assert_eq!(store.components(SYS), vec![want.clone()]);
     let changes = drain(&mut rx);
     assert!(matches!(changes.first(), Some(Change::Created { .. })), "{changes:?}");
     match changes.last() {
@@ -96,7 +96,7 @@ async fn a_body_gaining_a_block_registers_the_component() {
         other => panic!("the component's change is the write's last event: {other:?}"),
     }
     assert_eq!(heard(&changes), [("changed", "m-x".to_string())]);
-    assert_eq!(store.get(&id).await.unwrap().body, body, "the body is stored exactly as written");
+    assert_eq!(store.get(SYS, &id).await.unwrap().body, body, "the body is stored exactly as written");
 
     // An amend gaining one too.
     let other = born(&store, "nothing yet").await;
@@ -111,7 +111,7 @@ async fn the_owner_amending_the_block_replaces_the_source() {
     let id = born(&store, &def("m-x", "<template>one</template>")).await;
     let mut rx = store.subscribe();
     amend(&store, &id, &format!("new words\n\n{}", def("m-x", "<template>two</template>"))).await;
-    assert_eq!(store.components(), vec![component("m-x", &src("<template>two</template>"), Some(&id), &[])]);
+    assert_eq!(store.components(SYS), vec![component("m-x", &src("<template>two</template>"), Some(&id), &[])]);
     let changes = drain(&mut rx);
     assert!(matches!(changes[0], Change::Amended { .. }));
     assert_eq!(heard(&changes), [("changed", "m-x".to_string())]);
@@ -131,7 +131,7 @@ async fn another_ticket_defining_an_owned_name_is_refused_naming_the_owner() {
     let store = store().await;
     let owner = born(&store, &def("m-x", "<template>mine</template>")).await; // C-2
     let other = born(&store, "plain").await; // C-3
-    let before = store.components();
+    let before = store.components(SYS);
     let mut rx = store.subscribe();
 
     let e = store.create(ticket("C", Kind::Build, &def("m-x", "<template>theirs</template>"))).await.unwrap_err();
@@ -146,9 +146,9 @@ async fn another_ticket_defining_an_owned_name_is_refused_naming_the_owner() {
     assert!(e.to_string().contains(&owner), "{e}");
     assert!(e.to_string().contains(&format!("nothing changed for '{other}'")), "{e}");
 
-    assert_eq!(store.components(), before);
+    assert_eq!(store.components(SYS), before);
     assert!(drain(&mut rx).is_empty(), "nothing heard");
-    let t = store.get(&other).await.unwrap();
+    let t = store.get(SYS, &other).await.unwrap();
     assert_eq!((t.title.as_str(), t.body.as_str()), ("a build in C", "plain"), "title and body as they were");
     assert_eq!(born(&store, "next").await, "C-4", "no id was spent");
 }
@@ -162,7 +162,7 @@ async fn losing_the_block_with_references_left_orphans_it() {
     let user = born(&store, "uses <m-x></m-x>").await;
     let mut rx = store.subscribe();
     amend(&store, &owner, "the block is gone").await;
-    assert_eq!(store.components(), vec![component("m-x", &src("<template>x</template>"), None, &[&user])]);
+    assert_eq!(store.components(SYS), vec![component("m-x", &src("<template>x</template>"), None, &[&user])]);
     let changes = drain(&mut rx);
     assert_eq!(heard(&changes), [("changed", "m-x".to_string())]);
 }
@@ -174,7 +174,7 @@ async fn losing_the_block_with_no_references_removes_it() {
     let owner = born(&store, &def("m-x", "<template>x</template>")).await;
     let mut rx = store.subscribe();
     amend(&store, &owner, "gone").await;
-    assert!(store.components().is_empty());
+    assert!(store.components(SYS).is_empty());
     assert_eq!(heard(&drain(&mut rx)), [("removed", "m-x".to_string())]);
 }
 
@@ -190,7 +190,7 @@ async fn defining_an_orphans_name_adopts_it() {
     let mut rx = store.subscribe();
     let adopter = born(&store, &def("m-x", "<template>new</template>")).await;
     assert_eq!(
-        store.components(),
+        store.components(SYS),
         vec![component("m-x", &src("<template>new</template>"), Some(&adopter), &[&user])]
     );
     assert_eq!(heard(&drain(&mut rx)), [("changed", "m-x".to_string())]);
@@ -260,7 +260,7 @@ async fn an_orphans_last_reference_going_removes_it_in_the_same_write() {
     assert_eq!(orphans["m-b"], component("m-b", &src("<template>b</template>"), None, &["m-a"]));
     let mut rx = store.subscribe();
     amend(&store, &user, "no tags").await;
-    assert!(store.components().is_empty(), "m-a went, and m-b, which only m-a kept");
+    assert!(store.components(SYS).is_empty(), "m-a went, and m-b, which only m-a kept");
     let changes = drain(&mut rx);
     assert!(matches!(changes[0], Change::Amended { .. }));
     assert_eq!(heard(&changes), [("removed", "m-a".to_string()), ("removed", "m-b".to_string())]);
@@ -271,7 +271,7 @@ async fn an_orphans_last_reference_going_removes_it_in_the_same_write() {
     amend(&store, &p, "p's block gone").await;
     assert_eq!(registry(&store)["m-p"].owner, None, "m-q, owned, keeps it");
     amend(&store, &q, "q's block gone").await;
-    assert!(store.components().is_empty(), "a cycle of orphans keeps nothing alive");
+    assert!(store.components(SYS).is_empty(), "a cycle of orphans keeps nothing alive");
 }
 
 /// A definition inside an indented code block, or a fence of another
@@ -284,7 +284,7 @@ async fn a_definition_in_a_code_example_is_not_one() {
     let indented = "How to define one:\n\n    ```component m-x\n    <template><m-y></m-y></template>\n    ```\n";
     let a = born(&store, &fenced).await;
     let b = born(&store, indented).await;
-    assert!(store.components().is_empty());
+    assert!(store.components(SYS).is_empty());
     // Nothing waits on m-y either: defined now, nothing references it.
     born(&store, &def("m-y", "<template>y</template>")).await;
     assert_eq!(registry(&store)["m-y"].references, Vec::<String>::new());
@@ -324,8 +324,8 @@ async fn a_malformed_block_refuses_a_body_change() {
     assert_eq!(id, "C-2", "no id spent");
     let e = store.amend(&id, None, Some("```component Chart\nx\n```\n".into())).await.unwrap_err();
     assert!(e.to_string().contains(&format!("nothing changed for '{id}'")), "{e}");
-    assert_eq!(store.get(&id).await.unwrap().body, "plain");
-    assert!(store.components().is_empty());
+    assert_eq!(store.get(SYS, &id).await.unwrap().body, "plain");
+    assert!(store.components(SYS).is_empty());
 }
 
 /// The registry is durable: a reopened file holds it as acknowledged —
@@ -340,16 +340,16 @@ async fn the_registry_survives_a_reopen() {
         let owner = born(&store, &format!("{}{}", def("m-x", "<template><m-y></m-y></template>"), def("m-y", "y"))).await;
         born(&store, "<m-x></m-x>").await;
         amend(&store, &owner, &def("m-y", "y")).await; // m-x orphaned, kept by C-3
-        store.components()
+        store.components(SYS)
     };
     assert_eq!(before.len(), 2);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.components(), before);
+    assert_eq!(store.components(SYS), before);
     amend(&store, "C-3", "no more").await;
-    assert_eq!(store.components().into_iter().map(|c| c.name).collect::<Vec<_>>(), ["m-y"]);
+    assert_eq!(store.components(SYS).into_iter().map(|c| c.name).collect::<Vec<_>>(), ["m-y"]);
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.components(), vec![component("m-y", "y\n", Some("C-2"), &[])]);
+    assert_eq!(store.components(SYS), vec![component("m-y", "y\n", Some("C-2"), &[])]);
 }
 
 /// `watch { epic }` passes a component's change whatever the epic: a
@@ -397,9 +397,9 @@ async fn a_database_without_the_table_gains_it_built_from_the_bodies() {
         conn.query_row("SELECT count(*) FROM tickets", [], |r| r.get::<_, i64>(0)).unwrap()
     };
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.count() as i64, before, "every ticket kept");
+    assert_eq!(store.count(SYS) as i64, before, "every ticket kept");
     assert_eq!(
-        store.components(),
+        store.components(SYS),
         vec![
             component("m-x", &src("<template><m-y></m-y></template>"), Some("C-2"), &["C-1"]),
             component("m-y", "y\n", Some("C-5"), &["C-3", "m-x"]),
@@ -536,7 +536,7 @@ async fn a_component_without_docs_has_none() {
 async fn a_malformed_docs_refuses_the_write_naming_the_problem() {
     let store = store().await;
     let id = born(&store, &def("m-x", "<template>x</template>")).await; // C-2
-    let before = store.components();
+    let before = store.components(SYS);
     let mut rx = store.subscribe();
     for (docs, needle) in [
         ("<docs><attr type=\"number\">no name</attr></docs>", "an <attr> without a name"),
@@ -557,9 +557,9 @@ async fn a_malformed_docs_refuses_the_write_naming_the_problem() {
         let e = store.amend(&id, Some("new title".into()), Some(body.clone())).await.unwrap_err();
         assert!(e.to_string().contains(needle) && e.to_string().contains(&format!("nothing changed for '{id}'")), "{e}");
     }
-    assert_eq!(store.components(), before);
+    assert_eq!(store.components(SYS), before);
     assert!(drain(&mut rx).is_empty(), "nothing heard");
-    assert_eq!(store.get(&id).await.unwrap().title, "a build in C", "the title as it was");
+    assert_eq!(store.get(SYS, &id).await.unwrap().title, "a build in C", "the title as it was");
     assert_eq!(born(&store, "next").await, "C-3", "no id was spent");
 }
 
@@ -601,13 +601,13 @@ async fn docs_and_preview_survive_a_reopen() {
         born(&store, "<m-wave-summary board=RETURNS></m-wave-summary>").await;
         born(&store, &format!("{}{}", def("m-y", "<docs><summary>y</summary></docs>"), "")).await;
         amend(&store, &owner, "let it go").await; // m-wave-summary orphaned, docs kept
-        store.components()
+        store.components(SYS)
     };
     assert!(before.iter().all(|c| c.docs.is_some()), "{before:?}");
     assert_eq!(before[0].owner, None);
     assert_eq!(before[0].preview.len(), 2);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.components(), before);
+    assert_eq!(store.components(SYS), before);
 }
 
 /// A `components` table from before COMP-8 gains `preview` on open,
@@ -661,10 +661,10 @@ async fn a_cite_counts_as_its_tag_and_nothing_it_shows() {
     assert_eq!(reg["m-field"].references, [cited.as_str()], "the cited section's component is the cited ticket's");
     assert_eq!(reg["m-cite"].references, [citer.as_str()]);
     assert_eq!(reg["m-cite"].owner.as_deref(), Some(house.as_str()));
-    let inputs = store.inputs(Some(&citer), None, None).unwrap();
+    let inputs = store.inputs(SYS, Some(&citer), None, None).unwrap();
     assert!(inputs.is_empty(), "{inputs:?}");
-    let inputs = store.inputs(Some(&cited), None, None).unwrap();
+    let inputs = store.inputs(SYS, Some(&cited), None, None).unwrap();
     assert_eq!(inputs.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["landing"]);
-    let page = store.search("zanzibar", None, None, None).await.unwrap();
+    let page = store.search(SYS, "zanzibar", None, None, None).await.unwrap();
     assert_eq!(page.hits.iter().map(|h| h.summary.id.as_str()).collect::<Vec<_>>(), [cited.as_str()]);
 }

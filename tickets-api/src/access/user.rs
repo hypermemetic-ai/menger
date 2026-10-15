@@ -222,6 +222,28 @@ impl AdminOf {
     }
 }
 
+/// ACCESS-10: a [`VerifiedUser`] reading through one of its grants' reach
+/// ([`VerifiedUser::reading`]) — a [`crate::store::Reader`] as the user is,
+/// answered from where it holds `grant`.
+#[derive(Debug, Clone)]
+pub struct ReadingAs<'a> {
+    user: &'a VerifiedUser,
+    grant: GateGrant,
+}
+
+impl ReadingAs<'_> {
+    /// The filter a store read answers it from ([`VerifiedUser::filter_for`]
+    /// its grant).
+    pub fn read_filter(&self) -> Result<Option<Filter>, String> {
+        self.user.filter_for(&self.grant)
+    }
+
+    /// The user it reads as.
+    pub fn user(&self) -> &VerifiedUser {
+        self.user
+    }
+}
+
 /// Holding one proves the call's identity was verified now: signed in (or
 /// login off), the sign-in alive and unexpired, the principal parsed by the
 /// identity layer's grammar — never its `user_id` instead — its ceiling
@@ -340,6 +362,32 @@ impl VerifiedUser {
         }
     }
 
+    /// ACCESS-10: what a store read answers this user from — where the
+    /// call's grant is held (the method's, as the gate admitted it), or,
+    /// for a user verified outside a call, where [`SEES`] is: the filter
+    /// `under` those scopes, `None` everywhere, `Err` nowhere. What
+    /// [`crate::store::Reader`] reads.
+    pub fn read_filter(&self) -> Result<Option<Filter>, String> {
+        match self.grant() {
+            Some(g) => self.filter_for(g),
+            None => self.sight_filter(),
+        }
+    }
+
+    /// ACCESS-10: this user reading through `grant`'s reach instead of the
+    /// call's — a write naming tickets it must see ([`SEES`]), never wider
+    /// than this user holds: the reach is still its own.
+    pub fn reading(&self, grant: GateGrant) -> ReadingAs<'_> {
+        ReadingAs { user: self, grant }
+    }
+
+    /// ACCESS-10: this user reading through [`SEES`] — what it can see of
+    /// the tickets outside a read of its own (a write's refusal names only
+    /// those).
+    pub fn sight(&self) -> ReadingAs<'_> {
+        self.reading(GateGrant::new(SEES))
+    }
+
     /// [`VerifiedUser::filter_for`] [`SEES`]: what this user can see of the
     /// tickets, outside a read of its own.
     pub fn sight_filter(&self) -> Result<Option<Filter>, String> {
@@ -392,12 +440,12 @@ impl VerifiedUser {
     /// tickets' place in the tree, as a read sees them — `Err` naming the
     /// first it does not, and the shortcode it would be needed on.
     pub fn require_for(&self, grant: &GateGrant, ids: &[&str], store: &Store) -> Result<(), String> {
-        let Some(reach) = self.filter_for(grant).map_err(|_| self.lacks(grant, ids.first().copied()))? else {
+        if self.filter_for(grant).map_err(|_| self.lacks(grant, ids.first().copied()))?.is_none() {
             return Ok(());
-        };
-        let lens = Lens::of(&reach).map_err(|e| e.to_string())?;
+        }
+        // ACCESS-10: asked of the store as this user reading through `grant`.
         let owned: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
-        match store.member(&owned, &lens).iter().position(|ok| !ok) {
+        match store.member(&self.reading(grant.clone()), &owned, &Lens::all()).iter().position(|ok| !ok) {
             None => Ok(()),
             Some(i) => Err(self.lacks(grant, Some(ids[i]))),
         }

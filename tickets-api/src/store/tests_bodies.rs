@@ -67,7 +67,7 @@ async fn every_whole_ticket_is_its_row_and_the_stored_body_byte_exact() {
     store.set_status("BD-4", Status::Ready).await.unwrap();
 
     for (id, born) in [("BD-1", &root), ("BD-2", &a), ("BD-3", &b), ("BD-4", &c)] {
-        let got = store.get(id).await.unwrap();
+        let got = store.get(SYS, id).await.unwrap();
         assert_eq!(got.body.as_bytes(), born.body.as_bytes(), "{id} through get");
         assert_eq!(got.body, stored_body(&dir, id), "{id}: the file's body");
         let row = store.row(id).unwrap().0;
@@ -76,31 +76,31 @@ async fn every_whole_ticket_is_its_row_and_the_stored_body_byte_exact() {
         let json = serde_json::to_value(&got).unwrap();
         assert_eq!(json["body"].as_str().unwrap().as_bytes(), born.body.as_bytes(), "{id} on the wire");
     }
-    assert_eq!(store.get("BD-3").await.unwrap().body, "", "an empty body is a body");
+    assert_eq!(store.get(SYS, "BD-3").await.unwrap().body, "", "an empty body is a body");
 
-    let refs = store.blockers("BD-3").await.unwrap();
+    let refs = store.blockers(SYS, "BD-3").await.unwrap();
     match refs.as_slice() {
         [BlockerRef::Resolved(t), BlockerRef::Dangling(d)] => {
             assert_eq!((t.id.as_str(), d.as_str()), ("BD-2", "BD-9"), "in blocked_by order");
-            assert_eq!(t, &store.get("BD-2").await.unwrap(), "the blocker whole, at its status");
+            assert_eq!(t, &store.get(SYS, "BD-2").await.unwrap(), "the blocker whole, at its status");
         }
         other => panic!("one resolved, one dangling: {other:?}"),
     }
-    assert!(matches!(store.blockers("BD-7").await, Err(StoreError::NotFound(id)) if id == "BD-7"));
-    assert!(matches!(store.get("BD-7").await, Err(StoreError::NotFound(id)) if id == "BD-7"));
+    assert!(matches!(store.blockers(SYS, "BD-7").await, Err(StoreError::NotFound(id)) if id == "BD-7"));
+    assert!(matches!(store.get(SYS, "BD-7").await, Err(StoreError::NotFound(id)) if id == "BD-7"));
 
-    let all = store.list(None, None, None).await.unwrap();
+    let all = store.list(SYS, None, None, None).await.unwrap();
     assert_eq!(all.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["BD-1", "BD-2", "BD-3", "BD-4"]);
     for t in &all {
-        assert_eq!(t, &store.get(&t.id).await.unwrap(), "list answers what get does");
+        assert_eq!(t, &store.get(SYS, &t.id).await.unwrap(), "list answers what get does");
     }
     // BD-3 waits on a dangling BD-9; BD-4's one blocker is done.
-    assert_eq!(store.ready_set(None).await.unwrap(), [store.get("BD-4").await.unwrap()]);
+    assert_eq!(store.ready_set(SYS, None).await.unwrap(), [store.get(SYS, "BD-4").await.unwrap()]);
 
     // A reopen loads rows, and the bodies are still the file's.
     drop(store);
     let reopened = Store::open(&dir.path().join("bodies.db")).unwrap();
-    assert_eq!(reopened.list(None, None, None).await.unwrap(), all);
+    assert_eq!(reopened.list(SYS, None, None, None).await.unwrap(), all);
 }
 
 /// Every event that carries a ticket carries it whole — `Created`,
@@ -153,14 +153,14 @@ async fn every_event_that_carries_a_ticket_carries_its_stored_body() {
     ];
     assert_eq!(seen, expect.map(|(id, tag)| (id.to_string(), awkward(tag))), "each whole, byte-exact");
     for id in ["EV-1", "EV-2", "EV-3"] {
-        assert_eq!(store.get(id).await.unwrap().body, stored_body(&dir, id), "{id}");
+        assert_eq!(store.get(SYS, id).await.unwrap().body, stored_body(&dir, id), "{id}");
     }
 
     // The no-ops answer the ticket whole too, and write and say nothing.
     match store.set_parent("EV-3", "EV-2").await.unwrap() {
         Change::ParentChanged { ticket, previous } => {
             assert_eq!(previous.as_deref(), Some("EV-2"));
-            assert_eq!(ticket, store.get("EV-3").await.unwrap());
+            assert_eq!(ticket, store.get(SYS, "EV-3").await.unwrap());
         }
         other => panic!("{other:?}"),
     }
@@ -183,7 +183,7 @@ async fn every_event_that_carries_a_ticket_carries_its_stored_body() {
 async fn a_walk_holds_a_page_of_bodies_and_answers_what_one_page_would() {
     let store = Store::new();
     store.seed_synthetic(SeedSpec { count: 1_000, seed: 14, into_existing: false }).unwrap();
-    let rows = store.page(PageQuery::default()).unwrap().tickets;
+    let rows = store.page(SYS, PageQuery::default()).unwrap().tickets;
     let (first, mid) = (rows[0].id.clone(), rows[480].id.clone());
     let root = rows[0].id.clone();
     let epic = rows[0].epic.clone();
@@ -210,18 +210,18 @@ async fn a_walk_holds_a_page_of_bodies_and_answers_what_one_page_would() {
             for limit in [None, Some(0), Some(1), Some(99), Some(100), Some(101), Some(199), Some(200), Some(201), Some(450), Some(5_000)] {
                 let what = format!("{select:?} after {after:?} limit {limit:?}");
                 let page = match select {
-                    Select::List { epic, status, parent } => store.page(PageQuery {
+                    Select::List { epic, status, parent } => store.page(SYS, PageQuery {
                         epic: epic.as_deref(),
                         status: *status,
                         parent: parent.as_deref(),
                         after,
                         limit,
                     }),
-                    Select::Ready { epic } => store.ready_page(epic.as_deref(), after, limit),
-                    Select::Filtered(q) => store.filtered_page(q, after, None, limit),
+                    Select::Ready { epic } => store.ready_page(SYS, epic.as_deref(), after, limit),
+                    Select::Filtered(q) => store.filtered_page(SYS, q, after, None, limit),
                 }
                 .unwrap();
-                let mut walk = store.walk(select.clone(), after, limit);
+                let mut walk = store.walk(SYS, select.clone(), after, limit);
                 let mut got: Vec<Ticket> = Vec::new();
                 let end = loop {
                     match walk.next(&store).await.unwrap() {
@@ -239,7 +239,7 @@ async fn a_walk_holds_a_page_of_bodies_and_answers_what_one_page_would() {
             }
         }
     }
-    let mut walk = store.walk(Select::Ready { epic: None }, Some("no-such-1"), None);
+    let mut walk = store.walk(SYS, Select::Ready { epic: None }, Some("no-such-1"), None);
     assert!(matches!(walk.next(&store).await, Err(StoreError::CursorNotFound(id)) if id == "NO-SUCH-1"));
 }
 
@@ -260,15 +260,15 @@ async fn the_cache_only_answers_read_no_database() {
         permits: Arc::new(Semaphore::new(READERS)),
     });
 
-    assert_eq!(store.page(PageQuery::default()).unwrap().tickets.len(), 2);
-    assert_eq!(store.page(PageQuery { status: Some(Status::Ready), ..PageQuery::default() }).unwrap().tickets[0].id, "CO-2");
-    assert_eq!(store.ready_page(None, None, Some(5)).unwrap().tickets[0].id, "CO-2");
-    assert_eq!(store.find_page("co-2", None, None).unwrap().tickets.len(), 1);
-    assert_eq!(store.groups().len(), 1);
+    assert_eq!(store.page(SYS, PageQuery::default()).unwrap().tickets.len(), 2);
+    assert_eq!(store.page(SYS, PageQuery { status: Some(Status::Ready), ..PageQuery::default() }).unwrap().tickets[0].id, "CO-2");
+    assert_eq!(store.ready_page(SYS, None, None, Some(5)).unwrap().tickets[0].id, "CO-2");
+    assert_eq!(store.find_page(SYS, "co-2", None, None).unwrap().tickets.len(), 1);
+    assert_eq!(store.groups(SYS).len(), 1);
     assert_eq!(store.extents_text(), [("CO".to_string(), 2)]);
-    assert_eq!(store.count(), 2);
-    assert!(matches!(store.get("CO-2").await, Err(StoreError::Db(_))), "and the trap is real");
-    assert!(matches!(store.get("CO-9").await, Err(StoreError::NotFound(_))), "a miss is the cache's answer");
+    assert_eq!(store.count(SYS), 2);
+    assert!(matches!(store.get(SYS, "CO-2").await, Err(StoreError::Db(_))), "and the trap is real");
+    assert!(matches!(store.get(SYS, "CO-9").await, Err(StoreError::NotFound(_))), "a miss is the cache's answer");
 }
 
 /// A read does not wait for a write: with the writer's connection taken
@@ -296,7 +296,7 @@ async fn a_read_answers_beside_an_open_write() {
     while !open.load(Ordering::SeqCst) {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    let got = tokio::time::timeout(Duration::from_secs(5), store.get("RW-1")).await;
+    let got = tokio::time::timeout(Duration::from_secs(5), store.get(SYS, "RW-1")).await;
     release.store(true, Ordering::SeqCst);
     held.join().unwrap();
     assert_eq!(got.expect("the read did not wait for the writer").unwrap().body, "committed");
@@ -313,7 +313,7 @@ async fn a_read_that_meets_a_commit_answers_the_stored_version_whole() {
     let store = on_disk(&dir);
     store.create(new("MC", Kind::Scope, None, &[], "old body")).await.unwrap();
     store.create(new("MC", Kind::Build, None, &[], "child")).await.unwrap();
-    let before = store.get("MC-1").await.unwrap();
+    let before = store.get(SYS, "MC-1").await.unwrap();
 
     // What `commit` does, by hand, up to the moment `apply` would run.
     store.committing.fetch_add(1, Ordering::SeqCst);
@@ -325,16 +325,16 @@ async fn a_read_that_meets_a_commit_answers_the_stored_version_whole() {
         .unwrap();
     assert_eq!(store.row("MC-1").unwrap().0.title, before.title, "the cache has not seen it");
 
-    let got = store.get("MC-1").await.unwrap();
+    let got = store.get(SYS, "MC-1").await.unwrap();
     assert_eq!((got.title.as_str(), got.body.as_str(), got.updated_unix), ("new title", "new body", 42));
     assert_eq!(got.child_count, 1, "the count is the cache's: the file keeps none");
-    let walked = store.list(Some("MC"), None, None).await.unwrap();
+    let walked = store.list(SYS, Some("MC"), None, None).await.unwrap();
     assert_eq!(walked[0], got, "a walk's page reads the same way");
 
     // Without the count raised, the same read would have trusted its rows:
     // the old title over the new body. That is the anomaly the count is for.
     store.committing.fetch_sub(1, Ordering::SeqCst);
-    let torn = store.get("MC-1").await.unwrap();
+    let torn = store.get(SYS, "MC-1").await.unwrap();
     assert_eq!((torn.title.as_str(), torn.body.as_str()), (before.title.as_str(), "new body"));
 }
 
@@ -386,7 +386,7 @@ async fn read_your_writes_under_a_hammer_of_amends() {
             while !done.load(Ordering::SeqCst) {
                 if r == 0 {
                     let floor: Vec<u64> = acked.iter().map(|a| a.load(Ordering::SeqCst)).collect();
-                    for (i, t) in store.list(Some("HM"), None, None).await.unwrap().iter().enumerate() {
+                    for (i, t) in store.list(SYS, Some("HM"), None, None).await.unwrap().iter().enumerate() {
                         let (title, body) = version(t);
                         assert_eq!(title, body, "{}: one version, walked", t.id);
                         assert!(title >= floor[i], "{}: {title} older than the acknowledged {}", t.id, floor[i]);
@@ -394,7 +394,7 @@ async fn read_your_writes_under_a_hammer_of_amends() {
                 } else {
                     let i = (reads as usize + r) % TICKETS;
                     let floor = acked[i].load(Ordering::SeqCst);
-                    let t = store.get(&format!("HM-{}", i + 1)).await.unwrap();
+                    let t = store.get(SYS, &format!("HM-{}", i + 1)).await.unwrap();
                     let (title, body) = version(&t);
                     assert_eq!(title, body, "{}: one version", t.id);
                     assert!(title >= floor, "{}: {title} older than the acknowledged {floor}", t.id);
@@ -410,7 +410,7 @@ async fn read_your_writes_under_a_hammer_of_amends() {
         reads += r.await.unwrap();
     }
     for i in 1..=TICKETS {
-        let t = store.get(&format!("HM-{i}")).await.unwrap();
+        let t = store.get(SYS, &format!("HM-{i}")).await.unwrap();
         assert_eq!(version(&t), (VERSIONS, VERSIONS), "the last acknowledged, once the writer is done");
     }
     eprintln!(
@@ -447,6 +447,6 @@ async fn a_body_past_the_cap_is_refused_naming_the_cap() {
         Err(StoreError::BodyTooLarge { id, bytes, max }) => assert_eq!((id.as_deref(), bytes, max), (Some("CAP-2"), 1001, 1000)),
         other => panic!("refused, typed: {other:?}"),
     }
-    let after = store.get("CAP-2").await.unwrap();
+    let after = store.get(SYS, "CAP-2").await.unwrap();
     assert_eq!((after.title.as_str(), after.body.as_str()), (kept.title.as_str(), at.as_str()), "nothing written");
 }

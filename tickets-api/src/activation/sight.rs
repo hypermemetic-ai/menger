@@ -15,6 +15,18 @@ pub(super) fn watcher_for(store: &Store, filter: Option<&Filter>, epic: Option<&
     Ok(store.watcher_in(lens.with_clock(clock.clone()), epic).naming(filter))
 }
 
+/// ACCESS-10: a read's own filter text, read — ACCESS-29: held to its size
+/// first; `None` with none, an empty text the empty filter. The store ANDs
+/// the reader's reach into it (never this text formatted with it).
+pub(super) fn asked(text: Option<&str>) -> Result<Option<Filter>, String> {
+    text.map(crate::limits::check_filter).transpose()?;
+    match text.map(str::trim) {
+        None => Ok(None),
+        Some("") => Ok(Some(Filter::default())),
+        Some(t) => Filter::parse(t).map(Some).map_err(|e| e.to_string()),
+    }
+}
+
 /// MENGER-13: how a read's filter reads time — in `tz` (an IANA name, UTC,
 /// or an offset; none: UTC), now, with `me` the caller's principal
 /// (`anonymous` with login off). A zone the server cannot read is refused.
@@ -51,10 +63,14 @@ pub(super) fn act_of(caller: &VerifiedUser, source: Option<CallerSource>, messag
 }
 
 /// IDENTITY-37: what an open `watch` relays, as the caller's grants stand
-/// now — its reach, the lens of it, and the components it has been shown.
-/// Asked again at every change ([`Sight::again`]): rebuilt only when the
-/// grants moved, which is a comparison of the caller's few grants.
+/// now — the caller, its reach, the lens of it, and the components it has
+/// been shown. Asked again at every change ([`Sight::again`]): rebuilt only
+/// when the grants moved, which is a comparison of the caller's few grants.
+/// ACCESS-10: it holds the verified caller — every read it asks the store
+/// (the components it may see, whether an event's tickets are in reach) is
+/// asked as that caller.
 pub(super) struct Sight {
+    caller: VerifiedUser,
     /// AUTH-7: where the call's grant is held — what moves when the grants
     /// do. ACCESS-9: compiled and compared, not formatted.
     reach: Option<crate::access::ReachKey>,
@@ -66,20 +82,25 @@ pub(super) struct Sight {
 
 impl Sight {
     /// `caller`'s sight; `Err` when it sees nothing.
-    pub(super) fn of(store: &Store, caller: &VerifiedUser) -> Result<Self, String> {
-        let lens = view_lens(caller)?;
+    pub(super) fn of(store: &Store, caller: VerifiedUser) -> Result<Self, String> {
+        let lens = view_lens(&caller)?;
         let shown = match &lens {
             None => Default::default(),
-            Some(l) => visible_components(store, Some(l), store.components()).into_iter().map(|c| c.name).collect(),
+            Some(_) => store.components(&caller).into_iter().map(|c| c.name).collect(),
         };
-        Ok(Self { reach: caller.reach_key()?, lens, shown })
+        Ok(Self { reach: caller.reach_key()?, caller, lens, shown })
+    }
+
+    /// The caller, as it was last verified.
+    pub(super) fn caller(&self) -> &VerifiedUser {
+        &self.caller
     }
 
     /// The caller admitted again: `Ok(None)` when its reach is as it was;
-    /// `Ok(Some((caller, gone)))` when it moved — the sight rebuilt, and the
-    /// components it no longer sees; `Err` when it is refused, or now sees
-    /// nothing (the watch ends).
-    pub(super) fn again(&mut self, access: &Access, who: Option<&AuthContext>, reach: &Reach, store: &Store) -> Result<Option<(VerifiedUser, Vec<String>)>, String> {
+    /// `Ok(Some(gone))` when it moved — the sight rebuilt (its caller the
+    /// one verified now), and the components it no longer sees; `Err` when
+    /// it is refused, or now sees nothing (the watch ends).
+    pub(super) fn again(&mut self, access: &Access, who: Option<&AuthContext>, reach: &Reach, store: &Store) -> Result<Option<Vec<String>>, String> {
         // AUTH-7: the gate's live reach first — held nowhere any more, the
         // watch ends.
         let reach = reach.current().ok_or_else(|| "your access changed: you hold this nowhere any more".to_string())?;
@@ -88,10 +109,10 @@ impl Sight {
         if key == self.reach {
             return Ok(None);
         }
-        let now = Self::of(store, &caller).map_err(|why| format!("your access changed: {why}"))?;
+        let now = Self::of(store, caller).map_err(|why| format!("your access changed: {why}"))?;
         let gone: Vec<String> = match (&self.lens, &now.lens) {
             (_, None) => Vec::new(),
-            (None, Some(_)) => store.components().into_iter().map(|c| c.name).filter(|n| !now.shown.contains(n)).collect(),
+            (None, Some(_)) => store.components(&now.caller).into_iter().map(|c| c.name).filter(|n| !now.shown.contains(n)).collect(),
             (Some(_), Some(_)) => {
                 let mut g: Vec<String> = self.shown.difference(&now.shown).cloned().collect();
                 g.sort();
@@ -99,7 +120,7 @@ impl Sight {
             }
         };
         *self = now;
-        Ok(Some((caller, gone)))
+        Ok(Some(gone))
     }
 
     /// A change as this caller may hear it, or nothing. A component's change
@@ -107,11 +128,13 @@ impl Sight {
     /// to what it can view); one it could see and no longer can is said as
     /// its removal.
     pub(super) fn relay(&mut self, store: &Store, ev: TicketsEvent) -> Option<TicketsEvent> {
-        let Some(lens) = &self.lens else { return Some(ev) };
+        if self.lens.is_none() {
+            return Some(ev);
+        }
         match ev {
             TicketsEvent::ComponentChanged { component } => {
                 let name = component.name.clone();
-                match visible_components(store, Some(lens), vec![component]).pop() {
+                match visible_components(store, &self.caller, vec![component]).pop() {
                     Some(component) => {
                         self.shown.insert(name);
                         Some(TicketsEvent::ComponentChanged { component })
@@ -120,7 +143,7 @@ impl Sight {
                 }
             }
             TicketsEvent::ComponentRemoved { name } => self.shown.remove(&name).then_some(TicketsEvent::ComponentRemoved { name }),
-            ev => within(store, Some(lens), ev),
+            ev => within(store, &self.caller, ev),
         }
     }
 }
@@ -131,9 +154,8 @@ impl Sight {
 /// a new one does not compile until it is placed — and those that name no
 /// ticket and no shortcode pass; a component's are [`Sight::relay`]'s, and
 /// here nothing.
-pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> Option<TicketsEvent> {
-    let Some(reach) = reach else { return Some(ev) };
-    let sees = |id: &str| store.member(&[id.to_string()], reach).first().copied().unwrap_or(false);
+pub(super) fn within(store: &Store, caller: &VerifiedUser, ev: TicketsEvent) -> Option<TicketsEvent> {
+    let sees = |id: &str| sees_id(store, caller, id);
     let id: Option<String> = match &ev {
         TicketsEvent::Created { ticket }
         | TicketsEvent::Ticket { ticket }
@@ -196,7 +218,7 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
         TicketsEvent::Deleted { ids, tombstones } => {
             // ORG-3: a deleted ticket's shortcode is the one its key was
             // minted in (a deleted ticket never moves).
-            let held: Vec<crate::address::ShortcodeId> = store.counts(reach).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect();
+            let held: Vec<crate::address::ShortcodeId> = store.counts(caller, &Lens::all()).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect();
             let seen = |id: &str| id.rsplit_once('-').is_some_and(|(e, _)| held.iter().any(|h| h.as_str() == e));
             let ids: Vec<String> = ids.iter().filter(|id| seen(id)).cloned().collect();
             let tombstones = tombstones.iter().filter(|t| seen(&t.id)).cloned().collect();
@@ -223,7 +245,7 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
         TicketsEvent::QueueRecord { record } => Some(record.ticket.clone()),
         TicketsEvent::DanglingBlocker { id } | TicketsEvent::Member { id, .. } | TicketsEvent::NotFound { id } => Some(id.clone()),
         TicketsEvent::Extent { shortcode, .. } | TicketsEvent::Count { shortcode, .. } | TicketsEvent::Recount { shortcode, .. } => {
-            let seen = store.counts(reach).into_iter().any(|(e, n)| e == *shortcode && n > 0);
+            let seen = store.counts(caller, &Lens::all()).into_iter().any(|(e, n)| e == *shortcode && n > 0);
             return seen.then_some(ev);
         }
         // Without the owner in hand, nothing (Sight::relay places them).
@@ -257,57 +279,29 @@ pub(super) fn view_lens(caller: &VerifiedUser) -> Result<Option<Lens>, String> {
     caller.reach_filter()?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
 }
 
-/// AUTH-7: the lens a write sees the tickets it names through — where the
-/// caller holds `tickets.get` ([`crate::access::SEES`]).
-pub(super) fn sight_lens(caller: &VerifiedUser) -> Result<Option<Lens>, String> {
-    caller.sight_filter()?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
+/// Whether `who` sees the ticket `id` — ACCESS-10: the store's answer,
+/// one lookup in its reach.
+pub(super) fn sees_id(store: &Store, who: &(impl crate::store::Reader + ?Sized), id: &str) -> bool {
+    store.member(who, &[id.to_string()], &Lens::all()).first().copied().unwrap_or(false)
 }
 
-/// FILTER-24: a read's `keep` — the id of the ticket it names, when the
-/// caller's reach covers it: keeping never answers a ticket the caller
-/// could not read. Blank, naming no ticket, or outside the reach: `None`
-/// (the read answers as without it).
-pub(super) fn kept(store: &Store, caller: &VerifiedUser, keep: Option<&str>) -> Option<String> {
-    let id = store.ticket_id(keep.map(str::trim).filter(|k| !k.is_empty())?)?;
-    match view_lens(caller) {
-        Ok(None) => Some(id),
-        Ok(Some(reach)) => store.member(std::slice::from_ref(&id), &reach).first().copied().unwrap_or(false).then_some(id),
-        Err(_) => None,
-    }
-}
-
-/// Whether `reach` admits the ticket `id` (`None`: everything does).
-pub(super) fn sees_id(store: &Store, reach: Option<&Lens>, id: &str) -> bool {
-    match reach {
-        None => true,
-        Some(lens) => store.member(&[id.to_string()], lens).first().copied().unwrap_or(false),
-    }
-}
-
-/// IDENTITY-37: of `components`, those `reach` may see — each whose owner
-/// it admits (an orphan has none: it is no one's to show) — with only the
-/// references it may see: the tickets it admits, and the components it may
-/// see. Owners and references are asked of the cells in one batch.
-pub(super) fn visible_components(store: &Store, reach: Option<&Lens>, components: Vec<crate::types::Component>) -> Vec<crate::types::Component> {
-    let Some(lens) = reach else { return components };
-    // Every component's owner, to place a reference to one by its owner.
-    let owners: std::collections::HashMap<String, Option<String>> = store.components().into_iter().map(|c| (c.name, c.owner)).collect();
-    let mut ids: Vec<String> = owners.values().flatten().cloned().collect();
-    ids.extend(components.iter().filter_map(|c| c.owner.clone()));
-    ids.extend(components.iter().flat_map(|c| c.references.iter()).filter(|r| !owners.contains_key(*r)).cloned());
+/// IDENTITY-37: of `components`, those `caller` may see — each whose owner
+/// it sees (an orphan has none: it is no one's to show) — with only the
+/// references it may see: the tickets it sees, and the components it is
+/// shown ([`Store::components`], ACCESS-10).
+pub(super) fn visible_components(store: &Store, caller: &VerifiedUser, components: Vec<crate::types::Component>) -> Vec<crate::types::Component> {
+    let shown: std::collections::HashSet<String> = store.components(caller).into_iter().map(|c| c.name).collect();
+    let mut ids: Vec<String> = components.iter().filter_map(|c| c.owner.clone()).collect();
+    ids.extend(components.iter().flat_map(|c| c.references.iter()).filter(|r| !shown.contains(*r)).cloned());
     ids.sort();
     ids.dedup();
     let admitted: std::collections::HashSet<String> =
-        ids.iter().zip(store.member(&ids, lens)).filter(|(_, ok)| *ok).map(|(id, _)| id.clone()).collect();
-    let owned_in_reach = |o: &Option<String>| o.as_ref().is_some_and(|o| admitted.contains(o));
+        ids.iter().zip(store.member(caller, &ids, &Lens::all())).filter(|(_, ok)| *ok).map(|(id, _)| id.clone()).collect();
     components
         .into_iter()
-        .filter(|c| owned_in_reach(&c.owner))
+        .filter(|c| c.owner.as_ref().is_some_and(|o| admitted.contains(o)))
         .map(|mut c| {
-            c.references.retain(|r| match owners.get(r) {
-                Some(owner) => owned_in_reach(owner),
-                None => admitted.contains(r),
-            });
+            c.references.retain(|r| shown.contains(r) || admitted.contains(r));
             c
         })
         .collect()
@@ -352,34 +346,14 @@ fn redact(e: StoreError, sees: &dyn Fn(&str) -> bool) -> String {
     }
 }
 
-/// IDENTITY-21: the shortcodes a caller can see — `None`: all of them. A
-/// grant covers whole shortcodes (`under`), so a shortcode is visible
-/// exactly when the caller's reach admits any of its tickets.
-///
-/// ORG-3: by the shortcodes' identities.
-pub(super) fn visible_epics(store: &Store, caller: &VerifiedUser) -> Result<Option<std::collections::HashSet<crate::address::ShortcodeId>>, String> {
-    epics_under(store, caller.reach_filter()?)
-}
-
-/// AUTH-7: [`visible_epics`] by where `tickets.get` is held — what a write
-/// may name.
+/// AUTH-7: the shortcodes a caller sees a ticket of where `tickets.get` is
+/// held — what a write may name. `None`: every one. ACCESS-10: the store's
+/// counts, asked as the caller reading through its sight.
 pub(super) fn sight_epics(store: &Store, caller: &VerifiedUser) -> Result<Option<std::collections::HashSet<crate::address::ShortcodeId>>, String> {
-    epics_under(store, caller.sight_filter()?)
-}
-
-pub(super) fn epics_under(store: &Store, reach: Option<crate::filter::Filter>) -> Result<Option<std::collections::HashSet<crate::address::ShortcodeId>>, String> {
-    let Some(reach) = reach else { return Ok(None) };
-    let lens = Lens::of(&reach).map_err(|e| e.to_string())?;
-    Ok(Some(store.counts(&lens).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect()))
-}
-
-/// IDENTITY-21: how many tickets a caller can see.
-pub(super) fn visible_count(store: &Store, caller: &VerifiedUser) -> u64 {
-    match caller.reach_filter() {
-        Ok(None) => store.count() as u64,
-        Ok(Some(reach)) => Lens::of(&reach).map(|lens| store.counts(&lens).into_iter().map(|(_, n)| n).sum()).unwrap_or(0),
-        Err(_) => 0,
+    if caller.sight_filter()?.is_none() {
+        return Ok(None);
     }
+    Ok(Some(store.counts(&caller.sight(), &Lens::all()).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect()))
 }
 
 /// ORG-3: the shortcode `watch { epic }` names, by any short form of its

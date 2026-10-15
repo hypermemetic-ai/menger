@@ -178,7 +178,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
     // Ids the API can name: a lowercase one (only a hand edit writes one)
     // is folded to another by `amend` and its kin (SCALE-19, "found").
     let all: Vec<Row> = store
-        .page(PageQuery::default())
+        .page(SYS, PageQuery::default())
         .unwrap()
         .tickets
         .into_iter()
@@ -367,11 +367,11 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, epics: &[&str
         "every kind of write, and enough of them: {tally:?}"
     );
     let form = store.tickets.read().unwrap().form();
-    let (groups, extents) = (store.groups(), store.extents_text());
+    let (groups, extents) = (store.groups(SYS), store.extents_text());
     drop(store);
     let store = Store::open(path).unwrap();
     assert_eq!(store.tickets.read().unwrap().form(), form, "a reopen reads what was kept");
-    assert_eq!((store.groups(), store.extents_text()), (groups, extents));
+    assert_eq!((store.groups(SYS), store.extents_text()), (groups, extents));
     assert_stored_is_a_scan(&store, path, "the reopen");
     store
 }
@@ -386,7 +386,7 @@ async fn the_stored_state_is_a_scan_after_every_write_on_a_store_built_by_create
     assert_stored_is_a_scan(&store, &path, "a fresh open");
     let store = walk(store, &path, 0x5CA1_E028, 400, &["AA", "MAP", "SUB", "ZED", "QQ"]).await;
     // FILTER-21: the walk filed menger docs, each kept in a cell of its own.
-    let mengers = store.page(PageQuery::default()).unwrap().tickets.iter().filter(|t| crate::is_menger_doc(t.path.as_deref())).count();
+    let mengers = store.page(SYS, PageQuery::default()).unwrap().tickets.iter().filter(|t| crate::is_menger_doc(t.path.as_deref())).count();
     assert!(mengers > 0, "the walk files board notes");
     let cells = store.tickets.read().unwrap().form().cells;
     assert!(cells.keys.values().any(|k| k.menger()), "a menger doc's cell is stored");
@@ -495,8 +495,8 @@ async fn the_first_open_builds_once_and_every_later_open_reads_what_is_stored() 
     assert_eq!(read_state(&path), State::Absent);
     let store = Store::open(&path).unwrap();
     assert_eq!(read_state(&path), State::Current, "built, and committed, by the first open");
-    let (groups, extents) = (store.groups(), store.extents_text());
-    let par1 = store.get("PAR-1").await.unwrap().child_count;
+    let (groups, extents) = (store.groups(SYS), store.extents_text());
+    let par1 = store.get(SYS, "PAR-1").await.unwrap().child_count;
     drop(store);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 9, .. }));
 
@@ -516,8 +516,8 @@ async fn the_first_open_builds_once_and_every_later_open_reads_what_is_stored() 
     let last_par = |e: &[(String, u32)]| e.iter().find(|(epic, _)| epic == "PAR").unwrap().1;
     assert_eq!(last_par(&store.extents_text()), last_par(&extents) + 4, "the run as stored");
     let total = |g: &[Group]| g.iter().find(|g| g.epic == "PAR").unwrap().total;
-    assert_eq!(total(&store.groups()), total(&groups) + 100, "the roll-up as stored");
-    assert_eq!(store.get("PAR-1").await.unwrap().child_count, par1 + 50, "the count as stored");
+    assert_eq!(total(&store.groups(SYS)), total(&groups) + 100, "the roll-up as stored");
+    assert_eq!(store.get(SYS, "PAR-1").await.unwrap().child_count, par1 + 50, "the count as stored");
     assert_eq!(store.tickets.read().unwrap().ids.waiting_on("PAR-99"), ["PAR-1"], "the reference as stored");
     drop(store);
 
@@ -609,7 +609,7 @@ async fn a_seed_that_stops_before_storing_its_derived_state_leaves_it_marked_and
     Connection::open(&path).unwrap().execute_batch("DROP TABLE elsewhere").unwrap();
 
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.count(), 900, "the seed's tickets are in the file");
+    assert_eq!(store.count(SYS), 900, "the seed's tickets are in the file");
     assert_eq!(read_state(&path), State::Current, "built again on open");
     assert_stored_is_a_scan(&store, &path, "the open after a stopped seed");
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 900, .. }));
@@ -652,7 +652,7 @@ async fn a_write_whose_commit_fails_stores_no_derived_state_and_changes_no_cache
     assert!(store.set_parent("FX-3", "FX-2").await.is_err());
     Connection::open(&path).unwrap().execute_batch("DROP TRIGGER no_counts").unwrap();
     assert_eq!(snapshot(&store), before, "nothing stored, nothing cached");
-    assert_eq!(store.count(), 3);
+    assert_eq!(store.count(SYS), 3);
 
     let next = store.create(new_ticket("FX", Kind::Build, Some("FX-2".into()), Vec::new())).await.unwrap();
     assert_eq!(next.id, "FX-4", "the id no failed create took");
@@ -670,14 +670,14 @@ async fn children_by_page_come_from_the_files_index_in_store_order() {
     let path = dir.path().join("pages.db");
     let store = Store::open(&path).unwrap();
     store.seed_synthetic(SeedSpec { count: 3_000, seed: 11, into_existing: false }).unwrap();
-    let root = store.groups().into_iter().max_by_key(|g| g.total).unwrap().root.unwrap();
+    let root = store.groups(SYS).into_iter().max_by_key(|g| g.total).unwrap().root.unwrap();
     drop(store);
     let store = Store::open(&path).unwrap();
     let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     let mut after: Option<String> = None;
     loop {
         let page = store
-            .page(PageQuery { parent: Some(&root), after: after.as_deref(), limit: Some(200), ..PageQuery::default() })
+            .page(SYS, PageQuery { parent: Some(&root), after: after.as_deref(), limit: Some(200), ..PageQuery::default() })
             .unwrap();
         // The same page, as the file's index answers it — what B4 will ask.
         let (from_epic, from_seq) = match &after {
@@ -706,6 +706,6 @@ async fn children_by_page_come_from_the_files_index_in_store_order() {
     let stored: u64 = conn
         .query_row("SELECT child_count FROM tickets WHERE id = ?1", [&root], |r| r.get(0))
         .unwrap();
-    assert_eq!(store.get(&root).await.unwrap().child_count, stored);
+    assert_eq!(store.get(SYS, &root).await.unwrap().child_count, stored);
     assert!(stored > 500, "{root} has {stored} children");
 }

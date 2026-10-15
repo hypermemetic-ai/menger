@@ -492,9 +492,12 @@ impl Store {
 
     /// MENGER-39: the queue, most urgent first, then the oldest — each entry
     /// with its ticket's row; `snoozed`: whether the snoozed ones (at `now`)
-    /// are in it. A ticket `sees` refuses is left out. From the cache.
-    pub fn queued(&self, snoozed: bool, now: i64, sees: impl Fn(&str) -> bool) -> Vec<(QueueEntry, TicketSummary)> {
+    /// are in it. ACCESS-10: of the tickets `who` sees, each row redacted.
+    /// From the cache.
+    pub fn queued(&self, who: &(impl super::Reader + ?Sized), snoozed: bool, now: i64) -> Vec<(QueueEntry, TicketSummary)> {
+        let Ok(seen) = super::Seen::of(who) else { return Vec::new() };
         let cache = self.tickets.read().expect("store lock poisoned");
+        let sees = seen.sees(&cache);
         // Within one second, the first queued first: its `queued` record's id.
         let since = |t: &str| cache.queue.records(t).iter().rev().find(|r| r.action == QueueAction::Queued).map_or(0, |r| r.id);
         let mut out: Vec<(QueueEntry, TicketSummary, u64)> = cache
@@ -502,23 +505,29 @@ impl Store {
             .entries
             .values()
             .filter(|e| snoozed || !e.snoozed_at(now))
+            .filter(|e| sees.id(&e.ticket))
             .filter_map(|e| Some((e.clone(), cache.get(&e.ticket)?.clone(), since(&e.ticket))))
             .collect();
+        out.iter_mut().for_each(|(_, t, _)| sees.row(t));
+        drop(sees);
         drop(cache);
-        out.retain(|(e, _, _)| sees(&e.ticket));
         out.sort_by(|a, b| b.0.urgency.cmp(&a.0.urgency).then(a.0.queued_unix.cmp(&b.0.queued_unix)).then(a.2.cmp(&b.2)).then_with(|| order(&a.0, &b.0)));
         out.into_iter().map(|(e, t, _)| (e, t)).collect()
     }
 
-    /// MENGER-39: `id`'s queue entry, when it is queued. From the cache.
-    pub fn queue_entry(&self, id: &str) -> Option<QueueEntry> {
+    /// MENGER-39: `id`'s queue entry, when it is queued — ACCESS-10: and
+    /// `who` sees it. From the cache.
+    pub fn queue_entry(&self, who: &(impl super::Reader + ?Sized), id: &str) -> Option<QueueEntry> {
+        let seen = super::Seen::of(who).ok()?;
         let cache = self.tickets.read().expect("store lock poisoned");
-        cache.resolve(id).ok().and_then(|key| cache.queue.get(&key).cloned())
+        seen.sees(&cache).resolve(id).ok().and_then(|key| cache.queue.get(&key).cloned())
     }
 
-    /// MENGER-39: `id`'s queue history, oldest first. From the cache.
-    pub fn queue_history(&self, id: &str) -> Vec<QueueRecord> {
+    /// MENGER-39: `id`'s queue history, oldest first — ACCESS-10: when `who`
+    /// sees it. From the cache.
+    pub fn queue_history(&self, who: &(impl super::Reader + ?Sized), id: &str) -> Vec<QueueRecord> {
+        let Ok(seen) = super::Seen::of(who) else { return Vec::new() };
         let cache = self.tickets.read().expect("store lock poisoned");
-        cache.resolve(id).map(|key| cache.queue.records(&key).to_vec()).unwrap_or_default()
+        seen.sees(&cache).resolve(id).map(|key| cache.queue.records(&key).to_vec()).unwrap_or_default()
     }
 }

@@ -118,7 +118,7 @@ impl Members {
                     return;
                 }
             };
-            let mut grants = store.grants();
+            let mut grants = access.stored();
             for admin in access.admins() {
                 grants.extend(access.grants_of(&admin).into_iter().filter(|g| g.granted_by == OPERATOR));
             }

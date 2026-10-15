@@ -31,7 +31,7 @@ fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> New
 
 fn group(store: &Store, epic: &str) -> Group {
     store
-        .groups()
+        .groups(SYS)
         .into_iter()
         .find(|g| g.epic == epic)
         .unwrap_or_else(|| panic!("no group {epic}"))
@@ -76,7 +76,7 @@ fn kind_changed(change: Change) -> (Ticket, Kind) {
 /// the cache against a build by scan of its rows.
 #[track_caller]
 fn assert_kept(store: &Store, after: &str) {
-    assert_eq!(store.groups(), tests::nav(store), "the roll-ups the nav draws, after {after}");
+    assert_eq!(store.groups(SYS), tests::nav(store), "the roll-ups the nav draws, after {after}");
     tests_placements::assert_kept_placements_are_the_rule(store, after);
     let cache = store.tickets.read().unwrap();
     let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect(), cache.inputs.clone());
@@ -111,7 +111,7 @@ async fn to_a_doc_its_status_becomes_doc() {
     assert_eq!(types(&sent), ["kind_changed", "group_changed", "cells_moved"]);
     let g = group(&store, "K");
     assert_eq!((g.total, g.done, g.docs), (3, 0, 2), "a work ticket fewer, a doc more");
-    assert_eq!(store.get("K-5").await.unwrap(), t, "what the event carried is the ticket");
+    assert_eq!(store.get(SYS, "K-5").await.unwrap(), t, "what the event carried is the ticket");
     assert_kept(&store, "a gap made a doc");
 
     // `Doc` given is the same; anything else is refused.
@@ -166,7 +166,7 @@ async fn from_a_doc_its_status_is_given_or_epic_for_a_scope_or_pending() {
     assert!(matches!(refused, StoreError::DocStatusForWork { kind: Kind::Build, .. }), "{refused:?}");
     let msg = refused.to_string();
     assert!(msg.contains("'K-6'") && msg.contains("would be a build") && msg.contains("Doc"), "{msg}");
-    assert_eq!(store.get("K-6").await.unwrap().kind, Kind::Doc, "nothing changed");
+    assert_eq!(store.get(SYS, "K-6").await.unwrap().kind, Kind::Doc, "nothing changed");
     assert_kept(&store, "docs made work");
 }
 
@@ -187,7 +187,7 @@ async fn between_two_kinds_of_work_the_status_stays_unless_given() {
     assert_eq!((t.kind, t.status, t.placement), (Kind::Execution, Status::Complete, Some(Placement::Done)));
     let sent = drained(&mut rx);
     assert_eq!(types(&sent), ["kind_changed", "group_changed", "placements_changed"]);
-    assert_eq!(store.ready_set(Some("K")).await.unwrap().into_iter().map(|t| t.id).collect::<Vec<_>>(), ["K-4"]);
+    assert_eq!(store.ready_set(SYS, Some("K")).await.unwrap().into_iter().map(|t| t.id).collect::<Vec<_>>(), ["K-4"]);
     assert_eq!(group(&store, "K").done, 1);
     assert_kept(&store, "a build made a complete execution");
 }
@@ -219,7 +219,7 @@ async fn to_a_doc_is_refused_with_a_blocker_or_an_unlock_naming_them() {
     let dangling = store.set_kind("K-6", Kind::Doc, Some(Status::Doc)).await.unwrap_err();
     assert!(dangling.to_string().contains("blocked by 'NEVER-1' (nothing changed)"), "{dangling}");
     for id in ["K-2", "K-4", "K-6"] {
-        assert_eq!(store.get(id).await.unwrap().kind, Kind::Build, "{id}: nothing changed");
+        assert_eq!(store.get(SYS, id).await.unwrap().kind, Kind::Build, "{id}: nothing changed");
     }
     assert_kept(&store, "the refusals");
 }
@@ -302,7 +302,7 @@ async fn a_lower_seq_ticket_made_a_scope_or_a_doc_becomes_the_root() {
 
     // XPC's tickets are drawn under AGS-3 — XPC has no row. XPC-1 made its
     // scope root makes XPC a sub-shortcode hosted at AGS-3, a row of its own.
-    assert!(store.groups().iter().all(|g| g.epic != "XPC"));
+    assert!(store.groups(SYS).iter().all(|g| g.epic != "XPC"));
     kind_changed(store.set_kind("XPC-1", Kind::Scope, Some(Status::Ready)).await.unwrap());
     let sent = drained(&mut rx);
     let moved: Vec<String> = sent
@@ -330,7 +330,7 @@ async fn a_lower_seq_ticket_made_a_scope_or_a_doc_becomes_the_root() {
 #[tokio::test]
 async fn the_same_kind_and_no_status_changes_nothing() {
     let store = shortcode().await;
-    let before = store.get("K-2").await.unwrap();
+    let before = store.get(SYS, "K-2").await.unwrap();
     let mut rx = store.subscribe_filtered();
     for status in [None, Some(Status::Pending)] {
         let (t, previous) = kind_changed(store.set_kind("K-2", Kind::Build, status).await.unwrap());

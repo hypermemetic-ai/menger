@@ -51,13 +51,13 @@ async fn both_orgs_have_a_root_menger_each_its_own() {
     let store = two_orgs(&dir.path().join("t.db")).await;
     let mengers: Vec<String> = store.shortcodes().into_iter().filter(|(s, _)| s.code == "MENGER").map(|(_, a)| a).collect();
     assert_eq!(mengers, ["hypermemetic:MENGER", "acme:MENGER"]);
-    let theirs = store.get("acme:MENGER-2").await.unwrap();
+    let theirs = store.get(SYS, "acme:MENGER-2").await.unwrap();
     assert_eq!((theirs.epic.as_str(), theirs.address.as_str()), ("MENGER", "acme:MENGER-2"));
     assert_ne!(theirs.shortcode.as_str(), "MENGER", "a namesake's identity is its own");
-    assert_eq!(store.get("hypermemetic:MENGER-2").await.unwrap().title, "a build in MENGER");
+    assert_eq!(store.get(SYS, "hypermemetic:MENGER-2").await.unwrap().title, "a build in MENGER");
     // The bare id fits both: the resolver names each by its full address
     // (the activation keeps those in the caller's organizations).
-    match store.get("MENGER-2").await {
+    match store.get(SYS, "MENGER-2").await {
         Err(StoreError::Ambiguous { candidates, .. }) => assert_eq!(candidates, ["hypermemetic:MENGER-2", "acme:MENGER-2"]),
         other => panic!("expected Ambiguous, got {other:?}"),
     }
@@ -83,14 +83,14 @@ async fn an_org_is_made_once_by_a_name_no_other_has_or_had() {
 async fn under_an_org_is_every_ticket_in_it_and_none_of_another() {
     let dir = tempfile::tempdir().unwrap();
     let store = two_orgs(&dir.path().join("t.db")).await;
-    let held = |text: &str| -> u64 { store.counts(&lens(text)).into_iter().map(|(_, n)| n).sum() };
+    let held = |text: &str| -> u64 { store.counts(SYS, &lens(text)).into_iter().map(|(_, n)| n).sum() };
     assert_eq!(held("under acme:"), 2);
     assert_eq!(held("under hypermemetic:"), 3, "hosted IDENTITY with it");
     assert_eq!(held("under beta:"), 0, "an org there is not holds nowhere");
     assert_eq!(held("kind build and under acme:"), 1);
     let ids = ["MENGER-2".to_string(), "IDENTITY-1".to_string()];
-    assert_eq!(store.member(&ids, &lens("under acme:")), [false, false]);
-    assert_eq!(store.member(&ids, &lens("under hypermemetic:")), [true, true]);
+    assert_eq!(store.member(SYS, &ids, &lens("under acme:")), [false, false]);
+    assert_eq!(store.member(SYS, &ids, &lens("under hypermemetic:")), [true, true]);
     // A reach of two orgs reads both.
     assert_eq!(held("under in (acme:, hypermemetic:)"), 5);
 }
@@ -99,7 +99,7 @@ async fn under_an_org_is_every_ticket_in_it_and_none_of_another() {
 async fn a_scope_is_kept_by_its_org_and_its_identity() {
     let dir = tempfile::tempdir().unwrap();
     let store = two_orgs(&dir.path().join("t.db")).await;
-    let acme_menger = store.get("acme:MENGER-1").await.unwrap().shortcode;
+    let acme_menger = store.get(SYS, "acme:MENGER-1").await.unwrap().shortcode;
     assert_eq!(store.scope_named("*").unwrap(), "*");
     assert_eq!(store.scope_named("identity").unwrap(), "hypermemetic:IDENTITY");
     assert_eq!(store.scope_named("MENGER/IDENTITY").unwrap(), "hypermemetic:IDENTITY");
@@ -118,7 +118,7 @@ async fn a_scope_is_kept_by_its_org_and_its_identity() {
 async fn the_gate_chain_names_the_org_and_a_ticket_as_written() {
     let dir = tempfile::tempdir().unwrap();
     let store = two_orgs(&dir.path().join("t.db")).await;
-    let sc = store.get("acme:MENGER-1").await.unwrap().shortcode;
+    let sc = store.get(SYS, "acme:MENGER-1").await.unwrap().shortcode;
     let chain = store.gate_chain("acme:MENGER-2").unwrap();
     assert_eq!(chain.first().map(String::as_str), Some("acme:MENGER-2"), "what a refusal names: as written");
     assert!(chain.contains(&format!("acme:{sc}")) && chain.last().map(String::as_str) == Some("acme:"), "{chain:?}");
@@ -141,8 +141,8 @@ async fn a_rename_keeps_every_address_and_grant_and_the_old_name() {
         store.grant(Grant { principal: ADA.into(), scope: store.scope_named("acme:MENGER").unwrap(), role: Role::Editor, granted_by: "t".into(), at: 1 }).await.unwrap();
         let renamed = store.rename_org("acme", "acme-co").await.unwrap();
         assert_eq!((renamed.name.as_str(), renamed.aliases.clone()), ("acme-co", vec!["acme".to_string()]));
-        assert_eq!(store.get("acme:MENGER-2").await.unwrap().address, "acme-co:MENGER-2", "the old name resolves");
-        let scopes: Vec<String> = store.grants_of(ADA).into_iter().map(|g| g.scope).collect();
+        assert_eq!(store.get(SYS, "acme:MENGER-2").await.unwrap().address, "acme-co:MENGER-2", "the old name resolves");
+        let scopes: Vec<String> = store.grants_of(SYS, ADA).into_iter().map(|g| g.scope).collect();
         assert!(scopes.iter().all(|s| s.starts_with("acme-co:")), "{scopes:?}");
         assert!(store.create_org("acme", None).await.is_err(), "an old name still names it");
         assert_eq!(store.scope_named("acme:").unwrap(), "acme-co:");
@@ -150,7 +150,7 @@ async fn a_rename_keeps_every_address_and_grant_and_the_old_name() {
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(store.org("acme").map(|o| o.name.to_string()).as_deref(), Some("acme-co"), "kept across a reopen");
-    assert_eq!(store.get("acme:MENGER-2").await.unwrap().address, "acme-co:MENGER-2");
+    assert_eq!(store.get(SYS, "acme:MENGER-2").await.unwrap().address, "acme-co:MENGER-2");
     // Back to the old name: it is its own again, and no longer an alias.
     let back = store.rename_org("acme-co", "acme").await.unwrap();
     assert_eq!((back.name.as_str(), back.aliases), ("acme", vec!["acme-co".to_string()]));
@@ -167,7 +167,7 @@ async fn a_delete_is_refused_while_the_org_holds_a_ticket_and_takes_its_grants()
     store.create_org("beta", Some((ADA.into(), "t".into()))).await.unwrap();
     assert_eq!(store.delete_org("beta").await.unwrap(), (crate::address::OrgId::new("beta").unwrap(), 1));
     assert!(store.org("beta").is_none());
-    assert!(!store.grants_of(ADA).iter().any(|g| g.scope.starts_with("beta:")));
+    assert!(!store.grants_of(SYS, ADA).iter().any(|g| g.scope.starts_with("beta:")));
     assert!(matches!(store.delete_org("beta").await, Err(StoreError::NoOrg(_))));
 }
 
@@ -186,7 +186,7 @@ fn a_file_s_grants_from_before_orgs_move_into_hypermemetic_once() {
             rt.block_on(store.grant(g)).unwrap();
         }
     }
-    let scopes = |s: &Store| -> Vec<String> { s.grants_of(ADA).into_iter().map(|g| g.scope).collect() };
+    let scopes = |s: &Store| -> Vec<String> { s.grants_of(SYS, ADA).into_iter().map(|g| g.scope).collect() };
     let store = Store::open(&path).unwrap();
     assert_eq!(scopes(&store), ["*", "hypermemetic:IDENTITY", "hypermemetic:LATER"]);
     drop(store);

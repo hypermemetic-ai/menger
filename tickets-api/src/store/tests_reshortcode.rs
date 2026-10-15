@@ -102,16 +102,16 @@ async fn into_a_shortcode_there_is_each_takes_its_next_number_in_the_order_given
     let r = store.reshortcode(ask(&["M-5", "M-4"], "N")).await.unwrap();
     assert_eq!(moves(&r), pairs(&[("M-5", "N-3"), ("M-4", "N-4")]));
     for id in ["N-3", "N-4"] {
-        let t = store.get(id).await.unwrap();
+        let t = store.get(SYS, id).await.unwrap();
         assert_eq!((t.parent.as_deref(), t.epic.as_str(), t.shortcode.as_str()), (Some("N-1"), "N", "N"), "{id}");
     }
-    assert_eq!(store.get("N-3").await.unwrap().title, "build 5");
+    assert_eq!(store.get(SYS, "N-3").await.unwrap().title, "build 5");
     assert!(!exists(&store, "M-5") && !exists(&store, "M-4"));
     // `parent` must be inside the target.
     let e = store.reshortcode(Reshortcode { parent: Some("M-1".into()), ..ask(&["M-6"], "N") }).await.unwrap_err();
     assert!(e.to_string().contains("parent M-1 is not in N"), "{e}");
     let r = store.reshortcode(Reshortcode { parent: Some("N-2".into()), ..ask(&["M-6"], "N") }).await.unwrap();
-    assert_eq!(store.get(&r.moves[0].to).await.unwrap().parent.as_deref(), Some("N-2"));
+    assert_eq!(store.get(SYS, &r.moves[0].to).await.unwrap().parent.as_deref(), Some("N-2"));
     // Into its own shortcode: refused.
     let e = store.reshortcode(ask(&["N-2"], "N")).await.unwrap_err();
     assert!(refused(e)["N-2"].contains("is in N already"));
@@ -127,11 +127,11 @@ async fn new_scope_mints_the_shortcode_first_its_root_under_parent_and_a_clash_i
         .unwrap();
     assert_eq!(moves(&r), pairs(&[("M-8", "PAL-2"), ("M-9", "PAL-3")]));
     assert_eq!(r.tickets.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["PAL-1", "PAL-2", "PAL-3"]);
-    let root = store.get("PAL-1").await.unwrap();
+    let root = store.get(SYS, "PAL-1").await.unwrap();
     assert_eq!((root.kind, root.title.as_str(), root.parent.as_deref()), (Kind::Scope, "the palette", Some("M-7")));
     assert_eq!(root.address, "hypermemetic:M/PAL-1", "hosted where its parent is");
-    assert_eq!(store.get("PAL-3").await.unwrap().blocked_by, ["PAL-2"], "the block between them, by identity");
-    assert_eq!(store.history("PAL-1").unwrap().own.len(), 1, "its birth");
+    assert_eq!(store.get(SYS, "PAL-3").await.unwrap().blocked_by, ["PAL-2"], "the block between them, by identity");
+    assert_eq!(store.history(SYS, "PAL-1").unwrap().own.len(), 1, "its birth");
     // H is in M's namespace already: a second H there is refused, naming it.
     let e = store
         .reshortcode(Reshortcode { new_scope: Some("again".into()), parent: Some("M-2".into()), ..ask(&["M-6"], "H") })
@@ -150,13 +150,13 @@ async fn a_scope_moved_into_a_new_code_roots_it_hosted_where_it_hangs_and_its_ho
     legacy_scope(&store, "M-7").await;
     let r = store.reshortcode(Reshortcode { with_children: true, ..ask(&["M-7"], "AREA") }).await.unwrap();
     assert_eq!(moves(&r), pairs(&[("M-7", "AREA-1"), ("M-8", "AREA-2"), ("M-9", "AREA-3")]));
-    let root = store.get("AREA-1").await.unwrap();
+    let root = store.get(SYS, "AREA-1").await.unwrap();
     assert_eq!((root.parent.as_deref(), root.address.as_str()), (Some("M-1"), "hypermemetic:M/AREA-1"));
-    assert_eq!(store.get("AREA-2").await.unwrap().parent.as_deref(), Some("AREA-1"));
+    assert_eq!(store.get(SYS, "AREA-2").await.unwrap().parent.as_deref(), Some("AREA-1"));
     // H hung under M-7: it hangs under AREA-1 now, in AREA's namespace.
-    let h = store.get("H-1").await.unwrap();
+    let h = store.get(SYS, "H-1").await.unwrap();
     assert_eq!((h.parent.as_deref(), h.address.as_str()), (Some("AREA-1"), "hypermemetic:M/AREA/H-1"));
-    let groups = store.groups();
+    let groups = store.groups(SYS);
     assert!(groups.iter().any(|g| g.shortcode.as_str() == "AREA" && g.root.as_deref() == Some("AREA-1")), "{groups:?}");
     // A build can't: it names no shortcode, and roots nothing.
     let e = store.reshortcode(ask(&["M-2"], "NOPE")).await.unwrap_err();
@@ -168,28 +168,28 @@ async fn a_scope_moved_into_a_new_code_roots_it_hosted_where_it_hangs_and_its_ho
 async fn an_old_id_names_the_new_ticket_everywhere_and_get_says_moved_from() {
     let store = store().await;
     store.reshortcode(ask(&["M-2"], "N")).await.unwrap();
-    let t = store.get("M-2").await.unwrap();
+    let t = store.get(SYS, "M-2").await.unwrap();
     assert_eq!((t.id.as_str(), t.moved_from.clone()), ("N-3", vec!["M-2".to_string()]));
-    assert_eq!(store.get("m-2").await.unwrap().id, "N-3", "folded as a reader writes it");
+    assert_eq!(store.get(SYS, "m-2").await.unwrap().id, "N-3", "folded as a reader writes it");
     assert_eq!(store.resolve("M-2").unwrap(), "N-3");
     // Its blocked ticket names it anew; a new block by the old id lands on it.
-    assert_eq!(store.get("M-3").await.unwrap().blocked_by, ["N-3"]);
-    assert_eq!(store.get("N-3").await.unwrap().unlocks, ["M-3"]);
+    assert_eq!(store.get(SYS, "M-3").await.unwrap().blocked_by, ["N-3"]);
+    assert_eq!(store.get(SYS, "N-3").await.unwrap().unlocks, ["M-3"]);
     let born = store.create(NewTicket { blocked_by: vec!["M-2".into()], ..new("M", "waits on the old id", Kind::Build, None) }).await.unwrap();
     assert_eq!(born.blocked_by, ["N-3"]);
     // A filter by the old id, and a set_status by it.
     assert_eq!(store.counts_text(&Lens::parse("under M-2").unwrap()).into_iter().map(|(_, n)| n).sum::<u64>(), 1);
     store.set_status("M-2", Status::Ready).await.unwrap();
-    assert_eq!(store.get("N-3").await.unwrap().status, Status::Ready);
+    assert_eq!(store.get(SYS, "N-3").await.unwrap().status, Status::Ready);
     // Moved again: both old ids name it.
     store.reshortcode(ask(&["N-3"], "H")).await.unwrap();
-    let t = store.get("M-2").await.unwrap();
+    let t = store.get(SYS, "M-2").await.unwrap();
     assert_eq!((t.id.as_str(), t.moved_from.clone()), ("H-3", vec!["M-2".to_string(), "N-3".to_string()]));
     // No number is given out twice: N's next is past the one that left.
     assert_eq!(store.create(new("N", "after", Kind::Build, None)).await.unwrap().id, "N-4");
     store.reshortcode(ask(&["M-10"], "N")).await.unwrap();
     assert_eq!(store.create(new("M", "after", Kind::Build, None)).await.unwrap().id, "M-11", "past M-10, which left");
-    assert_eq!(store.get("M-10").await.unwrap().title, "waits on the old id", "and M-10 still names the one that left");
+    assert_eq!(store.get(SYS, "M-10").await.unwrap().title, "waits on the old id", "and M-10 still names the one that left");
     assert_kept(&store, "the old ids");
 }
 
@@ -211,15 +211,15 @@ async fn commits_inputs_comments_history_and_the_queue_move_by_identity() {
     let c = store.add_comment(anchor, "a note".into(), None).await.unwrap();
     store.queue_by("M-4", crate::queue::Urgency::Today, "look", None, Act::default()).await.unwrap();
     store.reshortcode(ask(&["M-4"], "N")).await.unwrap();
-    let t = store.get("N-3").await.unwrap();
+    let t = store.get(SYS, "N-3").await.unwrap();
     assert_eq!(t.commits, ["77df9a0"]);
-    assert_eq!(store.inputs(Some("N-3"), None, None).unwrap().iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["notes"]);
-    assert_eq!(store.inputs(Some("M-4"), None, None).unwrap().len(), 1, "by the old id too");
-    let c = store.comment(c.id.get()).unwrap();
+    assert_eq!(store.inputs(SYS, Some("N-3"), None, None).unwrap().iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["notes"]);
+    assert_eq!(store.inputs(SYS, Some("M-4"), None, None).unwrap().len(), 1, "by the old id too");
+    let c = store.comment(SYS, c.id.get()).unwrap();
     assert_eq!((c.anchor.ticket.as_deref(), c.anchor.route.as_str()), (Some("N-3"), "#/ticket/N-3"));
-    let h = store.history("N-3").unwrap();
+    let h = store.history(SYS, "N-3").unwrap();
     assert_eq!(h.own.iter().map(|t| t.to.as_str()).collect::<Vec<_>>(), ["Pending", "Ready"], "its history, kept");
-    assert!(store.queued(true, 0, |_| true).iter().any(|(e, _)| e.ticket == "N-3"), "still queued, as N-3");
+    assert!(store.queued(SYS, true, 0).iter().any(|(e, _)| e.ticket == "N-3"), "still queued, as N-3");
     assert_kept(&store, "the records");
 }
 
@@ -231,17 +231,17 @@ async fn children_stay_in_their_shortcode_unless_with_children() {
     let r = store.reshortcode(ask(&["M-7"], "N")).await.unwrap();
     assert_eq!(moves(&r), pairs(&[("M-7", "N-3")]));
     for id in ["M-8", "M-9"] {
-        assert_eq!(store.get(id).await.unwrap().parent.as_deref(), Some("M-1"), "{id}");
+        assert_eq!(store.get(SYS, id).await.unwrap().parent.as_deref(), Some("M-1"), "{id}");
     }
-    assert_eq!(store.get("H-1").await.unwrap().parent.as_deref(), Some("N-3"));
-    assert_eq!(store.get("N-3").await.unwrap().child_count, 1);
+    assert_eq!(store.get(SYS, "H-1").await.unwrap().parent.as_deref(), Some("N-3"));
+    assert_eq!(store.get(SYS, "N-3").await.unwrap().child_count, 1);
     // With: the subtree in its own shortcode comes, the structure kept.
     let store = self::store().await;
     let r = store.reshortcode(Reshortcode { with_children: true, ..ask(&["M-7"], "N") }).await.unwrap();
     assert_eq!(moves(&r), pairs(&[("M-7", "N-3"), ("M-8", "N-4"), ("M-9", "N-5")]));
-    assert_eq!(store.get("N-5").await.unwrap().parent.as_deref(), Some("N-3"));
-    assert_eq!(store.get("N-5").await.unwrap().blocked_by, ["N-4"]);
-    assert_eq!(store.get("N-3").await.unwrap().parent.as_deref(), Some("N-1"));
+    assert_eq!(store.get(SYS, "N-5").await.unwrap().parent.as_deref(), Some("N-3"));
+    assert_eq!(store.get(SYS, "N-5").await.unwrap().blocked_by, ["N-4"]);
+    assert_eq!(store.get(SYS, "N-3").await.unwrap().parent.as_deref(), Some("N-1"));
     assert_kept(&store, "the children");
 }
 
@@ -254,9 +254,9 @@ async fn a_root_moves_only_with_its_whole_shortcode_as_a_rename() {
     assert!(refused(e).contains_key("H-1"));
     let r = store.reshortcode(Reshortcode { with_children: true, ..ask(&["H-1"], "LOOK") }).await.unwrap();
     assert_eq!(moves(&r), pairs(&[("H-1", "LOOK-1"), ("H-2", "LOOK-2")]));
-    let t = store.get("H-2").await.unwrap();
+    let t = store.get(SYS, "H-2").await.unwrap();
     assert_eq!((t.id.as_str(), t.address.as_str(), t.parent.as_deref()), ("LOOK-2", "hypermemetic:M/LOOK-2", Some("LOOK-1")));
-    assert_eq!(store.get("LOOK-1").await.unwrap().parent.as_deref(), Some("M-7"));
+    assert_eq!(store.get(SYS, "LOOK-1").await.unwrap().parent.as_deref(), Some("M-7"));
     // A code taken in its namespace is refused: N is a root of the org, M's
     // namespace holds LOOK now.
     let e = store.reshortcode(Reshortcode { with_children: true, ..ask(&["N-1"], "M") }).await.unwrap_err();
@@ -265,7 +265,7 @@ async fn a_root_moves_only_with_its_whole_shortcode_as_a_rename() {
     // past the ones that left, whose ids name LOOK's.
     let h = store.create(new("H", "a new H", Kind::Scope, None)).await.unwrap();
     assert_eq!(h.id, "H-3");
-    assert_eq!(store.get("H-1").await.unwrap().id, "LOOK-1");
+    assert_eq!(store.get(SYS, "H-1").await.unwrap().id, "LOOK-1");
     assert_kept(&store, "the rename");
 }
 
@@ -329,7 +329,7 @@ async fn the_file_holds_what_the_cache_holds_and_verify_agrees() {
     store.reshortcode(Reshortcode { new_scope: Some("p".into()), parent: Some("M-1".into()), ..ask(&["M-2", "M-3"], "PAL") }).await.unwrap();
     assert_kept(&store, "the moves");
     let rows: Vec<Row> = store.tickets.read().unwrap().order.values().cloned().collect();
-    let (groups, extents) = (store.groups(), store.extents_text());
+    let (groups, extents) = (store.groups(SYS), store.extents_text());
     drop(store);
     match Store::verify_derived(&path).unwrap() {
         Verdict::Consistent { .. } => {}
@@ -338,12 +338,12 @@ async fn the_file_holds_what_the_cache_holds_and_verify_agrees() {
     let again = Store::open(&path).unwrap();
     let reread: Vec<Row> = again.tickets.read().unwrap().order.values().cloned().collect();
     assert_eq!(reread, rows, "the file holds what the cache held");
-    assert_eq!((again.groups(), again.extents_text()), (groups, extents));
+    assert_eq!((again.groups(SYS), again.extents_text()), (groups, extents));
     for (old, new) in [("M-5", "N-3"), ("M-7", "AREA-1"), ("M-9", "AREA-3"), ("H-2", "LOOK-2"), ("M-3", "PAL-3")] {
-        assert_eq!(again.get(old).await.unwrap().id, new, "{old}");
+        assert_eq!(again.get(SYS, old).await.unwrap().id, new, "{old}");
     }
-    assert_eq!(again.get("PAL-3").await.unwrap().blocked_by, ["PAL-2"]);
-    assert_eq!(again.get("AREA-3").await.unwrap().commits, ["abcdef1"]);
+    assert_eq!(again.get(SYS, "PAL-3").await.unwrap().blocked_by, ["PAL-2"]);
+    assert_eq!(again.get(SYS, "AREA-3").await.unwrap().commits, ["abcdef1"]);
 }
 
 /// ORG-4: a move keeps a ticket in its organization, and `to` is read in the

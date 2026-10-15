@@ -82,7 +82,7 @@ fn types(changes: &[Change]) -> Vec<&'static str> {
 /// makes, and the forward references a scan finds.
 #[track_caller]
 pub(super) fn assert_kept(store: &Store, after: &str) {
-    assert_eq!(store.groups(), tests::nav(store), "the roll-ups the nav draws, after {after}");
+    assert_eq!(store.groups(SYS), tests::nav(store), "the roll-ups the nav draws, after {after}");
     tests_placements::assert_kept_placements_are_the_rule(store, after);
     let cache = store.tickets.read().unwrap();
     let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect(), cache.inputs.clone());
@@ -133,7 +133,7 @@ async fn each_field_alone_moves_it_and_sends_its_own_event() {
 
     let u = store.update("U-2", Update { body: Some("a new body".into()), ..Update::default() }).await.unwrap();
     assert_eq!((u.changed, u.ticket.body.as_str()), (vec!["body".to_string()], "a new body"));
-    assert_eq!(store.get("U-2").await.unwrap().body, "a new body", "the body is stored");
+    assert_eq!(store.get(SYS, "U-2").await.unwrap().body, "a new body", "the body is stored");
     assert_eq!(types(&drained(&mut rx)), ["amended"]);
 
     let u = store.update("U-2", Update { kind: Some(Kind::Gap), ..Update::default() }).await.unwrap();
@@ -150,7 +150,7 @@ async fn each_field_alone_moves_it_and_sends_its_own_event() {
     let u = store.update("U-2", Update { parent: Some("u-5".into()), ..Update::default() }).await.unwrap();
     assert_eq!((u.changed, u.ticket.parent.as_deref()), (vec!["parent".to_string()], Some("U-5")));
     assert_eq!(types(&drained(&mut rx)), ["parent_changed", "children_changed", "child_removed"]);
-    assert_eq!(store.get("U-5").await.unwrap().child_count, 2);
+    assert_eq!(store.get(SYS, "U-5").await.unwrap().child_count, 2);
     assert_kept(&store, "a parent");
 
     let u = store.update("U-2", Update { severity: Some(Some(Severity::High)), ..Update::default() }).await.unwrap();
@@ -168,7 +168,7 @@ async fn each_field_alone_moves_it_and_sends_its_own_event() {
     let u = store.update("U-3", blocked(&["u-2"])).await.unwrap();
     assert_eq!((u.changed, u.ticket.blocked_by.clone()), (vec!["blocked_by".to_string()], vec!["U-2".to_string()]));
     assert_eq!(types(&drained(&mut rx)), ["blockers_changed", "unlocks_changed", "placements_changed", "cells_moved"]);
-    assert_eq!(store.get("U-2").await.unwrap().unlocks, ["U-3"]);
+    assert_eq!(store.get(SYS, "U-2").await.unwrap().unlocks, ["U-3"]);
     assert_kept(&store, "a block");
 
     let u = store.update("U-3", unblocked(&["U-2"])).await.unwrap();
@@ -207,7 +207,7 @@ async fn all_at_once_is_one_write_its_events_in_order() {
         (t.title.as_str(), t.kind, t.status, t.parent.as_deref(), t.severity, t.blocked_by.clone()),
         ("three, all at once", Kind::Gap, Status::Ready, Some("U-5"), Some(Severity::Low), vec!["U-2".to_string(), "V-2".to_string()])
     );
-    assert_eq!(store.get("U-3").await.unwrap(), *t, "the answer is the ticket as stored");
+    assert_eq!(store.get(SYS, "U-3").await.unwrap(), *t, "the answer is the ticket as stored");
     assert_eq!(store.tickets.read().unwrap().written, written + 1, "one write");
     let sent = drained(&mut rx);
     assert_eq!(
@@ -240,7 +240,7 @@ async fn all_at_once_is_one_write_its_events_in_order() {
 #[tokio::test]
 async fn nothing_to_change_writes_and_sends_nothing() {
     let store = store().await;
-    let before = store.get("U-2").await.unwrap();
+    let before = store.get(SYS, "U-2").await.unwrap();
     let written = store.tickets.read().unwrap().written;
     let mut rx = store.subscribe_filtered();
     for asked in [
@@ -260,7 +260,7 @@ async fn nothing_to_change_writes_and_sends_nothing() {
         assert!(u.changed.is_empty(), "{:?}", u.changed);
         assert_eq!(u.ticket, before);
     }
-    assert_eq!(store.get("U-2").await.unwrap(), before);
+    assert_eq!(store.get(SYS, "U-2").await.unwrap(), before);
     assert_eq!(store.tickets.read().unwrap().written, written, "no write");
     assert!(drained(&mut rx).is_empty(), "nothing sent");
 }
@@ -275,7 +275,7 @@ async fn every_refusal_writes_nothing() {
     let ids = ["U-1", "U-2", "U-3", "U-4", "U-5", "U-6", "V-1", "V-2"];
     let mut before = Vec::new();
     for id in ids {
-        before.push(store.get(id).await.unwrap());
+        before.push(store.get(SYS, id).await.unwrap());
     }
     let written = store.tickets.read().unwrap().written;
     let mut rx = store.subscribe_filtered();
@@ -316,7 +316,7 @@ async fn every_refusal_writes_nothing() {
     }
     assert!(matches!(store.update("U-77", Update::default()).await, Err(StoreError::NotFound(_))));
     for (id, was) in ids.iter().zip(&before) {
-        assert_eq!(&store.get(id).await.unwrap(), was, "{id} untouched");
+        assert_eq!(&store.get(SYS, id).await.unwrap(), was, "{id} untouched");
     }
     assert_eq!(store.tickets.read().unwrap().written, written, "no write");
     assert!(drained(&mut rx).is_empty(), "nothing sent");
@@ -393,7 +393,7 @@ async fn blockers_move_unlocks_ready_cells_and_waves() {
     assert_eq!(moved, [("U-3", Wave { n: 1 }), ("U-6", Wave { n: 2 })]);
     assert_eq!(ready(&store), ["U-2", "U-3"]);
     assert_eq!(count(&store, "blocked", "U"), 1);
-    assert!(store.get("U-2").await.unwrap().unlocks.is_empty());
+    assert!(store.get(SYS, "U-2").await.unwrap().unlocks.is_empty());
     assert_kept(&store, "the middle unblocked");
 
     // A completed blocker is satisfied: blocking on it blocks nothing.

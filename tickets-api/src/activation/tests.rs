@@ -1,5 +1,6 @@
 //! MENGER-29: the tickets activation's tests, moved out of `activation.rs`.
 
+use crate::store::SYS;
 use super::*;
 use futures::StreamExt;
 
@@ -1485,7 +1486,7 @@ async fn await_reply_waits_then_answers_once() {
     assert!(s.next().await.is_none());
 
     // `since`: what already happened answers at once.
-    let at = store.comments(&Default::default(), None, None).unwrap().comments[0].at;
+    let at = store.comments(SYS, &Default::default(), None, None).unwrap().comments[0].at;
     let mut s = Box::pin(hub.await_reply(None, Reach::everywhere(), "AW-1".into(), Some(at), None, None).await);
     assert!(matches!(s.next().await, Some(TicketsEvent::Waiting { .. })));
     assert!(matches!(s.next().await, Some(TicketsEvent::Replied { reply: Reply::Commented { .. }, .. })));

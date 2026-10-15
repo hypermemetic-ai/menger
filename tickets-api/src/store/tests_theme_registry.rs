@@ -91,7 +91,7 @@ async fn a_block_that_is_not_a_theme_refuses_the_write_naming_its_line() {
         ] {
             assert!(err.contains(&format!("```theme pantry: line {line}: ")) && err.contains(why), "{css}: {err}");
         }
-        assert_eq!(store.get(&t.id).await.unwrap().body, "plain", "nothing written");
+        assert_eq!(store.get(SYS, &t.id).await.unwrap().body, "plain", "nothing written");
         assert_eq!(names(&store), ["default"]);
     }
     for (body, why) in [
@@ -102,7 +102,7 @@ async fn a_block_that_is_not_a_theme_refuses_the_write_naming_its_line() {
         let err = store.amend(&t.id, None, Some(body)).await.unwrap_err().to_string();
         assert!(err.contains(why), "{err}");
     }
-    assert!(store.get("PANTRY-2").await.is_err(), "no id spent on a refused create");
+    assert!(store.get(SYS, "PANTRY-2").await.is_err(), "no id spent on a refused create");
 }
 
 #[tokio::test]

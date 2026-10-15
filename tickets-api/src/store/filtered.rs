@@ -38,6 +38,10 @@ pub struct Lens {
     history: Vec<crate::filter::History>,
     clock: super::history::Clock,
     judge: Arc<Judge>,
+    /// ACCESS-10: the filter it was compiled from ([`Lens::of`]) — what a
+    /// read ANDs the reader's reach into ([`Lens::and`]), as the language
+    /// ANDs two filters. `None` for a lens made of a judge alone (a test's).
+    filter: Option<Arc<Filter>>,
 }
 
 /// A lens's judge: a shortcode, a cell, the lineage's names that hold, and
@@ -59,7 +63,40 @@ impl Lens {
             history: Vec::new(),
             clock: Default::default(),
             judge: Arc::new(move |e, k, _, _| judge(e, k)),
+            filter: None,
         }
+    }
+
+    /// ACCESS-10: this lens AND `reach` — what a read answers a reader
+    /// under: the two filters ANDed and compiled as one ([`Filter::and`],
+    /// exactly the lens IDENTITY-21's `scoped` compiled), its clock this
+    /// lens's. A lens made of a judge alone is ANDed judge by judge.
+    pub(super) fn and(&self, reach: &Lens) -> Result<Lens, StoreError> {
+        if let (Some(a), Some(b)) = (&self.filter, &reach.filter) {
+            return Ok(Lens::of(&a.and(b))?.with_clock(self.clock.clone()));
+        }
+        let union = |a: &[String], b: &[String]| -> Vec<String> {
+            let mut v: Vec<String> = a.iter().chain(b).cloned().collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        let mut history = self.history.clone();
+        for h in &reach.history {
+            if !history.iter().any(|x| x.format() == h.format()) {
+                history.push(h.clone());
+            }
+        }
+        let (a, b) = (Arc::clone(&self.judge), Arc::clone(&reach.judge));
+        Ok(Lens {
+            text: format!("({}) and ({})", self.text, reach.text),
+            named: union(&self.named, &reach.named),
+            unders: union(&self.unders, &reach.unders),
+            history,
+            clock: self.clock.clone(),
+            judge: Arc::new(move |e, k, l, h| a(e, k, l, h) && b(e, k, l, h)),
+            filter: None,
+        })
     }
 
     /// MENGER-13: this lens reading time by `clock` — its zone, its moment
@@ -110,7 +147,8 @@ impl Lens {
 
     /// The empty filter: every ticket.
     pub fn all() -> Self {
-        Self::new(String::new(), Vec::new(), |_, _| true)
+        // ACCESS-10: the empty filter's, so a reach ANDs into it as text.
+        Self { filter: Some(Arc::new(Filter::default())), ..Self::new(String::new(), Vec::new(), |_, _| true) }
     }
 
     /// A filter's text, read by the language (FILTER-10) and judged by its
@@ -173,6 +211,7 @@ impl Lens {
             history,
             clock: Default::default(),
             judge: Arc::new(move |epic, key, lineage, holds| judged.matches(&facts(epic, key, lineage, holds))),
+            filter: Some(Arc::new(filter.clone())),
         })
     }
 
@@ -469,14 +508,14 @@ impl Store {
     /// the filter admits there. The empty lens is each shortcode's tickets.
     ///
     /// ORG-3: by the shortcode's identity — two THEMEs are two counts.
-    pub fn counts(&self, lens: &Lens) -> Vec<(ShortcodeId, u64)> {
-        self.counts_keeping(lens, None)
+    pub(super) fn counts_unscoped(&self, lens: &Lens) -> Vec<(ShortcodeId, u64)> {
+        self.counts_keeping_unscoped(lens, None)
     }
 
     /// FILTER-24: [`Store::counts`] with `keep` — a ticket counted as a
     /// match whatever the filter says of it (once: a match is counted as it
     /// was).
-    pub fn counts_keeping(&self, lens: &Lens, keep: Option<&str>) -> Vec<(ShortcodeId, u64)> {
+    pub(super) fn counts_keeping_unscoped(&self, lens: &Lens, keep: Option<&str>) -> Vec<(ShortcodeId, u64)> {
         let cache = self.tickets.read().expect("store lock poisoned");
         let view = Compiled::new(&cache, lens, None).view(None);
         let view = match keep.and_then(|id| keep_row(&cache, id)) {
@@ -489,7 +528,7 @@ impl Store {
 
     /// ORG-3: [`Store::counts_keeping`] for a read — an `under` name that
     /// names more than one in reach is refused, naming each.
-    pub fn counts_read(&self, lens: &Lens, keep: Option<&str>) -> Result<Vec<(ShortcodeId, u64)>, StoreError> {
+    pub(super) fn counts_read_unscoped(&self, lens: &Lens, keep: Option<&str>) -> Result<Vec<(ShortcodeId, u64)>, StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
         let view = Compiled::read(&cache, lens, None)?.view(None);
         let view = match keep.and_then(|id| keep_row(&cache, id)) {
@@ -508,23 +547,9 @@ impl Store {
         (cache.shortcodes.code(sc), cache.shortcodes.address(sc))
     }
 
-    /// FILTER-4: `facets { filter, base }` — the counts behind every menu
-    /// (Linear's facets). For each field of [`FACET_FIELDS`], in that order:
-    /// the tickets matching `base` and `filter` with `filter`'s own groups
-    /// for that field set aside (a group is a field's own when every
-    /// predicate in it names that field; `base`'s are never set aside),
-    /// counted by their value of the field — `(field, value, held)` for
-    /// each value held, statuses in [`Status::ALL`]'s order, shortcodes in
-    /// the store's. A sum over the kept cell counts: each distinct filter
-    /// the fields leave is compiled once, and its admitted bitmaps' lengths
-    /// are tallied for every field that left it.
-    pub fn facets(&self, filter: &Filter, base: &Filter) -> Result<Vec<(String, String, u64)>, StoreError> {
-        self.facets_at(filter, base, &Default::default())
-    }
-
     /// MENGER-13: [`Store::facets`] with a history filter's time read by
     /// `clock`.
-    pub fn facets_at(
+    pub(super) fn facets_at_unscoped(
         &self,
         filter: &Filter,
         base: &Filter,
@@ -607,7 +632,7 @@ impl Store {
     /// empty page, where it would start); `remaining` the matches after it,
     /// exactly. `at` past the end is an empty page at `at`. Both `at` and
     /// `after` is [`StoreError::AtAndAfter`].
-    pub fn filtered_page(
+    pub(super) fn filtered_page_unscoped(
         &self,
         q: &Filtered,
         after: Option<&str>,

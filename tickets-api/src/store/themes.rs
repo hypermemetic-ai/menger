@@ -319,10 +319,11 @@ impl Store {
     /// and the nearest shortcode's setting from the cache, the ticket's and
     /// its frame's from its body's frontmatter (read as `get` reads it) —
     /// and who wears what ([`themes::resolve`], no reader). A ticket that is
-    /// none is [`StoreError::NotFound`].
-    pub async fn theme_for(&self, id: &str) -> Result<(String, Regions, Levels), StoreError> {
+    /// none — ACCESS-10: or one `who` may not see — is
+    /// [`StoreError::NotFound`].
+    pub async fn theme_for(&self, who: &(impl super::Reader + ?Sized), id: &str) -> Result<(String, Regions, Levels), StoreError> {
         let id = id.trim();
-        let ticket = self.get(&if id.contains('/') { id.to_string() } else { id.to_ascii_uppercase() }).await?;
+        let ticket = self.get(who, &if id.contains('/') { id.to_string() } else { id.to_ascii_uppercase() }).await?;
         let declared = themes::declared(&ticket.body);
         let levels = {
             let cache = self.tickets.read().expect("store lock poisoned");

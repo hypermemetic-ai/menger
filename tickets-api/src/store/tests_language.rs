@@ -182,7 +182,7 @@ fn assert_filter_is_a_scan(store: &Store, plain: &Plain, rng: &mut Rng, epics: &
     assert_lens_is_a_scan(store, plain, &lens, &judge, rng, what);
     let base = if rng.below(2) == 0 { Filter::default() } else { random_menger_filter(rng, epics) };
     assert_eq!(
-        store.facets(&filter, &base).unwrap(),
+        store.facets(SYS, &filter, &base).unwrap(),
         facets_by_rows(plain, &filter, &base),
         "{what}: facets of `{}` under `{}`",
         filter.format(),
@@ -235,10 +235,10 @@ async fn random_filters_equal_the_evaluator_on_a_store_built_by_create() {
         let lens = Lens::parse(text).unwrap();
         let judge = |t: &Row, k: Key| filter.matches(&plain.facts(t, k));
         assert_lens_is_a_scan(&store, &plain, &lens, &judge, &mut rng, text);
-        let facets = store.facets(&filter, &Filter::default()).unwrap();
+        let facets = store.facets(SYS, &filter, &Filter::default()).unwrap();
         assert_eq!(facets, facets_by_rows(&plain, &filter, &Filter::default()), "facets of `{text}`");
     }
-    let facets = store.facets(&Filter::default(), &Filter::default()).unwrap();
+    let facets = store.facets(SYS, &Filter::default(), &Filter::default()).unwrap();
     let menu: Vec<&str> = facets.iter().filter(|(f, _, _)| f == "menger doc").map(|(_, v, _)| v.as_str()).collect();
     assert_eq!(menu, ["yes", "no"]);
 }
@@ -303,7 +303,7 @@ async fn every_filter_3_filter_is_answered_as_the_evaluator_answers() {
         let lens = Lens::parse(&text).unwrap();
         let judge = |t: &Row, k: Key| filter.matches(&plain.facts(t, k));
         assert_lens_is_a_scan(&store, &plain, &lens, &judge, &mut rng, &text);
-        assert_eq!(store.facets(&filter, &Filter::default()).unwrap(), facets_by_rows(&plain, &filter, &Filter::default()), "{text}");
+        assert_eq!(store.facets(SYS, &filter, &Filter::default()).unwrap(), facets_by_rows(&plain, &filter, &Filter::default()), "{text}");
     }
 }
 
@@ -315,13 +315,13 @@ async fn ready_is_the_ready_set() {
     store.seed_synthetic(SeedSpec { count: 3_000, seed: 2, into_existing: false }).unwrap();
     let lens = Lens::parse("ready").unwrap();
     for (epic, held) in store.counts_text(&lens) {
-        assert_eq!(held, store.ready_page(Some(&epic), None, Some(0)).unwrap().remaining, "{epic}");
+        assert_eq!(held, store.ready_page(SYS, Some(&epic), None, Some(0)).unwrap().remaining, "{epic}");
     }
     let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
     let (mut after, mut walked) = (None::<String>, 0);
     loop {
-        let filtered = store.filtered_page(&q, after.as_deref(), None, Some(150)).unwrap();
-        let ready = store.ready_page(None, after.as_deref(), Some(150)).unwrap();
+        let filtered = store.filtered_page(SYS, &q, after.as_deref(), None, Some(150)).unwrap();
+        let ready = store.ready_page(SYS, None, after.as_deref(), Some(150)).unwrap();
         assert_eq!((&filtered.tickets, &filtered.next, filtered.remaining), (&ready.tickets, &ready.next, ready.remaining));
         assert_eq!(filtered.first, Some(walked));
         walked += filtered.tickets.len() as u64;
@@ -358,10 +358,10 @@ fn text_is_refused_naming_where_it_lives_and_under_is_answered() {
     assert!(Lens::parse("ready and under SCALE-13 and (in SCALE or under MNG)").is_ok());
     let store = Store::new();
     let under = Filter::parse("under SCALE").unwrap();
-    assert!(store.facets(&under, &Filter::default()).is_ok());
-    assert!(store.facets(&Filter::default(), &under).is_ok(), "the base too");
+    assert!(store.facets(SYS, &under, &Filter::default()).is_ok());
+    assert!(store.facets(SYS, &Filter::default(), &under).is_ok(), "the base too");
     let text = Filter::parse("text \"x\"").unwrap();
-    assert!(store.facets(&text, &Filter::default()).is_err());
+    assert!(store.facets(SYS, &text, &Filter::default()).is_err());
     let bad = Lens::parse("tag x and ready and written today and nonsense").unwrap_err().to_string();
     for chunk in ["`tag x`", "`written today`", "`nonsense`"] {
         assert!(bad.contains(chunk), "{bad}");
@@ -383,10 +383,10 @@ async fn a_facet_sets_aside_only_its_fields_own_groups() {
     let store = Store::new();
     store.seed_synthetic(SeedSpec { count: 1_500, seed: 5, into_existing: false }).unwrap();
     let plain = Plain::of(&store);
-    let all = store.facets(&Filter::default(), &Filter::default()).unwrap();
+    let all = store.facets(SYS, &Filter::default(), &Filter::default()).unwrap();
     let by_status: Vec<&(String, String, u64)> = all.iter().filter(|(f, _, _)| f == "status").collect();
     let f = Filter::parse("status Ready and kind build").unwrap();
-    let got = store.facets(&f, &Filter::default()).unwrap();
+    let got = store.facets(SYS, &f, &Filter::default()).unwrap();
     // The status menu counts builds of every status; the kind menu, Ready
     // tickets of every kind.
     let total = |field: &str, v: &[(String, String, u64)]| -> u64 { v.iter().filter(|(x, _, _)| x == field).map(|(_, _, n)| n).sum() };
@@ -394,7 +394,7 @@ async fn a_facet_sets_aside_only_its_fields_own_groups() {
     assert_eq!(total("kind", &got), plain.rows.iter().filter(|t| t.status == Status::Ready).count() as u64);
     assert!(by_status.len() >= 5);
     let mixed = Filter::parse("(status Ready or blocked)").unwrap();
-    let got = store.facets(&mixed, &Filter::default()).unwrap();
+    let got = store.facets(SYS, &mixed, &Filter::default()).unwrap();
     assert_eq!(got, facets_by_rows(&plain, &mixed, &Filter::default()), "no field's own: kept for every field");
     let blocked_not_ready = plain.rows.iter().zip(&plain.cells).filter(|(t, k)| k.blocked() && t.status != Status::Ready).count();
     assert!(blocked_not_ready > 0 && got.iter().any(|(f, v, _)| f == "status" && v != "Ready"), "the status menu still holds the blocked");

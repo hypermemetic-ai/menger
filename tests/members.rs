@@ -341,11 +341,14 @@ async fn blockers_answer_only_what_the_caller_can_view_and_blocked_by_names_only
     call(&ada, "members.grant", grant(ALICE, "IDENTITY", "editor")).await;
     let alice = as_(&w, ALICE, "alice").await;
 
+    // ACCESS-10: a hidden blocker is not answered, nor named — the ticket
+    // counts it instead (`hidden_blocked_by`).
     let b = call(&alice, "tickets.blockers", json!({ "id": "IDENTITY-3" })).await;
-    assert_eq!(b.len(), 2, "{b:?}");
-    assert_eq!((b[0]["type"].as_str(), b[0]["id"].as_str()), (Some("dangling_blocker"), Some("OUGHT-2")), "nothing of OUGHT-2 but its id: {b:?}");
-    assert!(b[0].get("ticket").is_none());
-    assert_eq!((b[1]["type"].as_str(), b[1]["ticket"]["id"].as_str()), (Some("blocker"), Some("IDENTITY-2")));
+    assert_eq!(b.len(), 1, "{b:?}");
+    assert_eq!((b[0]["type"].as_str(), b[0]["ticket"]["id"].as_str()), (Some("blocker"), Some("IDENTITY-2")));
+    assert!(!format!("{b:?}").contains("OUGHT"), "nothing of OUGHT-2, not even its id: {b:?}");
+    let t = call(&alice, "tickets.get", json!({ "id": "IDENTITY-3" })).await;
+    assert_eq!((t[0]["ticket"]["blocked_by"].clone(), t[0]["ticket"]["hidden_blocked_by"].clone()), (json!(["IDENTITY-2"]), json!(1)), "{t:?}");
     // Ada sees both.
     let b = call(&ada, "tickets.blockers", json!({ "id": "IDENTITY-3" })).await;
     assert_eq!(b.iter().filter(|e| e["type"] == "blocker").count(), 2, "{b:?}");

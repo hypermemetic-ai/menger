@@ -44,7 +44,7 @@ pub(super) fn update_of(
 /// there too.
 pub(super) fn update_reach(store: &Store, caller: &VerifiedUser, id: &str, update: &Update) -> Result<(), String> {
     if let Some(parent) = &update.parent {
-        let root = store.groups().into_iter().any(|g| g.root.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(id.trim())));
+        let root = store.groups(caller).into_iter().any(|g| g.root.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(id.trim())));
         let wanted = if root { Some(Grant::new(ADMINISTER)) } else { caller.grant().cloned() };
         if let Some(g) = wanted {
             caller.check(&g, id).and_then(|()| caller.check(&g, parent.trim())).map_err(|message| {
@@ -106,8 +106,7 @@ pub(super) fn cells_stream(
                     yield TicketsEvent::Error { message };
                     return;
                 }
-                let sight = sight_lens(&caller).ok().flatten();
-                let written = match write {
+                        let written = match write {
                     CellWrite::Labels(add, remove) => store.label_many(&ids, texts(add), texts(remove)).await,
                     CellWrite::Commits(commits) => store.link_commits_many(&ids, texts(commits)).await,
                 };
@@ -117,7 +116,7 @@ pub(super) fn cells_stream(
                             yield change_event(change);
                         }
                     }
-                    Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, sight.as_ref(), id)) },
+                    Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
                 }
                 return;
             }
@@ -179,7 +178,6 @@ pub(super) fn update_many_stream(
                 return;
             }
         };
-        let sight = sight_lens(&caller).ok().flatten();
         let caller = Arc::new(caller);
         let (gate, reach_of, at) = (Arc::clone(&caller), asked.clone(), store.clone());
         let may = move |ids: &[String]| -> Result<(), String> {
@@ -193,7 +191,7 @@ pub(super) fn update_many_stream(
         };
         match store.update_many_by(select, asked, act, may).await {
             Ok(UpdatedMany { tickets, ids, unchanged, changed }) => yield TicketsEvent::UpdatedMany { ids, changed, tickets, unchanged },
-            Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, sight.as_ref(), id)) },
+            Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
         }
     }
 }

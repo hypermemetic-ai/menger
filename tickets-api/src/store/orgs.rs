@@ -396,7 +396,7 @@ impl Store {
     /// out of reach as for none. An organization (`acme:`, or a name it had)
     /// is itself; a stored shortcode scope (`acme:MENGER.12`) is its
     /// shortcode's chain. `None`: it names nothing a scope could hold.
-    pub fn gate_chain(&self, target: &str) -> Option<Vec<String>> {
+    pub(crate) fn gate_chain(&self, target: &str) -> Option<Vec<String>> {
         let t = target.trim();
         if t.is_empty() {
             return None;

@@ -37,7 +37,7 @@ const FIELD: &str = "```component m-x\n<template><section part=\"section\"><span
 async fn documented_parts_are_registered() {
     let store = store().await;
     store.create(ticket(Kind::Doc, FIELD)).await.unwrap();
-    let c = store.components().into_iter().find(|c| c.name == "m-x").expect("m-x");
+    let c = store.components(SYS).into_iter().find(|c| c.name == "m-x").expect("m-x");
     let parts: Vec<(String, bool)> = c.docs.expect("docs").parts.into_iter().map(|p| (p.name, p.scripted)).collect();
     assert_eq!(parts, vec![("section".into(), false), ("label".into(), false), ("go".into(), true)]);
 }
@@ -50,11 +50,11 @@ async fn a_part_the_template_lacks_is_refused() {
     let bad = FIELD.replace("part=\"label\"", "");
     let e = store.create(ticket(Kind::Doc, &bad)).await.expect_err("refused");
     assert!(e.to_string().contains("the part 'label' is documented but no element of the <template> carries part=\"label\""), "{e}");
-    assert!(store.components().is_empty());
+    assert!(store.components(SYS).is_empty());
     let id = store.create(ticket(Kind::Doc, FIELD)).await.unwrap().id;
     let e = store.amend(&id, None, Some(bad)).await.expect_err("refused");
     assert!(e.to_string().contains("the part 'label'"), "{e}");
-    let c = store.components().into_iter().find(|c| c.name == "m-x").unwrap();
+    let c = store.components(SYS).into_iter().find(|c| c.name == "m-x").unwrap();
     assert_eq!(c.docs.unwrap().parts.len(), 3, "the amend wrote nothing");
 }
 
@@ -70,7 +70,7 @@ async fn house_bodies_expose_their_documented_parts() {
         let id = store.create(ticket(Kind::Doc, &body)).await.unwrap_or_else(|e| panic!("{path}: refused: {e}")).id;
         // A component that renders nothing (m-house, the shared code: an empty template) has nothing to skin.
         let renders = |c: &Component| !c.source.contains("<template></template>");
-        for c in store.components().into_iter().filter(|c| c.owner.as_deref() == Some(id.as_str()) && renders(c)) {
+        for c in store.components(SYS).into_iter().filter(|c| c.owner.as_deref() == Some(id.as_str()) && renders(c)) {
             let docs = c.docs.unwrap_or_else(|| panic!("{path}: {} has no docs", c.name));
             assert!(!docs.parts.is_empty(), "{path}: {} documents no part a theme may skin", c.name);
             seen += 1;

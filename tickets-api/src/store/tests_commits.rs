@@ -106,7 +106,7 @@ async fn every_row_of_the_table() {
     assert_eq!(added, ["0bb28b2"]);
     assert_eq!(t.commits, ["77df9a0", "Plexus-Macros@4f7114a", "0bb28b2"], "link order");
     assert_eq!(linked(next(&mut rx)), (t.clone(), added));
-    assert_eq!(store.get("CM-2").await.unwrap(), t, "get shows them");
+    assert_eq!(store.get(SYS, "CM-2").await.unwrap(), t, "get shows them");
 
     // Every entry already linked; none given; one named twice in a call.
     for entries in [vec!["77df9a0"], vec!["0BB28B2", "Plexus-Macros@4f7114a"], vec![]] {
@@ -121,7 +121,7 @@ async fn every_row_of_the_table() {
     linked(next(&mut rx));
 
     // One malformed entry among valid ones: refused whole, naming it.
-    let before = store.get("CM-2").await.unwrap();
+    let before = store.get(SYS, "CM-2").await.unwrap();
     for entries in [vec!["499e3a0", "not-a-commit", "c8c5678"], vec!["499e3a0", "abc"]] {
         match store.link_commits("CM-2", strings(&entries)).await {
             Err(e @ StoreError::NotACommit { .. }) => {
@@ -136,7 +136,7 @@ async fn every_row_of_the_table() {
         Err(StoreError::NotACommit { entries, .. }) => assert_eq!(entries, ["xyz", "HEAD"], "every one, as given"),
         other => panic!("expected NotACommit, got {other:?}"),
     }
-    assert_eq!(store.get("CM-2").await.unwrap(), before, "the refused links wrote nothing");
+    assert_eq!(store.get(SYS, "CM-2").await.unwrap(), before, "the refused links wrote nothing");
     assert!(rx.try_recv().is_err());
 
     // Unlink: what is on the ticket comes off, in the order given; a
@@ -155,7 +155,7 @@ async fn every_row_of_the_table() {
         store.unlink_commits("CM-2", strings(&["5054a51", "nope"])).await,
         Err(StoreError::NotACommit { entries, .. }) if entries == ["nope"]
     ));
-    assert_eq!(store.get("CM-2").await.unwrap(), t, "the refused unlink removed nothing");
+    assert_eq!(store.get(SYS, "CM-2").await.unwrap(), t, "the refused unlink removed nothing");
 
     // An id naming no ticket, with entries or without.
     for entries in [vec!["77df9a0"], vec![]] {
@@ -179,8 +179,8 @@ async fn a_link_moves_the_commits_and_updated_unix_and_nothing_else() {
     store.create(ticket("ED", Kind::Spike, Some("ED-3"), &["ED-3"])).await.unwrap(); // ED-4
     store.set_status("ED-3", Status::Coding).await.unwrap();
     store.set_status("ED-2", Status::Complete).await.unwrap();
-    let before: Vec<Ticket> = store.list(None, None, None).await.unwrap();
-    let (groups, extents) = (store.groups(), store.extents_text());
+    let before: Vec<Ticket> = store.list(SYS, None, None, None).await.unwrap();
+    let (groups, extents) = (store.groups(SYS), store.extents_text());
     let started = chrono::Utc::now().timestamp();
 
     let (t, _) = linked(store.link_commits("ED-3", strings(&["77df9a0", "ought@1a2b3c4"])).await.unwrap());
@@ -195,19 +195,19 @@ async fn a_link_moves_the_commits_and_updated_unix_and_nothing_else() {
     expect.updated_unix = t.updated_unix;
     assert_eq!(t, expect);
 
-    let after = store.list(None, None, None).await.unwrap();
+    let after = store.list(SYS, None, None, None).await.unwrap();
     for (b, a) in before.iter().zip(&after) {
         if a.id != "ED-3" {
             assert_eq!(a, b, "{} untouched", a.id);
         }
     }
-    assert_eq!(store.get("ED-2").await.unwrap().commits, Vec::<String>::new(), "Complete with no commit");
-    assert_eq!(store.groups(), groups, "no roll-up moved");
+    assert_eq!(store.get(SYS, "ED-2").await.unwrap().commits, Vec::<String>::new(), "Complete with no commit");
+    assert_eq!(store.groups(SYS), groups, "no roll-up moved");
     assert_eq!(store.extents_text(), extents, "no sequence moved");
     for _ in 5..=9 {
         store.create(ticket("ED", Kind::Build, None, &[])).await.unwrap();
     }
-    assert_eq!(store.get("ED-9").await.unwrap().unlocks, ["ED-3"], "the forward reference kept");
+    assert_eq!(store.get(SYS, "ED-9").await.unwrap().unlocks, ["ED-3"], "the forward reference kept");
 }
 
 /// A ticket holds at most 256: a link that would pass it is refused whole
@@ -230,7 +230,7 @@ async fn a_ticket_holds_at_most_256_commits() {
         }
         other => panic!("expected TooManyCommits, got {other:?}"),
     }
-    assert_eq!(store.get("BD-1").await.unwrap().commits, first, "nothing written, not even the one that fit");
+    assert_eq!(store.get(SYS, "BD-1").await.unwrap().commits, first, "nothing written, not even the one that fit");
     assert!(rx.try_recv().is_err());
 
     let (t, added) = linked(store.link_commits("BD-1", vec![hash(0), hash(255)]).await.unwrap());
@@ -271,13 +271,13 @@ async fn commits_are_on_every_row_in_link_order_and_survive_a_reopen() {
     assert_eq!(stored, r#"["c8c5678","plexus-core@0bb28b2","090cdec"]"#);
 
     let store = Store::open(&path).unwrap();
-    let got = store.get("RO-2").await.unwrap();
+    let got = store.get(SYS, "RO-2").await.unwrap();
     assert_eq!(got, linked_at, "the acknowledged ticket, whole, after a reopen");
-    assert_eq!(store.list(None, None, None).await.unwrap()[1], got);
-    let page = store.page(PageQuery::default()).unwrap();
+    assert_eq!(store.list(SYS, None, None, None).await.unwrap()[1], got);
+    let page = store.page(SYS, PageQuery::default()).unwrap();
     assert_eq!(page.tickets[0].commits, Vec::<String>::new(), "never linked: []");
     assert_eq!(page.tickets[1], TicketSummary::from(got.clone()), "the summary row carries them");
-    assert_eq!(store.find_page("RO-2", None, None).unwrap().tickets[0].commits, got.commits);
+    assert_eq!(store.find_page(SYS, "RO-2", None, None).unwrap().tickets[0].commits, got.commits);
     let json = serde_json::to_value(&page.tickets[0]).unwrap();
     assert_eq!(json["commits"], serde_json::json!([]), "on the wire as [], never missing");
 }
@@ -310,16 +310,16 @@ async fn a_database_from_before_the_column_opens_with_none_linked_durably() {
 
     {
         let store = Store::open(&path).unwrap();
-        for t in store.list(None, None, None).await.unwrap() {
+        for t in store.list(SYS, None, None, None).await.unwrap() {
             assert_eq!(t.commits, Vec::<String>::new(), "{}", t.id);
         }
-        let old2 = store.get("OLD-2").await.unwrap();
+        let old2 = store.get(SYS, "OLD-2").await.unwrap();
         assert_eq!(
             (old2.status, old2.parent.as_deref(), old2.body.as_str(), old2.updated_unix),
             (Status::InReview, Some("OLD-1"), "b2", 4),
             "nothing else read differently"
         );
-        assert_eq!(store.get("OLD-1").await.unwrap().child_count, 1);
+        assert_eq!(store.get(SYS, "OLD-1").await.unwrap().child_count, 1);
         store.link_commits("OLD-2", strings(&["77df9a0"])).await.unwrap();
     }
     let mut conn = Connection::open(&path).unwrap();
@@ -336,6 +336,6 @@ async fn a_database_from_before_the_column_opens_with_none_linked_durably() {
     drop(conn);
 
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get("OLD-2").await.unwrap().commits, ["77df9a0"]);
-    assert_eq!(store.get("OLD-1").await.unwrap().commits, Vec::<String>::new());
+    assert_eq!(store.get(SYS, "OLD-2").await.unwrap().commits, ["77df9a0"]);
+    assert_eq!(store.get(SYS, "OLD-1").await.unwrap().commits, Vec::<String>::new());
 }

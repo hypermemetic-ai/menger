@@ -24,10 +24,9 @@
 //! [`place`] stays the rule: the store places every ticket by it at open,
 //! and it is what the kept placements are held equal to.
 
-use super::{satisfied, OrderKey, Row, Rows};
-use crate::address::ShortcodeId;
+use super::{satisfied, Row, Rows};
 use crate::types::{Kind, Placement, Status, TicketSummary};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 /// The kinds `waves` places when none are asked for — work (WAVE-1
 /// decision 9; FILTER-6's built-in "work").
@@ -179,10 +178,11 @@ pub(super) fn place<'a>(rows: Rows<'a>, t: &'a Row, memo: &mut HashMap<&'a str, 
 /// WAVE-6: each ticket's placement is the one the store keeps on its row; a
 /// row that has none kept (none the store makes: only a doc has none, and a
 /// doc is never yielded) is placed by the rule, as before.
-pub(super) fn waves(rows: Rows<'_>, epics: &BTreeSet<ShortcodeId>, kinds: &[Kind]) -> Waves {
+#[cfg(test)]
+pub(super) fn waves(rows: Rows<'_>, epics: &std::collections::BTreeSet<crate::address::ShortcodeId>, kinds: &[Kind]) -> Waves {
     let tickets = epics.iter().flat_map(|epic| {
-        let first = OrderKey { shortcode: epic.clone(), seq: 0 };
-        let last = OrderKey { shortcode: epic.clone(), seq: u32::MAX };
+        let first = super::OrderKey { shortcode: epic.clone(), seq: 0 };
+        let last = super::OrderKey { shortcode: epic.clone(), seq: u32::MAX };
         rows.order.range(first..=last).map(|(_, t)| t)
     });
     of(rows, tickets, kinds, &|_| true)
