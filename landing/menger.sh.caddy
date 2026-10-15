@@ -33,6 +33,11 @@ menger.sh {
 
 	encode zstd gzip
 	root * /srv/menger.sh
+	# DESIGN-56: /info is the landing page at a second address — a rewrite,
+	# not a redirect, so a crawler reads the tags there (a link X has never
+	# cached unfurls fresh); its relative assets resolve from the root
+	redir /info/ /info permanent
+	rewrite /info /index.html
 	file_server
 
 	header {
@@ -47,7 +52,7 @@ menger.sh {
 
 	# the pages: always revalidated, so a deploy shows at once (file_server
 	# redirects /guide to /guide/)
-	@page path / /index.html /guide/ /guide/index.html
+	@page path / /index.html /info /guide/ /guide/index.html
 	header @page Cache-Control "no-cache"
 
 	# their assets: names are not fingerprinted, so an hour, then revalidate
