@@ -134,18 +134,97 @@ const stills = [
       await sleep(400);
     },
   },
+  // DESIGN-48 — what the agents put inside their tickets, and the tray.
+  {
+    // the agent's mockup of the conflict screen with its decision, and the
+    // tab the queue put at the bottom of the screen (queued for this shot
+    // alone, so no other still carries the tray)
+    name: 'mockup',
+    route: '#/ticket/OFFLINE-14',
+    act: async (p) => {
+      synapse('queue', '--id', 'OFFLINE-14', '--urgency', 'now', '--input', 'layout', '--reason', 'OFFLINE-8 is idle until the layout is picked');
+      await sleep(4200); // the arrival's flash and label are over; the dot stays
+      await p.evaluate(() => { document.querySelector('#app .content').scrollTop = 100; });
+      await sleep(600);
+    },
+    after: () => synapse('unqueue', '--id', 'OFFLINE-14'),
+  },
+  {
+    // DESIGN-48: the help page an agent built, filed as a doc with
+    // view: mockup — the ticket draws it at 390 and 1440 side by side, the
+    // bar's toggles above. The whole app (owner: "show the nav"): a taller
+    // screen, the ticket's title at the top, the nav and the header kept.
+    name: 'page',
+    route: '#/ticket/OFFLINE-16',
+    height: 1040,
+    act: async (p) => {
+      await p.waitForSelector('.framed .device iframe', { timeout: 30000 });
+      await sleep(1800); // both frames painted; nothing scrolled: the header, the title, the frames
+    },
+  },
+  {
+    // the team's own component, on its help page: the docs, the example
+    // live, who defines it and who uses it, the source
+    name: 'components',
+    route: '#/components/fn-banner',
+    act: async (p) => {
+      await p.waitForSelector('iframe', { timeout: 30000 });
+      await sleep(1800);
+    },
+  },
+  {
+    // the components doc itself: both components in every state
+    name: 'kit',
+    route: '#/ticket/OFFLINE-17',
+    height: 1040,
+    act: async (p) => {
+      await p.waitForSelector('iframe', { timeout: 30000 });
+      await sleep(1800);
+      await p.evaluate(() => { document.querySelector('#app .content').scrollTop = 480; });
+      await sleep(600);
+    },
+  },
+  {
+    // the team on the agent's plan: annotation mode on OFFLINE-15, the pin
+    // of the two comments left on its title clicked, so they are listed
+    // over the map and the decision
+    name: 'collab',
+    route: '#/ticket/OFFLINE-15',
+    height: 1040,
+    act: async (p) => {
+      await p.waitForSelector('iframe', { timeout: 30000 });
+      await sleep(1800);
+      await p.evaluate(() => { document.querySelector('#app .content').scrollTop = 110; });
+      await sleep(400);
+      await p.keyboard.press('a');
+      await sleep(1200);
+      await p.click('.annot-pin:not(.moved)');
+      await sleep(800);
+    },
+  },
+  { name: 'deploys', route: '#/deployments' },
 ];
+
+/** The ticket page's scroller moved so its framed box starts `pad` px under the top. */
+async function scrollToFramed(p, pad) {
+  await p.evaluate((pad) => {
+    const c = document.querySelector('#app .content');
+    const box = document.querySelector('.framed');
+    c.scrollTop = box.getBoundingClientRect().top - c.getBoundingClientRect().top + c.scrollTop - pad;
+  }, pad);
+}
 
 async function takeStills(browser) {
   for (const s of stills) {
     if (!want(s.name)) continue;
     for (const theme of ['light', 'dark']) {
-      const page = await open(browser, { route: s.route, theme });
+      const page = await open(browser, { route: s.route, theme, height: s.height || 900 });
       if (s.act) await s.act(page);
       await sleep(300);
       const path = join(STILLS, `${s.name}.${theme}.png`);
       await page.screenshot({ path });
       console.error(`still ${path}`);
+      if (s.after) await s.after(page);
       await page.context().close();
     }
   }
@@ -238,6 +317,27 @@ async function pointTo(page, locator, { click = true } = {}) {
     });
   }
 }
+/** Every device frame of the page's mockup scrolled to `at` (0 top, 1 the
+ *  bottom) of its document, together, eased over `ms`. */
+async function scrollFrames(page, at, ms) {
+  const frames = [];
+  for (const h of await page.$$('.framed .device iframe')) { const f = await h.contentFrame(); if (f) frames.push(f); }
+  await Promise.all(frames.map((f) => f.evaluate(([at, ms]) => new Promise((done) => {
+    const el = document.scrollingElement, from = el.scrollTop, to = (el.scrollHeight - el.clientHeight) * at, t0 = performance.now();
+    const ease = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+    const step = (now) => { const t = Math.min(1, (now - t0) / ms); el.scrollTop = from + (to - from) * ease(t); t < 1 ? requestAnimationFrame(step) : done(); };
+    requestAnimationFrame(step);
+  }), [at, ms])));
+}
+
+/** The drawn pointer and the real mouse both to the middle of `locator`. */
+async function hover(page, locator) {
+  const box = await locator.boundingBox();
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  await page.evaluate(([x, y]) => { document.getElementById('lm-pointer').style.transform = `translate(${x}px, ${y}px)`; }, [x, y]);
+  await page.mouse.move(x, y);
+  await sleep(700);
+}
 async function keycap(page, label, ms = 900) {
   await page.evaluate(([label, ms]) => {
     const k = document.getElementById('lm-keys');
@@ -249,9 +349,9 @@ async function keycap(page, label, ms = 900) {
 }
 
 /** One clip of one page: open, overlay, record `act`, hold, write. */
-async function clip(browser, name, { route, width = 1200, height = 750, out = 1200, hold = 1400, setup, act }) {
+async function clip(browser, name, { route, width = 1200, height = 750, out = 1200, hold = 1400, navHidden = false, setup, act }) {
   if (!want(name)) return;
-  const page = await open(browser, { route, width, height, scale: 1 });
+  const page = await open(browser, { route, width, height, scale: 1, navHidden });
   if (setup) await setup(page);
   await page.evaluate(overlay);
   await sleep(300);
@@ -356,6 +456,60 @@ async function takeClips(browser) {
       await submit.click();
     },
     hold: 1800,
+  });
+
+  // 7 · the hero (DESIGN-48; owner: "the first should show both screens
+  //     scrolling"): the whole app, nav and header, the help page in its
+  //     ticket at 390 and 1440 — both frames scroll down together, rest, and
+  //     come back up. No pointer: nothing is clicked.
+  await clip(browser, 'hero-scroll', {
+    route: '#/ticket/OFFLINE-16',
+    width: 1440,
+    height: 980,
+    out: 1440,
+    setup: async (p) => {
+      await p.waitForSelector('.framed .device iframe', { timeout: 30000 });
+      await sleep(1800);
+      await p.evaluate(() => { document.getElementById('lm-pointer')?.remove(); });
+    },
+    act: async (p) => {
+      await p.evaluate(() => { const el = document.getElementById('lm-pointer'); if (el) el.style.display = 'none'; });
+      await sleep(600);
+      await scrollFrames(p, 0.62, 3200);
+      await sleep(1200);
+      await scrollFrames(p, 1.0, 1800);
+      await sleep(1000);
+      await scrollFrames(p, 0, 2400);
+    },
+    hold: 900,
+  });
+
+  // 6 · the queue (DESIGN-48; owner: "show the agent raising a queue item
+  //     next"): the whole app on the board; the agent's call queues its
+  //     question on OFFLINE-15 at now — the tab arrives along the bottom
+  //     edge; the owner opens it, reads the reason and the question, picks
+  //     the recommended option, and the tab leaves.
+  await clip(browser, 'tour-6-queue', {
+    route: '#/',
+    width: 1440,
+    height: 900,
+    out: 1440,
+    act: async (p) => {
+      await sleep(600);
+      synapse('queue', '--id', 'OFFLINE-15', '--urgency', 'now', '--input', 'shape', '--reason', 'the other help pages wait on this: one page or three?');
+      await sleep(3400); // the arrival: the flash, the sweep, the label
+      const tab = p.locator('#qtray .qtab').first();
+      await pointTo(p, tab);
+      await tab.click();
+      await sleep(2000); // the sheet: the reason and the question
+      const opt = p.locator('#qtray .qopt.rec').first();
+      await pointTo(p, opt);
+      await opt.click();
+      await sleep(600);
+      await p.mouse.move(900, 60);
+      await p.evaluate(() => { document.getElementById('lm-pointer').style.transform = 'translate(900px, 60px)'; });
+    },
+    hold: 2000,
   });
 
   // 5 · jump: the palette, from the keyboard

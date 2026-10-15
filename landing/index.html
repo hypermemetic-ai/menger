@@ -1,12 +1,20 @@
 <!doctype html>
-<!-- menger.sh — DESIGN-45 (the page of DESIGN-44, on DESIGN-37's build; its
-     media DESIGN-41's). One promise, one story, three claims, one row to get
-     it; the guide holds the rest. Static: this file, style.css, main.js,
-     favicon.svg, grain.svg, fonts/ (Geist and Geist Mono, OFL, latin), media/
-     (stills and clips of the real app, made by scripts/landing-media.sh from
-     a throwaway menger seeded with a sample project) and guide/ (the
-     reference). No inline style or script: the CSP (menger.sh.caddy) allows
-     neither, and nothing from another origin.
+<!-- menger.sh — DESIGN-48 (DESIGN-44's bones in the owner's order, on
+     DESIGN-37's build; its media the landing-media script's). One promise,
+     one story, three claims, one row to get it; the guide holds the rest.
+     The order: what makes working with agents better first — the page an
+     agent built, inside the ticket at phone and desktop width and inside the
+     whole app, the map it came from, the team's notes and its question, the
+     team's own components in every state — then shipping, then the one
+     surface; the queue and the live update are clauses, not sections (owner,
+     2026-10-15: "show the actual page as a mockup in a doc"; "show the nav";
+     "custom components"; "emphasize collaboration").
+     Static: this file, style.css, main.js, favicon.svg, grain.svg, fonts/
+     (Geist and Geist Mono, OFL, latin), media/ (stills and clips of the real
+     app, made by scripts/landing-media.sh from a throwaway menger seeded
+     with a sample project) and guide/ (the reference). No inline style or
+     script: the CSP (menger.sh.caddy) allows neither, and nothing from
+     another origin.
      The hosted app's address lives in ONE place for the script: data-app-url
      below. main.js points every [data-login] link at <data-app-url>/login;
      the hrefs written here are what a reader without JavaScript follows, so
@@ -15,8 +23,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>menger — one live plan for people and agents</title>
-<meta name="description" content="menger keeps a software team's plan as a live tree of tickets. You decide what is ready; people and agents claim it over the same wire; every screen shows it as it happens.">
+<title>menger — agents show you what they'd build, and ask</title>
+<meta name="description" content="menger is a plan for software teams of people and AI agents. An agent builds the page inside the ticket and shows it at phone and desktop width, maps the site, defines the components, and asks its question there; the team notes and answers in place, and every deploy writes itself into the plan.">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#fbfbf9" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#101014" media="(prefers-color-scheme: dark)">
@@ -59,86 +67,93 @@
 
 <main id="main">
 
-<!-- 1 · what is it: the promise, the action — and the wall -->
+<!-- 1 · what is it: the promise, the action — and the thing itself: the
+     page an agent built, inside its ticket at phone and desktop width -->
 <section class="hero" id="top" aria-labelledby="hero-title">
   <div class="wrap hero-grid">
     <div class="hero-copy">
       <p class="kicker after a1">For software teams of people and AI agents</p>
-      <h1 id="hero-title" class="lines"><span class="l"><span class="l1"><em>One live plan</em> for</span></span><span class="l"><span class="l2"><em>everyone</em> doing</span></span><span class="l"><span class="l3">the <em>work.</em></span></span></h1>
-      <p class="lede after a2">You decide what is ready. People and agents claim it over the same wire. Every screen shows it as it happens.</p>
+      <h1 id="hero-title" class="lines"><span class="l"><span class="l1">Agents <em>show you</em></span></span><span class="l"><span class="l2">what they'd <em>build,</em></span></span><span class="l"><span class="l3">and <em>ask.</em></span></span></h1>
+      <p class="lede after a2">The page itself, built in the ticket and shown at phone and desktop width; the map it came from; the question that decides the rest. The team notes and answers in place; the work goes on.</p>
       <div class="actions after a2">
         <a class="btn btn-primary" data-login href="https://app.menger.sh/login">Log in to menger →</a>
       </div>
       <p class="fine after a2">open source · MIT licence</p>
     </div>
-    <!-- The wall: the Menger carpet (MENGER-7's chains, flat). A scope
-         divides into 8, then 64, then 512 pieces of work, and each cell
-         takes the colour of its status as the work moves — serial inside the
-         smallest block, parallel above it. Without JavaScript: the carpet at
-         level 2, as on the favicon. -->
-    <figure class="wall after a3" aria-labelledby="wall-cap">
-      <svg class="carpet" id="wall" viewBox="-0.5 -0.5 28 28" role="img" aria-label="The Menger carpet: a square divided into nine, its centre removed, again and again.">
-        <path class="carpet-still" d="M0 0h27v3h-27zM0 3h3v3h-3zM6 3h6v3h-6zM15 3h6v3h-6zM24 3h3v3h-3zM0 6h27v3h-27zM0 9h9v3h-9zM18 9h9v3h-9zM0 12h3v3h-3zM6 12h3v3h-3zM18 12h3v3h-3zM24 12h3v3h-3zM0 15h9v3h-9zM18 15h9v3h-9zM0 18h27v3h-27zM0 21h3v3h-3zM6 21h6v3h-6zM15 21h6v3h-6zM24 21h3v3h-3zM0 24h27v3h-27z"/>
-      </svg>
-      <div class="legend" aria-hidden="true"><span class="chip st-epic">scope</span><span class="chip st-pending">Pending</span><span class="chip st-ready">Ready</span><span class="chip st-coding">Coding</span><span class="chip st-in-review">In review</span><span class="chip st-complete">Complete</span></div>
-      <figcaption class="fig" id="wall-cap">[ <b>fig. 1</b> — a scope divides into 8, 64, 512 pieces of work; each cell is the colour of its status ]</figcaption>
+    <figure class="panel hero-fig develop after a3" data-tone="review">
+      <div class="window"><div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFLINE-16 · the help page, in the plan, at 390 and 1440</span></div>
+        <!-- the owner: "the first should show both screens scrolling" — an
+             animated image of the whole app, both frames scrolling together;
+             under reduced motion, its last frame -->
+        <picture><source media="(prefers-reduced-motion: reduce)" srcset="media/hero-scroll.poster.webp"><img src="media/hero-scroll.anim.webp" width="1200" height="816" alt="The whole app: the plan's tree on the left; on the right the ticket OFFLINE-16, holding a help page an agent built in a phone frame and a desktop frame side by side. Both frames scroll down the page together, then back up." decoding="async" fetchpriority="high"></picture>
+      <figcaption class="fig">[ <b>fig. 1</b> — OFFLINE-16: the page an agent built, both screens scrolling, in the plan ]</figcaption>
     </figure>
   </div>
 </section>
 
-<!-- 2 · show me: one ticket, start to finish -->
+<!-- 2 · show me: one page, start to finish -->
 <section class="band" id="story" data-tone="ready" data-n="01" aria-labelledby="story-h">
   <div class="wrap">
-    <div class="head reveal"><span class="n">01 — one ticket, start to finish</span><h2 id="story-h" class="lines"><span class="l"><span>Filed, promoted, claimed, merged.</span></span></h2></div>
+    <div class="head reveal"><span class="n">01 — one page, start to finish</span><h2 id="story-h" class="lines"><span class="l"><span>Mapped, built, shown, decided — together.</span></span></h2></div>
     <figure class="panel reveal">
       <div class="window develop">
-        <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFLINE-10 · the lifecycle</span></div>
+        <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>the board · OFFLINE-15's question, queued</span></div>
         <!-- DESIGN-46: the clip is an animated image — it loads like a GIF,
              already playing, no player; under reduced motion, its last frame -->
-        <picture><source media="(prefers-reduced-motion: reduce)" srcset="media/tour-2-lifecycle.poster.webp"><img src="media/tour-2-lifecycle.anim.webp" width="1000" height="626" alt="A ticket page: OFFLINE-10 goes from Ready to Coding, gains a commit, goes to In Review, then Complete." decoding="async"></picture>
+        <picture><source media="(prefers-reduced-motion: reduce)" srcset="media/tour-6-queue.poster.webp"><img src="media/tour-6-queue.anim.webp" width="1200" height="750" alt="The whole app on the board. The agent queues its question on OFFLINE-15 at now: a red tab arrives along the bottom edge. The owner opens it, reads the reason and the question, picks the recommended option, and the tab leaves." decoding="async"></picture>
       </div>
-      <figcaption class="fig">[ <b>fig. 2</b> — OFFLINE-10, recorded from the real app: promoted, claimed, committed, reviewed, merged ]</figcaption>
+      <figcaption class="fig">[ <b>fig. 2</b> — recorded from the real app: the agent queues its question; the owner answers from the tray ]</figcaption>
     </figure>
     <div class="steps reveal" aria-label="The three moves">
-      <article data-tone="ready"><span class="num">01 · you</span><h3>You promote.</h3><p>Nothing starts until a person says so.</p><p class="chips"><span class="chip st-pending">Pending</span><i>→</i><span class="chip st-ready">Ready</span></p></article>
-      <article data-tone="coding"><span class="num">02 · an agent</span><h3>An agent claims.</h3><p>Coding the moment it starts; nothing is picked up twice.</p><p class="chips"><span class="chip st-ready">Ready</span><i>→</i><span class="chip st-coding">Coding</span></p></article>
-      <article data-tone="complete"><span class="num">03 · the merge</span><h3>The merge completes it.</h3><p>Every open screen shows it the same instant.</p><p class="chips"><span class="chip st-in-review">In review</span><i>→</i><span class="chip st-complete">Complete</span></p></article>
+      <article data-tone="coding"><span class="num">01 · an agent</span><h3>An agent builds the page.</h3><p>The map, the page, the components it needs, filed under the build, at every width.</p><p class="chips"><span class="chip st-pending">doc</span><i>→</i><span class="chip st-in-review">390 · 1440</span></p></article>
+      <article data-tone="review"><span class="num">02 · you</span><h3>The team looks, notes, answers.</h3><p>The agent queues its question; it arrives on every open screen. A note pinned on anything; one decision, each option with its cost.</p><p class="chips"><span class="chip st-blocked">now</span><i>→</i><span class="chip st-in-review">decided</span></p></article>
+      <article data-tone="complete"><span class="num">03 · the build</span><h3>The deploy says where it runs.</h3><p>The agent builds what you picked; the deploy records itself; the ticket says it reached prod.</p><p class="chips"><span class="chip st-complete">Complete</span><i>→</i><span class="chip st-epic">prod</span></p></article>
     </div>
   </div>
 </section>
 
-<!-- 3 · what is different: three claims, each with its proof -->
+<!-- 3 · what is different: three claims, in the order they matter, each with its proof -->
 <section class="band" id="why" data-tone="scope" data-n="02" aria-labelledby="why-h">
   <div class="wrap">
-    <div class="head reveal"><span class="n">02 — what is different</span><h2 id="why-h" class="lines"><span class="l"><span>Three opinions, each visible in the app.</span></span></h2></div>
+    <div class="head reveal"><span class="n">02 — what is different</span><h2 id="why-h" class="lines"><span class="l"><span>Built for people and agents together, then for shipping, then for scripts.</span></span></h2></div>
     <div class="ledger">
-      <article class="row reveal" data-tone="scope" id="p-tree" aria-labelledby="p-tree-h">
+      <article class="row reveal" data-tone="scope" id="p-inside" aria-labelledby="p-inside-h">
         <span class="n" aria-hidden="true">01</span>
-        <div class="p-text"><h3 id="p-tree-h">A plan is a tree.</h3><p>Work breaks down until a piece fits one person or one agent; what it produces is filed beneath it.</p><a class="more" href="guide/#what">Tickets and kinds</a></div>
+        <div class="p-text"><h3 id="p-inside-h">A ticket holds whatever an agent builds, and the talk about it.</h3><p>A body is markdown, a diagram or a whole HTML page, a decision in it like any paragraph. Anyone pins a note on any part; notes and answers stay with the work.</p><a class="more" href="guide/#inside">Inside a ticket</a></div>
         <figure class="panel p-visual">
-          <div class="window develop"><div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>the nav</span></div>
-            <picture><source type="image/avif" srcset="media/nav.dark.720.avif"><img class="portrait" src="media/nav.dark.720.webp" width="720" height="960" alt="The nav: the OFFLINE scope with its builds, spikes and gaps beneath it, its findings doc under the spike that produced it, and the SYNC scope nested inside." loading="lazy" decoding="async"></picture></div>
-          <figcaption class="fig">[ <b>fig. 3</b> — the OFFLINE plan as a tree, SYNC nested inside ]</figcaption>
+          <div class="window develop"><div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFLINE-15 · the map, the question, the team's notes</span></div>
+            <picture><source type="image/avif" srcset="media/collab-main.dark.1200.avif 1200w, media/collab-main.dark.2160.avif 2160w" sizes="(min-width: 860px) 560px, calc(100vw - 48px)"><img src="media/collab-main.dark.1200.webp" srcset="media/collab-main.dark.1200.webp 1200w, media/collab-main.dark.2160.webp 2160w" sizes="(min-width: 860px) 560px, calc(100vw - 48px)" width="1200" height="878" alt="A ticket page in annotation mode: the help site mapped as a graph, the decision with its options beneath, and at a pin on the title the team's two notes listed, each with Resolve." loading="lazy" decoding="async"></picture></div>
+          <figcaption class="fig">[ <b>fig. 3</b> — OFFLINE-15: the plan, the team's notes, the decision ]</figcaption>
+        </figure>
+      </article>
+      <article class="row reveal" data-tone="review" id="p-components" aria-labelledby="p-components-h">
+        <span class="n" aria-hidden="true">02</span>
+        <div class="p-text"><h3 id="p-components-h">Your own components, their look and feel agreed first.</h3><p>Define a component in a ticket, with its docs and the parts a theme may skin, and use it in any body. Every state is seen before the app has a line of it.</p><a class="more" href="guide/#components">Components</a></div>
+        <figure class="panel p-visual">
+          <div class="window develop"><div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFLINE-17 · the team's components</span></div>
+            <picture><source type="image/avif" srcset="media/kit-main.dark.1200.avif 1200w, media/kit-main.dark.2160.avif 2160w" sizes="(min-width: 860px) 560px, calc(100vw - 48px)"><img src="media/kit-main.dark.1200.webp" srcset="media/kit-main.dark.1200.webp 1200w, media/kit-main.dark.2160.webp 2160w" sizes="(min-width: 860px) 560px, calc(100vw - 48px)" width="1200" height="534" alt="A ticket defining two components: the banner shown in its three states with the markup beside them, and the conflict card's preview, both values side by side with Keep mine and Keep theirs." loading="lazy" decoding="async"></picture></div>
+          <figcaption class="fig">[ <b>fig. 4</b> — OFFLINE-17: the team's banner and card, in every state ]</figcaption>
+        </figure>
+      </article>
+      <article class="row reveal" data-tone="complete" id="p-ship" aria-labelledby="p-ship-h">
+        <span class="n" aria-hidden="true">03</span>
+        <div class="p-text"><h3 id="p-ship-h">Every deploy writes itself into the plan.</h3><p>Your CI records each deploy; menger works out which tickets it carried. A ticket says where it runs; the board, what reached prod and what still waits.</p><a class="more" href="guide/#deploys">Deployments</a></div>
+        <figure class="panel p-visual">
+          <div class="window develop"><div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>the deployments page</span></div>
+            <picture><source type="image/avif" srcset="media/deploys-main.dark.1200.avif 1200w, media/deploys-main.dark.2160.avif 2160w" sizes="(min-width: 860px) 560px, calc(100vw - 48px)"><img src="media/deploys-main.dark.1200.webp" srcset="media/deploys-main.dark.1200.webp 1200w, media/deploys-main.dark.2160.webp 2160w" sizes="(min-width: 860px) 560px, calc(100vw - 48px)" width="1200" height="612" alt="The deployments page for OFFLINE: the Complete work still waiting for prod, then beta and prod as columns, each with what it runs, its deploy and the tickets it carried." loading="lazy" decoding="async"></picture></div>
+          <figcaption class="fig">[ <b>fig. 5</b> — OFFLINE's beta and prod: each deploy, what it carried, what still waits ]</figcaption>
         </figure>
       </article>
       <article class="row reveal" data-tone="coding" id="p-wire" aria-labelledby="p-wire-h">
-        <span class="n" aria-hidden="true">02</span>
-        <div class="p-text"><h3 id="p-wire-h">One wire for people, scripts and agents.</h3><p>Everything menger does is a method on one connection; the app has no side door. Anything you can click, an agent can call.</p><a class="more" href="guide/#cli">The command line</a></div>
+        <span class="n" aria-hidden="true">04</span>
+        <div class="p-text"><h3 id="p-wire-h">One wire for people, scripts and agents.</h3><p>Everything menger does is a method on one connection; the app has no side door, and ships inside the binary. Anything you can click, an agent can call.</p><a class="more" href="guide/#cli">The command line</a></div>
         <figure class="term p-visual" aria-labelledby="wire-cap">
-<pre class="cmd" data-type><code><span class="c"># claim it, do the work, hand it over</span>
-synapse -P 4455 menger tickets set_status --id OFFLINE-10 --status Coding
-synapse -P 4455 menger tickets link_commits --id OFFLINE-10 --commits a7c31f0
-synapse -P 4455 menger tickets set_status --id OFFLINE-10 --status 'In Review'</code></pre>
-          <figcaption class="fig" id="wire-cap">[ <b>fig. 4</b> — the calls behind fig. 2 ]</figcaption>
-        </figure>
-      </article>
-      <article class="row reveal" data-tone="review" id="p-decide" aria-labelledby="p-decide-h">
-        <span class="n" aria-hidden="true">03</span>
-        <div class="p-text"><h3 id="p-decide-h">Decisions live inside the work.</h3><p>A ticket asks the owner right there, each option with its cost; the answer stays with the work.</p><a class="more" href="guide/#inputs">Inputs</a></div>
-        <figure class="panel p-visual">
-          <div class="window develop"><div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFLINE-7 · a decision</span></div>
-            <picture><source type="image/avif" srcset="media/decision.dark.1200.avif 1200w, media/decision.dark.2400.avif 2400w" sizes="(min-width: 860px) 560px, calc(100vw - 48px)"><img src="media/decision.dark.1200.webp" srcset="media/decision.dark.1200.webp 1200w, media/decision.dark.2400.webp 2400w" sizes="(min-width: 860px) 560px, calc(100vw - 48px)" width="1200" height="750" alt="A ticket asks: when two offline edits collide, which one wins? Three options with their costs, one recommended." loading="lazy" decoding="async"></picture></div>
-          <figcaption class="fig">[ <b>fig. 5</b> — agents ask, the owner answers ]</figcaption>
+<pre class="cmd" data-type><code><span class="c"># file the page under the build, then put its question in front of the owner</span>
+synapse -P 4455 menger tickets create --epic OFFLINE --parent OFFLINE-15 --kind doc \
+  --title 'Page · Working offline' --body "$(cat page.html)"
+synapse -P 4455 menger tickets queue --id OFFLINE-15 --urgency now --input shape \
+  --reason 'OFFLINE-15 is idle until the shape is picked'</code></pre>
+          <figcaption class="fig" id="wire-cap">[ <b>fig. 6</b> — the calls behind fig. 1 and fig. 3 ]</figcaption>
         </figure>
       </article>
     </div>
