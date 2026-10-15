@@ -198,6 +198,12 @@ The chain must be RSA to ISRG Root X1 (`EE ← YR1|YR2 ← Root YR ← ISRG Root
 X1`): `landing/menger.sh.caddy` asks for `key_type rsa2048`. Left to its
 default, Caddy takes ECDSA, whose chain (`YE1 ← Root YE ← X2 ← X1`) X's
 crawler did not follow — every other fetcher showed the card, X showed none.
+Caddy applies `key_type` only when it next issues and keeps serving the
+certificate it holds, so the type is also declared in hypermemetic-infra
+(`edge_cert_keys`, DESIGN-54): a `landing` run whose name answers with
+another type moves the stored certificate aside (kept under
+`/data/edge-kept/`), recreates the edge, and checks the new one — `landing
+--check` says `Would re-key: menger.sh (ec → rsa)`.
 
 A preview is cached by the app that drew it, per URL: X about a week, Slack,
 Discord and LinkedIn hours to days. To see a change at once, share a URL it
