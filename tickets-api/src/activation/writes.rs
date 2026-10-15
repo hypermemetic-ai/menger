@@ -12,6 +12,7 @@ use super::*;
 use crate::access::{AdminOf, Editor, Hidden, Permit, RoleMark, Viewer};
 use crate::address::TicketId;
 use crate::members::Scope;
+use crate::vocab::TicketRef;
 use crate::store::{Blocker, Filing, Parenting, Rehost, Under, Update, Updating};
 
 /// The key `id` names, as a write resolves it (any address): `Err` the
@@ -20,7 +21,7 @@ use crate::store::{Blocker, Filing, Parenting, Rehost, Under, Update, Updating};
 pub(super) fn key(store: &Store, caller: &VerifiedUser, id: &str) -> Result<TicketId, TicketsEvent> {
     match store.resolve(id) {
         Ok(k) => Ok(TicketId::new(k)),
-        Err(StoreError::NotFound(_)) => Err(TicketsEvent::NotFound { id: id.trim().to_string() }),
+        Err(StoreError::NotFound(_)) => Err(TicketsEvent::NotFound { id: Asked::stored(id.trim()) }),
         Err(e) => Err(veiled(caller, e)),
     }
 }
@@ -29,7 +30,7 @@ pub(super) fn key(store: &Store, caller: &VerifiedUser, id: &str) -> Result<Tick
 /// is not there and for one `caller` may not have, alike.
 pub(super) fn permit<R: RoleMark>(store: &Store, caller: &VerifiedUser, id: &str) -> Result<Permit<R>, TicketsEvent> {
     let k = key(store, caller, id)?;
-    caller.permit::<R>(&k, store).map_err(|Hidden| TicketsEvent::NotFound { id: id.trim().to_string() })
+    caller.permit::<R>(&k, store).map_err(|Hidden| TicketsEvent::NotFound { id: Asked::stored(id.trim()) })
 }
 
 /// [`permit`] for a ticket a write names beside its target: refused in
@@ -73,7 +74,7 @@ fn blocker(store: &Store, caller: &VerifiedUser, name: &str, home: Option<&crate
 /// shortcode's root; a shortcode with neither, editor on `*` (ORG-4: or on
 /// the organization the epic names); and a [`Blocker`] per `blocked_by`
 /// entry. Or the event to answer.
-pub(super) fn filing(store: &Store, caller: &VerifiedUser, epic: &str, parent: Option<&str>, blocked_by: Option<&[String]>) -> Result<Filing, TicketsEvent> {
+pub(super) fn filing(store: &Store, caller: &VerifiedUser, epic: &str, parent: Option<&str>, blocked_by: Option<&[TicketRef]>) -> Result<Filing, TicketsEvent> {
     let error = |message: String| TicketsEvent::Error { message };
     let anchor = match parent {
         Some(p) => Some(p.to_string()),
@@ -222,6 +223,5 @@ pub(crate) fn comment_permits<R: RoleMark>(store: &Store, caller: &VerifiedUser,
 /// ACCESS-11: the scope a shortcode (or `*`, or an organization) named by
 /// text is, as a grant on it is stored.
 pub(crate) fn scope_named(store: &Store, text: &str) -> Result<Scope, String> {
-    let stored = store.scope_named(text).map_err(|e| e.to_string())?;
-    Scope::stored(&stored).ok_or_else(|| format!("{text} is no scope"))
+    store.scope_named(text).map_err(|e| e.to_string())
 }

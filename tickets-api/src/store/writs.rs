@@ -254,7 +254,7 @@ impl Filing {
     /// under `parent` (resolved: the named parent, else the shortcode's
     /// root; `None`: neither — a new shortcode, in `org`) with
     /// `blocked_by` (each as `name_ticket` resolved it).
-    pub(super) fn check(&self, cache: &Cache, parent: Option<&str>, org: Option<&crate::address::OrgId>, blocked_by: &[String]) -> Result<(), StoreError> {
+    pub(super) fn check(&self, cache: &Cache, parent: Option<&str>, org: Option<&crate::address::OrgId>, blocked_by: &[TicketName]) -> Result<(), StoreError> {
         let Some((under, blockers)) = &self.0 else { return Ok(()) };
         match (under, parent) {
             (Under::Parent(p), Some(parent)) if key_of(cache, p.id()).as_deref() == Some(parent) => {}
@@ -270,10 +270,10 @@ impl Filing {
             }
             _ => return Err(mismatch("create: the parent it is filed under")),
         }
-        let mut held: Vec<String> = Vec::with_capacity(blockers.len());
+        let mut held: Vec<TicketName> = Vec::with_capacity(blockers.len());
         for b in blockers {
             match b {
-                Blocker::Seen(p) => held.push(key_of(cache, p.id()).ok_or_else(|| mismatch("blocked_by"))?),
+                Blocker::Seen(p) => held.push(key_of(cache, p.id()).map(TicketName::new).ok_or_else(|| mismatch("blocked_by"))?),
                 Blocker::Forward(f) => held.push(cache.name_ticket(f.name())?),
             }
         }
@@ -394,13 +394,13 @@ impl Authority {
     /// `scope`: the system, or admin minted on exactly it while login is on
     /// (ACCESS-3 #11: one minted with login off, for anyone, is refused —
     /// it would take effect when login turns on).
-    pub(super) fn grants_on(&self, scope: &str) -> Result<(), StoreError> {
+    pub(super) fn grants_on(&self, scope: &Scope) -> Result<(), StoreError> {
         match &self.0 {
             AuthorityBy::System => Ok(()),
             AuthorityBy::Admin(a) if a.anyone() => Err(StoreError::Invalid(
                 "login is off: a grant made now would take effect when login turns on — sign in to grant or revoke (nothing written)".into(),
             )),
-            AuthorityBy::Admin(a) if a.scope().text() == scope.trim() => Ok(()),
+            AuthorityBy::Admin(a) if a.scope() == scope => Ok(()),
             _ => Err(mismatch("a grant or a revoke needs admin on its scope")),
         }
     }

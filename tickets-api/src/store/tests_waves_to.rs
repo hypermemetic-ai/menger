@@ -18,7 +18,7 @@ fn new(epic: &str, kind: Kind, blocked_by: &[&str], parent: Option<&str>) -> New
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
         severity: None,
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: parent.map(str::to_string),
         body: String::new(),
     }
@@ -178,7 +178,7 @@ async fn a_cycle_is_named_and_does_not_hang() {
         let mut cache = store.tickets.write().unwrap();
         for (id, blocked_by) in [(&a, vec![b.clone()]), (&selfish, vec![selfish.clone()])] {
             let key = cache.at[id.as_str()].clone();
-            cache.order.get_mut(&key).unwrap().blocked_by = blocked_by;
+            cache.order.get_mut(&key).unwrap().blocked_by = blocked_by.into_iter().map(TicketName::new).collect();
         }
         cache.place_all();
     }

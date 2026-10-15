@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(a.own.iter().map(|t| t.id).collect::<Vec<_>>(), [1, 4]);
         assert_eq!(a.caused.iter().map(|t| t.ticket.as_str()).collect::<Vec<_>>(), ["R-3"]);
         assert_eq!((a.began, a.restorable), (Some(50), vec!["R-3".to_string()]));
-        assert!(answer_of("R-9", vec![TicketsEvent::NotFound { id: "R-9".into() }]).is_none());
+        assert!(answer_of("R-9", vec![TicketsEvent::NotFound { id: "R-9".parse().unwrap() }]).is_none());
     }
 
     /// A transition of the ticket, or one its change caused, moves its

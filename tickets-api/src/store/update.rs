@@ -52,13 +52,13 @@ pub struct Update {
     /// `Some(None)` clears it.
     pub severity: Option<Option<Severity>>,
     /// Ids it waits on from now on.
-    pub block: Vec<String>,
+    pub block: Vec<crate::vocab::TicketRef>,
     /// Ids it no longer waits on.
-    pub unblock: Vec<String>,
+    pub unblock: Vec<crate::vocab::TicketRef>,
     /// ACT-2: labels to add, and to take off — `label`'s rules
     /// ([`crate::labels::apply`]; one in both is added).
-    pub label: Vec<String>,
-    pub unlabel: Vec<String>,
+    pub label: Vec<Label>,
+    pub unlabel: Vec<Label>,
     /// What the caller refused already — an unknown kind, status or
     /// severity — named with the store's own refusals, so one answer names
     /// every one ([`StoreError::Invalid`]).
@@ -87,33 +87,29 @@ pub(super) struct Plan {
     status: Option<Status>,
     parent: Option<String>,
     severity: Option<Option<Severity>>,
-    added: Vec<String>,
-    removed: Vec<String>,
+    added: Vec<TicketName>,
+    removed: Vec<TicketName>,
     /// The ticket becomes a doc: it sheds its blockers before its kind.
     blockers_first: bool,
     /// ACT-2: the labels after, and what moved — `None`: none did.
-    labels: Option<Vec<String>>,
+    labels: Option<Vec<Label>>,
     pub(super) changed: Vec<String>,
 }
 
-/// Ids as a write keeps them — trimmed, upper-cased, each once — and the
-/// entries that are blank.
+/// Ids as a write keeps them — each once.
 ///
 /// ORG-3: each by any short form, as the key it names — or will be born as;
-/// one naming several is a refusal, into `refusals`.
-fn ids_of(cache: &Cache, entries: &[String], refusals: &mut Vec<StoreError>) -> (Vec<String>, bool) {
-    let mut ids: Vec<String> = Vec::with_capacity(entries.len());
+/// one naming several is a refusal, into `refusals`. ACCESS-48: each a
+/// [`crate::vocab::TicketRef`], so none is blank.
+fn ids_of(cache: &Cache, entries: &[crate::vocab::TicketRef], refusals: &mut Vec<StoreError>) -> Vec<TicketName> {
+    let mut ids: Vec<TicketName> = Vec::with_capacity(entries.len());
     for e in entries {
-        match e.trim() {
-            "" => ids.push(String::new()),
-            t => match cache.name_ticket(t) {
-                Ok(key) => ids.push(key),
-                Err(refused) => refusals.push(refused),
-            },
+        match cache.name_ticket(e) {
+            Ok(key) => ids.push(key),
+            Err(refused) => refusals.push(refused),
         }
     }
-    let blank = ids.iter().any(String::is_empty);
-    (rules::distinct(&ids.into_iter().filter(|i| !i.is_empty()).collect::<Vec<_>>()), blank)
+    rules::distinct(&ids)
 }
 
 /// SDLC-13 / MENGER-13: a change of kind's transitions — the kind's, then
@@ -309,18 +305,16 @@ pub(super) fn plan(
     }
     // The blockers as the update leaves them — what the kind is checked
     // against.
-    let (block, blank_block) = ids_of(cache, &u.block, refusals);
-    let (unblock, blank_unblock) = ids_of(cache, &u.unblock, refusals);
-    if blank_block || blank_unblock {
-        refusals.push(StoreError::Blockers { id: id.to_string(), why: "a blank id in block or unblock".into() });
-    }
-    let both: Vec<String> = block.iter().filter(|b| unblock.contains(b)).cloned().collect();
+    let block = ids_of(cache, &u.block, refusals);
+    let unblock = ids_of(cache, &u.unblock, refusals);
+    let both: Vec<TicketName> = block.iter().filter(|b| unblock.contains(b)).cloned().collect();
     if !both.is_empty() {
-        refusals.push(StoreError::Blockers { id: id.to_string(), why: format!("{} both blocked and unblocked", both.join(", ")) });
+        let named: Vec<&str> = both.iter().map(TicketName::as_str).collect();
+        refusals.push(StoreError::Blockers { id: id.to_string(), why: format!("{} both blocked and unblocked", named.join(", ")) });
     }
-    let added: Vec<String> = block.into_iter().filter(|b| !row.blocked_by.contains(b) && !both.contains(b)).collect();
-    let removed: Vec<String> = unblock.into_iter().filter(|b| row.blocked_by.contains(b) && !both.contains(b)).collect();
-    let mut after: Vec<String> = row.blocked_by.iter().filter(|b| !removed.contains(b)).cloned().collect();
+    let added: Vec<TicketName> = block.into_iter().filter(|b| !row.blocked_by.contains(b) && !both.contains(b)).collect();
+    let removed: Vec<TicketName> = unblock.into_iter().filter(|b| row.blocked_by.contains(b) && !both.contains(b)).collect();
+    let mut after: Vec<TicketName> = row.blocked_by.iter().filter(|b| !removed.contains(b)).cloned().collect();
     after.extend(added.iter().cloned());
     // set_kind's, the kind before the status; set_status's for a status
     // alone (the status it has is no change).
@@ -643,13 +637,13 @@ fn labels_step(
     cache: &mut Cache,
     unders: &lineage::UnderWatches,
     id: &str,
-    labels: Vec<String>,
+    labels: Vec<Label>,
     now: i64,
     out: &mut Gathered,
 ) -> Result<(), StoreError> {
     let mut row = cache.get(id).cloned().ok_or_else(|| StoreError::NotFound(id.to_string()))?;
-    let added: Vec<String> = labels.iter().filter(|l| !row.labels.contains(l)).cloned().collect();
-    let removed: Vec<String> = row.labels.iter().filter(|l| !labels.contains(l)).cloned().collect();
+    let added: Vec<Label> = labels.iter().filter(|l| !row.labels.contains(l)).cloned().collect();
+    let removed: Vec<Label> = row.labels.iter().filter(|l| !labels.contains(l)).cloned().collect();
     row.labels = labels;
     row.updated_unix = now;
     cell_step(txn, cache, unders, row, out, |ticket| Change::LabelsChanged { ticket, added, removed })
@@ -688,8 +682,8 @@ fn blockers_step(
     cache: &mut Cache,
     unders: &lineage::UnderWatches,
     id: &str,
-    added: &[String],
-    removed: &[String],
+    added: &[TicketName],
+    removed: &[TicketName],
     now: i64,
     out: &mut Gathered,
 ) -> Result<(), StoreError> {
@@ -711,14 +705,14 @@ fn blockers_step(
     row.updated_unix = now;
     // Each blocker that exists mirrors it in `unlocks`, as `create` keeps
     // them — gained or lost.
-    let mirror = |ids: &[String], gain: bool| -> Vec<Row> {
+    let mirror = |ids: &[TicketName], gain: bool| -> Vec<Row> {
         ids.iter()
             .filter_map(|b| cache.get(b))
             .filter(|b| b.unlocks.iter().any(|u| u == id) != gain)
             .map(|b| {
                 let mut b = b.clone();
                 if gain {
-                    b.unlocks.push(id.to_string());
+                    b.unlocks.push(TicketName::new(id));
                 } else {
                     b.unlocks.retain(|u| u != id);
                 }
@@ -759,9 +753,9 @@ fn blockers_step(
         // The blocker as the write leaves it — its placement included.
         let b = cache.get(&b.id).cloned().unwrap_or(b);
         out.tickets.push(if gain {
-            Change::UnlocksChanged { ticket: whole(b, body), added: id.to_string() }
+            Change::UnlocksChanged { ticket: whole(b, body), added: TicketName::new(id) }
         } else {
-            Change::UnlocksRemoved { ticket: whole(b, body), removed: id.to_string() }
+            Change::UnlocksRemoved { ticket: whole(b, body), removed: TicketName::new(id) }
         });
     }
     out.groups(groups);
@@ -778,7 +772,7 @@ impl Cache {
     /// ([`ready::Ready::reblocked_touching`]), its cell and the kept tree
     /// ([`Cache::recell`]), and its placement and every one downstream that
     /// moves ([`placements::replace`]) — the roll-ups count no edge.
-    fn reblock(&self, row: &Row, added: &[String], removed: &[String]) -> (Derived, ids::Reblock) {
+    fn reblock(&self, row: &Row, added: &[TicketName], removed: &[TicketName]) -> (Derived, ids::Reblock) {
         let rows = self.rows().with(row);
         let reblock = self.ids.reblock(rows, row, added, removed);
         let (ready, touched) = self.ready.reblocked_touching(rows, row);

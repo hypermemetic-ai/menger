@@ -25,6 +25,7 @@
 //! and it is what the kept placements are held equal to.
 
 use super::{satisfied, Row, Rows};
+use crate::address::{TicketId, TicketName};
 use crate::types::{Kind, Placement, Status, TicketSummary};
 use std::collections::{HashMap, HashSet};
 
@@ -39,7 +40,7 @@ pub struct Placed {
     pub placement: Placement,
     /// Its unsatisfied direct blockers, in `blocked_by` order, distinct —
     /// ids that name no ticket included; empty for `Done`.
-    pub waiting_on: Vec<String>,
+    pub waiting_on: Vec<TicketName>,
 }
 
 /// A whole `waves` answer: the placed tickets in yield order, then the
@@ -71,8 +72,8 @@ fn rank(status: Status) -> u8 {
 
 /// `t`'s unsatisfied direct blockers: each distinct id of its `blocked_by`,
 /// in order, that is not a `Complete` or `Superseded` ticket.
-fn waiting_on(rows: Rows<'_>, t: &Row) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+fn waiting_on(rows: Rows<'_>, t: &Row) -> Vec<TicketName> {
+    let mut out: Vec<TicketName> = Vec::new();
     for b in &t.blocked_by {
         if out.iter().any(|o| o == b) || rows.get(b).is_some_and(|r| satisfied(r.status)) {
             continue;
@@ -234,7 +235,7 @@ pub struct WavesTo {
     /// Each cycle among the open tickets of the answer (a strongly connected
     /// set of two or more, or one that names itself): its ids in the store's
     /// order; the cycles in the order of their first id.
-    pub cycles: Vec<Vec<String>>,
+    pub cycles: Vec<Vec<TicketId>>,
 }
 
 /// Whether a ticket's open descendants are part of what it is: a scope's
@@ -327,7 +328,7 @@ pub(super) fn to<'a>(
 /// The cycles among `open` over `blocked_by` (an edge to a ticket outside it
 /// ignored): Tarjan's strongly connected components, iteratively — each of
 /// two or more, or of one that names itself — ids in the store's order.
-fn cycles(open: &[&Row]) -> Vec<Vec<String>> {
+fn cycles(open: &[&Row]) -> Vec<Vec<TicketId>> {
     let ix: HashMap<&str, usize> = open.iter().enumerate().map(|(i, t)| (t.id.as_str(), i)).collect();
     let edges: Vec<Vec<usize>> =
         open.iter().map(|t| t.blocked_by.iter().filter_map(|b| ix.get(b.as_str()).copied()).collect()).collect();
@@ -388,7 +389,7 @@ fn cycles(open: &[&Row]) -> Vec<Vec<String>> {
         scc.sort_by_key(|i| order(*i));
     }
     found.sort_by_key(|scc| order(scc[0]));
-    found.into_iter().map(|scc| scc.into_iter().map(|i| open[i].id.to_string()).collect()).collect()
+    found.into_iter().map(|scc| scc.into_iter().map(|i| open[i].id.clone()).collect()).collect()
 }
 
 /// The keyed tickets in yield order, and their tally.

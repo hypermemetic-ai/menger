@@ -1,7 +1,7 @@
 use super::stored::Changes;
 use super::{satisfied, OrderKey, Row, Rows, Status};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use crate::address::ShortcodeId;
+use crate::address::{ShortcodeId, TicketName};
 use std::ops::Bound;
 
 /// How many statuses there are — one count each per shortcode.
@@ -27,7 +27,7 @@ pub(super) fn unsatisfied_of(rows: Rows<'_>, t: &Row) -> u32 {
 
 /// The same rule over any way of finding a blocker's status — `None`: no
 /// such ticket. A seed counts its tickets with it before their rows exist.
-pub(super) fn open_blockers(blocked_by: &[String], status_of: impl Fn(&str) -> Option<Status>) -> u32 {
+pub(super) fn open_blockers(blocked_by: &[TicketName], status_of: impl Fn(&str) -> Option<Status>) -> u32 {
     let mut named: Vec<&str> = Vec::with_capacity(blocked_by.len());
     let mut open = 0;
     for b in blocked_by {
@@ -304,16 +304,16 @@ impl Ready {
     fn fan_out<'a>(&self, rows: Rows<'a>, t: &Row, done: bool, m: &mut Move, touched: &mut Vec<Touched<'a>>) {
         let mut seen: HashSet<&str> = HashSet::with_capacity(t.unlocks.len());
         for id in &t.unlocks {
-            if !seen.insert(id) {
+            if !seen.insert(id.as_str()) {
                 continue;
             }
             let Some(r) = rows.get(id) else { continue };
-            if !r.blocked_by.contains(&t.id.to_string()) {
+            if !r.blocked_by.iter().any(|b| *b == t.id) {
                 continue;
             }
             let was = self.count(id);
             let now = if done { was.saturating_sub(1) } else { was + 1 };
-            m.counts.push((id.clone(), now));
+            m.counts.push((r.id.to_string(), now));
             touched.push((r, was, now));
         }
     }

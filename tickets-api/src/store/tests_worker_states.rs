@@ -15,7 +15,7 @@ fn ticket(epic: &str, kind: Kind, blocked_by: &[&str]) -> NewTicket {
         title: "t".into(),
         kind,
         severity: None,
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: None,
         body: String::new(),
     }

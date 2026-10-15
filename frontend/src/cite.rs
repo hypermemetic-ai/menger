@@ -869,7 +869,7 @@ mod tests {
     fn every_failure_is_a_named_state() {
         let c = parse("AUTH-10", Some("findings")).unwrap();
         let line = |s: State| state_text("AUTH-10", Some(&c), &s).unwrap();
-        assert_eq!(classify(Ok(vec![TicketsEvent::NotFound { id: "AUTH-10".into() }])), Fetched::NoTicket);
+        assert_eq!(classify(Ok(vec![TicketsEvent::NotFound { id: "AUTH-10".parse().unwrap() }])), Fetched::NoTicket);
         assert_eq!(line(State::NoTicket), "AUTH-10: no ticket you can read");
         assert_eq!(line(State::NoSection), "AUTH-10 has no section `findings`");
         assert_eq!(line(State::Unreadable), "you cannot read AUTH-10");

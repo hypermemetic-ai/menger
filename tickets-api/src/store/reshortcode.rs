@@ -458,7 +458,12 @@ fn rename(cache: &Cache, root: &Row, to: &Address, ask: &Reshortcode) -> Result<
 }
 
 /// `ids` (a JSON list) with every moved id renamed.
-fn renamed_list(list: &[String], map: &HashMap<String, String>) -> Vec<String> {
+fn renamed_list(list: &[TicketName], map: &HashMap<String, String>) -> Vec<TicketName> {
+    list.iter().map(|i| map.get(i.as_str()).map_or_else(|| i.clone(), TicketName::new)).collect()
+}
+
+/// [`renamed_list`] for a column's text — a list as another table stores it.
+fn renamed_texts(list: &[String], map: &HashMap<String, String>) -> Vec<String> {
     list.iter().map(|i| map.get(i).cloned().unwrap_or_else(|| i.clone())).collect()
 }
 
@@ -521,7 +526,7 @@ fn rekey(txn: &rusqlite::Transaction<'_>, map: &HashMap<String, String>, renamed
         for (k, text) in rows {
             let Ok(list) = serde_json::from_str::<Vec<String>>(&text) else { continue };
             if list.iter().any(|i| map.contains_key(i)) {
-                let list = serde_json::to_string(&renamed_list(&list, map)).expect("serialize ids");
+                let list = serde_json::to_string(&renamed_texts(&list, map)).expect("serialize ids");
                 txn.execute(&format!("UPDATE {table} SET {column} = ?2 WHERE {key} = ?1"), [k, list])?;
             }
         }
@@ -534,7 +539,7 @@ fn rekey(txn: &rusqlite::Transaction<'_>, map: &HashMap<String, String>, renamed
     for (id, text) in rows {
         let lines: Vec<String> = text.split('\n').map(str::to_string).collect();
         if lines.iter().any(|l| map.contains_key(l)) {
-            txn.execute("UPDATE deployments SET tickets = ?2 WHERE id = ?1", rusqlite::params![id, renamed_list(&lines, map).join("\n")])?;
+            txn.execute("UPDATE deployments SET tickets = ?2 WHERE id = ?1", rusqlite::params![id, renamed_texts(&lines, map).join("\n")])?;
         }
     }
     Ok(())
@@ -655,7 +660,7 @@ impl Store {
         let stay_under: HashMap<&str, &Option<String>> = p.stays.iter().map(|(c, u)| (c.id.as_str(), u)).collect();
         let mut named: BTreeSet<String> = BTreeSet::new();
         for s in &p.steps {
-            named.extend(s.row.blocked_by.iter().chain(&s.row.unlocks).cloned());
+            named.extend(s.row.blocked_by.iter().chain(&s.row.unlocks).map(TicketName::to_string));
         }
         named.extend(p.stays.iter().map(|(c, _)| c.id.to_string()));
         for s in &p.steps {

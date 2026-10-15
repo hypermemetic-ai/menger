@@ -43,6 +43,7 @@
 use super::history::Clock;
 use super::{lineage, Authority, Cache, OrderKey, Row, Store, StoreError};
 use crate::address::ShortcodeId;
+use crate::vocab::CommitRef;
 use crate::deployments::{
     environment_of, project_of, rank, DeploySource, DeployState, Deployment, DeploymentsEvent, Environment, Record, RunningCell, COMMITS_MAX, TICKETS_MAX,
 };
@@ -138,13 +139,13 @@ pub(super) fn same(a: &str, b: &str) -> bool {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Links {
     by_key: HashMap<String, Vec<(String, String)>>,
-    of: HashMap<String, Vec<String>>,
+    of: HashMap<String, Vec<CommitRef>>,
 }
 
 impl Links {
     /// `ticket`'s commits are `commits` now; whether that moved anything.
-    fn set(&mut self, ticket: &str, commits: &[String]) -> bool {
-        let had: Vec<String> = self.of.get(ticket).cloned().unwrap_or_default();
+    fn set(&mut self, ticket: &str, commits: &[CommitRef]) -> bool {
+        let had: Vec<CommitRef> = self.of.get(ticket).cloned().unwrap_or_default();
         if had == commits {
             return false;
         }
@@ -329,7 +330,7 @@ impl Deploys {
 
     /// `ticket`'s row was written with `commits`: when they moved, its cell
     /// in every environment again.
-    pub(super) fn relink(&mut self, ticket: &str, commits: &[String]) {
+    pub(super) fn relink(&mut self, ticket: &str, commits: &[CommitRef]) {
         if self.links.set(ticket, commits) {
             for k in self.envs.values_mut() {
                 k.rejoin(ticket, &self.links);

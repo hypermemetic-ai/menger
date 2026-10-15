@@ -20,7 +20,9 @@ use crate::orgs::OrgsEvent;
 use crate::address::OrgId;
 use crate::vocab::Principal;
 #[cfg(feature = "server")]
-use crate::access::{Access, VerifiedUser, OPERATOR};
+use crate::access::{Access, VerifiedUser};
+#[cfg(feature = "server")]
+use crate::vocab::GrantedBy;
 #[cfg(feature = "server")]
 use crate::store::{Store, StoreError};
 #[cfg(feature = "server")]
@@ -148,11 +150,11 @@ impl Orgs {
                 yield OrgsEvent::Error { message: "a new organization needs admin on *".into() };
                 return;
             };
-            let admin = admin.map(|p| (p.into_string(), caller.principal_text().unwrap_or_else(|| OPERATOR.into())));
+            let admin = admin.map(|p| (p, caller.principal().cloned().map_or(GrantedBy::Operator, GrantedBy::Principal)));
             match store.create_org(by, &name, admin).await {
                 Ok((org, admin)) => {
                     if let Some(g) = &admin {
-                        access.granted(&g.principal);
+                        access.granted(&g.principal.to_string());
                     }
                     yield OrgsEvent::Created { org, admin }
                 }

@@ -107,8 +107,8 @@ pub fn refused(each: Vec<(String, Vec<String>)>) -> String {
 /// What a cell-only change of many tickets moves on one: its labels, or its
 /// commits.
 enum Moved {
-    Labels { added: Vec<String>, removed: Vec<String> },
-    Commits { added: Vec<String> },
+    Labels { added: Vec<Label>, removed: Vec<Label> },
+    Commits { added: Vec<CommitRef> },
 }
 
 impl Moved {
@@ -266,7 +266,7 @@ impl Store {
     /// write, each named). One `LabelsChanged` per ticket, in the order
     /// named — empty where nothing moved, which is no write.
     /// ACCESS-11: of the tickets the permits `on` are for.
-    pub async fn label_many(&self, on: Vec<Permit<Editor>>, add: Vec<String>, remove: Vec<String>) -> Result<Vec<Change>, StoreError> {
+    pub async fn label_many(&self, on: Vec<Permit<Editor>>, add: Vec<Label>, remove: Vec<Label>) -> Result<Vec<Change>, StoreError> {
         let ids: Vec<String> = on.iter().map(|p| p.id().to_string()).collect();
         self.cells_many(&ids, |row| {
             let (after, added, removed) =
@@ -283,12 +283,11 @@ impl Store {
     /// or none. One `CommitsLinked` per ticket, in the order named — empty
     /// where nothing was added, which is no write.
     /// ACCESS-11: of the tickets the permits `on` are for.
-    pub async fn link_commits_many(&self, on: Vec<Permit<Editor>>, entries: Vec<String>) -> Result<Vec<Change>, StoreError> {
+    pub async fn link_commits_many(&self, on: Vec<Permit<Editor>>, refs: Vec<CommitRef>) -> Result<Vec<Change>, StoreError> {
         let ids: Vec<String> = on.iter().map(|p| p.id().to_string()).collect();
-        let refs = Self::references(&ids.join(", "), &entries)?;
         self.cells_many(&ids, |row| {
-            let mut known: HashSet<String> = row.commits.iter().cloned().collect();
-            let added: Vec<String> = refs.iter().filter(|r| known.insert((*r).clone())).cloned().collect();
+            let mut known: HashSet<CommitRef> = row.commits.iter().cloned().collect();
+            let added: Vec<CommitRef> = refs.iter().filter(|r| known.insert((*r).clone())).cloned().collect();
             if row.commits.len() + added.len() > commits::MAX_PER_TICKET {
                 return Err(StoreError::TooManyCommits { id: row.id.to_string(), linked: row.commits.len(), adding: added.len() });
             }

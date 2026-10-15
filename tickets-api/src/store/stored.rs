@@ -4,7 +4,7 @@ use super::{children::Children, db, ids::Ids, ready::Ready, rollup::Rollups, Cac
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
-use crate::address::ShortcodeId;
+use crate::address::{ShortcodeId, TicketId, TicketName};
 
 /// Which form of the stored derived state this build writes and reads.
 /// One table more (B3's edges, say) is a new form: a file holding an older
@@ -329,7 +329,7 @@ pub(super) type RunRow = (u32, u32, u64);
 
 /// A dangling forward reference as stored: the id named and the naming
 /// ticket's position — the key — and, as the value, the naming ticket's id.
-pub(super) type RefKey = (String, OrderKey);
+pub(super) type RefKey = (TicketName, OrderKey);
 
 /// A shortcode's roll-up as stored: every field the roll-ups keep for it.
 /// Each tally is `(total, done, docs)` (SDLC-11: `docs` since form 3).
@@ -391,7 +391,7 @@ impl Mark {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(super) struct Form {
     pub(super) runs: BTreeMap<ShortcodeId, RunRow>,
-    pub(super) refs: BTreeMap<RefKey, String>,
+    pub(super) refs: BTreeMap<RefKey, TicketId>,
     pub(super) groups: BTreeMap<ShortcodeId, GroupRow>,
     pub(super) cross: BTreeMap<String, CrossRow>,
     pub(super) marks: BTreeSet<(Mark, String)>,
@@ -419,8 +419,8 @@ pub(super) struct Form {
 pub(super) struct Changes {
     pub(super) runs: Vec<(ShortcodeId, RunRow)>,
     /// Ids born: every reference that named them leaves.
-    pub(super) refs_born: Vec<String>,
-    pub(super) refs_named: Vec<(RefKey, String)>,
+    pub(super) refs_born: Vec<TicketId>,
+    pub(super) refs_named: Vec<(RefKey, TicketId)>,
     /// MENGER-30: references a ticket no longer makes (`update { unblock }`
     /// of an id that names no ticket).
     pub(super) refs_unnamed: Vec<RefKey>,
@@ -710,7 +710,7 @@ fn put_run(conn: &Connection, epic: &ShortcodeId, (first, last, held): &RunRow) 
     Ok(())
 }
 
-fn put_ref(conn: &Connection, (id, key): &RefKey, referrer: &str) -> rusqlite::Result<()> {
+fn put_ref(conn: &Connection, (id, key): &RefKey, referrer: &TicketId) -> rusqlite::Result<()> {
     conn.prepare_cached("INSERT INTO forward_refs (id, epic, seq, referrer) VALUES (?1, ?2, ?3, ?4)")?
         .execute(params![id, key.shortcode, key.seq, referrer])?;
     Ok(())
@@ -1220,6 +1220,7 @@ fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
         let labels: Vec<String> = serde_json::from_str(r.get_ref(8)?.as_str()?).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, e.to_string().into())
         })?;
+        let labels: Vec<crate::vocab::Label> = labels.into_iter().map(crate::vocab::Label::stored).collect();
         let key = key.with(r.get(7)?, cells::LabelSet::of(&labels));
         out.insert(r.get(0)?, key);
     }
@@ -1552,7 +1553,7 @@ pub(super) fn compare(stored: &Form, scanned: &Form) -> Vec<String> {
     diff(&mut out, "shortcode run", &stored.runs, &scanned.runs, |(first, last, held)| {
         format!("first {first}, last {last}, holding {held}")
     });
-    let refs = |m: &BTreeMap<RefKey, String>| -> BTreeMap<String, String> {
+    let refs = |m: &BTreeMap<RefKey, TicketId>| -> BTreeMap<String, String> {
         m.iter()
             .map(|((id, key), referrer)| (format!("{id} named by {referrer}"), key.shortcode.key(key.seq)))
             .collect()

@@ -83,12 +83,24 @@ impl TryFrom<&Principal> for plexus_auth_core::identity::Principal {
 /// What the operator's grants (`--admin`) say granted them.
 pub const OPERATOR: &str = "--admin";
 
+/// ACCESS-48: what a grant the dev sign-in made says granted it.
+pub const DEV_LOGIN: &str = "dev-login";
+
+/// ACCESS-48: what a grant made through `auth.grant` (AUTH-7) says granted
+/// it — the gate decided it, the access layer wrote it.
+pub const AUTH_GRANT: &str = "auth.grant";
+
 /// IDENTITY-21: who gave a grant — a principal, or the operator (`--admin`
-/// on the command line, which no principal can be).
+/// on the command line, which no principal can be). ACCESS-48: or the
+/// server's own two writers — the dev sign-in (`dev-login`) and `auth.grant`
+/// (`auth.grant`) — which no principal can be either (a principal holds a
+/// `:`). Nothing else: a stored row naming anything else is held nowhere.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GrantedBy {
     Principal(Principal),
     Operator,
+    DevLogin,
+    AuthGrant,
 }
 
 impl TryFrom<&str> for GrantedBy {
@@ -96,6 +108,8 @@ impl TryFrom<&str> for GrantedBy {
     fn try_from(text: &str) -> Result<Self, String> {
         match text.trim() {
             OPERATOR => Ok(Self::Operator),
+            DEV_LOGIN => Ok(Self::DevLogin),
+            AUTH_GRANT => Ok(Self::AuthGrant),
             t => t.parse().map(Self::Principal),
         }
     }
@@ -106,11 +120,13 @@ impl fmt::Display for GrantedBy {
         match self {
             Self::Principal(p) => f.write_str(p.as_str()),
             Self::Operator => f.write_str(OPERATOR),
+            Self::DevLogin => f.write_str(DEV_LOGIN),
+            Self::AuthGrant => f.write_str(AUTH_GRANT),
         }
     }
 }
 
-as_text!(GrantedBy, "Who gave a grant: a Plexus principal, or --admin (the operator)");
+as_text!(GrantedBy, "Who gave a grant: a Plexus principal, --admin (the operator), dev-login or auth.grant");
 
 fn team_name(text: &str) -> Result<String, String> {
     let t = text.trim();

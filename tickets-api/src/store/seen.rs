@@ -314,14 +314,14 @@ impl<'c> Sees<'c> {
     }
 
     /// `ids` without those the reach hides; how many went.
-    fn cut(&self, ids: &mut Vec<String>) -> u32 {
+    fn cut(&self, ids: &mut Vec<TicketName>) -> u32 {
         let before = ids.len();
         ids.retain(|id| self.id(id));
         (before - ids.len()) as u32
     }
 
     /// Of `ids`, those the reach admits, in order.
-    pub(super) fn keep(&self, ids: impl IntoIterator<Item = String>) -> Vec<String> {
+    pub(super) fn keep<T: std::ops::Deref<Target = str>>(&self, ids: impl IntoIterator<Item = T>) -> Vec<T> {
         ids.into_iter().filter(|id| self.id(id)).collect()
     }
 

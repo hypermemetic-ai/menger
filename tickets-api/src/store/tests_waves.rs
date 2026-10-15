@@ -21,7 +21,7 @@ fn new(epic: &str, kind: Kind, blocked_by: &[&str]) -> NewTicket {
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
         severity: None,
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: None,
         body: String::new(),
     }
@@ -354,7 +354,7 @@ async fn a_hand_edited_cycle_terminates_in_the_missing_lane() {
         let mut cache = store.tickets.write().unwrap();
         for (id, blocked_by) in [(&a, vec![b.clone()]), (&selfish, vec![selfish.clone()])] {
             let key = cache.at[id.as_str()].clone();
-            cache.order.get_mut(&key).unwrap().blocked_by = blocked_by;
+            cache.order.get_mut(&key).unwrap().blocked_by = blocked_by.into_iter().map(TicketName::new).collect();
         }
         // WAVE-6: a hand edit reaches a store through its file, and the
         // store places every ticket when it opens it — as here.
@@ -399,7 +399,7 @@ fn a_chain_longer_than_any_call_stack_is_placed() {
         severity: None,
         parent: None,
         child_count: 0,
-        blocked_by: if seq > 1 { vec![format!("LONG-{}", seq - 1)] } else { vec![] },
+        blocked_by: if seq > 1 { vec![TicketName::new(format!("LONG-{}", seq - 1))] } else { vec![] },
         unlocks: vec![],
         commits: vec![],
         path: None,

@@ -59,8 +59,8 @@ async fn a_row_event_of_a_visible_ticket_blocked_by_a_hidden_one_is_redacted() {
         _ => None,
     });
     let born = born.expect("OPEN-5's birth");
-    assert_eq!((born.id.as_str(), born.blocked_by.clone(), born.hidden_blocked_by), ("OPEN-5", vec!["OPEN-2".to_string()], 1));
-    let unlocks: Vec<(String, String, Vec<String>, u32)> = got
+    assert_eq!((born.id.as_str(), born.blocked_by.clone(), born.hidden_blocked_by), ("OPEN-5", vec![TicketName::from("OPEN-2")], 1));
+    let unlocks: Vec<(String, TicketName, Vec<TicketName>, u32)> = got
         .iter()
         .filter_map(|c| match c {
             Change::UnlocksChanged { ticket, added } => Some((ticket.id.to_string(), added.clone(), ticket.unlocks.clone(), ticket.hidden_unlocks)),

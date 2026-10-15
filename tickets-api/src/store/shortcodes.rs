@@ -25,7 +25,7 @@
 
 use super::rollup::Rollups;
 use super::{Cache, Rows, StoreError};
-use crate::address::{shortcode_address, Address, At, Code, Namespace, OrgId, Shortcode, ShortcodeId};
+use crate::address::{shortcode_address, Address, At, Code, Namespace, OrgId, Shortcode, ShortcodeId, TicketName};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeMap, HashMap};
 
@@ -680,25 +680,25 @@ impl Cache {
     /// one shortcode it names; text that names no shortcode (`RT-0`) stays as
     /// written, as before. Ambiguous is refused: a forward reference has to
     /// say which namespace's ticket it waits for.
-    pub(super) fn name_ticket(&self, text: &str) -> Result<String, StoreError> {
+    pub(super) fn name_ticket(&self, text: &str) -> Result<TicketName, StoreError> {
         let t = text.trim();
         match self.find_ticket(t, OrgReach::All) {
-            Found::One(key) => return Ok(key),
+            Found::One(key) => return Ok(TicketName::new(key)),
             Found::Many(candidates) => return Err(StoreError::Ambiguous { text: t.to_string(), candidates }),
             Found::None => {}
         }
-        let Ok(a) = Address::parse(t) else { return Ok(t.to_string()) };
-        let At::Seq(n) = a.at else { return Ok(t.to_string()) };
+        let Ok(a) = Address::parse(t) else { return Ok(TicketName::new(t)) };
+        let At::Seq(n) = a.at else { return Ok(TicketName::new(t)) };
         if a.is_bare() {
             let plain = ShortcodeId::new(a.code.as_str());
             if self.shortcodes.entries.get(&plain).is_some_and(|e| e.pinned) {
-                return Ok(plain.key(n));
+                return Ok(TicketName::new(plain.key(n)));
             }
         }
         match self.shortcodes.find_shortcode(&Address { at: At::Shortcode, ..a.clone() }.to_string(), OrgReach::All) {
-            Found::One(sc) => Ok(sc.key(n)),
+            Found::One(sc) => Ok(TicketName::new(sc.key(n))),
             Found::Many(candidates) => Err(StoreError::Ambiguous { text: t.to_string(), candidates }),
-            Found::None => Ok(a.to_string()),
+            Found::None => Ok(TicketName::new(a.to_string())),
         }
     }
 

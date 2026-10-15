@@ -433,8 +433,9 @@ fn who_view(current: Memo<Option<Timed>>, set: impl Fn(&dyn Fn(&Timed) -> Timed)
                 let mut out: Vec<String> = Vec::new();
                 for ev in evs {
                     if let menger_tickets_api::MembersEvent::Grant { grant } = ev {
-                        if !out.contains(&grant.principal) {
-                            out.push(grant.principal);
+                        let principal = grant.principal.to_string();
+                        if !out.contains(&principal) {
+                            out.push(principal);
                         }
                     }
                 }

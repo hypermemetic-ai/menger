@@ -20,7 +20,7 @@ fn wire(change: QueueChange) -> TicketsEvent {
 /// the caller) does not hold, else the store's words.
 fn refused(store: &Store, caller: &VerifiedUser, id: String, e: StoreError) -> TicketsEvent {
     match e {
-        StoreError::NotFound(_) => TicketsEvent::NotFound { id },
+        StoreError::NotFound(_) => TicketsEvent::NotFound { id: Asked::stored(id) },
         // ORG-3: a name that fits several, each by its full address.
         e @ StoreError::Ambiguous { .. } => refusal(e),
         e => said(store, caller, e),

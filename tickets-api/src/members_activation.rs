@@ -19,7 +19,9 @@ use crate::members::{MembersEvent, Role};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
 use crate::vocab::{Principal, ScopeRef};
 #[cfg(feature = "server")]
-use crate::access::{Access, OPERATOR};
+use crate::access::Access;
+#[cfg(feature = "server")]
+use crate::vocab::{GrantedBy, Grantee};
 #[cfg(feature = "server")]
 use crate::members::Grant;
 #[cfg(feature = "server")]
@@ -120,11 +122,11 @@ impl Members {
             };
             let mut grants = access.stored();
             for admin in access.admins() {
-                grants.extend(access.grants_of(&admin).into_iter().filter(|g| g.granted_by == OPERATOR));
+                grants.extend(access.grants_of(&admin).into_iter().filter(|g| g.granted_by == GrantedBy::Operator));
             }
-            grants.sort_by(|a, b| (&a.principal, &a.scope).cmp(&(&b.principal, &b.scope)));
+            grants.sort_by_cached_key(|g| (g.principal.to_string(), g.scope.text()));
             for g in grants {
-                if only.as_ref().is_some_and(|o| *o != g.scope) || !reach.allows(&g.scope) {
+                if only.as_ref().is_some_and(|o| *o != g.scope) || !reach.allows(&g.scope.text()) {
                     continue;
                 }
                 yield grant_event(g);
@@ -166,10 +168,10 @@ impl Members {
                 }
             };
             let grant = Grant {
-                principal: principal.into_string(),
+                principal: Grantee::Principal(principal),
                 scope,
                 role,
-                granted_by: caller.principal_text().unwrap_or_else(|| OPERATOR.into()),
+                granted_by: caller.principal().cloned().map_or(GrantedBy::Operator, GrantedBy::Principal),
                 at: chrono::Utc::now().timestamp(),
             };
             // ACCESS-11: admin on the scope as it stands (ACCESS-3 #2, #11).
@@ -182,7 +184,7 @@ impl Members {
             };
             match store.grant(admin, grant).await {
                 Ok(g) => {
-                    access.granted(&g.principal);
+                    access.granted(&g.principal.to_string());
                     yield grant_event(g)
                 }
                 Err(e) => yield MembersEvent::Error { message: e.to_string() },
@@ -223,7 +225,7 @@ impl Members {
                     return;
                 }
             };
-            let principal = principal.into_string();
+            let principal = Grantee::Principal(principal);
             match store.revoke(admin, principal.clone(), scope.clone()).await {
                 Ok(existed) => yield MembersEvent::Revoked { principal, scope, existed },
                 Err(e) => yield MembersEvent::Error { message: e.to_string() },
@@ -260,7 +262,6 @@ impl Members {
 /// ACCESS-11: admin on the stored scope `scope`, minted against the tree as
 /// it stands — what a grant or a revoke on it takes; refused in words.
 #[cfg(feature = "server")]
-fn admin_on(store: &Store, caller: &crate::access::VerifiedUser, scope: &str) -> Result<crate::access::AdminOf, String> {
-    let s = crate::members::Scope::stored(scope).ok_or_else(|| format!("{scope} is no scope"))?;
-    caller.admin_of(&s, store).map_err(|r| r.to_string())
+fn admin_on(store: &Store, caller: &crate::access::VerifiedUser, scope: &crate::members::Scope) -> Result<crate::access::AdminOf, String> {
+    caller.admin_of(scope, store).map_err(|r| r.to_string())
 }

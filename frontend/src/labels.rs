@@ -18,6 +18,7 @@
 
 use leptos::prelude::*;
 use menger_tickets_api::labels::{normalize, MAX_PER_TICKET, NEEDS_YOU};
+use menger_tickets_api::vocab::Label;
 use menger_tickets_api::{TicketSummary, TicketsEvent};
 use wasm_bindgen_futures::spawn_local;
 
@@ -59,13 +60,14 @@ pub(crate) fn chip_class(label: &str) -> &'static str {
 }
 
 /// One label, as a chip and a FILTER-22 tag.
-pub(crate) fn chip(label: String) -> impl IntoView {
+pub(crate) fn chip(label: impl std::fmt::Display) -> impl IntoView {
+    let label = label.to_string();
     let tag = format!("label:{label}");
     view! { <span class=chip_class(&label) data-label=label.clone() data-tag=tag title=format!("label: {label}")>{label.clone()}</span> }
 }
 
 /// A row's labels, live — nothing when it has none.
-pub(crate) fn row_chips(ticket: impl Fn() -> Vec<String> + Send + Sync + 'static) -> impl IntoView {
+pub(crate) fn row_chips(ticket: impl Fn() -> Vec<Label> + Send + Sync + 'static) -> impl IntoView {
     move || {
         let labels = ticket();
         (!labels.is_empty()).then(|| view! { <span class="lchips">{labels.into_iter().map(chip).collect_view()}</span> })
@@ -103,7 +105,7 @@ async fn label(id: String, add: Vec<String>, remove: Vec<String>) -> Result<(), 
 /// × on each and a field to add.
 #[component]
 pub(crate) fn Editor(ticket: RwSignal<TicketSummary>) -> impl IntoView {
-    let labels = Memo::new(move |_| ticket.with(|t| t.labels.clone()));
+    let labels = Memo::new(move |_| ticket.with(|t| t.labels.iter().map(Label::to_string).collect::<Vec<String>>()));
     let draft = RwSignal::new(String::new());
     let problem = RwSignal::new(None::<String>);
     let busy = RwSignal::new(false);

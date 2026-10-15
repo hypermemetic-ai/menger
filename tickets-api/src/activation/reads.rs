@@ -18,7 +18,7 @@ pub(super) fn get_stream(store: Arc<Store>, caller: VerifiedUser, id: String) ->
         match store.get(&caller, &named).await {
             Ok(ticket) => yield TicketsEvent::Ticket { ticket },
             // ACT-5: a deleted ticket answers its tombstone.
-            Err(StoreError::NotFound(_)) => yield store.tombstone(&caller, &id).map_or(TicketsEvent::NotFound { id }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
+            Err(StoreError::NotFound(_)) => yield store.tombstone(&caller, &id).map_or(TicketsEvent::NotFound { id: Asked::stored(id.as_str()) }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
             Err(e) => yield veiled(&caller, e),
         }
     }
@@ -38,7 +38,7 @@ pub(super) fn blockers_stream(store: Arc<Store>, caller: VerifiedUser, id: Strin
                     };
                 }
             }
-            Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+            Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: Asked::stored(id.as_str()) },
             Err(e) => yield veiled(&caller, e),
         }
     }
@@ -64,7 +64,7 @@ pub(super) fn history_stream(store: Arc<Store>, caller: VerifiedUser, id: String
                 let (status_since_unix, status_since_exact) = (h.since.map(|s| s.0), h.since.map(|s| s.1));
                 yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable: h.restorable, status_since_unix, status_since_exact, deletions: h.deletions };
             }
-            Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+            Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: Asked::stored(id.as_str()) },
             Err(e) => yield veiled(&caller, e),
         }
     }
@@ -286,7 +286,9 @@ pub(super) fn search_stream(
 }
 
 /// `member` — which of `ids` a filter admits (FILTER-15), one lookup each.
-pub(super) fn member_events(store: &Store, caller: &VerifiedUser, ids: Vec<String>, filter: FilterText, tz: Option<Zone>) -> Vec<TicketsEvent> {
+pub(super) fn member_events(store: &Store, caller: &VerifiedUser, named: Vec<TicketRef>, filter: FilterText, tz: Option<Zone>) -> Vec<TicketsEvent> {
+    // ACCESS-48: each echoed as asked, a `TicketRef`.
+    let ids = texts(named.clone());
     let filter = match asked(Some(&filter)) {
         Ok(v) => v.unwrap_or_default(),
         Err(message) => return vec![TicketsEvent::Error { message }],
@@ -299,7 +301,7 @@ pub(super) fn member_events(store: &Store, caller: &VerifiedUser, ids: Vec<Strin
         Err(e) => return vec![veiled(caller, e)],
     };
     let matched = store.member(caller, &ids, &lens);
-    ids.into_iter().zip(matched).map(|(id, matched)| TicketsEvent::Member { id, matched }).collect()
+    named.into_iter().zip(matched).map(|(id, matched)| TicketsEvent::Member { id, matched }).collect()
 }
 
 /// `inputs` — INPUT-3's inputs in the caller's reach; FILTER-15: of the
@@ -325,7 +327,7 @@ pub(super) fn inputs_events(
     match answer {
         Ok(inputs) => inputs.into_iter().map(|input| TicketsEvent::Input { input }).collect(),
         // ACCESS-10: a ticket out of reach is not found, as one not there.
-        Err(StoreError::NotFound(id)) => vec![TicketsEvent::NotFound { id: ticket.map_or(id, String::from) }],
+        Err(StoreError::NotFound(id)) => vec![TicketsEvent::NotFound { id: ticket.map_or_else(|| Asked::stored(id), Asked::from) }],
         Err(e) => vec![veiled(caller, e)],
     }
 }

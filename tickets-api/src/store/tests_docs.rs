@@ -19,7 +19,7 @@ fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str]) -> New
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
         severity: None,
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: parent.map(Into::into),
         body: format!("the body of a {} in {epic}", kind.as_str()),
     }
@@ -41,8 +41,9 @@ fn group(store: &Store, epic: &str) -> Group {
         .unwrap_or_else(|| panic!("no group {epic}"))
 }
 
-fn ids<T: AsRef<str>>(v: impl IntoIterator<Item = T>) -> Vec<String> {
-    v.into_iter().map(|s| s.as_ref().to_string()).collect()
+/// ACCESS-48: names as the store keeps them — whichever type the list is.
+fn ids<T: AsRef<str>, U: for<'a> From<&'a str>>(v: impl IntoIterator<Item = T>) -> Vec<U> {
+    v.into_iter().map(|s| U::from(s.as_ref())).collect()
 }
 
 /// Every `GroupChanged` waiting on `rx`, in the order sent.
@@ -244,9 +245,9 @@ async fn the_ready_set_never_holds_a_doc_and_list_filters_on_doc() {
     for id in ["R-3", "R-4"] {
         store.set_status(SYS.permit(id), Status::Ready).await.unwrap();
     }
-    let ready = ids(store.ready_set(SYS, None).await.unwrap().iter().map(|t| t.id.clone()));
+    let ready = ids::<_, String>(store.ready_set(SYS, None).await.unwrap().iter().map(|t| t.id.clone()));
     assert_eq!(ready, ["R-3", "R-4"]);
-    assert_eq!(ids(store.ready_set(SYS, Some("R")).await.unwrap().iter().map(|t| t.id.clone())), ready);
+    assert_eq!(ids::<_, String>(store.ready_set(SYS, Some("R")).await.unwrap().iter().map(|t| t.id.clone())), ready);
     let page = store.ready_page(SYS, None, None, Some(1)).unwrap();
     assert_eq!((page.tickets[0].id.as_str(), page.remaining), ("R-3", 1));
     {
@@ -256,7 +257,7 @@ async fn the_ready_set_never_holds_a_doc_and_list_filters_on_doc() {
         assert_eq!((cache.ready.held(&ShortcodeId::from("R"), Status::Doc), cache.ready.held(&ShortcodeId::from("R"), Status::Ready)), (2, 2));
     }
 
-    let docs = ids(store.list(SYS, None, Some(Status::Doc), None).await.unwrap().iter().map(|t| t.id.clone()));
+    let docs = ids::<_, String>(store.list(SYS, None, Some(Status::Doc), None).await.unwrap().iter().map(|t| t.id.clone()));
     assert_eq!(docs, ["R-1", "R-2"]);
     let page = store
         .page(SYS, PageQuery { status: Some(Status::Doc), limit: Some(1), ..PageQuery::default() })
@@ -374,7 +375,7 @@ async fn everything_else_works_for_a_doc() {
     assert_eq!(store.groups(SYS), tests::nav(&store));
 
     let found = store.find_page(SYS, "manifest", None, None).unwrap();
-    assert_eq!(ids(found.tickets.iter().map(|t| t.id.clone())), ["E-2"]);
+    assert_eq!(ids::<_, String>(found.tickets.iter().map(|t| t.id.clone())), ["E-2"]);
     assert!(store.extents_text().contains(&("E".to_string(), 3)));
 }
 
@@ -397,7 +398,7 @@ async fn a_file_with_docs_verifies_and_reopens_as_it_was() {
     store.set_status(SYS.permit("HOST-2"), Status::Complete).await.unwrap();
     let groups = store.groups(SYS);
     assert_eq!(groups, tests::nav(&store));
-    let ready = ids(store.ready_set(SYS, None).await.unwrap().iter().map(|t| t.id.clone()));
+    let ready = ids::<_, String>(store.ready_set(SYS, None).await.unwrap().iter().map(|t| t.id.clone()));
     assert_eq!(ready, ["MAN-3"]);
     drop(store);
 
@@ -411,7 +412,7 @@ async fn a_file_with_docs_verifies_and_reopens_as_it_was() {
 
     let store = Store::open(&path).unwrap();
     assert_eq!(store.groups(SYS), groups, "the reopen reads what was stored");
-    assert_eq!(ids(store.ready_set(SYS, None).await.unwrap().iter().map(|t| t.id.clone())), ready);
+    assert_eq!(ids::<_, String>(store.ready_set(SYS, None).await.unwrap().iter().map(|t| t.id.clone())), ready);
     let lone = groups.iter().find(|g| g.epic == "LONE").unwrap();
     assert_eq!((lone.total, lone.docs, lone.drawn()), (0, 1, true));
     assert_eq!(store.get(SYS, "MAN-1").await.unwrap().status, Status::Doc);

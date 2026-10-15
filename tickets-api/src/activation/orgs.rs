@@ -14,8 +14,8 @@ pub(super) fn veiled(caller: &VerifiedUser, e: StoreError) -> TicketsEvent {
     let ours = |c: &String| c.split_once(':').is_some_and(|(o, _)| held.iter().any(|h| h.as_str() == o));
     let kept: Vec<String> = candidates.iter().filter(|c| ours(c)).cloned().collect();
     match kept.is_empty() {
-        true => TicketsEvent::NotFound { id: text.clone() },
-        false => TicketsEvent::Ambiguous { id: text.clone(), candidates: kept },
+        true => TicketsEvent::NotFound { id: crate::vocab::Asked::stored(text.as_str()) },
+        false => TicketsEvent::Ambiguous { id: crate::vocab::Asked::stored(text.as_str()), candidates: kept },
     }
 }
 

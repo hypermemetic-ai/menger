@@ -953,13 +953,13 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
     let mut edges = 0;
     for t in &all {
         for b in &t.blocked_by {
-            let blocker = by_id.get(b).unwrap_or_else(|| panic!("{}: dangling blocker {b}", t.id));
-            assert!(blocker.unlocks.contains(&t.id.to_string()), "{b}.unlocks lacks {}", t.id);
+            let blocker = by_id.get(b.as_str()).unwrap_or_else(|| panic!("{}: dangling blocker {b}", t.id));
+            assert!(blocker.unlocks.iter().any(|x| *x == t.id), "{b}.unlocks lacks {}", t.id);
             edges += 1;
         }
         for u in &t.unlocks {
-            let dependent = by_id.get(u).unwrap_or_else(|| panic!("{}: unlocks names {u}", t.id));
-            assert!(dependent.blocked_by.contains(&t.id.to_string()), "{u}.blocked_by lacks {}", t.id);
+            let dependent = by_id.get(u.as_str()).unwrap_or_else(|| panic!("{}: unlocks names {u}", t.id));
+            assert!(dependent.blocked_by.iter().any(|x| *x == t.id), "{u}.blocked_by lacks {}", t.id);
         }
     }
     assert_eq!(edges, report.edges);
@@ -969,7 +969,7 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
     let expected: Vec<String> = all
         .iter()
         .filter(|t| t.status == Status::Ready)
-        .filter(|t| t.blocked_by.iter().all(|b| satisfied(by_id[b].status)))
+        .filter(|t| t.blocked_by.iter().all(|b| satisfied(by_id[b.as_str()].status)))
         .map(|t| t.id.to_string())
         .collect();
     let got: Vec<String> = store.ready_set(SYS, None).await.unwrap().into_iter().map(|t| t.id.into_string()).collect();
@@ -1328,8 +1328,8 @@ pub(super) fn nav(store: &Store) -> Vec<Group> {
                 status: t.status,
                 kind: t.kind,
             }),
-            root: r.root,
-            host: r.host,
+            root: r.root.map(TicketId::new),
+            host: r.host.map(TicketId::new),
         })
         .collect()
 }
@@ -1882,7 +1882,7 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
                 // A root a third of the time: re-hosting shortcodes is
                 // the reshaping the roll-ups must follow.
                 let child = if rng.below(3) == 0 {
-                    before[rng.below(before.len())].root.clone().unwrap_or_else(|| String::from(any(&mut rng)))
+                    before[rng.below(before.len())].root.clone().map(String::from).unwrap_or_else(|| String::from(any(&mut rng)))
                 } else {
                     String::from(any(&mut rng))
                 };
@@ -1975,7 +1975,7 @@ pub(super) fn scanned(store: &Store) -> Scanned {
     }
     let named: BTreeSet<&str> = all
         .iter()
-        .flat_map(|t| t.blocked_by.iter().map(String::as_str))
+        .flat_map(|t| t.blocked_by.iter().map(TicketName::as_str))
         .filter(|b| !at.contains_key(b))
         .collect();
     for id in named {
@@ -2032,8 +2032,8 @@ fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
                 status: Status::Pending,
                 kind: *kind,
                 severity: None,
-                blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
-                unlocks,
+                blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
+                unlocks: unlocks.into_iter().map(TicketName::new).collect(),
                 parent: None,
                 child_count: 0,
                 commits: Vec::new(),
@@ -2199,7 +2199,7 @@ async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_par
     // A first ticket of a shortcode named before it existed, as a parent
     // of nothing and a blocker of WAIT-1.
     let t = store.create(SYS, scope("LATE", "named by WAIT-1")).await.unwrap();
-    assert_eq!((t.id.as_str(), t.unlocks.clone()), ("LATE-1", vec!["WAIT-1".to_string()]));
+    assert_eq!((t.id.as_str(), t.unlocks.clone()), ("LATE-1", vec![TicketName::from("WAIT-1")]));
     assert_kept_is_a_scan(&store, "LATE-1's birth");
 
     // New forward references, and a create that is both blocker and parent.
@@ -2267,7 +2267,7 @@ async fn the_id_indexes_are_a_scan_after_a_seed_with_and_without_into_existing()
     store
         .create(SYS, NewTicket {
             path: None,
-            blocked_by: vec![seeded.to_string(), "REAL-9".into()],
+            blocked_by: vec![seeded.to_string().as_str().into(), "REAL-9".into()],
             ..new_ticket("REAL", "names an id the seed will make")
         })
         .await
@@ -2481,7 +2481,7 @@ async fn every_create_gets_the_id_and_unlocks_a_scan_would_give_it() {
         let new = NewTicket {
             path: None,
             kind,
-            blocked_by,
+            blocked_by: blocked_by.iter().map(|b| b.as_str().into()).collect(),
             parent,
             ..new_ticket(epic, "walked")
         };

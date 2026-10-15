@@ -49,7 +49,7 @@ pub(super) fn waves_under_answer(store: &Store, caller: VerifiedUser, id: String
     let kinds = kinds.unwrap_or_else(|| crate::store::waves::DEFAULT_KINDS.to_vec());
     match store.waves_under(&caller, &id, &kinds) {
         Ok(answer) => wave_events(answer, Vec::new()),
-        Err(StoreError::NotFound(_)) => vec![TicketsEvent::NotFound { id }],
+        Err(StoreError::NotFound(_)) => vec![TicketsEvent::NotFound { id: Asked::stored(id.as_str()) }],
         Err(e) => vec![refusal(e)],
     }
 }
@@ -59,7 +59,7 @@ pub(super) fn waves_to_answer(store: &Store, caller: VerifiedUser, id: String, k
     let kinds = kinds.unwrap_or_else(|| vec![Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike]);
     match store.waves_to(&caller, &id, &kinds) {
         Ok(answer) => wave_events(answer.waves, answer.cycles),
-        Err(StoreError::NotFound(_)) => vec![TicketsEvent::NotFound { id }],
+        Err(StoreError::NotFound(_)) => vec![TicketsEvent::NotFound { id: Asked::stored(id.as_str()) }],
         Err(StoreError::DocHasNoLifecycle { .. }) => {
             vec![TicketsEvent::Error { message: format!("waves_to: {id} is a doc — a doc has no place in the order of work") }]
         }
@@ -69,7 +69,7 @@ pub(super) fn waves_to_answer(store: &Store, caller: VerifiedUser, id: String, k
 
 /// A wave answer as the wire carries it — each `Placed`, then each cycle
 /// (`waves_to`'s), then the one `WaveCounts`.
-fn wave_events(answer: crate::store::waves::Waves, cycles: Vec<Vec<String>>) -> Vec<TicketsEvent> {
+fn wave_events(answer: crate::store::waves::Waves, cycles: Vec<Vec<crate::TicketId>>) -> Vec<TicketsEvent> {
     let mut out: Vec<TicketsEvent> = answer
         .placed
         .into_iter()

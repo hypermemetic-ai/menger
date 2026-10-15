@@ -28,8 +28,8 @@ pub(super) fn update_of(
         status,
         parent: parent.map(String::from),
         severity: severity.map(SeverityChange::severity),
-        block: texts(block.unwrap_or_default()),
-        unblock: texts(unblock.unwrap_or_default()),
+        block: block.unwrap_or_default(),
+        unblock: unblock.unwrap_or_default(),
         label: Vec::new(),
         unlabel: Vec::new(),
         refused: Vec::new(),
@@ -85,8 +85,8 @@ pub(super) fn cells_stream(
                     }
                 };
                 let written = match write {
-                    CellWrite::Labels(add, remove) => store.label_many(on, texts(add), texts(remove)).await,
-                    CellWrite::Commits(commits) => store.link_commits_many(on, texts(commits)).await,
+                    CellWrite::Labels(add, remove) => store.label_many(on, add, remove).await,
+                    CellWrite::Commits(commits) => store.link_commits_many(on, commits).await,
                 };
                 match written {
                     Ok(changes) => {
@@ -107,12 +107,12 @@ pub(super) fn cells_stream(
             }
         };
         let written = match write {
-            CellWrite::Labels(add, remove) => store.label(on, texts(add), texts(remove)).await,
-            CellWrite::Commits(commits) => store.link_commits(on, texts(commits)).await,
+            CellWrite::Labels(add, remove) => store.label(on, add, remove).await,
+            CellWrite::Commits(commits) => store.link_commits(on, commits).await,
         };
         match written {
             Ok(change) => yield change_event(change),
-            Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
+            Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: Asked::stored(id.as_str()) },
             Err(e) => yield veiled(&caller, e),
         }
     }

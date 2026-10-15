@@ -23,7 +23,7 @@ fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str], body: 
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
         severity: None,
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: parent.map(Into::into),
         body: body.into(),
     }

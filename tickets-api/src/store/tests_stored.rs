@@ -35,7 +35,7 @@ fn new_ticket(epic: &str, kind: Kind, parent: Option<String>, blocked_by: Vec<St
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
         severity: None,
-        blocked_by,
+        blocked_by: blocked_by.iter().map(|b| b.as_str().into()).collect(),
         parent,
         body: format!("the body of a {} in {epic}", kind.as_str()),
     }
@@ -96,7 +96,7 @@ pub(super) fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
     assert_eq!(stored_last, last, "each shortcode's highest sequence, after {after}");
     let mut refs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for ((id, _), referrer) in &file.form.refs {
-        refs.entry(id.clone()).or_default().push(referrer.clone());
+        refs.entry(id.to_string()).or_default().push(referrer.to_string());
     }
     assert_eq!(refs, unborn, "the dangling forward references, after {after}");
 
@@ -124,14 +124,14 @@ pub(super) fn assert_stored_is_a_scan(store: &Store, path: &Path, after: &str) {
             total: g.roll.0,
             done: g.roll.1,
             docs: g.roll.2,
-            root: g.root.clone(),
+            root: g.root.clone().map(TicketId::new),
             // AGS-23: the root's row is the file's row of the root.
             root_row: g.root.as_ref().and_then(|r| file.rows.get(r)).map(|t| RootRow {
                 title: t.title.clone(),
                 status: t.status,
                 kind: t.kind,
             }),
-            host: g.host.clone(),
+            host: g.host.clone().map(TicketId::new),
         })
         .collect();
     assert_eq!(drawn, tests::nav(store), "the roll-ups the nav draws, after {after}");
@@ -326,7 +326,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
         16 | 17 => {
             let id = pick(rng);
             let commit = format!("{:07x}", 0x1000000 + rng.below(8));
-            store.link_commits(SYS.permit(&id), vec![commit.clone()]).await.unwrap();
+            store.link_commits(SYS.permit(&id), vec![CommitRef::from(commit.as_str())]).await.unwrap();
             tally.links += 1;
             format!("link_commits {id} {commit}")
         }
@@ -335,7 +335,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
             let linked = store.row(&id).unwrap().0.commits;
             let commit = match linked.first() {
                 Some(c) if rng.below(3) > 0 => c.clone(),
-                _ => "abcdef0".to_string(),
+                _ => CommitRef::from("abcdef0"),
             };
             store.unlink_commits(SYS.permit(&id), vec![commit.clone()]).await.unwrap();
             tally.unlinks += 1;

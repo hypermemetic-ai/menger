@@ -1223,7 +1223,7 @@ async fn first_ticket_of_a_prefix_must_be_a_scope_in_band() {
 #[allow(clippy::type_complexity)]
 async fn placed_and_counts(
     s: impl Stream<Item = TicketsEvent> + Send + 'static,
-) -> (Vec<(String, crate::types::Placement, Vec<String>)>, (Vec<u64>, u64, u64)) {
+) -> (Vec<(String, crate::types::Placement, Vec<crate::TicketName>)>, (Vec<u64>, u64, u64)) {
     let evs: Vec<TicketsEvent> = Box::pin(s).collect().await;
     let mut placed = Vec::new();
     let mut counts = None;
@@ -1294,7 +1294,7 @@ async fn waves_yields_placements_in_the_specified_order_then_one_wave_counts() {
     ];
     let got: Vec<(&str, crate::types::Placement, Vec<&str>)> = placed
         .iter()
-        .map(|(id, p, w)| (id.as_str(), *p, w.iter().map(String::as_str).collect()))
+        .map(|(id, p, w)| (id.as_str(), *p, w.iter().map(crate::TicketName::as_str).collect()))
         .collect();
     assert_eq!(got, want);
     assert_eq!(counts, (vec![4, 2], 2, 1));

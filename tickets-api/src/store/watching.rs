@@ -134,6 +134,8 @@ impl Store {
 fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
     // One name the reach may hide, beside a row it shows: blanked.
     let name = |id: String| if sees.id(&id) { id } else { String::new() };
+    // ACCESS-48: a blocker's name, the same way.
+    let named = |id: TicketName| if sees.id(&id) { id } else { TicketName::new(String::new()) };
     let row = |mut t: Ticket| {
         sees.ticket(&mut t);
         t
@@ -151,8 +153,8 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
         Change::SeverityChanged { ticket, previous } => sees.id(&ticket.id).then(|| Change::SeverityChanged { ticket: row(ticket), previous }),
         // The waiter it gained or lost may be hidden: its row says so in
         // `hidden_unlocks`, and the name is blanked (ACCESS-3 #13).
-        Change::UnlocksChanged { ticket, added } => sees.id(&ticket.id).then(|| Change::UnlocksChanged { ticket: row(ticket), added: name(added) }),
-        Change::UnlocksRemoved { ticket, removed } => sees.id(&ticket.id).then(|| Change::UnlocksRemoved { ticket: row(ticket), removed: name(removed) }),
+        Change::UnlocksChanged { ticket, added } => sees.id(&ticket.id).then(|| Change::UnlocksChanged { ticket: row(ticket), added: named(added) }),
+        Change::UnlocksRemoved { ticket, removed } => sees.id(&ticket.id).then(|| Change::UnlocksRemoved { ticket: row(ticket), removed: named(removed) }),
         Change::BlockersChanged { ticket, added, removed } => {
             sees.id(&ticket.id).then(|| Change::BlockersChanged { ticket: row(ticket), added: sees.keep(added), removed: sees.keep(removed) })
         }
@@ -210,7 +212,7 @@ fn cut(cache: &Cache, sees: &Sees<'_>, change: Change) -> Option<Change> {
         Change::Deleted { ids, tombstones } => {
             let held = sees.shortcodes().unwrap_or_default();
             let seen = |id: &str| id.rsplit_once('-').is_some_and(|(e, _)| held.iter().any(|h| h.as_str() == e));
-            let ids: Vec<String> = ids.into_iter().filter(|id| seen(id)).collect();
+            let ids: Vec<TicketId> = ids.into_iter().filter(|id| seen(id)).collect();
             let tombstones = tombstones
                 .into_iter()
                 .filter(|t| seen(&t.id))

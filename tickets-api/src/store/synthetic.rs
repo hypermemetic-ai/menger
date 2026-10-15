@@ -1,4 +1,5 @@
 use super::{Kind, SeedShape, SeedSpec, Severity, Status, Ticket};
+use crate::address::TicketName;
 use std::collections::{HashMap, HashSet};
 
 /// Rows per write transaction: a few fsyncs for a million rows, and a
@@ -306,7 +307,7 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
 
         for bid in &blocked_by {
             let bi = index[bid];
-            out[bi].unlocks.push(id.clone());
+            out[bi].unlocks.push(TicketName::new(id.clone()));
             out[bi].updated_unix = out[bi].updated_unix.max(created);
         }
         // MNG-14: the shape `create` would give it — every non-root
@@ -354,7 +355,7 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
             status,
             kind,
             severity,
-            blocked_by,
+            blocked_by: blocked_by.into_iter().map(TicketName::new).collect(),
             unlocks: Vec::new(),
             hidden_blocked_by: 0,
             hidden_unlocks: 0,

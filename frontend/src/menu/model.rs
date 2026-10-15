@@ -449,8 +449,8 @@ pub(crate) fn options(sub: Sub, ids: &[String], rows: &[TicketSummary]) -> Vec<O
             let mut labels: Vec<String> = Vec::new();
             for r in rows {
                 for l in &r.labels {
-                    if !labels.contains(l) {
-                        labels.push(l.clone());
+                    if !labels.iter().any(|h| l == h) {
+                        labels.push(l.to_string());
                     }
                 }
             }
@@ -459,7 +459,7 @@ pub(crate) fn options(sub: Sub, ids: &[String], rows: &[TicketSummary]) -> Vec<O
             }
             let mut out = Vec::new();
             for l in labels {
-                let n = holding(&|r| r.labels.contains(&l));
+                let n = holding(&|r| r.labels.iter().any(|h| *h == l));
                 if n == 0 {
                     out.push(opt(l.clone(), l.clone(), 0, Change::Label(l)));
                 } else if n >= total {
@@ -476,15 +476,15 @@ pub(crate) fn options(sub: Sub, ids: &[String], rows: &[TicketSummary]) -> Vec<O
             let mut blockers: Vec<String> = Vec::new();
             for r in rows {
                 for b in &r.blocked_by {
-                    if !blockers.contains(b) {
-                        blockers.push(b.clone());
+                    if !blockers.iter().any(|h| b == h) {
+                        blockers.push(b.to_string());
                     }
                 }
             }
             blockers
                 .into_iter()
                 .map(|b| {
-                    let n = holding(&|r| r.blocked_by.contains(&b));
+                    let n = holding(&|r| r.blocked_by.iter().any(|h| *h == b));
                     opt(b.clone(), b.clone(), n, Change::Unblock(b))
                 })
                 .collect()
@@ -639,7 +639,7 @@ impl DeletePlan {
                     id: id.clone(),
                     title: r.title.clone(),
                     children: r.child_count,
-                    waiting: r.unlocks.iter().filter(|u| !ids.contains(u)).cloned().collect(),
+                    waiting: r.unlocks.iter().filter(|u| !ids.iter().any(|i| *u == i)).map(ToString::to_string).collect(),
                 },
                 None => Doomed { id: id.clone(), title: String::new(), children: 0, waiting: Vec::new() },
             })
@@ -713,6 +713,10 @@ mod tests {
         }
     }
 
+    fn names(v: &[&str]) -> Vec<menger_tickets_api::TicketName> {
+        v.iter().map(|s| menger_tickets_api::TicketName::new(*s)).collect()
+    }
+
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
     }
@@ -748,7 +752,7 @@ mod tests {
     fn one_ticket_holds_its_actions_every_update_and_its_filter_items() {
         let mut r = row("DEMAND-4", Status::Ready, Kind::Build);
         r.parent = Some(menger_tickets_api::TicketId::new("DEMAND-1"));
-        r.blocked_by = ids(&["DEMAND-2"]);
+        r.blocked_by = names(&["DEMAND-2"]);
         let (i, rows) = (ids(&["DEMAND-4"]), vec![r]);
         assert_eq!(
             said(&entries(&facts(&i, &rows, ALL))),
@@ -951,7 +955,7 @@ mod tests {
     fn labels_and_unblock_over_one_or_many() {
         let one = ids(&["A-1"]);
         let mut r = row("A-1", Status::Ready, Kind::Build);
-        r.labels = vec!["stale".into()];
+        r.labels = vec!["stale".parse().unwrap()];
         let o = options(Sub::Labels, &one, &[r.clone()]);
         assert_eq!(
             o.iter().map(|o| (o.words.as_str(), o.mark, o.change.clone())).collect::<Vec<_>>(),
@@ -970,9 +974,9 @@ mod tests {
         );
         assert_eq!(o[0].mark, Mark::Count(1));
         let mut b1 = r2.clone();
-        b1.blocked_by = ids(&["A-9", "B-1"]);
+        b1.blocked_by = names(&["A-9", "B-1"]);
         let mut b2 = r.clone();
-        b2.blocked_by = ids(&["A-9"]);
+        b2.blocked_by = names(&["A-9"]);
         let o = options(Sub::Unblock, &many, &[b1, b2]);
         assert_eq!(o.iter().map(|o| (o.value.as_str(), o.mark)).collect::<Vec<_>>(), [("A-9", Mark::Count(2)), ("B-1", Mark::Count(1))]);
     }
@@ -1036,7 +1040,7 @@ mod tests {
         let i = ids(&["A-1", "A-2"]);
         let mut a = row("A-1", Status::Ready, Kind::Build);
         a.child_count = 2;
-        a.unlocks = ids(&["A-2", "B-7"]);
+        a.unlocks = names(&["A-2", "B-7"]);
         let b = row("A-2", Status::Ready, Kind::Build);
         let plan = DeletePlan::of(&i, &[a, b]);
         assert_eq!(plan.doomed[0].waiting, ids(&["B-7"]), "A-2 goes too: not waiting");

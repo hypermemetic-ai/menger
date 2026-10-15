@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-pub use crate::address::{Address, At, Code, Namespace, OrgId, Shortcode, ShortcodeId, TicketId};
+pub use crate::address::{Address, At, Code, Namespace, OrgId, Shortcode, ShortcodeId, TicketId, TicketName};
+use crate::vocab::{CommitRef, Label};
 
 /// Lifecycle status. Serialized with frontmatter casing (`Pending`, `Ready`, …)
 /// so a ticket round-trips into a plans/ file unchanged.
@@ -394,9 +395,9 @@ pub struct Ticket {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub severity: Option<Severity>,
     /// Ticket ids that must complete before this one starts.
-    pub blocked_by: Vec<String>,
+    pub blocked_by: Vec<TicketName>,
     /// Ticket ids that can start once this one completes.
-    pub unlocks: Vec<String>,
+    pub unlocks: Vec<TicketName>,
     /// ACCESS-10: how many of `blocked_by` the reader may not see — dropped
     /// from the list and counted here, so readiness stays honest. Omitted
     /// (0) for a reader who sees them all.
@@ -426,7 +427,7 @@ pub struct Ticket {
     /// optionally `repository@` before it. `[]` when none. Recorded, not
     /// verified: the server has no repository. At most 256 (SCALE-4's
     /// lesson — a list on a row is bounded).
-    pub commits: Vec<String>,
+    pub commits: Vec<CommitRef>,
     /// WAVE-10: the ticket's **path address** inside its shortcode, if it
     /// has one — `<SHORTCODE>/<path>` names it (`get { id:
     /// "PLEXUS/_MENGER/board" }`), and no other ticket of the shortcode
@@ -452,7 +453,7 @@ pub struct Ticket {
     /// alone, and asked by the filter cell `label <name>`. `default`: a
     /// server from before MENGER-12 sends none.
     #[serde(default)]
-    pub labels: Vec<String>,
+    pub labels: Vec<Label>,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
     pub body: String,
     pub created_unix: i64,
@@ -508,8 +509,8 @@ pub struct TicketSummary {
     #[serde(default, skip_serializing_if = "is_false")]
     pub parent_hidden: bool,
     pub child_count: u64,
-    pub blocked_by: Vec<String>,
-    pub unlocks: Vec<String>,
+    pub blocked_by: Vec<TicketName>,
+    pub unlocks: Vec<TicketName>,
     /// ACCESS-10: as on [`Ticket`].
     #[serde(default, skip_serializing_if = "is_zero")]
     pub hidden_blocked_by: u32,
@@ -518,7 +519,7 @@ pub struct TicketSummary {
     pub hidden_unlocks: u32,
     /// SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
     /// the ticket page all have it without a `get`.
-    pub commits: Vec<String>,
+    pub commits: Vec<CommitRef>,
     /// WAVE-10: as on [`Ticket`] — on the row, so the nav can hide
     /// `_MENGER/` documents without a `get`. Unlike `severity` and
     /// `parent`, omitted when there is none (the ticket's contract): every
@@ -533,7 +534,7 @@ pub struct TicketSummary {
     /// MENGER-12: as on [`Ticket`] — on the row, so the board, the nav and
     /// Home's "Needs you" draw a ticket's label chips without a `get`.
     #[serde(default)]
-    pub labels: Vec<String>,
+    pub labels: Vec<Label>,
     pub created_unix: i64,
     pub updated_unix: i64,
 }
@@ -665,10 +666,12 @@ pub struct Group {
     pub done: u64,
     /// SDLC-11: the docs in the row's subtree, which `total` leaves out.
     pub docs: u64,
-    pub root: Option<String>,
+    /// ACCESS-48: the root's key.
+    pub root: Option<TicketId>,
     /// AGS-23: what the root's own row shows.
     pub root_row: Option<RootRow>,
-    pub host: Option<String>,
+    /// The ticket the shortcode is hosted under, if any.
+    pub host: Option<TicketId>,
 }
 
 /// AGS-23: a shortcode root's row as the nav draws it at the top of its
@@ -1430,7 +1433,7 @@ pub struct Transition {
 /// delete dropped (`unblock`) — what `undelete` puts back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Tombstone {
-    pub id: String,
+    pub id: TicketId,
     pub title: String,
     pub by: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1441,11 +1444,11 @@ pub struct Tombstone {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restorable_until_unix: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    pub parent: Option<TicketId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub reparented: Vec<String>,
+    pub reparented: Vec<TicketId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unblocked: Vec<String>,
+    pub unblocked: Vec<TicketId>,
 }
 
 /// ACT-6: one ticket a `reshortcode` moved — the id it had and the id it
@@ -1546,32 +1549,32 @@ pub enum TicketsEvent {
     /// end with it — or nothing: `link_commits`' own answer when every
     /// entry was already linked, which `watch` never carries. The whole
     /// ticket rides along, as with every write after birth.
-    CommitsLinked { ticket: Ticket, added: Vec<String> },
+    CommitsLinked { ticket: Ticket, added: Vec<CommitRef> },
     /// SDLC-9: commits were unlinked from a ticket (yielded by
     /// `unlink_commits`, and by `watch` for every unlink that changed
     /// something). `removed` is what came off, in the order given; empty
     /// when none of it was linked, which `watch` never carries.
-    CommitsUnlinked { ticket: Ticket, removed: Vec<String> },
+    CommitsUnlinked { ticket: Ticket, removed: Vec<CommitRef> },
     /// MENGER-12: a ticket's labels moved (yielded by `label`, and by
     /// `watch` for every `label` that changed something). `added` and
     /// `removed` are what moved, in the order given — both empty is
     /// `label`'s own answer to a call that moved nothing, which `watch`
     /// never carries. The whole ticket rides along, its `labels` as the
     /// write left them.
-    LabelsChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
+    LabelsChanged { ticket: Ticket, added: Vec<Label>, removed: Vec<Label> },
     /// An existing ticket's `unlocks` gained `added`: a newly created
     /// ticket named it in `blocked_by` (yielded by `watch`). Carries the
     /// full updated ticket so a watch-only client stays coherent.
-    UnlocksChanged { ticket: Ticket, added: String },
+    UnlocksChanged { ticket: Ticket, added: TicketName },
     /// MENGER-30: an existing ticket's `unlocks` lost `removed`, which no
     /// longer waits on it (`update { unblock }`; yielded by `watch`). The
     /// full updated ticket, as `unlocks_changed`.
-    UnlocksRemoved { ticket: Ticket, removed: String },
+    UnlocksRemoved { ticket: Ticket, removed: TicketName },
     /// MENGER-30: a ticket's `blocked_by` moved after birth (`update`;
     /// yielded by `watch`) — `added` and `removed` as they moved. The whole
     /// ticket rides along; each blocker's side follows, `unlocks_changed` or
     /// `unlocks_removed`, then the placements it moved.
-    BlockersChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
+    BlockersChanged { ticket: Ticket, added: Vec<TicketName>, removed: Vec<TicketName> },
     /// MENGER-30: a ticket's severity moved (`update`; yielded by `watch`);
     /// `previous` the one it had (`null`: none). The whole ticket rides along.
     SeverityChanged { ticket: Ticket, previous: Option<Severity> },
@@ -1597,11 +1600,11 @@ pub enum TicketsEvent {
     /// `blockers_changed`, each surviving parent's `child_removed`, each
     /// blocker's `unlocks_removed`; after it the groups and placements that
     /// moved, and a filter's `left`.
-    Deleted { ids: Vec<String>, tombstones: Vec<Tombstone> },
+    Deleted { ids: Vec<TicketId>, tombstones: Vec<Tombstone> },
     /// ACT-5: `undelete`'s answer, and its write's event on `watch` — the
     /// tickets brought back (whole), in the store's order, with their
     /// children and blocks put back where nothing has moved them since.
-    Undeleted { ids: Vec<String>, tickets: Vec<Ticket> },
+    Undeleted { ids: Vec<TicketId>, tickets: Vec<Ticket> },
     /// ACT-6: `reshortcode`'s answer, and its write's event on `watch` —
     /// each moved ticket's old id and new one (`moves`, in the order they
     /// were numbered), and every moved ticket as the write left it
@@ -1749,7 +1752,7 @@ pub enum TicketsEvent {
     Placed {
         summary: TicketSummary,
         placement: Placement,
-        waiting_on: Vec<String>,
+        waiting_on: Vec<TicketName>,
     },
     /// WAVE-4: the tally that closes a `waves` answer, exactly once, after
     /// every `placed`: `waves[i]` is how many of the placed tickets sit in
@@ -1764,7 +1767,7 @@ pub enum TicketsEvent {
     /// on (yielded after the `placed`, before the `wave_counts`, one per
     /// cycle): its ids in the store's order. Every ticket on it — and the
     /// target behind it — is `missing_blocker`: no status change ends it.
-    WaveCycle { ids: Vec<String> },
+    WaveCycle { ids: Vec<TicketId> },
     /// WAVE-6: the kept placements one write moved (yielded by `watch`) —
     /// one event per write that moved any, after that write's other events,
     /// each change the ticket's id and its placement now: the ticket a
@@ -1811,20 +1814,20 @@ pub enum TicketsEvent {
     Blocker { ticket: Ticket },
     /// A blocker id that names no existing ticket — a dangling forward
     /// reference (yielded per-entry by `blockers`).
-    DanglingBlocker { id: String },
+    DanglingBlocker { id: TicketName },
     /// FILTER-15: whether a filter admits one ticket (yielded by `member`,
     /// one per id asked, in the order asked): `id` as it was asked,
     /// `matched` whether the filter admits the ticket it names — `false`
     /// for an id that names no ticket. One lookup in the filter's admitted
     /// cells, never a test of the ticket.
-    Member { id: String, matched: bool },
+    Member { id: crate::vocab::TicketRef, matched: bool },
     /// Lookup miss.
-    NotFound { id: String },
+    NotFound { id: crate::vocab::Asked },
     /// ORG-3: `id` (an address as it was asked — a ticket or a shortcode)
     /// names more than one thing in the reader's reach: `candidates` are
     /// each one's full address, in the store's order. Nothing was read or
     /// written; name one of them in full, or by a short form only it has.
-    Ambiguous { id: String, candidates: Vec<String> },
+    Ambiguous { id: crate::vocab::Asked, candidates: Vec<String> },
     /// In-band error (bad enum value, invalid epic, blocked_by cycle, …).
     /// A *data* event: the call succeeded and the activation said no,
     /// which is not the same thing as a transport or remote failure.
@@ -2199,7 +2202,7 @@ mod tests {
         assert_eq!(wire["waiting_on"], json!(["W-3"]));
         match serde_json::from_value::<TicketsEvent>(wire).unwrap() {
             TicketsEvent::Placed { placement, waiting_on, .. } => {
-                assert_eq!((placement, waiting_on), (Placement::Wave { n: 2 }, vec!["W-3".to_string()]));
+                assert_eq!((placement, waiting_on), (Placement::Wave { n: 2 }, vec![TicketName::from("W-3")]));
             }
             other => panic!("expected Placed, got {other:?}"),
         }

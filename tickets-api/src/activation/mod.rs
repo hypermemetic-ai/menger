@@ -38,6 +38,9 @@ use crate::vocab::{
     Query, Reason, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
+// ACCESS-48: what `not_found` / `ambiguous` echo.
+#[cfg(feature = "server")]
+use crate::vocab::Asked;
 #[cfg(feature = "server")]
 use crate::store::{
     BlockerRef, Change, Filtered, InputWrite, Lens, Membership, NewTicket, Page, PageQuery, Select, Step, Store, StoreError, Walk,
@@ -268,7 +271,6 @@ impl Tickets {
         // the proofs a birth takes (activation/writes.rs); MENGER-13: its
         // first status is a transition, the caller's.
         answered!(store = self.store.clone(), user, None => {
-            let blocked_by = blocked_by.map(texts);
             let epic = epic_in(&store, &user, epic.into_string(), org, parent.as_deref())?;
             let at = filing(&store, &user, &epic, parent.as_deref(), blocked_by.as_deref())?;
             let act = act_of(&user, None, None)?;
@@ -595,7 +597,7 @@ impl Tickets {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         answered!(store = self.store.clone(), user, Some(id.to_string()) => {
             let on = permit::<Editor>(&store, &user, &id)?;
-            Ok(change_event(store.unlink_commits(on, texts(commits)).await?))
+            Ok(change_event(store.unlink_commits(on, commits).await?))
         })
     }
 
@@ -739,7 +741,7 @@ impl Tickets {
         // AUTH-7: the gate held the grant on each of `ids`; a filter's
         // tickets, and a parent or blocker beyond them, are asked there.
         let mut ask = update_of(None, None, kind, status, parent, severity, block, unblock);
-        (ask.label, ask.unlabel) = (texts(label.unwrap_or_default()), texts(unlabel.unwrap_or_default()));
+        (ask.label, ask.unlabel) = (label.unwrap_or_default(), unlabel.unwrap_or_default());
         update_many_stream(self.store.clone(), user, ids, filter, max, tz, ask, source, message)
     }
 
@@ -972,7 +974,7 @@ impl Tickets {
         /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(member_events(&self.store, &user, texts(ids), filter, tz))
+        futures::stream::iter(member_events(&self.store, &user, ids, filter, tz))
     }
 
     /// One roll-up per shortcode: done/total over its subtree's work, its docs, its root (with the root's title, status and kind), and the host it nests under.

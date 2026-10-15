@@ -200,7 +200,7 @@ async fn a_ticket_waited_on_is_refused_unless_unblocked() {
     let k = kinds(&drained(&mut rx));
     assert_eq!(&k[..3], ["blockers_changed", "child_removed", "deleted"], "{k:?}");
     let h = store.history(SYS, "M-3").unwrap();
-    assert_eq!(h.deletions.iter().map(|t| (t.id.as_str(), t.unblocked.clone())).collect::<Vec<_>>(), [("M-2", vec!["M-3".to_string()])]);
+    assert_eq!(h.deletions.iter().map(|t| (t.id.as_str(), t.unblocked.clone())).collect::<Vec<_>>(), [("M-2", vec![TicketId::from("M-3")])]);
     assert_kept(&store, "an unblocking delete");
     // And a ticket that waited on it, deleted with it, needs no unblock.
     let store = self::store().await;

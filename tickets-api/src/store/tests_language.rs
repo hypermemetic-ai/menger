@@ -134,7 +134,7 @@ fn facets_by_rows(plain: &Plain, filter: &Filter, base: &Filter) -> Vec<(String,
             let yes = |b: bool| if b { "yes" } else { "no" }.to_string();
             // MENGER-12: a ticket counts under each label it holds.
             if field == "label" {
-                t.labels.iter().for_each(|l| add(l.clone()));
+                t.labels.iter().for_each(|l| add(l.to_string()));
                 continue;
             }
             add(match field {

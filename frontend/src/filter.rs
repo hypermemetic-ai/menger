@@ -824,7 +824,7 @@ impl ScTree {
         let mut hosts = BTreeMap::new();
         for g in groups.values() {
             if let Some(h) = &g.host {
-                hosts.insert(g.shortcode.to_string(), h.clone());
+                hosts.insert(g.shortcode.to_string(), h.to_string());
             }
             match g.host.as_deref().and_then(epic_of).filter(|h| *h != g.shortcode.as_str() && known.contains(*h)) {
                 Some(h) => kids.entry(h.to_string()).or_default().push(g.shortcode.to_string()),
@@ -2861,9 +2861,9 @@ pub(crate) mod tests {
                 total: 3,
                 done: 0,
                 docs: 0,
-                root: Some(format!("{epic}-1")),
+                root: Some(menger_tickets_api::TicketId::new(format!("{epic}-1"))),
                 root_row: None,
-                host: host.map(Into::into),
+                host: host.map(menger_tickets_api::TicketId::new),
             },
         )
     }

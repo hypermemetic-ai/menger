@@ -251,7 +251,7 @@ async fn labels_move_with_update_many_and_with_label_over_many_ids() {
     let before = written(&store);
     let changes = store.label_many(SYS.permits(["M-3", "M-4"]), vec!["stale".into()], vec!["needs-you".into()]).await.unwrap();
     assert_eq!(written(&store), before + 1, "one write");
-    let said: Vec<(String, Vec<String>, Vec<String>)> = changes
+    let said: Vec<(String, Vec<Label>, Vec<Label>)> = changes
         .into_iter()
         .map(|c| match c {
             Change::LabelsChanged { ticket, added, removed } => (ticket.id.into_string(), added, removed),
@@ -259,13 +259,13 @@ async fn labels_move_with_update_many_and_with_label_over_many_ids() {
         })
         .collect();
     assert_eq!(said, [
-        ("M-3".to_string(), vec!["stale".to_string()], vec!["needs-you".to_string()]),
-        ("M-4".to_string(), vec!["stale".to_string()], vec![]),
+        ("M-3".to_string(), vec![Label::from("stale")], vec![Label::from("needs-you")]),
+        ("M-4".to_string(), vec![Label::from("stale")], vec![]),
     ]);
     // All or none: a bad label, or an id that names nothing, refuses all.
     let before = written(&store);
     assert!(matches!(store.label_many(SYS.permits(["M-2", "M-40"]), vec!["x".into()], vec![]).await, Err(StoreError::RefusedMany { .. })));
-    assert!(store.label_many(SYS.permits(["M-2"]), vec!["no spaces".into()], vec![]).await.is_err());
+    assert!("no spaces".parse::<Label>().is_err(), "ACCESS-48: refused where it is read");
     assert_eq!(written(&store), before);
     assert!(store.get(SYS, "M-2").await.unwrap().labels == ["needs-you"]);
     assert_kept(&store, "labels");
@@ -282,7 +282,7 @@ async fn link_commits_over_many_ids_is_one_write_all_or_none() {
     assert_eq!(added, [1, 0], "M-3 had it");
     let before = written(&store);
     assert!(store.link_commits_many(SYS.permits(["M-2", "M-40"]), vec!["c8c5678".into()]).await.is_err());
-    assert!(store.link_commits_many(SYS.permits(["M-2"]), vec!["not;a;hash".into()]).await.is_err());
+    assert!("not;a;hash".parse::<CommitRef>().is_err(), "ACCESS-48: refused where it is read");
     assert_eq!(written(&store), before);
     assert_eq!(store.get(SYS, "M-2").await.unwrap().commits, ["77df9a0"]);
 }

@@ -158,7 +158,8 @@ use crate::types::{
     MENGER_PATH_PREFIX,
 };
 use crate::access::{Admin, Editor, Permit, Viewer};
-use crate::address::{Address, At, Shortcode, ShortcodeId};
+use crate::address::{Address, At, Shortcode, ShortcodeId, TicketId, TicketName};
+use crate::vocab::{CommitRef, Label};
 use rusqlite::{Connection, OpenFlags};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -757,26 +758,26 @@ pub enum Change {
     /// what was newly linked, in the order given. Carries the full ticket,
     /// as every write after birth does. Only broadcast when something was
     /// added: a no-op link writes and emits nothing.
-    CommitsLinked { ticket: Ticket, added: Vec<String> },
+    CommitsLinked { ticket: Ticket, added: Vec<CommitRef> },
     /// SDLC-9: commits were unlinked (`unlink_commits`); `removed` is what
     /// came off, in the order given. Only broadcast when something did.
-    CommitsUnlinked { ticket: Ticket, removed: Vec<String> },
+    CommitsUnlinked { ticket: Ticket, removed: Vec<CommitRef> },
     /// MENGER-12: a ticket's labels moved (`label`); `added` and `removed`
     /// are what moved, in the order given. Only broadcast when something
     /// did. Carries the full ticket.
-    LabelsChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
+    LabelsChanged { ticket: Ticket, added: Vec<Label>, removed: Vec<Label> },
     /// An existing ticket's `unlocks` gained `added` because a newly
     /// created ticket named it in `blocked_by`. Carries the full updated
     /// ticket so watch-only clients stay coherent.
-    UnlocksChanged { ticket: Ticket, added: String },
+    UnlocksChanged { ticket: Ticket, added: TicketName },
     /// MENGER-30: an existing ticket's `unlocks` lost `removed`, which no
     /// longer names it in `blocked_by` (`update { unblock }`). Carries the
     /// full updated ticket, as `UnlocksChanged` does.
-    UnlocksRemoved { ticket: Ticket, removed: String },
+    UnlocksRemoved { ticket: Ticket, removed: TicketName },
     /// MENGER-30: a ticket's `blocked_by` moved after birth (`update`) —
     /// `added` and `removed` as they moved. Carries the full ticket; each
     /// blocker's side follows as `UnlocksChanged` / `UnlocksRemoved`.
-    BlockersChanged { ticket: Ticket, added: Vec<String>, removed: Vec<String> },
+    BlockersChanged { ticket: Ticket, added: Vec<TicketName>, removed: Vec<TicketName> },
     /// MENGER-30: a ticket's severity moved (`update`); `previous` is the
     /// one it had (`None`: none). Carries the full ticket.
     SeverityChanged { ticket: Ticket, previous: Option<Severity> },
@@ -839,9 +840,9 @@ pub enum Change {
     UpdatedMany { ids: Vec<String>, changed: Vec<String> },
     /// ACT-5: a `delete` removed `ids`, each with its tombstone — after the
     /// events of the tickets it moved ([`delete`]).
-    Deleted { ids: Vec<String>, tombstones: Vec<crate::types::Tombstone> },
+    Deleted { ids: Vec<TicketId>, tombstones: Vec<crate::types::Tombstone> },
     /// ACT-5: an `undelete` brought `tickets` back — first of its write.
-    Undeleted { ids: Vec<String>, tickets: Vec<Ticket> },
+    Undeleted { ids: Vec<TicketId>, tickets: Vec<Ticket> },
     /// ACT-6: a `reshortcode` moved each ticket of `moves` from its old id to
     /// its new one — `tickets` as the write left them — first of its write
     /// ([`reshortcode`]).
@@ -982,7 +983,7 @@ pub enum BlockerRef {
     /// The blocker exists; carries it at its current status.
     Resolved(Ticket),
     /// The id names no existing ticket (a dangling forward reference).
-    Dangling(String),
+    Dangling(TicketName),
 }
 
 pub struct NewTicket {
@@ -994,7 +995,10 @@ pub struct NewTicket {
     pub title: String,
     pub kind: Kind,
     pub severity: Option<Severity>,
-    pub blocked_by: Vec<String>,
+    /// ACCESS-48: each a name as written ([`crate::vocab::TicketRef`]) —
+    /// `create` records it as the key it names, or as written for a
+    /// forward reference ([`TicketName`]).
+    pub blocked_by: Vec<crate::vocab::TicketRef>,
     /// AGS-19: the ticket this one is an output of. Must already exist
     /// (any epic) and must not make the newborn its own ancestor.
     pub parent: Option<String>,
@@ -1061,7 +1065,7 @@ pub enum StoreError {
     InvalidEpic(String),
     /// Creating `id` with the requested `blocked_by` would close a cycle;
     /// `path` is the blocked_by chain from `id` back to `id`.
-    Cycle { id: String, path: Vec<String> },
+    Cycle { id: String, path: Vec<TicketName> },
     /// AGS-19: the requested `parent` names no existing ticket. Nothing
     /// was stored and the id stays unallocated.
     ParentNotFound { id: String, parent: String },
@@ -1075,14 +1079,14 @@ pub enum StoreError {
     FirstMustBeScope { epic: String, kind: Kind },
     /// SDLC-11: a doc was asked to be born with a `blocked_by`. A doc has no
     /// lifecycle — nothing for a blocker to hold back. Nothing was stored.
-    DocBlocked { epic: String, blocked_by: Vec<String> },
+    DocBlocked { epic: String, blocked_by: Vec<crate::vocab::TicketRef> },
     /// SDLC-11: the `blocked_by` of `id` names `docs`, each a doc. A doc
     /// never completes, so it can never unblock anything. Nothing was stored.
-    BlockedByDoc { id: String, docs: Vec<String> },
+    BlockedByDoc { id: String, docs: Vec<TicketName> },
     /// SDLC-11: a doc would be born as `id`, which tickets already name in
     /// their `blocked_by` (`by`, a forward reference) — they would wait on
     /// it forever. Nothing was stored and the id stays unallocated.
-    DocAwaited { id: String, by: Vec<String> },
+    DocAwaited { id: String, by: Vec<TicketName> },
     /// SDLC-11: `set_status` on a doc. A doc has no lifecycle: it exists in
     /// its state, `Doc`, and nothing moves it. Nothing changed.
     DocHasNoLifecycle { id: String },
@@ -1098,7 +1102,7 @@ pub enum StoreError {
     /// SDLC-13: `set_kind … doc` on a ticket in the `blocked_by` graph — it
     /// waits on `blocked_by`, or `unlocks` wait on it — where a doc is never
     /// blocked and never a blocker. Both named. Nothing changed.
-    DocInGraph { id: String, blocked_by: Vec<String>, unlocks: Vec<String> },
+    DocInGraph { id: String, blocked_by: Vec<TicketName>, unlocks: Vec<TicketName> },
     /// SDLC-13: `id` is the root of `epic` — its lowest-seq scope or doc —
     /// and `kind` roots nothing. Nothing changed.
     RootKind { id: String, epic: String, kind: Kind },
@@ -1118,10 +1122,6 @@ pub enum StoreError {
     EmptyTitle { id: String },
     /// ACCESS-29: a title past [`crate::limits::TITLE_MAX`]; nothing written.
     TitleTooLong { id: Option<String>, bytes: usize },
-    /// SDLC-9: a `link_commits` or `unlink_commits` named entries that are
-    /// not commit references ([`commits::reference`]) — every one of them,
-    /// as given. A call is all or nothing: nothing was written.
-    NotACommit { id: String, entries: Vec<String> },
     /// SDLC-9: the link would put `linked + adding` commits on `id`, past
     /// [`commits::MAX_PER_TICKET`]. Nothing was written.
     TooManyCommits { id: String, linked: usize, adding: usize },
@@ -1233,7 +1233,7 @@ pub enum StoreError {
     Blockers { id: String, why: String },
     /// MENGER-30: `update { block }` would close a `blocked_by` cycle; `path`
     /// is the chain from a new blocker back to `id`. Nothing was written.
-    BlockCycle { id: String, path: Vec<String> },
+    BlockCycle { id: String, path: Vec<TicketName> },
     /// MENGER-30: what the caller refused before the store saw the call — an
     /// unknown kind, status or severity — named with the store's refusals.
     Invalid(String),
@@ -1359,7 +1359,7 @@ impl std::fmt::Display for StoreError {
                 kind.as_str()
             ),
             Self::DocInGraph { id, blocked_by, unlocks } => {
-                let named = |ids: &[String]| ids.iter().map(|i| format!("'{i}'")).collect::<Vec<_>>().join(", ");
+                let named = |ids: &[TicketName]| ids.iter().map(|i| format!("'{i}'")).collect::<Vec<_>>().join(", ");
                 let mut why: Vec<String> = Vec::new();
                 if !blocked_by.is_empty() {
                     why.push(format!("it is blocked by {}", named(blocked_by)));
@@ -1404,17 +1404,6 @@ impl std::fmt::Display for StoreError {
                 "a ticket's title cannot be empty: the title given for '{id}' is blank \
                  (nothing changed for '{id}')"
             ),
-            Self::NotACommit { id, entries } => {
-                let named: Vec<String> = entries.iter().map(|e| format!("'{e}'")).collect();
-                let verb = if entries.len() == 1 { "is not a commit reference" } else { "are not commit references" };
-                write!(
-                    f,
-                    "{} {verb}: a commit reference is a hexadecimal object name of 7 to 64 \
-                     characters, optionally after a repository (letters, digits, '.', '_', '-') \
-                     and '@' — e.g. 77df9a0, plexus-macros@4f7114a (nothing changed for '{id}')",
-                    named.join(", ")
-                )
-            }
             Self::TooManyCommits { id, linked, adding } => write!(
                 f,
                 "a ticket holds at most {} commits: '{id}' has {linked}, and linking {adding} more \
@@ -1589,10 +1578,10 @@ impl From<rusqlite::Error> for StoreError {
 fn find_cycle(
     tickets: &Cache,
     new_id: &str,
-    blocked_by: &[String],
-) -> Option<Vec<String>> {
-    let mut stack: Vec<Vec<String>> = blocked_by.iter().map(|b| vec![b.clone()]).collect();
-    let mut visited: HashSet<String> = HashSet::new();
+    blocked_by: &[TicketName],
+) -> Option<Vec<TicketName>> {
+    let mut stack: Vec<Vec<TicketName>> = blocked_by.iter().map(|b| vec![b.clone()]).collect();
+    let mut visited: HashSet<TicketName> = HashSet::new();
     while let Some(path) = stack.pop() {
         let last = path.last().expect("paths start non-empty");
         if last == new_id {
@@ -3204,8 +3193,9 @@ impl Store {
         cache.comments = comments::load(conn)?;
         // NOTE-2: the notes, as stored.
         cache.notes = notes::load(conn)?;
-        // IDENTITY-21: the members, as stored.
-        cache.members = members::load(conn)?;
+        // IDENTITY-21: the members, as stored — ACCESS-48: their rows, read
+        // as grants once ORG-4 has settled them (below).
+        let grant_rows = members::rows(conn)?;
         // AUTH-7: the edited roles, as stored.
         cache.roles = roles::load(conn)?;
         // MENGER-13: the transition log and its kept indexes.
@@ -3222,7 +3212,7 @@ impl Store {
         // root hangs; every row given its letters and its full address.
         shortcodes::settle(conn, &mut cache)?;
         // ORG-4: every grant from before organizations moved into its own.
-        orgs::settle(conn, &mut cache)?;
+        cache.members = orgs::settle(conn, &cache, grant_rows)?;
         // MENGER-39: the queue, as stored.
         cache.queue = queue::load(conn)?;
         // FILTER-36: the saved filters, from their docs' bodies.
@@ -4744,7 +4734,7 @@ impl Store {
 
     /// IDENTITY-21: removes a grant; whether there was one.
     /// ACCESS-11: by `by`, as [`Store::grant`].
-    pub async fn revoke(&self, by: impl Into<Authority>, principal: String, scope: String) -> Result<bool, StoreError> {
+    pub async fn revoke(&self, by: impl Into<Authority>, principal: crate::vocab::Grantee, scope: crate::members::Scope) -> Result<bool, StoreError> {
         by.into().grants_on(&scope)?;
         let serial = self.serial().await;
         let (p, sc) = (principal.clone(), scope.clone());
@@ -4916,14 +4906,13 @@ impl Store {
     /// else: not the status (whether `done` needs a commit is SDLC-4's) —
     /// then the cache, then one `CommitsLinked`. Like `amend`, it moves no
     /// roll-up and no index, so the row goes into the cache and that is all.
-    pub async fn link_commits(&self, on: Permit<Editor>, entries: Vec<String>) -> Result<Change, StoreError> {
+    pub async fn link_commits(&self, on: Permit<Editor>, refs: Vec<CommitRef>) -> Result<Change, StoreError> {
         // ACCESS-11: of the ticket `on` is for.
         let id = crate::address::folded(on.id());
-        let refs = Self::references(&id, &entries)?;
         let serial = self.serial().await;
         let (mut row, written) = self.row(&id)?;
-        let mut known: HashSet<String> = row.commits.iter().cloned().collect();
-        let added: Vec<String> = refs.into_iter().filter(|r| known.insert(r.clone())).collect();
+        let mut known: HashSet<CommitRef> = row.commits.iter().cloned().collect();
+        let added: Vec<CommitRef> = refs.into_iter().filter(|r| known.insert(r.clone())).collect();
         if added.is_empty() {
             return Ok(Change::CommitsLinked {
                 ticket: self.full_one(row, written).await?,
@@ -5001,7 +4990,7 @@ impl Store {
     /// commits (its labels and `updated_unix`) with the cell move its new
     /// set makes (`label <name>`), then the cache, then one
     /// `LabelsChanged`, then the cell moves.
-    pub async fn label(&self, on: Permit<Editor>, add: Vec<String>, remove: Vec<String>) -> Result<Change, StoreError> {
+    pub async fn label(&self, on: Permit<Editor>, add: Vec<Label>, remove: Vec<Label>) -> Result<Change, StoreError> {
         // ACCESS-11: of the ticket `on` is for.
         let id = crate::address::folded(on.id());
         let serial = self.serial().await;
@@ -5058,13 +5047,12 @@ impl Store {
     /// broadcast, answered `removed: []`; otherwise the row commits (its
     /// commits and `updated_unix`), then the cache, then one
     /// `CommitsUnlinked`.
-    pub async fn unlink_commits(&self, on: Permit<Editor>, entries: Vec<String>) -> Result<Change, StoreError> {
+    pub async fn unlink_commits(&self, on: Permit<Editor>, refs: Vec<CommitRef>) -> Result<Change, StoreError> {
         // ACCESS-11: of the ticket `on` is for.
         let id = crate::address::folded(on.id());
-        let refs = Self::references(&id, &entries)?;
         let serial = self.serial().await;
         let (mut row, written) = self.row(&id)?;
-        let mut removed: Vec<String> = Vec::new();
+        let mut removed: Vec<CommitRef> = Vec::new();
         for r in refs {
             let before = row.commits.len();
             row.commits.retain(|c| *c != r);
@@ -5112,28 +5100,6 @@ impl Store {
         .await
     }
 
-    /// SDLC-9: every entry of a link or an unlink as the reference it is
-    /// stored as, in order — or the refusal naming every entry that is not
-    /// one. Before the write-serial lock and before any read, so a call
-    /// with one bad entry does nothing at all.
-    fn references(id: &str, entries: &[String]) -> Result<Vec<String>, StoreError> {
-        let mut refs = Vec::with_capacity(entries.len());
-        let mut not: Vec<String> = Vec::new();
-        for entry in entries {
-            match commits::reference(entry) {
-                Some(r) => refs.push(r),
-                None => not.push(entry.clone()),
-            }
-        }
-        if !not.is_empty() {
-            return Err(StoreError::NotACommit {
-                id: id.to_string(),
-                entries: not,
-            });
-        }
-        Ok(refs)
-    }
-
     /// One ticket's `blocked_by`, each entry resolved to the current
     /// ticket or marked dangling, in `blocked_by` order. SCALE-14: each
     /// blocker whole — its row from the cache, its body from the database,
@@ -5146,7 +5112,7 @@ impl Store {
                 .get(id)
                 .ok_or_else(|| StoreError::NotFound(id.to_string()))?;
             let mut rows = Vec::new();
-            let slots: Vec<Option<String>> = ticket
+            let slots: Vec<Option<TicketName>> = ticket
                 .blocked_by
                 .iter()
                 .map(|b| match cache.get(b) {

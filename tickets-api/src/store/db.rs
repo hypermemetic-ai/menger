@@ -1,4 +1,5 @@
 use super::{Row, Ticket};
+use crate::address::TicketName;
 use rusqlite::types::Type;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -620,8 +621,9 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
             .as_deref()
             .map(|s| parse_col(6, s))
             .transpose()?,
-        blocked_by: parse_ids(7, &row.get::<_, String>(7)?)?,
-        unlocks: parse_ids(8, &row.get::<_, String>(8)?)?,
+        // ACCESS-48: each list read back as the store kept it, typed.
+        blocked_by: parse_ids(7, &row.get::<_, String>(7)?)?.into_iter().map(TicketName::new).collect(),
+        unlocks: parse_ids(8, &row.get::<_, String>(8)?)?.into_iter().map(TicketName::new).collect(),
         hidden_blocked_by: 0,
         hidden_unlocks: 0,
         parent_hidden: false,
@@ -631,13 +633,13 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         // SCALE-28: stored, moved by the transaction of every birth or move
         // under this ticket (SCALE-4 counted it from the parents at load).
         child_count: row.get(13)?,
-        commits: parse_ids(12, &row.get::<_, String>(12)?)?,
+        commits: parse_ids(12, &row.get::<_, String>(12)?)?.into_iter().map(crate::vocab::CommitRef::stored).collect(),
         // WAVE-10: set at birth, never moved.
         path: row.get(14)?,
         // WAVE-6: not stored — the cache places every row at open.
         placement: None,
         // MENGER-12: moved by `label` alone.
-        labels: parse_ids(15, &row.get::<_, String>(15)?)?,
+        labels: parse_ids(15, &row.get::<_, String>(15)?)?.into_iter().map(crate::vocab::Label::stored).collect(),
     })
 }
 

@@ -39,7 +39,7 @@ pub(super) fn new_ticket(epic: &str, kind: Kind, parent: Option<String>, blocked
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
         severity: None,
-        blocked_by,
+        blocked_by: blocked_by.iter().map(|b| b.as_str().into()).collect(),
         parent,
         body: String::new(),
     }
@@ -79,7 +79,7 @@ fn scan(rows: &[Row]) -> Scan {
         ready: BTreeMap::new(),
     };
     for t in rows {
-        let named: BTreeSet<&str> = t.blocked_by.iter().map(String::as_str).collect();
+        let named: BTreeSet<&str> = t.blocked_by.iter().map(TicketName::as_str).collect();
         let open = named.iter().filter(|b| !resolved(b)).count() as u32;
         if open > 0 {
             s.unsatisfied.insert(t.id.to_string(), open);
@@ -207,7 +207,7 @@ impl Plain {
         let at: HashMap<String, usize> = rows.iter().enumerate().map(|(i, t)| (t.id.to_string(), i)).collect();
         let ready = rows
             .iter()
-            .map(|t| t.status == Status::Ready && t.blocked_by.iter().all(|b| at.get(b).is_some_and(|i| done(rows[*i].status))))
+            .map(|t| t.status == Status::Ready && t.blocked_by.iter().all(|b| at.get(b.as_str()).is_some_and(|i| done(rows[*i].status))))
             .collect();
         Self { rows, at, ready }
     }
@@ -435,10 +435,10 @@ pub(super) async fn random_ask_or_label(store: &Store, own: &mut Rng, all: &[Row
         }
         _ => {
             let names = ["needs-you", "p1", "later"];
-            let (add, remove): (Vec<String>, Vec<String>) = match own.below(3) {
+            let (add, remove): (Vec<Label>, Vec<Label>) = match own.below(3) {
                 0 => (vec![names[own.below(3)].into()], vec![]),
                 1 => (vec![], vec![names[own.below(3)].into()]),
-                _ => (vec![names[own.below(3)].into(), names[own.below(3)].to_ascii_uppercase()], vec![names[own.below(3)].into()]),
+                _ => (vec![names[own.below(3)].into(), names[own.below(3)].to_ascii_uppercase().as_str().into()], vec![names[own.below(3)].into()]),
             };
             match store.label(SYS.permit(&id), add.clone(), remove.clone()).await.unwrap() {
                 Change::LabelsChanged { added, removed, .. } if !(added.is_empty() && removed.is_empty()) => tally.labelled += 1,
@@ -595,13 +595,13 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
         }
         18 => {
             let id = pick(rng);
-            store.link_commits(SYS.permit(&id), vec![format!("{:07x}", 0xabc0000 + rng.below(4))]).await.unwrap();
+            store.link_commits(SYS.permit(&id), vec![CommitRef::from(format!("{:07x}", 0xabc0000 + rng.below(4)).as_str())]).await.unwrap();
             tally.others += 1;
             format!("link_commits {id}")
         }
         _ => {
             let id = pick(rng);
-            store.unlink_commits(SYS.permit(&id), vec![format!("{:07x}", 0xabc0000 + rng.below(4))]).await.unwrap();
+            store.unlink_commits(SYS.permit(&id), vec![CommitRef::from(format!("{:07x}", 0xabc0000 + rng.below(4)).as_str())]).await.unwrap();
             tally.others += 1;
             format!("unlink_commits {id}")
         }

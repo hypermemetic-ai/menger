@@ -15,7 +15,7 @@ fn new(epic: &str, title: &str, kind: Kind, parent: Option<&str>, blocked_by: &[
         title: title.into(),
         kind,
         severity: None,
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: parent.map(Into::into),
         body: format!("the body of {title}"),
     }
@@ -91,12 +91,12 @@ pub(super) fn assert_kept(store: &Store, after: &str) {
     for t in cache.order.values() {
         for b in &t.blocked_by {
             if let Some(bt) = cache.get(b) {
-                assert!(bt.unlocks.contains(&t.id.to_string()), "{b}'s unlocks name {}, after {after}", t.id);
+                assert!(bt.unlocks.iter().any(|x| *x == t.id), "{b}'s unlocks name {}, after {after}", t.id);
             }
         }
         for u in &t.unlocks {
             let ut = cache.get(u).unwrap_or_else(|| panic!("{u} in {}'s unlocks is a ticket, after {after}", t.id));
-            assert!(ut.blocked_by.contains(&t.id.to_string()), "{u} names {} it unlocks, after {after}", t.id);
+            assert!(ut.blocked_by.iter().any(|x| *x == t.id), "{u} names {} it unlocks, after {after}", t.id);
         }
     }
     drop(cache);
@@ -104,11 +104,11 @@ pub(super) fn assert_kept(store: &Store, after: &str) {
 }
 
 fn blocked(ids: &[&str]) -> Update {
-    Update { block: ids.iter().map(|s| s.to_string()).collect(), ..Update::default() }
+    Update { block: ids.iter().map(|s| (*s).into()).collect(), ..Update::default() }
 }
 
 fn unblocked(ids: &[&str]) -> Update {
-    Update { unblock: ids.iter().map(|s| s.to_string()).collect(), ..Update::default() }
+    Update { unblock: ids.iter().map(|s| (*s).into()).collect(), ..Update::default() }
 }
 
 /// How many tickets of `epic` a filter admits.
@@ -166,7 +166,7 @@ async fn each_field_alone_moves_it_and_sends_its_own_event() {
     assert_kept(&store, "a severity");
 
     let u = store.update(SYS.updating("U-3"), blocked(&["u-2"])).await.unwrap();
-    assert_eq!((u.changed, u.ticket.blocked_by.clone()), (vec!["blocked_by".to_string()], vec!["U-2".to_string()]));
+    assert_eq!((u.changed, u.ticket.blocked_by.clone()), (vec!["blocked_by".to_string()], vec![TicketName::from("U-2")]));
     assert_eq!(types(&drained(&mut rx)), ["blockers_changed", "unlocks_changed", "placements_changed", "cells_moved"]);
     assert_eq!(store.get(SYS, "U-2").await.unwrap().unlocks, ["U-3"]);
     assert_kept(&store, "a block");
@@ -205,7 +205,7 @@ async fn all_at_once_is_one_write_its_events_in_order() {
     let t = &u.ticket;
     assert_eq!(
         (t.title.as_str(), t.kind, t.status, t.parent.as_deref(), t.severity, t.blocked_by.clone()),
-        ("three, all at once", Kind::Gap, Status::Ready, Some("U-5"), Some(Severity::Low), vec!["U-2".to_string(), "V-2".to_string()])
+        ("three, all at once", Kind::Gap, Status::Ready, Some("U-5"), Some(Severity::Low), vec![TicketName::from("U-2"), TicketName::from("V-2")])
     );
     assert_eq!(store.get(SYS, "U-3").await.unwrap(), *t, "the answer is the ticket as stored");
     assert_eq!(store.tickets.read().unwrap().written, written + 1, "one write");
@@ -302,7 +302,7 @@ async fn every_refusal_writes_nothing() {
         ("U-2", Update { block: vec!["V-2".into()], unblock: vec!["v-2".into()], ..Update::default() }, |e| {
             matches!(e, StoreError::Blockers { .. })
         }),
-        ("U-2", blocked(&[" "]), |e| matches!(e, StoreError::Blockers { .. })),
+        // ACCESS-48: a blank id is no `TicketRef` — refused where it is read.
         ("U-2", Update { refused: vec!["unknown kind 'bug'".into()], ..Update::default() }, |e| matches!(e, StoreError::Invalid(_))),
         // A valid title beside an invalid status: the whole update refused.
         ("U-2", Update { title: title("a fine title"), status: Some(Status::Doc), ..Update::default() }, |e| {
@@ -415,7 +415,7 @@ async fn blockers_move_unlocks_ready_cells_and_waves() {
     store.update(SYS.updating("U-3"), blocked(&["U-8"])).await.unwrap();
     store.create(SYS, new("U", "seven", Kind::Build, None, &[])).await.unwrap();
     let eight = store.create(SYS, new("U", "eight", Kind::Build, None, &[])).await.unwrap();
-    assert_eq!((eight.id.as_str(), eight.unlocks.clone()), ("U-8", vec!["U-3".to_string()]));
+    assert_eq!((eight.id.as_str(), eight.unlocks.clone()), ("U-8", vec![TicketName::from("U-3")]));
     assert_kept(&store, "the forward reference born");
 }
 
@@ -462,10 +462,10 @@ async fn random_updates_leave_verify_derived_consistent() {
             u.severity = Some([None, Some(Severity::High), Some(Severity::Low)][below(3)]);
         }
         for _ in 0..below(3) {
-            u.block.push(if below(10) == 0 { format!("U-{}", 40 + below(5)) } else { pick(&mut below) });
+            u.block.push(if below(10) == 0 { format!("U-{}", 40 + below(5)).as_str().into() } else { pick(&mut below).as_str().into() });
         }
         for _ in 0..below(3) {
-            u.unblock.push(pick(&mut below));
+            u.unblock.push(pick(&mut below).as_str().into());
         }
         let id = pick(&mut below);
         let what = format!("step {step}: update {id} {u:?}");

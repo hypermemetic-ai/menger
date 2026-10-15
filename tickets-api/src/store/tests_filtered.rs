@@ -281,7 +281,7 @@ impl Plain {
     pub(super) fn facts(&self, t: &Row, k: Key) -> crate::filter::Facts {
         crate::filter::Facts {
             asking: k.asking(),
-            labels: t.labels.clone(),
+            labels: t.labels.iter().map(|l| l.to_string()).collect(),
             id: t.id.to_string(),
             epic: t.epic.to_string(),
             title: t.title.clone(),

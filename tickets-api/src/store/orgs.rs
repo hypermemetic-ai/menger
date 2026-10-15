@@ -40,6 +40,7 @@ use super::*;
 use crate::address::{folded, OrgId};
 use crate::members::{Grant, Scope, EVERYWHERE};
 use crate::orgs::Org;
+use crate::vocab::{GrantedBy, Grantee, Principal};
 use rusqlite::params;
 
 impl Registry {
@@ -121,15 +122,18 @@ fn org_card(cache: &Cache, row: i64, org: &OrgId) -> Org {
 
 /// A grant's scope moved from `old:` to `new:` — `None` for a scope not in
 /// that organization.
-fn moved_scope(scope: &str, old: &str, new: &OrgId) -> Option<String> {
-    let rest = scope.strip_prefix(old)?.strip_prefix(':')?;
-    Some(format!("{new}:{rest}"))
+fn moved_scope(scope: &Scope, old: &str, new: &OrgId) -> Option<Scope> {
+    match scope {
+        Scope::Org(o) if o.as_str() == old => Some(Scope::Org(new.clone())),
+        Scope::Shortcode { org, id } if org.as_str() == old => Some(Scope::Shortcode { org: new.clone(), id: id.clone() }),
+        _ => None,
+    }
 }
 
 /// Whether a grant's scope is in the organization named `names` (its name
 /// and every alias).
-fn scope_in(scope: &str, names: &[String]) -> bool {
-    scope.split_once(':').is_some_and(|(o, _)| names.iter().any(|n| n == o))
+fn scope_in(scope: &Scope, names: &[String]) -> bool {
+    scope.org().is_some_and(|o| names.iter().any(|n| n == o.as_str()))
 }
 
 impl Store {
@@ -179,7 +183,7 @@ impl Store {
     /// The organization and the grant as kept.
     ///
     /// ACCESS-11: by `by` — the system, or admin on `*`.
-    pub async fn create_org(&self, by: impl Into<Authority>, name: &str, admin: Option<(String, String)>) -> Result<(Org, Option<Grant>), StoreError> {
+    pub async fn create_org(&self, by: impl Into<Authority>, name: &str, admin: Option<(Principal, GrantedBy)>) -> Result<(Org, Option<Grant>), StoreError> {
         by.into().admin_on(&crate::members::Scope::Everywhere, "a new organization needs admin on *")?;
         let org = OrgId::new(name.trim()).map_err(StoreError::Invalid)?;
         let serial = self.serial().await;
@@ -192,8 +196,8 @@ impl Store {
             r.orgs.keys().next_back().map_or(1, |last| last + 1)
         };
         let grant = admin.map(|(principal, by)| Grant {
-            principal,
-            scope: Scope::Org(org.clone()).text(),
+            principal: Grantee::Principal(principal),
+            scope: Scope::Org(org.clone()),
             role: crate::members::Role::Admin,
             granted_by: by,
             at: chrono::Utc::now().timestamp(),
@@ -246,7 +250,7 @@ impl Store {
             if let Some(why) = r.taken_name(&to).filter(|_| !own_alias) {
                 return Err(StoreError::Invalid(why));
             }
-            let moved: Vec<(Grant, String)> = cache
+            let moved: Vec<(Grant, Scope)> = cache
                 .members
                 .all()
                 .into_iter()
@@ -365,20 +369,20 @@ impl Store {
     /// first, unnamed) — the id a root of that code takes when it is born
     /// there. Refused: a name that is no scope, an organization there is
     /// not, a shortcode naming several.
-    pub fn scope_named(&self, text: &str) -> Result<String, StoreError> {
+    pub fn scope_named(&self, text: &str) -> Result<Scope, StoreError> {
         let t = crate::members::scope_of(text).map_err(StoreError::Invalid)?;
         if t == EVERYWHERE {
-            return Ok(t);
+            return Ok(Scope::Everywhere);
         }
         let cache = self.tickets.read().expect("store lock poisoned");
         let r = &cache.shortcodes;
         if let Some(org) = t.strip_suffix(':') {
-            return org_in(r, org).map(|(_, o)| Scope::Org(o.clone()).text());
+            return org_in(r, org).map(|(_, o)| Scope::Org(o.clone()));
         }
         if let Some(Scope::Shortcode { org, id }) = Scope::stored(&t) {
             let now = org_in(r, org.as_str())?.1.clone();
             if r.org(&id) == Some(&now) {
-                return Ok(Scope::Shortcode { org: now, id }.text());
+                return Ok(Scope::Shortcode { org: now, id });
             }
         }
         let a = Address::parse(&t).map_err(StoreError::Invalid)?;
@@ -391,10 +395,10 @@ impl Store {
             None => t.clone(),
         };
         match r.find_shortcode(&asked, OrgReach::All) {
-            Found::One(id) => Ok(Scope::Shortcode { org: r.org(&id).cloned().unwrap_or_else(|| r.first_org()), id }.text()),
+            Found::One(id) => Ok(Scope::Shortcode { org: r.org(&id).cloned().unwrap_or_else(|| r.first_org()), id }),
             Found::Many(candidates) => Err(StoreError::Ambiguous { text: t, candidates }),
             Found::None if a.hosts.is_empty() => {
-                Ok(Scope::Shortcode { org: org.unwrap_or_else(|| r.first_org()), id: ShortcodeId::new(a.code.as_str()) }.text())
+                Ok(Scope::Shortcode { org: org.unwrap_or_else(|| r.first_org()), id: ShortcodeId::new(a.code.as_str()) })
             }
             Found::None => Err(StoreError::NoShortcode(t)),
         }
@@ -491,24 +495,28 @@ fn legacy_scope(r: &Registry, scope: &str) -> Option<String> {
 /// shortcode (a grant from before ORG-4) becomes that shortcode in its
 /// organization (`IDENTITY` → `hypermemetic:IDENTITY`), durably, in one
 /// transaction; `*` stays site-wide. A file from after ORG-4 has none, and
-/// nothing is written. Returns how many it moved.
-pub(super) fn settle(conn: &mut rusqlite::Connection, cache: &mut Cache) -> anyhow::Result<usize> {
-    let moved: Vec<(Grant, String)> =
-        cache.members.all().into_iter().filter_map(|g| legacy_scope(&cache.shortcodes, &g.scope).map(|s| (g, s))).collect();
+/// nothing is written.
+///
+/// ACCESS-48: on the grants' rows ([`members::Row`]) as stored — the one
+/// place a scope in no form of [`Scope`] is read — and answers the members
+/// the cache keeps, each a [`Grant`] ([`members::Members::of_rows`]).
+pub(super) fn settle(conn: &mut rusqlite::Connection, cache: &Cache, mut rows: Vec<members::Row>) -> anyhow::Result<members::Members> {
+    let moved: Vec<(usize, String)> =
+        rows.iter().enumerate().filter_map(|(i, g)| legacy_scope(&cache.shortcodes, &g.scope).map(|s| (i, s))).collect();
     if moved.is_empty() {
-        return Ok(0);
+        return Ok(members::Members::of_rows(rows));
     }
     let tx = conn.transaction()?;
-    for (g, scope) in &moved {
-        members::delete(&tx, &g.principal, &g.scope)?;
-        members::store(&tx, &Grant { scope: scope.clone(), ..g.clone() })?;
+    for (i, scope) in &moved {
+        let g = &rows[*i];
+        members::delete_row(&tx, &g.principal, &g.scope)?;
+        members::store_row(&tx, &g.principal, scope, g.role, &g.granted_by, g.at)?;
     }
     tx.commit()?;
     let org = cache.shortcodes.first_org();
     let unplaced = moved.iter().filter(|(_, s)| Scope::stored(s).is_none()).count();
-    for (g, scope) in &moved {
-        cache.members.remove(&g.principal, &g.scope);
-        cache.members.put(Grant { scope: scope.clone(), ..g.clone() });
+    for (i, scope) in &moved {
+        rows[*i].scope = scope.clone();
     }
     tracing::warn!(
         "ORG-4: moved {} grant(s) from before organizations into their organization ({org} for every shortcode in it; \
@@ -519,7 +527,7 @@ pub(super) fn settle(conn: &mut rusqlite::Connection, cache: &mut Cache) -> anyh
             n => format!(" — {n} named no shortcode this build can place and hold nowhere"),
         }
     );
-    Ok(moved.len())
+    Ok(members::Members::of_rows(rows))
 }
 
 /// ACCESS-11: whether `by` administers the organization `org` (as it is

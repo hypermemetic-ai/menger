@@ -1372,7 +1372,7 @@ fn ticket_view(
     // the row, so a link made anywhere reaches this page as the row's
     // update on `watch` — no fetch, no reload — and the memo keeps any
     // other change to the row from rebuilding them.
-    let commits = Memo::new(move |_| ticket.with(|t| t.commits.clone()));
+    let commits = Memo::new(move |_| ticket.with(|t| t.commits.iter().map(ToString::to_string).collect::<Vec<String>>()));
     let running_id = ticket.with_untracked(|t| t.id.clone());
     let commits_view = move || {
         let refs = commits.get();
@@ -1397,7 +1397,7 @@ fn ticket_view(
                 <ul id="blockers">
                     {ids
                         .into_iter()
-                        .map(|bid| dag_entry(bid, Some(blockers_loaded), Some(lensed)))
+                        .map(|bid| dag_entry(bid.into(), Some(blockers_loaded), Some(lensed)))
                         .collect_view()}
                 </ul>
             }
@@ -1413,7 +1413,7 @@ fn ticket_view(
                 <ul id="unlocks">
                     {ids
                         .into_iter()
-                        .map(|uid| dag_entry(uid, None, Some(lensed)))
+                        .map(|uid| dag_entry(uid.into(), None, Some(lensed)))
                         .collect_view()}
                 </ul>
             }
@@ -1880,8 +1880,8 @@ fn tombstone_view(t: menger_tickets_api::Tombstone) -> impl IntoView {
         None => "Its body has been purged: it can no longer be brought back.".to_string(),
     };
     view! {
-        <div id="tombstone" data-ticket-id=t.id.clone()>
-            <h2>{t.id.clone()}" — deleted"</h2>
+        <div id="tombstone" data-ticket-id=t.id.to_string()>
+            <h2>{t.id.to_string()}" — deleted"</h2>
             <p class="tomb-title">{t.title.clone()}</p>
             <p class="tomb-who">"Deleted by "<b>{by}</b>" "{when}"."</p>
             {t.message.clone().map(|m| view! { <p class="tomb-why">"Why: "{m}</p> })}
@@ -1996,7 +1996,7 @@ fn TicketPage(
         Memo::new(move |_| {
             let mut v = vec![id.clone()];
             if let Some(row) = ticket.get() {
-                row.with(|t| v.extend(t.blocked_by.iter().chain(&t.unlocks).cloned()));
+                row.with(|t| v.extend(t.blocked_by.iter().chain(&t.unlocks).map(ToString::to_string)));
             }
             kids.with(|k| {
                 if k.all {
@@ -2047,7 +2047,7 @@ fn TicketPage(
             let (blocked, unlocks) = row.with(|t| (t.blocked_by.clone(), t.unlocks.clone()));
             let (chain, next) = chain_of(&id);
             let mut want: Vec<String> = Vec::new();
-            for w in chain.into_iter().chain(next).chain(blocked).chain(unlocks) {
+            for w in chain.into_iter().chain(next).chain(blocked.into_iter().chain(unlocks).map(String::from)) {
                 if w != id && !want.contains(&w) && want.len() < WANT_MAX {
                     want.push(w);
                 }

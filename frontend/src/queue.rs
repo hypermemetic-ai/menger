@@ -122,7 +122,7 @@ impl Queue {
             TicketsEvent::Unqueued { id, .. } | TicketsEvent::ChangesRequested { id, .. } => self.remove(id),
             TicketsEvent::Deleted { ids, .. } => {
                 let before = self.rows.len();
-                self.rows.retain(|r| !ids.contains(&r.entry.ticket));
+                self.rows.retain(|r| !ids.iter().any(|id| *id == r.entry.ticket));
                 self.rows.len() != before
             }
             // ACT-6: a queued ticket moved — its entry and row, renamed.
@@ -1244,7 +1244,7 @@ mod tests {
         let gone = TicketsEvent::Unqueued { id: "A-3".into(), entry: entry("A-3", Urgency::Blocking, 3), action: QueueAction::Closed, by: "system".into(), at_unix: 9 };
         assert!(q.apply(&gone));
         assert_eq!(ids(&q), ["A-1", "A-2"]);
-        assert!(q.apply(&TicketsEvent::Deleted { ids: vec!["A-2".into()], tombstones: Vec::new() }));
+        assert!(q.apply(&TicketsEvent::Deleted { ids: vec![menger_tickets_api::TicketId::new("A-2")], tombstones: Vec::new() }));
         assert_eq!(ids(&q), ["A-1"]);
         // APP-23: handed back — the watch's `unqueued` (changes_requested) or
         // the write's own answer — the tab leaves.

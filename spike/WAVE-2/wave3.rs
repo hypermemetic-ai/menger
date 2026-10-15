@@ -343,7 +343,8 @@ async fn measure(path: &Path, samples: usize) {
                 title: "wave3".into(),
                 kind: Kind::Build,
                 severity: None,
-                blocked_by,
+                // ACCESS-48: each a name as written, read by its rule.
+                blocked_by: blocked_by.iter().map(|b| b.parse().expect("a ticket's name")).collect(),
                 parent: None,
                 path: None,
                 body: String::new(),

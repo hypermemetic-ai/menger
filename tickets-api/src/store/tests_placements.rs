@@ -37,7 +37,7 @@ fn new(epic: &str, kind: Kind, blocked_by: &[&str]) -> NewTicket {
         title: format!("a {} in {epic}", kind.as_str()),
         kind,
         severity: None,
-        blocked_by: blocked_by.iter().map(|b| b.to_string()).collect(),
+        blocked_by: blocked_by.iter().map(|b| (*b).into()).collect(),
         parent: None,
         path: None,
         body: String::new(),
