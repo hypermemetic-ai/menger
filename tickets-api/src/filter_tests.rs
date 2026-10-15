@@ -359,9 +359,13 @@ fn unreadable_chunks_are_errors() {
         "()",
         "status in ()",
         "(ready or blocked and kind build)",
-        "((ready or blocked) or kind build)",
-        "(status in (Ready, Pending) or blocked)",
-        "not (ready or blocked)",
+        // FILTER-36: groups nest now; what stays refused about parentheses.
+        "((ready or blocked)",
+        "(ready or (blocked and kind build)",
+        "(ready or (blocked or kind build and has commits))",
+        "(ready or (text \"x\" and blocked))",
+        "saved",
+        "saved \"--\"",
         "has",
         "readyx",
         "ready · tree by kind",
@@ -931,7 +935,8 @@ fn and_matches_what_both_match() {
 /// its texts — passes `f`, asked of the evaluator itself.
 fn some_world_matches(f: &Filter) -> bool {
     let (mut epics, mut unders, mut texts, mut labels) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for p in f.groups.iter().flat_map(|g| &g.preds) {
+    // FILTER-36: every leaf, a nested group's too.
+    for p in f.leaves() {
         match &p.field {
             Field::In(e) if !epics.contains(e) => epics.push(e.clone()),
             // MENGER-12: each label named, held or not.
@@ -1303,4 +1308,304 @@ fn malformed_touched_is_refused() {
         let e = refused(text).to_string();
         assert!(e.contains(says), "{text}: {e}");
     }
+}
+
+// -- FILTER-36: nesting and names -----------------------------------------------------
+
+fn saved(name: &str) -> Field {
+    Field::Saved(name.into())
+}
+
+/// Nested texts are fixed points of `format ∘ parse` — and parse to the
+/// tree they say.
+#[test]
+fn nested_canonical_texts_are_fixed_points() {
+    for text in [
+        "(ready or (blocked and kind build))",
+        "(ready or (blocked and kind build)) and has commits",
+        "(asking or (label needs-you and (blocked or status Pending)))",
+        "(kind build and (blocked or ready) and (asking or has commits))",
+        "not (blocked or ready)",
+        "not (blocked and kind build)",
+        "(ready or not (blocked and kind build))",
+        "(blocked and status in (Ready, Pending))",
+        "(asking or (kind build and not status Complete))",
+        "saved \"Needs you\"",
+        "saved Plexus-Ready",
+        "not saved \"Needs you\"",
+        "(saved \"Needs you\" or saved Plexus-Ready)",
+        "(saved Deployment and saved Plexus-Coding)",
+        "(ready or (saved Deployment and not blocked)) and kind build",
+        "text \"watch\" and (ready or (blocked and asking))",
+        "(ready or (blocked and kind build)) · flat",
+    ] {
+        let f = parsed(text);
+        assert_eq!(f.format(), text, "{f:?}");
+        assert_eq!(parsed(&f.format()), f, "{text}");
+    }
+    assert_eq!(
+        parsed("(ready or (blocked and kind build))").groups,
+        vec![Group {
+            conj: Conj::Any,
+            preds: vec![is(Field::Ready), Group::all(vec![is(Field::Blocked), is(kind(Kind::Build))]).nested(false)],
+        }]
+    );
+    assert_eq!(parsed("not saved \"Needs you\"").groups, vec![one(not(saved("Needs you")))]);
+}
+
+/// What is read as written but written canonically: a nested group joined
+/// as its parent is spliced in, a one-item group is its item, a negated list
+/// is the other list, a list among `or`s joins them.
+#[test]
+fn nested_groups_settle_to_the_canonical_shape() {
+    for (text, canonical) in [
+        ("((ready or blocked) or kind build)", "(ready or blocked or kind build)"),
+        ("(ready and (blocked and (kind build and asking)))", "(ready and blocked and kind build and asking)"),
+        ("((ready and blocked))", "(ready and blocked)"),
+        ("(ready or (blocked))", "(ready or blocked)"),
+        ("(ready or not (blocked))", "(ready or not blocked)"),
+        ("not (not blocked)", "blocked"),
+        ("not (status Ready or status Coding)", "not status in (Ready, Coding)"),
+        ("not status in (Ready, Coding)", "not status in (Ready, Coding)"),
+        ("(status in (Ready, Pending) or blocked)", "(status Ready or status Pending or blocked)"),
+        ("(status Ready or (status Pending or status Coding))", "status in (Ready, Pending, Coding)"),
+        ("(blocked and not status in (Ready, Coding))", "(blocked and not status Ready and not status Coding)"),
+        ("ready or (blocked and kind build)", "(ready or (blocked and kind build))"),
+        ("saved \"Plexus-Ready\"", "saved Plexus-Ready"),
+        ("saved   \"Needs   you\"", "saved \"Needs you\""),
+        ("((text \"x\"))", "text \"x\""),
+    ] {
+        assert_eq!(parsed(text).format(), canonical, "{text}");
+        assert_eq!(parsed(canonical).format(), canonical, "{canonical} is canonical");
+    }
+}
+
+/// `text` stays a top-level `and` group of its own, at any depth.
+#[test]
+fn text_inside_a_nested_group_is_an_error() {
+    for t in [
+        "(ready or (text \"x\" and blocked))",
+        "(ready or (blocked or text \"x\"))",
+        "(ready and (blocked or text \"x\"))",
+        "(ready or not (text \"x\"))",
+        "not (text \"x\")",
+    ] {
+        let e = refused(t);
+        assert!(e.chunks.iter().any(|c| c.why.contains("stands alone")), "{t}: {e:?}");
+    }
+}
+
+/// A tree the language could hold, drawn at random — leaves from every
+/// field but `text` (and, `named`, saved names), `not` anywhere, either
+/// join at every level, to `depth`.
+fn random_tree(rng: &mut Rng, pools: &Pools, depth: usize, named: bool) -> Raw {
+    if depth == 0 || rng.below(3) == 0 {
+        if named && rng.below(5) == 0 {
+            let names = ["Needs you", "Plexus-Ready", "Deployment"];
+            return Raw::Leaf(Predicate { field: saved(rng.pick(&names)), not: rng.coin() });
+        }
+        return Raw::Leaf(random_pred(rng, pools));
+    }
+    let conj = if rng.coin() { Conj::Any } else { Conj::All };
+    let kids = (0..1 + rng.below(3)).map(|_| random_tree(rng, pools, depth - 1, named)).collect();
+    Raw::Node(conj, rng.coin(), kids)
+}
+
+/// A tree as drawn, before the language settles it.
+#[derive(Clone, Debug)]
+enum Raw {
+    Leaf(Predicate),
+    Node(Conj, bool, Vec<Raw>),
+}
+
+impl Raw {
+    /// Judged as drawn — the reference the settled tree is held to.
+    fn holds(&self, x: &Facts) -> bool {
+        match self {
+            Raw::Leaf(p) => p.matches(x),
+            Raw::Node(conj, not, kids) => {
+                let hit = match conj {
+                    Conj::Any => kids.iter().any(|k| k.holds(x)),
+                    Conj::All => kids.iter().all(|k| k.holds(x)),
+                };
+                hit != *not
+            }
+        }
+    }
+
+    /// The tree as a predicate of the language, settled by [`Group::of`].
+    fn item(&self) -> Predicate {
+        match self {
+            Raw::Leaf(p) => p.clone(),
+            Raw::Node(conj, not, kids) => Group::of(*conj, kids.iter().map(Raw::item).collect()).nested(*not),
+        }
+    }
+}
+
+/// A filter of random trees: each top-level group one of them.
+fn random_nested(rng: &mut Rng, pools: &Pools, named: bool) -> (Filter, Vec<Raw>) {
+    let raws: Vec<Raw> = (0..1 + rng.below(3)).map(|_| random_tree(rng, pools, 3, named)).collect();
+    let groups = raws.iter().map(|r| Group::of(Conj::All, vec![r.item()])).collect();
+    (Filter { groups, display: Display::default() }, raws)
+}
+
+/// Over random trees: settling keeps the meaning (De Morgan for a negated
+/// list included), `parse(format(f)) == f`, and `format` is a fixed point.
+#[test]
+fn trees_round_trip_and_keep_their_meaning() {
+    let mut rng = Rng(0xF136_0001);
+    let mut nested = 0;
+    for _ in 0..3000 {
+        let (f, raws) = random_nested(&mut rng, &WIDE, true);
+        nested += usize::from(f.is_nested());
+        let text = f.format();
+        assert_eq!(Filter::parse(&text).as_ref(), Ok(&f), "{text}");
+        assert_eq!(parsed(&text).format(), text);
+        for _ in 0..40 {
+            let x = random_facts(&mut rng, &WIDE);
+            assert_eq!(f.matches(&x), raws.iter().all(|r| r.holds(&x)), "{text} on {x:?}");
+        }
+    }
+    assert!(nested > 1500, "the trees nest: {nested}");
+}
+
+/// `and` over trees still matches what both match.
+#[test]
+fn and_over_trees_matches_what_both_match() {
+    let mut rng = Rng(0xF136_0002);
+    for _ in 0..1500 {
+        let ((a, _), (b, _)) = (random_nested(&mut rng, &WIDE, false), random_nested(&mut rng, &WIDE, false));
+        let both = a.and(&b);
+        assert_eq!(Filter::parse(&both.format()).as_ref(), Ok(&both), "{}", both.format());
+        for _ in 0..40 {
+            let x = random_facts(&mut rng, &WIDE);
+            assert_eq!(both.matches(&x), a.matches(&x) && b.matches(&x), "{}", both.format());
+        }
+    }
+}
+
+/// `admits_nothing` stays exact over the closed domain when groups nest,
+/// and what it names is a nested group's whole top-level group.
+#[test]
+fn admits_nothing_is_exact_over_trees() {
+    let mut rng = Rng(0xF136_0003);
+    let mut found = 0;
+    for _ in 0..500 {
+        let (f, _) = random_nested(&mut rng, &NARROW, false);
+        let none = !some_world_matches(&f);
+        let got = f.admits_nothing();
+        assert_eq!(got.is_some(), none, "{}: {got:?}", f.format());
+        if let Some(c) = got {
+            found += 1;
+            assert!(!some_world_matches(&sub(&f, &c.at)), "{} names {:?}", f.format(), c.at);
+        }
+    }
+    assert!(found > 20, "the rounds hold contradictions: {found}");
+    let f = parsed("(blocked or (status Ready and status Coding)) and not blocked");
+    let c = f.admits_nothing().expect("a contradiction through a nested group");
+    assert_eq!(c.to_string(), "`(blocked or (status Ready and status Coding))` and `not blocked` admit no ticket together");
+}
+
+/// The saved filters a resolution test reads: canonical texts by name, the
+/// lookup matching names by slug as the store does.
+fn lookup_in<'a>(saved: &'a [(&'a str, &'a str)]) -> impl FnMut(&str) -> Option<String> + 'a {
+    move |name| {
+        let key = crate::saved_filters::slug(name);
+        saved.iter().find(|(n, _)| crate::saved_filters::slug(n) == key).map(|(_, t)| t.to_string())
+    }
+}
+
+/// `resolve` puts each named filter in its name's place: alone at the top,
+/// its groups join the filter's; under `or` (or `not`), all of them are one
+/// group, nested; names inside names are expanded too; the display stays.
+#[test]
+fn resolve_expands_names_where_they_stand() {
+    let saved = [
+        ("Needs you", "(queued or asking or label needs-you)"),
+        ("Plexus-Ready", "in (PLEXUS, SYNAPSE) and not category done and not blocked"),
+        ("Deployment", "in (DEPLOY, FILTER) and not kind doc"),
+        ("Both", "saved \"needs you\" and kind build"),
+    ];
+    for (text, resolved) in [
+        ("saved \"Needs you\"", "(queued or asking or label needs-you)"),
+        ("saved Plexus-Ready", "in (PLEXUS, SYNAPSE) and not category done and not blocked"),
+        ("kind build and saved plexus-ready", "kind build and in (PLEXUS, SYNAPSE) and not category done and not blocked"),
+        (
+            "saved \"Needs you\" or saved Plexus-Ready",
+            "(queued or asking or label needs-you or (in (PLEXUS, SYNAPSE) and not category done and not blocked))",
+        ),
+        ("not saved Deployment", "not (in (DEPLOY, FILTER) and not kind doc)"),
+        ("not saved \"Needs you\"", "not (queued or asking or label needs-you)"),
+        ("(ready or saved Deployment) · flat", "(ready or (in (DEPLOY, FILTER) and not kind doc)) · flat"),
+        ("saved Both", "(queued or asking or label needs-you) and kind build"),
+        ("blocked and status Ready", "blocked and status Ready"),
+    ] {
+        let got = parsed(text).resolve(&mut lookup_in(&saved)).unwrap_or_else(|e| panic!("{text}: {e}"));
+        assert_eq!(got.format(), resolved, "{text}");
+        assert!(got.saved_names().is_empty());
+        assert_eq!(parsed(resolved), got, "{resolved} round-trips");
+    }
+    // The union, judged: what either matches.
+    let union = parsed("saved \"Needs you\" or saved Plexus-Ready").resolve(&mut lookup_in(&saved)).unwrap();
+    let (a, b) = (parsed(saved[0].1), parsed(saved[1].1));
+    let mut rng = Rng(0xF136_0004);
+    for _ in 0..2000 {
+        let mut x = random_facts(&mut rng, &WIDE);
+        x.epic = rng.pick(&["PLEXUS", "SYNAPSE", "MNG"]).to_string();
+        assert_eq!(union.matches(&x), a.matches(&x) || b.matches(&x), "{x:?}");
+    }
+}
+
+/// A name nothing holds, a cycle, too deep, a saved text that does not
+/// read or holds `text`: refused in words, naming the chunk.
+#[test]
+fn resolve_refuses_in_words() {
+    let saved = [
+        ("A", "saved B and ready"),
+        ("B", "(blocked or saved A)"),
+        ("Self", "saved self"),
+        ("Texty", "text \"watch\" and ready"),
+        ("Broken", "frobnicate"),
+        ("Empty", "· flat"),
+        ("D0", "saved D1"),
+        ("D1", "saved D2"),
+        ("D2", "saved D3"),
+        ("D3", "saved D4"),
+        ("D4", "saved D5"),
+        ("D5", "saved D6"),
+        ("D6", "saved D7"),
+        ("D7", "saved D8"),
+        ("D8", "saved D9"),
+        ("D9", "ready"),
+    ];
+    for (text, words) in [
+        ("saved Nope", "not resolved: `saved Nope` — no saved filter named \"Nope\""),
+        ("ready or saved \"Not there\"", "no saved filter named \"Not there\""),
+        ("saved A", "a cycle: \"A\" names \"B\" names \"A\""),
+        ("saved Self", "a cycle: \"Self\" names \"self\""),
+        ("saved Texty", "holds `text`, which stands only at a filter's own top"),
+        ("saved Broken", "the saved filter \"Broken\" does not read — not understood"),
+        ("saved Empty", "the saved filter \"Empty\" names no predicate"),
+        ("saved D0", "at most 8 deep"),
+    ] {
+        let e = parsed(text).resolve(&mut lookup_in(&saved)).expect_err(text);
+        assert!(e.unresolved, "{text}");
+        assert!(e.to_string().contains(words), "{text}: {e}");
+    }
+    // Two bad names: each chunk named.
+    let e = parsed("saved X and saved Y").resolve(&mut lookup_in(&saved)).unwrap_err();
+    assert_eq!(e.chunks.len(), 2, "{e}");
+}
+
+/// An unresolved name passes nothing, and is a free truth to the
+/// contradiction check — never a false contradiction.
+#[test]
+fn an_unresolved_name_matches_nothing_and_clashes_with_nothing() {
+    let f = parsed("saved \"Needs you\"");
+    assert!(!f.matches(&facts("MNG-1", "x", Status::Ready, Kind::Build)));
+    assert!(f.admits_nothing().is_none());
+    assert!(parsed("saved X and not saved x").admits_nothing().is_some(), "a name and its negation, by slug");
+    assert_eq!(parsed("saved A or saved B or not ready").saved_names(), ["A", "B"]);
+    assert!(!parsed("status Ready").is_nested() && !parsed("(ready or blocked)").is_nested());
+    assert!(parsed("saved A").is_nested() && parsed("(ready or (blocked and asking))").is_nested());
 }

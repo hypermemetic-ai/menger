@@ -28,7 +28,7 @@ pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<Caller, String>,
                 return;
             }
         };
-        match filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())) {
+        match store.lens_or_all(filter.as_deref()) {
             Ok(lens) => {
                 let lens = lens.with_clock(clock);
                 let keep = kept(&store, &caller, keep.as_deref());
@@ -73,9 +73,8 @@ pub(super) fn facets_stream(store: Arc<Store>, admitted: Result<Caller, String>,
                 return;
             }
         };
-        let read = |text: Option<String>| -> Result<crate::filter::Filter, String> {
-            text.as_deref().map_or_else(|| Ok(Default::default()), |t| crate::filter::Filter::parse(t).map_err(|e| e.to_string()))
-        };
+        // FILTER-36: each read with its saved names resolved.
+        let read = |text: Option<String>| -> Result<crate::filter::Filter, String> { store.resolved(text.as_deref()) };
         let answer = clock_of(&caller, tz.as_deref()).and_then(|clock| {
             read(filter)
                 .and_then(|f| Ok((f, read(base)?)))

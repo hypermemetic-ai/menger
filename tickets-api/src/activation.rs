@@ -36,7 +36,7 @@ use crate::types::TransitionSource;
 use crate::types::{AnswerSource, InputState};
 // FILTER-15: the reads that take the lens.
 #[cfg(feature = "server")]
-use crate::store::{narrowing, narrowing_lens, ready_and, MEMBER_MAX};
+use crate::store::{ready_and, MEMBER_MAX};
 // SEARCH-2: search inside tickets.
 #[cfg(feature = "server")]
 use crate::store::{SearchPage, SEARCH_LIMIT, SEARCH_MAX};
@@ -407,7 +407,7 @@ impl Tickets {
                     yield TicketsEvent::Error { message: StoreError::AtAndAfter.to_string() };
                     return;
                 }
-                let lens = match filter.as_deref().map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())) {
+                let lens = match store.lens_or_all(filter.as_deref()) {
                     Ok(lens) => lens,
                     Err(e) => {
                         yield veiled(&caller, e);
@@ -1092,7 +1092,7 @@ impl Tickets {
                 }
             };
             // FILTER-15: from the cells.
-            match narrowing(filter.as_deref()).and_then(|f| f.map(|f| ready_and(&f, epic.clone())).transpose()) {
+            match store.narrowing(filter.as_deref()).and_then(|f| f.map(|f| ready_and(&f, epic.clone())).transpose()) {
                 Err(e) => {
                     yield veiled(&caller, e);
                     return;
@@ -1185,7 +1185,7 @@ impl Tickets {
                 }
             };
             let limit = Some(limit.unwrap_or(FIND_LIMIT));
-            let page = match zoned_lens(&caller, filter.as_deref(), tz.as_deref()) {
+            let page = match zoned_lens(&store, &caller, filter.as_deref(), tz.as_deref()) {
                 Err(e) => Err(e),
                 // FILTER-15: the candidates the cells admit.
                 Ok(Some(lens)) => store.find_filtered(&query, &lens, after.as_deref(), limit),
@@ -1252,7 +1252,7 @@ impl Tickets {
                     return;
                 }
             };
-            let lens = match zoned_lens(&caller, filter.as_deref(), tz.as_deref()) {
+            let lens = match zoned_lens(&store, &caller, filter.as_deref(), tz.as_deref()) {
                 Ok(lens) => lens,
                 Err(e) => {
                     yield veiled(&caller, e);
@@ -1320,7 +1320,7 @@ impl Tickets {
                 };
                 return;
             }
-            let lens = match zoned_lens(&caller, Some(&filter), tz.as_deref()) {
+            let lens = match zoned_lens(&store, &caller, Some(&filter), tz.as_deref()) {
                 Ok(lens) => lens.unwrap_or_else(Lens::all),
                 Err(e) => {
                     yield veiled(&caller, e);
@@ -1500,7 +1500,7 @@ impl Tickets {
                 }
             };
             // FILTER-15: of the tickets the filter admits, by the cells.
-            let answer = match zoned_lens(&caller, filter.as_deref(), tz.as_deref()) {
+            let answer = match zoned_lens(&store, &caller, filter.as_deref(), tz.as_deref()) {
                 Err(e) => Err(e),
                 Ok(Some(lens)) => store.inputs_filtered(ticket.as_deref(), epic.as_deref(), state, &lens),
                 Ok(None) => store.inputs(ticket.as_deref(), epic.as_deref(), state),
@@ -1840,7 +1840,7 @@ impl Tickets {
                     return;
                 }
             };
-            let lens = match Lens::parse(&filter) {
+            let lens = match store.lens(&filter) {
                 Ok(lens) => lens,
                 Err(e) => {
                     yield veiled(&caller, e);
@@ -2218,20 +2218,24 @@ impl Tickets {
                                 yield membership_event(&store, m);
                             }
                         }
-                        Ok(change) => {
-                            if membership {
-                                continue;
-                            }
+                        Ok(change) if !membership => {
                             if let Some(ev) = change.in_epic(epic.as_ref()).and_then(wire_event) {
                                 if let Some(ev) = sight.relay(&store, ev) {
                                     yield ev;
                                 }
                             }
                         }
+                        Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
                             yield TicketsEvent::Lagged { missed };
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                    // FILTER-36: a saved filter it names, changed — said
+                    // after the change that changed it.
+                    match watcher.resaved(&store, epic.as_ref()) {
+                        Ok(moved) => for m in moved { yield membership_event(&store, m); },
+                        Err(message) => { yield TicketsEvent::Error { message }; return; }
                     }
                 }
                 return;

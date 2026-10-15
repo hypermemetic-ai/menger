@@ -357,7 +357,10 @@ pub(crate) fn token_of(f: &Field) -> Option<(Cat, Option<String>)> {
         Field::Label(l) => (Cat::Label, Some(l.to_ascii_lowercase())),
         // FILTER-27: a time clause is a pill of its own (When's), never a
         // category's value.
-        Field::Category(_) | Field::Under(_) | Field::Text(_) | Field::History(_) => return None,
+        // FILTER-36: a nested group and a saved name are drawn as their text.
+        Field::Category(_) | Field::Under(_) | Field::Text(_) | Field::History(_) | Field::Group(_) | Field::Saved(_) => {
+            return None
+        }
     })
 }
 
@@ -431,6 +434,9 @@ impl Kept {
             .enumerate()
             .map(|(at, (d, g))| match d {
                 Some((cat, clause)) => Pill::Clause { cat, clause },
+                // FILTER-36: a group holding a group or a saved name is its
+                // canonical text, edited as text, until FILTER-37's tree.
+                None if g.is_nested() => Pill::Custom { text: g.format(), at },
                 // FILTER-31: two members or more are a box.
                 None if crate::anyof::is_group(g) => Pill::Group { at, conj: g.conj, members: crate::anyof::members(g) },
                 None => match crate::when::of_group(g) {
@@ -1571,6 +1577,29 @@ mod tests {
         assert!(matches!(members.as_slice(), [crate::anyof::Member::Time(_), crate::anyof::Member::Time(_)]));
     }
 
+    /// FILTER-36: a group holding a group, and a saved name, are custom
+    /// pills of their canonical text — never a box nor a category's clause —
+    /// and × takes them out; the unnested pills beside them are as before.
+    #[test]
+    fn a_nested_group_or_a_name_is_a_custom_pill() {
+        let mut k = Kept {
+            filter: parsed("status Ready and (blocked or (kind build and asking)) and saved \"Needs you\" and (ready or saved Plexus-Ready)"),
+            ..Kept::default()
+        };
+        assert_eq!(
+            k.pills(),
+            vec![
+                Pill::Clause { cat: Cat::Status, clause: clause(Op::Is, &["Ready"]) },
+                Pill::Custom { text: "(blocked or (kind build and asking))".into(), at: 1 },
+                Pill::Custom { text: "saved \"Needs you\"".into(), at: 2 },
+                Pill::Custom { text: "(ready or saved Plexus-Ready)".into(), at: 3 },
+            ]
+        );
+        k.remove_group(2);
+        assert_eq!(k.filter.format(), "status Ready and (blocked or (kind build and asking)) and (ready or saved Plexus-Ready)");
+        assert_eq!(Kept { filter: parsed("not saved Deployment"), ..Kept::default() }.pills(), vec![Pill::Custom { text: "not saved Deployment".into(), at: 0 }]);
+    }
+
     /// Acceptance 1: a group no category draws is a custom pill showing its
     /// canonical text; × takes it out. A second group of one category is
     /// custom too: a category has one pill. FILTER-31: a group of pills the
@@ -1694,11 +1723,17 @@ mod tests {
         assert!(k.in_group(Cat::Status) && k.in_group(Cat::Kind) && !k.in_group(Cat::Severity));
         assert_eq!(k.group_clauses(0).get(Cat::Status), Some(&clause(Op::Is, &["Ready"])));
         assert_eq!(k.at_of(Cat::Status), Some(1));
-        // A shape the language refuses draws nothing: the text does not parse.
-        let e = Filter::parse("(changed today and kind build) or created today").unwrap_err();
-        assert!(!e.chunks.is_empty());
-        let e = Filter::parse("((changed today or created today) and kind build)").unwrap_err();
-        assert!(e.chunks.iter().any(|c| c.why.contains("nest")), "{e}");
+        // FILTER-36: groups nest now — a nested shape is drawn as its text.
+        for (text, canonical) in [
+            ("(changed today and kind build) or created today", "((changed today and kind build) or created today)"),
+            ("((changed today or created today) and kind build)", "((changed today or created today) and kind build)"),
+        ] {
+            let k = Kept { filter: parsed(text), ..Kept::default() };
+            assert_eq!(k.pills(), vec![Pill::Custom { text: canonical.into(), at: 0 }], "{text}");
+        }
+        // A shape the language still refuses draws nothing: `or` and `and` in one pair.
+        let e = Filter::parse("(changed today and kind build or created today)").unwrap_err();
+        assert!(e.chunks.iter().any(|c| c.why.contains("do not mix")), "{e}");
     }
 
     /// FILTER-31: the menu adding to a group — Or… on a pill, the group's

@@ -1825,6 +1825,10 @@ struct Cache {
     shortcodes: shortcodes::Registry,
     /// MENGER-39: the queue and its history ([`queue::Queue`]).
     queue: queue::Queue,
+    /// FILTER-36: every saved filter's text, by its doc's id
+    /// ([`saved::SavedFilters`]) — read from the bodies at open, moved by a
+    /// body's write with the component registry.
+    saved: saved::SavedFilters,
     written: u64,
 }
 
@@ -2192,6 +2196,8 @@ impl Cache {
             // ORG-3: read beside the cache ([`shortcodes::settle`]).
             shortcodes: Default::default(),
             queue: Default::default(),
+            // FILTER-36: read beside the cache, from the bodies.
+            saved: Default::default(),
             written: 0,
         }
     }
@@ -2275,6 +2281,8 @@ impl Cache {
             // ORG-3: read beside the cache ([`shortcodes::settle`]).
             shortcodes: Default::default(),
             queue: Default::default(),
+            // FILTER-36: read beside the cache, from the bodies.
+            saved: Default::default(),
             written: 0,
         }
     }
@@ -3176,6 +3184,8 @@ impl Store {
         orgs::settle(conn, &mut cache)?;
         // MENGER-39: the queue, as stored.
         cache.queue = queue::load(conn)?;
+        // FILTER-36: the saved filters, from their docs' bodies.
+        cache.saved = saved::load(conn)?;
         Ok(cache)
     }
 
@@ -5493,6 +5503,13 @@ pub use lineage::{Node, TreePage, TreeQuery, UnderMoves, UNDERS_MAX};
 /// (filter)`. Never a walk of the store.
 mod lensed;
 pub use lensed::{narrowing, narrowing_lens, ready_and, MEMBER_MAX};
+
+/// FILTER-36: `saved "Name"` — the saved filters' texts kept in the cache,
+/// and every filter a read, a count or a watch is asked resolved through
+/// them before it is compiled.
+mod saved;
+#[cfg(test)]
+mod tests_saved;
 
 /// ORG-3: the shortcodes — each one's namespace, stored; the orgs; the pins;
 /// and the one resolver from what a reader writes to what the store keys on.

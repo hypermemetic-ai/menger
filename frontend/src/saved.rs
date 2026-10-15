@@ -52,21 +52,18 @@ use crate::{dom, keys, session};
 // ---------------------------------------------------------------------
 // Where they live
 
-/// The collection: the doc whose body lists the saved filters.
-pub(crate) const COLLECTION: &str = "VIEW-1";
-/// The collection's shortcode — every saved filter's doc is in it.
-pub(crate) const EPIC: &str = "VIEW";
+// FILTER-36: where they live and how a name is matched are the server's
+// too — `saved "Name"` resolves by the same slug — so they are kept once,
+// in `tickets-api`.
+pub(crate) use menger_tickets_api::saved_filters::{COLLECTION, EPIC, FILTER_LINE, PATH_PREFIX};
+#[cfg(test)]
+pub(crate) use menger_tickets_api::saved_filters::SLUG_MAX;
 /// The collection's title.
 pub(crate) const COLLECTION_TITLE: &str = "Saved filters";
 /// What the collection hangs under: the filters' scope.
 pub(crate) const COLLECTION_PARENT: &str = "FILTER-1";
-/// Where a saved filter's doc sits in the collection's shortcode.
-pub(crate) const PATH_PREFIX: &str = "_MENGER/view/";
-/// The line of a saved filter's body that holds it.
-pub(crate) const FILTER_LINE: &str = "filter:";
-/// The longest name kept, and the longest slug.
+/// The longest name kept.
 pub(crate) const NAME_MAX: usize = 120;
-pub(crate) const SLUG_MAX: usize = 64;
 
 /// FILTER-27: the filters every reader is offered before saving any —
 /// "to get attention in one place": what was born today, what moved today,
@@ -88,31 +85,9 @@ pub(crate) fn suggestions(listed: &[Entry]) -> Vec<(&'static str, &'static str)>
     SUGGESTED.into_iter().filter(|(name, _)| !listed.iter().any(|e| slug(&e.name) == slug(name) || e.id == slug(name))).collect()
 }
 
-/// A name as a path's last part: lower case, letters and digits, every run
-/// of anything else one `-`, none at either end; at most [`SLUG_MAX`]
-/// characters. Empty when the name has no letter or digit.
-pub(crate) fn slug(name: &str) -> String {
-    let mut out = String::new();
-    let mut gap = false;
-    for ch in name.chars().flat_map(char::to_lowercase) {
-        if ch.is_alphanumeric() {
-            if gap && !out.is_empty() {
-                out.push('-');
-            }
-            gap = false;
-            out.push(ch);
-        } else {
-            gap = true;
-        }
-    }
-    if out.chars().count() > SLUG_MAX {
-        out = out.chars().take(SLUG_MAX).collect();
-        while out.ends_with('-') {
-            out.pop();
-        }
-    }
-    out
-}
+/// A name as a path's last part (FILTER-36: the server's rule, the one
+/// `saved "Name"` is resolved by).
+pub(crate) use menger_tickets_api::saved_filters::slug;
 
 /// A saved filter's path in the collection's shortcode.
 pub(crate) fn path_of(id: &str) -> String {

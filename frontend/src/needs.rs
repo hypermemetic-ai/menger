@@ -44,11 +44,12 @@ use crate::{dom, keys, saved, session};
 
 /// The filter while none is saved: MENGER-39: every ticket in the owner's
 /// queue, every ticket asking the owner something, and every ticket
-/// labelled `needs-you`.
-pub(crate) const DEFAULT: &str = "queued or asking or label needs-you";
+/// labelled `needs-you`. FILTER-36: the server's too — `saved "Needs you"`
+/// means it until a doc holds the name.
+pub(crate) const DEFAULT: &str = menger_tickets_api::saved_filters::NEEDS_YOU.1;
 
 /// The saved filter's name — its id (its doc's path) is the name's slug.
-pub(crate) const SAVED_NAME: &str = "Needs you";
+pub(crate) const SAVED_NAME: &str = menger_tickets_api::saved_filters::NEEDS_YOU.0;
 
 /// The default, parsed.
 pub(crate) fn default_filter() -> Filter {

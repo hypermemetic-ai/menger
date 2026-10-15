@@ -8,9 +8,10 @@ use super::*;
 /// FILTER-4: a filtered watch's watcher — `text` (already ANDed with the
 /// caller's reach) compiled, in `epic` alone when one is asked. MENGER-13:
 /// its history read by `clock`.
+/// FILTER-36: its saved names resolved, and the text kept to resolve again.
 pub(super) fn watcher_for(store: &Store, text: Option<&str>, epic: Option<&crate::address::ShortcodeId>, clock: &Clock) -> Result<crate::store::Watcher, String> {
-    let lens = text.map(Lens::parse).unwrap_or_else(|| Ok(Lens::all())).map_err(|e| e.to_string())?;
-    Ok(store.watcher_in(lens.with_clock(clock.clone()), epic))
+    let lens = store.lens_or_all(text).map_err(|e| e.to_string())?;
+    Ok(store.watcher_in(lens.with_clock(clock.clone()), epic).naming(text))
 }
 
 /// MENGER-13: how a read's filter reads time — in `tz` (an IANA name, UTC,
@@ -31,10 +32,10 @@ pub(super) fn caller_source(s: AnswerSource) -> Result<AnswerSource, String> {
 }
 
 /// FILTER-15's [`narrowing_lens`], MENGER-13: its history read by the
-/// caller's clock in `tz`.
-pub(super) fn zoned_lens(caller: &Caller, filter: Option<&str>, tz: Option<&str>) -> Result<Option<Lens>, StoreError> {
+/// caller's clock in `tz`. FILTER-36: its saved names resolved by `store`.
+pub(super) fn zoned_lens(store: &Store, caller: &Caller, filter: Option<&str>, tz: Option<&str>) -> Result<Option<Lens>, StoreError> {
     let clock = clock_of(caller, tz).map_err(StoreError::Filter)?;
-    Ok(narrowing_lens(filter)?.map(|l| l.with_clock(clock)))
+    Ok(store.narrowing_lens(filter)?.map(|l| l.with_clock(clock)))
 }
 
 /// MENGER-13: who a write acts as — the caller's principal and name

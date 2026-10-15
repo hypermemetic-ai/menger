@@ -53,6 +53,10 @@ pub mod inputs;
 /// reference evaluator. Wasm-safe, with no feature gate: the server
 /// compiles it against its cells, the app parses what a reader types.
 pub mod filter;
+/// FILTER-36: where a saved filter lives (FILTER-6) and how a name is
+/// matched — the slug the app paths its docs by and the server resolves
+/// `saved "Name"` by. Wasm-safe: one rule for both.
+pub mod saved_filters;
 /// ACCESS-29: the sizes a request is held to — a title, a filter's text,
 /// `list`'s and `comments.list`'s pages. Wasm-safe.
 pub mod limits;
