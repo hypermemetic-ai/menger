@@ -74,6 +74,9 @@ pub fn mime_of(key: &str) -> &'static str {
 pub(crate) struct Asset {
     pub(crate) bytes: Bytes,
     pub(crate) mime: &'static str,
+    /// ACCESS-28: an HTML file's inline-script hashes, for its policy
+    /// (`None`: not a page).
+    pub(crate) scripts: Option<String>,
 }
 
 impl Asset {
@@ -88,7 +91,9 @@ impl Asset {
         } else {
             data
         };
-        Asset { bytes: Bytes::from(data), mime: mime_of(key) }
+        let mime = mime_of(key);
+        let scripts = mime.starts_with("text/html").then(|| crate::csp::script_hashes(&String::from_utf8_lossy(&data)));
+        Asset { bytes: Bytes::from(data), mime, scripts }
     }
 }
 

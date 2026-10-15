@@ -13,7 +13,10 @@
 //!   changes, so a rebuild needs no restart) or a table compiled into the
 //!   binary. The app adds its own routes ([`ShellConfig::routes`]) and
 //!   stamped pages ([`ShellConfig::pages`]); [`router`] is the composed
-//!   router and [`serve_on`] serves one, hardened.
+//!   router and [`serve_on`] serves one, hardened. Every page it serves
+//!   goes out under a Content-Security-Policy ([`ShellConfig::csp`],
+//!   [`DEFAULT_CSP`]): its inline scripts by hash, the wasm, its hub's
+//!   socket, nothing that frames it (menger's ACCESS-28).
 //! - **The embedding** ([`build`], always compiled, no dependencies): the
 //!   app crate's build script calls
 //!   [`build::embed_dir`]`("frontend/dist")`, which writes the table into
@@ -42,12 +45,16 @@ pub mod build;
 #[cfg(feature = "serve")]
 mod app;
 #[cfg(feature = "serve")]
+mod csp;
+#[cfg(feature = "serve")]
 mod shell;
 #[cfg(feature = "local")]
 mod local;
 
 #[cfg(feature = "serve")]
 pub use app::{has_entrypoint, mime_of, stamp, AppSource};
+#[cfg(feature = "serve")]
+pub use csp::{hub_sources, page_policy, script_hashes, DEFAULT_CSP};
 #[cfg(feature = "serve")]
 pub use shell::{harden, not_built_page, router, serve_on, ShellConfig};
 #[cfg(feature = "local")]

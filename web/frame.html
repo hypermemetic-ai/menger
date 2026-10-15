@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- ACCESS-28: the document every ticket-body frame starts as, served at
+     /app/frame under a policy of its own (src/shell.rs, FRAME_CSP). The app's
+     pages go out under a strict policy, and a srcdoc frame would inherit it —
+     a body's inline scripts and esm.sh imports refused — so a frame loads this
+     instead: it says it is up (`menger:boot` on its channel, the URL's
+     fragment), takes its document from the host (`menger:doc`, its own parent
+     only: frontend/src/frame.rs) and writes it over itself. From there the
+     frame is what a srcdoc frame was: the same sandbox, IDENTITY-28's policy,
+     the SDK. -->
+<meta charset="utf-8">
+<script>
+(function () {
+  var channel = location.hash.slice(1);
+  addEventListener("message", function take(e) {
+    var d = e.data;
+    if (e.source !== parent || !d || d.type !== "menger:doc" || d.channel !== channel || typeof d.html !== "string") return;
+    removeEventListener("message", take);
+    document.open();
+    document.write(d.html);
+    document.close();
+  });
+  parent.postMessage({ type: "menger:boot", channel: channel }, "*");
+})();
+</script>

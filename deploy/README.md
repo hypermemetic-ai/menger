@@ -70,7 +70,8 @@ the release it already runs and must pass the smoke checks. One way only:
 **Smoke checks** (`smoke ENV`): both units active; `tickets.health` answers on
 the env's port; `--verify-derived` is consistent; the app is served stamped
 with the env's WebSocket port; `diagrams` parses a diagram; a headless browser
-loads the app to `live · WS` with the nav drawn and no page errors. On test,
+loads the app to `live · WS` with the nav drawn and no page errors, its page
+under its Content-Security-Policy and nothing refused by one (ACCESS-28). On test,
 behind the login with the dev sign-in, `deploy/probe-auth.mjs` then plays the
 login's known attacks against the live server (IDENTITY-38): foreign and
 anonymous sockets, framing, reads and writes across shortcodes, a blocker in a

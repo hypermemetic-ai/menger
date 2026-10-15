@@ -43,8 +43,19 @@
 //! (IDENTITY-38) and [`AppSource`] are `plexus-shell`'s. This module is
 //! menger's part: the `/vanilla` page (and `/` falling back to it), the
 //! favicon, the tab's title, the "not built" page's words, the embedded
-//! table, and the login routes and checks layered around the crate's
-//! router.
+//! table, the pages' policy and the frame document (ACCESS-28), and the
+//! login routes and checks layered around the crate's router.
+//!
+//! ACCESS-28: **every page goes out under a policy.** The app's pages
+//! (`/`, `/app/`, `/vanilla`, "not built") under [`PAGE_CSP`] — scripts
+//! only the app's own files, the wasm and the page's hashed inline blocks;
+//! connections only to itself and its hub; images only its own; nothing
+//! frames it. The sign-in pages under plexus-login's own (their blocks
+//! hashed, AUTH-22). A ticket body's frame is not a srcdoc any more — a
+//! srcdoc inherits its parent's policy, and a body's inline scripts and
+//! esm.sh imports are the product — but [`FRAME`], served at
+//! [`FRAME_PATH`] under [`FRAME_CSP`], which writes the body's document
+//! over itself (frontend/src/frame.rs).
 
 use axum::extract::{Request, State};
 use axum::http::{header, StatusCode};
@@ -88,6 +99,41 @@ const FAVICON: &str = include_str!("../web/favicon.svg");
 /// build (MFE-4); stamped as the app's entrypoint is (MFE-9, MFE-23).
 const VANILLA: &str = include_str!("../web/index.html");
 
+/// ACCESS-28: the app's pages' Content-Security-Policy (plexus-shell fills
+/// `{{SCRIPTS}}` with the page's inline-script hashes and `{{HUB}}` with the
+/// hub's WebSocket origins at the name the page was asked for):
+///
+/// - scripts: the app's files, the wasm, the hashed inline blocks — no
+///   other inline script, no other origin;
+/// - styles `'unsafe-inline'` (the app writes `style` and `<style>`: the
+///   theme blocks) and `https:` with fonts — a theme may `@import` a face's
+///   sheet (THEME-3: `@import url("https://…")`);
+/// - images: its own and `data:` — a remote image in a body shown in the
+///   app is refused, so a body cannot learn who reads it (ACCESS-4 M5);
+/// - connections: itself, its hub, and a WebSocket on loopback — MFE-21's
+///   settings point the app at another menger on this machine;
+/// - frames: its own (the body frames, [`FRAME_PATH`]); nothing frames it.
+///
+/// No `form-action`: the sign-out form's answer may go on to a provider's
+/// own sign-out page (IDENTITY-30), which the browser checks against it.
+pub const PAGE_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' {{SCRIPTS}}; \
+style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; img-src 'self' data: blob:; \
+connect-src 'self' {{HUB}} ws://127.0.0.1:* ws://localhost:*; frame-src 'self'; \
+object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+
+/// ACCESS-28: where a ticket body's frame starts ([`FRAME`]).
+pub const FRAME_PATH: &str = "/app/frame";
+
+/// ACCESS-28: the frame document — it asks the host for its document and
+/// writes it over itself (its header is the protocol's reference).
+const FRAME: &str = include_str!("../web/frame.html");
+
+/// ACCESS-28: the frame document's policy — IDENTITY-28's (no connection,
+/// no form; scripts, styles, images and fonts left alone: bodies import
+/// modules from esm.sh and show images from anywhere), and framed only by
+/// the app.
+pub const FRAME_CSP: &str = "connect-src 'none'; form-action 'none'; frame-ancestors 'self'";
+
 /// The degraded answer when `frontend/dist` holds no build. 200 on
 /// purpose: "not built yet" is a documented state of a fresh checkout,
 /// and the page itself is the clear indication MFE-2 requires.
@@ -129,14 +175,22 @@ pub fn preferred_app() -> AppSource {
 /// menger's shell as plexus-shell serves it: the app under `/app/` (where
 /// `Trunk.toml`'s `public_url` puts its assets, and MFE-1's deep links),
 /// titled for the environment (MFE-23), `/vanilla`, and `/` falling back
-/// to it when there is no build (MFE-4). No other routes: the favicon and
-/// the login routes are added around it ([`favicon_routes`], [`serve_on`]).
+/// to it when there is no build (MFE-4). No other routes: the favicon,
+/// the frame document and the login routes are added around it
+/// ([`favicon_routes`], [`frame_routes`], [`serve_on`]).
 pub fn app_shell(env: Option<&str>, app: AppSource) -> plexus_shell::ShellConfig {
     let mut cfg = plexus_shell::ShellConfig::new(tab_title(env), app);
     cfg.pages.push(("/vanilla".into(), VANILLA.into()));
     cfg.root_fallback = Some(VANILLA.into());
     cfg.not_built = Some(NOT_BUILT.into());
+    cfg.csp = PAGE_CSP.into();
     cfg
+}
+
+/// ACCESS-28: the frame document, public — it holds no data, and the
+/// frame's first navigation is the app's.
+pub fn frame_routes() -> Router {
+    Router::new().route(FRAME_PATH, get(frame))
 }
 
 /// MFE-23: the tab's icon, for both pages — public, never behind a session.
@@ -173,7 +227,7 @@ async fn router(cfg: ShellConfig) -> Router {
     if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
         app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));
     }
-    let mut app = app.merge(favicon_routes());
+    let mut app = app.merge(favicon_routes()).merge(frame_routes());
     // DESIGN-40: a framed body's document has an opaque origin, so the
     // house faces it loads from `/app/fonts/` are cross-origin fetches —
     // answered with CORS (`*`: public files, no data).
@@ -265,6 +319,21 @@ async fn host_is_ours(State(hosts): State<Arc<Vec<String>>>, req: Request, next:
         Some(h) if hosts.iter().any(|a| *a == h) => next.run(req).await,
         _ => (StatusCode::MISDIRECTED_REQUEST, "this server does not answer to that name").into_response(),
     }
+}
+
+/// ACCESS-28: the frame document, under its own policy: framed by the app
+/// alone. Small and fixed per release: an hour in the cache.
+async fn frame() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CONTENT_SECURITY_POLICY, FRAME_CSP),
+            (header::X_FRAME_OPTIONS, "SAMEORIGIN"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        FRAME,
+    )
+        .into_response()
 }
 
 /// MFE-23: the tab's icon, for both pages.

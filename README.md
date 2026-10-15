@@ -973,7 +973,12 @@ body opens no connection of its own and submits no form — scripts, styles,
 images and fonts load from anywhere, and a link opens the real page in a
 new tab once the app has asked — MENGER-14, "Links" below) under menger's SDK
 (`frontend/sdk/menger-sdk.js`, whose header is the protocol's reference),
-and every component in the registry is a custom element there. A custom
+and every component in the registry is a custom element there. ACCESS-28:
+the frame is not a `srcdoc` — a srcdoc inherits the app page's strict policy
+("Security headers" below), which would refuse a body's inline scripts and
+esm.sh imports — but `/app/frame#<channel>` (`web/frame.html`), served under
+the frame's policy alone; it posts `menger:boot`, and the host answers
+`menger:doc` with the document it built, which the frame writes over itself. A custom
 element cannot be redefined, so each name's class delegates to its current
 source: amending a definition re-renders every live instance in every open
 frame, without a reload; an orphan keeps rendering; a component that left
@@ -1047,8 +1052,8 @@ a page). It is still the sandboxed frame, and IDENTITY-28's CSP is still the
 first element of its head (injected inside its `<head>`, ahead of anything
 the page holds), followed by the page shim. Inline it gets a viewport of
 its own (80vh) and scrolls inside it; its `#fragment` links scroll the page
-(a srcdoc document's base URL is the app's, so the browser would navigate
-the frame away), any other link takes MENGER-14's path (`menger:link`: the leave dialog first; full screen steps aside for it), and its `prefers-color-scheme`
+(the frame document's base URL is `/app/frame`, so the browser would
+navigate the frame away), any other link takes MENGER-14's path (`menger:link`: the leave dialog first; full screen steps aside for it), and its `prefers-color-scheme`
 follows the app's painted mode.
 
 **What makes `prefers-color-scheme` follow inside the frame.** An iframe's
@@ -2412,7 +2417,34 @@ ports, so prod (`_4456`) and test (`_4451`) on 127.0.0.1 keep apart — and
 `__Host-menger_session` over https. Only it is read from a browser's
 cookies; a provider's token reaches the socket as `Authorization: Bearer`.
 Every shell response refuses framing (`frame-ancestors 'none'`), and the
-page shows only its own words (no `?error=` text). The page is
+page shows only its own words (no `?error=` text).
+
+**Security headers** (ACCESS-28). Every answer the shell gives carries
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` (nothing
+goes to another origin; `no-referrer` would make a browser send `Origin:
+null` on the sign-in and sign-out forms' POSTs, which their Origin check
+refuses) and `X-Frame-Options: DENY` with at least `frame-ancestors 'none'`.
+The app's pages — `/`, `/app/`, `/vanilla`, "not built" — go out under
+`src/shell.rs`'s `PAGE_CSP`, filled per page by plexus-shell:
+
+```text
+default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-<each inline block>';
+style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; img-src 'self' data: blob:;
+connect-src 'self' ws://<host>:<ws port> wss://<host>:<ws port> ws://127.0.0.1:* ws://localhost:*;
+frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'
+```
+
+No inline script runs but the page's own (hashed when the build is read),
+nothing executes from another origin, a remote image in a body shown in the
+app is refused (it would tell its host who reads it), styles and fonts may
+come over https (a theme's `@import`), and the app connects to itself, its
+hub and — for `#/settings`' other backend — loopback. The sign-in pages keep
+plexus-login's own policy (their blocks hashed, `default-src 'none'`). The
+frame document (`/app/frame`, public: it holds no data) goes out under
+`connect-src 'none'; form-action 'none'; frame-ancestors 'self'` and
+`X-Frame-Options: SAMEORIGIN` — IDENTITY-28's policy, and framed by the app
+alone; a body's scripts, styles, images and fonts load as before. The
+landing (menger.sh) is served by the edge under its own (`landing/menger.sh.caddy`). The page is
 self-contained (`plexus-login/web/login.html`), so an IdP can host it later.
 
 `--require-login` puts the whole app behind it. `/`, `/app/…` and `/vanilla`
@@ -2783,9 +2815,12 @@ copy:
   table follows ACCESS-33: a request path is a key and never a path, and
   there are size caps, a MIME table, and a reread on a new `index.html` for
   `Dir`. `ShellConfig { app, title, mount, stamps, pages, root_fallback,
-  not_built, routes }` says what to serve. `router(cfg, ws_port)` builds
+  not_built, routes, csp }` says what to serve. `router(cfg, ws_port)` builds
   the router and `serve_on(listener, router, shutdown)` serves it, hardened
-  (IDENTITY-38's headers). The entrypoint and `pages` are stamped with
+  (IDENTITY-38's headers). Every page it serves goes out under `csp`
+  (ACCESS-28; default `DEFAULT_CSP`), a template whose `{{SCRIPTS}}` is the
+  page's inline-script hashes and `{{HUB}}` the hub's WebSocket origins at
+  the name the page was asked for. The entrypoint and `pages` are stamped with
   `{{WS_PORT}}`, `{{TITLE}}` and any `(placeholder, value)` in `stamps`.
 - **The embedding.** The app crate's `build.rs` calls
   `plexus_shell::build::embed_dir_with_feature("frontend/dist",

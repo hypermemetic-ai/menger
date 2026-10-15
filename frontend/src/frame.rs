@@ -31,6 +31,18 @@
 //!   the activation — the script's GENERATED region, written by
 //!   `scripts/sdk-codegen.sh`) and every registered component defined.
 //!
+//! ACCESS-28: **the document is handed over, not a `srcdoc`.** A srcdoc
+//! inherits its parent's Content-Security-Policy, and the app's pages go
+//! out under a strict one (scripts its own, hashed inline blocks, no remote
+//! image) — a body's inline scripts and esm.sh imports would be refused.
+//! So a frame is `<iframe src="/app/frame#<channel>">` ([`FRAME_URL`]): the
+//! shell serves that document under IDENTITY-28's policy alone
+//! (`web/frame.html`, `src/shell.rs`'s `FRAME_CSP`); it posts `menger:boot`
+//! on its channel, and the host answers `menger:doc { html }` — the
+//! [`srcdoc`] it built, kept on the `<iframe>` element itself, where the
+//! frame cannot reach it — which the frame writes over itself. Every check
+//! below is the same: the frame's own window, its own channel.
+//!
 //! The host half of the handshake is here: one `message` listener for every
 //! frame ([`install_listener`]) accepts a `menger:*` message only from a
 //! frame's own `contentWindow` carrying that frame's channel; it answers
@@ -190,6 +202,19 @@ pub(crate) const SDK_VERSION: &str = "1.19.0";
 /// `sdk/menger-sdk.js` into `dist/sdk/`). The frames do not fetch it — it is
 /// inlined — but it is the app's published copy of what they run.
 pub(crate) const SDK_URL: &str = "/app/sdk/menger-sdk.js";
+
+/// ACCESS-28: the document a frame starts as (menger's shell serves it, its
+/// own policy and all); the fragment is the frame's channel.
+pub(crate) const FRAME_URL: &str = "/app/frame";
+
+/// ACCESS-28: where a frame's document waits for its `menger:boot` — a
+/// property of the `<iframe>` element, never an attribute.
+const DOC_PROP: &str = "mengerDoc";
+
+/// ACCESS-28: a frame's `src` — the frame document, told its channel.
+pub(crate) fn frame_src(channel: &str) -> String {
+    format!("{FRAME_URL}#{channel}")
+}
 
 /// The shell, inlined into every srcdoc.
 const SDK_JS: &str = include_str!("../sdk/menger-sdk.js");
@@ -596,6 +621,8 @@ pub(crate) fn srcdoc(body_html: &str, shell: &Shell) -> String {
 /// A message the host acts on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Msg {
+    /// ACCESS-28: the frame document is up and asks for its document.
+    Boot,
     Ready,
     /// The document's height in CSS px (clamped), and whether its first
     /// paint is complete.
@@ -642,6 +669,7 @@ pub(crate) enum Msg {
 /// Read a `menger:*` message's kind and fields; anything else is ignored.
 pub(crate) fn parse_msg(kind: &str, height: Option<f64>, settled: Option<bool>) -> Option<Msg> {
     match kind {
+        "menger:boot" => Some(Msg::Boot),
         "menger:ready" => Some(Msg::Ready),
         "menger:call" => Some(Msg::Call),
         "menger:navigate" => Some(Msg::Navigate),
@@ -1135,6 +1163,15 @@ fn on_message(ev: web_sys::MessageEvent) {
         return;
     }
     match parse_msg(&kind, field("height").and_then(|v| v.as_f64()), field("settled").and_then(|v| v.as_bool())) {
+        // ACCESS-28: the document this frame was made for — again if the
+        // frame reloads; nothing it did not already hold.
+        Some(Msg::Boot) => {
+            if let Some(html) = Reflect::get(&frame, &JsValue::from_str(DOC_PROP)).ok().filter(|v| v.is_string()) {
+                let msg = message("menger:doc", &channel);
+                set(&msg, "html", &html);
+                post(&frame, &msg.into());
+            }
+        }
         Some(Msg::Ready) => {
             // MENGER-15: a whole document reports no size — ready is shown.
             if frame.has_attribute("data-page") {
@@ -1684,7 +1721,9 @@ fn load_frame(container: &web_sys::Element, body_html: &str, stamp: Stamp) {
     if let Some(s) = emulate.and_then(|e| e.scheme) {
         let _ = web_sys::HtmlElement::style(&frame).set_property("color-scheme", s.as_str());
     }
-    frame.set_srcdoc(&html);
+    // ACCESS-28: the document waits on the element for the frame's boot.
+    let _ = Reflect::set(&frame, &JsValue::from_str(DOC_PROP), &JsValue::from_str(&html));
+    frame.set_src(&frame_src(&channel));
     let _ = container.append_child(&frame);
     spawn_local(async move {
         dom::sleep_ms(PROMOTE_AFTER_MS).await;
@@ -1812,6 +1851,25 @@ mod tests {
     /// The srcdoc: the theme first (no flash of the wrong one), links to a
     /// new tab, the init block, the SDK inline before the body, then the
     /// body's markup as given.
+    /// ACCESS-28: a frame starts as the shell's frame document, told its
+    /// channel; the document says `menger:boot` on it and writes only a
+    /// `menger:doc` from its own parent, on its channel.
+    #[test]
+    fn a_frame_starts_as_the_frame_document_and_takes_its_own() {
+        assert_eq!(frame_src("f7"), "/app/frame#f7");
+        let boot = include_str!("../../web/frame.html");
+        for part in [
+            "location.hash.slice(1)",
+            "parent.postMessage({ type: \"menger:boot\", channel: channel }, \"*\")",
+            "e.source !== parent",
+            "d.type !== \"menger:doc\"",
+            "d.channel !== channel",
+            "document.write(d.html)",
+        ] {
+            assert!(boot.contains(part), "{part}");
+        }
+    }
+
     #[test]
     fn the_srcdoc_is_the_shell_then_the_body() {
         let tokens = shell_tokens();
@@ -2021,6 +2079,7 @@ mod tests {
     /// clamped height.
     #[test]
     fn the_host_reads_ready_and_size_and_nothing_else() {
+        assert_eq!(parse_msg("menger:boot", None, None), Some(Msg::Boot));
         assert_eq!(parse_msg("menger:ready", None, None), Some(Msg::Ready));
         assert_eq!(parse_msg("menger:size", Some(312.2), Some(true)), Some(Msg::Size { height: 313, settled: true }));
         assert_eq!(parse_msg("menger:size", Some(40.0), None), Some(Msg::Size { height: 40, settled: false }));

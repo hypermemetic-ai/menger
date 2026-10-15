@@ -414,6 +414,14 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
   must contain no `/rest/`, no hand-parsed SSE, and no `serde_json::Value`
   on a wire path. Both halves are on the plexus 0.6 line (MFE-10), and the
   client the app uses is emitted from the server's own activation (MFE-11).
+- **Every page goes out under a Content-Security-Policy** (ACCESS-28,
+  `src/shell.rs`'s `PAGE_CSP`; README "Security headers"): the app runs no
+  inline script but its own blocks, hashed when the build is read, loads no
+  script and no image from another origin, and connects only to itself, its
+  hub and loopback. Something the app needs from elsewhere is a change to
+  that policy, made deliberately. A ticket body's frame starts as
+  `/app/frame` (`web/frame.html`), never a `srcdoc` — a srcdoc inherits the
+  app's policy, and a body's own scripts are the product.
 - Every RPC method returns `impl Stream<Item = TicketsEvent> + Send + 'static`;
   event enums use `#[serde(tag = "type", rename_all = "snake_case")]` with an
   in-band `Error { message }` variant.

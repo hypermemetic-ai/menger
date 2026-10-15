@@ -479,3 +479,109 @@ async fn the_tab_title_names_the_environment_and_the_icon_is_served() {
     }
 }
 
+
+/// Send and drain, with the headers: (status, headers, body bytes).
+async fn fetch_with_headers(port: u16, path: &str) -> (StatusCode, hyper::HeaderMap, Bytes) {
+    let mut sender = connect(port).await;
+    let resp = sender.send_request(request(port, Method::GET, path, "")).await.expect("send request");
+    let (status, headers) = (resp.status(), resp.headers().clone());
+    (status, headers, resp.into_body().collect().await.unwrap().to_bytes())
+}
+
+fn header_of<'a>(h: &'a hyper::HeaderMap, name: &str) -> &'a str {
+    h.get(name).and_then(|v| v.to_str().ok()).unwrap_or_default()
+}
+
+/// `'sha256-…'` of an inline block, as a policy names it.
+fn sha256_source(block: &str) -> String {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    format!("'sha256-{}'", base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(block.as_bytes())))
+}
+
+/// ACCESS-28: every page the shell serves carries its policy — scripts its
+/// own files, the wasm and its own hashed inline blocks; connections to
+/// itself and its hub; images its own; framed by nothing — and every answer
+/// `nosniff` and a referrer kept to the origin. The frame document is the
+/// one page with a policy of its own: no connection, no form, framed by the
+/// app alone.
+#[tokio::test]
+async fn every_page_goes_out_under_its_policy() {
+    let dist = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let loader = "import init from '/app/app.js'; await init();";
+    std::fs::write(
+        dist.path().join("index.html"),
+        format!("<!-- no <script> here --><script>window.t=1</script><script type=\"module\">{loader}</script><script src=\"/app/app.js\"></script>"),
+    )
+    .unwrap();
+    std::fs::write(dist.path().join("app.js"), "export default async function () {}").unwrap();
+    let s = spawn_server(dist.path(), false).await;
+    let hub = |csp: &str| -> u16 {
+        let at = csp.find("ws://127.0.0.1:").expect("the hub's origin") + "ws://127.0.0.1:".len();
+        csp[at..].split(' ').next().unwrap().parse().unwrap()
+    };
+
+    for path in ["/", "/app", "/app/", "/app/index.html"] {
+        let (status, h, _) = fetch_with_headers(s.shell_port, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        let csp = header_of(&h, "content-security-policy");
+        let script_src = csp.split(';').map(str::trim).find(|d| d.starts_with("script-src ")).unwrap_or_default();
+        assert_eq!(
+            script_src,
+            format!("script-src 'self' 'wasm-unsafe-eval' {} {}", sha256_source("window.t=1"), sha256_source(loader)),
+            "{path}: only its own inline blocks, by hash"
+        );
+        for directive in [
+            "default-src 'self'",
+            "img-src 'self' data: blob:",
+            "object-src 'none'",
+            "base-uri 'self'",
+            "frame-src 'self'",
+            "frame-ancestors 'none'",
+        ] {
+            assert!(csp.split(';').map(str::trim).any(|d| d == directive), "{path}: {directive} in {csp}");
+        }
+        let ws = hub(csp);
+        assert!(
+            csp.contains(&format!("connect-src 'self' ws://127.0.0.1:{ws} wss://127.0.0.1:{ws} ws://127.0.0.1:* ws://localhost:*;")),
+            "{path}: itself, its hub at the name asked for, and loopback: {csp}"
+        );
+        assert!(!csp.contains("'unsafe-eval'") && !script_src.contains("'unsafe-inline'"), "{path}: {csp}");
+        assert_eq!(header_of(&h, "x-content-type-options"), "nosniff", "{path}");
+        assert_eq!(header_of(&h, "referrer-policy"), "same-origin", "{path}");
+        assert_eq!(header_of(&h, "x-frame-options"), "DENY", "{path}");
+    }
+
+    // The vanilla page: its own inline script hashed, the same policy.
+    let (_, h, body) = fetch_with_headers(s.shell_port, "/vanilla").await;
+    let page = String::from_utf8_lossy(&body);
+    let block = &page[page.find("<script>").unwrap() + 8..page.find("</script>").unwrap()];
+    let csp = header_of(&h, "content-security-policy");
+    assert!(csp.contains(&format!("script-src 'self' 'wasm-unsafe-eval' {};", sha256_source(block))), "{csp}");
+    assert!(csp.contains("frame-ancestors 'none'") && header_of(&h, "x-content-type-options") == "nosniff");
+
+    // A file of the build: no page policy, still hardened.
+    let (_, h, _) = fetch_with_headers(s.shell_port, "/app/app.js").await;
+    assert_eq!(header_of(&h, "content-security-policy"), "frame-ancestors 'none'");
+    assert_eq!(header_of(&h, "x-content-type-options"), "nosniff");
+    assert_eq!(header_of(&h, "referrer-policy"), "same-origin");
+
+    // The frame document: IDENTITY-28's policy, framed by the app alone.
+    let (status, h, body) = fetch_with_headers(s.shell_port, "/app/frame").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(header_of(&h, "content-type").starts_with("text/html"));
+    assert_eq!(header_of(&h, "content-security-policy"), "connect-src 'none'; form-action 'none'; frame-ancestors 'self'");
+    assert_eq!(header_of(&h, "x-frame-options"), "SAMEORIGIN");
+    assert_eq!(header_of(&h, "x-content-type-options"), "nosniff");
+    assert_eq!(header_of(&h, "referrer-policy"), "same-origin");
+    assert!(String::from_utf8_lossy(&body).contains("menger:boot"));
+
+    // With no build: the "not built" page and the vanilla root, the same way.
+    let empty = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let bare = spawn_server(empty.path(), false).await;
+    for path in ["/", "/app/"] {
+        let (_, h, _) = fetch_with_headers(bare.shell_port, path).await;
+        let csp = header_of(&h, "content-security-policy");
+        assert!(csp.starts_with("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'") && csp.ends_with("frame-ancestors 'none'"), "{path}: {csp}");
+    }
+}

@@ -853,7 +853,26 @@ async fn every_page_refuses_to_be_framed() {
         assert_eq!(h.get("referrer-policy").and_then(|v| v.to_str().ok()), Some("same-origin"), "{path}");
         let csp = h.get("content-security-policy").and_then(|v| v.to_str().ok()).unwrap_or_default();
         assert!(csp.contains("frame-ancestors 'none'"), "{path}: {csp}");
+        // ACCESS-28: a page's scripts are its own, never any inline one.
+        if ["/", "/app/", "/vanilla"].contains(&path) {
+            let scripts = csp.split(';').map(str::trim).find(|d| d.starts_with("script-src ")).unwrap_or_default();
+            assert!(scripts.starts_with("script-src ") && !scripts.contains("'unsafe-inline'") && !scripts.contains("https:"), "{path}: {csp}");
+            // The vanilla page (and `/`, with no build here) holds an inline
+            // block: named by hash.
+            assert_eq!(scripts.contains("'sha256-"), path != "/app/", "{path}: {csp}");
+        }
     }
+    // The sign-in page (to the signed-out: the signed-in are sent on) names
+    // its own blocks by hash (AUTH-22).
+    let r = m.http.get(m.url("/login")).send().await.unwrap();
+    let csp = r.headers().get("content-security-policy").and_then(|v| v.to_str().ok()).unwrap_or_default();
+    assert!(csp.contains("script-src 'sha256-") && !csp.contains("'unsafe-inline'") && csp.contains("frame-ancestors 'none'"), "{csp}");
+    // ACCESS-28: the frame document is public — it holds no data, and the
+    // frame's first navigation is the app's — and framed by the app alone.
+    let r = m.http.get(m.url("/app/frame")).send().await.unwrap();
+    assert_eq!(r.status(), 200, "no detour to the login page");
+    let csp = r.headers().get("content-security-policy").and_then(|v| v.to_str().ok()).unwrap_or_default();
+    assert_eq!(csp, "connect-src 'none'; form-action 'none'; frame-ancestors 'self'");
 }
 
 #[tokio::test]
