@@ -41,6 +41,10 @@ done
 
 mkdir -p "$WORK"
 syn() { synapse -P "$PORT" menger "$@" >/dev/null; }
+# A release whose comments and notes take the author from the caller's
+# identity (no --author) gets the sample's lines without their names
+# (DESIGN-55 found it on 20261015T213139Z-af90d92).
+author() { synapse -P "$PORT" menger "$1" add --help 2>/dev/null | grep -q -- '--author' && printf '%s\n' --author "$2"; }
 say() { printf 'landing-media: %s\n' "$*" >&2; }
 
 start_server() {
@@ -486,27 +490,29 @@ EOF
 
   # a reader's comments on the app, and notes not yet tickets
   syn comments add --anchor.route '#/ticket/OFFLINE-10' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
-    --anchor.excerpt 'Photos attached offline are lost' --anchor.ticket OFFLINE-10 --author priya \
+    --anchor.excerpt 'Photos attached offline are lost' --anchor.ticket OFFLINE-10 $(author comments priya) \
     --body 'Seen twice on the Galaxy A12 too. Raising to the 4.2 blockers.'
   syn comments add --anchor.route '#/ticket/OFFLINE-2' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
-    --anchor.excerpt 'Beta rollout' --anchor.ticket OFFLINE-2 --author sam \
+    --anchor.excerpt 'Beta rollout' --anchor.ticket OFFLINE-2 $(author comments sam) \
     --body 'Can we start with 1% on iOS? TestFlight users are our most active.'
   # DESIGN-48: the team on the agent's plan — two notes on OFFLINE-15, both
   # pinned at its title (an anchor inside the framed body is placed only once
   # the frame has answered the probe, too late for a still)
   syn comments add --anchor.route '#/ticket/OFFLINE-15' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
-    --anchor.excerpt 'Help site for offline mode' --anchor.ticket OFFLINE-15 --author sam \
+    --anchor.excerpt 'Help site for offline mode' --anchor.ticket OFFLINE-15 $(author comments sam) \
     --body 'One page — but crews read this underground on a 5-inch phone: put the collide part first?'
   syn comments add --anchor.route '#/ticket/OFFLINE-15' --anchor.path '#ticket-page h2' --anchor.label 'Title' \
-    --anchor.excerpt 'Help site for offline mode' --anchor.ticket OFFLINE-15 --author priya \
+    --anchor.excerpt 'Help site for offline mode' --anchor.ticket OFFLINE-15 $(author comments priya) \
     --body 'Agent: the banner copy should count photos too — see OFFLINE-10.'
-  syn notes add --author priya --body 'Offline search across the team: worth a spike after 4.2?'
-  syn notes add --author sam --body 'Show the outbox depth in the debug menu so support can ask for it.'
+  syn notes add $(author notes priya) --body 'Offline search across the team: worth a spike after 4.2?'
+  syn notes add $(author notes sam) --body 'Show the outbox depth in the debug menu so support can ask for it.'
   say "seeded: KIT-1, OFFLINE-1…17, SYNC-1…5, 2 deploys, 4 comments, 2 notes"
 }
 
 capture() {
   node "$here/scripts/landing-media.mjs" --port "$SHELL_PORT" --ws-port "$PORT" --raw "$WORK/raw"
+  # DESIGN-55: the ask on two screens — the agent's terminal beside the app
+  node "$here/scripts/ask-recorded.mjs" --port "$SHELL_PORT" --ws-port "$PORT" --raw "$WORK/raw"
 }
 
 # ── encode ───────────────────────────────────────────────────────────────
@@ -571,7 +577,9 @@ encode() {
     # GIF's bytes, lossy WebP.
     # DESIGN-48 (owner: "all videos should be higher quality gifs"): 20 fps,
     # up to 1200 px wide (the page's widest slot), quality 88.
-    ffmpeg -loglevel error -y -i "$clip" -vf "fps=20,scale='min(1200,iw)':-2:flags=lanczos" -loop 0 \
+    # DESIGN-55: the two-screen ask up to 1600 px, so its terminal reads
+    local w=1200; [[ $base == ask-recorded ]] && w=1600
+    ffmpeg -loglevel error -y -i "$clip" -vf "fps=20,scale='min($w,iw)':-2:flags=lanczos" -loop 0 \
       -c:v libwebp_anim -lossless 0 -q:v 88 -compression_level 6 "$OUT/$base.anim.webp"
   done
   rm -f "$WORK/tmp.png"

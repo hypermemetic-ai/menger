@@ -112,12 +112,14 @@
     <div class="head reveal"><span class="n">01 — one page, start to finish</span><h2 id="story-h" class="lines"><span class="l"><span>Mapped, built, shown, decided — together.</span></span></h2></div>
     <figure class="panel reveal">
       <div class="window develop">
-        <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>the board · OFFLINE-15's question, queued</span></div>
-        <!-- DESIGN-46: the clip is an animated image — it loads like a GIF,
-             already playing, no player; under reduced motion, its last frame -->
-        <picture><source media="(prefers-reduced-motion: reduce)" srcset="media/tour-6-queue.poster.webp"><img src="media/tour-6-queue.anim.webp" width="1200" height="750" alt="The whole app on the board. The agent queues its question on OFFLINE-15 at now: a red tab arrives along the bottom edge. The owner opens it, reads the reason and the question, picks the recommended option, and the tab leaves." decoding="async"></picture>
+        <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>the agent's terminal · the app · OFFLINE-15's question, queued and answered</span></div>
+        <!-- DESIGN-55 (owner: "two screens one the konsole saying: queueing;
+             the browser showing it pop up. clicking it, answering, then the
+             monitor hitting"): scripts/ask-recorded.mjs — every command in
+             the terminal ran against the sample, the app is the real one -->
+        <picture><source media="(prefers-reduced-motion: reduce)" srcset="media/ask-recorded.poster.webp"><img src="media/ask-recorded.anim.webp" width="1600" height="662" alt="Two screens. Left, a Claude Code session in a terminal: asked to queue the question in a ticket, the agent runs the queue command for OFFLINE-15 at now, then await_reply, which says waiting. Right, the app: a red tab arrives along the bottom edge; the owner opens it, reads the reason and the question, picks One page, and submits. Left again, await_reply prints replied, answered, shape equals one; the agent says the owner picked One page and closes the input." decoding="async"></picture>
       </div>
-      <figcaption class="fig">[ <b>fig. 2</b> — recorded from the real app: the agent queues its question; the owner answers from the tray ]</figcaption>
+      <figcaption class="fig">[ <b>fig. 2</b> — replayed from a real session: the agent queues its question and listens; the owner answers in the app; the agent hears it ]</figcaption>
     </figure>
     <div class="steps reveal" aria-label="The three moves">
       <article data-tone="coding"><span class="num">01 · an agent</span><h3>An agent builds the page.</h3><p>The map, the page, the components it needs, filed under the build, at every width.</p><p class="chips"><span class="chip st-pending">doc</span><i>→</i><span class="chip st-in-review">390 · 1440</span></p></article>

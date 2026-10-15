@@ -484,33 +484,9 @@ async function takeClips(browser) {
     hold: 900,
   });
 
-  // 6 · the queue (DESIGN-48; owner: "show the agent raising a queue item
-  //     next"): the whole app on the board; the agent's call queues its
-  //     question on OFFLINE-15 at now — the tab arrives along the bottom
-  //     edge; the owner opens it, reads the reason and the question, picks
-  //     the recommended option, and the tab leaves.
-  await clip(browser, 'tour-6-queue', {
-    route: '#/',
-    width: 1440,
-    height: 900,
-    out: 1440,
-    act: async (p) => {
-      await sleep(600);
-      synapse('queue', '--id', 'OFFLINE-15', '--urgency', 'now', '--input', 'shape', '--reason', 'the other help pages wait on this: one page or three?');
-      await sleep(3400); // the arrival: the flash, the sweep, the label
-      const tab = p.locator('#qtray .qtab').first();
-      await pointTo(p, tab);
-      await tab.click();
-      await sleep(2000); // the sheet: the reason and the question
-      const opt = p.locator('#qtray .qopt.rec').first();
-      await pointTo(p, opt);
-      await opt.click();
-      await sleep(600);
-      await p.mouse.move(900, 60);
-      await p.evaluate(() => { document.getElementById('lm-pointer').style.transform = 'translate(900px, 60px)'; });
-    },
-    hold: 2000,
-  });
+  // 6 · the queue: scripts/ask-recorded.mjs since DESIGN-55 — the agent's
+  //     terminal beside the app, answering OFFLINE-15's `shape` (which a
+  //     clip here would answer first)
 
   // 5 · jump: the palette, from the keyboard
   await clip(browser, 'tour-5-jump', {
