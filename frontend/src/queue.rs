@@ -1020,10 +1020,12 @@ fn changes_view(id: String, problem: RwSignal<Option<String>>, busy: RwSignal<bo
         area.on_load(|el: web_sys::HtmlTextAreaElement| {
             let _ = el.focus();
         });
+        crate::grow::follow(area, move || draft.text.track());
         view! {
             <div class="qchange open">
                 <textarea
                     node_ref=area
+                    class="grow"
                     rows="3"
                     aria-label="request changes"
                     placeholder=CHANGES_PLACEHOLDER
@@ -1136,20 +1138,26 @@ fn input_view(
                 .collect_view();
             view! { <div class="qopts multi">{boxes}</div> }.into_any()
         }
-        InputKind::Text => view! {
-            <div class="qopts text">
-                <textarea
-                    rows="2"
-                    aria-label="your reply"
-                    prop:value=move || pick.with(|p| p.text.clone())
-                    on:input=move |ev| {
-                        let t = event_target_value(&ev);
-                        pick.update(|p| p.text = t);
-                    }
-                ></textarea>
-            </div>
+        InputKind::Text => {
+            let area = NodeRef::<leptos::html::Textarea>::new();
+            crate::grow::follow(area, move || pick.with(|p| p.text.clone()));
+            view! {
+                <div class="qopts text">
+                    <textarea
+                        node_ref=area
+                        class="grow"
+                        rows="2"
+                        aria-label="your reply"
+                        prop:value=move || pick.with(|p| p.text.clone())
+                        on:input=move |ev| {
+                            let t = event_target_value(&ev);
+                            pick.update(|p| p.text = t);
+                        }
+                    ></textarea>
+                </div>
+            }
+            .into_any()
         }
-        .into_any(),
     };
     let kind = input.kind;
     let send = move |_| {

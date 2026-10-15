@@ -887,6 +887,7 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
     let anchor = a.draft.with_untracked(|d| d.as_ref().map(|d| d.anchor.clone())).unwrap_or_default();
     let body = RwSignal::new(String::new());
     let area = NodeRef::<leptos::html::Textarea>::new();
+    crate::grow::follow(area, move || body.track());
     area.on_load(|el: web_sys::HtmlTextAreaElement| {
         let _ = el.focus();
     });
@@ -931,6 +932,7 @@ fn draft_view(a: Annot, seq: u32) -> impl IntoView {
             </div>
             <textarea
                 node_ref=area
+                class="grow"
                 rows="4"
                 placeholder="Leave a comment — Ctrl+Enter saves, Esc cancels"
                 prop:value=move || body.get()
