@@ -94,7 +94,9 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
                 // As plexus-core's own `{ns}.call`: the params, the caller
                 // the upgrade proved, the route, each item piped out.
                 let p: CallParams = params.parse()?;
-                let auth = ext.get::<Arc<AuthContext>>().map(|a| a.as_ref());
+                // ACCESS-13: with login off, the anonymous caller.
+                let anonymous = AuthContext::anonymous();
+                let auth = caller(&hub, ext.get::<Arc<AuthContext>>().map(|a| a.as_ref()), &anonymous);
                 let result = hub.route(&p.method, p.params.unwrap_or_default(), auth).await;
                 let sink = pending.accept().await?;
                 match result {
@@ -120,6 +122,19 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
         })
         .map_err(|e| anyhow::anyhow!("rpc module build failed: {e}"))?;
     Ok(module)
+}
+
+/// ACCESS-13: the identity a call carries into `hub` — the one the upgrade
+/// proved, else, on a hub with no gate (login off), `anonymous`. Every
+/// method on the frame resolves its caller from an identity
+/// (`#[from_auth(self.access.verify)]`), which the dispatch refuses to run
+/// without one; with login off the resolver admits anyone, so the
+/// transports menger serves hand it the anonymous identity — what "no
+/// identity" always meant there. With login on (a gate) nothing is added:
+/// no identity is the anonymous view, which the gate decides. ACCESS-24
+/// removes open mode, and this with it.
+pub fn caller<'a>(hub: &DynamicHub, proved: Option<&'a AuthContext>, anonymous: &'a AuthContext) -> Option<&'a AuthContext> {
+    proved.or_else(|| hub.gate().is_none().then_some(anonymous))
 }
 
 /// `{ns}.call`'s params, as plexus-core reads them.

@@ -60,6 +60,14 @@ impl LocalServer {
     /// Starts `hub`'s WebSocket and the shell. Needs a Tokio runtime (it
     /// spawns the servers onto it). Fails if a port cannot be bound.
     pub async fn start(hub: Arc<DynamicHub>, cfg: LocalConfig) -> anyhow::Result<LocalServer> {
+        let module = rpc_module(hub.clone())?;
+        Self::start_module(hub, module, cfg).await
+    }
+
+    /// [`LocalServer::start`], serving `module` — the hub's RPC module as
+    /// its host builds it (menger's holds its calls to its limits and hands
+    /// a call with no identity the anonymous one while login is off).
+    pub async fn start_module(hub: Arc<DynamicHub>, module: jsonrpsee::RpcModule<()>, cfg: LocalConfig) -> anyhow::Result<LocalServer> {
         log_activations(&hub);
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", cfg.shell_port))
             .await
@@ -69,7 +77,7 @@ impl LocalServer {
         let mut ws_config = WebSocketConfig::new(cfg.ws_port);
         ws_config.allowed_origins = loopback_origins(shell_port);
         ws_config.allowed_origins.extend(cfg.extra_origins);
-        let (ws, addr) = serve_websocket_with(rpc_module(hub)?, ws_config, None, UpgradeOptions::default()).await?;
+        let (ws, addr) = serve_websocket_with(module, ws_config, None, UpgradeOptions::default()).await?;
         let ws_port = addr.port();
         tracing::info!("WebSocket: ws://127.0.0.1:{ws_port}");
 

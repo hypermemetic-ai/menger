@@ -96,7 +96,10 @@ impl LocalServer {
             extra_origins: cfg.extra_origins,
             shell: app,
         };
-        Ok(LocalServer(plexus_shell::LocalServer::start(hub, local).await?))
+        // ACCESS-13: menger's own module — its calls' limits, and (login is
+        // off here) the anonymous caller for a call with no identity.
+        let module = crate::calls::rpc_module(hub.clone(), crate::calls::CallLimits::default())?;
+        Ok(LocalServer(plexus_shell::LocalServer::start_module(hub, module, local).await?))
     }
 
     /// The WebSocket's port.

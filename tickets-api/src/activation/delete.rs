@@ -11,7 +11,7 @@ use crate::store::{Children, Deleted, Deletion, Reshortcode, Reshortcoded, Selec
 /// ACT-5: `delete` — what to delete, how, and the store's write.
 pub(super) fn delete_stream(
     store: Arc<Store>,
-    admitted: Result<VerifiedUser, String>,
+    caller: VerifiedUser,
     ids: Option<Vec<TicketRef>>,
     filter: Option<FilterText>,
     max: Option<u32>,
@@ -21,7 +21,7 @@ pub(super) fn delete_stream(
     message: Option<Message>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let chosen = admitted.and_then(|caller| {
+        let chosen = Ok::<_, String>(caller).and_then(|caller| {
             let select = match (ids, filter) {
                 (Some(ids), None) if !ids.is_empty() => Selection::Ids(texts(ids)),
                 (None, Some(filter)) => {
@@ -57,15 +57,8 @@ pub(super) fn delete_stream(
 }
 
 /// ACT-5: `undelete` — the caller's grant on each id, then the store's write.
-pub(super) fn undelete_stream(store: Arc<Store>, admitted: Result<VerifiedUser, String>, ids: Vec<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn undelete_stream(store: Arc<Store>, caller: VerifiedUser, ids: Vec<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let caller = match admitted {
-            Ok(caller) => caller,
-            Err(message) => {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-        };
         let act = match act_of(&caller, None, None) {
             Ok(a) => a,
             Err(message) => {
@@ -88,13 +81,13 @@ pub(super) fn undelete_stream(store: Arc<Store>, admitted: Result<VerifiedUser, 
 /// ACT-6: `reshortcode` — who asks, the grants, and the store's write.
 pub(super) fn reshortcode_stream(
     store: Arc<Store>,
-    admitted: Result<VerifiedUser, String>,
+    caller: VerifiedUser,
     mut ask: Reshortcode,
     message: Option<Message>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let (caller, act) = match admitted.and_then(|caller| act_of(&caller, None, message).map(|act| (caller, act))) {
-            Ok(c) => c,
+        let act = match act_of(&caller, None, message) {
+            Ok(a) => a,
             Err(message) => {
                 yield TicketsEvent::Error { message };
                 return;
