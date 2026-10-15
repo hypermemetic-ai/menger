@@ -241,6 +241,16 @@
         "ids",
         "tz"
       ],
+      "queue": [
+        "id",
+        "input",
+        "reason",
+        "source",
+        "urgency"
+      ],
+      "queued": [
+        "snoozed"
+      ],
       "ready_set": [
         "after",
         "epic",
@@ -279,6 +289,11 @@
         "source",
         "status"
       ],
+      "snooze": [
+        "id",
+        "minutes",
+        "source"
+      ],
       "tree": [
         "after",
         "epic",
@@ -295,6 +310,10 @@
       "unlink_commits": [
         "commits",
         "id"
+      ],
+      "unqueue": [
+        "id",
+        "source"
       ],
       "update": [
         "block",

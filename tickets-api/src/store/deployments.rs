@@ -449,6 +449,8 @@ impl Cache {
     pub(super) fn holds(&self, h: &crate::filter::History, clock: &Clock) -> BTreeMap<ShortcodeId, RoaringBitmap> {
         match &h.event {
             crate::filter::Event::Deployed(env) => self.deploys.holds(env, h.window.as_ref(), clock, &self.at),
+            // MENGER-39: `queued` from the queue's kept entries.
+            crate::filter::Event::Queued(u) => self.queue.holds(*u, &self.at),
             _ => self.log.holds(h, clock),
         }
     }
@@ -457,6 +459,8 @@ impl Cache {
     pub(super) fn next_boundary(&self, h: &crate::filter::History, clock: &Clock) -> Option<i64> {
         match &h.event {
             crate::filter::Event::Deployed(env) => self.deploys.next_boundary(env, h.window.as_ref(), clock),
+            // MENGER-39: time alone never moves the queue.
+            crate::filter::Event::Queued(_) => None,
             _ => self.log.next_boundary(h, clock),
         }
     }

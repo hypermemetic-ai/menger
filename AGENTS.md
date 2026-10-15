@@ -17,6 +17,12 @@ Bare `cargo run` takes prod's ports (4455–4457) **and prod's database**
 (the default `--db-path` is `~/.local/share/menger/tickets.db`) — never run
 it that way while prod is installed.
 
+Every listener answers only its own names (ACCESS-25): `127.0.0.1:<port>`,
+`localhost:<port>`, `--public-url`'s host, and each `--allowed-host`
+(repeatable; `MENGER_ALLOWED_HOSTS`, `;`-separated); any other `Host` is
+refused 421 before routing — reach a server by those names (synapse, curl
+and the scripts do). README "Run" → Hosts.
+
 ## Deploying
 
 menger runs in two environments on this machine, **prod** (4455–4458) and
@@ -287,6 +293,23 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   method gets a role by being listed in its activation's `roles(...)` —
   unlisted, only admin holds it. README "The AUTH protocol" has the rest.
 
+  **Limits** (ACCESS-29): connections in all, per IP, per principal and
+  anonymous (`--max-connections` 1,024, `--max-connections-per-ip` 256,
+  `--max-connections-per-principal` 64, `--max-anonymous-connections` 128,
+  `--max-anonymous-connections-per-ip` 32 — 429 past them), calls open on one
+  connection (`--max-calls-per-connection` 256 — `error_kind:
+  too_many_calls`), a connection idle with none (`--idle-timeout-secs` 900),
+  a browser sign-in unused (`--session-idle-minutes` 120), the `/login/*`
+  routes and password guesses per client and account (AUTH-22's throttles,
+  429), titles (1 KiB), filters (4 KiB), and `list` / `comments list` pages
+  (1,000 / 500 unless `--limit`, at most 10,000 / 1,000 — page with the
+  `page` event's `next`). README "Limits and caps" has the table; a script
+  that wants everything pages:
+
+  ```sh
+  synapse -P 4455 menger tickets list --epic MENGER --summary true --limit 1000 --after MENGER-1000
+  ```
+
   **Params are individual flags, not a JSON blob** — treat synapse as a
   normal CLI: `--kebab-case-flag value` after the method path, and
   `<method> --help` prints each parameter's name and type. **A list
@@ -400,7 +423,8 @@ nested parameter as one string (SYNAPSE-9).
 2026-10-12, MENGER-12). Put it on its ticket as an input — or, when it is
 not a choice or a reply, label the ticket `needs-you` with the reason in its
 body — and only then mention it in chat, with the ticket id. Home's "Needs
-you" panel (filter `asking or label needs-you`) is where the owner looks;
+you" panel (filter `queued or asking or label needs-you`) is where the owner
+looks; when it cannot wait, queue it too (below, MENGER-39);
 a question that lives only in a chat transcript is never seen. Whoever acts
 on a `needs-you` takes the label off:
 
@@ -409,6 +433,35 @@ synapse -P 4455 menger tickets label --id MENGER-40 --add needs-you      # the r
 synapse -P 4455 menger tickets list --filter 'asking or label needs-you' --summary
 synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once acted on
 ```
+
+## Queue — asking the owner urgently (MENGER-39)
+
+An input or a `needs-you` label waits on Home until the owner looks. When it
+should not wait — an agent idle until it is answered, a promote that rolled
+back, a gap on prod — **queue the ticket**: it is put in front of the owner
+with an urgency and a reason, and every open app shows it at once as a tab
+in the tray along the bottom edge (`now` and `blocking` red, taller, and
+nudging until opened). The urgencies are `whenever` · `today` · `now` ·
+`blocking`; `blocking` means the caller is idle until the named `--input`
+(one on that ticket) is answered. A ticket is queued once: queueing it again
+raises the urgency, never lowers it. Closing the named input unqueues it;
+the owner answering in the tray takes it out too (the input stays yours to
+close, as always). Queue the question first — the input — then the ticket:
+
+```sh
+synapse -P 4455 menger tickets queue --id RETURNS-13 --urgency blocking --input landing --reason "the import is idle until this is decided"
+synapse -P 4455 menger tickets queue --id MENGER-41 --urgency now --reason "the promote rolled back"
+synapse -P 4455 menger tickets queued                       # most urgent first, then oldest
+synapse -P 4455 menger tickets snooze --id MENGER-41 --minutes 30
+synapse -P 4455 menger tickets unqueue --id MENGER-41       # withdrawn, or done with
+synapse -P 4455 menger tickets list --filter 'queued now or queued blocking' --summary true
+```
+
+`watch` carries `queued` / `unqueued` / `snoozed`; `history --id X` ends with
+the ticket's `queue_record`s (who queued it, why, at what urgency). `queued`
+and `queued <urgency>` are filter cells; Home's "Needs you" is `queued or
+asking or label needs-you`. Ask at `now` or `blocking` only when it is so —
+a queue that is always loud is a queue the owner learns to ignore.
 
 ## Conventions
 
@@ -442,6 +495,14 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
   must contain no `/rest/`, no hand-parsed SSE, and no `serde_json::Value`
   on a wire path. Both halves are on the plexus 0.6 line (MFE-10), and the
   client the app uses is emitted from the server's own activation (MFE-11).
+- **Every page goes out under a Content-Security-Policy** (ACCESS-28,
+  `src/shell.rs`'s `PAGE_CSP`; README "Security headers"): the app runs no
+  inline script but its own blocks, hashed when the build is read, loads no
+  script and no image from another origin, and connects only to itself, its
+  hub and loopback. Something the app needs from elsewhere is a change to
+  that policy, made deliberately. A ticket body's frame starts as
+  `/app/frame` (`web/frame.html`), never a `srcdoc` — a srcdoc inherits the
+  app's policy, and a body's own scripts are the product.
 - Every RPC method returns `impl Stream<Item = TicketsEvent> + Send + 'static`;
   event enums use `#[serde(tag = "type", rename_all = "snake_case")]` with an
   in-band `Error { message }` variant.
@@ -560,8 +621,8 @@ synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you   # once 
   for the owner is an input on its ticket (or the `needs-you` label with
   the reason in the body), and is mentioned in chat with the ticket id —
   never asked only in chat. `asking` and `label <name>` are filter cells
-  (FILTER-3's language); Home's "Needs you" panel shows `asking or label
-  needs-you`.
+  (FILTER-3's language); Home's "Needs you" panel shows `queued or asking
+  or label needs-you`. An urgent one is queued too (MENGER-39, "Queue").
 - Ticketing follows **menger-skills** (`../menger-skills`, the house
   methodology — its `ticketing/`, `planning/`, `asking/`, `building/`
   skills; `ought` is retired, owner 2026-10-14). Its lifecycle is

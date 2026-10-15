@@ -1,0 +1,60 @@
+# ACCESS-6: the macro spike — one toy activation built the way ACCESS-13
+# will build menger's (auth = "required", request = …, client, server_cfg,
+# #[from_auth] VerifiedUser, a #[child] namespace, typed params, /// docs),
+# compiled for the server and for wasm32, driven by synapse and synapse-cc.
+# `run.sh` runs it. Its own [workspace] table keeps it out of menger's
+# workspace (like frontend/): `cargo test --workspace` never builds it.
+[package]
+name = "access6-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+default = ["server"]
+server = [
+    "dep:plexus-core",
+    "dep:plexus-transport",
+    "dep:async-trait",
+    "dep:jsonrpsee",
+    "dep:tokio",
+    "dep:serde_json",
+    "dep:async-stream",
+    "dep:anyhow",
+    "dep:tracing-subscriber",
+    "dep:uuid",
+]
+# Question 5's two open schemas for the lenient `Status` (see vocab.rs).
+schema-anyof = []
+schema-examples = []
+
+[[bin]]
+name = "access6-spike"
+path = "src/main.rs"
+required-features = ["server"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+schemars = { version = "1.1", features = ["derive"] }
+futures = "0.3"
+# The 0.6 line by sibling path, as tickets-api takes it.
+plexus-macros = { path = "../../../plexus-macros" }
+plexus-client = { path = "../../../plexus-macros/plexus-client", default-features = false }
+
+plexus-core = { path = "../../../plexus-core", optional = true }
+plexus-transport = { path = "../../../plexus-transport", default-features = false, optional = true }
+async-trait = { version = "0.1", optional = true }
+jsonrpsee = { version = "0.26", features = ["server", "macros"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+serde_json = { version = "1", optional = true }
+async-stream = { version = "0.3", optional = true }
+anyhow = { version = "1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+plexus-client = { path = "../../../plexus-macros/plexus-client", features = ["ws-native"] }
+tokio = { version = "1", features = ["full"] }

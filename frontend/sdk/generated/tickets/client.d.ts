@@ -32,7 +32,7 @@ export interface TicketsClient {
     groups(): AsyncGenerator<TicketsEvent>;
     /** Heartbeat — version, unix time, ticket count */
     health(): AsyncGenerator<TicketsEvent>;
-    /** A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then history_end (when the log began; what a restore would put back; since when it has held its status) */
+    /** A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then its queue records (MENGER-39), then history_end (when the log began; what a restore would put back; since when it has held its status) */
     history(id: string): AsyncGenerator<TicketsEvent>;
     /** Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket */
     inputs(epic?: string | null, filter?: string | null, state?: string | null, ticket?: string | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
@@ -44,6 +44,10 @@ export interface TicketsClient {
     list(after?: string | null, at?: number | null, epic?: string | null, filter?: string | null, keep?: string | null, limit?: number | null, parent?: string | null, status?: string | null, summary?: boolean | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
     /** Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids */
     member(filter: string, ids: string[], tz?: string | null): AsyncGenerator<TicketsEvent>;
+    /** Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why; queued again it is raised, never lowered; yields queued { entry, ticket, action } */
+    queue(id: string, reason: string, urgency: string, input?: string | null, source?: string | null): AsyncGenerator<TicketsEvent>;
+    /** The owner's queue, most urgent first, then oldest: a queue_row { entry, ticket } each, then queue_end { count, snoozed, now_unix } */
+    queued(snoozed?: boolean | null): AsyncGenerator<TicketsEvent>;
     /** Tickets that can start now: Ready, with every blocker Complete, Superseded or Canceled; optionally under a filter */
     readySet(after?: string | null, epic?: string | null, filter?: string | null, limit?: number | null, summary?: boolean | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
     /** Reopen a closed input; yields input_changed */
@@ -58,12 +62,16 @@ export interface TicketsClient {
     setParent(id: string, parent: string): AsyncGenerator<TicketsEvent>;
     /** Set a ticket's status (not a doc's: a doc has no lifecycle); Canceled cancels its open descendants in the same write, and leaving Canceled may restore them (restore_children) */
     setStatus(id: string, status: string, message?: string | null, restoreChildren?: boolean | null, source?: string | null): AsyncGenerator<TicketsEvent>;
+    /** Snooze a queued ticket for some minutes (1 to a week): off the alerting surfaces, still queued; yields snoozed { entry, ticket } */
+    snooze(id: string, minutes: number, source?: string | null): AsyncGenerator<TicketsEvent>;
     /** The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page; matches_only: the matches nearest below instead, then the hosted shortcodes drawn there */
     tree(filter: string, after?: string | null, epic?: string | null, keep?: string | null, limit?: number | null, matchesOnly?: boolean | null, parent?: string | null, tz?: string | null): AsyncGenerator<TicketsEvent>;
     /** Bring deleted tickets back (admin) within 30 days of the delete, whole, children and blocks put back; yields undeleted { ids, tickets } */
     undelete(ids: string[]): AsyncGenerator<TicketsEvent>;
     /** Unlink commits from a ticket; yields commits_unlinked { ticket, removed } */
     unlinkCommits(commits: string[], id: string): AsyncGenerator<TicketsEvent>;
+    /** Take a ticket out of the owner's queue (done with it, or withdrawn); yields unqueued { id, entry, action, by, at_unix }, or not_queued */
+    unqueue(id: string, source?: string | null): AsyncGenerator<TicketsEvent>;
     /** Change any part of a ticket in one write — title, body, kind, status, parent, severity, blockers (block / unblock); all lands or none does; yields updated { ticket, changed } */
     update(id: string, block?: string[] | null, body?: string | null, kind?: string | null, message?: string | null, parent?: string | null, severity?: string | null, source?: string | null, status?: string | null, title?: string | null, unblock?: string[] | null): AsyncGenerator<TicketsEvent>;
     /** The same update to many tickets in one write — kind, status, parent, severity, blockers, labels; by ids or a filter; all lands or none does; yields updated_many { ids, changed, tickets, unchanged } */

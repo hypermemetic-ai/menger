@@ -19,6 +19,7 @@ impl Store {
         };
         let epic = asked.to_string();
         self.check_body(None, &new.body)?;
+        self.check_title(None, &new.title)?;
         if !new.kind.has_lifecycle() && !new.blocked_by.is_empty() {
             return Err(StoreError::DocBlocked {
                 epic,

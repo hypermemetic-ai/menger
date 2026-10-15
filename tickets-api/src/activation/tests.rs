@@ -1378,3 +1378,76 @@ async fn waves_to_and_under_answer_as_waves_does() {
         assert!(matches!(evs.as_slice(), [TicketsEvent::Error { .. }]), "{evs:?}");
     }
 }
+
+/// ACCESS-29 (ACCESS-4 L5): `list` answers 1,000 rows unless `limit` says,
+/// and never more than 10,000; the page event carries the cursor to the
+/// rest, so a client that pages still reads everything.
+#[tokio::test]
+async fn list_pages_by_default_and_never_past_the_most() {
+    use crate::limits::{LIST_PAGE_DEFAULT, LIST_PAGE_MAX};
+    let store = Arc::new(Store::new());
+    store.seed_synthetic(crate::store::SeedSpec { count: 1_200, seed: 7, into_existing: false }).unwrap();
+    let hub = Tickets::new(store);
+    let list = |after: Option<String>, limit: Option<u32>| {
+        hub.list(None, Reach::everywhere(), None, None, None, after, limit, Some(true), None, None, None, None)
+    };
+    let (ids, page) = ids_and_page(list(None, None).await).await;
+    assert_eq!(ids.len(), LIST_PAGE_DEFAULT as usize);
+    let (next, remaining) = page.expect("a page");
+    assert_eq!(remaining, 200);
+    let (rest, page) = ids_and_page(list(next, None).await).await;
+    assert_eq!((rest.len(), page.map(|p| p.0)), (200, Some(None)), "paged, everything is read");
+    let (ids, _) = ids_and_page(list(None, Some(u32::MAX)).await).await;
+    assert_eq!(ids.len(), 1_200, "under the most, what is asked");
+    assert!(LIST_PAGE_MAX >= 10_000);
+    // Full rows page the same way.
+    let (ids, _) = ids_and_page(hub.list(None, Reach::everywhere(), None, None, None, None, None, None, None, None, None, None).await).await;
+    assert_eq!(ids.len(), LIST_PAGE_DEFAULT as usize);
+}
+
+/// ACCESS-29: a title past 1 KiB and a filter past 4 KiB are refused in
+/// band, naming the size.
+#[tokio::test]
+async fn a_title_and_a_filter_are_held_to_their_sizes() {
+    let hub = hub();
+    one(hub.create(None, Reach::everywhere(), "SZ".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    let long = "t".repeat(crate::limits::TITLE_MAX + 1);
+    match one(hub.create(None, Reach::everywhere(), "SZ".into(), long.clone(), None, None, None, None, None, None).await).await {
+        TicketsEvent::Error { message } => assert!(message.contains("at most 1024 bytes"), "{message}"),
+        other => panic!("refused: {other:?}"),
+    }
+    match one(hub.amend(None, Reach::everywhere(), "SZ-1".into(), Some(long), None).await).await {
+        TicketsEvent::Error { message } => assert!(message.contains("'SZ-1'"), "{message}"),
+        other => panic!("refused: {other:?}"),
+    }
+    let at = "t".repeat(crate::limits::TITLE_MAX);
+    assert!(matches!(one(hub.amend(None, Reach::everywhere(), "SZ-1".into(), Some(at), None).await).await, TicketsEvent::Amended { .. }));
+    let filter = format!("kind build and {}", "not kind doc and ".repeat(300));
+    match one(hub.list(None, Reach::everywhere(), None, None, None, None, None, Some(true), Some(filter), None, None, None).await).await {
+        TicketsEvent::Error { message } => assert!(message.contains("a filter is at most 4096 bytes"), "{message}"),
+        other => panic!("refused: {other:?}"),
+    }
+}
+
+/// ACCESS-29: `comments.list` answers 500 unless `limit` says, never past
+/// 1,000.
+#[tokio::test]
+async fn comments_list_pages_by_default_and_never_past_the_most() {
+    use crate::comments::{Anchor, CommentsEvent};
+    let store = Arc::new(Store::new());
+    for i in 0..1_100 {
+        let anchor = Anchor { route: "#/".into(), path: "body".into(), label: "x".into(), excerpt: "x".into(), ticket: None, version: None };
+        store.add_comment(anchor, format!("note {i}"), None).await.unwrap();
+    }
+    let comments = crate::Comments::new(store);
+    let count = |evs: Vec<CommentsEvent>| {
+        let n = evs.iter().filter(|e| matches!(e, CommentsEvent::Comment { .. })).count();
+        let next = evs.iter().find_map(|e| if let CommentsEvent::Page { next } = e { Some(*next) } else { None });
+        (n, next.expect("a page"))
+    };
+    let list = |limit| comments.list(None, Reach::everywhere(), None, None, None, None, None, None, None, None, limit);
+    let (n, next) = count(Box::pin(list(None).await).collect().await);
+    assert_eq!((n, next.is_some()), (500, true));
+    let (n, next) = count(Box::pin(list(Some(5_000)).await).collect().await);
+    assert_eq!((n, next.is_some()), (1_000, true));
+}

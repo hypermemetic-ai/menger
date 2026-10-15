@@ -702,7 +702,7 @@ impl FromStr for Filter {
 
 /// The fields a filter may name — menger's (FILTER-3 §1) and manifest's
 /// that menger refuses — longest first, as manifest's `BY_LENGTH`.
-const NAMES: [&str; 31] = [
+const NAMES: [&str; 32] = [
     "has commits",
     "menger doc",
     "discussion",
@@ -719,6 +719,8 @@ const NAMES: [&str; 31] = [
     "blocked",
     "session",
     "asking",
+    // MENGER-39: the owner's queue.
+    "queued",
     "created",
     // FILTER-30: the ticket's last touch.
     "touched",
@@ -747,7 +749,7 @@ const NESTED: &str = "groups do not nest: parentheses hold predicates, not group
 const LIST_NESTED: &str = "a list `field in (…)` is a group of its own, never inside parentheses or `or`";
 const NOT_UNDERSTOOD: &str = "not understood: a predicate is `status`, `category`, `kind`, `severity`, `blocked`, \
                               `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under`, `text`, \
-                              `entered`, `left`, `changed`, `by`, `created`, `for` or `deployed`, or a quoted text";
+                              `entered`, `left`, `changed`, `by`, `created`, `for`, `deployed` or `queued`, or a quoted text";
 const QUOTES: &str = "a quoted value is quoted whole — one `\"` before it and one after, none inside";
 
 /// `raw` cut at `sep` (ASCII case-insensitive) where it stands outside
@@ -1008,6 +1010,8 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "touched" => read_history(name, tail).map(Field::History),
         // DEPLOY-11: over the deployments' kept cells.
         "deployed" => read_history(name, tail).map(Field::History),
+        // MENGER-39: over the queue's kept entries.
+        "queued" => read_history(name, tail).map(Field::History),
         "for" => read_held("", &rest[name.len()..]).map(Field::History),
         "written" | "age" => Err(format!(
             "`{name}` is refused: it needs an index of its own (FILTER-3 §6.9, open question 6)"
@@ -1159,6 +1163,10 @@ pub enum Event {
     /// one), since a moment in the window when one is given. Answered from
     /// the deployments' kept cells, never from the transition log.
     Deployed(String),
+    /// MENGER-39: `queued` — the ticket is in the owner's queue; `queued
+    /// <urgency>`, at that urgency (a snooze does not take it out). Answered
+    /// from the queue's kept entries; no window, no `by`.
+    Queued(Option<crate::queue::Urgency>),
 }
 
 impl Event {
@@ -1173,6 +1181,7 @@ impl Event {
             Event::Touched => "touched",
             Event::Held(_) => "for",
             Event::Deployed(_) => "deployed",
+            Event::Queued(_) => "queued",
         }
     }
 }
@@ -1479,6 +1488,8 @@ impl History {
             Event::Created => "created".to_string(),
             Event::Touched => "touched".to_string(),
             Event::Deployed(env) => format!("deployed {}", quoted(env)),
+            Event::Queued(None) => "queued".to_string(),
+            Event::Queued(Some(u)) => format!("queued {u}"),
             Event::Held(h) => {
                 let of = |name: &str, vs: Vec<String>| match vs.as_slice() {
                     [one] => format!("{name} {one} "),
@@ -1569,6 +1580,14 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
             let env = w.first().ok_or("`deployed` names an environment, as `deployed prod` or `deployed menger/prod`")?;
             i = 1;
             (Event::Deployed(deployed_env(env)?), None)
+        }
+        // MENGER-39: `queued [urgency]`, and nothing after it.
+        "queued" => {
+            let u = w.first().map(|u| u.parse::<crate::queue::Urgency>()).transpose()?;
+            if let Some(extra) = w.get(usize::from(u.is_some())) {
+                return Err(format!("`{extra}` is not understood here — `queued` takes an urgency (whenever, today, now, blocking) and nothing else: no window, no `by`"));
+            }
+            return Ok(History { event: Event::Queued(u), window: None, by: None });
         }
         _ => {
             let who = w.first().ok_or("`by` names who: `me`, `system` or a principal")?;

@@ -58,8 +58,16 @@ async fn run(hub: std::sync::Arc<plexus_core::plexus::DynamicHub>) -> anyhow::Re
 To use your own listener, routes or layers, call `router(cfg, ws_port)` and
 `serve_on(listener, router, shutdown)`. `ShellConfig` carries the extras:
 `routes` (merged in), `pages` (stamped HTML at a route), `stamps`,
-`root_fallback` (served at `/` when there is no build), `not_built`, and
-`mount` (default `/app`).
+`root_fallback` (served at `/` when there is no build), `not_built`,
+`mount` (default `/app`), and `csp`.
+
+Every answer is hardened (`nosniff`, `Referrer-Policy: same-origin`, no
+framing), and every page the shell serves goes out under `csp` (default
+`DEFAULT_CSP`), a template: `{{SCRIPTS}}` becomes the page's inline-script
+hashes (read when the build is), `{{HUB}}` the hub's WebSocket origins at the
+name the page was asked for. The default allows scripts from the app's own
+files, the wasm and those hashes, and connections to the page's origin and
+its hub.
 
 ## Features
 

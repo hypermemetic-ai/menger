@@ -215,6 +215,11 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
             return (!ids.is_empty()).then_some(TicketsEvent::Undeleted { ids, tickets });
         }
         TicketsEvent::Hit { summary, .. } => Some(summary.id.clone()),
+        // MENGER-39: a queue write, a queue row and a history line are their
+        // ticket's.
+        TicketsEvent::Queued { entry, .. } | TicketsEvent::Snoozed { entry, .. } | TicketsEvent::QueueRow { entry, .. } => Some(entry.ticket.clone()),
+        TicketsEvent::Unqueued { id, .. } | TicketsEvent::NotQueued { id } => Some(id.clone()),
+        TicketsEvent::QueueRecord { record } => Some(record.ticket.clone()),
         TicketsEvent::DanglingBlocker { id } | TicketsEvent::Member { id, .. } | TicketsEvent::NotFound { id } => Some(id.clone()),
         TicketsEvent::Extent { shortcode, .. } | TicketsEvent::Count { shortcode, .. } | TicketsEvent::Recount { shortcode, .. } => {
             let seen = store.counts(reach).into_iter().any(|(e, n)| e == *shortcode && n > 0);
@@ -234,7 +239,8 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
         | TicketsEvent::Ambiguous { .. }
         | TicketsEvent::BodyTooLarge { .. }
         | TicketsEvent::Searched { .. }
-        | TicketsEvent::HistoryEnd { .. } => None,
+        | TicketsEvent::HistoryEnd { .. }
+        | TicketsEvent::QueueEnd { .. } => None,
     };
     match id {
         Some(id) if !sees(&id) => None,

@@ -825,6 +825,9 @@ pub enum Change {
     #[serde(skip)]
     #[schemars(skip)]
     UnderMoved { moves: std::sync::Arc<lineage::UnderMoves> },
+    /// MENGER-39: a queue write — `queued`, `unqueued`, `snoozed` on the
+    /// wire; `shortcode` is its ticket's (ORG-3: by identity), what `watch { epic }` filters by.
+    Queue { shortcode: ShortcodeId, change: queue::QueueChange },
 }
 
 impl Change {
@@ -857,7 +860,7 @@ impl Change {
             // INPUT-3: its ticket's.
             Self::InputChanged { shortcode, .. } => Some(shortcode),
             // MENGER-13: its ticket's.
-            Self::Transition { shortcode, .. } => Some(shortcode),
+            Self::Transition { shortcode, .. } | Self::Queue { shortcode, .. } => Some(shortcode),
             // FILTER-4: one per write, its moves in any shortcode.
             Self::CellsMoved { .. } => None,
             // FILTER-13: one per write, each watch's events already in its epic.
@@ -1068,6 +1071,8 @@ pub enum StoreError {
     /// MNG-16: an `amend` asked for a title that is empty after trimming.
     /// A ticket always has one; nothing was written.
     EmptyTitle { id: String },
+    /// ACCESS-29: a title past [`crate::limits::TITLE_MAX`]; nothing written.
+    TitleTooLong { id: Option<String>, bytes: usize },
     /// SDLC-9: a `link_commits` or `unlink_commits` named entries that are
     /// not commit references ([`commits::reference`]) — every one of them,
     /// as given. A call is all or nothing: nothing was written.
@@ -1341,6 +1346,7 @@ impl std::fmt::Display for StoreError {
                  its own shortcode — only a shortcode's scope root may hang under another \
                  shortcode (nothing changed for '{id}')"
             ),
+            Self::TitleTooLong { id, bytes } => f.write_str(&crate::limits::title_too_long(id.as_deref(), *bytes)),
             Self::EmptyTitle { id } => write!(
                 f,
                 "a ticket's title cannot be empty: the title given for '{id}' is blank \
@@ -1797,6 +1803,8 @@ struct Cache {
     /// before ORG-3), moved by a write that mints a shortcode or moves a
     /// root, and the one place text becomes an identity.
     shortcodes: shortcodes::Registry,
+    /// MENGER-39: the queue and its history ([`queue::Queue`]).
+    queue: queue::Queue,
     written: u64,
 }
 
@@ -2163,6 +2171,7 @@ impl Cache {
             deploys,
             // ORG-3: read beside the cache ([`shortcodes::settle`]).
             shortcodes: Default::default(),
+            queue: Default::default(),
             written: 0,
         }
     }
@@ -2245,6 +2254,7 @@ impl Cache {
             deploys,
             // ORG-3: read beside the cache ([`shortcodes::settle`]).
             shortcodes: Default::default(),
+            queue: Default::default(),
             written: 0,
         }
     }
@@ -3032,6 +3042,8 @@ impl Store {
         delete::migrate(&mut conn)?;
         // DEPLOY-11: and one without the deployments tables gains them, empty.
         deployments::migrate(&mut conn)?;
+        // MENGER-39: and one without the queue's tables gains them, empty.
+        queue::migrate(&mut conn)?;
         let cache = Self::load_cache(&mut conn)?;
         let db = Arc::new(StdMutex::new(conn));
         let readers = match path {
@@ -3068,6 +3080,14 @@ impl Store {
     fn check_body(&self, id: Option<&str>, body: &str) -> Result<(), StoreError> {
         if body.len() > self.body_max {
             return Err(StoreError::BodyTooLarge { id: id.map(str::to_string), bytes: body.len(), max: self.body_max });
+        }
+        Ok(())
+    }
+
+    /// ACCESS-29: refuse a title past [`crate::limits::TITLE_MAX`], as a body.
+    fn check_title(&self, id: Option<&str>, title: &str) -> Result<(), StoreError> {
+        if title.len() > crate::limits::TITLE_MAX {
+            return Err(StoreError::TitleTooLong { id: id.map(str::to_string), bytes: title.len() });
         }
         Ok(())
     }
@@ -3132,6 +3152,8 @@ impl Store {
         // for a file from before ORG-3 (stored form 11), from where each
         // root hangs; every row given its letters and its full address.
         shortcodes::settle(conn, &mut cache)?;
+        // MENGER-39: the queue, as stored.
+        cache.queue = queue::load(conn)?;
         Ok(cache)
     }
 
@@ -4238,6 +4260,9 @@ impl Store {
         if title.as_deref().is_some_and(|t| t.trim().is_empty()) {
             return Err(StoreError::EmptyTitle { id });
         }
+        if let Some(title) = &title {
+            self.check_title(Some(&id), title)?;
+        }
         if let Some(body) = &body {
             self.check_body(Some(&id), body)?;
         }
@@ -4494,7 +4519,12 @@ impl Store {
         };
         // FILTER-30: an answer or a clear touches the ticket.
         let touches = inputs::touches(&entry);
-        let (derived, under) = match asked != asks {
+        // MENGER-39: closing the input a queue entry names takes it out.
+        let closing = (next.state == InputState::Closed).then(|| {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            queue::Closing::of(&cache, &row.id, &next.id, entry.at_unix)
+        });
+        let (derived, mut under) = match asked != asks {
             true => {
                 let (d, u) = self.cell_derived(&row, Some(asks));
                 (Some(d), u)
@@ -4505,6 +4535,12 @@ impl Store {
             }
             false => (None, None),
         };
+        if let (Some(Some(_)), None) = (&closing, &derived) {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            under = self.under_before(&cache, || lineage::Touched::default().row(&row));
+        }
+        let closing = closing.flatten();
+        let (closing_tx, closing_cache, queue_epic) = (closing.clone(), closing.clone(), epic.clone());
         let at = entry.at_unix;
         let announced = derived.as_ref().and_then(Derived::announced);
         let (cells_stored, moved) = match derived {
@@ -4520,10 +4556,16 @@ impl Store {
                 if let Some(cells) = &cells_stored {
                     cells.write(tx)?;
                 }
+                if let Some(c) = &closing_tx {
+                    c.commit(tx)?;
+                }
                 Ok(())
             },
             move |cache, _| {
                 cache.inputs.put(kept);
+                if let Some(c) = &closing_cache {
+                    c.apply(cache);
+                }
                 if touches {
                     cache.log.touch(&row.shortcode, row.seq, at);
                 }
@@ -4537,6 +4579,9 @@ impl Store {
                     shortcode: epic,
                     input: next.clone(),
                 });
+                if let Some(c) = closing {
+                    tx.send(c.change(queue_epic));
+                }
                 if let Some(moves) = announced {
                     tx.send(Change::CellsMoved { moves });
                 }
@@ -5380,6 +5425,8 @@ mod theme_registry;
 /// DEPLOY-11: every deployment, what each environment runs, and where each
 /// ticket's work runs — the `deployed` cells.
 mod deployments;
+mod queue;
+pub use queue::QueueChange;
 pub use deployments::{DeployPage, DeployQuery};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
@@ -5479,6 +5526,9 @@ mod tests_deployments;
 /// THEME-8: define, set, theme_for (every row), refusals, a reopen.
 #[cfg(test)]
 mod tests_themes;
+/// MENGER-39: the queue.
+#[cfg(test)]
+mod tests_queue;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).

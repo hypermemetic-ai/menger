@@ -174,7 +174,8 @@ impl Comments {
     /// `comment` event each — then exactly one `page { next }`: `next` is
     /// the id to pass as the next call's `after`, `null` when nothing more
     /// matches. `after` starts the page strictly after (older than) that
-    /// comment; `limit` caps it; without `limit`, every match. The filters:
+    /// comment; `limit` caps it (ACCESS-29: 500 unless given, at most 1,000,
+    /// [`crate::limits`]). The filters:
     /// `ticket` (the anchor's ticket), `under` (a ticket or a shortcode: the
     /// comment's ticket is in its lineage — itself, its ancestors, its
     /// shortcode and the shortcodes hosting it — as the filter language's
@@ -196,7 +197,7 @@ impl Comments {
             author = "Only comments by this author, exactly (optional)",
             text = "Only comments with this text in the body, the label or the excerpt, any ASCII case (optional)",
             after = "Cursor: start strictly after (older than) this comment id (optional)",
-            limit = "At most this many comments; the page event carries the next cursor (optional)"
+            limit = "At most this many comments (default 500, at most 1000); the page event carries the next cursor (optional)"
         ),
         values(state = ["open", "resolved"]),
         example(note = "open comments under FILTER that mention a title", params = r#"{"under": "FILTER", "state": "open", "text": "title"}"#)
@@ -239,7 +240,8 @@ impl Comments {
                 }
             };
             let q = CommentQuery { ticket, under, route, path, state, author, text };
-            match store.comments(&q, after, limit) {
+            let limit = crate::limits::page(limit, crate::limits::COMMENTS_PAGE_DEFAULT, crate::limits::COMMENTS_PAGE_MAX);
+            match store.comments(&q, after, Some(limit)) {
                 Ok(page) => {
                     for comment in page.comments {
                         if !sees(&store, reach.as_ref(), &comment) {

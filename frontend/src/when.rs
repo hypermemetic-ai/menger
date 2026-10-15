@@ -72,6 +72,10 @@ pub(crate) enum Kind {
     /// DEPLOY-13: `not deployed <env> [window]` — built negated, as Hasn't
     /// changed is; a pill of it is a Deployed one, turned around.
     NotDeployed,
+    /// MENGER-39: `queued [urgency]` — the owner's queue, kept by the
+    /// store; a pill (from the palette or a saved filter), never a row of
+    /// When's menu.
+    Queued,
 }
 
 impl Kind {
@@ -90,6 +94,7 @@ impl Kind {
             Event::Changed => Kind::Changed,
             Event::Touched => Kind::Untouched,
             Event::Deployed(_) => Kind::Deployed,
+            Event::Queued(_) => Kind::Queued,
         }
     }
 
@@ -104,6 +109,7 @@ impl Kind {
             Kind::Untouched => "Hasn't changed",
             Kind::Deployed => "Deployed to",
             Kind::NotDeployed => "Not deployed to",
+            Kind::Queued => "Queued",
         }
     }
 
@@ -118,6 +124,7 @@ impl Kind {
             Kind::Untouched => "untouched",
             Kind::Deployed => "deployed",
             Kind::NotDeployed => "notdeployed",
+            Kind::Queued => "queued",
         }
     }
 
@@ -134,7 +141,7 @@ impl Kind {
 
     /// Whether its clause has a window (all but In status for).
     pub(crate) fn windowed(self) -> bool {
-        self != Kind::Held
+        !matches!(self, Kind::Held | Kind::Queued)
     }
 
     /// Whether its clause may say who (the transitions'; not a birth).
@@ -247,6 +254,8 @@ pub(crate) fn new_clause(kind: Kind, status: Option<Status>, window: Option<Wind
         Kind::Untouched => Event::Touched,
         // DEPLOY-13: names an environment first ([`new_deployed`]).
         Kind::Deployed | Kind::NotDeployed => return None,
+        // MENGER-39: never built by When's menu.
+        Kind::Queued => return None,
     };
     let window = match kind {
         Kind::Created | Kind::Untouched => Some(window.unwrap_or_else(|| default_window(&event))),
@@ -490,6 +499,12 @@ pub(crate) fn segments(t: &Timed, h12: bool) -> Vec<(Option<Part>, String)> {
         Event::Deployed(env) => {
             out.push((None, "deployed to".into()));
             out.push((Some(Part::Env), env.clone()));
+        }
+        Event::Queued(u) => {
+            out.push((None, "queued".into()));
+            if let Some(u) = u {
+                out.push((None, u.as_str().into()));
+            }
         }
         Event::Held(h) => {
             out.push((Some(Part::Status), scope_words(&h.of)));

@@ -861,6 +861,8 @@ async fn session(
     registry::refresh();
     // INPUT-6: the inputs, likewise — only once #/inputs has asked.
     inputs::refresh();
+    // MENGER-39: the owner's queue — the tray is on every page.
+    crate::queue::refresh();
     // COMMENT-3: the comments — `comments.watch`, then the list — only once
     // a view has asked (annotation mode, #/comments, a ticket page's count).
     comments::refresh();
@@ -913,6 +915,8 @@ async fn session(
             registry::heard(data);
             // INPUT-6: an `input_changed` upserts the app's inputs.
             inputs::heard(data);
+            // MENGER-39: a queue write moves the tray.
+            crate::queue::heard(data);
             // DEPLOY-13: a commit linked or unlinked moves where the ticket
             // runs (the server keeps the join): its cells asked again.
             if let TicketsEvent::CommitsLinked { ticket, .. } | TicketsEvent::CommitsUnlinked { ticket, .. } = data {
@@ -1038,6 +1042,7 @@ async fn session(
                 refetch_open_children(last_error);
                 registry::refresh();
                 inputs::refresh();
+                crate::queue::refresh();
                 crate::deploys::refresh();
                 STALE.with(|s| s.update(|n| *n = n.wrapping_add(1)));
             }

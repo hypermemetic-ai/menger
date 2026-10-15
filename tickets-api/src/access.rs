@@ -165,12 +165,28 @@ pub struct Book {
     /// (`roles(...)`, merged by name) — seeded once the hub is built
     /// ([`Book::seed`]).
     defaults: RwLock<BTreeMap<String, BTreeSet<String>>>,
-    waiting: Mutex<BTreeMap<String, Waiting>>,
+    waiting: Mutex<WaitingList>,
+}
+
+/// The waiting list, and (ACCESS-29) its order by arrival beside it: at the
+/// cap, the one waiting longest is found in O(log n), not by a scan.
+#[derive(Default)]
+struct WaitingList {
+    by_principal: BTreeMap<String, Waiting>,
+    by_since: BTreeSet<(i64, String)>,
+}
+
+impl WaitingList {
+    fn remove(&mut self, principal: &str) {
+        if let Some(w) = self.by_principal.remove(principal) {
+            self.by_since.remove(&(w.since, w.principal));
+        }
+    }
 }
 
 impl Book {
     fn new(admins: Vec<String>) -> Self {
-        Self { store: OnceLock::new(), admins, defaults: RwLock::new(BTreeMap::new()), waiting: Mutex::new(BTreeMap::new()) }
+        Self { store: OnceLock::new(), admins, defaults: RwLock::new(BTreeMap::new()), waiting: Mutex::new(WaitingList::default()) }
     }
 
     fn store(&self) -> Option<&Arc<Store>> {
@@ -207,18 +223,16 @@ impl Book {
     /// bounded — the one waiting longest goes).
     fn wait(&self, principal: &str, name: Option<String>, provider: Option<String>) -> Waiting {
         let mut waiting = self.waiting.lock().unwrap();
-        if let Some(w) = waiting.get(principal) {
+        if let Some(w) = waiting.by_principal.get(principal) {
             return w.clone();
         }
-        while waiting.len() >= WAITING_MAX {
-            let oldest = waiting.values().min_by_key(|w| w.since).map(|w| w.principal.clone());
-            match oldest {
-                Some(p) => waiting.remove(&p),
-                None => break,
-            };
+        while waiting.by_principal.len() >= WAITING_MAX {
+            let Some((_, oldest)) = waiting.by_since.pop_first() else { break };
+            waiting.by_principal.remove(&oldest);
         }
         let w = Waiting { principal: principal.to_string(), name, provider, since: now() };
-        waiting.insert(principal.to_string(), w.clone());
+        waiting.by_since.insert((w.since, w.principal.clone()));
+        waiting.by_principal.insert(principal.to_string(), w.clone());
         w
     }
 }
@@ -420,6 +434,8 @@ impl Caller {
     /// call's grant on: what the method answers under instead. Unchanged
     /// when it holds it everywhere; `Err` when nowhere.
     pub fn scoped(&self, text: Option<&str>) -> Result<Option<String>, String> {
+        // ACCESS-29: the caller's own text is held to its size first.
+        text.map(crate::limits::check_filter).transpose()?;
         let Some(reach) = self.reach_filter()? else { return Ok(text.map(str::to_string)) };
         let asked = match text.map(str::trim).filter(|t| !t.is_empty()) {
             Some(t) => Filter::parse(t).map_err(|e| e.to_string())?,
@@ -613,7 +629,7 @@ impl Access {
 
     /// Everyone signed in who holds no grant yet, by when they first came.
     pub fn waiting(&self) -> Vec<Waiting> {
-        let mut w: Vec<Waiting> = self.book.waiting.lock().unwrap().values().cloned().collect();
+        let mut w: Vec<Waiting> = self.book.waiting.lock().unwrap().by_principal.values().cloned().collect();
         w.sort_by_key(|w| w.since);
         w
     }

@@ -97,6 +97,38 @@ async fn without_node_the_service_starts_and_says_so() {
     assert_eq!(client.parse_all("pie".into()).await.unwrap().len(), 1);
 }
 
+// -- ACCESS-25 ----------------------------------------------------------------------
+
+/// The status code a raw request to the service naming `host` gets.
+async fn status_for_host(port: u16, host: &str) -> (u16, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let req = format!(
+        "GET / HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+         Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+    );
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut buf = vec![0u8; 512];
+    let n = s.read(&mut buf).await.unwrap();
+    let text = String::from_utf8_lossy(&buf[..n]).to_string();
+    (text.split(' ').nth(1).and_then(|c| c.parse().ok()).unwrap_or(0), text)
+}
+
+/// Loopback only: an upgrade naming another host (DNS rebinding) is
+/// refused 421; the loopback names on its port are served.
+#[tokio::test]
+async fn the_service_answers_only_loopback_names() {
+    let port = free_port().await;
+    let _service = service(port, Some(&path_without_node()));
+    let _ = connect(port).await; // up
+    let (code, text) = status_for_host(port, "evil.example").await;
+    assert_eq!(code, 421, "{text}");
+    assert!(text.contains("this server does not answer to that name"), "{text}");
+    assert_eq!(status_for_host(port, &format!("evil.example:{port}")).await.0, 421);
+    assert_eq!(status_for_host(port, &format!("127.0.0.1:{port}")).await.0, 101);
+    assert_eq!(status_for_host(port, &format!("localhost:{port}")).await.0, 101);
+}
+
 // -- the end of the service is the end of its Node -------------------------------------
 
 /// The service killed outright — no shutdown, no destructors — still

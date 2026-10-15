@@ -970,6 +970,7 @@ async fn shell_serves_the_page() {
             app: menger::shell::AppSource::Dir(app_dist),
             env: None,
             login: None,
+            allowed_hosts: Vec::new(),
         })
         .await;
     });
@@ -978,7 +979,7 @@ async fn shell_serves_the_page() {
     for _ in 0..50 {
         match tokio::net::TcpStream::connect(("127.0.0.1", shell_port)).await {
             Ok(mut s) => {
-                s.write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                s.write_all(format!("GET / HTTP/1.0\r\nHost: localhost:{shell_port}\r\n\r\n").as_bytes())
                     .await
                     .unwrap();
                 s.read_to_end(&mut resp).await.unwrap();
@@ -3125,4 +3126,111 @@ async fn delete_over_the_wire() {
     assert_eq!(answer(&client, "tickets.get", json!({"id": "DEL-3"})).await["ticket"]["parent"], "DEL-2", "back under it");
     let born = answer(&client, "tickets.create", json!({"epic": "DEL", "title": "after"})).await;
     assert_eq!(born["ticket"]["id"], "DEL-6", "DEL-5's number is not reused");
+}
+
+/// MENGER-39: the queue over the real protocol — `queue` answers `queued`
+/// and `watch` hears it; a requeue raises and never lowers; `queued` lists
+/// it most urgent first; a `watch { filter: "queued" }` hears it enter; a
+/// `close_input` of the named input unqueues it — `watch` hears `unqueued`
+/// (action `closed`) and the filter's `left`; `snooze`, `unqueue`'s
+/// `not_queued`, the refusals, and `history`'s queue records.
+#[tokio::test]
+async fn the_queue_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    collect(call(&client, "tickets.create", json!({"epic": "QUE", "title": "root", "kind": "scope"})).await).await;
+    let body = "<m-decision data-field=\"decision\" id=\"landing\">\n\n\
+                <m-question data-field=\"question\">Archive or delete?</m-question>\n\n\
+                <m-option data-field=\"option\" name=\"Archive\" value=\"archive\" recommended></m-option>\n\
+                <m-option data-field=\"option\" name=\"Delete\" value=\"delete\"></m-option>\n\n\
+                </m-decision>\n";
+    collect(call(&client, "tickets.create", json!({"epic": "QUE", "title": "asks", "body": body})).await).await;
+    collect(call(&client, "tickets.create", json!({"epic": "QUE", "title": "a gap on prod"})).await).await;
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    let mut queued = call(&client, "tickets.watch", json!({"filter": "queued", "membership": true})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Blocking: the input that answers it.
+    let ev = answer(&client, "tickets.queue", json!({"id": "que-2", "urgency": "blocking", "reason": "the import waits on this", "input": "landing"})).await;
+    assert_eq!((ev["type"].as_str(), ev["action"].as_str()), (Some("queued"), Some("queued")), "{ev}");
+    assert_eq!(
+        (ev["entry"]["ticket"].as_str(), ev["entry"]["urgency"].as_str(), ev["entry"]["input"].as_str()),
+        (Some("QUE-2"), Some("blocking"), Some("landing"))
+    );
+    assert_eq!((ev["ticket"]["id"].as_str(), ev["ticket"]["title"].as_str()), (Some("QUE-2"), Some("asks")), "its row, for the tray");
+    let heard = watch_until(&mut watch, "queued").await;
+    assert_eq!(heard.last().unwrap()["entry"], ev["entry"], "watch hears it at once");
+    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "entered", "id": "QUE-2", "epic": "QUE", "shortcode": "QUE", "seq": 2})]);
+
+    // Today, then a lower requeue keeps it, a higher one raises it.
+    answer(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "today", "reason": "the promote rolled back", "source": "pipeline"})).await;
+    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "entered", "id": "QUE-3", "epic": "QUE", "shortcode": "QUE", "seq": 3})]);
+    let ev = answer(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "whenever", "reason": "still rolled back"})).await;
+    assert_eq!((ev["action"].as_str(), ev["entry"]["urgency"].as_str()), (Some("requeued"), Some("today")), "{ev}");
+    let ev = answer(&client, "tickets.queue", json!({"id": "QUE-3", "urgency": "now", "reason": "prod is down"})).await;
+    assert_eq!((ev["action"].as_str(), ev["entry"]["urgency"].as_str()), (Some("raised"), Some("now")), "{ev}");
+    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
+    let order: Vec<(&str, &str)> = rows
+        .iter()
+        .filter(|r| r["type"] == "queue_row")
+        .map(|r| (r["entry"]["ticket"].as_str().unwrap(), r["entry"]["urgency"].as_str().unwrap()))
+        .collect();
+    assert_eq!(order, [("QUE-2", "blocking"), ("QUE-3", "now")]);
+    assert_eq!((rows[2]["type"].as_str(), rows[2]["count"].as_u64(), rows[2]["snoozed"].as_u64()), (Some("queue_end"), Some(2), Some(0)));
+    let counts = collect(call(&client, "tickets.counts", json!({"filter": "queued now or queued blocking"})).await).await;
+    assert_eq!(counts, [json!({"type": "count", "epic": "QUE", "shortcode": "QUE", "held": 2})]);
+
+    // Snooze: still queued, off the list without the snoozed.
+    let ev = answer(&client, "tickets.snooze", json!({"id": "QUE-3", "minutes": 10, "source": "app"})).await;
+    assert_eq!(ev["type"], "snoozed", "{ev}");
+    assert!(ev["entry"]["snoozed_until_unix"].as_i64().unwrap() > 0);
+    assert_eq!(watch_until(&mut watch, "snoozed").await.last().unwrap()["entry"]["ticket"], "QUE-3");
+    let rows = collect(call(&client, "tickets.queued", json!({"snoozed": false})).await).await;
+    assert_eq!((rows.len(), rows[0]["entry"]["ticket"].as_str()), (2, Some("QUE-2")), "{rows:?}");
+
+    // The answer alone does not unqueue; closing the named input does.
+    answer(&client, "tickets.answer", json!({"ticket": "QUE-2", "input": "landing", "value": {"type": "choice", "option": "archive"}, "source": "app"})).await;
+    assert_eq!(collect(call(&client, "tickets.queued", json!({})).await).await.len(), 3, "answered, still queued");
+    answer(&client, "tickets.close_input", json!({"ticket": "QUE-2", "input": "landing"})).await;
+    let heard = watch_until(&mut watch, "unqueued").await;
+    let unq = heard.last().unwrap();
+    assert_eq!((unq["id"].as_str(), unq["action"].as_str(), unq["by"].as_str()), (Some("QUE-2"), Some("closed"), Some("system")), "{unq}");
+    assert!(heard.iter().any(|e| e["type"] == "input_changed" && e["input"]["state"] == "closed"), "{heard:?}");
+    assert_eq!(next_events(&mut queued, 1).await, [json!({"type": "left", "id": "QUE-2", "epic": "QUE", "shortcode": "QUE", "seq": 2})]);
+
+    // Unqueue; again: not_queued, nothing written.
+    let ev = answer(&client, "tickets.unqueue", json!({"id": "QUE-3", "source": "app"})).await;
+    assert_eq!((ev["type"].as_str(), ev["action"].as_str(), ev["id"].as_str()), (Some("unqueued"), Some("unqueued"), Some("QUE-3")), "{ev}");
+    assert_eq!(answer(&client, "tickets.unqueue", json!({"id": "QUE-3"})).await, json!({"type": "not_queued", "id": "QUE-3"}));
+    let rows = collect(call(&client, "tickets.queued", json!({})).await).await;
+    assert_eq!((rows.len(), rows[0]["type"].as_str(), rows[0]["count"].as_u64()), (1, Some("queue_end"), Some(0)));
+
+    // Refusals, one in-band event each.
+    for (method, params, says) in [
+        ("tickets.queue", json!({"id": "QUE-3", "urgency": "blocking", "reason": "idle"}), "names the input"),
+        ("tickets.queue", json!({"id": "QUE-3", "urgency": "soon", "reason": "x"}), "unknown urgency"),
+        ("tickets.queue", json!({"id": "QUE-3", "urgency": "now", "reason": " "}), "reason"),
+        ("tickets.queue", json!({"id": "QUE-2", "urgency": "blocking", "reason": "again", "input": "landing"}), "is closed"),
+        ("tickets.snooze", json!({"id": "QUE-3", "minutes": 10}), "not queued"),
+    ] {
+        let ev = answer(&client, method, params).await;
+        assert_eq!(ev["type"], "error", "{method}: {ev}");
+        assert!(ev["message"].as_str().unwrap().contains(says), "{method}: {ev}");
+    }
+    assert_eq!(
+        answer(&client, "tickets.queue", json!({"id": "QUE-99", "urgency": "now", "reason": "x"})).await,
+        json!({"type": "not_found", "id": "QUE-99"})
+    );
+
+    // History: the queue's records after the transitions, before the end.
+    let evs = collect(call(&client, "tickets.history", json!({"id": "QUE-3"})).await).await;
+    let records: Vec<(&str, &str)> = evs
+        .iter()
+        .filter(|e| e["type"] == "queue_record")
+        .map(|e| (e["record"]["action"].as_str().unwrap(), e["record"]["urgency"].as_str().unwrap()))
+        .collect();
+    assert_eq!(records, [("queued", "today"), ("requeued", "today"), ("raised", "now"), ("snoozed", "now"), ("unqueued", "now")]);
+    let first = evs.iter().find(|e| e["type"] == "queue_record").unwrap();
+    assert_eq!((first["record"]["source"].as_str(), first["record"]["reason"].as_str()), (Some("pipeline"), Some("the promote rolled back")));
+    assert_eq!(evs.last().unwrap()["type"], "history_end");
 }

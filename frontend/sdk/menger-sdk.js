@@ -7,8 +7,10 @@
  * A framed body (frontend/src/frame.rs) is one sandboxed iframe —
  * `sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"`, no
  * `allow-same-origin`, so its origin is opaque, and no `allow-forms`
- * (IDENTITY-28) — whose `srcdoc` is the body's HTML with this script inlined
- * at the top of <head>, under a CSP that is the head's first element:
+ * (IDENTITY-28) — whose document (ACCESS-28: handed over by the host to
+ * the frame document at /app/frame, which writes it over itself) is the
+ * body's HTML with this script inlined at the top of <head>, under a CSP
+ * that is the head's first element, and the frame document's own:
  * `connect-src 'none'; form-action 'none'` — no fetch, socket or beacon of
  * the frame's own, no form submission; the bridge below is its only way
  * out. It runs before anything the body holds, and it is the
@@ -276,7 +278,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.19.0";
+  var VERSION = "1.20.0";
   // The height a frame may claim. A body sized from the viewport (`110vh`)
   // would otherwise grow its frame forever.
   var MAX_HEIGHT = 50000;
@@ -667,6 +669,14 @@
       const stream = this.rpc.call("tickets.member", { filter, ids, tz });
       yield* extractData(stream);
     }
+    async* queue(id, reason, urgency, input, source) {
+      const stream = this.rpc.call("tickets.queue", { id, input, reason, source, urgency });
+      yield* extractData(stream);
+    }
+    async* queued(snoozed) {
+      const stream = this.rpc.call("tickets.queued", { snoozed });
+      yield* extractData(stream);
+    }
     async* readySet(after, epic, filter, limit, summary, tz) {
       const stream = this.rpc.call("tickets.ready_set", { after, epic, filter, limit, summary, tz });
       yield* extractData(stream);
@@ -695,6 +705,10 @@
       const stream = this.rpc.call("tickets.set_status", { id, message, restore_children: restoreChildren, source, status });
       yield* extractData(stream);
     }
+    async* snooze(id, minutes, source) {
+      const stream = this.rpc.call("tickets.snooze", { id, minutes, source });
+      yield* extractData(stream);
+    }
     async* tree(filter, after, epic, keep, limit, matchesOnly, parent, tz) {
       const stream = this.rpc.call("tickets.tree", { after, epic, filter, keep, limit, matches_only: matchesOnly, parent, tz });
       yield* extractData(stream);
@@ -705,6 +719,10 @@
     }
     async* unlinkCommits(commits, id) {
       const stream = this.rpc.call("tickets.unlink_commits", { commits, id });
+      yield* extractData(stream);
+    }
+    async* unqueue(id, source) {
+      const stream = this.rpc.call("tickets.unqueue", { id, source });
       yield* extractData(stream);
     }
     async* update(id, block, body, kind, message, parent, severity, source, status, title, unblock) {

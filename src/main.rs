@@ -4,7 +4,7 @@ use menger::login::{LoginButton, Provider};
 use menger::wiring::{LoginOptions, Wiring};
 use menger_tickets_api::access::Access;
 use menger::{build_rpc_login, default_db_path, local, shell, MengerAccess};
-use plexus_transport::{RestHttpConfig, RouteFn, TransportServer};
+use plexus_transport::{ConnectionQuotas, RestHttpConfig, RouteFn, TransportServer};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -187,6 +187,14 @@ struct Args {
     #[arg(long = "allowed-origin", env = "MENGER_ALLOWED_ORIGINS", value_name = "ORIGIN", value_delimiter = ';')]
     allowed_origin: Vec<String>,
 
+    /// ACCESS-25: another `Host` every listener (WebSocket, shell, REST)
+    /// answers to (repeatable; `host:port`, or `host` for a default port).
+    /// Always answered: `127.0.0.1:<its port>`, `localhost:<its port>` and
+    /// `--public-url`'s host; anything else is refused 421 before routing
+    /// (DNS rebinding). In the env var, separated by `;`.
+    #[arg(long = "allowed-host", env = "MENGER_ALLOWED_HOSTS", value_name = "HOST", value_delimiter = ';')]
+    allowed_host: Vec<String>,
+
     /// IDENTITY-21: a principal who is admin on every shortcode from the
     /// operator (repeatable; `idp:<uuid>`, `oidc:<provider>/<sub>`,
     /// `nostr:<hex>`) — how the first admin exists. In the env var,
@@ -243,6 +251,46 @@ struct Args {
     /// IDENTITY-19: how long a sign-in lasts.
     #[arg(long, env = "MENGER_SESSION_HOURS", default_value = "12", value_name = "HOURS")]
     session_hours: i64,
+
+    /// ACCESS-29: a browser's sign-in ends after this long unused — no
+    /// socket open on it and no page loaded with it — as well as at its
+    /// --session-hours. 0: only at its expiry. A minted token (an agent's)
+    /// keeps only its expiry.
+    #[arg(long, env = "MENGER_SESSION_IDLE_MINUTES", default_value_t = menger::sessions::IDLE_SECS_DEFAULT / 60, value_name = "MINUTES")]
+    session_idle_minutes: i64,
+
+    /// ACCESS-29: the calls one WebSocket connection may have open at once
+    /// (each call — a `watch` for as long as it runs — is a subscription);
+    /// past it a call is answered `error_kind: too_many_calls`.
+    #[arg(long, env = "MENGER_MAX_CALLS_PER_CONNECTION", default_value_t = menger::calls::CALLS_PER_CONNECTION, value_name = "N")]
+    max_calls_per_connection: usize,
+
+    /// ACCESS-29: a WebSocket connection with no call open for this long is
+    /// closed. 0: never.
+    #[arg(long, env = "MENGER_IDLE_TIMEOUT_SECS", default_value_t = menger::calls::IDLE_SECS, value_name = "SECS")]
+    idle_timeout_secs: u64,
+
+    /// ACCESS-29 (AUTH-12's quotas): WebSocket connections open in all.
+    #[arg(long, env = "MENGER_MAX_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_connections, value_name = "N")]
+    max_connections: u32,
+
+    /// ACCESS-29: connections from one IP address (the peer's: behind a
+    /// proxy, the proxy's).
+    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_IP", default_value_t = ConnectionQuotas::default().max_per_ip, value_name = "N")]
+    max_connections_per_ip: u32,
+
+    /// ACCESS-29: connections one signed-in principal holds.
+    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_PRINCIPAL", default_value_t = ConnectionQuotas::default().max_per_principal, value_name = "N")]
+    max_connections_per_principal: u32,
+
+    /// ACCESS-29: connections that prove no one, in all — held below
+    /// --max-connections, so they never lock a signed-in caller out.
+    #[arg(long, env = "MENGER_MAX_ANONYMOUS_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_anonymous, value_name = "N")]
+    max_anonymous_connections: u32,
+
+    /// ACCESS-29: anonymous connections from one IP address.
+    #[arg(long, env = "MENGER_MAX_ANONYMOUS_CONNECTIONS_PER_IP", default_value_t = ConnectionQuotas::default().max_anonymous_per_ip, value_name = "N")]
+    max_anonymous_connections_per_ip: u32,
 }
 
 #[tokio::main]
@@ -284,6 +332,7 @@ async fn main() -> anyhow::Result<()> {
         public_url: args.public_url.clone(),
         allowed_origins: args.allowed_origin.clone(),
         session_ttl_secs: args.session_hours * 3600,
+        session_idle_secs: args.session_idle_minutes * 60,
         require: args.require_login,
         page: !args.no_shell && !args.stdio,
         title: shell::tab_title(args.env.as_deref()),
@@ -340,7 +389,13 @@ async fn main() -> anyhow::Result<()> {
 
     // DIST-3: the wiring shared with `menger::local` (the library's
     // no-login server) lives there; the flags' variations stay here.
-    let mut builder = TransportServer::builder(hub.clone(), local::rpc_module);
+    // ACCESS-29: `menger.call` held to the calls a connection may have open,
+    // and a connection idle with none closed (menger::calls).
+    let limits = menger::calls::CallLimits {
+        per_connection: args.max_calls_per_connection,
+        idle: (args.idle_timeout_secs > 0).then(|| std::time::Duration::from_secs(args.idle_timeout_secs)),
+    };
+    let mut builder = TransportServer::builder(hub.clone(), move |hub| menger::calls::rpc_module(hub, limits));
     if args.stdio {
         builder = builder.with_stdio();
         tracing::info!("Starting stdio transport");
@@ -348,7 +403,18 @@ async fn main() -> anyhow::Result<()> {
             tracing::warn!("--auth-provider is ignored over stdio: there is no upgrade to carry a credential");
         }
     } else {
-        builder = builder.with_websocket(args.port);
+        // ACCESS-25: each listener answers only its own names.
+        let hosts = |port| local::listener_hosts(port, args.public_url.as_deref(), &args.allowed_host);
+        builder = builder
+            .with_websocket(args.port)
+            .with_connection_quotas(ConnectionQuotas {
+                max_connections: args.max_connections,
+                max_per_ip: args.max_connections_per_ip,
+                max_per_principal: args.max_connections_per_principal,
+                max_anonymous: args.max_anonymous_connections,
+                max_anonymous_per_ip: args.max_anonymous_connections_per_ip,
+            })
+            .with_allowed_hosts(hosts(args.port));
         tracing::info!("WebSocket: ws://127.0.0.1:{}", args.port);
         // IDENTITY-29: only menger's own pages may open the socket from a
         // browser, login or not; synapse sends no Origin and is unaffected.
@@ -373,7 +439,8 @@ async fn main() -> anyhow::Result<()> {
                 .with_rest_http_config(
                     RestHttpConfig::new(args.rest_port)
                         .with_server_name("menger".into())
-                        .with_server_version(env!("CARGO_PKG_VERSION").into()),
+                        .with_server_version(env!("CARGO_PKG_VERSION").into())
+                        .with_allowed_hosts(hosts(args.rest_port)),
                 )
                 .with_flat_schemas(hub.list_plugin_schemas()) // registers /rest/tickets/*
                 .with_route_fn(route_fn); // dispatches via hub.route()
@@ -389,6 +456,7 @@ async fn main() -> anyhow::Result<()> {
                 app: args.app_dist.map(shell::AppSource::Dir).unwrap_or_else(shell::preferred_app),
                 env: args.env.clone(),
                 login: wired.login.clone(),
+                allowed_hosts: hosts(args.shell_port),
             };
             tokio::spawn(async move {
                 if let Err(e) = shell::serve(cfg).await {

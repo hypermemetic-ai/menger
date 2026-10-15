@@ -205,7 +205,7 @@ pub(super) fn holds_by_rule(pred: &crate::filter::History, own: &[crate::types::
             Event::Entered(s) => t.field == TransitionField::Status && t.to == s.as_str(),
             Event::Left(s) => t.field == TransitionField::Status && t.from.as_deref() == Some(s.as_str()),
             Event::Changed => true,
-            Event::Created | Event::Touched | Event::Held(_) | Event::Deployed(_) => false,
+            Event::Created | Event::Touched | Event::Held(_) | Event::Deployed(_) | Event::Queued(_) => false,
         };
         let when = lo.is_none_or(|l| t.at_unix >= l) && hi.is_none_or(|h| t.at_unix < h);
         let who = match &pred.by {
