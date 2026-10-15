@@ -5,11 +5,10 @@
 // leans its cells toward the cursor, (4) types the install line as it comes
 // into view, (5) reveals sections on view and develops pictures as they
 // arrive, (6) types the terminal, (7) offers the visitor's OS first in the
-// Download section, (8) adds copy buttons to commands, (9) plays the clip
-// while it is on screen. Shared by the landing page and guide/. It requests
-// nothing but the page's own media, and only as it nears the screen. No
-// inline style: every value it sets goes through the CSSOM (the CSP allows
-// no attribute).
+// Download section, (8) adds copy buttons to commands. Shared by the landing
+// page and guide/. It requests nothing but the page's own media. No inline
+// style: every value it sets goes through the CSSOM (the CSP allows no
+// attribute).
 (function () {
   "use strict";
   var root = document.documentElement;
@@ -232,24 +231,6 @@
     });
   }
 
-  // (9) the clip ---------------------------------------------------------------
-  // It has controls and no poster in the HTML (a poster is fetched at once,
-  // wherever the video is): the poster is set as it nears the screen, and
-  // with motion allowed it plays, muted and looping, while on screen —
-  // without controls. Under reduced motion it keeps its controls and waits.
-  var clips = Array.prototype.slice.call(document.querySelectorAll("video[data-auto]"));
-  function poster(v) { var p = v.getAttribute("data-poster"); if (p && !v.getAttribute("poster")) v.setAttribute("poster", p); }
-  function play(v) { var p = v.play(); if (p && p.catch) p.catch(function () { v.controls = true; }); }
-  clips.forEach(function (v) {
-    near(v, function (on) { if (on) poster(v); }, "600px 0px");
-    if (reduce.matches) return;
-    v.controls = false;
-    near(v, function (on) { v.inView = on; if (on && !document.hidden) play(v); else v.pause(); }, "0px 0px -15% 0px");
-  });
-  // a hidden tab plays nothing; back in view, what is on screen resumes
-  document.addEventListener("visibilitychange", function () {
-    if (document.hidden) { clips.forEach(function (v) { v.pause(); }); return; }
-    if (reduce.matches) return;
-    clips.forEach(function (v) { if (v.inView) play(v); });
-  });
+  // The clip is an animated image (DESIGN-46): it plays by itself and stops
+  // under reduced motion through its <picture>; nothing here touches it.
 })();

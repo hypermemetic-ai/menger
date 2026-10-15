@@ -23,7 +23,8 @@
 #
 # Output: landing/media/ — stills light and dark, AVIF + WebP at 1200 px (the
 # hero's AVIF at 2400 too), the nav crop at 720; clips as MP4 (H.264) + WebM
-# (VP9) with a WebP poster. The raw captures stay in $WORK/raw.
+# (VP9) with a WebP poster, and as an animated WebP (DESIGN-46: the page's
+# <img>, which loads like a GIF). The raw captures stay in $WORK/raw.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -264,6 +265,11 @@ encode() {
       "$OUT/$base.webm"
     ffmpeg -loglevel error -y -sseof -0.1 -i "$clip" -frames:v 1 -update 1 "$WORK/tmp.png"
     cwebp -quiet -q 72 -m 6 "$WORK/tmp.png" -o "$OUT/$base.poster.webp"
+    # DESIGN-46: the clip as an animated image too — an <img> that loads like
+    # a GIF (no player, no poster, playing as it appears) at a fraction of a
+    # GIF's bytes: 12 fps, at most 1000 px wide, lossy WebP.
+    ffmpeg -loglevel error -y -i "$clip" -vf "fps=12,scale='min(1000,iw)':-2:flags=lanczos" -loop 0 \
+      -c:v libwebp_anim -lossless 0 -q:v 70 -compression_level 6 "$OUT/$base.anim.webp"
   done
   rm -f "$WORK/tmp.png"
   du -cb "$OUT"/* | tail -1 >&2
