@@ -96,15 +96,19 @@ struct Session {
 
 /// ACCESS-29: a table of entries that end, kept beside an index by when —
 /// an insert drops the ended from the index's front and, at its cap, the
-/// entry nearest its end: O(log n), never a scan of the table.
+/// entry nearest its end: O(log n), never a scan of the table. ACCESS-44:
+/// among entries ending in the same second the earliest inserted goes
+/// first — the index carries an insertion sequence, so which one makes
+/// room is never the luck of a random id.
 struct Ending<V> {
-    map: HashMap<String, (V, i64)>,
-    by_end: BTreeSet<(i64, String)>,
+    map: HashMap<String, (V, i64, u64)>,
+    by_end: BTreeSet<(i64, u64, String)>,
+    seq: u64,
 }
 
 impl<V> Ending<V> {
     fn new() -> Self {
-        Self { map: HashMap::new(), by_end: BTreeSet::new() }
+        Self { map: HashMap::new(), by_end: BTreeSet::new(), seq: 0 }
     }
 
     /// Keeps `v` under `key` until `ends`, `cap` entries at most.
@@ -112,34 +116,35 @@ impl<V> Ending<V> {
         self.purge(now());
         self.remove(&key);
         while self.map.len() >= cap.max(1) {
-            let Some((_, k)) = self.by_end.pop_first() else { break };
+            let Some((_, _, k)) = self.by_end.pop_first() else { break };
             self.map.remove(&k);
         }
-        self.by_end.insert((ends, key.clone()));
-        self.map.insert(key, (v, ends));
+        self.seq += 1;
+        self.by_end.insert((ends, self.seq, key.clone()));
+        self.map.insert(key, (v, ends, self.seq));
     }
 
     /// Drops every entry ended by `t`, from the front of the index.
     fn purge(&mut self, t: i64) {
-        while self.by_end.first().is_some_and(|(e, _)| *e <= t) {
-            let (_, k) = self.by_end.pop_first().expect("checked");
+        while self.by_end.first().is_some_and(|(e, _, _)| *e <= t) {
+            let (_, _, k) = self.by_end.pop_first().expect("checked");
             self.map.remove(&k);
         }
     }
 
     /// The entry under `key`, while it lasts.
     fn get_mut(&mut self, key: &str) -> Option<&mut V> {
-        self.map.get_mut(key).filter(|(_, e)| *e > now()).map(|(v, _)| v)
+        self.map.get_mut(key).filter(|(_, e, _)| *e > now()).map(|(v, _, _)| v)
     }
 
     fn get(&self, key: &str) -> Option<&V> {
-        self.map.get(key).filter(|(_, e)| *e > now()).map(|(v, _)| v)
+        self.map.get(key).filter(|(_, e, _)| *e > now()).map(|(v, _, _)| v)
     }
 
     /// Takes the entry under `key` out, ended or not: it and when it ends.
     fn remove(&mut self, key: &str) -> Option<(V, i64)> {
-        let (v, e) = self.map.remove(key)?;
-        self.by_end.remove(&(e, key.to_string()));
+        let (v, e, n) = self.map.remove(key)?;
+        self.by_end.remove(&(e, n, key.to_string()));
         Some((v, e))
     }
 
