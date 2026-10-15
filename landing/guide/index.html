@@ -322,8 +322,10 @@ synapse -P 4455 menger notes upgrade --id 1 --epic HOME</code></pre>
 <section class="step" id="self-host" aria-labelledby="self-host-h">
   <p class="num" aria-hidden="true">9</p>
   <h2 id="self-host-h">Run your own</h2>
-  <p>menger is one binary with the web app built in and a SQLite file as its
-    system of record. With Rust installed:</p>
+  <p>menger is one binary and a SQLite file as its system of record.
+    <code>--features embedded-app</code> builds the web app into that binary,
+    so the one file serves the app, the WebSocket and REST with nothing
+    beside it. With Rust installed:</p>
 <pre class="cmd"><code>cargo install menger --features embedded-app
 menger --db-path ~/menger/tickets.db
 # the app       http://127.0.0.1:4456/
