@@ -536,6 +536,9 @@ pub enum ThemesEvent {
     Regions { id: String, regions: Regions, levels: Levels },
     /// A slow `watch` lost `missed` changes: `list` again.
     Lagged { missed: u64 },
+    /// ACCESS-12 (`watch`): the watch ended — its caller, verified again
+    /// when the grants moved or its sign-in ended, was refused. Last.
+    WatchClosed { reason: crate::types::WatchEnd, message: String },
     /// In-band refusal, naming the problem; nothing was written.
     Error { message: String },
 }

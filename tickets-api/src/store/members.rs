@@ -58,6 +58,12 @@ impl Members {
         gone
     }
 
+    /// ACCESS-12: something else moved who holds what (a role's grants
+    /// edited) — the generation moves with it.
+    pub(super) fn moved(&mut self) {
+        self.generation += 1;
+    }
+
     /// ACCESS-9: the grants generation ([`Members`]).
     pub fn generation(&self) -> u64 {
         self.generation

@@ -4,7 +4,9 @@
 //! `activation.rs` as they were, so that file holds the methods alone.
 
 use super::*;
+use crate::access::{Closed, Followed, Following};
 use crate::filter::Filter;
+use crate::store::WatchSight;
 
 /// FILTER-4: a filtered watch's watcher — `filter` (already ANDed with the
 /// caller's reach) compiled, in `epic` alone when one is asked. MENGER-13:
@@ -63,248 +65,108 @@ pub(super) fn act_of(caller: &VerifiedUser, source: Option<CallerSource>, messag
 }
 
 /// IDENTITY-37: what an open `watch` relays, as the caller's grants stand
-/// now — the caller, its reach, the lens of it, and the components it has
-/// been shown. Asked again at every change ([`Sight::again`]): rebuilt only
-/// when the grants moved, which is a comparison of the caller's few grants.
-/// ACCESS-10: it holds the verified caller — every read it asks the store
-/// (the components it may see, whether an event's tickets are in reach) is
-/// asked as that caller.
+/// now — ACCESS-12: the caller followed ([`Following`]: verified again only
+/// when the grants generation moves, a sign-out or the expiry comes), its
+/// reach compiled once ([`WatchSight`]) and every change cut to it by the
+/// store ([`Store::heard`]), and the components it has been shown.
 pub(super) struct Sight {
-    caller: VerifiedUser,
-    /// AUTH-7: where the call's grant is held — what moves when the grants
-    /// do. ACCESS-9: compiled and compared, not formatted.
-    reach: Option<crate::access::ReachKey>,
-    /// `None`: everything.
-    lens: Option<Lens>,
-    /// The components this caller can see now (by name) — with a lens only.
+    following: Following,
+    sight: WatchSight,
+    /// The components this caller can see now (by name) — with a reach
+    /// that hides something only.
     shown: std::collections::HashSet<String>,
 }
 
+/// What a moved reach did: the reach the watch heard through until now,
+/// and the components it no longer sees.
+pub(super) struct Moved {
+    pub(super) was: WatchSight,
+    pub(super) gone: Vec<String>,
+}
+
 impl Sight {
-    /// `caller`'s sight; `Err` when it sees nothing.
-    pub(super) fn of(store: &Store, caller: VerifiedUser) -> Result<Self, String> {
-        let lens = view_lens(&caller)?;
-        let shown = match &lens {
-            None => Default::default(),
-            Some(_) => store.components(&caller).into_iter().map(|c| c.name).collect(),
-        };
-        Ok(Self { reach: caller.reach_key()?, caller, lens, shown })
+    /// The watch's caller, verified now; `Err` (in words) when it is
+    /// refused or sees nothing.
+    pub(super) fn open(store: &Arc<Store>, access: &Access, who: Option<&AuthContext>, reach: &Reach) -> Result<Self, String> {
+        let following = Following::open(access, store, who, reach)?;
+        let sight = store.watch_sight(following.user()).map_err(|e| e.to_string())?;
+        let shown = Self::shown(store, &following, &sight);
+        Ok(Self { following, sight, shown })
+    }
+
+    fn shown(store: &Store, following: &Following, sight: &WatchSight) -> std::collections::HashSet<String> {
+        match sight.all() {
+            true => Default::default(),
+            false => store.components(following.user()).into_iter().map(|c| c.name).collect(),
+        }
     }
 
     /// The caller, as it was last verified.
     pub(super) fn caller(&self) -> &VerifiedUser {
-        &self.caller
+        self.following.user()
     }
 
-    /// The caller admitted again: `Ok(None)` when its reach is as it was;
-    /// `Ok(Some(gone))` when it moved — the sight rebuilt (its caller the
-    /// one verified now), and the components it no longer sees; `Err` when
-    /// it is refused, or now sees nothing (the watch ends).
-    pub(super) fn again(&mut self, access: &Access, who: Option<&AuthContext>, reach: &Reach, store: &Store) -> Result<Option<Vec<String>>, String> {
-        // AUTH-7: the gate's live reach first — held nowhere any more, the
-        // watch ends.
-        let reach = reach.current().ok_or_else(|| "your access changed: you hold this nowhere any more".to_string())?;
-        let caller = access.verify_call(who, &reach)?;
-        let key = caller.reach_key().map_err(|why| format!("your access changed: {why}"))?;
-        if key == self.reach {
-            return Ok(None);
-        }
-        let now = Self::of(store, caller).map_err(|why| format!("your access changed: {why}"))?;
-        let gone: Vec<String> = match (&self.lens, &now.lens) {
-            (_, None) => Vec::new(),
-            (None, Some(_)) => store.components(&now.caller).into_iter().map(|c| c.name).filter(|n| !now.shown.contains(n)).collect(),
-            (Some(_), Some(_)) => {
-                let mut g: Vec<String> = self.shown.difference(&now.shown).cloned().collect();
-                g.sort();
-                g
+    /// The reach it hears through now.
+    pub(super) fn sight(&self) -> &WatchSight {
+        &self.sight
+    }
+
+    /// Until something that could change the caller moves (cancel-safe).
+    pub(super) async fn changed(&mut self) {
+        self.following.changed().await
+    }
+
+    /// The caller as it stands: `Ok(None)` when what it hears is as it was;
+    /// `Ok(Some(moved))` when its reach moved — the sight rebuilt, `moved`
+    /// the reach it had and the components it no longer sees; `Err` when it
+    /// is refused, or now sees nothing (the watch ends, saying why).
+    pub(super) fn again(&mut self, store: &Store) -> Result<Option<Moved>, Closed> {
+        match self.following.again()? {
+            Followed::Same => Ok(None),
+            Followed::Moved { was } => {
+                let sight = store.watch_sight(self.following.user()).map_err(Closed::revoked)?;
+                let shown = Self::shown(store, &self.following, &sight);
+                let mut gone: Vec<String> = match (self.sight.all(), sight.all()) {
+                    (_, true) => Vec::new(),
+                    (true, false) => store.components(&was).into_iter().map(|c| c.name).filter(|n| !shown.contains(n)).collect(),
+                    (false, false) => self.shown.difference(&shown).cloned().collect(),
+                };
+                gone.sort();
+                let was = std::mem::replace(&mut self.sight, sight);
+                self.shown = shown;
+                Ok(Some(Moved { was, gone }))
             }
-        };
-        *self = now;
-        Ok(Some(gone))
+        }
     }
 
-    /// A change as this caller may hear it, or nothing. A component's change
-    /// reaches it when it can view the component's owner (its references cut
-    /// to what it can view); one it could see and no longer can is said as
-    /// its removal.
-    pub(super) fn relay(&mut self, store: &Store, ev: TicketsEvent) -> Option<TicketsEvent> {
-        if self.lens.is_none() {
-            return Some(ev);
-        }
-        match ev {
-            TicketsEvent::ComponentChanged { component } => {
-                let name = component.name.clone();
-                match visible_components(store, &self.caller, vec![component]).pop() {
-                    Some(component) => {
-                        self.shown.insert(name);
-                        Some(TicketsEvent::ComponentChanged { component })
-                    }
-                    None => self.shown.remove(&name).then_some(TicketsEvent::ComponentRemoved { name }),
+    /// A change as this caller may hear it, as its one wire event, or
+    /// nothing — cut to the reach by the store ([`Store::heard`]: every
+    /// change classified, rows redacted). A component's change reaches it
+    /// when it can view the component's owner; one it had been shown and
+    /// can no longer see is said as its removal, one it never saw not at all.
+    pub(super) fn relay(&mut self, store: &Store, change: Change) -> Option<TicketsEvent> {
+        let change = store.heard(&self.sight, change)?;
+        if !self.sight.all() {
+            match &change {
+                Change::ComponentChanged { component } => {
+                    self.shown.insert(component.name.clone());
                 }
+                Change::ComponentRemoved { name } => {
+                    if !self.shown.remove(name) {
+                        return None;
+                    }
+                }
+                _ => {}
             }
-            TicketsEvent::ComponentRemoved { name } => self.shown.remove(&name).then_some(TicketsEvent::ComponentRemoved { name }),
-            ev => within(store, &self.caller, ev),
         }
+        wire_event(change)
     }
-}
-
-/// IDENTITY-21: a watched event as a restricted caller may hear it: itself
-/// when every ticket it names is within `reach`, the part of it that is
-/// (a placements change), or nothing. IDENTITY-37: every variant is named —
-/// a new one does not compile until it is placed — and those that name no
-/// ticket and no shortcode pass; a component's are [`Sight::relay`]'s, and
-/// here nothing.
-pub(super) fn within(store: &Store, caller: &VerifiedUser, ev: TicketsEvent) -> Option<TicketsEvent> {
-    let sees = |id: &str| sees_id(store, caller, id);
-    let id: Option<String> = match &ev {
-        TicketsEvent::Created { ticket }
-        | TicketsEvent::Ticket { ticket }
-        | TicketsEvent::StatusChanged { ticket, .. }
-        | TicketsEvent::KindChanged { ticket, .. }
-        | TicketsEvent::Amended { ticket, .. }
-        | TicketsEvent::CommitsLinked { ticket, .. }
-        | TicketsEvent::CommitsUnlinked { ticket, .. }
-        | TicketsEvent::LabelsChanged { ticket, .. }
-        | TicketsEvent::UnlocksChanged { ticket, .. }
-        | TicketsEvent::UnlocksRemoved { ticket, .. }
-        | TicketsEvent::BlockersChanged { ticket, .. }
-        | TicketsEvent::SeverityChanged { ticket, .. }
-        | TicketsEvent::Updated { ticket, .. }
-        | TicketsEvent::ParentChanged { ticket, .. }
-        | TicketsEvent::Blocker { ticket } => Some(ticket.id.to_string()),
-        TicketsEvent::Summary { summary } | TicketsEvent::Placed { summary, .. } | TicketsEvent::Node { summary, .. } => {
-            Some(summary.id.to_string())
-        }
-        TicketsEvent::ChildrenChanged { id, .. }
-        | TicketsEvent::ChildRemoved { id, .. }
-        | TicketsEvent::Entered { id, .. }
-        | TicketsEvent::Left { id, .. } => Some(id.clone()),
-        TicketsEvent::Group { group } | TicketsEvent::GroupChanged { group } => {
-            if !sees(group.root.as_deref().unwrap_or_default()) {
-                return None;
-            }
-            // As `groups` answers it: a host out of reach is no host.
-            let mut group = group.clone();
-            if group.host.as_deref().is_some_and(|h| !sees(h)) {
-                group.host = None;
-            }
-            return Some(match ev {
-                TicketsEvent::Group { .. } => TicketsEvent::Group { group },
-                _ => TicketsEvent::GroupChanged { group },
-            });
-        }
-        TicketsEvent::InputChanged { input } | TicketsEvent::Input { input } => Some(input.ticket.to_string()),
-        // MENGER-13: a transition is its ticket's.
-        TicketsEvent::Transition { transition } => Some(transition.ticket.to_string()),
-        TicketsEvent::PlacementsChanged { changes } => {
-            let kept: Vec<_> = changes.iter().filter(|c| sees(&c.id)).cloned().collect();
-            return (!kept.is_empty()).then_some(TicketsEvent::PlacementsChanged { changes: kept });
-        }
-        // MENGER-31: a cycle, of the tickets on it the reach holds.
-        TicketsEvent::WaveCycle { ids } => {
-            let kept: Vec<String> = ids.iter().filter(|id| sees(id)).cloned().collect();
-            return (!kept.is_empty()).then_some(TicketsEvent::WaveCycle { ids: kept });
-        }
-        // ACT-2: a write over many tickets, of those the reach holds.
-        TicketsEvent::UpdatedMany { ids, changed, tickets, unchanged } => {
-            let kept: Vec<String> = ids.iter().filter(|id| sees(id)).cloned().collect();
-            let tickets: Vec<crate::types::Ticket> = tickets.iter().filter(|t| sees(&t.id)).cloned().collect();
-            let unchanged: Vec<String> = unchanged.iter().filter(|id| sees(id)).cloned().collect();
-            return (!kept.is_empty() || !tickets.is_empty())
-                .then(|| TicketsEvent::UpdatedMany { ids: kept, changed: changed.clone(), tickets, unchanged });
-        }
-        // ACT-5: a deleted ticket is no member of any reach any more — its
-        // shortcode's is the reach's word; a ticket brought back, its own.
-        TicketsEvent::Deleted { ids, tombstones } => {
-            // ORG-3: a deleted ticket's shortcode is the one its key was
-            // minted in (a deleted ticket never moves).
-            let held: Vec<crate::address::ShortcodeId> = store.counts(caller, &Lens::all()).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect();
-            let seen = |id: &str| id.rsplit_once('-').is_some_and(|(e, _)| held.iter().any(|h| h.as_str() == e));
-            let ids: Vec<String> = ids.iter().filter(|id| seen(id)).cloned().collect();
-            let tombstones = tombstones.iter().filter(|t| seen(&t.id)).cloned().collect();
-            return (!ids.is_empty()).then_some(TicketsEvent::Deleted { ids, tombstones });
-        }
-        TicketsEvent::Undeleted { ids, tickets } => {
-            let ids: Vec<String> = ids.iter().filter(|id| sees(id)).cloned().collect();
-            let tickets = tickets.iter().filter(|t| sees(&t.id)).cloned().collect();
-            return (!ids.is_empty()).then_some(TicketsEvent::Undeleted { ids, tickets });
-        }
-        // ACT-6: a move, of the tickets the reach holds where they are now.
-        TicketsEvent::Reshortcoded { moves, tickets } => {
-            let moves: Vec<crate::types::ShortcodeMove> = moves.iter().filter(|m| sees(&m.to)).cloned().collect();
-            let tickets = tickets.iter().filter(|t| sees(&t.id)).cloned().collect();
-            return (!moves.is_empty()).then_some(TicketsEvent::Reshortcoded { moves, tickets });
-        }
-        TicketsEvent::Hit { summary, .. } => Some(summary.id.to_string()),
-        // MENGER-39: a queue write, a queue row and a history line are their
-        // ticket's.
-        TicketsEvent::Queued { entry, .. } | TicketsEvent::Snoozed { entry, .. } | TicketsEvent::QueueRow { entry, .. } => Some(entry.ticket.clone()),
-        TicketsEvent::Unqueued { id, .. } | TicketsEvent::NotQueued { id } | TicketsEvent::ChangesRequested { id, .. } => Some(id.clone()),
-        // APP-24: a wait's events are its ticket's.
-        TicketsEvent::Waiting { ticket, .. } | TicketsEvent::Replied { ticket, .. } | TicketsEvent::TimedOut { ticket } => Some(ticket.clone()),
-        TicketsEvent::QueueRecord { record } => Some(record.ticket.clone()),
-        TicketsEvent::DanglingBlocker { id } | TicketsEvent::Member { id, .. } | TicketsEvent::NotFound { id } => Some(id.clone()),
-        TicketsEvent::Extent { shortcode, .. } | TicketsEvent::Count { shortcode, .. } | TicketsEvent::Recount { shortcode, .. } => {
-            let seen = store.counts(caller, &Lens::all()).into_iter().any(|(e, n)| e == *shortcode && n > 0);
-            return seen.then_some(ev);
-        }
-        // Without the owner in hand, nothing (Sight::relay places them).
-        TicketsEvent::Component { .. } | TicketsEvent::ComponentChanged { .. } | TicketsEvent::ComponentRemoved { .. } => return None,
-        // Name no ticket and no shortcode: answers worked out under the reach.
-        TicketsEvent::Health { .. }
-        | TicketsEvent::Page { .. }
-        | TicketsEvent::Lagged { .. }
-        | TicketsEvent::Facet { .. }
-        | TicketsEvent::WaveCounts { .. }
-        | TicketsEvent::Error { .. }
-        // ORG-3: a refusal, its candidates the store's (ORG-4 gives the
-        // resolver the caller's reach).
-        | TicketsEvent::Ambiguous { .. }
-        | TicketsEvent::BodyTooLarge { .. }
-        | TicketsEvent::Searched { .. }
-        | TicketsEvent::HistoryEnd { .. }
-        | TicketsEvent::QueueEnd { .. } => None,
-    };
-    match id {
-        Some(id) if !sees(&id) => None,
-        _ => Some(ev),
-    }
-}
-
-/// IDENTITY-21: the lens a caller sees tickets through in this call —
-/// `under` where it holds the call's grant (AUTH-7) — `None`: all; `Err`:
-/// nothing. IDENTITY-37: a reach that does not compile is refused, never
-/// read as "all".
-pub(super) fn view_lens(caller: &VerifiedUser) -> Result<Option<Lens>, String> {
-    caller.reach_filter()?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
 }
 
 /// Whether `who` sees the ticket `id` — ACCESS-10: the store's answer,
 /// one lookup in its reach.
 pub(super) fn sees_id(store: &Store, who: &(impl crate::store::Reader + ?Sized), id: &str) -> bool {
     store.member(who, &[id.to_string()], &Lens::all()).first().copied().unwrap_or(false)
-}
-
-/// IDENTITY-37: of `components`, those `caller` may see — each whose owner
-/// it sees (an orphan has none: it is no one's to show) — with only the
-/// references it may see: the tickets it sees, and the components it is
-/// shown ([`Store::components`], ACCESS-10).
-pub(super) fn visible_components(store: &Store, caller: &VerifiedUser, components: Vec<crate::types::Component>) -> Vec<crate::types::Component> {
-    let shown: std::collections::HashSet<String> = store.components(caller).into_iter().map(|c| c.name).collect();
-    let mut ids: Vec<String> = components.iter().filter_map(|c| c.owner.clone()).collect();
-    ids.extend(components.iter().flat_map(|c| c.references.iter()).filter(|r| !shown.contains(*r)).cloned());
-    ids.sort();
-    ids.dedup();
-    let admitted: std::collections::HashSet<String> =
-        ids.iter().zip(store.member(caller, &ids, &Lens::all())).filter(|(_, ok)| *ok).map(|(id, _)| id.clone()).collect();
-    components
-        .into_iter()
-        .filter(|c| c.owner.as_ref().is_some_and(|o| admitted.contains(o)))
-        .map(|mut c| {
-            c.references.retain(|r| shown.contains(r) || admitted.contains(r));
-            c
-        })
-        .collect()
 }
 
 /// MENGER-15: a body past the cap, as the typed refusal (`body_too_large`)

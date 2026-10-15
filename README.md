@@ -1909,6 +1909,47 @@ visible and `child_count` needs no redaction. A reach no read can narrow to
 for random trees, grants and reads, nothing answered or named lies outside
 the reach, and the tree reaches everything in it.
 
+### Watches through a reach (ACCESS-12)
+
+An open watch — `tickets.watch` (plain, filtered or `membership`),
+`comments.watch`, `themes.watch`, `deployments.watch`, `await_reply` —
+holds its caller: the `VerifiedUser`, the `AuthContext` it was verified
+from and the gate's reach it was admitted with
+(`tickets-api/src/access/following.rs`). It is verified again when, and
+only when, something that could change the answer moves: the **grants
+generation** (a grant, a revoke, a team or an organization changed, a
+role's grants edited — `Store::grants_moved` wakes the watch at once, so a
+quiet watch is not waiting for the next write), a **sign-out**, or the
+sign-in's **expiry**; at each change it hears, and every 15 s of a quiet
+watch whose identity is a session, its sign-in's liveness is asked (a
+lookup, no store read — a sign-out by the shell's `/logout` or the login
+backend's own path, which do not pass through the access layer, is found
+so). Then:
+
+- **refused** — signed out, expired, its grant held nowhere, a reach that
+  reaches nothing — the stream ends with one `watch_closed { reason,
+  message }` (`reason`: `signed_out`, `expired`, `revoked`, `refused`) and
+  nothing after it;
+- **a reach that moved** — the watch hears through the new one from that
+  moment (a filtered watch's filter compiled again within it), and says what
+  entered and left what it hears, as a filtered watch says a write's moves:
+  `entered` / `left` per ticket, past 256 one `recount` per shortcode (a
+  plain watch too); the components it no longer sees as
+  `component_removed`.
+
+**Every change is cut to the reach as a read is** (`store/watching.rs`,
+`Store::heard`): one `match` over `Change` with no `_` arm classifies it —
+about one ticket, several, a shortcode (its group, by its root), a
+component (its owner), or the watch's own cell moves — so a new change does
+not compile until it is placed. A change about a hidden ticket is not
+heard; one about several is cut to those in reach; every row it carries is
+redacted with the `hidden_*` counts, and a hidden id beside it is dropped
+(a list: `blocked_by`'s `added`, a tombstone's `reparented`) or blanked (one
+name: `unlocks_changed`'s `added`, `child_removed`'s `removed`, `""`). The
+reach is compiled once a watch (and again when it moves) — not parsed per
+change; `store/tests_watching.rs` measures many watchers hearing many
+changes.
+
 ### Addresses and namespaces (ORG-3)
 
 A shortcode is unique only within its **namespace** — its organization and

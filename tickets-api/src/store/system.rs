@@ -67,6 +67,18 @@ impl Store {
     /// `team` or out of it, in the cache alone (nothing is written).
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_team_for_tests(&self, principal: &str, team: crate::vocab::TeamName, member: bool) {
-        self.tickets.write().expect("store lock poisoned").members.set_team(principal, team, member);
+        let generation = {
+            let mut cache = self.tickets.write().expect("store lock poisoned");
+            cache.members.set_team(principal, team, member);
+            cache.members.generation()
+        };
+        self.tx.grants_at(generation);
+    }
+
+    /// ACCESS-12: what wakes an open watch when the grants generation moves
+    /// — a receiver of the store's own; the watch reads the generation
+    /// itself ([`Store::grants_generation`]).
+    pub fn grants_moved(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.tx.grants.subscribe()
     }
 }

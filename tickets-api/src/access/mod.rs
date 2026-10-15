@@ -56,6 +56,9 @@ use crate::store::{Lens, Store};
 
 pub mod reach;
 pub mod user;
+/// ACCESS-12: an open watch's caller, followed as the grants move.
+pub mod following;
+pub use following::{Closed, Followed, Following};
 pub use crate::store::System;
 pub use reach::{Held, Reach, ReachKey};
 pub use user::{Admin, AdminOf, Editor, Hidden, Permit, ReadingAs, Refusal, RoleMark, VerifiedUser, Viewer};
@@ -367,6 +370,9 @@ pub struct Access {
     minter: Option<Arc<dyn SessionMint>>,
     book: Arc<Book>,
     gate: Gate,
+    /// ACCESS-12: moved by every sign-out through this access layer — what
+    /// wakes an open watch to verify its caller again.
+    ended: Arc<tokio::sync::watch::Sender<u64>>,
 }
 
 impl Default for Access {
@@ -379,7 +385,7 @@ impl Access {
     fn build(login: bool, require_login: bool, sessions: Option<Arc<dyn SessionCheck>>, admins: Vec<String>) -> Self {
         let book = Arc::new(Book::new(admins));
         let gate = Gate::new(book.clone(), book.clone(), book.clone());
-        Self { login, require_login, sessions, minter: None, book, gate }
+        Self { login, require_login, sessions, minter: None, book, gate, ended: Arc::new(tokio::sync::watch::channel(0).0) }
     }
 
     /// No login: every call is admitted and reaches everything; the hub
@@ -742,6 +748,8 @@ impl Access {
         match auth.filter(|c| c.is_authenticated()).and_then(|c| c.get_metadata_string(self.session_key()?)) {
             Some(key) => {
                 minter.end_key(&key);
+                // ACCESS-12: the open watches look again.
+                self.ended.send_modify(|n| *n += 1);
                 Ok(())
             }
             None => Err("this connection holds no session to log out (session.login mints one)".into()),

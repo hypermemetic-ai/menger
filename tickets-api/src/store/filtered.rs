@@ -803,6 +803,11 @@ impl Store {
 }
 
 impl Watcher {
+    /// ACCESS-12: the lens it admits by — its filter within its reach.
+    pub fn lens(&self) -> &Lens {
+        &self.lens
+    }
+
     /// MENGER-13: whether this watch's filter moves with the clock — the
     /// stream reads it again ([`Watcher::tick`]) on a timer.
     pub fn relative(&self) -> bool {

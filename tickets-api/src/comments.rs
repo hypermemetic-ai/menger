@@ -198,6 +198,9 @@ pub enum CommentsEvent {
     /// `watch`: this subscriber fell behind and `missed` changes were
     /// dropped — `list` again to catch up.
     Lagged { missed: u64 },
+    /// ACCESS-12 (`watch`): the watch ended — its caller, verified again
+    /// when the grants moved or its sign-in ended, was refused. Last.
+    WatchClosed { reason: crate::types::WatchEnd, message: String },
     /// A refusal, naming the problem; nothing was kept or changed.
     Error { message: String },
 }
@@ -220,7 +223,7 @@ impl CommentsEvent {
             CommentsEvent::Added { comment } | CommentsEvent::Resolved { comment } | CommentsEvent::Reopened { comment } => {
                 Some(comment)
             }
-            CommentsEvent::Page { .. } | CommentsEvent::Lagged { .. } | CommentsEvent::Error { .. } => None,
+            CommentsEvent::Page { .. } | CommentsEvent::Lagged { .. } | CommentsEvent::WatchClosed { .. } | CommentsEvent::Error { .. } => None,
         }
     }
 }

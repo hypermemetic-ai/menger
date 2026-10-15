@@ -369,6 +369,12 @@ impl Registry {
             .collect()
     }
 
+    /// ACCESS-12: whether `name` is a component (`None`: it names none —
+    /// a ticket, then), and the ticket that owns it if one does.
+    pub(super) fn owner_of(&self, name: &str) -> Option<Option<&str>> {
+        self.names.get(name).filter(|e| e.is_component()).map(|e| e.owner.as_deref())
+    }
+
     /// The ticket that owns `name`, if one does.
     fn owner(&self, name: &str) -> Option<&str> {
         self.names.get(name).and_then(|e| e.owner.as_deref())

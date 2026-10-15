@@ -327,7 +327,8 @@ impl Comments {
     /// ticket's write does is here — that is `tickets.watch`. IDENTITY-37:
     /// what it relays follows the caller's grants as they stand at each
     /// change, and a caller who can see nothing any more is told so in band
-    /// and the stream ends.
+    /// and the stream ends — ACCESS-12: with one `watch_closed { reason,
+    /// message }`, at once when a revoke or sign-out ends it.
     #[plexus_macros::method(
         group = "read",
         streaming,
@@ -335,55 +336,39 @@ impl Comments {
     )]
     pub async fn watch(&self, auth: Option<&AuthContext>, reach: Reach) -> impl Stream<Item = CommentsEvent> + Send + 'static {
         let mut rx = self.store.subscribe_comments();
-        // IDENTITY-19: admitted now and at every change, as tickets.watch.
-        let access = self.access.clone();
-        let who = auth.cloned();
+        // ACCESS-12: the caller followed — verified again when the grants
+        // generation moves, a sign-out or the expiry comes, and only then.
+        let opened = crate::access::Following::open(&self.access, &self.store, auth, &reach).and_then(|f| {
+            f.user().read_filter()?;
+            Ok(f)
+        });
         let store = self.store.clone();
         stream! {
-            let mut held = match access.verify_call(who.as_ref(), &reach).and_then(|c| {
-                c.read_filter()?;
-                c.reach_key()
-            }) {
-                Ok(r) => r,
+            let mut following = match opened {
+                Ok(f) => f,
                 Err(message) => {
                     yield CommentsEvent::Error { message };
                     return;
                 }
             };
             loop {
-                let next = rx.recv().await;
-                // AUTH-7: the gate's live reach — held nowhere any more, the
-                // watch ends.
-                let Some(now) = reach.current() else {
-                    yield CommentsEvent::Error { message: "your access changed: you hold this nowhere any more".into() };
+                let next = tokio::select! {
+                    biased;
+                    () = following.changed() => None,
+                    r = rx.recv() => Some(r),
+                };
+                // The caller as it stands, before anything is relayed:
+                // refused, the watch ends saying why.
+                if let Err(closed) = following.again() {
+                    yield CommentsEvent::WatchClosed { reason: closed.reason, message: closed.message };
                     return;
-                };
-                let caller = match access.verify_call(who.as_ref(), &now) {
-                    Ok(c) => c,
-                    Err(message) => {
-                        yield CommentsEvent::Error { message };
-                        return;
-                    }
-                };
-                // IDENTITY-37: the reach as the grants stand now.
-                let key = match caller.reach_key() {
-                    Ok(k) => k,
-                    Err(why) => {
-                        yield CommentsEvent::Error { message: format!("your access changed: {why}") };
-                        return;
-                    }
-                };
-                if key != held {
-                    if let Err(why) = caller.read_filter() {
-                        yield CommentsEvent::Error { message: format!("your access changed: {why}") };
-                        return;
-                    }
-                    held = key;
                 }
+                let Some(next) = next else { continue };
                 match next {
-                    // IDENTITY-21: only comments the watcher can see.
+                    // IDENTITY-21: only comments the watcher can see, as
+                    // its reach stands now.
                     Ok(CommentChange::Added(c) | CommentChange::Resolved(c) | CommentChange::Reopened(c))
-                        if !sees(&store, &caller, &c) => {}
+                        if !sees(&store, following.user(), &c) => {}
                     Ok(CommentChange::Added(comment)) => yield CommentsEvent::Added { comment },
                     Ok(CommentChange::Resolved(comment)) => yield CommentsEvent::Resolved { comment },
                     Ok(CommentChange::Reopened(comment)) => yield CommentsEvent::Reopened { comment },

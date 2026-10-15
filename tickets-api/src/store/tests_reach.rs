@@ -30,7 +30,7 @@ fn single(id: &str) -> VerifiedUser {
     VerifiedUser::for_tests(&Access::for_tests(), READER.parse().unwrap(), vec![(Held::Ticket(TicketId::new(id)), Role::Viewer)])
 }
 
-fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str], body: &str) -> NewTicket {
+pub(super) fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str], body: &str) -> NewTicket {
     NewTicket {
         epic: epic.into(),
         title: format!("{epic} {}", kind.as_str()),
@@ -53,7 +53,7 @@ fn new(epic: &str, kind: Kind, parent: Option<&str>, blocked_by: &[&str], body: 
 ///                   └─ OPEN-3 ⟵ OPEN-2, SECRET-2
 ///                         └─ OPEN-4 (<m-secret>)
 /// ```
-async fn tracker() -> Store {
+pub(super) async fn tracker() -> Store {
     let s = Store::new();
     s.create(new("SECRET", Kind::Scope, None, &[], "")).await.unwrap();
     s.create(new("SECRET", Kind::Build, Some("SECRET-1"), &[], "classified\n\n```component m-secret\n<template>s</template>\n```\n")).await.unwrap();
