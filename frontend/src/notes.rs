@@ -352,7 +352,7 @@ pub(crate) fn BodyEditor(
             let answer = match action {
                 Save::Amend { id: tid, body: b } => client.amend_all(tid, None, Some(b)).await,
                 Save::Create { create: c, body: b } => {
-                    client.create_all(c.epic, c.title, Some("doc".into()), None, None, Some(b), None, Some(c.path)).await
+                    client.create_all(c.epic, c.title, Some("doc".into()), None, None, Some(b), None, Some(c.path), None).await
                 }
             };
             let answer = answer.map_err(|e| session::describe(&e)).and_then(ticket_of);

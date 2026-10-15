@@ -37,7 +37,7 @@ pub(super) fn blockers_stream(store: Arc<Store>, admitted: Result<Caller, String
                 }
             }
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-            Err(e) => yield refusal(e),
+            Err(e) => yield veiled(&caller, e),
         }
     }
 }
@@ -82,7 +82,7 @@ pub(super) fn history_stream(store: Arc<Store>, admitted: Result<Caller, String>
                 yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable, status_since_unix, status_since_exact, deletions: h.deletions };
             }
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
-            Err(e) => yield refusal(e),
+            Err(e) => yield veiled(&caller, e),
         }
     }
 }

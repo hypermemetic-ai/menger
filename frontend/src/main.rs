@@ -292,6 +292,8 @@ mod queue;
 mod mermaid;
 mod motion;
 mod needs;
+// ORG-4: the organizations held, and the header's switcher.
+mod orgs;
 mod registry;
 mod rowclick;
 mod saved;
@@ -2294,6 +2296,9 @@ fn App() -> impl IntoView {
                     // DESIGN-38: the wordmark — the carpet in the lifecycle's
                     // colours, then the name in the display face.
                     <h1><a href="#/" class="wordmark"><carpet::Carpet class="mark" /><span>"menger"</span></a></h1>
+                    // ORG-4: the organization every page reads within — when
+                    // the reader holds more than one.
+                    <orgs::OrgSwitcher />
                     // DESIGN-38: the board and a ticket, the bar's first word.
                     <a
                         class="hlink"

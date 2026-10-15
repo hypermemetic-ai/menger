@@ -568,7 +568,7 @@ async fn amend(client: &session::Client, id: &str, title: Option<String>, body: 
 /// `create { epic, title, kind: doc, body, parent, path }`.
 async fn create_doc(client: &session::Client, title: &str, body: String, parent: &str, path: Option<String>) -> Result<Ticket, String> {
     let events = client
-        .create_all(EPIC.into(), title.into(), Some("doc".into()), None, None, Some(body), Some(parent.into()), path)
+        .create_all(EPIC.into(), title.into(), Some("doc".into()), None, None, Some(body), Some(parent.into()), path, None)
         .await
         .map_err(|e| session::describe(&e))?;
     ticket_of(events).map_err(|m| format!("create: {m}"))

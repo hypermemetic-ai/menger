@@ -112,16 +112,30 @@ pub trait SessionMint: Send + Sync {
 }
 
 /// A ceiling's scope: `*`, a shortcode, or one ticket (`SHORTCODE-<n>`),
-/// in upper case.
+/// in upper case. ORG-4: or an organization (`acme:`), or a shortcode in
+/// one (`acme:MENGER`) — [`crate::members::scope_of`]'s spelling.
 pub fn ceiling_scope_of(text: &str) -> Result<String, String> {
     let t = text.trim();
     let ticket = t.split_once('-').filter(|(code, n)| {
-        crate::members::scope_of(code).is_ok_and(|c| c != EVERYWHERE) && !n.is_empty() && n.len() <= 12 && n.bytes().all(|b| b.is_ascii_digit())
+        !code.contains(':') && crate::members::scope_of(code).is_ok_and(|c| c != EVERYWHERE) && !n.is_empty() && n.len() <= 12 && n.bytes().all(|b| b.is_ascii_digit())
     });
     match ticket {
         Some((code, n)) => Ok(format!("{}-{n}", code.to_ascii_uppercase())),
-        None => crate::members::scope_of(t)
-            .map_err(|_| format!("`{t}` is not a scope: a shortcode (e.g. IDENTITY), a ticket (e.g. IDENTITY-12) or `*`")),
+        None => crate::members::scope_of(t).map_err(|_| {
+            format!("`{t}` is not a scope: an organization (acme:), a shortcode (e.g. IDENTITY, acme:MENGER), a ticket (e.g. IDENTITY-12) or `*`")
+        }),
+    }
+}
+
+/// ORG-4: the `under` name a held scope reads as — `*` none (everything);
+/// an organization, `acme:`, itself (the filter's `under acme:`: every
+/// ticket in it); a shortcode in one, `acme:MENGER.12`, its identity; a
+/// ticket (a ceiling's) or a scope from before ORG-4, itself.
+fn under_name(scope: &str) -> String {
+    match scope.trim().split_once(':') {
+        Some((org, "")) => format!("{}:", org.to_ascii_lowercase()),
+        Some((_, id)) => id.to_ascii_uppercase(),
+        None => scope.trim().to_ascii_uppercase(),
     }
 }
 
@@ -290,7 +304,8 @@ impl MembershipStore for Book {
         let role: Role = m.role.as_str().parse().map_err(|_| {
             GateStoreError::new(format!("menger keeps viewer, editor, admin and deployer memberships; {} is not one of them", m.role))
         })?;
-        let scope = crate::members::scope_of(m.scope.as_str()).map_err(GateStoreError::new)?;
+        // ORG-4: kept as the store keeps a scope — the org, the identity.
+        let scope = store.scope_named(m.scope.as_str()).map_err(|e| GateStoreError::new(e.to_string()))?;
         let principal = m.principal.to_string();
         let g = Grant { principal: principal.clone(), scope, role, granted_by: AUTH_GRANT.into(), at: now() };
         store.grant(g).await.map_err(|e| GateStoreError::new(e.to_string()))?;
@@ -300,7 +315,7 @@ impl MembershipStore for Book {
 
     async fn revoke(&self, principal: &Principal, role: Option<&RoleName>, scope: &ScopeRef) -> Result<Vec<RoleName>, GateStoreError> {
         let store = self.store().ok_or_else(|| GateStoreError::new("no store is attached"))?;
-        let scope = crate::members::scope_of(scope.as_str()).map_err(GateStoreError::new)?;
+        let scope = store.scope_named(scope.as_str()).map_err(|e| GateStoreError::new(e.to_string()))?;
         let who = principal.to_string();
         let held = store.grants_of(&who).into_iter().find(|g| g.scope == scope);
         let Some(held) = held.filter(|g| role.is_none_or(|r| r.as_str() == g.role.as_str())) else {
@@ -319,7 +334,8 @@ impl Resolve for Book {
         let store = self.store()?;
         // A target no scope could hold (`a b`) lives only in `*`: an admin
         // of `*` reaches the method, which says what is wrong with it.
-        let mut out: Vec<ScopeRef> = store.scope_chain(target).unwrap_or_default().into_iter().map(ScopeRef::Named).collect();
+        // ORG-4: each shortcode as `org:ID`, then the organization, `org:`.
+        let mut out: Vec<ScopeRef> = store.gate_chain(target).unwrap_or_default().into_iter().map(ScopeRef::Named).collect();
         out.push(ScopeRef::Everywhere);
         Some(out)
     }
@@ -371,7 +387,7 @@ impl Caller {
             return Err(format!("no access yet: {} holds {grant} nowhere — ask an admin for a role", self.who()));
         }
         if !held.iter().any(ScopeRef::is_everywhere) {
-            parts.push(held.iter().map(|s| s.as_str().to_string()).collect());
+            parts.push(held.iter().map(|s| under_name(s.as_str())).collect());
         }
         let layers = GateCeiling::layers_of(ctx).map_err(|e| e.to_string())?;
         for layer in layers {
@@ -388,7 +404,7 @@ impl Caller {
                 return Err(format!("this session's scope ({}) holds no {grant}", layer.text().join(", ")));
             }
             if !allowed.iter().any(|s| s.is_everywhere()) {
-                parts.push(allowed.iter().map(|s| s.as_str().to_ascii_uppercase()).collect());
+                parts.push(allowed.iter().map(|s| under_name(s.as_str())).collect());
             }
         }
         Ok(parts)
@@ -405,6 +421,28 @@ impl Caller {
         }
         let text = parts.iter().map(|p| under_text(p)).collect::<Vec<_>>().join(" and ");
         Filter::parse(&text).map(Some).map_err(|e| e.to_string())
+    }
+
+    /// ORG-4: the organizations this caller holds a role in — what a short
+    /// form resolves in, an ambiguous answer names candidates from, and
+    /// `orgs.list` lists. `None`: every one (a role on `*`, or login off).
+    pub fn orgs(&self) -> Option<Vec<crate::address::OrgId>> {
+        let (Some((_, book)), Some(ctx)) = (&self.gate, &self.ctx) else { return None };
+        let Some(p) = ctx.principal() else { return Some(Vec::new()) };
+        let mut out: Vec<crate::address::OrgId> = Vec::new();
+        for m in book.held(&p) {
+            match crate::members::Scope::stored(m.scope.as_str()) {
+                Some(crate::members::Scope::Everywhere) => return None,
+                Some(s) => {
+                    if let Some(o) = s.org().filter(|o| !out.contains(o)) {
+                        out.push(o.clone());
+                    }
+                }
+                None => {}
+            }
+        }
+        out.sort();
+        Some(out)
     }
 
     /// [`Caller::filter_for`] the grant the call was admitted for.
@@ -600,7 +638,7 @@ impl Access {
     /// kept in the store like any other and signed `granted_by` `dev-login`.
     pub async fn dev_grant(&self, principal: &str, scope: &str, role: Role) -> Result<Grant, String> {
         let store = self.book.store().cloned().ok_or("no store is attached")?;
-        let scope = crate::members::scope_of(scope)?;
+        let scope = store.scope_named(scope).map_err(|e| e.to_string())?;
         let g = Grant { principal: principal.into(), scope, role, granted_by: DEV_LOGIN.into(), at: now() };
         let g = store.grant(g).await.map_err(|e| e.to_string())?;
         self.granted(principal);
@@ -611,8 +649,9 @@ impl Access {
     /// and every other stored grant of theirs revoked.
     pub async fn dev_set_grants(&self, principal: &str, grants: &[(Role, String)]) -> Result<(), String> {
         let store = self.book.store().cloned().ok_or("no store is attached")?;
+        let named: Vec<String> = grants.iter().map(|(_, s)| store.scope_named(s).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
         for g in store.grants_of(principal) {
-            if !grants.iter().any(|(_, s)| *s == g.scope) {
+            if !named.contains(&g.scope) {
                 store.revoke(principal.into(), g.scope).await.map_err(|e| e.to_string())?;
             }
         }
@@ -709,6 +748,13 @@ impl Access {
             .ok_or_else(|| format!("`{}` is not role@SCOPE (e.g. editor@IDENTITY, viewer@*)", text.trim()))?;
         let left = left.trim();
         let scope = ceiling_scope_of(scope)?;
+        // ORG-4: a shortcode or an organization as the store keeps it, so
+        // the gate's chain holds it (a ticket stays its key-like spelling).
+        let ticket = scope.split_once('-').is_some_and(|(_, n)| n.bytes().all(|b| b.is_ascii_digit()));
+        let scope = match self.book.store() {
+            Some(store) if !ticket => store.scope_named(&scope).map_err(|e| e.to_string())?,
+            _ => scope,
+        };
         if left.contains('.') {
             let ok = left.split_once('.').is_some_and(|(a, m)| {
                 let word = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
@@ -972,8 +1018,18 @@ mod tests {
         let set = GateGrant::new("tickets.set_status");
         assert!(g.check(Some(&me), &set, Some("IDENTITY-2")).is_ok(), "IDENTITY is hosted under PLEXUS-1");
         assert!(g.check(Some(&me), &set, Some("IDENTITY-99")).is_ok(), "a missing ticket resolves by its shortcode");
+        // ORG-4: a ticket target is refused by what was written — the same
+        // words for a ticket out of reach as for none.
         let refused = g.check(Some(&me), &set, Some("OUGHT-2")).unwrap_err();
-        assert_eq!(refused.to_string(), "needs tickets.set_status on OUGHT");
+        assert_eq!(refused.to_string(), "needs tickets.set_status on OUGHT-2");
+        assert_eq!(g.check(Some(&me), &set, Some("OUGHT-99")).unwrap_err().to_string(), "needs tickets.set_status on OUGHT-99");
+        assert_eq!(
+            s.gate_chain("identity-2").unwrap(),
+            ["IDENTITY-2", "hypermemetic:IDENTITY", "IDENTITY", "IDENTITY-1", "PLEXUS-1", "hypermemetic:PLEXUS", "PLEXUS", "hypermemetic:"]
+                .map(String::from)
+                .to_vec()
+        );
+        assert_eq!(s.gate_chain("hypermemetic:").unwrap(), vec!["hypermemetic:".to_string()]);
         assert_eq!(
             s.scope_chain("identity-2").unwrap(),
             ["IDENTITY", "IDENTITY-2", "IDENTITY-1", "PLEXUS-1", "PLEXUS"].map(String::from).to_vec()
@@ -1098,13 +1154,14 @@ mod tests {
         a.attach(store().await);
         let agent = ctx(json!({ "agent": "worker-3", "name": "worker-3", "provider": "key", "auth_method": "key", "expires_at": now() + 300 }));
         let m = a.mint(Some(&agent), None, Some(vec!["editor@identity".into()])).unwrap();
-        assert_eq!((m.principal.as_str(), m.agent.as_deref(), m.scope.clone()), (ALICE, Some("worker-3"), vec!["editor@IDENTITY".to_string()]));
+        // ORG-4: the shortcode as the store keeps a scope, in its organization.
+        assert_eq!((m.principal.as_str(), m.agent.as_deref(), m.scope.clone()), (ALICE, Some("worker-3"), vec!["editor@hypermemetic:IDENTITY".to_string()]));
         assert!(m.expires_at >= now() + MINT_TTL_DEFAULT_SECS as i64 - 5);
         let minted = mint.0.lock().unwrap().last().cloned().unwrap();
         assert_eq!(minted.metadata["agent"], "worker-3");
         assert_eq!(minted.metadata["provider"], "key");
         assert_eq!(minted.metadata["principal"], ALICE);
-        assert_eq!(minted.metadata[CEILING_KEY], json!([["editor@IDENTITY"]]));
+        assert_eq!(minted.metadata[CEILING_KEY], json!([["editor@hypermemetic:IDENTITY"]]));
         // The gate reads it as one layer.
         assert_eq!(GateCeiling::layers_of(&minted).unwrap().len(), 1);
 
@@ -1112,10 +1169,10 @@ mod tests {
         let m2 = a.mint(Some(&minted), Some(60), Some(vec!["admin@*".into()])).unwrap();
         assert_eq!(m2.scope, vec!["admin@*".to_string()]);
         let again = mint.0.lock().unwrap().last().cloned().unwrap();
-        assert_eq!(again.metadata[CEILING_KEY], json!([["editor@IDENTITY"], ["admin@*"]]));
+        assert_eq!(again.metadata[CEILING_KEY], json!([["editor@hypermemetic:IDENTITY"], ["admin@*"]]));
         assert!(!a.admit(Some(&again), &Reach::everywhere()).unwrap().administers("*"), "still held to IDENTITY");
         // Asking nothing inherits it, and says so.
-        assert_eq!(a.mint(Some(&minted), None, None).unwrap().scope, vec!["editor@IDENTITY".to_string()]);
+        assert_eq!(a.mint(Some(&minted), None, None).unwrap().scope, vec!["editor@hypermemetic:IDENTITY".to_string()]);
         assert!(a.mint(Some(&agent), None, None).unwrap().scope.is_empty(), "no ceiling");
 
         for (ttl, scope) in [(Some(0), None), (Some(MINT_TTL_MAX_SECS + 1), None), (None, Some(vec![])), (None, Some(vec!["owner@X".into()]))] {

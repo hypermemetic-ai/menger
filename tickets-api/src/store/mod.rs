@@ -1204,6 +1204,8 @@ pub enum StoreError {
     Ambiguous { text: String, candidates: Vec<String> },
     /// ORG-3: `text` names no shortcode in the reader's reach.
     NoShortcode(String),
+    /// ORG-4: `text` names no organization (in the reader's reach).
+    NoOrg(String),
     /// ORG-3: a write would put a shortcode `code` into `namespace` (`org:`
     /// for an org's roots, else its host's full address), which already holds
     /// one: `there`, its full address. `id` the ticket whose write it was.
@@ -1509,6 +1511,7 @@ impl std::fmt::Display for StoreError {
                 candidates.join(", ")
             ),
             Self::NoShortcode(text) => write!(f, "no shortcode '{text}'"),
+            Self::NoOrg(text) => write!(f, "no organization '{text}'"),
             Self::ShortcodeTaken { id, code, namespace, there } => {
                 let whose = id.as_deref().map_or_else(|| "nothing was created".to_string(), |i| format!("nothing changed for '{i}'"));
                 write!(
@@ -3152,6 +3155,8 @@ impl Store {
         // for a file from before ORG-3 (stored form 11), from where each
         // root hangs; every row given its letters and its full address.
         shortcodes::settle(conn, &mut cache)?;
+        // ORG-4: every grant from before organizations moved into its own.
+        orgs::settle(conn, &mut cache)?;
         // MENGER-39: the queue, as stored.
         cache.queue = queue::load(conn)?;
         Ok(cache)
@@ -5467,6 +5472,11 @@ pub use lensed::{narrowing, narrowing_lens, ready_and, MEMBER_MAX};
 /// ORG-3: the shortcodes — each one's namespace, stored; the orgs; the pins;
 /// and the one resolver from what a reader writes to what the store keys on.
 mod shortcodes;
+// ORG-4: organizations — made, renamed, deleted; a grant's scopes in them,
+// and where a target lives as the gate asks it.
+mod orgs;
+#[cfg(test)]
+mod tests_orgs;
 // The create write, in a module of its own (MENGER-29).
 mod create;
 pub use shortcodes::OrgReach;

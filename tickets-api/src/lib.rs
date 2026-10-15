@@ -149,6 +149,14 @@ pub use members_activation::Members;
 
 /// IDENTITY-14: who a connection is — [`SessionEvent`], wasm-safe like
 /// [`comments`].
+// ORG-4: organizations, and the activation that makes them.
+pub mod orgs;
+pub use orgs::{Org, OrgsEvent};
+pub mod orgs_activation;
+pub use orgs_activation::OrgsClient;
+#[cfg(feature = "server")]
+pub use orgs_activation::Orgs;
+
 pub mod session;
 pub use session::{ProviderKind, ProviderOffer, SessionEvent};
 /// IDENTITY-14: the `session` activation, declared once: the server's

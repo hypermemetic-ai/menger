@@ -39,7 +39,7 @@ async fn health_reports_count() {
 #[tokio::test]
 async fn create_allocates_sequential_ids() {
     let hub = hub();
-    let ev = one(hub.create(None, Reach::everywhere(), "mng".into(), "first".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    let ev = one(hub.create(None, Reach::everywhere(), "mng".into(), "first".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     match ev {
         TicketsEvent::Created { ticket } => {
             assert_eq!(ticket.id, "MNG-1");
@@ -47,7 +47,7 @@ async fn create_allocates_sequential_ids() {
         }
         other => panic!("expected Created, got {other:?}"),
     }
-    let ev = one(hub.create(None, Reach::everywhere(), "MNG".into(), "second".into(), None, None, None, None, None, None).await).await;
+    let ev = one(hub.create(None, Reach::everywhere(), "MNG".into(), "second".into(), None, None, None, None, None, None, None).await).await;
     match ev {
         TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "MNG-2"),
         other => panic!("expected Created, got {other:?}"),
@@ -62,19 +62,19 @@ async fn create_defaults_kind_to_build_accepts_gap_and_rejects_unknown_naming_th
     let hub = hub();
     // MNG-12: the prefix's scope root first; the default is measured
     // on the ticket after it.
-    one(hub.create(None, Reach::everywhere(), "MNG".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-    match one(hub.create(None, Reach::everywhere(), "MNG".into(), "no kind".into(), None, None, None, None, None, None).await).await {
+    one(hub.create(None, Reach::everywhere(), "MNG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    match one(hub.create(None, Reach::everywhere(), "MNG".into(), "no kind".into(), None, None, None, None, None, None, None).await).await {
         TicketsEvent::Created { ticket } => assert_eq!(ticket.kind, Kind::Build),
         other => panic!("expected Created, got {other:?}"),
     }
-    match one(hub.create(None, Reach::everywhere(), "MNG".into(), "a gap".into(), Some("gap".into()), None, None, None, None, None).await)
+    match one(hub.create(None, Reach::everywhere(), "MNG".into(), "a gap".into(), Some("gap".into()), None, None, None, None, None, None).await)
         .await
     {
         TicketsEvent::Created { ticket } => assert_eq!(ticket.kind, Kind::Gap),
         other => panic!("expected Created, got {other:?}"),
     }
     let ev = one(
-        hub.create(None, Reach::everywhere(), "MNG".into(), "x".into(), Some("bug".into()), None, None, None, None, None)
+        hub.create(None, Reach::everywhere(), "MNG".into(), "x".into(), Some("bug".into()), None, None, None, None, None, None)
             .await,
     )
     .await;
@@ -101,13 +101,13 @@ async fn create_defaults_kind_to_build_accepts_gap_and_rejects_unknown_naming_th
 #[tokio::test]
 async fn a_doc_over_the_activation_refuses_every_lifecycle_write_in_band() {
     let hub = hub();
-    match one(hub.create(None, Reach::everywhere(), "DOCS".into(), "the manifest".into(), Some("doc".into()), None, None, None, None, None).await).await {
+    match one(hub.create(None, Reach::everywhere(), "DOCS".into(), "the manifest".into(), Some("doc".into()), None, None, None, None, None, None).await).await {
         TicketsEvent::Created { ticket } => {
             assert_eq!((ticket.id.as_str(), ticket.kind, ticket.status), ("DOCS-1", Kind::Doc, Status::Doc));
         }
         other => panic!("expected Created, got {other:?}"),
     }
-    one(hub.create(None, Reach::everywhere(), "DOCS".into(), "work".into(), None, None, None, None, None, None).await).await; // DOCS-2
+    one(hub.create(None, Reach::everywhere(), "DOCS".into(), "work".into(), None, None, None, None, None, None, None).await).await; // DOCS-2
     for status in ["Ready", "Complete", "Doc", "active"] {
         match one(hub.set_status(None, Reach::everywhere(), "DOCS-1".into(), status.into(), None, None, None).await).await {
             TicketsEvent::Error { message } => assert!(message.contains("a doc has no lifecycle"), "{message}"),
@@ -119,12 +119,12 @@ async fn a_doc_over_the_activation_refuses_every_lifecycle_write_in_band() {
         other => panic!("expected Error, got {other:?}"),
     }
     let blocked = Some(vec!["DOCS-2".to_string()]);
-    match one(hub.create(None, Reach::everywhere(), "DOCS".into(), "x".into(), Some("doc".into()), None, blocked, None, None, None).await).await {
+    match one(hub.create(None, Reach::everywhere(), "DOCS".into(), "x".into(), Some("doc".into()), None, blocked, None, None, None, None).await).await {
         TicketsEvent::Error { message } => assert!(message.contains("a doc is never blocked"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
     let on_doc = Some(vec!["DOCS-1".to_string()]);
-    match one(hub.create(None, Reach::everywhere(), "DOCS".into(), "x".into(), None, None, on_doc, None, None, None).await).await {
+    match one(hub.create(None, Reach::everywhere(), "DOCS".into(), "x".into(), None, None, on_doc, None, None, None, None).await).await {
         TicketsEvent::Error { message } => assert!(message.contains("'DOCS-1' is a doc"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
@@ -141,7 +141,7 @@ async fn a_doc_over_the_activation_refuses_every_lifecycle_write_in_band() {
 #[tokio::test]
 async fn get_distinguishes_found_from_missing() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "MNG".into(), "x".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "MNG".into(), "x".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     assert!(matches!(
         one(hub.get(None, Reach::everywhere(), "MNG-1".into()).await).await,
         TicketsEvent::Ticket { .. }
@@ -155,8 +155,8 @@ async fn get_distinguishes_found_from_missing() {
 #[tokio::test]
 async fn list_filters_by_status() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
-    one(hub.create(None, Reach::everywhere(), "MNG".into(), "b".into(), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "MNG".into(), "b".into(), None, None, None, None, None, None, None).await).await;
     one(hub.set_status(None, Reach::everywhere(), "MNG-1".into(), "Ready".into(), None, None, None).await).await;
 
     let (ids, page) =
@@ -168,7 +168,7 @@ async fn list_filters_by_status() {
 #[tokio::test]
 async fn set_status_reports_previous() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     match one(hub.set_status(None, Reach::everywhere(), "MNG-1".into(), "ready".into(), None, None, None).await).await {
         TicketsEvent::StatusChanged { ticket, previous } => {
             assert_eq!(ticket.status, Status::Ready);
@@ -186,8 +186,8 @@ async fn set_status_reports_previous() {
 #[tokio::test]
 async fn set_kind_reports_previous_and_refuses_in_band() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "IDN".into(), "identity".into(), Some("doc".into()), None, None, None, None, None).await).await;
-    one(hub.create(None, Reach::everywhere(), "IDN".into(), "a".into(), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "IDN".into(), "identity".into(), Some("doc".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "IDN".into(), "a".into(), None, None, None, None, None, None, None).await).await;
     match one(hub.set_kind(None, Reach::everywhere(), "IDN-1".into(), "Scope".into(), None, None, None).await).await {
         TicketsEvent::KindChanged { ticket, previous } => {
             assert_eq!((ticket.kind, ticket.status, previous), (Kind::Scope, Status::Epic, Kind::Doc));
@@ -225,9 +225,9 @@ async fn set_kind_reports_previous_and_refuses_in_band() {
 #[tokio::test]
 async fn set_status_takes_the_worker_states_and_list_filters_on_them() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "WK".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-    one(hub.create(None, Reach::everywhere(), "WK".into(), "a".into(), None, None, None, None, None, None).await).await;
-    one(hub.create(None, Reach::everywhere(), "WK".into(), "b".into(), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "WK".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "WK".into(), "a".into(), None, None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "WK".into(), "b".into(), None, None, None, None, None, None, None).await).await;
 
     for (id, spelling, want, previous) in [
         ("WK-2", "Coding", Status::Coding, Status::Pending),
@@ -259,8 +259,8 @@ async fn set_status_takes_the_worker_states_and_list_filters_on_them() {
 #[tokio::test]
 async fn a_body_past_the_cap_is_the_typed_body_too_large() {
     let hub = Tickets::new(Arc::new(Store::new().with_body_max(10)));
-    one(hub.create(None, Reach::everywhere(), "BIG".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-    let ev = one(hub.create(None, Reach::everywhere(), "BIG".into(), "page".into(), Some("doc".into()), None, None, Some("x".repeat(11)), None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "BIG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    let ev = one(hub.create(None, Reach::everywhere(), "BIG".into(), "page".into(), Some("doc".into()), None, None, Some("x".repeat(11)), None, None, None).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
     assert_eq!((wire["type"].as_str(), wire["bytes"].as_u64(), wire["max"].as_u64()), (Some("body_too_large"), Some(11), Some(10)), "{wire}");
     assert!(wire["id"].is_null() && wire["message"].as_str().unwrap().contains("past the 10-byte cap"), "{wire}");
@@ -275,7 +275,7 @@ async fn a_body_past_the_cap_is_the_typed_body_too_large() {
 #[tokio::test]
 async fn amend_yields_amended_and_watch_carries_only_what_changed() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "AM".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "AM".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
 
     let ev = one(hub.amend(None, Reach::everywhere(), "am-1".into(), None, Some("the body, now".into())).await).await;
@@ -325,7 +325,7 @@ async fn amend_yields_amended_and_watch_carries_only_what_changed() {
 #[tokio::test]
 async fn link_commits_yields_commits_linked_and_watch_carries_only_what_changed() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "LC".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "LC".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
     let commits = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
 
@@ -400,7 +400,7 @@ async fn watch_sees_creations_and_status_changes() {
     let hub = hub();
     let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
 
-    one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     match watch.next().await.expect("change") {
         TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "MNG-1"),
         other => panic!("expected Created, got {other:?}"),
@@ -440,9 +440,9 @@ async fn watch_sees_creations_and_status_changes() {
 #[tokio::test]
 async fn groups_yields_the_rows_and_watch_filters_group_changes_by_their_shortcode() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "PLX".into(), "host".into(), Some("scope".into()), None, None, None, None, None).await).await;
-    one(hub.create(None, Reach::everywhere(), "SUB".into(), "hosted".into(), Some("scope".into()), None, None, None, Some("PLX-1".into()), None).await).await;
-    one(hub.create(None, Reach::everywhere(), "SUB".into(), "work".into(), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "PLX".into(), "host".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "SUB".into(), "hosted".into(), Some("scope".into()), None, None, None, Some("PLX-1".into()), None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "SUB".into(), "work".into(), None, None, None, None, None, None, None).await).await;
 
     let evs: Vec<TicketsEvent> = Box::pin(hub.groups(None, Reach::everywhere()).await).collect().await;
     let groups: Vec<crate::types::Group> = evs
@@ -476,10 +476,10 @@ async fn groups_yields_the_rows_and_watch_filters_group_changes_by_their_shortco
 async fn extents_yields_each_shortcodes_last_seq_in_shortcode_order() {
     let hub = hub();
     for (epic, kind) in [("ZED", "scope"), ("AB", "scope"), ("ZED", "build"), ("B", "scope"), ("ZED", "gap")] {
-        one(hub.create(None, Reach::everywhere(), epic.into(), "t".into(), Some(kind.into()), None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), epic.into(), "t".into(), Some(kind.into()), None, None, None, None, None, None).await).await;
     }
     // Refused: AB-2 would be its own blocker. Nothing is allocated.
-    let refused = one(hub.create(None, Reach::everywhere(), "AB".into(), "t".into(), None, None, Some(vec!["AB-2".into()]), None, None, None).await).await;
+    let refused = one(hub.create(None, Reach::everywhere(), "AB".into(), "t".into(), None, None, Some(vec!["AB-2".into()]), None, None, None, None).await).await;
     assert!(matches!(refused, TicketsEvent::Error { .. }), "{refused:?}");
 
     let evs: Vec<TicketsEvent> = Box::pin(hub.extents(None, Reach::everywhere()).await).collect().await;
@@ -536,9 +536,9 @@ async fn ids_and_page(
 #[tokio::test]
 async fn ready_set_gates_on_blockers() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     one(hub
-        .create(None, Reach::everywhere(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
+        .create(None, Reach::everywhere(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None)
         .await)
     .await;
     one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Ready".into(), None, None, None).await).await;
@@ -553,12 +553,12 @@ async fn ready_set_gates_on_blockers() {
 #[tokio::test]
 async fn ready_set_accepts_superseded_blockers_and_filters_by_epic() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "ONE".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "ONE".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     one(hub
-        .create(None, Reach::everywhere(), "ONE".into(), "b".into(), None, None, Some(vec!["ONE-1".into()]), None, None, None)
+        .create(None, Reach::everywhere(), "ONE".into(), "b".into(), None, None, Some(vec!["ONE-1".into()]), None, None, None, None)
         .await)
     .await;
-    one(hub.create(None, Reach::everywhere(), "TWO".into(), "c".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "TWO".into(), "c".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     one(hub.set_status(None, Reach::everywhere(), "ONE-1".into(), "Superseded".into(), None, None, None).await).await;
     one(hub.set_status(None, Reach::everywhere(), "ONE-2".into(), "Ready".into(), None, None, None).await).await;
     one(hub.set_status(None, Reach::everywhere(), "TWO-1".into(), "Ready".into(), None, None, None).await).await;
@@ -577,7 +577,7 @@ async fn ready_set_accepts_superseded_blockers_and_filters_by_epic() {
 async fn dangling_blocker_excludes_from_ready_set_and_is_marked() {
     let hub = hub();
     one(hub
-        .create(None, Reach::everywhere(), "DAG".into(), "c".into(), Some("scope".into()), None, Some(vec!["DAG-99".into()]), None, None, None)
+        .create(None, Reach::everywhere(), "DAG".into(), "c".into(), Some("scope".into()), None, Some(vec!["DAG-99".into()]), None, None, None, None)
         .await)
     .await;
     one(hub.set_status(None, Reach::everywhere(), "DAG-1".into(), "Ready".into(), None, None, None).await).await;
@@ -595,8 +595,8 @@ async fn dangling_blocker_excludes_from_ready_set_and_is_marked() {
 #[tokio::test]
 async fn blockers_resolve_to_current_statuses_in_order() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
-    one(hub.create(None, Reach::everywhere(), "DAG".into(), "b".into(), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "DAG".into(), "b".into(), None, None, None, None, None, None, None).await).await;
     one(hub
         .create(None, Reach::everywhere(), 
             "DAG".into(),
@@ -605,6 +605,7 @@ async fn blockers_resolve_to_current_statuses_in_order() {
             None,
             Some(vec!["DAG-1".into(), "DAG-2".into(), "DAG-99".into()]),
             None, None, None,
+            None,
         )
         .await)
     .await;
@@ -640,11 +641,11 @@ async fn blockers_resolve_to_current_statuses_in_order() {
 #[tokio::test]
 async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let mut watch = Box::pin(untransitioned(hub.watch(None, Reach::everywhere(), None, None, None, None).await));
 
     one(hub
-        .create(None, Reach::everywhere(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
+        .create(None, Reach::everywhere(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None)
         .await)
     .await;
 
@@ -687,7 +688,7 @@ async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
 #[tokio::test]
 async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "FAM".into(), "P".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "FAM".into(), "P".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let mut watch = Box::pin(untransitioned(hub.watch(None, Reach::everywhere(), None, None, None, None).await));
 
     match one(
@@ -699,6 +700,7 @@ async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
             None,
             None,
             Some("fam-1".into()), None,
+            None,
         )
         .await,
     )
@@ -766,6 +768,7 @@ async fn create_rejects_a_nonexistent_parent_in_band() {
             None,
             None,
             Some("ORPH-9".into()), None,
+            None,
         )
         .await,
     )
@@ -788,8 +791,8 @@ async fn create_rejects_a_nonexistent_parent_in_band() {
 #[tokio::test]
 async fn list_filters_by_parent() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "LP".into(), "P".into(), Some("scope".into()), None, None, None, None, None).await).await;
-    one(hub.create(None, Reach::everywhere(), "LP".into(), "unrelated".into(), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "LP".into(), "P".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "LP".into(), "unrelated".into(), None, None, None, None, None, None, None).await).await;
     // ZZ's first ticket is its scope root (MNG-12), filed under LP-1.
     for (epic, title, kind) in [("LP", "child a", None), ("ZZ", "child b", Some("scope"))] {
         one(hub
@@ -801,6 +804,7 @@ async fn list_filters_by_parent() {
                 None,
                 None,
                 Some("LP-1".into()), None,
+                None,
             )
             .await)
         .await;
@@ -836,6 +840,7 @@ async fn summary_rows_carry_every_field_but_the_body() {
             None,
             Some("## Problem\n\nthe weight of a list".into()),
             None, None,
+            None,
         )
         .await)
     .await;
@@ -869,7 +874,7 @@ async fn summary_rows_carry_every_field_but_the_body() {
 #[tokio::test]
 async fn an_after_that_names_no_ticket_is_one_in_band_error() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "CUR".into(), "a".into(), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "CUR".into(), "a".into(), None, None, None, None, None, None, None).await).await;
 
     for evs in [
         Box::pin(hub.list(None, Reach::everywhere(), None, None, None, Some("ZZZ-9".into()), None, None, None, None, None, None).await)
@@ -896,9 +901,9 @@ async fn ready_set_takes_the_same_page_params() {
     let hub = hub();
     for i in 0..3 {
         let kind = (i == 0).then(|| "scope".to_string()); // MNG-12: the root first
-        one(hub.create(None, Reach::everywhere(), "RS".into(), "r".into(), kind, None, None, None, None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "RS".into(), "r".into(), kind, None, None, None, None, None, None).await).await;
     }
-    one(hub.create(None, Reach::everywhere(), "RS".into(), "still pending".into(), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "RS".into(), "still pending".into(), None, None, None, None, None, None, None).await).await;
     for id in ["RS-1", "RS-2", "RS-3"] {
         one(hub.set_status(None, Reach::everywhere(), id.into(), "Ready".into(), None, None, None).await).await;
     }
@@ -928,9 +933,9 @@ async fn find_yields_summary_rows_then_one_page_fifty_by_default() {
     let hub = hub();
     for i in 1..=60 {
         let kind = (i == 1).then(|| "scope".to_string()); // MNG-12: the root first
-        one(hub.create(None, Reach::everywhere(), "FND".into(), format!("row {i}"), kind, None, None, Some("a body".into()), None, None).await).await;
+        one(hub.create(None, Reach::everywhere(), "FND".into(), format!("row {i}"), kind, None, None, Some("a body".into()), None, None, None).await).await;
     }
-    one(hub.create(None, Reach::everywhere(), "OTH".into(), "The Ticket Page".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "OTH".into(), "The Ticket Page".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
 
     let evs: Vec<TicketsEvent> = Box::pin(hub.find(None, Reach::everywhere(), "".into(), None, None, None, None).await).collect().await;
     assert_eq!(evs.len(), 51, "50 rows and the page");
@@ -964,11 +969,11 @@ async fn find_yields_summary_rows_then_one_page_fifty_by_default() {
 async fn dangling_forward_reference_resolves_at_birth() {
     let hub = hub();
     one(hub
-        .create(None, Reach::everywhere(), "DAG".into(), "d1".into(), Some("scope".into()), None, Some(vec!["DAG-2".into()]), None, None, None)
+        .create(None, Reach::everywhere(), "DAG".into(), "d1".into(), Some("scope".into()), None, Some(vec!["DAG-2".into()]), None, None, None, None)
         .await)
     .await;
     // The ticket that becomes DAG-2 has DAG-1 in unlocks from birth.
-    match one(hub.create(None, Reach::everywhere(), "DAG".into(), "d2".into(), None, None, None, None, None, None).await).await {
+    match one(hub.create(None, Reach::everywhere(), "DAG".into(), "d2".into(), None, None, None, None, None, None, None).await).await {
         TicketsEvent::Created { ticket } => {
             assert_eq!(ticket.id, "DAG-2");
             assert_eq!(ticket.unlocks, vec!["DAG-1"]);
@@ -986,7 +991,7 @@ async fn create_rejects_self_reference() {
     let hub = hub();
     // First create in the epic allocates DAG-1; naming it is a self-cycle.
     let ev = one(hub
-        .create(None, Reach::everywhere(), "DAG".into(), "me".into(), Some("scope".into()), None, Some(vec!["DAG-1".into()]), None, None, None)
+        .create(None, Reach::everywhere(), "DAG".into(), "me".into(), Some("scope".into()), None, Some(vec!["DAG-1".into()]), None, None, None, None)
         .await)
     .await;
     match ev {
@@ -1004,12 +1009,12 @@ async fn create_rejects_cycle_through_dangling_forward_reference() {
     let hub = hub();
     // DAG-1 blocked_by the not-yet-existing DAG-2.
     one(hub
-        .create(None, Reach::everywhere(), "DAG".into(), "d1".into(), Some("scope".into()), None, Some(vec!["DAG-2".into()]), None, None, None)
+        .create(None, Reach::everywhere(), "DAG".into(), "d1".into(), Some("scope".into()), None, Some(vec!["DAG-2".into()]), None, None, None, None)
         .await)
     .await;
     // The create that would become DAG-2, blocked_by DAG-1, closes the loop.
     let ev = one(hub
-        .create(None, Reach::everywhere(), "DAG".into(), "d2".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
+        .create(None, Reach::everywhere(), "DAG".into(), "d2".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None)
         .await)
     .await;
     match ev {
@@ -1027,16 +1032,16 @@ async fn create_rejects_cycle_through_dangling_forward_reference() {
 async fn create_rejects_longer_cycles() {
     let hub = hub();
     one(hub
-        .create(None, Reach::everywhere(), "DAG".into(), "p1".into(), Some("scope".into()), None, Some(vec!["DAG-3".into()]), None, None, None)
+        .create(None, Reach::everywhere(), "DAG".into(), "p1".into(), Some("scope".into()), None, Some(vec!["DAG-3".into()]), None, None, None, None)
         .await)
     .await;
     one(hub
-        .create(None, Reach::everywhere(), "DAG".into(), "p2".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None)
+        .create(None, Reach::everywhere(), "DAG".into(), "p2".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None)
         .await)
     .await;
     // Would become DAG-3: DAG-3 -> DAG-2 -> DAG-1 -> DAG-3.
     let ev = one(hub
-        .create(None, Reach::everywhere(), "DAG".into(), "p3".into(), None, None, Some(vec!["DAG-2".into()]), None, None, None)
+        .create(None, Reach::everywhere(), "DAG".into(), "p3".into(), None, None, Some(vec!["DAG-2".into()]), None, None, None, None)
         .await)
     .await;
     assert!(matches!(ev, TicketsEvent::Error { .. }), "got {ev:?}");
@@ -1051,8 +1056,8 @@ async fn watch_epic_filter_drops_other_epics() {
     let hub = hub();
     let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), Some("mng".into()), None, None, None).await);
 
-    one(hub.create(None, Reach::everywhere(), "OTHER".into(), "x".into(), Some("scope".into()), None, None, None, None, None).await).await;
-    one(hub.create(None, Reach::everywhere(), "MNG".into(), "y".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "OTHER".into(), "x".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "MNG".into(), "y".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
 
     match watch.next().await.expect("change") {
         TicketsEvent::Created { ticket } => assert_eq!(ticket.epic, "MNG"),
@@ -1087,13 +1092,13 @@ async fn a_watch_that_falls_behind_reads_one_lagged_then_the_newest_changes() {
     const CREATES: u64 = 200;
     const HELD: u64 = 256; // Store::with_connection's broadcast capacity
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "LAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "LAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
     let mut other = Box::pin(hub.watch(None, Reach::everywhere(), Some("other".into()), None, None, None).await);
 
     let mut broadcast: Vec<String> = Vec::new();
     for k in 2..=CREATES + 1 {
-        match one(hub.create(None, Reach::everywhere(), "LAG".into(), format!("t{k}"), None, None, None, None, None, None).await).await {
+        match one(hub.create(None, Reach::everywhere(), "LAG".into(), format!("t{k}"), None, None, None, None, None, None, None).await).await {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.id, format!("LAG-{k}")),
             ev => panic!("expected Created, got {ev:?}"),
         }
@@ -1120,10 +1125,10 @@ async fn a_watch_that_falls_behind_reads_one_lagged_then_the_newest_changes() {
     assert_eq!(read.iter().filter(|l| l.starts_with("lagged")).count(), 1);
     assert!(futures::FutureExt::now_or_never(watch.next()).is_none(), "and nothing more");
 
-    one(hub.create(None, Reach::everywhere(), "LAG".into(), "after".into(), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "LAG".into(), "after".into(), None, None, None, None, None, None, None).await).await;
     assert_eq!(label(&watch.next().await.expect("an event")), format!("created LAG-{}", CREATES + 2), "and on, as usual");
 
-    one(hub.create(None, Reach::everywhere(), "OTHER".into(), "its own".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "OTHER".into(), "its own".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     assert_eq!(label(&other.next().await.expect("an event")), "created OTHER-1", "then only its own epic");
 
     let wire = serde_json::to_value(TicketsEvent::Lagged { missed: 3 }).unwrap();
@@ -1136,10 +1141,10 @@ async fn a_watch_that_falls_behind_reads_one_lagged_then_the_newest_changes() {
 #[tokio::test]
 async fn set_parent_yields_parent_changed_and_maps_errors_in_band() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "SP".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
-    one(hub.create(None, Reach::everywhere(), "SP".into(), "a".into(), None, None, None, None, None, None).await).await; // SP-2 → SP-1
-    one(hub.create(None, Reach::everywhere(), "SP".into(), "b".into(), None, None, None, None, None, None).await).await; // SP-3 → SP-1
-    one(hub.create(None, Reach::everywhere(), "OT".into(), "other".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "SP".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "SP".into(), "a".into(), None, None, None, None, None, None, None).await).await; // SP-2 → SP-1
+    one(hub.create(None, Reach::everywhere(), "SP".into(), "b".into(), None, None, None, None, None, None, None).await).await; // SP-3 → SP-1
+    one(hub.create(None, Reach::everywhere(), "OT".into(), "other".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let mut watch = Box::pin(hub.watch(None, Reach::everywhere(), None, None, None, None).await);
 
     match one(hub.set_parent(None, Reach::everywhere(), "sp-3".into(), "sp-2".into()).await).await {
@@ -1200,7 +1205,7 @@ async fn set_parent_yields_parent_changed_and_maps_errors_in_band() {
 #[tokio::test]
 async fn first_ticket_of_a_prefix_must_be_a_scope_in_band() {
     let hub = hub();
-    match one(hub.create(None, Reach::everywhere(), "FRESH".into(), "a build".into(), None, None, None, None, None, None).await).await {
+    match one(hub.create(None, Reach::everywhere(), "FRESH".into(), "a build".into(), None, None, None, None, None, None, None).await).await {
         TicketsEvent::Error { message } => {
             assert!(message.contains("FRESH") && message.contains("scope"), "{message}");
         }
@@ -1249,7 +1254,7 @@ async fn waves_yields_placements_in_the_specified_order_then_one_wave_counts() {
         let blocked_by = (!blocked_by.is_empty()).then(|| blocked_by.iter().map(|b| b.to_string()).collect());
         let (epic, kind) = (epic.to_string(), kind.map(String::from));
         let hub = hub.clone();
-        async move { one(hub.create(None, Reach::everywhere(), epic, "t".into(), kind, None, blocked_by, None, None, None).await).await }
+        async move { one(hub.create(None, Reach::everywhere(), epic, "t".into(), kind, None, blocked_by, None, None, None, None).await).await }
     };
     let status = |id: &str, s: &str| {
         let (id, s, hub) = (id.to_string(), s.to_string(), hub.clone());
@@ -1315,7 +1320,7 @@ async fn waves_yields_placements_in_the_specified_order_then_one_wave_counts() {
 #[tokio::test]
 async fn waves_errors_are_in_band_and_alone() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "ER".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "ER".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
 
     let evs: Vec<TicketsEvent> = Box::pin(hub.waves(None, Reach::everywhere(), vec![], None).await).collect().await;
     assert_eq!(evs.len(), 1, "{evs:?}");
@@ -1348,7 +1353,7 @@ async fn waves_to_and_under_answer_as_waves_does() {
     let create = |kind: &str, blocked_by: &[&str], parent: Option<&str>| {
         let blocked_by = (!blocked_by.is_empty()).then(|| blocked_by.iter().map(|b| b.to_string()).collect());
         let (kind, parent, hub) = (kind.to_string(), parent.map(String::from), hub.clone());
-        async move { one(hub.create(None, Reach::everywhere(), "WT".into(), "t".into(), Some(kind), None, blocked_by, parent, None, None).await).await }
+        async move { one(hub.create(None, Reach::everywhere(), "WT".into(), "t".into(), Some(kind), None, blocked_by, parent, None, None, None).await).await }
     };
     create("scope", &[], None).await; // WT-1
     create("build", &[], Some("WT-1")).await; // WT-2
@@ -1410,9 +1415,9 @@ async fn list_pages_by_default_and_never_past_the_most() {
 #[tokio::test]
 async fn a_title_and_a_filter_are_held_to_their_sizes() {
     let hub = hub();
-    one(hub.create(None, Reach::everywhere(), "SZ".into(), "root".into(), Some("scope".into()), None, None, None, None, None).await).await;
+    one(hub.create(None, Reach::everywhere(), "SZ".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let long = "t".repeat(crate::limits::TITLE_MAX + 1);
-    match one(hub.create(None, Reach::everywhere(), "SZ".into(), long.clone(), None, None, None, None, None, None).await).await {
+    match one(hub.create(None, Reach::everywhere(), "SZ".into(), long.clone(), None, None, None, None, None, None, None).await).await {
         TicketsEvent::Error { message } => assert!(message.contains("at most 1024 bytes"), "{message}"),
         other => panic!("refused: {other:?}"),
     }

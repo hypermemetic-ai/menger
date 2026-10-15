@@ -241,6 +241,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 None,
                 None, None,
+                None,
             )
             .await
             .expect("create"),
@@ -254,7 +255,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // The rule itself, typed: a build first is the activation's own Error.
     match one(
         client
-            .create_all("FRESH".into(), "a build first".into(), None, None, None, None, None, None)
+            .create_all("FRESH".into(), "a build first".into(), None, None, None, None, None, None, None)
             .await
             .expect("the call succeeds; the activation says no"),
     ) {
@@ -332,6 +333,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 Some(vec!["DG-99".into()]),
                 None,
                 None, None,
+                None,
             )
             .await
             .expect("create DG-1"),
@@ -355,7 +357,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- parent / children (AGS-19, MNG-14, MNG-12's set_parent) ------------
     let parent = created(
         client
-            .create_all("PA".into(), "P".into(), Some("scope".into()), None, None, None, None, None)
+            .create_all("PA".into(), "P".into(), Some("scope".into()), None, None, None, None, None, None)
             .await
             .expect("create PA-1"),
     );
@@ -370,6 +372,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 None,
                 Some("PA-1".into()), None,
+                None,
             )
             .await
             .expect("create PA-2"),
@@ -379,7 +382,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // No parent named: the shortcode root (MNG-14).
     let third = created(
         client
-            .create_all("PA".into(), "loose".into(), None, None, None, None, None, None)
+            .create_all("PA".into(), "loose".into(), None, None, None, None, None, None, None)
             .await
             .expect("create PA-3"),
     );
@@ -418,7 +421,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- an unlocks edge ----------------------------------------------------
     created(
         client
-            .create_all("RS".into(), "A".into(), Some("scope".into()), None, None, None, None, None)
+            .create_all("RS".into(), "A".into(), Some("scope".into()), None, None, None, None, None, None)
             .await
             .expect("create RS-1"),
     );
@@ -432,6 +435,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 Some(vec!["RS-1".into()]),
                 None,
                 None, None,
+                None,
             )
             .await
             .expect("create RS-2"),
@@ -441,7 +445,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // A doc collection's root made a scope, through the emitted client.
     created(
         client
-            .create_all("KD".into(), "identity".into(), Some("doc".into()), None, None, None, None, None)
+            .create_all("KD".into(), "identity".into(), Some("doc".into()), None, None, None, None, None, None)
             .await
             .expect("create KD-1"),
     );
@@ -611,7 +615,7 @@ async fn waves_decode_typed_through_the_generated_client() {
     ] {
         created(
             client
-                .create_all(epic.into(), "t".into(), Some(kind.into()), None, blocked_by, None, None, None)
+                .create_all(epic.into(), "t".into(), Some(kind.into()), None, blocked_by, None, None, None, None)
                 .await
                 .expect("create"),
         );
@@ -655,7 +659,7 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
     let client = TicketsClient::new(&transport);
     let mut watch = client.watch(None, None, None, None);
     let mut make = |kind: &str, blocked_by: Option<Vec<String>>, path: Option<&str>| {
-        client.create_all("PT".into(), "t".into(), Some(kind.into()), None, blocked_by, None, None, path.map(Into::into))
+        client.create_all("PT".into(), "t".into(), Some(kind.into()), None, blocked_by, None, None, path.map(Into::into), None)
     };
     created(make("scope", None, None).await.expect("create")); // PT-1
     let y = created(make("build", None, None).await.expect("create")); // PT-2
@@ -709,8 +713,8 @@ async fn the_comments_through_the_generated_client() {
     let transport = connect(port).await;
     let tickets = TicketsClient::new(&transport);
     let comments = CommentsClient::new(&transport);
-    tickets.create_all("DEMAND".into(), "demands".into(), Some("scope".into()), None, None, None, None, None).await.expect("create");
-    tickets.create_all("DEMAND".into(), "the chip".into(), None, None, None, None, None, None).await.expect("create");
+    tickets.create_all("DEMAND".into(), "demands".into(), Some("scope".into()), None, None, None, None, None, None).await.expect("create");
+    tickets.create_all("DEMAND".into(), "the chip".into(), None, None, None, None, None, None, None).await.expect("create");
     let version = match one(tickets.get_all("DEMAND-2".into()).await.expect("get")) {
         TicketsEvent::Ticket { ticket } => ticket.updated_unix,
         other => panic!("expected `ticket`, got {other:?}"),
