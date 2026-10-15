@@ -1,6 +1,6 @@
 use menger_tickets_api::access::Access;
 use menger_tickets_api::{Comments, Deployments, Members, Notes, Orgs, ProviderOffer, Session, Themes, Tickets};
-use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError, PURGE_EVERY};
+use menger_tickets_api::store::{SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
 use crate::auth_backend::MengerAuth;
@@ -28,11 +28,12 @@ pub fn default_db_path() -> PathBuf {
 /// then every [`PURGE_EVERY`], for the life of the process. A failure is
 /// logged and tried again at the next turn: a body kept a day longer harms
 /// nothing.
-fn purge_daily(store: Arc<Store>) {
+/// ACCESS-11: as the store's [`System`] — the server's own upkeep.
+fn purge_daily(store: Arc<Store>, system: Arc<System>) {
     tokio::spawn(async move {
         loop {
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-            match store.purge(now).await {
+            match store.purge(&system, now).await {
                 Ok(ids) if !ids.is_empty() => tracing::info!("ACT-5: purged the bodies of {} deleted ticket(s): {}", ids.len(), ids.join(", ")),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("ACT-5: the purge of deleted tickets' bodies failed ({e}) — tried again in a day"),
@@ -123,19 +124,20 @@ pub async fn build_rpc_login(
     let store = tokio::task::spawn_blocking(move || Store::open(&path)).await??.with_body_max(body_max);
     // ACCESS-10: the store's System — the builder reads as it, then hands
     // it to the access layer.
-    let system = store.system().expect("a store just opened holds its System");
+    let system = Arc::new(store.system().expect("a store just opened holds its System"));
     tracing::info!("database: {}", db_path.display());
     tracing::info!(
         "loaded {} tickets from the database in {:.1} ms",
-        store.count(&system),
+        store.count(&*system),
         started.elapsed().as_secs_f64() * 1000.0
     );
 
     let store = match seed {
         None => store,
         Some(spec) => {
+            let seeding = Arc::clone(&system);
             let (store, report) = tokio::task::spawn_blocking(move || {
-                let outcome = store.seed_synthetic_shaped(spec, shape);
+                let outcome = store.seed_synthetic_shaped(&seeding, spec, shape);
                 (store, outcome)
             })
             .await?;
@@ -153,7 +155,7 @@ pub async fn build_rpc_login(
                         r.edges,
                         r.generate.as_secs_f64() * 1000.0,
                         r.persist.as_secs_f64() * 1000.0,
-                        store.count(&system)
+                        store.count(&*system)
                     );
                 }
                 Err(StoreError::SeedRefused { existing }) => anyhow::bail!(
@@ -175,7 +177,7 @@ pub async fn build_rpc_login(
     let store = Arc::new(store);
     // ACT-5: a deleted ticket's body is kept 30 days for its undo — purged
     // past that now, and every day after, inside the server.
-    purge_daily(Arc::clone(&store));
+    purge_daily(Arc::clone(&store), Arc::clone(&system));
     // IDENTITY-21: the members that decide, from the same store.
     access.attach_with(Arc::clone(&store), system);
     let mut hub = DynamicHub::new("menger")

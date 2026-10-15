@@ -71,15 +71,15 @@ fn touched_by_rule(store: &Store) -> BTreeSet<String> {
 async fn aged(path: &std::path::Path, n: usize) -> Store {
     let store = Store::open(path).unwrap();
     store
-        .create(NewTicket { kind: Kind::Scope, ..build("root", None, "") })
+        .create(SYS, NewTicket { kind: Kind::Scope, ..build("root", None, "") })
         .await
         .unwrap();
-    store.create(build("parent", None, "")).await.unwrap();
-    store.create(build("child a", Some("T-2"), "")).await.unwrap();
-    store.create(build("child b", Some("T-2"), "")).await.unwrap();
-    store.create(build("asks", None, ASKS)).await.unwrap();
+    store.create(SYS, build("parent", None, "")).await.unwrap();
+    store.create(SYS, build("child a", Some("T-2"), "")).await.unwrap();
+    store.create(SYS, build("child b", Some("T-2"), "")).await.unwrap();
+    store.create(SYS, build("asks", None, ASKS)).await.unwrap();
     for i in 6..=n {
-        store.create(build(&format!("plain {i}"), None, "")).await.unwrap();
+        store.create(SYS, build(&format!("plain {i}"), None, "")).await.unwrap();
     }
     drop(store);
     let then = chrono::Utc::now().timestamp() - 30 * DAY;
@@ -116,46 +116,46 @@ async fn each_kind_of_edit_touches_and_a_rollup_does_not() {
         let untouched = ids(store, "not touched within 1d");
         assert_eq!(untouched, every.difference(&want).cloned().collect(), "its negation, after {label}");
     };
-    store.amend("T-6", None, Some("a new body".into())).await.unwrap();
+    store.amend(SYS.permit("T-6"), None, Some("a new body".into())).await.unwrap();
     step(&store, "a body", &["T-6"]);
-    store.amend("T-7", Some("a new title".into()), None).await.unwrap();
+    store.amend(SYS.permit("T-7"), Some("a new title".into()), None).await.unwrap();
     step(&store, "a title", &["T-7"]);
     // A child's status moves its parent's roll-up, not its parent's row.
-    store.set_status("T-3", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("T-3"), Status::Complete).await.unwrap();
     step(&store, "a child's status", &["T-3"]);
-    store.set_kind("T-8", Kind::Gap, None).await.unwrap();
+    store.set_kind(SYS.permit("T-8"), Kind::Gap, None).await.unwrap();
     step(&store, "a kind", &["T-8"]);
-    store.update("T-9", Update { severity: Some(Some(Severity::High)), ..Update::default() }).await.unwrap();
+    store.update(SYS.updating("T-9"), Update { severity: Some(Some(Severity::High)), ..Update::default() }).await.unwrap();
     step(&store, "a severity", &["T-9"]);
-    store.label("T-10", vec!["stale".into()], Vec::new()).await.unwrap();
+    store.label(SYS.permit("T-10"), vec!["stale".into()], Vec::new()).await.unwrap();
     step(&store, "a label", &["T-10"]);
-    store.link_commits("T-11", vec!["abc1234".into()]).await.unwrap();
+    store.link_commits(SYS.permit("T-11"), vec!["abc1234".into()]).await.unwrap();
     step(&store, "a commit", &["T-11"]);
     // A blocker: the ticket, and the blocker whose `unlocks` mirrors it.
-    store.update("T-12", Update { block: vec!["T-13".into()], ..Update::default() }).await.unwrap();
+    store.update(SYS.updating("T-12"), Update { block: vec!["T-13".into()], ..Update::default() }).await.unwrap();
     step(&store, "a blocker", &["T-12", "T-13"]);
     // A move: the child's row; the parents' counts are derived.
-    store.set_parent("T-14", "T-2").await.unwrap();
+    store.set_parent(SYS.moving("T-14", "T-2")).await.unwrap();
     step(&store, "a parent", &["T-14"]);
     // A child born: the newborn; its parent only counts it.
-    store.create(build("newborn", Some("T-15"), "")).await.unwrap();
+    store.create(SYS, build("newborn", Some("T-15"), "")).await.unwrap();
     step(&store, "a child born", &["T-21"]);
     // A comment and an answer, neither of which writes the row.
     let before = store.row("T-16").unwrap().0.updated_unix;
-    store.add_comment(anchor("T-16"), "still needed?".into(), None).await.unwrap();
+    store.add_comment(SYS, anchor("T-16"), "still needed?".into(), None).await.unwrap();
     assert_eq!(store.row("T-16").unwrap().0.updated_unix, before, "a comment writes no row");
     step(&store, "a comment", &["T-16"]);
-    store.answer("T-5", "notes", InputValue::Text { text: "ship it".into() }, None, AnswerSource::Api).await.unwrap();
+    store.answer(SYS.permit("T-5"), "notes", InputValue::Text { text: "ship it".into() }, None, AnswerSource::Api).await.unwrap();
     step(&store, "an answer", &["T-5"]);
     // Closing an input is not the owner's word on it: no touch.
-    store.close_input("T-5", "notes").await.unwrap();
+    store.close_input(SYS.permit("T-5"), "notes").await.unwrap();
     step(&store, "a close", &[]);
     // A cancel cascades: the parent's row and its open child's are written
     // (T-3 is done already and stays).
-    store.set_status("T-2", Status::Canceled).await.unwrap();
+    store.set_status(SYS.permit("T-2"), Status::Canceled).await.unwrap();
     step(&store, "a cancel's cascade", &["T-2", "T-4"]);
     // A comment on no ticket touches none.
-    store.add_comment(Anchor { ticket: None, route: "#/".into(), ..anchor("T-1") }, "the board".into(), None).await.unwrap();
+    store.add_comment(SYS, Anchor { ticket: None, route: "#/".into(), ..anchor("T-1") }, "the board".into(), None).await.unwrap();
     step(&store, "a comment on the board", &[]);
 
     let fresh = |store: &Store| {
@@ -195,19 +195,19 @@ async fn a_watch_hears_a_touched_ticket_leave() {
         out
     };
     let left = |id: &str| Membership::Left { id: id.into(), shortcode: ShortcodeId::from("T"), seq: id[2..].parse().unwrap() };
-    store.amend("T-6", None, Some("rewritten".into())).await.unwrap();
+    store.amend(SYS.permit("T-6"), None, Some("rewritten".into())).await.unwrap();
     assert_eq!(heard(&mut rx), [left("T-6")], "a body");
-    store.add_comment(anchor("T-7"), "is this still wanted?".into(), None).await.unwrap();
+    store.add_comment(SYS, anchor("T-7"), "is this still wanted?".into(), None).await.unwrap();
     assert_eq!(heard(&mut rx), [left("T-7")], "a comment");
-    store.answer("T-5", "notes", InputValue::Text { text: "yes".into() }, None, AnswerSource::App).await.unwrap();
+    store.answer(SYS.permit("T-5"), "notes", InputValue::Text { text: "yes".into() }, None, AnswerSource::App).await.unwrap();
     assert_eq!(heard(&mut rx), [left("T-5")], "an answer");
-    store.label("T-8", vec!["x".into()], Vec::new()).await.unwrap();
+    store.label(SYS.permit("T-8"), vec!["x".into()], Vec::new()).await.unwrap();
     assert_eq!(heard(&mut rx), [left("T-8")], "a label");
-    store.amend("T-6", None, Some("again".into())).await.unwrap();
+    store.amend(SYS.permit("T-6"), None, Some("again".into())).await.unwrap();
     assert!(heard(&mut rx).is_empty(), "gone already");
     // A child's status: the child leaves; the parent, whose roll-up moved,
     // stays.
-    store.set_status("T-3", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("T-3"), Status::Ready).await.unwrap();
     assert_eq!(heard(&mut rx), [left("T-3")], "the child alone");
 }
 
@@ -216,8 +216,8 @@ async fn a_watch_hears_a_touched_ticket_leave() {
 #[tokio::test]
 async fn a_touch_ages_out_of_a_relative_window() {
     let store = Store::new();
-    store.create(NewTicket { kind: Kind::Scope, ..build("root", None, "") }).await.unwrap();
-    store.create(build("one", None, "")).await.unwrap();
+    store.create(SYS, NewTicket { kind: Kind::Scope, ..build("root", None, "") }).await.unwrap();
+    store.create(SYS, build("one", None, "")).await.unwrap();
     let at = store.row("T-2").unwrap().0.updated_unix;
     let clock = |t: i64| Clock { fixed: Some(t), ..Clock::default() };
     let lens = Lens::parse("kind build and not touched within 1h").unwrap().with_clock(clock(at));

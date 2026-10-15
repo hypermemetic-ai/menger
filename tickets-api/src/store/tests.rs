@@ -75,12 +75,12 @@ fn ids(page: &Page) -> Vec<&str> {
 #[tokio::test]
 async fn the_index_pages_the_whole_store_in_order_exactly_once() {
     let store = Store::new();
-    store.create(scope("A", "a")).await.unwrap(); // MNG-12: the root first
+    store.create(SYS, scope("A", "a")).await.unwrap(); // MNG-12: the root first
     for _ in 0..10 {
-        store.create(new_ticket("A", "a")).await.unwrap();
+        store.create(SYS, new_ticket("A", "a")).await.unwrap();
     }
-    store.create(scope("B", "b")).await.unwrap();
-    store.create(scope("AB", "ab")).await.unwrap();
+    store.create(SYS, scope("B", "b")).await.unwrap();
+    store.create(SYS, scope("AB", "ab")).await.unwrap();
 
     let all: Vec<String> = store.list(SYS, None, None, None).await.unwrap().iter().map(|t| t.id.to_string()).collect();
     assert_eq!(
@@ -121,12 +121,12 @@ async fn a_page_composes_with_filters_and_a_bad_cursor_is_an_error() {
     let store = Store::new();
     for i in 0..6 {
         let nt = if i == 0 { scope("PG", "p") } else { new_ticket("PG", "p") };
-        let id = store.create(nt).await.unwrap().id;
+        let id = store.create(SYS, nt).await.unwrap().id;
         if i % 2 == 0 {
-            store.set_status(&id, Status::Ready).await.unwrap();
+            store.set_status(SYS.permit(&id), Status::Ready).await.unwrap();
         }
     }
-    store.create(scope("ZZ", "z")).await.unwrap();
+    store.create(SYS, scope("ZZ", "z")).await.unwrap();
 
     let page = store
         .page(SYS, PageQuery {
@@ -172,9 +172,9 @@ async fn a_page_composes_with_filters_and_a_bad_cursor_is_an_error() {
 async fn an_epic_filter_bounds_the_walk_wherever_the_cursor_sits() {
     let store = Store::new();
     for epic in ["AA", "MM", "ZZ"] {
-        store.create(scope(epic, "t")).await.unwrap();
+        store.create(SYS, scope(epic, "t")).await.unwrap();
         for _ in 0..2 {
-            store.create(new_ticket(epic, "t")).await.unwrap();
+            store.create(SYS, new_ticket(epic, "t")).await.unwrap();
         }
     }
     let epic_page = |after: Option<&'static str>, limit| {
@@ -218,11 +218,11 @@ async fn an_epic_filter_bounds_the_walk_wherever_the_cursor_sits() {
 #[tokio::test]
 async fn a_ticket_born_above_the_cursor_is_still_walked() {
     let store = Store::new();
-    store.create(scope("MID", "m")).await.unwrap();
+    store.create(SYS, scope("MID", "m")).await.unwrap();
     for _ in 0..2 {
-        store.create(new_ticket("MID", "m")).await.unwrap();
+        store.create(SYS, new_ticket("MID", "m")).await.unwrap();
     }
-    store.create(scope("AAA", "below")).await.unwrap();
+    store.create(SYS, scope("AAA", "below")).await.unwrap();
 
     let first = store
         .page(SYS, PageQuery {
@@ -233,8 +233,8 @@ async fn a_ticket_born_above_the_cursor_is_still_walked() {
     assert_eq!(ids(&first), ["AAA-1", "MID-1"]);
 
     // Mid-walk: one above the cursor (MID-4), one below it (AAA-2).
-    store.create(new_ticket("MID", "above")).await.unwrap();
-    store.create(new_ticket("AAA", "below again")).await.unwrap();
+    store.create(SYS, new_ticket("MID", "above")).await.unwrap();
+    store.create(SYS, new_ticket("AAA", "below again")).await.unwrap();
 
     let rest = store
         .page(SYS, PageQuery {
@@ -253,18 +253,18 @@ async fn the_ready_set_pages_on_its_own_membership() {
     let store = Store::new();
     for i in 0..4 {
         let nt = if i == 0 { scope("RD", "r") } else { new_ticket("RD", "r") };
-        let id = store.create(nt).await.unwrap().id;
-        store.set_status(&id, Status::Ready).await.unwrap();
+        let id = store.create(SYS, nt).await.unwrap().id;
+        store.set_status(SYS.permit(&id), Status::Ready).await.unwrap();
     }
     store
-        .create(NewTicket {
+        .create(SYS, NewTicket {
             path: None,
             blocked_by: vec!["RD-1".into()],
             ..new_ticket("RD", "blocked")
         })
         .await
         .unwrap();
-    store.set_status("RD-5", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("RD-5"), Status::Ready).await.unwrap();
 
     let page = store.ready_page(SYS, None, None, Some(2)).unwrap();
     assert_eq!(ids(&page), ["RD-1", "RD-2"]);
@@ -391,7 +391,7 @@ async fn legacy_ticket_type_migrates_durably_on_first_open() {
     for (id, kind) in expected {
         assert_eq!(store.get(SYS, id).await.unwrap().kind, kind, "{id} after reopen");
     }
-    let next = store.create(new_ticket("LEG", "born after the migration")).await.unwrap();
+    let next = store.create(SYS, new_ticket("LEG", "born after the migration")).await.unwrap();
     assert_eq!(next.id, "LEG-6");
     assert_eq!(next.kind, Kind::Build);
 }
@@ -477,13 +477,13 @@ async fn a_childs_birth_updates_its_parent_and_is_broadcast() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("family.db");
     let store = Store::open(&path).unwrap();
-    let parent = store.create(scope("FAM", "the parent")).await.unwrap();
+    let parent = store.create(SYS, scope("FAM", "the parent")).await.unwrap();
     assert_eq!(parent.parent, None);
     assert_eq!(parent.child_count, 0);
 
     let mut rx = store.subscribe();
     let child = store
-        .create(child_of("FAM", "the output", "FAM-1"))
+        .create(SYS, child_of("FAM", "the output", "FAM-1"))
         .await
         .unwrap();
     assert_eq!(child.parent.as_deref(), Some("FAM-1"));
@@ -523,9 +523,9 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
     let store = Store::new();
     // MNG-12: the shortcode's scope root comes first, so the orphan
     // would be CHAIN-2.
-    store.create(scope("CHAIN", "root")).await.unwrap();
+    store.create(SYS, scope("CHAIN", "root")).await.unwrap();
     let err = store
-        .create(child_of("CHAIN", "orphan", "CHAIN-9"))
+        .create(SYS, child_of("CHAIN", "orphan", "CHAIN-9"))
         .await
         .unwrap_err();
     match &err {
@@ -544,7 +544,7 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
     // missing parent, before any cycle can be formed. The id stays
     // unallocated: the next successful create still takes CHAIN-2.
     let err = store
-        .create(child_of("CHAIN", "myself", "CHAIN-2"))
+        .create(SYS, child_of("CHAIN", "myself", "CHAIN-2"))
         .await
         .unwrap_err();
     assert!(
@@ -554,7 +554,7 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
 
     // Three deep, the middle link in another epic (its scope root).
     store
-        .create(NewTicket {
+        .create(SYS, NewTicket {
             path: None,
             kind: Kind::Scope,
             ..child_of("OTHER", "middle", "CHAIN-1")
@@ -564,7 +564,7 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
     // MNG-14: a non-root stays inside its shortcode — the leaf under
     // OTHER-1 is OTHER-2, and a CHAIN ticket naming OTHER-1 is refused.
     let err = store
-        .create(child_of("CHAIN", "leaf", "OTHER-1"))
+        .create(SYS, child_of("CHAIN", "leaf", "OTHER-1"))
         .await
         .unwrap_err();
     assert!(
@@ -573,7 +573,7 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
     );
     assert!(err.to_string().contains("OTHER-1") && err.to_string().contains("outside"), "{err}");
     store
-        .create(child_of("OTHER", "leaf", "OTHER-1"))
+        .create(SYS, child_of("OTHER", "leaf", "OTHER-1"))
         .await
         .unwrap();
     assert_eq!(store.get(SYS, "CHAIN-1").await.unwrap().parent, None);
@@ -610,10 +610,10 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
 #[tokio::test]
 async fn a_parent_that_is_also_a_blocker_gets_both_edges() {
     let store = Store::new();
-    store.create(scope("BOTH", "the parent")).await.unwrap();
+    store.create(SYS, scope("BOTH", "the parent")).await.unwrap();
     let mut rx = store.subscribe();
     let child = store
-        .create(NewTicket {
+        .create(SYS, NewTicket {
             path: None,
             blocked_by: vec!["BOTH-1".into()],
             ..child_of("BOTH", "report", "BOTH-1")
@@ -647,19 +647,19 @@ async fn a_parent_that_is_also_a_blocker_gets_both_edges() {
 #[tokio::test]
 async fn list_filters_by_parent() {
     let store = Store::new();
-    store.create(scope("LP", "parent")).await.unwrap();
-    store.create(new_ticket("LP", "unrelated")).await.unwrap();
-    store.create(child_of("LP", "child a", "LP-1")).await.unwrap();
+    store.create(SYS, scope("LP", "parent")).await.unwrap();
+    store.create(SYS, new_ticket("LP", "unrelated")).await.unwrap();
+    store.create(SYS, child_of("LP", "child a", "LP-1")).await.unwrap();
     store
-        .create(NewTicket {
+        .create(SYS, NewTicket {
             path: None,
             kind: Kind::Scope,
             ..child_of("ZZ", "child b", "LP-1")
         })
         .await
         .unwrap();
-    store.create(child_of("LP", "grandchild", "LP-3")).await.unwrap();
-    store.set_status("LP-3", Status::Ready).await.unwrap();
+    store.create(SYS, child_of("LP", "grandchild", "LP-3")).await.unwrap();
+    store.set_status(SYS.permit("LP-3"), Status::Ready).await.unwrap();
 
     // MNG-14: "unrelated" (LP-2) named no parent, so it defaulted to
     // the shortcode root and is LP-1's child too.
@@ -759,7 +759,7 @@ async fn pre_ags19_database_backfills_typed_parents_from_frontmatter() {
     let store = Store::open(&path).unwrap();
     assert_eq!(db::migrate_add_parenthood(&mut Connection::open(&path).unwrap()).unwrap(), 0);
     assert_eq!(store.get(SYS, "OLD-4").await.unwrap().parent.as_deref(), Some("OLD-2"));
-    let next = store.create(child_of("OLD", "born after", "OLD-4")).await.unwrap();
+    let next = store.create(SYS, child_of("OLD", "born after", "OLD-4")).await.unwrap();
     assert_eq!(next.id, "OLD-7");
     assert_eq!(next.parent.as_deref(), Some("OLD-4"));
     assert_eq!(children(&store, "OLD-4"), vec!["OLD-7"]);
@@ -799,7 +799,7 @@ async fn reopen_round_trips_every_field_and_continues_seq() {
     let (after_flip, child) = {
         let store = Store::open(&path).unwrap();
         store
-            .create(NewTicket {
+            .create(SYS, NewTicket {
                 path: None,
                 epic: "rt".into(),
                 title: "first — ünïcode ✓".into(),
@@ -813,10 +813,10 @@ async fn reopen_round_trips_every_field_and_continues_seq() {
             .unwrap();
         // AGS-19: the parent edge and its mirror ride the same path.
         let child = store
-            .create(child_of("RT", "its output", "RT-1"))
+            .create(SYS, child_of("RT", "its output", "RT-1"))
             .await
             .unwrap();
-        let parent = match store.set_status("RT-1", Status::Ready).await.unwrap() {
+        let parent = match store.set_status(SYS.permit("RT-1"), Status::Ready).await.unwrap() {
             Change::StatusChanged { ticket, previous } => {
                 assert_eq!(previous, Status::Pending);
                 ticket
@@ -835,7 +835,7 @@ async fn reopen_round_trips_every_field_and_continues_seq() {
     assert_eq!(store.get(SYS, "RT-2").await.unwrap().parent.as_deref(), Some("RT-1"));
 
     // Id allocation continues from the persisted max, not from 1.
-    let next = store.create(new_ticket("RT", "second")).await.unwrap();
+    let next = store.create(SYS, new_ticket("RT", "second")).await.unwrap();
     assert_eq!(next.id, "RT-3");
     assert_eq!(next.seq, 3);
     assert_eq!(next.parent.as_deref(), Some("RT-1"), "MNG-14: defaulted to the root");
@@ -848,7 +848,7 @@ async fn fresh_location_is_an_empty_store() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("brand-new.db")).unwrap();
     assert_eq!(store.count(SYS), 0);
-    assert!(store.create(scope("NEW", "works")).await.is_ok());
+    assert!(store.create(SYS, scope("NEW", "works")).await.is_ok());
 }
 
 // ---- PERF-2: synthetic seeding -------------------------------------
@@ -906,7 +906,7 @@ async fn seed_ten_thousand_has_a_valid_dag_and_correct_queries() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("seeded.db");
     let store = Store::open(&path).unwrap();
-    let report = store.seed_synthetic(spec(10_000, 42)).unwrap();
+    let report = store.seed_synthetic(SYS, spec(10_000, 42)).unwrap();
     assert_eq!(report.count, 10_000);
     assert_eq!(store.count(SYS), 10_000);
     assert!(report.epics >= 10, "several epics, got {}", report.epics);
@@ -1006,9 +1006,9 @@ async fn seed_is_deterministic_per_seed_value() {
     let a = Store::new();
     let b = Store::new();
     let c = Store::new();
-    a.seed_synthetic(spec(500, 7)).unwrap();
-    b.seed_synthetic(spec(500, 7)).unwrap();
-    c.seed_synthetic(spec(500, 8)).unwrap();
+    a.seed_synthetic(SYS, spec(500, 7)).unwrap();
+    b.seed_synthetic(SYS, spec(500, 7)).unwrap();
+    c.seed_synthetic(SYS, spec(500, 8)).unwrap();
     let la = a.list(SYS, None, None, None).await.unwrap();
     assert_eq!(la, b.list(SYS, None, None, None).await.unwrap());
     assert_ne!(la, c.list(SYS, None, None, None).await.unwrap());
@@ -1021,9 +1021,9 @@ async fn seed_is_deterministic_per_seed_value() {
 #[tokio::test]
 async fn seed_refuses_an_existing_store_unless_allowed_then_continues_ids() {
     let store = Store::new();
-    store.create(scope("REAL", "already here")).await.unwrap();
+    store.create(SYS, scope("REAL", "already here")).await.unwrap();
 
-    let err = store.seed_synthetic(spec(100, 1)).unwrap_err();
+    let err = store.seed_synthetic(SYS, spec(100, 1)).unwrap_err();
     assert!(matches!(err, StoreError::SeedRefused { existing: 1 }), "{err}");
     assert!(err.to_string().contains("already holds 1 ticket"), "{err}");
     assert_eq!(store.count(SYS), 1, "nothing was written");
@@ -1032,13 +1032,13 @@ async fn seed_refuses_an_existing_store_unless_allowed_then_continues_ids() {
         into_existing: true,
         ..spec(100, 1)
     };
-    store.seed_synthetic(allowed).unwrap();
+    store.seed_synthetic(SYS, allowed).unwrap();
     assert_eq!(store.count(SYS), 101);
     // Seeding the same spec again regenerates the same epics: the
     // second batch must continue their numbering (the normal
     // allocation), which the UNIQUE (epic, seq) constraint would
     // otherwise reject.
-    store.seed_synthetic(allowed).unwrap();
+    store.seed_synthetic(SYS, allowed).unwrap();
     assert_eq!(store.count(SYS), 201);
     let all = store.list(SYS, None, None, None).await.unwrap();
     let mut ids: Vec<&str> = all.iter().map(|t| t.id.as_str()).collect();
@@ -1047,19 +1047,19 @@ async fn seed_refuses_an_existing_store_unless_allowed_then_continues_ids() {
     assert_eq!(ids.len(), 201);
     assert!(store.get(SYS, "REAL-1").await.is_ok());
     // The normal write path still works afterwards.
-    let next = store.create(new_ticket("REAL", "after the seed")).await.unwrap();
+    let next = store.create(SYS, new_ticket("REAL", "after the seed")).await.unwrap();
     assert_eq!(next.id, "REAL-2");
 }
 
 #[test]
 fn seed_of_zero_is_a_no_op_and_small_counts_work() {
     let store = Store::new();
-    let r = store.seed_synthetic(spec(0, 1)).unwrap();
+    let r = store.seed_synthetic(SYS, spec(0, 1)).unwrap();
     assert_eq!((r.count, r.epics, r.edges), (0, 0, 0));
     assert_eq!(store.count(SYS), 0);
     for n in [1, 2, 3, 10] {
         let s = Store::new();
-        s.seed_synthetic(spec(n, 1)).unwrap();
+        s.seed_synthetic(SYS, spec(n, 1)).unwrap();
         assert_eq!(s.count(SYS), n);
     }
 }
@@ -1067,13 +1067,13 @@ fn seed_of_zero_is_a_no_op_and_small_counts_work() {
 #[tokio::test]
 async fn concurrent_creates_never_collide_on_ids() {
     let store = Arc::new(Store::new());
-    store.create(scope("RACE", "root")).await.unwrap();
+    store.create(SYS, scope("RACE", "root")).await.unwrap();
     let mut handles = Vec::new();
     for i in 0..16 {
         let store = store.clone();
         handles.push(tokio::spawn(async move {
             store
-                .create(new_ticket("RACE", &format!("t{i}")))
+                .create(SYS, new_ticket("RACE", &format!("t{i}")))
                 .await
                 .unwrap()
                 .id
@@ -1096,7 +1096,7 @@ async fn concurrent_creates_never_collide_on_ids() {
 #[tokio::test]
 async fn first_ticket_of_a_shortcode_must_be_a_scope() {
     let store = Store::new();
-    let err = store.create(new_ticket("FRESH", "a build first")).await.unwrap_err();
+    let err = store.create(SYS, new_ticket("FRESH", "a build first")).await.unwrap_err();
     match &err {
         StoreError::FirstMustBeScope { epic, kind } => {
             assert_eq!(epic, "FRESH");
@@ -1108,10 +1108,10 @@ async fn first_ticket_of_a_shortcode_must_be_a_scope() {
     assert!(msg.contains("FRESH") && msg.contains("scope") && msg.contains("build"), "{msg}");
     assert_eq!(store.count(SYS), 0, "nothing was created");
 
-    let root = store.create(scope("fresh", "the root")).await.unwrap();
+    let root = store.create(SYS, scope("fresh", "the root")).await.unwrap();
     assert_eq!(root.id, "FRESH-1", "the refused create allocated nothing");
     assert_eq!(root.kind, Kind::Scope);
-    let next = store.create(new_ticket("FRESH", "a build second")).await.unwrap();
+    let next = store.create(SYS, new_ticket("FRESH", "a build second")).await.unwrap();
     assert_eq!(next.id, "FRESH-2");
     assert_eq!(next.kind, Kind::Build);
     assert_eq!(next.parent.as_deref(), Some("FRESH-1"), "defaults to the shortcode root");
@@ -1124,10 +1124,10 @@ async fn first_ticket_of_a_shortcode_must_be_a_scope() {
 #[tokio::test]
 async fn a_parent_stays_inside_the_shortcode_except_for_the_root() {
     let store = Store::new();
-    store.create(scope("HOST", "the host")).await.unwrap();
+    store.create(SYS, scope("HOST", "the host")).await.unwrap();
     // A new shortcode's root may hang under HOST-1 …
     let sub = store
-        .create(NewTicket {
+        .create(SYS, NewTicket {
             path: None,
             kind: Kind::Scope,
             ..child_of("SUB", "a sub-shortcode", "HOST-1")
@@ -1136,7 +1136,7 @@ async fn a_parent_stays_inside_the_shortcode_except_for_the_root() {
         .unwrap();
     assert_eq!(sub.parent.as_deref(), Some("HOST-1"));
     // … but its non-root tickets may not.
-    let err = store.create(child_of("SUB", "escapes", "HOST-1")).await.unwrap_err();
+    let err = store.create(SYS, child_of("SUB", "escapes", "HOST-1")).await.unwrap_err();
     match &err {
         StoreError::ParentOutsideShortcode { id, parent } => {
             assert_eq!(id, "SUB-2");
@@ -1146,13 +1146,13 @@ async fn a_parent_stays_inside_the_shortcode_except_for_the_root() {
     }
     assert_eq!(store.count(SYS), 2, "nothing was created");
     // Nor be moved out afterwards; the root can be re-hosted.
-    store.create(new_ticket("SUB", "inside")).await.unwrap(); // SUB-2 → SUB-1
+    store.create(SYS, new_ticket("SUB", "inside")).await.unwrap(); // SUB-2 → SUB-1
     assert!(matches!(
-        store.set_parent("SUB-2", "HOST-1").await.unwrap_err(),
+        store.set_parent(SYS.moving("SUB-2", "HOST-1")).await.unwrap_err(),
         StoreError::ParentOutsideShortcode { .. }
     ));
-    store.create(scope("HOST2", "another host")).await.unwrap();
-    store.set_parent("SUB-1", "HOST2-1").await.unwrap();
+    store.create(SYS, scope("HOST2", "another host")).await.unwrap();
+    store.set_parent(SYS.moving("SUB-1", "HOST2-1")).await.unwrap();
     assert_eq!(store.get(SYS, "SUB-1").await.unwrap().parent.as_deref(), Some("HOST2-1"));
     assert_eq!(children(&store, "HOST-1"), Vec::<String>::new());
     assert_eq!(children(&store, "HOST2-1"), vec!["SUB-1"]);
@@ -1168,13 +1168,13 @@ async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("move.db");
     let store = Store::open(&path).unwrap();
-    store.create(scope("AD", "the root")).await.unwrap(); // AD-1
-    store.create(new_ticket("AD", "a")).await.unwrap(); // AD-2 → AD-1
-    store.create(new_ticket("AD", "b")).await.unwrap(); // AD-3 → AD-1
+    store.create(SYS, scope("AD", "the root")).await.unwrap(); // AD-1
+    store.create(SYS, new_ticket("AD", "a")).await.unwrap(); // AD-2 → AD-1
+    store.create(SYS, new_ticket("AD", "b")).await.unwrap(); // AD-3 → AD-1
     assert_eq!(children(&store, "AD-1"), vec!["AD-2", "AD-3"]);
     let mut rx = store.subscribe();
 
-    match store.set_parent("ad-3", "ad-2").await.unwrap() {
+    match store.set_parent(SYS.moving("ad-3", "ad-2")).await.unwrap() {
         Change::ParentChanged { ticket, previous } => {
             assert_eq!(ticket.id, "AD-3");
             assert_eq!(ticket.parent.as_deref(), Some("AD-2"));
@@ -1207,7 +1207,7 @@ async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
     assert!(rx.try_change().is_err());
 
     // Idempotent: the parent it already has writes and emits nothing.
-    match store.set_parent("AD-3", "AD-2").await.unwrap() {
+    match store.set_parent(SYS.moving("AD-3", "AD-2")).await.unwrap() {
         Change::ParentChanged { previous, .. } => assert_eq!(previous.as_deref(), Some("AD-2")),
         other => panic!("expected ParentChanged, got {other:?}"),
     }
@@ -1227,30 +1227,30 @@ async fn set_parent_moves_a_ticket_broadcasts_and_is_durable() {
 #[tokio::test]
 async fn set_parent_guards_ancestry_and_a_move_removes_from_the_old_parent() {
     let store = Store::new();
-    store.create(scope("MV", "root")).await.unwrap(); // MV-1
-    store.create(child_of("MV", "a", "MV-1")).await.unwrap(); // MV-2
-    store.create(child_of("MV", "b", "MV-2")).await.unwrap(); // MV-3
-    store.create(new_ticket("MV", "loose")).await.unwrap(); // MV-4 → MV-1 (MNG-14)
+    store.create(SYS, scope("MV", "root")).await.unwrap(); // MV-1
+    store.create(SYS, child_of("MV", "a", "MV-1")).await.unwrap(); // MV-2
+    store.create(SYS, child_of("MV", "b", "MV-2")).await.unwrap(); // MV-3
+    store.create(SYS, new_ticket("MV", "loose")).await.unwrap(); // MV-4 → MV-1 (MNG-14)
 
     assert!(matches!(
-        store.set_parent("MV-9", "MV-1").await.unwrap_err(),
+        store.set_parent(SYS.moving("MV-9", "MV-1")).await.unwrap_err(),
         StoreError::NotFound(_)
     ));
-    match store.set_parent("MV-4", "MV-9").await.unwrap_err() {
+    match store.set_parent(SYS.moving("MV-4", "MV-9")).await.unwrap_err() {
         StoreError::ParentNotFound { id, parent } => {
             assert_eq!(id, "MV-4");
             assert_eq!(parent, "MV-9");
         }
         other => panic!("expected ParentNotFound, got {other:?}"),
     }
-    match store.set_parent("MV-2", "MV-2").await.unwrap_err() {
+    match store.set_parent(SYS.moving("MV-2", "MV-2")).await.unwrap_err() {
         StoreError::ParentCycle { id, path } => {
             assert_eq!(id, "MV-2");
             assert_eq!(path, vec!["MV-2"]);
         }
         other => panic!("expected ParentCycle, got {other:?}"),
     }
-    match store.set_parent("MV-1", "MV-3").await.unwrap_err() {
+    match store.set_parent(SYS.moving("MV-1", "MV-3")).await.unwrap_err() {
         StoreError::ParentCycle { id, path } => {
             assert_eq!(id, "MV-1");
             assert_eq!(path, vec!["MV-3", "MV-2", "MV-1"]);
@@ -1264,7 +1264,7 @@ async fn set_parent_guards_ancestry_and_a_move_removes_from_the_old_parent() {
 
     // The move: MV-3 from under MV-2 to under MV-1.
     let mut rx = store.subscribe();
-    store.set_parent("MV-3", "MV-1").await.unwrap();
+    store.set_parent(SYS.moving("MV-3", "MV-1")).await.unwrap();
     assert!(matches!(
         rx.change().await.unwrap(),
         Change::ParentChanged { previous: Some(p), .. } if p == "MV-2"
@@ -1465,15 +1465,15 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
         kind: Kind::Scope,
         ..child_of(epic, title, host)
     };
-    store.create(scope("PLEX", "plexus")).await.unwrap(); // PLEX-1
-    store.create(new_ticket("PLEX", "core")).await.unwrap(); // PLEX-2 → PLEX-1
-    store.create(sub("TRAN", "transport", "PLEX-1")).await.unwrap(); // TRAN-1
-    store.create(new_ticket("TRAN", "ws")).await.unwrap(); // TRAN-2 → TRAN-1
-    store.create(new_ticket("TRAN", "rest")).await.unwrap(); // TRAN-3 → TRAN-1
-    store.create(sub("WIRE", "wire", "TRAN-2")).await.unwrap(); // WIRE-1
-    store.create(new_ticket("WIRE", "frames")).await.unwrap(); // WIRE-2 → WIRE-1
-    store.create(scope("SOLO", "alone")).await.unwrap(); // SOLO-1
-    store.create(new_ticket("SOLO", "one")).await.unwrap(); // SOLO-2 → SOLO-1
+    store.create(SYS, scope("PLEX", "plexus")).await.unwrap(); // PLEX-1
+    store.create(SYS, new_ticket("PLEX", "core")).await.unwrap(); // PLEX-2 → PLEX-1
+    store.create(SYS, sub("TRAN", "transport", "PLEX-1")).await.unwrap(); // TRAN-1
+    store.create(SYS, new_ticket("TRAN", "ws")).await.unwrap(); // TRAN-2 → TRAN-1
+    store.create(SYS, new_ticket("TRAN", "rest")).await.unwrap(); // TRAN-3 → TRAN-1
+    store.create(SYS, sub("WIRE", "wire", "TRAN-2")).await.unwrap(); // WIRE-1
+    store.create(SYS, new_ticket("WIRE", "frames")).await.unwrap(); // WIRE-2 → WIRE-1
+    store.create(SYS, scope("SOLO", "alone")).await.unwrap(); // SOLO-1
+    store.create(SYS, new_ticket("SOLO", "one")).await.unwrap(); // SOLO-2 → SOLO-1
 
     assert_eq!(
         bare(store.groups(SYS)),
@@ -1489,7 +1489,7 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
 
     // Acceptance 2: one shortcode, one event, done + 1, after the
     // status change it follows from.
-    store.set_status("SOLO-2", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("SOLO-2"), Status::Complete).await.unwrap();
     assert!(matches!(rx.try_change().unwrap(), Change::StatusChanged { .. }));
     match rx.try_change().unwrap() {
         Change::GroupChanged { group: g } => assert_eq!(bare(vec![g]), [group("SOLO", 2, 1, "SOLO-1", None)]),
@@ -1500,12 +1500,12 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     assert!(rx.try_change().is_err(), "one group moved, one event");
 
     // Not a crossing of Complete: nothing moves.
-    store.set_status("WIRE-2", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("WIRE-2"), Status::Ready).await.unwrap();
     assert!(matches!(rx.try_change().unwrap(), Change::StatusChanged { .. }));
     assert!(rx.try_change().is_err(), "Pending → Ready moves no count");
 
     // Deepest first: WIRE, the TRAN row it nests in, then PLEX.
-    store.set_status("WIRE-2", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("WIRE-2"), Status::Complete).await.unwrap();
     assert_eq!(
         bare(group_changes(&mut rx)),
         vec![
@@ -1515,13 +1515,13 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
         ]
     );
     // Superseded is not done (the nav's rule): back out the same way.
-    store.set_status("WIRE-2", Status::Superseded).await.unwrap();
+    store.set_status(SYS.permit("WIRE-2"), Status::Superseded).await.unwrap();
     let done: Vec<(String, u64)> =
         group_changes(&mut rx).into_iter().map(|g| (g.epic.to_string(), g.done)).collect();
     assert_eq!(done, [("WIRE".into(), 0), ("TRAN".into(), 0), ("PLEX".into(), 0)]);
 
     // A birth deep inside counts in every row around it.
-    store.create(new_ticket("WIRE", "more")).await.unwrap(); // WIRE-3
+    store.create(SYS, new_ticket("WIRE", "more")).await.unwrap(); // WIRE-3
     let totals: Vec<(String, u64)> =
         group_changes(&mut rx).into_iter().map(|g| (g.epic.to_string(), g.total)).collect();
     assert_eq!(totals, [("WIRE".into(), 3), ("TRAN".into(), 6), ("PLEX".into(), 8)]);
@@ -1530,7 +1530,7 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
     // Re-hosting a sub-shortcode moves its whole count: WIRE from under
     // TRAN-2 to under SOLO-1. After the ticket events, every row that
     // moved — innermost first, then shortcode order.
-    store.set_parent("WIRE-1", "SOLO-1").await.unwrap();
+    store.set_parent(SYS.moving("WIRE-1", "SOLO-1")).await.unwrap();
     assert!(matches!(rx.try_change().unwrap(), Change::ParentChanged { .. }));
     assert!(matches!(rx.try_change().unwrap(), Change::ChildrenChanged { .. }));
     assert!(matches!(rx.try_change().unwrap(), Change::ChildRemoved { .. }));
@@ -1547,7 +1547,7 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
 
     // A top-level shortcode becomes a sub-shortcode: SOLO (and WIRE
     // inside it) under PLEX-2. Its pool moves whole.
-    store.set_parent("SOLO-1", "PLEX-2").await.unwrap();
+    store.set_parent(SYS.moving("SOLO-1", "PLEX-2")).await.unwrap();
     assert_eq!(
         bare(store.groups(SYS)),
         vec![
@@ -1573,10 +1573,10 @@ async fn groups_roll_up_sub_shortcodes_as_the_nav_draws_them() {
 #[tokio::test]
 async fn a_group_carries_its_roots_row_and_a_change_to_it_is_a_group_change() {
     let store = Store::new();
-    store.create(scope("HOST", "the host")).await.unwrap(); // HOST-1
-    store.create(new_ticket("HOST", "work")).await.unwrap(); // HOST-2 → HOST-1
+    store.create(SYS, scope("HOST", "the host")).await.unwrap(); // HOST-1
+    store.create(SYS, new_ticket("HOST", "work")).await.unwrap(); // HOST-2 → HOST-1
     store
-        .create(NewTicket { kind: Kind::Scope, ..child_of("SUB", "the sub", "HOST-2") })
+        .create(SYS, NewTicket { kind: Kind::Scope, ..child_of("SUB", "the sub", "HOST-2") })
         .await
         .unwrap(); // SUB-1, hosted under HOST-2
     let row = |title: &str, status| Some(RootRow { title: title.into(), status, kind: Kind::Scope });
@@ -1587,7 +1587,7 @@ async fn a_group_carries_its_roots_row_and_a_change_to_it_is_a_group_change() {
     let mut rx = store.subscribe();
 
     // A root's status, crossing nothing: its group, once, after the ticket.
-    store.set_status("SUB-1", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("SUB-1"), Status::Ready).await.unwrap();
     assert!(matches!(rx.try_change().unwrap(), Change::StatusChanged { .. }));
     match rx.try_change().unwrap() {
         Change::GroupChanged { group } => {
@@ -1599,32 +1599,32 @@ async fn a_group_carries_its_roots_row_and_a_change_to_it_is_a_group_change() {
     assert!(rx.try_change().is_err(), "the root's group only — not the host's");
 
     // Across Complete: the counts' own report carries the new row, once.
-    store.set_status("SUB-1", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("SUB-1"), Status::Complete).await.unwrap();
     let moved = group_changes(&mut rx);
     assert_eq!(moved.iter().map(|g| g.epic.as_str()).collect::<Vec<_>>(), ["SUB", "HOST"], "innermost first");
     assert_eq!(moved[0].root_row, row("the sub", Status::Complete));
     assert_eq!(moved[1].root_row, row("the host", Status::Pending));
 
     // The status it already has: the ticket event, no group.
-    store.set_status("SUB-1", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("SUB-1"), Status::Complete).await.unwrap();
     assert!(matches!(rx.try_change().unwrap(), Change::StatusChanged { .. }));
     assert!(rx.try_change().is_err());
 
     // A root's title: its group, after the `Amended`; a body alone, none.
-    store.amend("HOST-1", Some("the host, renamed".into()), None).await.unwrap();
+    store.amend(SYS.permit("HOST-1"), Some("the host, renamed".into()), None).await.unwrap();
     assert!(matches!(rx.try_change().unwrap(), Change::Amended { .. }));
     match rx.try_change().unwrap() {
         Change::GroupChanged { group } => assert_eq!(group.root_row, row("the host, renamed", Status::Pending)),
         other => panic!("expected GroupChanged, got {other:?}"),
     }
     assert!(rx.try_change().is_err());
-    store.amend("HOST-1", None, Some("a body".into())).await.unwrap();
+    store.amend(SYS.permit("HOST-1"), None, Some("a body".into())).await.unwrap();
     assert!(matches!(rx.try_change().unwrap(), Change::Amended { .. }));
     assert!(rx.try_change().is_err(), "a body is not on the row");
 
     // Not a root: a ticket event and nothing more.
-    store.set_status("HOST-2", Status::Ready).await.unwrap();
-    store.amend("HOST-2", Some("other work".into()), None).await.unwrap();
+    store.set_status(SYS.permit("HOST-2"), Status::Ready).await.unwrap();
+    store.amend(SYS.permit("HOST-2"), Some("other work".into()), None).await.unwrap();
     assert!(matches!(rx.try_change().unwrap(), Change::StatusChanged { .. }));
     assert!(matches!(rx.try_change().unwrap(), Change::Amended { .. }));
     assert!(rx.try_change().is_err());
@@ -1752,7 +1752,7 @@ async fn hand_edited_shapes_roll_up_as_drawn_and_their_repair_rebuilds() {
 
     // Off the cycle: CYC-2 under CYC-4 frees CYC-1 (and CYC-3 with
     // it) — all still in CYC's row, so nothing is reported.
-    store.set_parent("CYC-2", "CYC-4").await.unwrap();
+    store.set_parent(SYS.moving("CYC-2", "CYC-4")).await.unwrap();
     assert_eq!(store.groups(SYS), nav(&store));
     assert_eq!(group_changes(&mut rx), Vec::<Group>::new());
 
@@ -1761,7 +1761,7 @@ async fn hand_edited_shapes_roll_up_as_drawn_and_their_repair_rebuilds() {
     // CXB-1's parent CXC-1 one of CXC: three rows nest into PLEX at
     // once, each inside the last.
     let before = nav(&store);
-    store.set_parent("CXA-1", "PLEX-2").await.unwrap();
+    store.set_parent(SYS.moving("CXA-1", "PLEX-2")).await.unwrap();
     let after = nav(&store);
     assert_eq!(store.groups(SYS), after);
     let at = |epic: &str| after.iter().find(|g| g.epic == epic).cloned().unwrap();
@@ -1781,7 +1781,7 @@ async fn hand_edited_shapes_roll_up_as_drawn_and_their_repair_rebuilds() {
 
     // The ghost is born: ORPH-2 now hangs under it, in GHOST's row.
     let before = nav(&store);
-    store.create(scope("GHOST", "late")).await.unwrap();
+    store.create(SYS, scope("GHOST", "late")).await.unwrap();
     let after = nav(&store);
     assert_eq!(store.groups(SYS), after);
     assert_eq!(
@@ -1855,7 +1855,7 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
                     parent,
                     ..new_ticket(epic, "walked")
                 };
-                if store.create(new).await.is_ok() {
+                if store.create(SYS, new).await.is_ok() {
                     writes += 1;
                 }
                 what
@@ -1870,7 +1870,7 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
                 // SDLC-11: a doc's status never moves, and Doc is no other
                 // kind's — both refused, and nothing is drawn differently.
                 let kind = store.get(SYS, &id).await.unwrap().kind;
-                match store.set_status(&id, status).await {
+                match store.set_status(SYS.permit(&id), status).await {
                     Ok(_) => writes += 1,
                     Err(StoreError::DocHasNoLifecycle { .. }) => assert_eq!(kind, Kind::Doc, "{id}"),
                     Err(StoreError::DocStatusOnWork { .. }) => assert_eq!(status, Status::Doc, "{id}"),
@@ -1894,7 +1894,7 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
                     any(&mut rng)
                 };
                 let was = store.get(SYS, &child).await.unwrap().parent;
-                if store.set_parent(&child, &parent).await.is_ok()
+                if store.set_parent(SYS.moving(&child, &parent)).await.is_ok()
                     && was.as_deref() != Some(parent.as_str())
                 {
                     writes += 1;
@@ -1930,7 +1930,7 @@ async fn the_roll_ups_stay_the_navs_plan_through_every_kind_of_write() {
 #[tokio::test]
 async fn a_seeded_store_rolls_up_as_the_nav_draws_it() {
     let store = Store::new();
-    let report = store.seed_synthetic(spec(10_000, 42)).unwrap();
+    let report = store.seed_synthetic(SYS, spec(10_000, 42)).unwrap();
     let groups = store.groups(SYS);
     assert_eq!(groups.len(), report.epics);
     assert_eq!(groups, nav(&store));
@@ -1939,14 +1939,14 @@ async fn a_seeded_store_rolls_up_as_the_nav_draws_it() {
 
     let host = format!("{}-2", groups[0].epic);
     store
-        .set_parent(groups[1].root.as_deref().unwrap(), &host)
+        .set_parent(SYS.moving(groups[1].root.as_deref().unwrap(), &host))
         .await
         .unwrap();
     assert_eq!(store.groups(SYS), nav(&store));
     assert_eq!(store.groups(SYS)[1].host.as_deref(), Some(host.as_str()));
 
     store
-        .seed_synthetic(SeedSpec {
+        .seed_synthetic(SYS, SeedSpec {
             into_existing: true,
             ..spec(500, 3)
         })
@@ -2061,7 +2061,7 @@ async fn a_reopened_store_resolves_forward_references_at_birth_as_the_scan_did()
     {
         let store = Store::open(&path).unwrap();
         store
-            .create(NewTicket {
+            .create(SYS, NewTicket {
                 path: None,
                 blocked_by: vec!["FWD-3".into()],
                 ..scope("FWD", "names its third ticket")
@@ -2069,7 +2069,7 @@ async fn a_reopened_store_resolves_forward_references_at_birth_as_the_scan_did()
             .await
             .unwrap();
         store
-            .create(NewTicket {
+            .create(SYS, NewTicket {
                 path: None,
                 blocked_by: vec!["FWD-3".into(), "FWD-3".into(), "ZZZ-1".into()],
                 ..new_ticket("FWD", "names it twice, and an unborn shortcode")
@@ -2077,7 +2077,7 @@ async fn a_reopened_store_resolves_forward_references_at_birth_as_the_scan_did()
             .await
             .unwrap();
         store
-            .create(NewTicket {
+            .create(SYS, NewTicket {
                 path: None,
                 blocked_by: vec!["FWD-3".into()],
                 ..scope("AAA", "sorts before FWD, born after it")
@@ -2085,7 +2085,7 @@ async fn a_reopened_store_resolves_forward_references_at_birth_as_the_scan_did()
             .await
             .unwrap();
         store
-            .create(NewTicket {
+            .create(SYS, NewTicket {
                 path: None,
                 blocked_by: vec!["FWD-3".into()],
                 ..scope("ZZZ", "sorts after")
@@ -2101,7 +2101,7 @@ async fn a_reopened_store_resolves_forward_references_at_birth_as_the_scan_did()
     assert_eq!(unborn["FWD-3"], ["AAA-1", "FWD-1", "FWD-2", "ZZZ-1"]);
     assert_eq!(store.get(SYS, "ZZZ-1").await.unwrap().unlocks, ["FWD-2"], "resolved at ZZZ-1's birth");
 
-    let born = store.create(new_ticket("FWD", "the named one")).await.unwrap();
+    let born = store.create(SYS, new_ticket("FWD", "the named one")).await.unwrap();
     assert_eq!(born.id, "FWD-3");
     assert_eq!(born.unlocks, unborn["FWD-3"], "what the scan gave");
     assert_eq!(store.get(SYS, "FWD-3").await.unwrap().unlocks, born.unlocks);
@@ -2150,7 +2150,7 @@ async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_par
     );
 
     // Highest plus one, past the hole; GAP-2 stays unborn.
-    let t = store.create(new_ticket("GAP", "after the hole")).await.unwrap();
+    let t = store.create(SYS, new_ticket("GAP", "after the hole")).await.unwrap();
     assert_eq!((t.id.as_str(), t.unlocks.len()), ("GAP-4", 0));
     assert_kept_is_a_scan(&store, "a create past a hole");
 
@@ -2187,24 +2187,24 @@ async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_par
     ];
     for new in refused {
         let title = new.title.clone();
-        assert!(store.create(new).await.is_err(), "{title}");
+        assert!(store.create(SYS, new).await.is_err(), "{title}");
         assert_eq!(kept(&store), before, "a refused create indexed nothing: {title}");
         assert_kept_is_a_scan(&store, &title);
     }
-    let t = store.create(new_ticket("WAIT", "the id the refusals did not take")).await.unwrap();
+    let t = store.create(SYS, new_ticket("WAIT", "the id the refusals did not take")).await.unwrap();
     assert_eq!(t.id, "WAIT-2");
     assert_eq!(t.unlocks, ["WAIT-1"], "and the forward reference resolved");
     assert_kept_is_a_scan(&store, "WAIT-2's birth");
 
     // A first ticket of a shortcode named before it existed, as a parent
     // of nothing and a blocker of WAIT-1.
-    let t = store.create(scope("LATE", "named by WAIT-1")).await.unwrap();
+    let t = store.create(SYS, scope("LATE", "named by WAIT-1")).await.unwrap();
     assert_eq!((t.id.as_str(), t.unlocks.clone()), ("LATE-1", vec!["WAIT-1".to_string()]));
     assert_kept_is_a_scan(&store, "LATE-1's birth");
 
     // New forward references, and a create that is both blocker and parent.
     store
-        .create(NewTicket {
+        .create(SYS, NewTicket {
             path: None,
             blocked_by: vec!["WAIT-5".into(), "LATE-3".into(), "WAIT-2".into()],
             ..new_ticket("WAIT", "WAIT-3")
@@ -2213,7 +2213,7 @@ async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_par
         .unwrap();
     assert_kept_is_a_scan(&store, "a create naming two unborn ids");
     store
-        .create(NewTicket {
+        .create(SYS, NewTicket {
             path: None,
             blocked_by: vec!["WAIT-1".into()],
             parent: Some("WAIT-1".into()),
@@ -2221,16 +2221,16 @@ async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_par
         })
         .await
         .unwrap();
-    let t = store.create(new_ticket("WAIT", "WAIT-5")).await.unwrap();
+    let t = store.create(SYS, new_ticket("WAIT", "WAIT-5")).await.unwrap();
     assert_eq!(t.unlocks, ["WAIT-3"]);
     assert_kept_is_a_scan(&store, "WAIT-5's birth");
 
     // set_parent moves no sequence and no blocked_by.
-    store.set_parent("WAIT-3", "WAIT-2").await.unwrap();
+    store.set_parent(SYS.moving("WAIT-3", "WAIT-2")).await.unwrap();
     assert_kept_is_a_scan(&store, "set_parent");
-    store.set_parent("LATE-1", "WAIT-5").await.unwrap();
+    store.set_parent(SYS.moving("LATE-1", "WAIT-5")).await.unwrap();
     assert_kept_is_a_scan(&store, "set_parent of a root across shortcodes");
-    store.set_status("WAIT-2", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("WAIT-2"), Status::Complete).await.unwrap();
     assert_kept_is_a_scan(&store, "set_status");
 
     let held = kept(&store);
@@ -2238,9 +2238,9 @@ async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_par
     let store = Store::open(&path).unwrap();
     assert_eq!(kept(&store), held, "a reopen rebuilds what was kept");
     assert_kept_is_a_scan(&store, "the reopen");
-    let t = store.create(new_ticket("LATE", "LATE-2")).await.unwrap();
+    let t = store.create(SYS, new_ticket("LATE", "LATE-2")).await.unwrap();
     assert_eq!(t.id, "LATE-2");
-    let t = store.create(new_ticket("LATE", "LATE-3")).await.unwrap();
+    let t = store.create(SYS, new_ticket("LATE", "LATE-3")).await.unwrap();
     assert_eq!(t.unlocks, ["WAIT-3"]);
     assert_kept_is_a_scan(&store, "the creates after the reopen");
 }
@@ -2254,18 +2254,18 @@ async fn the_id_indexes_are_a_scan_after_a_load_every_kind_of_create_and_set_par
 #[tokio::test]
 async fn the_id_indexes_are_a_scan_after_a_seed_with_and_without_into_existing() {
     let fresh = Store::new();
-    fresh.seed_synthetic(spec(3_000, 9)).unwrap();
+    fresh.seed_synthetic(SYS, spec(3_000, 9)).unwrap();
     assert_kept_is_a_scan(&fresh, "a seed into an empty store");
     assert_eq!(kept(&fresh).1, BTreeMap::new(), "the generator names only what it made");
 
     let dry = Store::new();
-    dry.seed_synthetic(spec(2_000, 5)).unwrap();
+    dry.seed_synthetic(SYS, spec(2_000, 5)).unwrap();
     let seeded = dry.list(SYS, None, None, None).await.unwrap()[0].id.clone(); // e.g. its first shortcode's root
 
     let store = Store::new();
-    store.create(scope("REAL", "already here")).await.unwrap();
+    store.create(SYS, scope("REAL", "already here")).await.unwrap();
     store
-        .create(NewTicket {
+        .create(SYS, NewTicket {
             path: None,
             blocked_by: vec![seeded.to_string(), "REAL-9".into()],
             ..new_ticket("REAL", "names an id the seed will make")
@@ -2274,7 +2274,7 @@ async fn the_id_indexes_are_a_scan_after_a_seed_with_and_without_into_existing()
         .unwrap();
     assert!(kept(&store).1.contains_key(seeded.as_str()));
     store
-        .seed_synthetic(SeedSpec {
+        .seed_synthetic(SYS, SeedSpec {
             into_existing: true,
             ..spec(2_000, 5)
         })
@@ -2285,7 +2285,7 @@ async fn the_id_indexes_are_a_scan_after_a_seed_with_and_without_into_existing()
 
     // Again over itself: every seeded shortcode continues its numbering.
     store
-        .seed_synthetic(SeedSpec {
+        .seed_synthetic(SYS, SeedSpec {
             into_existing: true,
             ..spec(2_000, 5)
         })
@@ -2293,7 +2293,7 @@ async fn the_id_indexes_are_a_scan_after_a_seed_with_and_without_into_existing()
     assert_kept_is_a_scan(&store, "a second seed over the first");
     let (last, _) = scanned(&store);
     for (epic, highest) in &last {
-        let t = store.create(new_ticket(epic, "after the seeds")).await.unwrap();
+        let t = store.create(SYS, new_ticket(epic, "after the seeds")).await.unwrap();
         assert_eq!(t.seq, highest + 1, "{epic}");
     }
     assert_kept_is_a_scan(&store, "a create in every shortcode");
@@ -2326,7 +2326,7 @@ async fn the_id_indexes_are_a_scan_after_both_in_place_migrations() {
     let store = Store::open(&path).unwrap();
     assert_kept_is_a_scan(&store, "the AGS-13 migration");
     assert_eq!(kept(&store).1["LEG-4"], ["LEG-1", "LEG-3"]);
-    let t = store.create(new_ticket("LEG", "the named one")).await.unwrap();
+    let t = store.create(SYS, new_ticket("LEG", "the named one")).await.unwrap();
     assert_eq!((t.id.as_str(), t.unlocks.clone()), ("LEG-4", vec!["LEG-1".into(), "LEG-3".into()]));
     assert_kept_is_a_scan(&store, "LEG-4's birth");
 
@@ -2348,7 +2348,7 @@ async fn the_id_indexes_are_a_scan_after_both_in_place_migrations() {
     let store = Store::open(&path).unwrap();
     assert_eq!(store.get(SYS, "OLD-2").await.unwrap().parent.as_deref(), Some("OLD-1"), "migrated");
     assert_kept_is_a_scan(&store, "the AGS-19 migration");
-    let t = store.create(new_ticket("OLD", "the named one")).await.unwrap();
+    let t = store.create(SYS, new_ticket("OLD", "the named one")).await.unwrap();
     assert_eq!((t.id.as_str(), t.unlocks.clone()), ("OLD-3", vec!["OLD-1".into(), "OLD-2".into()]));
     assert_kept_is_a_scan(&store, "OLD-3's birth");
 }
@@ -2359,15 +2359,15 @@ async fn the_id_indexes_are_a_scan_after_both_in_place_migrations() {
 #[tokio::test]
 async fn after_a_seed_into_an_existing_store_the_next_create_is_highest_plus_one() {
     let dry = Store::new();
-    dry.seed_synthetic(spec(10_000, 1)).unwrap();
+    dry.seed_synthetic(SYS, spec(10_000, 1)).unwrap();
     let biggest = dry.groups(SYS).into_iter().max_by_key(|g| g.total).unwrap().epic;
 
     let store = Store::new();
-    store.create(scope(&biggest, "here before the seed")).await.unwrap();
-    store.create(new_ticket(&biggest, "and its second")).await.unwrap();
-    store.create(scope("REAL", "a shortcode the seed does not know")).await.unwrap();
+    store.create(SYS, scope(&biggest, "here before the seed")).await.unwrap();
+    store.create(SYS, new_ticket(&biggest, "and its second")).await.unwrap();
+    store.create(SYS, scope("REAL", "a shortcode the seed does not know")).await.unwrap();
     store
-        .seed_synthetic(SeedSpec {
+        .seed_synthetic(SYS, SeedSpec {
             into_existing: true,
             ..spec(10_000, 1)
         })
@@ -2376,12 +2376,12 @@ async fn after_a_seed_into_an_existing_store_the_next_create_is_highest_plus_one
 
     let highest = store.list(SYS, Some(&biggest), None, None).await.unwrap().last().unwrap().seq;
     assert!(highest > 2, "the seed continued {biggest} after the two already there");
-    let t = store.create(new_ticket(&biggest, "the next one")).await.unwrap();
+    let t = store.create(SYS, new_ticket(&biggest, "the next one")).await.unwrap();
     assert_eq!(t.seq, highest + 1);
     let other = dry.list(SYS, None, None, None).await.unwrap().into_iter().find(|t| t.epic != biggest).unwrap().epic;
     let highest = store.list(SYS, Some(&other), None, None).await.unwrap().last().unwrap().seq;
-    assert_eq!(store.create(new_ticket(&other, "x")).await.unwrap().seq, highest + 1);
-    assert_eq!(store.create(new_ticket("REAL", "x")).await.unwrap().id, "REAL-2");
+    assert_eq!(store.create(SYS, new_ticket(&other, "x")).await.unwrap().seq, highest + 1);
+    assert_eq!(store.create(SYS, new_ticket("REAL", "x")).await.unwrap().id, "REAL-2");
     assert_kept_is_a_scan(&store, "the seed and the creates");
 }
 
@@ -2391,14 +2391,14 @@ async fn after_a_seed_into_an_existing_store_the_next_create_is_highest_plus_one
 #[tokio::test]
 async fn concurrent_creates_take_every_id_once_with_no_gaps() {
     let store = Arc::new(Store::new());
-    store.create(scope("RACE", "root")).await.unwrap();
-    store.create(scope("PACE", "root")).await.unwrap();
+    store.create(SYS, scope("RACE", "root")).await.unwrap();
+    store.create(SYS, scope("PACE", "root")).await.unwrap();
     let mut handles = Vec::new();
     for i in 0..32 {
         let store = store.clone();
         let epic = if i % 2 == 0 { "RACE" } else { "PACE" };
         handles.push(tokio::spawn(async move {
-            store.create(new_ticket(epic, &format!("t{i}"))).await.unwrap()
+            store.create(SYS, new_ticket(epic, &format!("t{i}"))).await.unwrap()
         }));
     }
     let mut seqs: HashMap<String, Vec<u32>> = HashMap::new();
@@ -2444,7 +2444,7 @@ async fn every_create_gets_the_id_and_unlocks_a_scan_would_give_it() {
             let child = &all[rng.below(all.len())];
             let mine: Vec<&Ticket> = all.iter().filter(|t| t.epic == child.epic).collect();
             let parent = mine[rng.below(mine.len())].id.clone();
-            let _ = store.set_parent(&child.id, &parent).await;
+            let _ = store.set_parent(SYS.moving(&child.id, &parent)).await;
             assert_kept_is_a_scan(&store, &format!("step {step}: set_parent"));
             continue;
         }
@@ -2485,7 +2485,7 @@ async fn every_create_gets_the_id_and_unlocks_a_scan_would_give_it() {
             parent,
             ..new_ticket(epic, "walked")
         };
-        match store.create(new).await {
+        match store.create(SYS, new).await {
             Ok(t) => {
                 born += 1;
                 assert_eq!(t.seq, seq, "{what}");
@@ -2524,17 +2524,17 @@ async fn the_default_parent_is_the_lowest_seq_scope_in_a_legacy_prefix_too() {
         ],
     );
     let store = Store::open(&path).unwrap();
-    let t = store.create(new_ticket("DEMO", "defaulted")).await.unwrap();
+    let t = store.create(SYS, new_ticket("DEMO", "defaulted")).await.unwrap();
     assert_eq!((t.id.as_str(), t.parent.as_deref()), ("DEMO-5", Some("DEMO-3")));
-    let t = store.create(new_ticket("NOSC", "no root to default to")).await.unwrap();
+    let t = store.create(SYS, new_ticket("NOSC", "no root to default to")).await.unwrap();
     assert_eq!((t.id.as_str(), t.parent.as_deref()), ("NOSC-3", None));
-    let t = store.create(scope("NOSC", "a first scope, late")).await.unwrap();
+    let t = store.create(SYS, scope("NOSC", "a first scope, late")).await.unwrap();
     assert_eq!(t.parent, None, "a shortcode's root is top-level unless it names a host");
-    let t = store.create(new_ticket("NOSC", "now it has one")).await.unwrap();
+    let t = store.create(SYS, new_ticket("NOSC", "now it has one")).await.unwrap();
     assert_eq!(t.parent.as_deref(), Some("NOSC-4"));
     // MNG-14's guard reads the same root: only it may be hosted elsewhere.
-    assert!(store.set_parent("DEMO-4", "NOSC-4").await.is_err());
-    store.set_parent("DEMO-3", "NOSC-4").await.unwrap();
+    assert!(store.set_parent(SYS.moving("DEMO-4", "NOSC-4")).await.is_err());
+    store.set_parent(SYS.moving("DEMO-3", "NOSC-4")).await.unwrap();
 }
 
 // ---- SCALE-16: extents -----------------------------------------------
@@ -2548,7 +2548,7 @@ async fn the_default_parent_is_the_lowest_seq_scope_in_a_legacy_prefix_too() {
 #[tokio::test]
 async fn extents_are_each_shortcodes_highest_sequence_in_order() {
     let store = Store::new();
-    let report = store.seed_synthetic(spec(10_000, 42)).unwrap();
+    let report = store.seed_synthetic(SYS, spec(10_000, 42)).unwrap();
     let extents = store.extents_text();
     assert_eq!(extents.len(), report.epics);
     assert!(extents.windows(2).all(|w| w[0].0 < w[1].0), "shortcode order");

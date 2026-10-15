@@ -33,6 +33,7 @@ use crate::address::ShortcodeId;
 use super::history::Act;
 use super::lineage::{self, UnderBefore};
 use super::{Cache, Change, OrderKey, Row, Store, StoreError};
+use crate::access::{Editor, Permit};
 use crate::queue::{order, QueueAction, QueueEntry, QueueRecord, Urgency, REASON_MAX, SNOOZE_MAX_MINUTES};
 use crate::types::{InputState, TicketSummary, TransitionSource};
 use roaring::RoaringBitmap;
@@ -353,9 +354,9 @@ impl Store {
     /// raised, never lowered, the reason (and an input given) the new ones,
     /// a snooze ended. One entry, one record, one write; answers the entry
     /// with its row and what the write was.
-    pub async fn queue_by(&self, id: &str, urgency: Urgency, reason: &str, input: Option<&str>, act: Act) -> Result<QueueChange, StoreError> {
+    pub async fn queue_by(&self, on: Permit<Editor>, urgency: Urgency, reason: &str, input: Option<&str>, act: Act) -> Result<QueueChange, StoreError> {
         // ORG-3: the ticket by any short form of its address.
-        let id = self.resolve(id)?;
+        let id = self.resolve(on.id())?;
         let reason = reason.trim().to_string();
         if reason.is_empty() {
             return Err(StoreError::Invalid("a queue entry says why: `reason` is blank".into()));
@@ -409,9 +410,9 @@ impl Store {
     /// MENGER-39: takes `id` out of the queue — the owner done with it, or
     /// the caller withdrawing it. `None`: it was not queued, and nothing is
     /// written.
-    pub async fn unqueue_by(&self, id: &str, act: Act) -> Result<Option<QueueChange>, StoreError> {
+    pub async fn unqueue_by(&self, on: Permit<Editor>, act: Act) -> Result<Option<QueueChange>, StoreError> {
         // ORG-3: the ticket by any short form of its address.
-        let id = self.resolve(id)?;
+        let id = self.resolve(on.id())?;
         let serial = self.serial().await;
         let now = chrono::Utc::now().timestamp();
         let (row, entry, record, under) = {
@@ -428,9 +429,9 @@ impl Store {
 
     /// MENGER-39: `id` off the alerting surfaces for `minutes` (1 to a
     /// week); still queued. Refused when it is not queued.
-    pub async fn snooze_by(&self, id: &str, minutes: u32, act: Act) -> Result<QueueChange, StoreError> {
+    pub async fn snooze_by(&self, on: Permit<Editor>, minutes: u32, act: Act) -> Result<QueueChange, StoreError> {
         // ORG-3: the ticket by any short form of its address.
-        let id = self.resolve(id)?;
+        let id = self.resolve(on.id())?;
         if minutes == 0 || minutes > SNOOZE_MAX_MINUTES {
             return Err(StoreError::Invalid(format!("`minutes` is 1 to {SNOOZE_MAX_MINUTES} (a week) — not {minutes}")));
         }

@@ -256,6 +256,14 @@ impl Notes {
                     return;
                 }
             }
+            // ACCESS-11: the proofs a birth takes, as tickets.create's.
+            let at = match crate::activation::filing_text(&store, &caller, &epic, parent.as_deref().map(str::trim).filter(|p| !p.is_empty())) {
+                Ok(at) => at,
+                Err(message) => {
+                    yield NotesEvent::Error { message };
+                    return;
+                }
+            };
             let note = match store.note(id) {
                 Ok(n) => n,
                 Err(e) => {
@@ -276,7 +284,7 @@ impl Notes {
                 path: None,
                 body,
             };
-            yield answer(store.upgrade_note(id, new).await.map(|(_, note)| note));
+            yield answer(store.upgrade_note(at, id, new).await.map(|(_, note)| note));
         }
     }
 }

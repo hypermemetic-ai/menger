@@ -41,7 +41,7 @@
 //! MENGER) — what a `deployer` grant names and a ticket lives in.
 
 use super::history::Clock;
-use super::{lineage, Cache, OrderKey, Row, Store, StoreError};
+use super::{lineage, Authority, Cache, OrderKey, Row, Store, StoreError};
 use crate::address::ShortcodeId;
 use crate::deployments::{
     environment_of, project_of, rank, DeploySource, DeployState, Deployment, DeploymentsEvent, Environment, Record, RunningCell, COMMITS_MAX, TICKETS_MAX,
@@ -650,7 +650,11 @@ impl Store {
     /// `deployments.watch`, and on `tickets.watch { filter }` each ticket a
     /// `deployed` filter admits or no longer admits because of it. `by` is
     /// who sent it.
-    pub async fn record_deployment(&self, rec: Record, by: String) -> Result<DeploymentsEvent, StoreError> {
+    ///
+    /// ACCESS-11: `allowed` — the system, or a deployer (or admin) on
+    /// exactly the project's shortcode, checked under the write-serial lock.
+    pub async fn record_deployment(&self, allowed: impl Into<Authority>, rec: Record, by: String) -> Result<DeploymentsEvent, StoreError> {
+        let allowed = allowed.into();
         let now = chrono::Utc::now().timestamp();
         let mut d = read(rec, now)?;
         d.recorded_by = by;
@@ -663,6 +667,7 @@ impl Store {
                     d.project
                 )));
             }
+            allowed.deployer_on(&super::writs::scope_of(&cache, &ShortcodeId::new(&d.project)), "a deployment needs deployer on its project")?;
             if let Some(kept) = cache.deploys.keys.get(&dedupe(&d)).and_then(|id| cache.deploys.by_id.get(id)) {
                 let (carried, unlinked, live) = cache.carried(kept);
                 let deployment = kept.clone();

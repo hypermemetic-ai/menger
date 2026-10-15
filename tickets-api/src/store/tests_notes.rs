@@ -71,11 +71,11 @@ async fn a_note_is_kept_dated_untitled_and_listed_newest_first() {
 #[tokio::test]
 async fn an_upgrade_makes_the_ticket_and_marks_the_note_in_one_write() {
     let store = Store::new();
-    store.create(ticket("SR", Kind::Scope, "the root")).await.unwrap();
+    store.create(SYS, ticket("SR", Kind::Scope, "the root")).await.unwrap();
     let note = store.add_note_as("## watch drops **events**\nseen twice".into(), None, None).await.unwrap();
     let mut watch = store.subscribe();
 
-    let (made, marked) = store.upgrade_note(note.id.get(), from_note(&store, note.id.get(), "sr")).await.unwrap();
+    let (made, marked) = store.upgrade_note(SYS, note.id.get(), from_note(&store, note.id.get(), "sr")).await.unwrap();
     assert_eq!((made.id.as_str(), made.title.as_str(), made.parent.as_deref()), ("SR-2", "watch drops events", Some("SR-1")));
     assert!(made.body.starts_with("## watch drops **events**\nseen twice\n\nNoted ") && made.body.ends_with(" — note 1."), "{}", made.body);
     assert_eq!(marked, Note { ticket: Some("SR-2".into()), upgraded_at: Some(made.created_unix), ..note.clone() });
@@ -86,20 +86,20 @@ async fn an_upgrade_makes_the_ticket_and_marks_the_note_in_one_write() {
     assert_eq!(all(&store, NoteQuery { state: Some(NoteState::Open), ..Default::default() }), Vec::<u64>::new());
 
     // Already a ticket: refused, nothing made.
-    match store.upgrade_note(1, from_note(&store, 1, "SR")).await {
+    match store.upgrade_note(SYS, 1, from_note(&store, 1, "SR")).await {
         Err(StoreError::NoteUpgraded { id: 1, ticket }) => assert_eq!(ticket, "SR-2"),
         other => panic!("{other:?}"),
     }
     // A note that is none: refused, nothing made.
-    assert!(matches!(store.upgrade_note(7, ticket("SR", Kind::Build, "x")).await, Err(StoreError::NoteNotFound { id: 7, .. })));
+    assert!(matches!(store.upgrade_note(SYS, 7, ticket("SR", Kind::Build, "x")).await, Err(StoreError::NoteNotFound { id: 7, .. })));
 
     // A ticket create refuses: the note stays open, no id is spent.
     let open = store.add_note_as("a second thought".into(), None, None).await.unwrap();
-    assert!(matches!(store.upgrade_note(open.id.get(), from_note(&store, open.id.get(), "BAD EPIC")).await, Err(StoreError::InvalidEpic(_))));
+    assert!(matches!(store.upgrade_note(SYS, open.id.get(), from_note(&store, open.id.get(), "BAD EPIC")).await, Err(StoreError::InvalidEpic(_))));
     let parented = NewTicket { parent: Some("NOPE-1".into()), ..from_note(&store, open.id.get(), "SR") };
-    assert!(store.upgrade_note(open.id.get(), parented).await.is_err(), "a parent that is none");
+    assert!(store.upgrade_note(SYS, open.id.get(), parented).await.is_err(), "a parent that is none");
     assert_eq!(store.note(open.id.get()).unwrap(), open, "still open, untouched");
-    assert_eq!(store.create(ticket("SR", Kind::Build, "next")).await.unwrap().id, "SR-3", "no id was spent");
+    assert_eq!(store.create(SYS, ticket("SR", Kind::Build, "next")).await.unwrap().id, "SR-3", "no id was spent");
 }
 
 /// A title given wins; a note with no words is titled by when it was taken.
@@ -123,10 +123,10 @@ async fn notes_and_their_tickets_survive_a_reopen_and_an_older_file_gains_the_ta
     let path = dir.path().join("notes.db");
     let (kept, marked) = {
         let store = Store::open(&path).unwrap();
-        store.create(ticket("SR", Kind::Scope, "the root")).await.unwrap();
+        store.create(SYS, ticket("SR", Kind::Scope, "the root")).await.unwrap();
         let kept = store.add_note_as("kept as written".into(), Some("ada".into()), None).await.unwrap();
         let other = store.add_note_as("made a ticket".into(), None, None).await.unwrap();
-        let (_, marked) = store.upgrade_note(other.id.get(), from_note(&store, other.id.get(), "SR")).await.unwrap();
+        let (_, marked) = store.upgrade_note(SYS, other.id.get(), from_note(&store, other.id.get(), "SR")).await.unwrap();
         (kept, marked)
     };
     {

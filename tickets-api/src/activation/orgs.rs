@@ -81,35 +81,3 @@ pub(super) fn epic_in(store: &Store, caller: &VerifiedUser, epic: String, org: O
         ))),
     }
 }
-
-/// IDENTITY-21 / AUTH-7: whether `caller` may create a ticket filed in
-/// `epic` under `parent` — `tickets.create` held on the parent, or on the
-/// shortcode's root; a shortcode with neither needs it on `*` (ORG-4: or on
-/// the organization the epic names). IDENTITY-37: a blocker the caller
-/// cannot view is refused by its shortcode, read from the id, so a hidden
-/// ticket and an id naming none get the same answer; or the event to
-/// answer.
-pub(super) fn create_admits(store: &Store, caller: &VerifiedUser, epic: &str, parent: Option<&str>, blocked_by: Option<&[String]>) -> Result<(), TicketsEvent> {
-    let anchor = match parent {
-        Some(p) => Some(p.to_string()),
-        None => store.root_of(epic).map_err(|e| veiled(caller, e))?,
-    };
-    // A new shortcode in a named organization is held on it (`acme:`).
-    let org = crate::address::Address::parse(epic).ok().and_then(|a| a.org).map(|o| format!("{o}:"));
-    let allowed = match (&anchor, caller.grant().cloned()) {
-        (_, None) => Ok(()),
-        (Some(a), Some(g)) => caller.check(&g, a),
-        (None, Some(g)) => caller
-            .check(&g, org.as_deref().unwrap_or("*"))
-            .map_err(|_| format!("a new shortcode {} needs {g} on {}", epic.to_ascii_uppercase(), org.as_deref().unwrap_or("*"))),
-    };
-    allowed.map_err(|message| TicketsEvent::Error { message })?;
-    let visible = sight_epics(store, caller).map_err(|message| TicketsEvent::Error { message })?;
-    if let Some(v) = &visible {
-        let hidden = blocked_by.into_iter().flatten().find(|b| store.shortcode_of(b.trim()).is_none_or(|sc| !v.contains(&sc)));
-        if let Some(b) = hidden {
-            return Err(TicketsEvent::Error { message: format!("blocked_by: {}", caller.lacks(&Grant::new(crate::access::SEES), Some(b.trim()))) });
-        }
-    }
-    Ok(())
-}

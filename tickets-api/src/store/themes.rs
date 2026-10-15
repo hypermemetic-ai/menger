@@ -23,7 +23,8 @@
 //! that says nothing is deleted). A file without them gains them, empty,
 //! on open ([`migrate`]).
 
-use super::{lineage, Store, StoreError};
+use super::{lineage, Authority, Store, StoreError};
+use crate::address::ShortcodeId;
 use crate::themes::{self, Levels, Regions, Takeover, Theme, ThemeReach, ThemeSetting, DEFAULT_THEME, SITE};
 use rusqlite::{params, Connection};
 use std::collections::BTreeMap;
@@ -175,7 +176,11 @@ impl Store {
     /// a token that is not in [`themes::TOKENS`] or a value that could
     /// escape its declaration is [`StoreError::Invalid`], naming each, and
     /// nothing is kept.
-    pub async fn define_theme(&self, name: &str, light: BTreeMap<String, String>, dark: BTreeMap<String, String>) -> Result<Theme, StoreError> {
+    ///
+    /// ACCESS-11: by `by` — a theme is the whole site's: the system, or
+    /// editor (or admin) on `*`.
+    pub async fn define_theme(&self, by: impl Into<Authority>, name: &str, light: BTreeMap<String, String>, dark: BTreeMap<String, String>) -> Result<Theme, StoreError> {
+        by.into().editor_on(&crate::members::Scope::Everywhere, "a theme is the whole site's: defining one needs editor on *")?;
         let name = themes::name_of(name).map_err(StoreError::Invalid)?;
         if name == DEFAULT_THEME {
             return Err(StoreError::Invalid("`default` is the theme that overrides nothing; it cannot be defined".into()));
@@ -242,7 +247,11 @@ impl Store {
     /// adopts or not: it has no reach beyond itself and nothing above it to
     /// opt out of, so either is [`StoreError::Invalid`]; so is a theme not
     /// defined, or a shortcode that is none. Saying nothing clears it.
-    pub async fn set_theme(&self, scope: &str, theme: Option<&str>, reach: Option<ThemeReach>, takeover: Option<Takeover>) -> Result<ThemeSetting, StoreError> {
+    ///
+    /// ACCESS-11: by `by` — the system; for the site, admin on `*`; for a
+    /// shortcode, editor (or admin) on exactly its scope.
+    pub async fn set_theme(&self, by: impl Into<Authority>, scope: &str, theme: Option<&str>, reach: Option<ThemeReach>, takeover: Option<Takeover>) -> Result<ThemeSetting, StoreError> {
+        let by = by.into();
         let raw = scope.trim();
         let site = raw.eq_ignore_ascii_case(SITE);
         // ORG-3: a shortcode by any short form of its address, kept by its
@@ -274,6 +283,10 @@ impl Store {
             }
             if !site && !cache.rollups.groups().iter().any(|g| g.shortcode.as_str() == setting.scope) {
                 return Err(StoreError::Invalid(format!("no shortcode {}: a theme is set on `site` or on a shortcode that holds a ticket", setting.scope)));
+            }
+            match site {
+                true => by.admin_on(&crate::members::Scope::Everywhere, "the site's theme is everyone's: setting it needs admin on *")?,
+                false => by.editor_on(&super::writs::scope_of(&cache, &ShortcodeId::new(&setting.scope)), "a shortcode's theme needs editor on it")?,
             }
         }
         // THEME-3: an orphan only this scope's old setting kept goes with it.

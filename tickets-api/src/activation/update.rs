@@ -36,42 +36,6 @@ pub(super) fn update_of(
     }
 }
 
-/// The reach an update takes beyond its target (the gate held its grant on
-/// `id`): a parent as `set_parent` takes it — a shortcode's root moving
-/// takes admin on it and on its new host, any other ticket the grant on
-/// both sides —, and a blocker as `create` takes it (one the caller cannot
-/// view is refused, by its shortcode) and, in another shortcode, the grant
-/// there too.
-pub(super) fn update_reach(store: &Store, caller: &VerifiedUser, id: &str, update: &Update) -> Result<(), String> {
-    if let Some(parent) = &update.parent {
-        let root = store.groups(caller).into_iter().any(|g| g.root.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(id.trim())));
-        let wanted = if root { Some(Grant::new(ADMINISTER)) } else { caller.grant().cloned() };
-        if let Some(g) = wanted {
-            caller.check(&g, id).and_then(|()| caller.check(&g, parent.trim())).map_err(|message| {
-                if root {
-                    format!("moving a shortcode's root takes admin on it and on its new host: {message}")
-                } else {
-                    message
-                }
-            })?;
-        }
-    }
-    let named = update.block.iter().chain(&update.unblock).map(|b| b.trim()).filter(|b| !b.is_empty());
-    let visible = sight_epics(store, caller)?;
-    // ORG-3: each by the shortcode its address names it in.
-    let home = store.shortcode_of(id.trim());
-    for b in named {
-        let epic = store.shortcode_of(b);
-        if visible.as_ref().is_some_and(|v| epic.as_ref().is_none_or(|e| !v.contains(e))) {
-            return Err(format!("blocked_by: {}", caller.lacks(&Grant::new(crate::access::SEES), Some(b))));
-        }
-        if let (true, Some(g), Some(ticket)) = (epic != home, caller.grant(), store.ticket_id(b)) {
-            caller.check(g, &ticket)?;
-        }
-    }
-    Ok(())
-}
-
 /// ACT-2: a write `label` or `link_commits` makes, to one ticket or many.
 pub(super) enum CellWrite {
     /// `add`, `remove`.
@@ -102,13 +66,27 @@ pub(super) fn cells_stream(
         let id = match target {
             Ok(id) => id,
             Err(ids) => {
-                if let Err(message) = caller.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &store) {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-                        let written = match write {
-                    CellWrite::Labels(add, remove) => store.label_many(&ids, texts(add), texts(remove)).await,
-                    CellWrite::Commits(commits) => store.link_commits_many(&ids, texts(commits)).await,
+                // ACCESS-11: an editor's permit per ticket, the ids as the
+                // store resolves them; the store writes those.
+                // An id that names no ticket refuses the write, by name, as
+                // the store does (to one who would see it; to anyone else
+                // as a hidden one, `permits`).
+                let on = match permits(&store, &caller, &ids) {
+                    Ok(on) if on.len() == ids.len() => on,
+                    Ok(_) => {
+                        let missing = ids.iter().filter(|id| store.ticket_id(id).is_none());
+                        let each = missing.map(|id| (id.trim().to_ascii_uppercase(), vec![StoreError::NotFound(id.trim().to_ascii_uppercase()).to_string()])).collect();
+                        yield TicketsEvent::Error { message: crate::store::refused_many(each) };
+                        return;
+                    }
+                    Err(message) => {
+                        yield TicketsEvent::Error { message };
+                        return;
+                    }
+                };
+                let written = match write {
+                    CellWrite::Labels(add, remove) => store.label_many(on, texts(add), texts(remove)).await,
+                    CellWrite::Commits(commits) => store.link_commits_many(on, texts(commits)).await,
                 };
                 match written {
                     Ok(changes) => {
@@ -116,14 +94,21 @@ pub(super) fn cells_stream(
                             yield change_event(change);
                         }
                     }
-                    Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
+                    Err(e) => yield said(&store, &caller, e),
                 }
                 return;
             }
         };
+        let on = match permit::<crate::access::Editor>(&store, &caller, &id) {
+            Ok(on) => on,
+            Err(ev) => {
+                yield ev;
+                return;
+            }
+        };
         let written = match write {
-            CellWrite::Labels(add, remove) => store.label(&id, texts(add), texts(remove)).await,
-            CellWrite::Commits(commits) => store.link_commits(&id, texts(commits)).await,
+            CellWrite::Labels(add, remove) => store.label(on, texts(add), texts(remove)).await,
+            CellWrite::Commits(commits) => store.link_commits(on, texts(commits)).await,
         };
         match written {
             Ok(change) => yield change_event(change),
@@ -179,19 +164,16 @@ pub(super) fn update_many_stream(
             }
         };
         let caller = Arc::new(caller);
+        // ACCESS-11: for each ticket selected, its editor's permit and the
+        // proofs for the parent and blockers the update names.
         let (gate, reach_of, at) = (Arc::clone(&caller), asked.clone(), store.clone());
-        let may = move |ids: &[String]| -> Result<(), String> {
-            gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at)?;
-            if reach_of.parent.is_some() || !reach_of.block.is_empty() || !reach_of.unblock.is_empty() {
-                for id in ids {
-                    update_reach(&at, &gate, id, &reach_of)?;
-                }
-            }
-            Ok(())
+        let may = move |ids: &[String]| -> Result<Vec<crate::store::Updating>, String> {
+            let on = permits::<crate::access::Editor>(&at, &gate, ids)?;
+            on.into_iter().map(|p| updating(&at, &gate, p, &reach_of)).collect()
         };
         match store.update_many_by(select, asked, act, may).await {
             Ok(UpdatedMany { tickets, ids, unchanged, changed }) => yield TicketsEvent::UpdatedMany { ids, changed, tickets, unchanged },
-            Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
+            Err(e) => yield said(&store, &caller, e),
         }
     }
 }

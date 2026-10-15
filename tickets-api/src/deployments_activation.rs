@@ -178,7 +178,15 @@ impl Deployments {
                 at: at.map(String::from),
                 source,
             };
-            yield store.record_deployment(rec, by).await.unwrap_or_else(refused);
+            // ACCESS-11: deployer on the project's shortcode (DEPLOY-14).
+            let on = match crate::activation::scope_named(&store, &rec.project).and_then(|s| caller.on::<crate::access::Deployer>(&s, &store).map_err(|r| r.to_string())) {
+                Ok(on) => on,
+                Err(message) => {
+                    yield DeploymentsEvent::Error { message };
+                    return;
+                }
+            };
+            yield store.record_deployment(on, rec, by).await.unwrap_or_else(refused);
         }
     }
 

@@ -44,17 +44,17 @@ fn rec(env: &str, state: &str, revision: &str, commits: &[&str], at: i64) -> Rec
 /// `ccccccc`; MENGER-5 linked to nothing.
 async fn menger() -> Store {
     let store = Store::new();
-    store.create(ticket("MENGER", "menger", Kind::Scope)).await.unwrap();
+    store.create(SYS, ticket("MENGER", "menger", Kind::Scope)).await.unwrap();
     for (i, c) in ["aaaaaaa", "bbbbbbb", "ccccccc"].into_iter().enumerate() {
-        store.create(ticket("MENGER", &format!("work {i}"), Kind::Build)).await.unwrap();
-        store.link_commits(&format!("MENGER-{}", i + 2), vec![c.into()]).await.unwrap();
+        store.create(SYS, ticket("MENGER", &format!("work {i}"), Kind::Build)).await.unwrap();
+        store.link_commits(SYS.permit(&format!("MENGER-{}", i + 2)), vec![c.into()]).await.unwrap();
     }
-    store.create(ticket("MENGER", "unlinked", Kind::Build)).await.unwrap();
+    store.create(SYS, ticket("MENGER", "unlinked", Kind::Build)).await.unwrap();
     store
 }
 
 async fn record(store: &Store, r: Record) -> DeploymentsEvent {
-    store.record_deployment(r, "ci".into()).await.unwrap()
+    store.record_deployment(SYS, r, "ci".into()).await.unwrap()
 }
 
 /// The environments `id` runs in, each with since.
@@ -116,10 +116,10 @@ async fn the_join_is_kept_not_computed_once() {
     let store = menger().await;
     record(&store, rec("test", "succeeded", "ddddddd", &["ddddddd"], T0)).await;
     assert!(running(&store, "MENGER-5").is_empty());
-    store.link_commits("MENGER-5", vec!["ddddddd".into()]).await.unwrap();
+    store.link_commits(SYS.permit("MENGER-5"), vec!["ddddddd".into()]).await.unwrap();
     assert_eq!(running(&store, "MENGER-5"), [("test".to_string(), T0)]);
     assert_eq!(admitted(&store, "deployed test", T0 + 10), ["MENGER-5"]);
-    store.unlink_commits("MENGER-5", vec!["ddddddd".into()]).await.unwrap();
+    store.unlink_commits(SYS.permit("MENGER-5"), vec!["ddddddd".into()]).await.unwrap();
     assert!(running(&store, "MENGER-5").is_empty());
 }
 
@@ -212,7 +212,7 @@ async fn an_unlinked_commit_is_kept_and_said() {
 #[tokio::test]
 async fn the_deployed_cells_filter() {
     let store = menger().await;
-    store.create(ticket("OTHER", "other", Kind::Scope)).await.unwrap();
+    store.create(SYS, ticket("OTHER", "other", Kind::Scope)).await.unwrap();
     record(&store, rec("test", "succeeded", "aaaaaaa", &["aaaaaaa", "bbbbbbb"], T0)).await;
     record(&store, rec("prod", "succeeded", "aaaaaaa", &["aaaaaaa"], T0 + 86_400 * 2)).await;
     let now = T0 + 86_400 * 2 + 3600;
@@ -278,7 +278,7 @@ async fn refusals_keep_nothing() {
         (Record { tickets: vec!["nope".into()], ..rec("prod", "succeeded", "aaaaaaa", &[], T0) }, "not a ticket id"),
     ];
     for (r, why) in cases {
-        let e = store.record_deployment(r, "ci".into()).await.unwrap_err().to_string();
+        let e = store.record_deployment(SYS, r, "ci".into()).await.unwrap_err().to_string();
         assert!(e.contains(why), "{e} — wanted {why}");
     }
     assert!(store.deployments(&DeployQuery::default(), None, None, None).unwrap().rows.is_empty());
@@ -336,14 +336,14 @@ async fn kept_across_a_reopen_and_verified() {
     let path = dir.path().join("deploys.db");
     {
         let store = Store::open(&path).unwrap();
-        store.create(ticket("MENGER", "menger", Kind::Scope)).await.unwrap();
-        store.create(ticket("MENGER", "work", Kind::Build)).await.unwrap();
-        store.link_commits("MENGER-2", vec!["aaaaaaa".into()]).await.unwrap();
+        store.create(SYS, ticket("MENGER", "menger", Kind::Scope)).await.unwrap();
+        store.create(SYS, ticket("MENGER", "work", Kind::Build)).await.unwrap();
+        store.link_commits(SYS.permit("MENGER-2"), vec!["aaaaaaa".into()]).await.unwrap();
         record(&store, rec("prod", "succeeded", "aaaaaaa", &["aaaaaaa"], T0)).await;
         record(&store, rec("prod", "succeeded", "bbbbbbb", &["bbbbbbb"], T0 + 5)).await;
         // Linked after it was deployed.
-        store.create(ticket("MENGER", "late", Kind::Build)).await.unwrap();
-        store.link_commits("MENGER-3", vec!["bbbbbbb".into()]).await.unwrap();
+        store.create(SYS, ticket("MENGER", "late", Kind::Build)).await.unwrap();
+        store.link_commits(SYS.permit("MENGER-3"), vec!["bbbbbbb".into()]).await.unwrap();
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(running(&store, "MENGER-2"), [("prod".to_string(), T0)]);
@@ -384,10 +384,10 @@ async fn the_kept_cells_are_a_scan() {
                 record(&store, r).await;
             }
             2 => {
-                store.link_commits(&format!("MENGER-{}", 2 + next(4)), vec![commits[next(5)].into()]).await.unwrap();
+                store.link_commits(SYS.permit(&format!("MENGER-{}", 2 + next(4))), vec![commits[next(5)].into()]).await.unwrap();
             }
             _ => {
-                let _ = store.unlink_commits(&format!("MENGER-{}", 2 + next(4)), vec![commits[next(5)].into()]).await;
+                let _ = store.unlink_commits(SYS.permit(&format!("MENGER-{}", 2 + next(4))), vec![commits[next(5)].into()]).await;
             }
         }
     }
@@ -413,11 +413,11 @@ fn fixture(name: &str) -> String {
 #[tokio::test]
 async fn deploy_10s_records_are_taken_whole() {
     let store = Store::new();
-    store.create(ticket("MENGER", "menger", Kind::Scope)).await.unwrap();
-    store.create(ticket("MENGER", "first", Kind::Build)).await.unwrap();
-    store.create(ticket("MENGER", "third", Kind::Build)).await.unwrap();
-    store.link_commits("MENGER-2", vec!["1111111".into()]).await.unwrap();
-    store.link_commits("MENGER-3", vec!["3333333".into()]).await.unwrap();
+    store.create(SYS, ticket("MENGER", "menger", Kind::Scope)).await.unwrap();
+    store.create(SYS, ticket("MENGER", "first", Kind::Build)).await.unwrap();
+    store.create(SYS, ticket("MENGER", "third", Kind::Build)).await.unwrap();
+    store.link_commits(SYS.permit("MENGER-2"), vec!["1111111".into()]).await.unwrap();
+    store.link_commits(SYS.permit("MENGER-3"), vec!["3333333".into()]).await.unwrap();
     for line in fixture("pipeline.expected.ndjson").lines().filter(|l| !l.trim().is_empty()) {
         let r: Record = serde_json::from_str(line).unwrap();
         let ev = record(&store, r).await;
@@ -439,11 +439,11 @@ async fn deploy_10s_records_are_taken_whole() {
         [("test".to_string(), at("2026-10-03T08:01:00Z")), ("staging".to_string(), at("2026-10-05T09:00:00Z"))]
     );
 
-    store.create(ticket("SHOP", "shop", Kind::Scope)).await.unwrap();
+    store.create(SYS, ticket("SHOP", "shop", Kind::Scope)).await.unwrap();
     for i in 2..=9 {
-        store.create(ticket("SHOP", &format!("shop {i}"), Kind::Build)).await.unwrap();
+        store.create(SYS, ticket("SHOP", &format!("shop {i}"), Kind::Build)).await.unwrap();
     }
-    store.link_commits("SHOP-2", vec!["4f1c2a9".into()]).await.unwrap();
+    store.link_commits(SYS.permit("SHOP-2"), vec!["4f1c2a9".into()]).await.unwrap();
     for name in ["deployment_status", "github-actions", "gitlab", "ci-output"] {
         let r: Record = serde_json::from_str(&fixture(&format!("{name}.expected.json"))).unwrap();
         let ev = record(&store, r).await;

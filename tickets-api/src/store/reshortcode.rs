@@ -543,8 +543,8 @@ fn rekey(txn: &rusqlite::Transaction<'_>, map: &HashMap<String, String>, renamed
 impl Store {
     /// [`Store::reshortcode_by`] as nobody signed in, through the API, with
     /// every ticket allowed.
-    pub async fn reshortcode(&self, ask: Reshortcode) -> Result<Reshortcoded, StoreError> {
-        self.reshortcode_by(ask, Act::default(), |_| Ok(())).await
+    pub async fn reshortcode(&self, sys: &System, ask: Reshortcode) -> Result<Reshortcoded, StoreError> {
+        self.reshortcode_by(ask, Act::default(), |ids| Ok(ids.iter().map(|id| sys.permit(id)).collect())).await
     }
 
     /// ACT-6: the tickets `ask` names moved into its shortcode — all of them
@@ -555,7 +555,7 @@ impl Store {
         &self,
         ask: Reshortcode,
         act: Act,
-        may: impl FnOnce(&[String]) -> Result<(), String> + Send,
+        may: impl FnOnce(&[String]) -> Result<Vec<Permit<Editor>>, String> + Send,
     ) -> Result<Reshortcoded, StoreError> {
         if let Some(title) = &ask.new_scope {
             self.check_title(None, title)?;
@@ -566,7 +566,9 @@ impl Store {
             plan(&cache, &ask)
         };
         let p = planned?;
-        may(&p.asked).map_err(StoreError::Invalid)?;
+        // ACCESS-11: an editor's permit for every ticket the move names.
+        let permits = may(&p.asked).map_err(StoreError::Invalid)?;
+        writs::covers_exactly(&self.tickets.read().expect("store lock poisoned"), &permits, &p.asked)?;
         self.in_one_write(serial, move |conn, cache, unders| Self::reshortcoding(conn, cache, unders, p, act)).await
     }
 

@@ -283,7 +283,7 @@ async fn reads_under_random_filters_equal_the_evaluator_on_a_seeded_store() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("seeded.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 3_000, seed: 415, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 3_000, seed: 415, into_existing: false }).unwrap();
     let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(5).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     walk(store, &path, 0x5EED_F415, 200, 25, &epics).await;
@@ -326,7 +326,7 @@ async fn inputs_under_random_filters_are_the_inputs_of_the_tickets_the_filter_ad
     let store = Store::open(&path).unwrap();
     let epics = ["IN", "OUT", "ZED"];
     for e in epics {
-        store.create(new_ticket(e, Kind::Scope, None, vec![])).await.unwrap();
+        store.create(SYS, new_ticket(e, Kind::Scope, None, vec![])).await.unwrap();
     }
     let mut rng = Rng(0x1_F415);
     let mut tally = Tally::default();
@@ -337,21 +337,21 @@ async fn inputs_under_random_filters_are_the_inputs_of_the_tickets_the_filter_ad
                 let epic = epics[rng.below(epics.len())];
                 let mut t = new_ticket(epic, Kind::Build, None, vec![]);
                 t.body = format!("{}{}", decision("pick"), if rng.below(2) == 0 { decision("second") } else { String::new() });
-                let id = store.create(t).await.unwrap().id;
+                let id = store.create(SYS, t).await.unwrap().id;
                 declared.push(id.to_string());
                 format!("create {id} with inputs")
             }
             1 if !declared.is_empty() => {
                 let id = declared[rng.below(declared.len())].clone();
-                let _ = store.answer(&id, "pick", InputValue::Choice { option: "b".into() }, None, AnswerSource::Api).await;
+                let _ = store.answer(SYS.permit(&id), "pick", InputValue::Choice { option: "b".into() }, None, AnswerSource::Api).await;
                 if rng.below(3) == 0 {
-                    let _ = store.close_input(&id, "pick").await;
+                    let _ = store.close_input(SYS.permit(&id), "pick").await;
                 }
                 format!("answer {id}")
             }
             2 if !declared.is_empty() && rng.below(4) == 0 => {
                 let id = declared[rng.below(declared.len())].clone();
-                store.amend(&id, None, Some("no inputs now".into())).await.unwrap();
+                store.amend(SYS.permit(&id), None, Some("no inputs now".into())).await.unwrap();
                 format!("amend {id} without its inputs")
             }
             _ => random_write(&store, &mut rng, &epics, &mut tally).await,
@@ -419,7 +419,7 @@ fn a_filter_that_narrows_nothing_is_no_filter_and_a_refusal_is_filter_4s() {
 #[tokio::test]
 async fn a_filter_admitting_everything_answers_as_no_filter() {
     let store = Store::new();
-    store.seed_synthetic(SeedSpec { count: 2_500, seed: 15, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 2_500, seed: 15, into_existing: false }).unwrap();
     let all = Filter::parse("(status Ready or not status Ready)").unwrap();
     let lens = Lens::of(&all).unwrap();
     let plain = Plain::of(&store);
@@ -444,7 +444,7 @@ async fn a_filter_admitting_everything_answers_as_no_filter() {
 async fn find_under_a_filter_pages_by_position() {
     let store = Store::new();
     for (epic, kind) in [("A", Kind::Scope), ("A", Kind::Build), ("A", Kind::Build), ("B", Kind::Scope), ("B", Kind::Build)] {
-        store.create(new_ticket(epic, kind, None, vec![])).await.unwrap();
+        store.create(SYS, new_ticket(epic, kind, None, vec![])).await.unwrap();
     }
     let lens = Lens::parse("kind build").unwrap();
     let ids = |p: &Page| p.tickets.iter().map(|t| t.id.to_string()).collect::<Vec<_>>();
@@ -476,7 +476,7 @@ async fn member_names_a_ticket_as_get_does() {
     let store = Store::open(&path).unwrap();
     let mut board = new_ticket("UP", Kind::Doc, None, vec![]);
     board.path = Some("_MENGER/board".into());
-    assert_eq!(store.create(board).await.unwrap().id, "UP-2");
+    assert_eq!(store.create(SYS, board).await.unwrap().id, "UP-2");
     let ready = Lens::parse("status Ready").unwrap();
     let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
     let asked = ids(&["low-1", "LOW-1", "low-2", "up-1", "UP-1", " UP-1 ", "NOPE-1", "", "UP-1"]);

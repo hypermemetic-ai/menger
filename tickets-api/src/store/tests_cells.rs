@@ -166,12 +166,12 @@ async fn the_cells_are_a_scan_on_a_seeded_store() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("seeded.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 1_500, seed: 44, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 1_500, seed: 44, into_existing: false }).unwrap();
     assert_cells_are_a_scan(&store, Some(&path), "a seed");
     let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     let store = walk(store, &path, 0x5EED_F404, 200, &epics).await;
-    store.seed_synthetic(SeedSpec { count: 700, seed: 9, into_existing: true }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 700, seed: 9, into_existing: true }).unwrap();
     assert_cells_are_a_scan(&store, Some(&path), "a seed into the walked store");
     walk(store, &path, 0x5EED_F405, 100, &epics).await;
 }
@@ -209,18 +209,18 @@ async fn exactly_the_writes_that_change_a_cell_move_one() {
     };
     let key = |status, blocked, commits| Some(Key::new(status, Kind::Build, None, blocked, commits, false));
 
-    store.create(new_ticket("MV", Kind::Scope, None, vec![])).await.unwrap();
+    store.create(SYS, new_ticket("MV", Kind::Scope, None, vec![])).await.unwrap();
     let born = announced(&mut rx, &store);
     assert_eq!(ids(&born), ["MV-1"]);
     assert!(born.iter().all(|(_, from, _)| from.is_none()), "a birth joins its cell from none");
     // A create that names the id it would take is refused as a cycle — and
     // moves nothing.
-    assert!(store.create(new_ticket("MV", Kind::Build, None, vec!["MV-2".into()])).await.is_err());
+    assert!(store.create(SYS, new_ticket("MV", Kind::Build, None, vec!["MV-2".into()])).await.is_err());
     let born = announced(&mut rx, &store);
     assert_eq!(born.len(), 0, "a refused create moves nothing: {born:?}");
-    store.create(new_ticket("MV", Kind::Build, None, vec![])).await.unwrap();
+    store.create(SYS, new_ticket("MV", Kind::Build, None, vec![])).await.unwrap();
     for _ in 0..3 {
-        store.create(new_ticket("MV", Kind::Build, None, vec!["MV-2".into()])).await.unwrap();
+        store.create(SYS, new_ticket("MV", Kind::Build, None, vec!["MV-2".into()])).await.unwrap();
     }
     let born = announced(&mut rx, &store);
     assert_eq!(ids(&born), ["MV-2", "MV-3", "MV-4", "MV-5"]);
@@ -228,57 +228,57 @@ async fn exactly_the_writes_that_change_a_cell_move_one() {
     assert_eq!(blocked, [false, true, true, true], "born blocked by MV-2, which is not done");
 
     // A status change of the ticket itself.
-    store.set_status("MV-3", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("MV-3"), Status::Ready).await.unwrap();
     let moved = announced(&mut rx, &store);
     assert_eq!(moved.into_iter().collect::<Vec<_>>(), [(OrderKey { shortcode: ShortcodeId::from("MV"), seq: 3 }, key(Status::Pending, true, false), key(Status::Ready, true, false).unwrap())]);
     // To itself: a write, and no move.
-    store.set_status("MV-3", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("MV-3"), Status::Ready).await.unwrap();
     assert!(announced(&mut rx, &store).is_empty(), "a status set to itself moves no cell");
 
     // A crossing fans out: MV-3, MV-4 and MV-5 leave `blocked`, with MV-2's own move.
-    store.set_status("MV-2", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("MV-2"), Status::Complete).await.unwrap();
     let moved = announced(&mut rx, &store);
     assert_eq!(ids(&moved), ["MV-2", "MV-3", "MV-4", "MV-5"]);
     assert!(moved.iter().filter(|(k, _, _)| k.seq > 2).all(|(_, from, to)| from.unwrap().blocked() && !to.blocked()));
     // Complete → Superseded crosses nothing: MV-2 alone moves.
-    store.set_status("MV-2", Status::Superseded).await.unwrap();
+    store.set_status(SYS.permit("MV-2"), Status::Superseded).await.unwrap();
     assert_eq!(ids(&announced(&mut rx, &store)), ["MV-2"]);
 
     // Commits: the first moves, a second does not; an unlink that leaves one
     // does not, the last does.
-    store.link_commits("MV-4", vec!["abc1234".into()]).await.unwrap();
+    store.link_commits(SYS.permit("MV-4"), vec!["abc1234".into()]).await.unwrap();
     assert_eq!(ids(&announced(&mut rx, &store)), ["MV-4"]);
-    store.link_commits("MV-4", vec!["abc1235".into()]).await.unwrap();
+    store.link_commits(SYS.permit("MV-4"), vec!["abc1235".into()]).await.unwrap();
     assert!(announced(&mut rx, &store).is_empty(), "a second commit moves no cell");
-    store.unlink_commits("MV-4", vec!["abc1234".into()]).await.unwrap();
+    store.unlink_commits(SYS.permit("MV-4"), vec!["abc1234".into()]).await.unwrap();
     assert!(announced(&mut rx, &store).is_empty(), "an unlink that leaves one moves no cell");
-    store.unlink_commits("MV-4", vec!["abc1235".into()]).await.unwrap();
+    store.unlink_commits(SYS.permit("MV-4"), vec!["abc1235".into()]).await.unwrap();
     let last = announced(&mut rx, &store);
     assert_eq!(ids(&last), ["MV-4"]);
     assert!(last.iter().all(|(_, from, to)| from.unwrap().commits() && !to.commits()));
 
     // No cell moves: an amend, a re-parent, a no-op link.
-    store.amend("MV-4", Some("renamed".into()), Some("a body".into())).await.unwrap();
-    store.set_parent("MV-5", "MV-4").await.unwrap();
-    store.link_commits("MV-5", vec![]).await.unwrap();
+    store.amend(SYS.permit("MV-4"), Some("renamed".into()), Some("a body".into())).await.unwrap();
+    store.set_parent(SYS.moving("MV-5", "MV-4")).await.unwrap();
+    store.link_commits(SYS.permit("MV-5"), vec![]).await.unwrap();
     assert!(announced(&mut rx, &store).is_empty(), "amend, set_parent and a no-op move no cell");
 
     // FILTER-21: a board note is born into a menger doc's cell, an ordinary
     // doc beside it into the cell it would share without the flag; nothing
     // after its birth moves it — its path is set then and never again.
     let note = NewTicket { path: Some("_MENGER/board".into()), ..new_ticket("MV", Kind::Doc, None, vec![]) };
-    store.create(note).await.unwrap();
-    store.create(new_ticket("MV", Kind::Doc, None, vec![])).await.unwrap();
+    store.create(SYS, note).await.unwrap();
+    store.create(SYS, new_ticket("MV", Kind::Doc, None, vec![])).await.unwrap();
     let born: Vec<_> = announced(&mut rx, &store).into_iter().collect();
     assert_eq!(born.iter().map(|(k, _, _)| k.seq).collect::<Vec<_>>(), [6, 7]);
     let doc = |menger| Key::new(Status::Doc, Kind::Doc, None, false, false, menger);
     assert_eq!((born[0].2, born[1].2), (doc(true), doc(false)), "two cells, the flag apart");
     assert!(born[0].2.menger() && born[0].2.to_string().ends_with(", menger doc)"), "{}", born[0].2);
     assert_eq!(born[1].2.to_string(), "(Doc, doc, none, not blocked, no commits)", "an ordinary doc is named as before");
-    store.amend("MV-6", Some("board: MV".into()), Some("notes".into())).await.unwrap();
-    store.set_parent("MV-6", "MV-4").await.unwrap();
+    store.amend(SYS.permit("MV-6"), Some("board: MV".into()), Some("notes".into())).await.unwrap();
+    store.set_parent(SYS.moving("MV-6", "MV-4")).await.unwrap();
     assert!(announced(&mut rx, &store).is_empty(), "amend and set_parent leave a menger doc in its cell");
-    store.link_commits("MV-6", vec!["abc1236".into()]).await.unwrap();
+    store.link_commits(SYS.permit("MV-6"), vec!["abc1236".into()]).await.unwrap();
     let moved: Vec<_> = announced(&mut rx, &store).into_iter().collect();
     assert_eq!(moved.len(), 1);
     assert!(moved[0].1.unwrap().menger() && moved[0].2.menger() && moved[0].2.commits(), "a commit moves it within the flag");
@@ -299,7 +299,7 @@ async fn asking_and_labels_move_a_tickets_cell() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("asking.db");
     let store = Store::open(&path).unwrap();
-    store.create(new_ticket("AS", Kind::Scope, None, vec![])).await.unwrap();
+    store.create(SYS, new_ticket("AS", Kind::Scope, None, vec![])).await.unwrap();
     let mut rx = store.subscribe_filtered();
     let ids = |moves: &BTreeSet<(OrderKey, Option<Key>, Key)>| moves.iter().map(|(k, _, _)| format!("{}-{}", k.shortcode, k.seq)).collect::<Vec<_>>();
     let text = |id: &str| format!("<m-input id=\"{id}\" kind=\"text\"><m-question>Anything?</m-question></m-input>\n");
@@ -307,7 +307,7 @@ async fn asking_and_labels_move_a_tickets_cell() {
 
     // Born asking.
     let new = NewTicket { body: text("q"), ..new_ticket("AS", Kind::Build, None, vec![]) };
-    store.create(new).await.unwrap(); // AS-2
+    store.create(SYS, new).await.unwrap(); // AS-2
     let born = announced(&mut rx, &store);
     assert!(born.iter().all(|(_, from, to)| from.is_none() && to.asking()), "born asking: {born:?}");
     assert!(born.iter().next().unwrap().2.to_string().ends_with(", asking)"));
@@ -315,54 +315,54 @@ async fn asking_and_labels_move_a_tickets_cell() {
     // An answer takes it out, a clear puts it back, a close takes it out,
     // a reopen (no answer) puts it back; a no-op moves nothing.
     let src = crate::types::AnswerSource::Api;
-    store.answer("AS-2", "q", InputValue::Text { text: "yes".into() }, None, src).await.unwrap();
+    store.answer(SYS.permit("AS-2"), "q", InputValue::Text { text: "yes".into() }, None, src).await.unwrap();
     assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
     assert!(!asking(&store, "AS-2"));
-    store.clear_answer("AS-2", "q", src).await.unwrap();
+    store.clear_answer(SYS.permit("AS-2"), "q", src).await.unwrap();
     assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
     assert!(asking(&store, "AS-2"));
-    store.close_input("AS-2", "q").await.unwrap();
+    store.close_input(SYS.permit("AS-2"), "q").await.unwrap();
     assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
     assert!(!asking(&store, "AS-2"), "a closed input asks nothing");
-    store.close_input("AS-2", "q").await.unwrap();
+    store.close_input(SYS.permit("AS-2"), "q").await.unwrap();
     assert!(announced(&mut rx, &store).is_empty(), "closing what is closed moves nothing");
-    store.reopen_input("AS-2", "q").await.unwrap();
+    store.reopen_input(SYS.permit("AS-2"), "q").await.unwrap();
     assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
     assert!(asking(&store, "AS-2"));
 
     // A body: re-declaring moves nothing; a second open input moves
     // nothing (it asked already); dropping both takes it out; one more puts
     // it back.
-    store.amend("AS-2", None, Some(format!("again\n\n{}", text("q")))).await.unwrap();
-    store.amend("AS-2", None, Some(format!("{}{}", text("q"), text("r")))).await.unwrap();
+    store.amend(SYS.permit("AS-2"), None, Some(format!("again\n\n{}", text("q")))).await.unwrap();
+    store.amend(SYS.permit("AS-2"), None, Some(format!("{}{}", text("q"), text("r")))).await.unwrap();
     assert!(announced(&mut rx, &store).is_empty(), "still asking: no move");
-    store.amend("AS-2", None, Some("asks nothing".into())).await.unwrap();
+    store.amend(SYS.permit("AS-2"), None, Some("asks nothing".into())).await.unwrap();
     assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
     assert!(!asking(&store, "AS-2"), "removed inputs ask nothing");
-    store.amend("AS-2", None, Some(text("s"))).await.unwrap();
+    store.amend(SYS.permit("AS-2"), None, Some(text("s"))).await.unwrap();
     assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
     assert!(asking(&store, "AS-2"));
 
     // Labels: added, a no-op, removed; one set, one cell.
-    store.create(new_ticket("AS", Kind::Build, None, vec![])).await.unwrap(); // AS-3
-    store.create(new_ticket("AS", Kind::Build, None, vec![])).await.unwrap(); // AS-4
+    store.create(SYS, new_ticket("AS", Kind::Build, None, vec![])).await.unwrap(); // AS-3
+    store.create(SYS, new_ticket("AS", Kind::Build, None, vec![])).await.unwrap(); // AS-4
     let _ = announced(&mut rx, &store);
-    store.label("AS-3", vec!["p1".into(), "needs-you".into()], vec![]).await.unwrap();
+    store.label(SYS.permit("AS-3"), vec!["p1".into(), "needs-you".into()], vec![]).await.unwrap();
     let moved = announced(&mut rx, &store);
     assert_eq!(ids(&moved), ["AS-3"]);
     let to = moved.iter().next().unwrap().2;
     assert_eq!(&*to.labels().labels(), ["needs-you".to_string(), "p1".to_string()]);
     assert!(to.to_string().ends_with(", labels needs-you p1)"), "{to}");
-    store.label("AS-3", vec!["P1".into()], vec!["later".into()]).await.unwrap();
+    store.label(SYS.permit("AS-3"), vec!["P1".into()], vec!["later".into()]).await.unwrap();
     assert!(announced(&mut rx, &store).is_empty(), "a label held, one not: no move");
-    store.label("AS-4", vec!["P1".into(), "Needs-You".into()], vec![]).await.unwrap();
+    store.label(SYS.permit("AS-4"), vec!["P1".into(), "Needs-You".into()], vec![]).await.unwrap();
     let moved = announced(&mut rx, &store);
     assert_eq!(moved.iter().next().unwrap().2, to, "the same set, the same cell");
     assert!(matches!(
-        store.label("AS-4", vec!["no way".into()], vec![]).await,
+        store.label(SYS.permit("AS-4"), vec!["no way".into()], vec![]).await,
         Err(StoreError::Labels { .. })
     ));
-    store.label("AS-4", vec![], vec!["needs-you".into(), "p1".into()]).await.unwrap();
+    store.label(SYS.permit("AS-4"), vec![], vec!["needs-you".into(), "p1".into()]).await.unwrap();
     assert!(announced(&mut rx, &store).iter().all(|(_, _, to)| to.labels().is_empty()));
     assert_cells_are_a_scan(&store, Some(&path), "the writes");
     drop(store);
@@ -407,15 +407,15 @@ async fn asking_and_labels_move_a_tickets_cell() {
 #[tokio::test]
 async fn a_crossing_past_the_threshold_carries_the_counts_it_leaves() {
     let store = Store::new();
-    store.create(new_ticket("FAN", Kind::Scope, None, vec![])).await.unwrap();
-    store.create(new_ticket("OTHER", Kind::Scope, None, vec![])).await.unwrap();
-    let hub = store.create(new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
+    store.create(SYS, new_ticket("FAN", Kind::Scope, None, vec![])).await.unwrap();
+    store.create(SYS, new_ticket("OTHER", Kind::Scope, None, vec![])).await.unwrap();
+    let hub = store.create(SYS, new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
     for i in 0..300 {
         let epic = if i % 3 == 0 { "OTHER" } else { "FAN" };
-        store.create(new_ticket(epic, Kind::Build, None, vec![hub.to_string()])).await.unwrap();
+        store.create(SYS, new_ticket(epic, Kind::Build, None, vec![hub.to_string()])).await.unwrap();
     }
     let mut rx = store.subscribe_filtered();
-    store.set_status(&hub, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&hub), Status::Complete).await.unwrap();
     let mut counts = None;
     while let Ok(change) = rx.try_recv() {
         if let Change::CellsMoved { moves } = change {
@@ -430,8 +430,8 @@ async fn a_crossing_past_the_threshold_carries_the_counts_it_leaves() {
         .map(|e| (ShortcodeId::from(e), kept.iter().filter(|((epic, _), _)| epic == e).map(|((_, c), n)| (*c, *n)).collect()))
         .collect();
     assert_eq!(counts, want, "every count of each shortcode moved, as the write left it");
-    store.set_status(&hub, Status::Ready).await.unwrap();
-    store.set_status("FAN-1", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit(&hub), Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("FAN-1"), Status::Ready).await.unwrap();
     let mut seen = 0;
     while let Ok(change) = rx.try_recv() {
         if let Change::CellsMoved { moves } = change {
@@ -451,7 +451,7 @@ async fn a_file_in_form_3_gains_the_cells_once_on_first_open() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("form3.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 900, seed: 3, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 900, seed: 3, into_existing: false }).unwrap();
     let want = scanned(&rows(&store), &asking(&store));
     drop(store);
     Connection::open(&path)
@@ -497,11 +497,11 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("form5.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 600, seed: 21, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 600, seed: 21, into_existing: false }).unwrap();
     for epic in ["PLX", "MNG"] {
-        let root = store.create(new_ticket(epic, Kind::Scope, None, vec![])).await.unwrap().id;
-        store.create(NewTicket { path: Some("_MENGER/board".into()), ..new_ticket(epic, Kind::Doc, None, vec![]) }).await.unwrap();
-        store.create(new_ticket(epic, Kind::Doc, Some(String::from(root)), vec![])).await.unwrap();
+        let root = store.create(SYS, new_ticket(epic, Kind::Scope, None, vec![])).await.unwrap().id;
+        store.create(SYS, NewTicket { path: Some("_MENGER/board".into()), ..new_ticket(epic, Kind::Doc, None, vec![]) }).await.unwrap();
+        store.create(SYS, new_ticket(epic, Kind::Doc, Some(String::from(root)), vec![])).await.unwrap();
     }
     let want = scanned(&rows(&store), &asking(&store));
     assert_eq!(want.values().filter(|k| k.menger()).count(), 2);
@@ -573,11 +573,11 @@ async fn verify_names_an_altered_container_and_an_altered_count() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("verify.db");
     let store = Store::open(&path).unwrap();
-    store.create(new_ticket("VC", Kind::Scope, None, vec![])).await.unwrap();
+    store.create(SYS, new_ticket("VC", Kind::Scope, None, vec![])).await.unwrap();
     for _ in 0..3 {
-        store.create(new_ticket("VC", Kind::Build, None, vec![])).await.unwrap();
+        store.create(SYS, new_ticket("VC", Kind::Build, None, vec![])).await.unwrap();
     }
-    store.set_status("VC-3", Status::Ready).await.unwrap();
+    store.set_status(SYS.permit("VC-3"), Status::Ready).await.unwrap();
     drop(store);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 4, cells: 3, bitmaps: 3, .. }));
     let conn = Connection::open(&path).unwrap();
@@ -640,7 +640,7 @@ fn a_container_round_trips_at_the_threshold() {
 #[tokio::test]
 async fn every_dimension_of_a_cell_is_kept() {
     let store = Store::new();
-    store.create(new_ticket("DIM", Kind::Scope, None, vec![])).await.unwrap();
+    store.create(SYS, new_ticket("DIM", Kind::Scope, None, vec![])).await.unwrap();
     let severities = [None, Some(Severity::Critical), Some(Severity::High), Some(Severity::Medium), Some(Severity::Low)];
     let mut n = 1;
     for (i, kind) in Kind::ALL.into_iter().enumerate() {
@@ -651,17 +651,17 @@ async fn every_dimension_of_a_cell_is_kept() {
                 Kind::Scope => new_ticket(&format!("DS{j}"), kind, Some("DIM-1".into()), blocked_by),
                 _ => new_ticket("DIM", kind, None, blocked_by),
             };
-            let t = store.create(NewTicket { severity, ..made }).await.unwrap();
+            let t = store.create(SYS, NewTicket { severity, ..made }).await.unwrap();
             n += 1;
             if kind != Kind::Doc {
-                store.set_status(&t.id, Status::LIFECYCLE[n % Status::LIFECYCLE.len()]).await.unwrap();
+                store.set_status(SYS.permit(&t.id), Status::LIFECYCLE[n % Status::LIFECYCLE.len()]).await.unwrap();
             }
             if n % 3 == 0 {
-                store.link_commits(&t.id, vec!["fedcba9".into()]).await.unwrap();
+                store.link_commits(SYS.permit(&t.id), vec!["fedcba9".into()]).await.unwrap();
             }
         }
     }
-    store.create(NewTicket { path: Some("_MENGER/board".into()), ..new_ticket("DIM", Kind::Doc, None, vec![]) }).await.unwrap();
+    store.create(SYS, NewTicket { path: Some("_MENGER/board".into()), ..new_ticket("DIM", Kind::Doc, None, vec![]) }).await.unwrap();
     assert_cells_are_a_scan(&store, None, "every dimension");
     let kept = store.tickets.read().unwrap().cells.by_ticket();
     let seen = |f: fn(&Key) -> String| kept.values().map(f).collect::<BTreeSet<String>>().len();
@@ -710,7 +710,7 @@ async fn fan_out_phases() {
         let t_take = t.elapsed();
         drop(cache);
         let t = std::time::Instant::now();
-        store.set_status(&hub, status).await.unwrap();
+        store.set_status(SYS.permit(&hub), status).await.unwrap();
         let t_write = t.elapsed();
         println!(
             "{previous} -> {status}: ready move {:.1} ms, cell move {:.1} ms, its rows {:.1} ms, cache take {:.1} ms; the whole write {:.1} ms",

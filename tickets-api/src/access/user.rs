@@ -207,6 +207,8 @@ impl Permit<Admin> {
 #[derive(Debug)]
 pub struct AdminOf {
     scope: Scope,
+    /// Login off: minted for anyone (ACCESS-11).
+    anyone: bool,
 }
 
 impl AdminOf {
@@ -218,7 +220,108 @@ impl AdminOf {
     /// An `AdminOf` for a test in another module (compiled out of the server).
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_tests(scope: Scope) -> Self {
-        Self { scope }
+        Self { scope, anyone: false }
+    }
+}
+
+impl AdminOf {
+    /// ACCESS-11: whether it was minted for no one in particular — login
+    /// off, where anyone reaches everything. A grant or a revoke refuses
+    /// one: planted while login is off, it would take effect when login
+    /// turns on (ACCESS-3 #11).
+    pub fn anyone(&self) -> bool {
+        self.anyone
+    }
+}
+
+/// The mark of a role on a scope a CI's key holds (DEPLOY-14): deployer,
+/// held by deployer and admin — what `deployments.record` takes.
+#[derive(Debug)]
+pub enum Deployer {}
+
+impl sealed::Sealed for Deployer {}
+
+impl RoleMark for Deployer {
+    const ROLE: Role = Role::Deployer;
+    fn admits(held: Role) -> bool {
+        matches!(held, Role::Deployer | Role::Admin)
+    }
+}
+
+/// ACCESS-11: holding one proves its user holds a role `R` admits on the
+/// scope it names (`*`, an organization, a shortcode — or one covering it),
+/// within its ceiling: what a write that names no ticket but a scope takes
+/// — a new shortcode (editor on `*` or its organization), a theme, a
+/// deployment. [`AdminOf`] is the admin's.
+#[derive(Debug)]
+pub struct On<R: RoleMark> {
+    scope: Scope,
+    _role: PhantomData<fn() -> R>,
+}
+
+/// [`On`] the editor's.
+pub type EditorOf = On<Editor>;
+/// [`On`] the deployer's.
+pub type DeployerOf = On<Deployer>;
+
+impl<R: RoleMark> On<R> {
+    /// The scope it is for.
+    pub fn scope(&self) -> &Scope {
+        &self.scope
+    }
+
+    /// An `On` for a test in another module (compiled out of the server).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_tests(scope: Scope) -> Self {
+        Self { scope, _role: PhantomData }
+    }
+}
+
+/// ACCESS-11: a name a write may record without reading it — a blocker not
+/// born yet (a forward reference). Only one who sees every ticket mints
+/// one: to anyone else a name that is no ticket and a ticket out of reach
+/// must be one answer ([`Hidden`]), so it names only what it may read.
+#[derive(Debug)]
+pub struct Forward {
+    name: String,
+}
+
+impl Forward {
+    /// The name, as given.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// ACCESS-11: the [`System`] — the code that opened the store, acting for
+/// no user — mints any proof: the builder's seeding, the access layer's
+/// own writes (`auth.grant`, `auth.revoke`, `auth.role_set`, decided by the
+/// gate), migrations, tests. A permit it mints names its ticket as given
+/// (any address); the write resolves it as it always did.
+impl System {
+    /// A permit for the ticket `id` names, unchecked.
+    pub fn permit<R: RoleMark>(&self, id: impl AsRef<str>) -> Permit<R> {
+        Permit::new(TicketId::new(id.as_ref().trim()))
+    }
+
+    /// A permit for each ticket `ids` names, unchecked.
+    pub fn permits<R: RoleMark>(&self, ids: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<Permit<R>> {
+        ids.into_iter().map(|id| self.permit(id)).collect()
+    }
+
+    /// Admin on `scope`, unchecked.
+    pub fn admin_of(&self, scope: &Scope) -> AdminOf {
+        AdminOf { scope: scope.clone(), anyone: false }
+    }
+
+    /// A role `R` on `scope`, unchecked.
+    pub fn on<R: RoleMark>(&self, scope: &Scope) -> On<R> {
+        On { scope: scope.clone(), _role: PhantomData }
+    }
+
+    /// A forward reference to `name`.
+    pub fn forward(&self, name: impl Into<String>) -> Forward {
+        Forward { name: name.into() }
     }
 }
 
@@ -342,8 +445,44 @@ impl VerifiedUser {
             s => store.gate_chain(&s.text()).unwrap_or_default(),
         };
         match self.reach.covers::<Admin>("", &chain) {
-            true => Ok(AdminOf { scope: scope.clone() }),
+            true => Ok(AdminOf { scope: scope.clone(), anyone: self.reach.gate().is_none() }),
             false => Err(Refusal::Lacks(format!("{} needs admin on {scope}", self.who()))),
+        }
+    }
+
+    /// ACCESS-11: an [`On<R>`] `scope` — when this user holds a role `R`
+    /// admits on a scope that covers it, within every ceiling layer: as
+    /// [`VerifiedUser::admin_of`] asks for admin.
+    pub fn on<R: RoleMark>(&self, scope: &Scope, store: &Store) -> Result<On<R>, Refusal> {
+        let chain = match scope {
+            Scope::Everywhere => Vec::new(),
+            s => store.gate_chain(&s.text()).unwrap_or_default(),
+        };
+        match self.reach.covers::<R>("", &chain) {
+            true => Ok(On { scope: scope.clone(), _role: PhantomData }),
+            false => Err(Refusal::Lacks(format!("{} needs {} on {scope}", self.who(), R::ROLE))),
+        }
+    }
+
+    /// ACCESS-11: a [`Forward`] reference to `name` — a name that is no
+    /// ticket (yet), for a user who would see it if it were one: one who
+    /// sees every ticket (login off, or a role on `*`), or holds a role on
+    /// the whole shortcode the name is in (or an organization or a host
+    /// covering it). To anyone else [`Hidden`], as a ticket out of reach
+    /// is: a name that is no ticket and a hidden ticket, one answer.
+    pub fn forward(&self, name: &str, store: &Store) -> Result<Forward, Hidden> {
+        let ok = match self.sight_filter() {
+            Ok(None) => true,
+            Ok(Some(_)) => {
+                let scope = store.shortcode_of(name.trim()).map(|sc| store.scope_of_shortcode(&sc)).ok_or(Hidden)?;
+                let chain = store.gate_chain(&scope.text()).unwrap_or_default();
+                self.reach.covers::<Viewer>("", &chain)
+            }
+            Err(_) => false,
+        };
+        match ok {
+            true => Ok(Forward { name: name.trim().to_string() }),
+            false => Err(Hidden),
         }
     }
 

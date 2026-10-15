@@ -1375,7 +1375,7 @@ async fn waves_to_and_under_answer_as_waves_does() {
 async fn list_pages_by_default_and_never_past_the_most() {
     use crate::limits::{LIST_PAGE_DEFAULT, LIST_PAGE_MAX};
     let store = Arc::new(Store::new());
-    store.seed_synthetic(crate::store::SeedSpec { count: 1_200, seed: 7, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, crate::store::SeedSpec { count: 1_200, seed: 7, into_existing: false }).unwrap();
     let hub = Tickets::new(store);
     let list = |after: Option<crate::vocab::Cursor>, limit: Option<u32>| {
         hub.list(None, Reach::everywhere(), None, None, None, after, limit, Some(true), None, None, None, None)
@@ -1420,7 +1420,7 @@ async fn comments_list_pages_by_default_and_never_past_the_most() {
     let store = Arc::new(Store::new());
     for i in 0..1_100 {
         let anchor = Anchor { route: "#/".into(), path: "body".into(), label: "x".into(), excerpt: "x".into(), ticket: None, version: None };
-        store.add_comment(anchor, format!("note {i}"), None).await.unwrap();
+        store.add_comment(SYS, anchor, format!("note {i}"), None).await.unwrap();
     }
     let comments = crate::Comments::new(store);
     let count = |evs: Vec<CommentsEvent>| {
@@ -1447,13 +1447,13 @@ async fn await_reply_waits_then_answers_once() {
     let hub = Tickets::new(Arc::clone(&store));
     let decision = "<m-decision data-field=\"decision\" id=\"landing\">\n<m-question data-field=\"question\">A or B?</m-question>\n\
 <m-option data-field=\"option\" name=\"A\" value=\"a\"></m-option>\n<m-option data-field=\"option\" name=\"B\" value=\"b\"></m-option>\n</m-decision>\n";
-    store.create(crate::store::NewTicket { epic: "AW".into(), title: "root".into(), kind: Kind::Scope, severity: None, blocked_by: vec![], parent: None, path: None, body: String::new() }).await.unwrap();
-    store.create(crate::store::NewTicket { epic: "AW".into(), title: "asks".into(), kind: Kind::Build, severity: None, blocked_by: vec![], parent: None, path: None, body: decision.into() }).await.unwrap();
-    store.queue_by("AW-2", Urgency::Blocking, "idle", Some("landing"), Act::default()).await.unwrap();
+    store.create(SYS, crate::store::NewTicket { epic: "AW".into(), title: "root".into(), kind: Kind::Scope, severity: None, blocked_by: vec![], parent: None, path: None, body: String::new() }).await.unwrap();
+    store.create(SYS, crate::store::NewTicket { epic: "AW".into(), title: "asks".into(), kind: Kind::Build, severity: None, blocked_by: vec![], parent: None, path: None, body: decision.into() }).await.unwrap();
+    store.queue_by(SYS.permit("AW-2"), Urgency::Blocking, "idle", Some("landing"), Act::default()).await.unwrap();
 
     // Subscribed at the call; the answer lands before the first ask.
     let mut s = Box::pin(hub.await_reply(None, Reach::everywhere(), "aw-2".into(), None, Some("landing".into()), None).await);
-    store.answer("AW-2", "landing", InputValue::Choice { option: "b".into() }, None, AnswerSource::App).await.unwrap();
+    store.answer(SYS.permit("AW-2"), "landing", InputValue::Choice { option: "b".into() }, None, AnswerSource::App).await.unwrap();
     match s.next().await {
         Some(TicketsEvent::Waiting { ticket, queued }) => assert_eq!((ticket.as_str(), queued.map(|e| e.urgency)), ("AW-2", Some(Urgency::Blocking))),
         other => panic!("expected waiting, got {other:?}"),
@@ -1477,7 +1477,7 @@ async fn await_reply_waits_then_answers_once() {
     let writer = Arc::clone(&store);
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        writer.add_comment(crate::store::conversation_anchor("AW-1"), "do X instead".into(), None).await.unwrap();
+        writer.add_comment(SYS, crate::store::conversation_anchor("AW-1"), "do X instead".into(), None).await.unwrap();
     });
     match tokio::time::timeout(std::time::Duration::from_secs(5), s.next()).await.expect("woken") {
         Some(TicketsEvent::Replied { reply: Reply::Commented { comment }, .. }) => assert_eq!(comment.body, "do X instead"),

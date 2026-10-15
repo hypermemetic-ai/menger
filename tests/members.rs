@@ -690,3 +690,58 @@ async fn org_4_a_reader_of_one_org_sees_nothing_of_the_other() {
     assert_eq!(renamed[0]["org"]["aliases"], json!(["acme"]), "{renamed:?}");
     assert_eq!(call(&alice, "tickets.get", json!({ "id": "acme:MENGER-2" })).await[0]["ticket"]["address"], "acme-co:MENGER-2");
 }
+
+/// ACCESS-11 (ACCESS-3 #2): a shortcode's root leaves its host only with
+/// admin on that host — admin on the shortcode and on where it goes is not
+/// enough to take it from PLEXUS's admins; through `update` as through
+/// `set_parent`.
+#[tokio::test]
+async fn a_root_leaves_its_host_only_with_admin_on_the_host() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    // IDENTITY is hosted under PLEXUS-1. Alice: admin on IDENTITY and OUGHT.
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "admin")).await;
+    call(&ada, "members.grant", grant(ALICE, "OUGHT", "admin")).await;
+    let alice = as_(&w, ALICE, "alice").await;
+    for (method, params) in [
+        ("tickets.set_parent", json!({ "id": "IDENTITY-1", "parent": "OUGHT-2" })),
+        ("tickets.update", json!({ "id": "IDENTITY-1", "parent": "OUGHT-2" })),
+    ] {
+        let r = call(&alice, method, params).await;
+        assert_eq!(r[0]["type"], "error", "{method}: {r:?}");
+        assert!(r[0]["message"].as_str().unwrap().contains("takes admin"), "{method}: {r:?}");
+        assert!(!format!("{r:?}").contains("PLEXUS"), "the host she cannot see, unnamed: {r:?}");
+    }
+    let still = call(&ada, "tickets.get", json!({ "id": "IDENTITY-1" })).await;
+    assert_eq!(still[0]["ticket"]["parent"], "PLEXUS-1", "still PLEXUS's: {still:?}");
+    // With admin on PLEXUS too, it moves.
+    call(&ada, "members.grant", grant(ALICE, "PLEXUS", "admin")).await;
+    let r = call(&alice, "tickets.update", json!({ "id": "IDENTITY-1", "parent": "OUGHT-2" })).await;
+    assert_eq!(r[0]["type"], "updated", "{r:?}");
+}
+
+/// ACCESS-11 (ACCESS-3 #8): a write's refusal names no ticket out of the
+/// caller's reach — a doc's place in the graph, a component's owner.
+#[tokio::test]
+async fn a_write_s_refusal_names_nothing_out_of_reach() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    let made = call(&ada, "tickets.create", json!({ "epic": "IDENTITY", "title": "waits", "parent": "IDENTITY-1", "blocked_by": ["OUGHT-2"] })).await;
+    assert_eq!(made[0]["ticket"]["id"], "IDENTITY-3", "{made:?}");
+    let owner = call(&ada, "tickets.create", json!({ "epic": "OUGHT", "title": "defines", "parent": "OUGHT-1",
+        "body": "```component m-secret\n<template>s</template>\n```\n" })).await;
+    assert_eq!(owner[0]["ticket"]["id"], "OUGHT-3", "{owner:?}");
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "editor")).await;
+    let alice = as_(&w, ALICE, "alice").await;
+    let doc = call(&alice, "tickets.set_kind", json!({ "id": "IDENTITY-3", "kind": "doc" })).await;
+    assert_eq!(doc[0]["type"], "error", "{doc:?}");
+    assert!(!format!("{doc:?}").contains("OUGHT"), "the blocker it waits on, unnamed: {doc:?}");
+    let taken = call(&alice, "tickets.amend", json!({ "id": "IDENTITY-2", "body": "```component m-secret\n<template>mine</template>\n```\n" })).await;
+    assert_eq!(taken[0]["type"], "error", "{taken:?}");
+    assert!(!format!("{taken:?}").contains("OUGHT"), "the component's owner, unnamed: {taken:?}");
+    // Ada, who sees both, hears them named.
+    let doc = call(&ada, "tickets.set_kind", json!({ "id": "IDENTITY-3", "kind": "doc" })).await;
+    assert!(format!("{doc:?}").contains("OUGHT-2"), "{doc:?}");
+}

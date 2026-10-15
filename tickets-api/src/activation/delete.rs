@@ -47,10 +47,11 @@ pub(super) fn delete_stream(
         };
         let caller = Arc::new(caller);
         let (gate, at) = (Arc::clone(&caller), store.clone());
-        let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);
+        // ACCESS-11: an admin's permit for every ticket that goes.
+        let may = move |ids: &[String]| permits::<crate::access::Admin>(&at, &gate, ids);
         match store.delete_by(select, how, act, may).await {
             Ok(Deleted { ids, tombstones }) => yield TicketsEvent::Deleted { ids, tombstones },
-            Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
+            Err(e) => yield said(&store, &caller, e),
         }
     }
 }
@@ -74,7 +75,9 @@ pub(super) fn undelete_stream(store: Arc<Store>, admitted: Result<VerifiedUser, 
         };
         let caller = Arc::new(caller);
         let (gate, at) = (Arc::clone(&caller), store.clone());
-        let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);
+        // ACCESS-11: admin on each one's shortcode (a deleted ticket has
+        // no permit).
+        let may = move |ids: &[String]| undeleting(&at, &gate, ids);
         match store.undelete_by(&ids, act, may).await {
             Ok(Undeleted { ids, tickets }) => yield TicketsEvent::Undeleted { ids, tickets },
             Err(e) => yield veiled(&caller, e),
@@ -101,10 +104,11 @@ pub(super) fn reshortcode_stream(
         ask.orgs = caller.orgs();
         let caller = Arc::new(caller);
         let (gate, at) = (Arc::clone(&caller), store.clone());
-        let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);
+        // ACCESS-11: an editor's permit for every ticket the move names.
+        let may = move |ids: &[String]| permits::<crate::access::Editor>(&at, &gate, ids);
         match store.reshortcode_by(ask, act, may).await {
             Ok(Reshortcoded { moves, tickets }) => yield TicketsEvent::Reshortcoded { moves, tickets },
-            Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
+            Err(e) => yield said(&store, &caller, e),
         }
     }
 }

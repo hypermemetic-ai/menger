@@ -172,7 +172,15 @@ impl Members {
                 granted_by: caller.principal_text().unwrap_or_else(|| OPERATOR.into()),
                 at: chrono::Utc::now().timestamp(),
             };
-            match store.grant(grant).await {
+            // ACCESS-11: admin on the scope as it stands (ACCESS-3 #2, #11).
+            let admin = match admin_on(&store, &caller, &grant.scope) {
+                Ok(a) => a,
+                Err(message) => {
+                    yield MembersEvent::Error { message };
+                    return;
+                }
+            };
+            match store.grant(admin, grant).await {
                 Ok(g) => {
                     access.granted(&g.principal);
                     yield grant_event(g)
@@ -194,10 +202,13 @@ impl Members {
         let admitted = self.access.verify_call(auth, &reach);
         let store = self.store.clone();
         stream! {
-            if let Err(message) = admitted {
-                yield MembersEvent::Error { message };
-                return;
-            }
+            let caller = match admitted {
+                Ok(c) => c,
+                Err(message) => {
+                    yield MembersEvent::Error { message };
+                    return;
+                }
+            };
             let scope = match store.scope_named(&scope) {
                 Ok(s) => s,
                 Err(e) => {
@@ -205,8 +216,15 @@ impl Members {
                     return;
                 }
             };
+            let admin = match admin_on(&store, &caller, &scope) {
+                Ok(a) => a,
+                Err(message) => {
+                    yield MembersEvent::Error { message };
+                    return;
+                }
+            };
             let principal = principal.into_string();
-            match store.revoke(principal.clone(), scope.clone()).await {
+            match store.revoke(admin, principal.clone(), scope.clone()).await {
                 Ok(existed) => yield MembersEvent::Revoked { principal, scope, existed },
                 Err(e) => yield MembersEvent::Error { message: e.to_string() },
             }
@@ -237,4 +255,12 @@ impl Members {
             }
         }
     }
+}
+
+/// ACCESS-11: admin on the stored scope `scope`, minted against the tree as
+/// it stands — what a grant or a revoke on it takes; refused in words.
+#[cfg(feature = "server")]
+fn admin_on(store: &Store, caller: &crate::access::VerifiedUser, scope: &str) -> Result<crate::access::AdminOf, String> {
+    let s = crate::members::Scope::stored(scope).ok_or_else(|| format!("{scope} is no scope"))?;
+    caller.admin_of(&s, store).map_err(|r| r.to_string())
 }

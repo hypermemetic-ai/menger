@@ -157,6 +157,7 @@ use crate::types::{
     is_menger_path, AnswerSource, Component, Input, InputState, InputValue, Placement, PlacementChange, TicketSummary,
     MENGER_PATH_PREFIX,
 };
+use crate::access::{Admin, Editor, Permit, Viewer};
 use crate::address::{Address, At, Shortcode, ShortcodeId};
 use rusqlite::{Connection, OpenFlags};
 use schemars::JsonSchema;
@@ -3469,15 +3470,20 @@ impl Store {
     /// naming a doc ([`StoreError::BlockedByDoc`]), and a doc born as an id
     /// some `blocked_by` already names ([`StoreError::DocAwaited`]) — so no
     /// ticket ever waits on a doc, which never completes.
-    pub async fn create(&self, new: NewTicket) -> Result<Ticket, StoreError> {
-        self.create_by(new, Act::default()).await
+    ///
+    /// ACCESS-11: filed as `at` allows ([`Filing`]): the system's, or the
+    /// caller's editor permit on the parent (else the shortcode's root; a
+    /// new shortcode, editor on `*` or its organization) and a viewer
+    /// permit (or a forward reference) per blocker.
+    pub async fn create(&self, at: impl Into<Filing>, new: NewTicket) -> Result<Ticket, StoreError> {
+        self.create_by(at, new, Act::default()).await
     }
 
     /// MENGER-13: [`Store::create`] by `act` — the newborn's first status a
     /// transition (from nothing), recorded in the birth's write and said
     /// right after its `Created`.
-    pub async fn create_by(&self, new: NewTicket, act: Act) -> Result<Ticket, StoreError> {
-        self.create_from(new, None, act).await.map(|(ticket, _)| ticket)
+    pub async fn create_by(&self, at: impl Into<Filing>, new: NewTicket, act: Act) -> Result<Ticket, StoreError> {
+        self.create_from(at.into(), new, None, act).await.map(|(ticket, _)| ticket)
     }
 
     /// NOTE-2: the note `id` made the ticket `new` — in one write: the
@@ -3488,13 +3494,14 @@ impl Store {
     /// write-serial lock, before anything is allocated; a ticket `create`
     /// refuses leaves the note open, and spends no id. The ticket's events
     /// are `create`'s; the note is returned with it.
-    pub async fn upgrade_note(&self, id: u64, new: NewTicket) -> Result<(Ticket, crate::notes::Note), StoreError> {
-        self.upgrade_note_by(id, new, Act::default()).await
+    pub async fn upgrade_note(&self, at: impl Into<Filing>, id: u64, new: NewTicket) -> Result<(Ticket, crate::notes::Note), StoreError> {
+        self.upgrade_note_by(at, id, new, Act::default()).await
     }
 
-    /// MENGER-13: [`Store::upgrade_note`] by `act`.
-    pub async fn upgrade_note_by(&self, id: u64, new: NewTicket, act: Act) -> Result<(Ticket, crate::notes::Note), StoreError> {
-        let (ticket, note) = self.create_from(new, Some(id), act).await?;
+    /// MENGER-13: [`Store::upgrade_note`] by `act`. ACCESS-11: filed as
+    /// `create` is ([`Filing`]).
+    pub async fn upgrade_note_by(&self, at: impl Into<Filing>, id: u64, new: NewTicket, act: Act) -> Result<(Ticket, crate::notes::Note), StoreError> {
+        let (ticket, note) = self.create_from(at.into(), new, Some(id), act).await?;
         Ok((ticket, note.expect("a note was named, so one was marked")))
     }
 
@@ -3957,8 +3964,8 @@ impl Store {
     /// it: one `GroupChanged` per row that moved, innermost first (AGS-23:
     /// a root's group whenever its kind or status changed), the
     /// `PlacementsChanged`, the cell moves and what an `under` watch saw.
-    pub async fn set_kind(&self, id: &str, kind: Kind, status: Option<Status>) -> Result<Change, StoreError> {
-        self.set_kind_by(id, kind, status, Act::default()).await
+    pub async fn set_kind(&self, on: Permit<Editor>, kind: Kind, status: Option<Status>) -> Result<Change, StoreError> {
+        self.set_kind_by(on, kind, status, Act::default()).await
     }
 
     /// MENGER-13: [`Store::set_kind`] by `act` — the kind's change a
@@ -3967,7 +3974,9 @@ impl Store {
     /// `KindChanged`. A status crossing into `Canceled` withdraws the
     /// ticket's open inputs, and out of it restores them, as `set_status`
     /// does; `set_kind` cancels no descendant (only `set_status` cascades).
-    pub async fn set_kind_by(&self, id: &str, kind: Kind, status: Option<Status>, act: Act) -> Result<Change, StoreError> {
+    /// ACCESS-11: of the ticket `on` is for.
+    pub async fn set_kind_by(&self, on: Permit<Editor>, kind: Kind, status: Option<Status>, act: Act) -> Result<Change, StoreError> {
+        let id = on.id().as_str();
         let serial = self.serial().await;
         let (mut row, written) = self.row(id)?;
         let old = row.clone();
@@ -4093,7 +4102,13 @@ impl Store {
     /// holding its code is [`StoreError::ShortcodeTaken`], naming the one
     /// there; every row of it, and of each shortcode hosted under it, takes
     /// its new address.
-    pub async fn set_parent(&self, id: &str, parent: &str) -> Result<Change, StoreError> {
+    ///
+    /// ACCESS-11: the move `mv` is for ([`Move`]): the child and the parent
+    /// its permits name — and, under the write-serial lock, the parent the
+    /// child has now the one its caller was allowed to take it from (one
+    /// that moved since refuses), a root's re-hosting admin on both hosts.
+    pub async fn set_parent(&self, mv: Move) -> Result<Change, StoreError> {
+        let (id, parent) = mv.ids();
         let id = self.resolve(id)?;
         let parent = {
             let cache = self.tickets.read().expect("store lock poisoned");
@@ -4117,6 +4132,7 @@ impl Store {
             if tickets.get(&parent).is_none() {
                 return Err(StoreError::ParentNotFound { id, parent });
             }
+            mv.check(&tickets, child, &parent)?;
             (child.parent.as_deref() == Some(parent.as_str()))
                 .then(|| (child.clone(), tickets.written))
         };
@@ -4234,14 +4250,16 @@ impl Store {
     /// SCALE-14: the body it compares with is the stored one, read under
     /// the write-serial lock (so it is the newest), and only a body that
     /// changed is written.
+    ///
+    /// ACCESS-11: of the ticket `on` is for.
     pub async fn amend(
         &self,
-        id: &str,
+        on: Permit<Editor>,
         title: Option<String>,
         body: Option<String>,
     ) -> Result<Change, StoreError> {
         // ORG-3: as the store spells it — `get` below resolves it.
-        let id = crate::address::folded(id);
+        let id = crate::address::folded(on.id());
         if title.as_deref().is_some_and(|t| t.trim().is_empty()) {
             return Err(StoreError::EmptyTitle { id });
         }
@@ -4415,35 +4433,35 @@ impl Store {
     /// is never touched, nor the ticket's row.
     pub async fn answer(
         &self,
-        ticket: &str,
+        on: Permit<Editor>,
         input: &str,
         value: InputValue,
         rationale: Option<String>,
         source: AnswerSource,
     ) -> Result<InputWrite, StoreError> {
-        self.input_write(ticket, input, inputs::Op::Answer { value, rationale, source }).await
+        self.input_write(on.id(), input, inputs::Op::Answer { value, rationale, source }).await
     }
 
     /// INPUT-3: clears the input's answer — `open` again, the clear in its
     /// history, with `source` (INPUT-9: `app` when the host clears it for a
     /// frame). One holding no answer is [`InputWrite::Unchanged`]: nothing
     /// written. Refused as `answer` is, but for the value: closed, removed.
-    pub async fn clear_answer(&self, ticket: &str, input: &str, source: AnswerSource) -> Result<InputWrite, StoreError> {
-        self.input_write(ticket, input, inputs::Op::Clear { source }).await
+    pub async fn clear_answer(&self, on: Permit<Editor>, input: &str, source: AnswerSource) -> Result<InputWrite, StoreError> {
+        self.input_write(on.id(), input, inputs::Op::Clear { source }).await
     }
 
     /// INPUT-3: closes the input — frozen, with its answer or without one;
     /// an answer or a clear is refused until it is reopened. A closed one is
     /// [`InputWrite::Unchanged`]. Refused when removed.
-    pub async fn close_input(&self, ticket: &str, input: &str) -> Result<InputWrite, StoreError> {
-        self.input_write(ticket, input, inputs::Op::Close).await
+    pub async fn close_input(&self, on: Permit<Editor>, input: &str) -> Result<InputWrite, StoreError> {
+        self.input_write(on.id(), input, inputs::Op::Close).await
     }
 
     /// INPUT-3: reopens a closed input — `answered` again when it holds an
     /// answer, else `open`. One not closed is [`InputWrite::Unchanged`].
     /// Refused when removed.
-    pub async fn reopen_input(&self, ticket: &str, input: &str) -> Result<InputWrite, StoreError> {
-        self.input_write(ticket, input, inputs::Op::Reopen).await
+    pub async fn reopen_input(&self, on: Permit<Editor>, input: &str) -> Result<InputWrite, StoreError> {
+        self.input_write(on.id(), input, inputs::Op::Reopen).await
     }
 
     /// INPUT-3: one change to one input, through the write path every write
@@ -4567,18 +4585,23 @@ impl Store {
     /// comment takes the next id, state `open` and the time. One row
     /// committed, the cache moved, `Added` broadcast; the comment as kept is
     /// the answer. A refusal keeps nothing.
-    pub async fn add_comment(&self, anchor: crate::comments::Anchor, body: String, author: Option<String>) -> Result<crate::comments::Comment, StoreError> {
-        self.add_comment_as(anchor, body, author, None).await
+    ///
+    /// ACCESS-11: as `at` allows ([`OnComment`]) — a viewer's permit on the
+    /// anchor's ticket, checked under the write-serial lock.
+    pub async fn add_comment(&self, at: impl Into<OnComment<Viewer>>, anchor: crate::comments::Anchor, body: String, author: Option<String>) -> Result<crate::comments::Comment, StoreError> {
+        self.add_comment_as(at, anchor, body, author, None).await
     }
 
     /// IDENTITY-21: [`Store::add_comment`], signed by `principal`.
     pub async fn add_comment_as(
         &self,
+        at: impl Into<OnComment<Viewer>>,
         anchor: crate::comments::Anchor,
         body: String,
         author: Option<String>,
         principal: Option<String>,
     ) -> Result<crate::comments::Comment, StoreError> {
+        let at = at.into();
         let (mut anchor, author) = crate::comments::check(anchor, &body, author.as_deref()).map_err(StoreError::CommentRefused)?;
         let serial = self.serial().await;
         let comment = {
@@ -4594,6 +4617,7 @@ impl Store {
                 anchor.ticket = Some(row.id.to_string());
                 anchor.version = Some(row.updated_unix);
             }
+            at.check(&cache, anchor.ticket.as_deref())?;
             crate::comments::Comment {
                 id: crate::vocab::CommentId::new(cache.comments.next_id()),
                 state: crate::comments::CommentState::Open,
@@ -4702,7 +4726,11 @@ impl Store {
 
     /// IDENTITY-21: keeps a grant (replacing the principal's role on that
     /// scope): one row committed, then the cache moved. The grant as kept.
-    pub async fn grant(&self, g: crate::members::Grant) -> Result<crate::members::Grant, StoreError> {
+    ///
+    /// ACCESS-11: by `by` — the system, or admin on exactly the grant's
+    /// scope, minted while login is on ([`Authority::grants_on`]).
+    pub async fn grant(&self, by: impl Into<Authority>, g: crate::members::Grant) -> Result<crate::members::Grant, StoreError> {
+        by.into().grants_on(&g.scope)?;
         let serial = self.serial().await;
         let (stored, kept) = (g.clone(), g.clone());
         self.write(
@@ -4715,7 +4743,9 @@ impl Store {
     }
 
     /// IDENTITY-21: removes a grant; whether there was one.
-    pub async fn revoke(&self, principal: String, scope: String) -> Result<bool, StoreError> {
+    /// ACCESS-11: by `by`, as [`Store::grant`].
+    pub async fn revoke(&self, by: impl Into<Authority>, principal: String, scope: String) -> Result<bool, StoreError> {
+        by.into().grants_on(&scope)?;
         let serial = self.serial().await;
         let (p, sc) = (principal.clone(), scope.clone());
         self.write(
@@ -4735,7 +4765,11 @@ impl Store {
 
     /// AUTH-7: keeps an admin's edit of `role` — its grants, replacing any
     /// edit before: one row committed, then the cache moved.
-    pub async fn set_role(&self, role: String, grants: Vec<String>) -> Result<(), StoreError> {
+    ///
+    /// ACCESS-11: by `by` — the system (the gate decided `auth.role_set`),
+    /// or admin on `*`.
+    pub async fn set_role(&self, by: impl Into<Authority>, role: String, grants: Vec<String>) -> Result<(), StoreError> {
+        by.into().admin_on(&crate::members::Scope::Everywhere, "a role's grants are everyone's: editing one needs admin on *")?;
         let serial = self.serial().await;
         let at = chrono::Utc::now().timestamp();
         let (r, g) = (role.clone(), grants.clone());
@@ -4817,23 +4851,28 @@ impl Store {
     /// committed, the cache moved, `Resolved` broadcast. One already
     /// resolved is the answer as it is: nothing written, nothing said. An
     /// id that names no comment is [`StoreError::CommentNotFound`].
-    pub async fn resolve_comment(&self, id: u64) -> Result<crate::comments::Comment, StoreError> {
-        self.comment_state(id, crate::comments::CommentState::Resolved).await
+    ///
+    /// ACCESS-11: as `at` allows ([`OnComment`]) — an editor's permit on
+    /// the comment's ticket, checked under the write-serial lock.
+    pub async fn resolve_comment(&self, at: impl Into<OnComment<Editor>>, id: u64) -> Result<crate::comments::Comment, StoreError> {
+        self.comment_state(at.into(), id, crate::comments::CommentState::Resolved).await
     }
 
     /// COMMENT-2: reopens the comment `id` — `open` again; as
     /// [`Store::resolve_comment`], the other way.
-    pub async fn reopen_comment(&self, id: u64) -> Result<crate::comments::Comment, StoreError> {
-        self.comment_state(id, crate::comments::CommentState::Open).await
+    pub async fn reopen_comment(&self, at: impl Into<OnComment<Editor>>, id: u64) -> Result<crate::comments::Comment, StoreError> {
+        self.comment_state(at.into(), id, crate::comments::CommentState::Open).await
     }
 
     /// COMMENT-2: the comment `id` moved to `to`, through the write path
     /// every write takes; a move to where it is writes and says nothing.
-    async fn comment_state(&self, id: u64, to: crate::comments::CommentState) -> Result<crate::comments::Comment, StoreError> {
+    async fn comment_state(&self, at: OnComment<Editor>, id: u64, to: crate::comments::CommentState) -> Result<crate::comments::Comment, StoreError> {
         let serial = self.serial().await;
         let current = {
             let cache = self.tickets.read().expect("store lock poisoned");
-            cache.comments.get(id).cloned().ok_or(StoreError::CommentNotFound { id, newest: cache.comments.newest() })?
+            let c = cache.comments.get(id).cloned().ok_or(StoreError::CommentNotFound { id, newest: cache.comments.newest() })?;
+            at.check(&cache, c.anchor.ticket.as_deref())?;
+            c
         };
         if current.state == to {
             return Ok(current);
@@ -4877,8 +4916,9 @@ impl Store {
     /// else: not the status (whether `done` needs a commit is SDLC-4's) —
     /// then the cache, then one `CommitsLinked`. Like `amend`, it moves no
     /// roll-up and no index, so the row goes into the cache and that is all.
-    pub async fn link_commits(&self, id: &str, entries: Vec<String>) -> Result<Change, StoreError> {
-        let id = crate::address::folded(id);
+    pub async fn link_commits(&self, on: Permit<Editor>, entries: Vec<String>) -> Result<Change, StoreError> {
+        // ACCESS-11: of the ticket `on` is for.
+        let id = crate::address::folded(on.id());
         let refs = Self::references(&id, &entries)?;
         let serial = self.serial().await;
         let (mut row, written) = self.row(&id)?;
@@ -4961,8 +5001,9 @@ impl Store {
     /// commits (its labels and `updated_unix`) with the cell move its new
     /// set makes (`label <name>`), then the cache, then one
     /// `LabelsChanged`, then the cell moves.
-    pub async fn label(&self, id: &str, add: Vec<String>, remove: Vec<String>) -> Result<Change, StoreError> {
-        let id = crate::address::folded(id);
+    pub async fn label(&self, on: Permit<Editor>, add: Vec<String>, remove: Vec<String>) -> Result<Change, StoreError> {
+        // ACCESS-11: of the ticket `on` is for.
+        let id = crate::address::folded(on.id());
         let serial = self.serial().await;
         let (mut row, written) = self.row(&id)?;
         let (after, added, removed) =
@@ -5017,8 +5058,9 @@ impl Store {
     /// broadcast, answered `removed: []`; otherwise the row commits (its
     /// commits and `updated_unix`), then the cache, then one
     /// `CommitsUnlinked`.
-    pub async fn unlink_commits(&self, id: &str, entries: Vec<String>) -> Result<Change, StoreError> {
-        let id = crate::address::folded(id);
+    pub async fn unlink_commits(&self, on: Permit<Editor>, entries: Vec<String>) -> Result<Change, StoreError> {
+        // ACCESS-11: of the ticket `on` is for.
+        let id = crate::address::folded(on.id());
         let refs = Self::references(&id, &entries)?;
         let serial = self.serial().await;
         let (mut row, written) = self.row(&id)?;
@@ -5335,6 +5377,9 @@ mod members;
 // ACCESS-9: the capability of acting for no user, minted here alone.
 mod system;
 pub use system::System;
+// ACCESS-11: what a write takes.
+mod writs;
+pub use writs::{Authority, Blocker, Filing, Move, OnComment, Parenting, Rehost, Under, Updating};
 #[cfg(test)]
 pub(crate) use system::SYS;
 pub use members::Members;
@@ -5470,6 +5515,8 @@ mod tests;
 mod tests_reach;
 #[cfg(test)]
 mod tests_watching;
+#[cfg(test)]
+mod tests_writs;
 
 /// SCALE-4: the children index against a scan of every ticket's `parent`
 /// after every path that sets one, `child_count` against both, pages of

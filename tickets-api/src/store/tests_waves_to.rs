@@ -25,7 +25,7 @@ fn new(epic: &str, kind: Kind, blocked_by: &[&str], parent: Option<&str>) -> New
 }
 
 async fn make(store: &Store, epic: &str, kind: Kind, blocked_by: &[&str], parent: Option<&str>) -> String {
-    String::from(store.create(new(epic, kind, blocked_by, parent)).await.unwrap().id)
+    String::from(store.create(SYS, new(epic, kind, blocked_by, parent)).await.unwrap().id)
 }
 
 async fn build(store: &Store, epic: &str, blocked_by: &[&str]) -> String {
@@ -69,7 +69,7 @@ async fn a_chain_is_its_waves_and_nothing_else() {
     assert_eq!(shape(&to(&store, &b)), [at(&a, wave(1)), at(&b, wave(2))]);
     assert_eq!(shape(&to(&store, &a)), [at(&a, wave(1))], "nothing before it: alone in wave 1");
 
-    store.set_status(&a, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&a), Status::Complete).await.unwrap();
     assert_eq!(shape(&to(&store, &c)), [at(&b, wave(1)), at(&c, wave(2)), at(&a, Placement::Done)]);
 }
 
@@ -104,14 +104,14 @@ async fn done_blockers_are_done_and_not_followed() {
     let a = build(&store, "DN", &[&far]).await;
     let ext = build(&store, "XS", &[]).await;
     let b = build(&store, "DN", &[&a, &ext]).await;
-    store.set_status(&a, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&a), Status::Complete).await.unwrap();
     let w = to(&store, &b);
     assert_eq!(shape(&w), [at(&ext, wave(1)), at(&b, wave(2)), at(&a, Placement::Done)]);
     assert_eq!(w.waves.done, 1);
     assert_eq!(w.waves.placed[1].waiting_on, vec![ext.clone()], "the target waits on its open blocker");
 
     // A done target is done, alone.
-    store.set_status(&b, Status::Superseded).await.unwrap();
+    store.set_status(SYS.permit(&b), Status::Superseded).await.unwrap();
     assert_eq!(shape(&to(&store, &b)), [at(&b, Placement::Done)]);
 }
 
@@ -131,7 +131,7 @@ async fn a_scope_gathers_its_open_descendants() {
     let b2 = make(&store, "SS", Kind::Build, &[&ext], Some(&e)).await;
     let b3 = make(&store, "SS", Kind::Build, &[&b2], Some(&e)).await;
     let done = make(&store, "SS", Kind::Build, &[], Some(&s)).await;
-    store.set_status(&done, Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&done), Status::Complete).await.unwrap();
     let doc = make(&store, "SS", Kind::Doc, &[], Some(&s)).await;
     let _beside = make(&store, "SC", Kind::Build, &[], Some(&root)).await;
 

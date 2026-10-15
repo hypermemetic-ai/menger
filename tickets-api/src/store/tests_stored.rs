@@ -262,7 +262,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
             }
             let forward = blocked_by.iter().any(|b| !all.iter().any(|t| &t.id == b));
             let what = format!("create {epic} {kind} under {parent:?} blocked by {blocked_by:?} at {path:?}");
-            match store.create(NewTicket { path: path.clone(), ..new_ticket(epic, kind, parent, blocked_by) }).await {
+            match store.create(SYS, NewTicket { path: path.clone(), ..new_ticket(epic, kind, parent, blocked_by) }).await {
                 Ok(_) => {
                     tally.created += 1;
                     tally.mengers += usize::from(path.is_some());
@@ -285,7 +285,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
                 (row.status, row.kind)
             };
             // SDLC-11: a doc's status never moves, and Doc is a doc's alone.
-            match store.set_status(&id, status).await {
+            match store.set_status(SYS.permit(&id), status).await {
                 Ok(_) => {
                     tally.statuses += 1;
                     tally.crossings += usize::from((before == Status::Complete) != (status == Status::Complete));
@@ -306,7 +306,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
                 pick(rng)
             };
             let was = store.row(&child).unwrap().0.parent;
-            match store.set_parent(&child, &parent).await {
+            match store.set_parent(SYS.moving(&child, &parent)).await {
                 Ok(_) if was.as_deref() != Some(parent.as_str()) => tally.moves += 1,
                 Ok(_) => {}
                 Err(_) => tally.refused += 1,
@@ -317,7 +317,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
             let id = pick(rng);
             let n = rng.below(1000);
             store
-                .amend(&id, Some(format!("amended {n}")), (rng.below(2) == 0).then(|| format!("body {n}")))
+                .amend(SYS.permit(&id), Some(format!("amended {n}")), (rng.below(2) == 0).then(|| format!("body {n}")))
                 .await
                 .unwrap();
             tally.amends += 1;
@@ -326,7 +326,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
         16 | 17 => {
             let id = pick(rng);
             let commit = format!("{:07x}", 0x1000000 + rng.below(8));
-            store.link_commits(&id, vec![commit.clone()]).await.unwrap();
+            store.link_commits(SYS.permit(&id), vec![commit.clone()]).await.unwrap();
             tally.links += 1;
             format!("link_commits {id} {commit}")
         }
@@ -337,7 +337,7 @@ async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], tally: &mut 
                 Some(c) if rng.below(3) > 0 => c.clone(),
                 _ => "abcdef0".to_string(),
             };
-            store.unlink_commits(&id, vec![commit.clone()]).await.unwrap();
+            store.unlink_commits(SYS.permit(&id), vec![commit.clone()]).await.unwrap();
             tally.unlinks += 1;
             format!("unlink_commits {id} {commit}")
         }
@@ -399,12 +399,12 @@ async fn the_stored_state_is_a_scan_after_every_write_on_a_seeded_store() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("seeded.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 1_500, seed: 28, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 1_500, seed: 28, into_existing: false }).unwrap();
     assert_stored_is_a_scan(&store, &path, "a seed");
     let epics: Vec<String> = store.extents_text().into_iter().map(|(e, _)| e).take(4).chain(["NEW".into()]).collect();
     let epics: Vec<&str> = epics.iter().map(String::as_str).collect();
     let store = walk(store, &path, 0x5EED_0028, 250, &epics).await;
-    store.seed_synthetic(SeedSpec { count: 700, seed: 3, into_existing: true }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 700, seed: 3, into_existing: true }).unwrap();
     assert_stored_is_a_scan(&store, &path, "a seed into the walked store");
     walk(store, &path, 0x5EED_0029, 100, &epics).await;
 }
@@ -444,11 +444,11 @@ async fn the_stored_state_is_a_scan_on_hand_edited_shapes_and_through_their_repa
     let marks = |store: &Store| read_back(&path).form.marks.len() + store.tickets.read().unwrap().form().marks.len();
     assert!(marks(&store) > 0, "the cycles and the dangling parent are marked");
 
-    store.set_parent("CYC-2", "CYC-4").await.unwrap();
+    store.set_parent(SYS.moving("CYC-2", "CYC-4")).await.unwrap();
     assert_stored_is_a_scan(&store, &path, "a move off a cycle (a rebuild)");
-    store.set_parent("CXA-1", "PLEX-2").await.unwrap();
+    store.set_parent(SYS.moving("CXA-1", "PLEX-2")).await.unwrap();
     assert_stored_is_a_scan(&store, &path, "a move off the cycle across three shortcodes");
-    store.create(new_ticket("GHOST", Kind::Scope, None, Vec::new())).await.unwrap();
+    store.create(SYS, new_ticket("GHOST", Kind::Scope, None, Vec::new())).await.unwrap();
     assert_stored_is_a_scan(&store, &path, "the birth a dangling parent named (a rebuild)");
     let file = read_back(&path);
     assert!(!file.form.marks.iter().any(|(m, id)| *m == stored::Mark::Dangling && id == "GHOST-1"), "repaired");
@@ -539,9 +539,9 @@ async fn verify_names_an_altered_number_and_writes_nothing() {
     let path = dir.path().join("verify.db");
     let store = Store::open(&path).unwrap();
     for (epic, kind, parent) in [("VER", Kind::Scope, None), ("VER", Kind::Build, None), ("SUBV", Kind::Scope, Some("VER-2"))] {
-        store.create(new_ticket(epic, kind, parent.map(Into::into), Vec::new())).await.unwrap();
+        store.create(SYS, new_ticket(epic, kind, parent.map(Into::into), Vec::new())).await.unwrap();
     }
-    store.set_status("VER-2", Status::Complete).await.unwrap();
+    store.set_status(SYS.permit("VER-2"), Status::Complete).await.unwrap();
     let bytes = || -> Vec<Vec<u8>> {
         ["", "-wal"]
             .iter()
@@ -595,14 +595,14 @@ async fn a_seed_that_stops_before_storing_its_derived_state_leaves_it_marked_and
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("seed.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 400, seed: 7, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 400, seed: 7, into_existing: false }).unwrap();
     assert_eq!(read_state(&path), State::Current);
     assert_stored_is_a_scan(&store, &path, "a seed");
 
     // The tickets commit; the derived state cannot. (A seed the size of
     // the store drops the children index with its first chunk, too.)
     Connection::open(&path).unwrap().execute_batch("ALTER TABLE rollup_cross RENAME TO elsewhere").unwrap();
-    assert!(store.seed_synthetic(SeedSpec { count: 500, seed: 8, into_existing: true }).is_err());
+    assert!(store.seed_synthetic(SYS, SeedSpec { count: 500, seed: 8, into_existing: true }).is_err());
     drop(store);
     assert_eq!(read_state(&path), State::Stale, "the file says its derived state is behind");
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("behind")));
@@ -615,7 +615,7 @@ async fn a_seed_that_stops_before_storing_its_derived_state_leaves_it_marked_and
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 900, .. }));
 
     // A small seed into a large store keeps the index as it goes.
-    store.seed_synthetic(SeedSpec { count: 50, seed: 9, into_existing: true }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 50, seed: 9, into_existing: true }).unwrap();
     assert_stored_is_a_scan(&store, &path, "a small seed into the store");
 }
 
@@ -628,9 +628,9 @@ async fn a_write_whose_commit_fails_stores_no_derived_state_and_changes_no_cache
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("fails.db");
     let store = Store::open(&path).unwrap();
-    store.create(new_ticket("FX", Kind::Scope, None, Vec::new())).await.unwrap();
-    store.create(new_ticket("FX", Kind::Build, None, Vec::new())).await.unwrap();
-    store.create(new_ticket("FX", Kind::Build, None, Vec::new())).await.unwrap();
+    store.create(SYS, new_ticket("FX", Kind::Scope, None, Vec::new())).await.unwrap();
+    store.create(SYS, new_ticket("FX", Kind::Build, None, Vec::new())).await.unwrap();
+    store.create(SYS, new_ticket("FX", Kind::Build, None, Vec::new())).await.unwrap();
     assert_stored_is_a_scan(&store, &path, "the setup");
     let rename = |from: &str, to: &str| {
         Connection::open(&path).unwrap().execute_batch(&format!("ALTER TABLE {from} RENAME TO {to}")).unwrap();
@@ -639,25 +639,25 @@ async fn a_write_whose_commit_fails_stores_no_derived_state_and_changes_no_cache
 
     let before = snapshot(&store);
     rename("rollup_groups", "away");
-    assert!(store.create(new_ticket("FX", Kind::Build, None, Vec::new())).await.is_err());
-    assert!(store.set_status("FX-2", Status::Complete).await.is_err());
+    assert!(store.create(SYS, new_ticket("FX", Kind::Build, None, Vec::new())).await.is_err());
+    assert!(store.set_status(SYS.permit("FX-2"), Status::Complete).await.is_err());
     rename("away", "rollup_groups");
     rename("shortcode_runs", "away");
-    assert!(store.create(new_ticket("FX", Kind::Build, Some("FX-2".into()), Vec::new())).await.is_err());
+    assert!(store.create(SYS, new_ticket("FX", Kind::Build, Some("FX-2".into()), Vec::new())).await.is_err());
     rename("away", "shortcode_runs");
     Connection::open(&path)
         .unwrap()
         .execute_batch("CREATE TRIGGER no_counts BEFORE UPDATE OF child_count ON tickets BEGIN SELECT RAISE(ABORT, 'no'); END;")
         .unwrap();
-    assert!(store.set_parent("FX-3", "FX-2").await.is_err());
+    assert!(store.set_parent(SYS.moving("FX-3", "FX-2")).await.is_err());
     Connection::open(&path).unwrap().execute_batch("DROP TRIGGER no_counts").unwrap();
     assert_eq!(snapshot(&store), before, "nothing stored, nothing cached");
     assert_eq!(store.count(SYS), 3);
 
-    let next = store.create(new_ticket("FX", Kind::Build, Some("FX-2".into()), Vec::new())).await.unwrap();
+    let next = store.create(SYS, new_ticket("FX", Kind::Build, Some("FX-2".into()), Vec::new())).await.unwrap();
     assert_eq!(next.id, "FX-4", "the id no failed create took");
-    store.set_parent("FX-3", "FX-2").await.unwrap();
-    store.set_status("FX-2", Status::Complete).await.unwrap();
+    store.set_parent(SYS.moving("FX-3", "FX-2")).await.unwrap();
+    store.set_status(SYS.permit("FX-2"), Status::Complete).await.unwrap();
     assert_stored_is_a_scan(&store, &path, "the same writes, succeeding");
 }
 
@@ -669,7 +669,7 @@ async fn children_by_page_come_from_the_files_index_in_store_order() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("pages.db");
     let store = Store::open(&path).unwrap();
-    store.seed_synthetic(SeedSpec { count: 3_000, seed: 11, into_existing: false }).unwrap();
+    store.seed_synthetic(SYS, SeedSpec { count: 3_000, seed: 11, into_existing: false }).unwrap();
     let root = store.groups(SYS).into_iter().max_by_key(|g| g.total).unwrap().root.unwrap();
     drop(store);
     let store = Store::open(&path).unwrap();

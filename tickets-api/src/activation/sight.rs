@@ -190,9 +190,21 @@ pub(super) fn redacted(e: StoreError, sees: impl Fn(&str) -> bool) -> String {
 /// each redacted the same way.
 fn redact(e: StoreError, sees: &dyn Fn(&str) -> bool) -> String {
     const HIDDEN: &str = "(a ticket out of your reach)";
-    let veil = |ids: Vec<String>| -> Vec<String> { ids.into_iter().map(|i| if sees(&i) { i } else { HIDDEN.to_string() }).collect() };
+    let one = |i: String| if sees(&i) { i } else { HIDDEN.to_string() };
+    let veil = |ids: Vec<String>| -> Vec<String> { ids.into_iter().map(one).collect() };
     match e {
         StoreError::Cycle { id, path } => StoreError::Cycle { id, path: veil(path) }.to_string(),
+        // ACCESS-11 (ACCESS-3 #8): every write's refusal names only what
+        // the caller may see — a doc's place in the graph, a parent chain,
+        // a component's owner, a shortcode's root, a path's holder, and the
+        // id a birth would have taken (the next number of a shortcode).
+        StoreError::DocInGraph { id, blocked_by, unlocks } => StoreError::DocInGraph { id, blocked_by: veil(blocked_by), unlocks: veil(unlocks) }.to_string(),
+        StoreError::ParentCycle { id, path } => StoreError::ParentCycle { id, path: veil(path) }.to_string(),
+        StoreError::ParentOutsideShortcode { id, parent } => StoreError::ParentOutsideShortcode { id: one(id), parent: one(parent) }.to_string(),
+        StoreError::ComponentOwned { id, name, owner } => StoreError::ComponentOwned { id, name, owner: one(owner) }.to_string(),
+        StoreError::ScopeNotRoot { id, root, parent } => StoreError::ScopeNotRoot { id: one(id), root: one(root), parent: one(parent) }.to_string(),
+        StoreError::PathTaken { epic, path, holder } => StoreError::PathTaken { epic, path, holder: one(holder) }.to_string(),
+        StoreError::PathParent { path, parent, root } => StoreError::PathParent { path, parent: one(parent), root: one(root) }.to_string(),
         StoreError::DocAwaited { id, by } => StoreError::DocAwaited { id, by: veil(by) }.to_string(),
         // MENGER-30: `update`'s cycle, and each of its refusals.
         StoreError::BlockCycle { id, path } => StoreError::BlockCycle { id, path: veil(path) }.to_string(),
@@ -208,15 +220,6 @@ fn redact(e: StoreError, sees: &dyn Fn(&str) -> bool) -> String {
     }
 }
 
-/// AUTH-7: the shortcodes a caller sees a ticket of where `tickets.get` is
-/// held — what a write may name. `None`: every one. ACCESS-10: the store's
-/// counts, asked as the caller reading through its sight.
-pub(super) fn sight_epics(store: &Store, caller: &VerifiedUser) -> Result<Option<std::collections::HashSet<crate::address::ShortcodeId>>, String> {
-    if caller.sight_filter()?.is_none() {
-        return Ok(None);
-    }
-    Ok(Some(store.counts(&caller.sight(), &Lens::all()).into_iter().filter(|(_, n)| *n > 0).map(|(e, _)| e).collect()))
-}
 
 /// ORG-3: the shortcode `watch { epic }` names, by any short form of its
 /// address — one naming several refuses the watch (the second, why); one

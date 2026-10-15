@@ -67,15 +67,16 @@ fn refused(e: StoreError, name: &str) -> OrgsEvent {
 /// `Err` is the event to answer — `not_found` when it holds no role there
 /// (or there is none), a refusal when it holds one but not admin.
 #[cfg(feature = "server")]
-fn administered(store: &Store, caller: &VerifiedUser, name: &str) -> Result<crate::orgs::Org, OrgsEvent> {
+fn administered(store: &Store, caller: &VerifiedUser, name: &str) -> Result<(crate::orgs::Org, crate::access::AdminOf), OrgsEvent> {
     let not_found = || OrgsEvent::NotFound { name: name.trim().to_string() };
     let org = store.org(name).ok_or_else(not_found)?;
     if caller.orgs().is_some_and(|held| !held.contains(&org.name)) {
         return Err(not_found());
     }
-    match caller.administers(&format!("{}:", org.name)) {
-        true => Ok(org),
-        false => Err(OrgsEvent::Error { message: format!("{} needs admin on {}: (or on *)", caller.principal().map(|p| p.as_str()).unwrap_or("you"), org.name) }),
+    // ACCESS-11: admin on it, the proof the store's write takes.
+    match caller.admin_of(&crate::members::Scope::Org(org.name.clone()), store) {
+        Ok(a) => Ok((org, a)),
+        Err(_) => Err(OrgsEvent::Error { message: format!("{} needs admin on {}: (or on *)", caller.principal().map(|p| p.as_str()).unwrap_or("you"), org.name) }),
     }
 }
 
@@ -143,12 +144,12 @@ impl Orgs {
                     return;
                 }
             };
-            if !caller.administers("*") {
+            let Ok(by) = caller.admin_of(&crate::members::Scope::Everywhere, &store) else {
                 yield OrgsEvent::Error { message: "a new organization needs admin on *".into() };
                 return;
-            }
+            };
             let admin = admin.map(|p| (p.into_string(), caller.principal_text().unwrap_or_else(|| OPERATOR.into())));
-            match store.create_org(&name, admin).await {
+            match store.create_org(by, &name, admin).await {
                 Ok((org, admin)) => {
                     if let Some(g) = &admin {
                         access.granted(&g.principal);
@@ -180,14 +181,14 @@ impl Orgs {
                     return;
                 }
             };
-            let org = match administered(&store, &caller, &name) {
+            let (org, by) = match administered(&store, &caller, &name) {
                 Ok(o) => o,
                 Err(ev) => {
                     yield ev;
                     return;
                 }
             };
-            match store.rename_org(org.name.as_str(), &to).await {
+            match store.rename_org(by, org.name.as_str(), &to).await {
                 Ok(now) => yield OrgsEvent::Renamed { from: org.name.to_string(), org: now },
                 Err(e) => yield refused(e, &name),
             }
@@ -214,14 +215,14 @@ impl Orgs {
                     return;
                 }
             };
-            let org = match administered(&store, &caller, &name) {
+            let (org, by) = match administered(&store, &caller, &name) {
                 Ok(o) => o,
                 Err(ev) => {
                     yield ev;
                     return;
                 }
             };
-            match store.delete_org(org.name.as_str()).await {
+            match store.delete_org(by, org.name.as_str()).await {
                 Ok((name, grants)) => yield OrgsEvent::Deleted { name, grants },
                 Err(e) => yield refused(e, &name),
             }

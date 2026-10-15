@@ -31,10 +31,10 @@ const DECISION: &str = "<m-decision data-field=\"decision\" id=\"landing\">\n<m-
 /// Q-1 a scope; Q-2 a build asking `landing`, queued at blocking by an
 /// agent; Q-3 a plain build, not queued.
 async fn fill(store: &Store) {
-    store.create(ticket(Kind::Scope, "root")).await.unwrap();
-    store.create(ticket(Kind::Build, DECISION)).await.unwrap();
-    store.create(ticket(Kind::Build, "")).await.unwrap();
-    store.queue_by("Q-2", Urgency::Blocking, "idle until decided", Some("landing"), act("idp:agent")).await.unwrap();
+    store.create(SYS, ticket(Kind::Scope, "root")).await.unwrap();
+    store.create(SYS, ticket(Kind::Build, DECISION)).await.unwrap();
+    store.create(SYS, ticket(Kind::Build, "")).await.unwrap();
+    store.queue_by(SYS.permit("Q-2"), Urgency::Blocking, "idle until decided", Some("landing"), act("idp:agent")).await.unwrap();
 }
 
 /// One write: the comment on the conversation with intent `changes`, the
@@ -47,7 +47,7 @@ async fn a_change_request_is_a_comment_and_an_unqueue_in_one_write() {
     let mut tickets = store.subscribe();
     let mut comments = store.subscribe_comments();
     let (c, change) = store
-        .request_changes_by("q-2", "Neither: **split** the import first.".into(), None, Some("idp:owner".into()), act("idp:owner"))
+        .request_changes_by(SYS.permit("q-2"), "Neither: **split** the import first.".into(), None, Some("idp:owner".into()), act("idp:owner"))
         .await
         .unwrap();
     assert_eq!(c.intent, CommentIntent::Changes);
@@ -80,13 +80,13 @@ async fn a_change_request_is_a_comment_and_an_unqueue_in_one_write() {
     }
     assert_eq!(unq, 1);
     // `list { intent }`.
-    store.add_comment(crate::comments::Anchor { ..conversation_anchor("Q-2") }, "a plain one".into(), None).await.unwrap();
+    store.add_comment(SYS, crate::comments::Anchor { ..conversation_anchor("Q-2") }, "a plain one".into(), None).await.unwrap();
     let only = |i| CommentQuery { intent: Some(i), ..CommentQuery::default() };
     let ids = |q: &CommentQuery| store.comments(SYS, q, None, None).unwrap().comments.into_iter().map(|c| c.id).collect::<Vec<_>>();
     assert_eq!(ids(&only(CommentIntent::Changes)), [c.id]);
     assert_eq!(ids(&only(CommentIntent::Comment)), [c.id.get() + 1]);
     // Re-queued after acting: back in the queue, a new entry.
-    let again = store.queue_by("Q-2", Urgency::Now, "split it; look again", None, act("idp:agent")).await.unwrap();
+    let again = store.queue_by(SYS.permit("Q-2"), Urgency::Now, "split it; look again", None, act("idp:agent")).await.unwrap();
     assert!(matches!(again, QueueChange::Queued { action: QueueAction::Queued, .. }));
 }
 
@@ -101,10 +101,10 @@ async fn a_refused_change_request_writes_nothing() {
     fill(&store).await;
     let mut comments = store.subscribe_comments();
     let records = store.queue_history(SYS, "Q-2").len();
-    let e = store.request_changes_by("Q-3", "x".into(), None, None, act("o")).await.unwrap_err();
+    let e = store.request_changes_by(SYS.permit("Q-3"), "x".into(), None, None, act("o")).await.unwrap_err();
     assert!(e.to_string().contains("Q-3 is not queued"), "{e}");
-    assert!(matches!(store.request_changes_by("Q-99", "x".into(), None, None, act("o")).await, Err(StoreError::NotFound(_))));
-    let e = store.request_changes_by("Q-2", " \n".into(), None, None, act("o")).await.unwrap_err();
+    assert!(matches!(store.request_changes_by(SYS.permit("Q-99"), "x".into(), None, None, act("o")).await, Err(StoreError::NotFound(_))));
+    let e = store.request_changes_by(SYS.permit("Q-2"), " \n".into(), None, None, act("o")).await.unwrap_err();
     assert!(e.to_string().contains("the comment's body is empty"), "{e}");
     assert!(comments.try_recv().is_err(), "nothing said");
     assert!(store.comments(SYS, &CommentQuery::default(), None, None).unwrap().comments.is_empty(), "nothing kept");
@@ -127,7 +127,7 @@ async fn a_change_request_is_kept_across_a_restart_and_an_older_file_gains_the_c
     drop(conn);
     let c = {
         let store = Store::open(&path).unwrap();
-        store.request_changes_by("Q-2", "split it".into(), Some("ada".into()), None, act("idp:ada")).await.unwrap().0
+        store.request_changes_by(SYS.permit("Q-2"), "split it".into(), Some("ada".into()), None, act("idp:ada")).await.unwrap().0
     };
     let store = Store::open(&path).unwrap();
     assert_eq!(store.comment(SYS, c.id.get()).ok().map(|c| (c.intent, c.author)), Some((CommentIntent::Changes, "ada".to_string())));

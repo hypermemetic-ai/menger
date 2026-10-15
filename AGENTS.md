@@ -317,6 +317,13 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   every change is cut by `Store::heard`, whose `match` has no `_` arm — a
   new `Change` is classified there or does not compile (ACCESS-12, README
   "Watches through a reach").
+  Every public store write takes the proof for what it writes — a
+  `Permit` for each ticket (it carries the id: the ticket checked is the
+  ticket written), `AdminOf` / `On<R>` for a scope, `System` for what acts
+  for no user — minted through the user in `activation/writes.rs`, checked
+  by the store under its write lock (ACCESS-11, README "Writes through a
+  permit"); store tests write as `SYS.permit(id)`, `SYS.moving(a, b)`,
+  `SYS.updating(id)`, or `SYS` where a bundle is taken.
 
   **Organizations** (ORG-4) are the `orgs` activation: every ticket and
   shortcode is in one (today's tracker is `hypermemetic`). `list` (the

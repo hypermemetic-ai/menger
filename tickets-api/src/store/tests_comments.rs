@@ -70,7 +70,7 @@ async fn tree(store: &Store) {
         ("SOLO", Kind::Scope, None),
         ("SOLO", Kind::Build, None),
     ] {
-        store.create(ticket(epic, kind, parent)).await.unwrap();
+        store.create(SYS, ticket(epic, kind, parent)).await.unwrap();
     }
 }
 
@@ -93,7 +93,7 @@ async fn add_keeps_the_comment_and_returns_it() {
     let mut rx = store.subscribe_comments();
     let before = chrono::Utc::now().timestamp();
     let sent = Anchor { ticket: Some(" root-2 ".into()), ..anchor(Some("ROOT-2")) };
-    let c = store.add_comment(sent, "show the parent's title too".into(), None).await.unwrap();
+    let c = store.add_comment(SYS, sent, "show the parent's title too".into(), None).await.unwrap();
     let root2 = store.get(SYS, "ROOT-2").await.unwrap();
     assert_eq!(
         c,
@@ -112,7 +112,7 @@ async fn add_keeps_the_comment_and_returns_it() {
     assert_eq!(rx.try_recv().unwrap(), CommentChange::Added(c.clone()));
 
     let sent = Anchor { version: Some(42), ..anchor(None) };
-    let d = store.add_comment(sent, "on the board".into(), Some(" agent-7 ".into())).await.unwrap();
+    let d = store.add_comment(SYS, sent, "on the board".into(), Some(" agent-7 ".into())).await.unwrap();
     assert_eq!((d.id.get(), d.author.as_str(), d.anchor.ticket.as_deref(), d.anchor.version), (2, "agent-7", None, None), "a version sent is replaced");
     assert_eq!(store.comment(SYS, 2).ok(), Some(d.clone()));
     assert_eq!(all(&store, CommentQuery::default()), [2, 1]);
@@ -151,16 +151,16 @@ async fn every_refusal_names_its_problem_and_keeps_nothing() {
         (Anchor { ticket: Some(String::new()), ..anchor(None) }, "x", None, "malformed anchor: ticket is empty (leave it out when the element belongs to no ticket) (nothing was kept)"),
     ];
     for (a, body, author, message) in refused {
-        let e = store.add_comment(a, body.into(), author.map(Into::into)).await.unwrap_err();
+        let e = store.add_comment(SYS, a, body.into(), author.map(Into::into)).await.unwrap_err();
         assert_eq!(e.to_string(), message);
     }
     assert!(rx.try_recv().is_err(), "nothing said");
     assert_eq!(all(&store, CommentQuery::default()), Vec::<u64>::new());
-    let e = store.resolve_comment(1).await.unwrap_err();
+    let e = store.resolve_comment(SYS, 1).await.unwrap_err();
     assert_eq!(e.to_string(), "no comment 1: there are no comments yet (nothing changed)");
-    let c = store.add_comment(anchor(None), "the first kept".into(), None).await.unwrap();
+    let c = store.add_comment(SYS, anchor(None), "the first kept".into(), None).await.unwrap();
     assert_eq!(c.id, 1, "no id was spent on a refusal");
-    let e = store.reopen_comment(9).await.unwrap_err();
+    let e = store.reopen_comment(SYS, 9).await.unwrap_err();
     assert_eq!(e.to_string(), "no comment 9: comment ids run from 1 to 1 (nothing changed)");
     drop(store);
     let conn = Connection::open(&path).unwrap();
@@ -176,29 +176,29 @@ async fn resolve_and_reopen_flip_the_state_once() {
     let path = dir.path().join("states.db");
     let store = Store::open(&path).unwrap();
     tree(&store).await;
-    let a = store.add_comment(anchor(Some("SUB-2")), "one".into(), None).await.unwrap();
-    let b = store.add_comment(anchor(None), "two".into(), Some("agent".into())).await.unwrap();
+    let a = store.add_comment(SYS, anchor(Some("SUB-2")), "one".into(), None).await.unwrap();
+    let b = store.add_comment(SYS, anchor(None), "two".into(), Some("agent".into())).await.unwrap();
     let mut rx = store.subscribe_comments();
     let committed = |store: &Store| store.committing.load(Ordering::SeqCst);
-    let resolved = store.resolve_comment(a.id.get()).await.unwrap();
+    let resolved = store.resolve_comment(SYS, a.id.get()).await.unwrap();
     assert_eq!(resolved, Comment { state: CommentState::Resolved, ..a.clone() });
     assert_eq!(rx.try_recv().unwrap(), CommentChange::Resolved(resolved.clone()));
     let writes = committed(&store);
-    assert_eq!(store.resolve_comment(a.id.get()).await.unwrap(), resolved, "resolved already");
-    assert_eq!(store.reopen_comment(b.id.get()).await.unwrap(), b, "open already");
+    assert_eq!(store.resolve_comment(SYS, a.id.get()).await.unwrap(), resolved, "resolved already");
+    assert_eq!(store.reopen_comment(SYS, b.id.get()).await.unwrap(), b, "open already");
     assert_eq!(committed(&store), writes, "nothing written");
     assert!(rx.try_recv().is_err(), "nothing said");
-    let reopened = store.reopen_comment(a.id.get()).await.unwrap();
+    let reopened = store.reopen_comment(SYS, a.id.get()).await.unwrap();
     assert_eq!(reopened, a);
     assert_eq!(rx.try_recv().unwrap(), CommentChange::Reopened(a.clone()));
-    store.resolve_comment(b.id.get()).await.unwrap();
+    store.resolve_comment(SYS, b.id.get()).await.unwrap();
     let held = store.comments(SYS, &CommentQuery::default(), None, None).unwrap();
     drop(store);
 
     let store = Store::open(&path).unwrap();
     assert_eq!(store.comments(SYS, &CommentQuery::default(), None, None).unwrap(), held, "as stored");
     assert_eq!(store.comment(SYS, b.id.get()).unwrap().state, CommentState::Resolved);
-    assert_eq!(store.add_comment(anchor(None), "three".into(), None).await.unwrap().id, 3, "ids go on from the file's");
+    assert_eq!(store.add_comment(SYS, anchor(None), "three".into(), None).await.unwrap().id, 3, "ids go on from the file's");
 }
 
 /// Row 3: newest first, paged with `after` (exclusive) and `limit`; `next`
@@ -210,9 +210,9 @@ async fn list_is_newest_first_and_pages_with_after_and_limit() {
     tree(&store).await;
     for i in 1..=7 {
         let state_resolved = i % 3 == 0;
-        let c = store.add_comment(anchor(Some("ROOT-2")), format!("comment {i}"), None).await.unwrap();
+        let c = store.add_comment(SYS, anchor(Some("ROOT-2")), format!("comment {i}"), None).await.unwrap();
         if state_resolved {
-            store.resolve_comment(c.id.get()).await.unwrap();
+            store.resolve_comment(SYS, c.id.get()).await.unwrap();
         }
     }
     let q = CommentQuery::default();
@@ -244,7 +244,7 @@ async fn each_filter_admits_what_it_names() {
         let store = &store;
         async move {
             let a = Anchor { route: route.into(), path: path.into(), label: label.into(), excerpt: excerpt.into(), ticket: ticket.map(Into::into), version: None };
-            store.add_comment(a, body.into(), author.map(Into::into)).await.unwrap().id
+            store.add_comment(SYS, a, body.into(), author.map(Into::into)).await.unwrap().id
         }
     };
     let c1 = add(Some("ROOT-4"), "#/ticket/ROOT-4", "main > h1", "Title", "a build", "rename the title", None).await;
@@ -252,7 +252,7 @@ async fn each_filter_admits_what_it_names() {
     let c3 = add(Some("DEEP-2"), "#/ticket/DEEP-2", "[data-tag=\"m-wave\"]", "Wave summary", "WAVE 2", "numbers look off", None).await;
     let c4 = add(Some("SOLO-2"), "#/ticket/SOLO-2", "main > h1", "Title", "a TITLE here", "fine", Some("agent-1")).await;
     let c5 = add(None, "#/", "nav > ul", "Nav", "", "the nav is slow", None).await;
-    store.resolve_comment(c2.get()).await.unwrap();
+    store.resolve_comment(SYS, c2.get()).await.unwrap();
     let q = |f: fn(&mut CommentQuery)| {
         let mut q = CommentQuery::default();
         f(&mut q);
@@ -382,17 +382,17 @@ async fn every_filter_and_every_conjunction_is_the_reference() {
                     version: None,
                 };
                 let body = format!("{} {}", rng.pick(&words), rng.pick(&words));
-                let c = store.add_comment(a, body, authors[rng.below(authors.len())].map(Into::into)).await.unwrap();
+                let c = store.add_comment(SYS, a, body, authors[rng.below(authors.len())].map(Into::into)).await.unwrap();
                 held.push(c);
             }
             6 if !held.is_empty() => {
                 let id = held[rng.below(held.len())].id;
-                let c = if rng.below(2) == 0 { store.resolve_comment(id.get()).await } else { store.reopen_comment(id.get()).await }.unwrap();
+                let c = if rng.below(2) == 0 { store.resolve_comment(SYS, id.get()).await } else { store.reopen_comment(SYS, id.get()).await }.unwrap();
                 held[id.get() as usize - 1] = c;
             }
             7 => {
                 let (child, parent) = moves[rng.below(moves.len())];
-                store.set_parent(child, parent).await.unwrap();
+                store.set_parent(SYS.moving(child, parent)).await.unwrap();
             }
             _ => {}
         }
@@ -466,18 +466,18 @@ async fn a_comment_keeps_its_anchor_whatever_its_ticket_goes_through() {
     let path = dir.path().join("anchors.db");
     let store = Store::open(&path).unwrap();
     tree(&store).await;
-    let c = store.add_comment(anchor(Some("ROOT-4")), "keep me".into(), None).await.unwrap();
+    let c = store.add_comment(SYS, anchor(Some("ROOT-4")), "keep me".into(), None).await.unwrap();
     let born = store.get(SYS, "ROOT-4").await.unwrap().updated_unix;
     assert_eq!(c.anchor.version, Some(born));
     assert_eq!(all(&store, CommentQuery { under: Some("ROOT-3".into()), ..CommentQuery::default() }), [c.id]);
 
     // The clock moves on, so every write below moves `updated_unix`.
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    store.amend("ROOT-4", Some("a new title".into()), Some("a new body, the element gone".into())).await.unwrap();
-    store.set_parent("ROOT-4", "ROOT-2").await.unwrap();
-    store.set_status("ROOT-4", Status::Ready).await.unwrap();
-    store.set_kind("ROOT-4", Kind::Gap, None).await.unwrap();
-    store.link_commits("ROOT-4", vec!["77df9a0".into()]).await.unwrap();
+    store.amend(SYS.permit("ROOT-4"), Some("a new title".into()), Some("a new body, the element gone".into())).await.unwrap();
+    store.set_parent(SYS.moving("ROOT-4", "ROOT-2")).await.unwrap();
+    store.set_status(SYS.permit("ROOT-4"), Status::Ready).await.unwrap();
+    store.set_kind(SYS.permit("ROOT-4"), Kind::Gap, None).await.unwrap();
+    store.link_commits(SYS.permit("ROOT-4"), vec!["77df9a0".into()]).await.unwrap();
     let now = store.get(SYS, "ROOT-4").await.unwrap();
     assert!(now.updated_unix > born, "the ticket moved on");
     assert_eq!(store.comment(SYS, c.id.get()).ok(), Some(c.clone()), "the comment did not");
@@ -524,8 +524,8 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     let before = {
         let store = Store::open(&path).unwrap();
         tree(&store).await;
-        store.set_status("ROOT-2", Status::Complete).await.unwrap();
-        store.link_commits("SOLO-2", vec!["77df9a0".into()]).await.unwrap();
+        store.set_status(SYS.permit("ROOT-2"), Status::Complete).await.unwrap();
+        store.link_commits(SYS.permit("SOLO-2"), vec!["77df9a0".into()]).await.unwrap();
         answers(&store).await
     };
     assert_eq!(read_state(&path), State::Current);
@@ -544,7 +544,7 @@ async fn a_form_6_file_gains_form_7_once_in_place_and_answers_as_before() {
     assert!(has_comments_table(&path));
     assert_eq!(all(&store, CommentQuery::default()), Vec::<u64>::new(), "the table starts empty");
     assert_eq!(answers(&store).await, before, "answers as before");
-    let c = store.add_comment(anchor(Some("ROOT-4")), "after the upgrade".into(), None).await.unwrap();
+    let c = store.add_comment(SYS, anchor(Some("ROOT-4")), "after the upgrade".into(), None).await.unwrap();
     drop(store);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 10, .. }));
 
@@ -588,7 +588,7 @@ async fn a_form_7_file_gains_form_8_in_place_and_keeps_its_comments() {
     let c = {
         let store = Store::open(&path).unwrap();
         tree(&store).await;
-        store.add_comment(anchor(Some("ROOT-4")), "before".into(), None).await.unwrap()
+        store.add_comment(SYS, anchor(Some("ROOT-4")), "before".into(), None).await.unwrap()
     };
     let conn = Connection::open(&path).unwrap();
     conn.execute_batch(
@@ -601,7 +601,7 @@ async fn a_form_7_file_gains_form_8_in_place_and_keeps_its_comments() {
     assert_eq!(read_state(&path), State::Current);
     assert_eq!(store.comment(SYS, c.id.get()).ok(), Some(c), "the comment kept, unsigned");
     let signed = store
-        .add_comment_as(anchor(Some("ROOT-4")), "after".into(), Some("alice".into()), Some("idp:alice".into()))
+        .add_comment_as(SYS, anchor(Some("ROOT-4")), "after".into(), Some("alice".into()), Some("idp:alice".into()))
         .await
         .unwrap();
     assert_eq!(signed.principal.as_deref(), Some("idp:alice"));

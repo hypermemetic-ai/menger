@@ -122,7 +122,15 @@ impl Themes {
                     return;
                 }
             }
-            match store.define_theme(&name, light, dark).await {
+            // ACCESS-11: editor on `*`, the proof the store takes.
+            let on = match caller.on::<crate::access::Editor>(&crate::members::Scope::Everywhere, &store) {
+                Ok(on) => on,
+                Err(r) => {
+                    yield ThemesEvent::Error { message: format!("a theme is the whole site's: defining one takes themes.define on *: {r}") };
+                    return;
+                }
+            };
+            match store.define_theme(on, &name, light, dark).await {
                 Ok(theme) => yield ThemesEvent::Theme { theme },
                 Err(e) => yield refused(e),
             }
@@ -227,7 +235,19 @@ impl Themes {
                     return;
                 }
             }
-            match store.set_theme(&scope, theme.as_deref(), reach, takeover).await {
+            // ACCESS-11: admin on `*` for the site, editor on the shortcode.
+            let by: Result<crate::store::Authority, String> = match site {
+                true => caller.admin_of(&crate::members::Scope::Everywhere, &store).map(Into::into).map_err(|r| r.to_string()),
+                false => crate::activation::scope_named(&store, &scope.to_string()).and_then(|s| caller.on::<crate::access::Editor>(&s, &store).map(Into::into).map_err(|r| r.to_string())),
+            };
+            let by = match by {
+                Ok(by) => by,
+                Err(message) => {
+                    yield ThemesEvent::Error { message };
+                    return;
+                }
+            };
+            match store.set_theme(by, &scope, theme.as_deref(), reach, takeover).await {
                 Ok(setting) => yield ThemesEvent::Setting { setting },
                 Err(e) => yield refused(e),
             }

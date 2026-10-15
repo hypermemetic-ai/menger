@@ -21,13 +21,15 @@ impl Store {
     /// there is no subscriber to tell, and a million `Created` events
     /// would only lag the channel. Blocking I/O: call from a blocking
     /// context (the builder wraps it in `spawn_blocking`).
-    pub fn seed_synthetic(&self, spec: SeedSpec) -> Result<SeedReport, StoreError> {
-        self.seed_synthetic_shaped(spec, SeedShape::Flat)
+    ///
+    /// ACCESS-11: the system's alone — it runs before anyone is served.
+    pub fn seed_synthetic(&self, sys: &System, spec: SeedSpec) -> Result<SeedReport, StoreError> {
+        self.seed_synthetic_shaped(sys, spec, SeedShape::Flat)
     }
 
     /// FILTER-13: [`Store::seed_synthetic`] in a given shape — PERF-2's flat
     /// one, or FILTER-3 §6.5's nested one ([`SeedShape`]).
-    pub fn seed_synthetic_shaped(&self, spec: SeedSpec, shape: SeedShape) -> Result<SeedReport, StoreError> {
+    pub fn seed_synthetic_shaped(&self, _sys: &System, spec: SeedSpec, shape: SeedShape) -> Result<SeedReport, StoreError> {
         // Mutations stay serialized even here: a concurrent writer means
         // this was called while serving, which it must not be.
         let _serial = self

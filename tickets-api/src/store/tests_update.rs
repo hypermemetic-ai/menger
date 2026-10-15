@@ -25,14 +25,14 @@ fn new(epic: &str, title: &str, kind: Kind, parent: Option<&str>, blocked_by: &[
 /// scope under the root with U-6 a build under it; and `V`, V-1 its root
 /// and V-2 a build.
 async fn fixture(store: &Store) {
-    store.create(new("U", "the root", Kind::Scope, None, &[])).await.unwrap();
-    store.create(new("U", "two", Kind::Build, None, &[])).await.unwrap();
-    store.create(new("U", "three", Kind::Build, None, &[])).await.unwrap();
-    store.create(new("U", "a doc", Kind::Doc, None, &[])).await.unwrap();
-    store.create(new("U", "an area", Kind::Execution, Some("U-1"), &[])).await.unwrap();
-    store.create(new("U", "six", Kind::Build, Some("U-5"), &[])).await.unwrap();
-    store.create(new("V", "v root", Kind::Scope, None, &[])).await.unwrap();
-    store.create(new("V", "v two", Kind::Build, None, &[])).await.unwrap();
+    store.create(SYS, new("U", "the root", Kind::Scope, None, &[])).await.unwrap();
+    store.create(SYS, new("U", "two", Kind::Build, None, &[])).await.unwrap();
+    store.create(SYS, new("U", "three", Kind::Build, None, &[])).await.unwrap();
+    store.create(SYS, new("U", "a doc", Kind::Doc, None, &[])).await.unwrap();
+    store.create(SYS, new("U", "an area", Kind::Execution, Some("U-1"), &[])).await.unwrap();
+    store.create(SYS, new("U", "six", Kind::Build, Some("U-5"), &[])).await.unwrap();
+    store.create(SYS, new("V", "v root", Kind::Scope, None, &[])).await.unwrap();
+    store.create(SYS, new("V", "v two", Kind::Build, None, &[])).await.unwrap();
 }
 
 async fn store() -> Store {
@@ -126,52 +126,52 @@ async fn each_field_alone_moves_it_and_sends_its_own_event() {
     let store = store().await;
     let mut rx = store.subscribe_filtered();
 
-    let u = store.update("U-2", Update { title: Some("two, renamed".into()), ..Update::default() }).await.unwrap();
+    let u = store.update(SYS.updating("U-2"), Update { title: Some("two, renamed".into()), ..Update::default() }).await.unwrap();
     assert_eq!((u.changed.as_slice(), u.ticket.title.as_str()), (&["title".to_string()][..], "two, renamed"));
     assert_eq!(types(&drained(&mut rx)), ["amended"]);
     assert_kept(&store, "a title");
 
-    let u = store.update("U-2", Update { body: Some("a new body".into()), ..Update::default() }).await.unwrap();
+    let u = store.update(SYS.updating("U-2"), Update { body: Some("a new body".into()), ..Update::default() }).await.unwrap();
     assert_eq!((u.changed, u.ticket.body.as_str()), (vec!["body".to_string()], "a new body"));
     assert_eq!(store.get(SYS, "U-2").await.unwrap().body, "a new body", "the body is stored");
     assert_eq!(types(&drained(&mut rx)), ["amended"]);
 
-    let u = store.update("U-2", Update { kind: Some(Kind::Gap), ..Update::default() }).await.unwrap();
+    let u = store.update(SYS.updating("U-2"), Update { kind: Some(Kind::Gap), ..Update::default() }).await.unwrap();
     assert_eq!((u.changed, u.ticket.kind, u.ticket.status), (vec!["kind".to_string()], Kind::Gap, Status::Pending));
     assert_eq!(types(&drained(&mut rx)), ["kind_changed", "transition", "cells_moved"]);
     assert_kept(&store, "a kind");
 
-    let u = store.update("U-2", Update { status: Some(Status::Ready), ..Update::default() }).await.unwrap();
+    let u = store.update(SYS.updating("U-2"), Update { status: Some(Status::Ready), ..Update::default() }).await.unwrap();
     assert_eq!((u.changed, u.ticket.status), (vec!["status".to_string()], Status::Ready));
     assert_eq!(types(&drained(&mut rx)), ["status_changed", "transition", "cells_moved"]);
     assert!(ready(&store).contains(&"U-2".to_string()));
     assert_kept(&store, "a status");
 
-    let u = store.update("U-2", Update { parent: Some("u-5".into()), ..Update::default() }).await.unwrap();
+    let u = store.update(SYS.updating("U-2"), Update { parent: Some("u-5".into()), ..Update::default() }).await.unwrap();
     assert_eq!((u.changed, u.ticket.parent.as_deref()), (vec!["parent".to_string()], Some("U-5")));
     assert_eq!(types(&drained(&mut rx)), ["parent_changed", "children_changed", "child_removed"]);
     assert_eq!(store.get(SYS, "U-5").await.unwrap().child_count, 2);
     assert_kept(&store, "a parent");
 
-    let u = store.update("U-2", Update { severity: Some(Some(Severity::High)), ..Update::default() }).await.unwrap();
+    let u = store.update(SYS.updating("U-2"), Update { severity: Some(Some(Severity::High)), ..Update::default() }).await.unwrap();
     assert_eq!((u.changed, u.ticket.severity), (vec!["severity".to_string()], Some(Severity::High)));
     let sent = drained(&mut rx);
     assert_eq!(types(&sent), ["severity_changed", "cells_moved"]);
     assert!(matches!(&sent[0], Change::SeverityChanged { previous: None, .. }));
     assert_eq!(count(&store, "severity High", "U"), 1);
-    let u = store.update("U-2", Update { severity: Some(None), ..Update::default() }).await.unwrap();
+    let u = store.update(SYS.updating("U-2"), Update { severity: Some(None), ..Update::default() }).await.unwrap();
     assert_eq!((u.changed, u.ticket.severity), (vec!["severity".to_string()], None), "severity clears");
     assert!(matches!(&drained(&mut rx)[0], Change::SeverityChanged { previous: Some(Severity::High), .. }));
     assert_eq!(count(&store, "severity High", "U"), 0);
     assert_kept(&store, "a severity");
 
-    let u = store.update("U-3", blocked(&["u-2"])).await.unwrap();
+    let u = store.update(SYS.updating("U-3"), blocked(&["u-2"])).await.unwrap();
     assert_eq!((u.changed, u.ticket.blocked_by.clone()), (vec!["blocked_by".to_string()], vec!["U-2".to_string()]));
     assert_eq!(types(&drained(&mut rx)), ["blockers_changed", "unlocks_changed", "placements_changed", "cells_moved"]);
     assert_eq!(store.get(SYS, "U-2").await.unwrap().unlocks, ["U-3"]);
     assert_kept(&store, "a block");
 
-    let u = store.update("U-3", unblocked(&["U-2"])).await.unwrap();
+    let u = store.update(SYS.updating("U-3"), unblocked(&["U-2"])).await.unwrap();
     assert_eq!((u.changed, u.ticket.blocked_by.len()), (vec!["blocked_by".to_string()], 0));
     let sent = drained(&mut rx);
     assert_eq!(types(&sent), ["blockers_changed", "unlocks_removed", "placements_changed", "cells_moved"]);
@@ -186,7 +186,7 @@ async fn all_at_once_is_one_write_its_events_in_order() {
     let written = store.tickets.read().unwrap().written;
     let u = store
         .update(
-            "U-3",
+            SYS.updating("U-3"),
             Update {
                 title: Some("three, all at once".into()),
                 body: Some("everything moves".into()),
@@ -256,7 +256,7 @@ async fn nothing_to_change_writes_and_sends_nothing() {
             ..Update::default()
         },
     ] {
-        let u = store.update("U-2", asked).await.unwrap();
+        let u = store.update(SYS.updating("U-2"), asked).await.unwrap();
         assert!(u.changed.is_empty(), "{:?}", u.changed);
         assert_eq!(u.ticket, before);
     }
@@ -271,7 +271,7 @@ async fn nothing_to_change_writes_and_sends_nothing() {
 async fn every_refusal_writes_nothing() {
     let store = Store::new().with_body_max(64);
     fixture(&store).await;
-    store.update("U-3", blocked(&["U-2"])).await.unwrap();
+    store.update(SYS.updating("U-3"), blocked(&["U-2"])).await.unwrap();
     let ids = ["U-1", "U-2", "U-3", "U-4", "U-5", "U-6", "V-1", "V-2"];
     let mut before = Vec::new();
     for id in ids {
@@ -311,10 +311,10 @@ async fn every_refusal_writes_nothing() {
     ];
     for (id, asked, expected) in cases {
         let what = format!("{id} {asked:?}");
-        let e = store.update(id, asked).await.unwrap_err();
+        let e = store.update(SYS.updating(id), asked).await.unwrap_err();
         assert!(expected(&e), "{what}: {e:?}");
     }
-    assert!(matches!(store.update("U-77", Update::default()).await, Err(StoreError::NotFound(_))));
+    assert!(matches!(store.update(SYS.updating("U-77"), Update::default()).await, Err(StoreError::NotFound(_))));
     for (id, was) in ids.iter().zip(&before) {
         assert_eq!(&store.get(SYS, id).await.unwrap(), was, "{id} untouched");
     }
@@ -328,7 +328,7 @@ async fn several_refusals_are_named_together() {
     let store = store().await;
     let e = store
         .update(
-            "U-2",
+            SYS.updating("U-2"),
             Update {
                 title: Some("".into()),
                 status: Some(Status::Doc),
@@ -352,9 +352,9 @@ async fn several_refusals_are_named_together() {
 #[tokio::test]
 async fn a_cycle_is_refused_and_named() {
     let store = store().await;
-    store.update("U-3", blocked(&["U-2"])).await.unwrap();
-    store.update("U-6", blocked(&["U-3"])).await.unwrap();
-    let e = store.update("U-2", blocked(&["U-6"])).await.unwrap_err();
+    store.update(SYS.updating("U-3"), blocked(&["U-2"])).await.unwrap();
+    store.update(SYS.updating("U-6"), blocked(&["U-3"])).await.unwrap();
+    let e = store.update(SYS.updating("U-2"), blocked(&["U-6"])).await.unwrap_err();
     assert!(matches!(&e, StoreError::BlockCycle { id, path } if id == "U-2" && path == &["U-6", "U-3", "U-2"]), "{e:?}");
     assert!(e.to_string().contains("U-2 -> U-6 -> U-3 -> U-2"), "{e}");
 }
@@ -367,14 +367,14 @@ async fn a_cycle_is_refused_and_named() {
 async fn blockers_move_unlocks_ready_cells_and_waves() {
     let store = store().await;
     for id in ["U-2", "U-3", "U-6"] {
-        store.set_status(id, Status::Ready).await.unwrap();
+        store.set_status(SYS.permit(id), Status::Ready).await.unwrap();
     }
     assert_eq!(ready(&store), ["U-2", "U-3", "U-6"]);
     assert_eq!(count(&store, "blocked", "U"), 0);
 
     // U-6 waits on U-3, which waits on U-2: waves 1, 2, 3.
-    store.update("U-3", blocked(&["U-2"])).await.unwrap();
-    store.update("U-6", blocked(&["U-3"])).await.unwrap();
+    store.update(SYS.updating("U-3"), blocked(&["U-2"])).await.unwrap();
+    store.update(SYS.updating("U-6"), blocked(&["U-3"])).await.unwrap();
     assert_eq!(ready(&store), ["U-2"]);
     assert_eq!(count(&store, "blocked", "U"), 2);
     let wave = |id: &str| store.tickets.read().unwrap().get(id).unwrap().placement;
@@ -384,7 +384,7 @@ async fn blockers_move_unlocks_ready_cells_and_waves() {
 
     // Unblocking the middle moves it and what waits on it a wave left.
     let mut rx = store.subscribe_filtered();
-    store.update("U-3", unblocked(&["U-2"])).await.unwrap();
+    store.update(SYS.updating("U-3"), unblocked(&["U-2"])).await.unwrap();
     let sent = drained(&mut rx);
     let Some(Change::PlacementsChanged { changes }) = sent.iter().find(|c| matches!(c, Change::PlacementsChanged { .. })) else {
         panic!("{:?}", types(&sent))
@@ -397,24 +397,24 @@ async fn blockers_move_unlocks_ready_cells_and_waves() {
     assert_kept(&store, "the middle unblocked");
 
     // A completed blocker is satisfied: blocking on it blocks nothing.
-    store.set_status("U-2", Status::Complete).await.unwrap();
-    store.update("U-3", blocked(&["U-2"])).await.unwrap();
+    store.set_status(SYS.permit("U-2"), Status::Complete).await.unwrap();
+    store.update(SYS.updating("U-3"), blocked(&["U-2"])).await.unwrap();
     assert_eq!(ready(&store), ["U-3"]);
     assert_eq!(count(&store, "blocked", "U"), 1, "only U-6, on U-3");
     assert_kept(&store, "blocked on a done ticket");
 
     // A forward reference: kept by the id it names, which, born, unlocks.
-    store.update("U-3", blocked(&["U-8"])).await.unwrap();
+    store.update(SYS.updating("U-3"), blocked(&["U-8"])).await.unwrap();
     assert_eq!(store.tickets.read().unwrap().ids.unborn().get("U-8").cloned(), Some(vec!["U-3".to_string()]));
     assert!(!ready(&store).contains(&"U-3".to_string()), "a missing blocker is not done");
     assert_eq!(wave("U-3"), Some(crate::types::Placement::MissingBlocker));
     assert_kept(&store, "a forward reference");
-    store.update("U-3", unblocked(&["U-8"])).await.unwrap();
+    store.update(SYS.updating("U-3"), unblocked(&["U-8"])).await.unwrap();
     assert!(store.tickets.read().unwrap().ids.unborn().is_empty());
     assert_kept(&store, "a forward reference dropped");
-    store.update("U-3", blocked(&["U-8"])).await.unwrap();
-    store.create(new("U", "seven", Kind::Build, None, &[])).await.unwrap();
-    let eight = store.create(new("U", "eight", Kind::Build, None, &[])).await.unwrap();
+    store.update(SYS.updating("U-3"), blocked(&["U-8"])).await.unwrap();
+    store.create(SYS, new("U", "seven", Kind::Build, None, &[])).await.unwrap();
+    let eight = store.create(SYS, new("U", "eight", Kind::Build, None, &[])).await.unwrap();
     assert_eq!((eight.id.as_str(), eight.unlocks.clone()), ("U-8", vec!["U-3".to_string()]));
     assert_kept(&store, "the forward reference born");
 }
@@ -429,7 +429,7 @@ async fn random_updates_leave_verify_derived_consistent() {
     let store = Store::open(&path).unwrap();
     fixture(&store).await;
     for i in 0..8 {
-        store.create(new(if i % 2 == 0 { "U" } else { "V" }, &format!("more {i}"), Kind::Build, None, &[])).await.unwrap();
+        store.create(SYS, new(if i % 2 == 0 { "U" } else { "V" }, &format!("more {i}"), Kind::Build, None, &[])).await.unwrap();
     }
     let mut seed: u64 = 0x5eed_0030;
     let mut below = move |n: usize| {
@@ -469,7 +469,7 @@ async fn random_updates_leave_verify_derived_consistent() {
         }
         let id = pick(&mut below);
         let what = format!("step {step}: update {id} {u:?}");
-        match store.update(&id, u).await {
+        match store.update(SYS.updating(&id), u).await {
             Ok(_) => done += 1,
             Err(StoreError::NotFound(_)) => panic!("{what}"),
             Err(_) => refused += 1,

@@ -54,7 +54,7 @@ use futures::{Stream, StreamExt};
 #[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
-use crate::access::{Access, VerifiedUser, ADMINISTER};
+use crate::access::{Access, Editor, VerifiedUser, ADMINISTER};
 #[cfg(feature = "server")]
 use plexus_core::plexus::{AuthContext, Grant, Reach};
 
@@ -122,6 +122,12 @@ mod reads;
 use reads::*;
 #[cfg(feature = "server")]
 mod orgs;
+#[cfg(feature = "server")]
+mod writes;
+#[cfg(feature = "server")]
+use writes::*;
+#[cfg(feature = "server")]
+pub(crate) use writes::{comment_permits, filing_text, scope_named};
 #[cfg(feature = "server")]
 use orgs::*;
 // ACCESS-12: `watch` as its stream — the caller followed, every change cut.
@@ -262,10 +268,14 @@ impl Tickets {
                     return;
                 }
             };
-            if let Err(ev) = create_admits(&store, &caller, &epic, parent.as_deref(), blocked_by.as_deref()) {
-                yield ev;
-                return;
-            }
+            // ACCESS-11: the proofs a birth takes (activation/writes.rs).
+            let at = match filing(&store, &caller, &epic, parent.as_deref(), blocked_by.as_deref()) {
+                Ok(at) => at,
+                Err(ev) => {
+                    yield ev;
+                    return;
+                }
+            };
             let kind = kind.unwrap_or(Kind::Build);
             // MENGER-13: its first status is a transition, the caller's.
             let act = match act_of(&caller, None, None) {
@@ -275,7 +285,7 @@ impl Tickets {
                     return;
                 }
             };
-            match store.create_by(NewTicket {
+            match store.create_by(at, NewTicket {
                 epic,
                 title: title.into_string(),
                 kind,
@@ -287,7 +297,7 @@ impl Tickets {
             }, act).await {
                 Ok(ticket) => yield TicketsEvent::Created { ticket },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
-                Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
+                Err(e) => yield said(&store, &caller, e),
             }
         }
     }
@@ -498,10 +508,11 @@ impl Tickets {
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
+            // ACCESS-11: the editor's permit for `id`; the store writes it.
+            let (caller, on) = match admit_on::<Editor>(&store, admitted, &id) {
+                Ok(x) => x,
+                Err(ev) => {
+                    yield ev;
                     return;
                 }
             };
@@ -512,7 +523,7 @@ impl Tickets {
                     return;
                 }
             };
-            match store.set_status_by(&id, status, act, restore_children.unwrap_or(false)).await {
+            match store.set_status_by(on, status, act, restore_children.unwrap_or(false)).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
                 Err(e) => yield veiled(&caller, e),
@@ -566,10 +577,10 @@ impl Tickets {
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
-            let caller = match admitted {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
+            let (caller, on) = match admit_on::<Editor>(&store, admitted, &id) {
+                Ok(x) => x,
+                Err(ev) => {
+                    yield ev;
                     return;
                 }
             };
@@ -581,10 +592,12 @@ impl Tickets {
                     return;
                 }
             };
-            match store.set_kind_by(&id, kind, status, act).await {
+            match store.set_kind_by(on, kind, status, act).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
-                Err(e) => yield veiled(&caller, e),
+                // ACCESS-11: DocInGraph and the rest name only what it sees.
+                Err(e @ StoreError::Ambiguous { .. }) => yield veiled(&caller, e),
+                Err(e) => yield said(&store, &caller, e),
             }
         }
     }
@@ -621,25 +634,36 @@ impl Tickets {
                     return;
                 }
             };
-            // IDENTITY-37: a shortcode's root moves the shortcode — and
-            // whoever administers its new host administers it — so it takes
-            // admin on the shortcode and on where it goes; any other ticket
-            // moves inside its shortcode, and takes `tickets.set_parent` on
-            // both sides. AUTH-7: the gate held the grant on `id` (the
-            // target); the rest is its own question, as it stands now.
-            let root = store.groups(&caller).into_iter().any(|g| g.root.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(id.trim())));
-            let wanted = if root { Some(Grant::new(ADMINISTER)) } else { caller.grant().cloned() };
-            if let Some(g) = wanted {
-                if let Err(message) = caller.check(&g, &id).and_then(|()| caller.check(&g, &parent)) {
-                    let message = if root { format!("moving a shortcode's root takes admin on it and on its new host: {message}") } else { message };
+            // IDENTITY-37 / ACCESS-11: a shortcode's root moves the
+            // shortcode — and whoever administers its new host administers
+            // it — so it takes admin on the host it leaves and on the one it
+            // joins; every move, editor on the child, the parent it has and
+            // the one it goes to (activation/writes.rs). The store checks,
+            // under its lock, that the parent it has is still that one.
+            let child = match permit::<Editor>(&store, &caller, &id) {
+                Ok(p) => p,
+                Err(ev) => {
+                    yield ev;
+                    return;
+                }
+            };
+            let mv = match parenting(&store, &caller, child.id(), &parent) {
+                Ok(Some(p)) => crate::store::Move::new(child, p),
+                // A parent that is no ticket: the store's own refusal.
+                Ok(None) => {
+                    yield refusal(StoreError::ParentNotFound { id: child.id().to_string(), parent: parent.trim().to_ascii_uppercase() });
+                    return;
+                }
+                Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
-            }
-            match store.set_parent(&id, &parent).await {
+            };
+            match store.set_parent(mv).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
-                Err(e) => yield veiled(&caller, e),
+                Err(e @ StoreError::Ambiguous { .. }) => yield veiled(&caller, e),
+                Err(e) => yield said(&store, &caller, e),
             }
         }
     }
@@ -679,15 +703,18 @@ impl Tickets {
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
-            if let Err(message) = admitted {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-            match store.amend(&id, title.map(String::from), body.map(String::from)).await {
+            let (caller, on) = match admit_on::<Editor>(&store, admitted, &id) {
+                Ok(x) => x,
+                Err(ev) => {
+                    yield ev;
+                    return;
+                }
+            };
+            match store.amend(on, title.map(String::from), body.map(String::from)).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
-                Err(e) => yield refusal(e),
+                Err(e) => yield said(&store, &caller, e),
             }
         }
     }
@@ -756,11 +783,14 @@ impl Tickets {
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
-            if let Err(message) = admitted {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-            match store.unlink_commits(&id, texts(commits)).await {
+            let on = match admit_on::<Editor>(&store, admitted, &id) {
+                Ok((_, on)) => on,
+                Err(ev) => {
+                    yield ev;
+                    return;
+                }
+            };
+            match store.unlink_commits(on, texts(commits)).await {
                 Ok(change) => yield change_event(change),
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
                 Err(e) => yield refusal(e),
@@ -852,12 +882,15 @@ impl Tickets {
         let admitted = self.access.verify_call(auth, &reach);
         stream! {
             // AUTH-7: the gate held the grant on the target; a parent or a
-            // blocker beyond it is asked here (`update_reach`).
+            // blocker beyond it is proved here (`updating`, ACCESS-11).
             let asked = update_of(title, body, kind, status, parent, severity, block, unblock);
-            let caller = match admitted.and_then(|c| update_reach(&store, &c, &id, &asked).map(|()| c)) {
-                Ok(caller) => caller,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
+            let (caller, at) = match admit_on::<Editor>(&store, admitted, &id).and_then(|(c, on)| match updating(&store, &c, on, &asked) {
+                Ok(at) => Ok((c, at)),
+                Err(message) => Err(TicketsEvent::Error { message }),
+            }) {
+                Ok(x) => x,
+                Err(ev) => {
+                    yield ev;
                     return;
                 }
             };
@@ -868,11 +901,11 @@ impl Tickets {
                     return;
                 }
             };
-            match store.update_by(&id, asked, act).await {
+            match store.update_by(at, asked, act).await {
                 Ok(crate::store::Updated { ticket, changed }) => yield TicketsEvent::Updated { ticket, changed },
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
-                Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
+                Err(e) => yield said(&store, &caller, e),
             }
         }
     }
@@ -1511,12 +1544,15 @@ impl Tickets {
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
-            if let Err(message) = admitted {
-                yield TicketsEvent::Error { message };
-                return;
-            }
+            let on = match admit_on::<Editor>(&store, admitted, &ticket) {
+                Ok((_, on)) => on,
+                Err(ev) => {
+                    yield ev;
+                    return;
+                }
+            };
             let source = AnswerSource::from(source.unwrap_or_default());
-            yield input_event(store.answer(&ticket, &input, value, rationale.and_then(Message::given), source).await, ticket.into_string());
+            yield input_event(store.answer(on, &input, value, rationale.and_then(Message::given), source).await, ticket.into_string());
         }
     }
 
@@ -1548,12 +1584,15 @@ impl Tickets {
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
-            if let Err(message) = admitted {
-                yield TicketsEvent::Error { message };
-                return;
-            }
+            let on = match admit_on::<Editor>(&store, admitted, &ticket) {
+                Ok((_, on)) => on,
+                Err(ev) => {
+                    yield ev;
+                    return;
+                }
+            };
             let source = AnswerSource::from(source.unwrap_or_default());
-            yield input_event(store.clear_answer(&ticket, &input, source).await, ticket.into_string());
+            yield input_event(store.clear_answer(on, &input, source).await, ticket.into_string());
         }
     }
 
@@ -1574,11 +1613,14 @@ impl Tickets {
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
-            if let Err(message) = admitted {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-            yield input_event(store.close_input(&ticket, &input).await, ticket.into_string());
+            let on = match admit_on::<Editor>(&store, admitted, &ticket) {
+                Ok((_, on)) => on,
+                Err(ev) => {
+                    yield ev;
+                    return;
+                }
+            };
+            yield input_event(store.close_input(on, &input).await, ticket.into_string());
         }
     }
 
@@ -1598,11 +1640,14 @@ impl Tickets {
         stream! {
             // AUTH-7: the gate held the grant on the target; the sign-in
             // must still stand.
-            if let Err(message) = admitted {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-            yield input_event(store.reopen_input(&ticket, &input).await, ticket.into_string());
+            let on = match admit_on::<Editor>(&store, admitted, &ticket) {
+                Ok((_, on)) => on,
+                Err(ev) => {
+                    yield ev;
+                    return;
+                }
+            };
+            yield input_event(store.reopen_input(on, &input).await, ticket.into_string());
         }
     }
 

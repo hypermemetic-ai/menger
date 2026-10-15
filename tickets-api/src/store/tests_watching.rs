@@ -27,17 +27,17 @@ async fn a_change_about_a_hidden_ticket_never_reaches_a_narrow_watcher() {
     let s = tracker().await;
     let sight = s.watch_sight(&viewer_of(&["OPEN"])).unwrap();
     let mut rx = s.subscribe();
-    s.amend("SECRET-2", Some("still secret".into()), Some("classified again".into())).await.unwrap();
-    s.create(new("SECRET", Kind::Build, Some("SECRET-1"), &[], "classified too")).await.unwrap();
-    s.set_status("SECRET-2", Status::Ready).await.unwrap();
-    s.amend("OPEN-2", Some("seen".into()), None).await.unwrap();
+    s.amend(SYS.permit("SECRET-2"), Some("still secret".into()), Some("classified again".into())).await.unwrap();
+    s.create(SYS, new("SECRET", Kind::Build, Some("SECRET-1"), &[], "classified too")).await.unwrap();
+    s.set_status(SYS.permit("SECRET-2"), Status::Ready).await.unwrap();
+    s.amend(SYS.permit("OPEN-2"), Some("seen".into()), None).await.unwrap();
     let got = heard(&s, &sight, &mut rx);
     let t = text(&got);
     assert!(!t.contains("SECRET-") && !t.contains("classified"), "{t}");
     assert!(got.iter().any(|c| matches!(c, Change::Amended { ticket, .. } if ticket.id.as_str() == "OPEN-2")), "{t}");
     // The system hears all of it.
     let mut rx = s.subscribe();
-    s.amend("SECRET-2", Some("again".into()), None).await.unwrap();
+    s.amend(SYS.permit("SECRET-2"), Some("again".into()), None).await.unwrap();
     let all = s.watch_sight(SYS).unwrap();
     assert!(text(&heard(&s, &all, &mut rx)).contains("SECRET-2"));
 }
@@ -48,9 +48,9 @@ async fn a_row_event_of_a_visible_ticket_blocked_by_a_hidden_one_is_redacted() {
     let sight = s.watch_sight(&viewer_of(&["OPEN"])).unwrap();
     let mut rx = s.subscribe();
     // OPEN-5 waits on OPEN-2 and SECRET-2: born, and each blocker's side.
-    s.create(new("OPEN", Kind::Build, Some("OPEN-1"), &["OPEN-2", "SECRET-2"], "")).await.unwrap();
+    s.create(SYS, new("OPEN", Kind::Build, Some("OPEN-1"), &["OPEN-2", "SECRET-2"], "")).await.unwrap();
     // SECRET-3 waits on OPEN-2: OPEN-2's unlocks gained a hidden ticket.
-    s.create(new("SECRET", Kind::Build, Some("SECRET-1"), &["OPEN-2"], "")).await.unwrap();
+    s.create(SYS, new("SECRET", Kind::Build, Some("SECRET-1"), &["OPEN-2"], "")).await.unwrap();
     let got = heard(&s, &sight, &mut rx);
     let t = text(&got);
     assert!(!t.contains("SECRET-"), "no hidden id, anywhere: {t}");
@@ -74,7 +74,7 @@ async fn a_row_event_of_a_visible_ticket_blocked_by_a_hidden_one_is_redacted() {
     assert!(unlocks[1].2.iter().all(|u| u.starts_with("OPEN-")));
     // A hidden parent is none, said — OPEN-1's (under SECRET-1).
     let mut rx = s.subscribe();
-    s.amend("OPEN-1", Some("the open root".into()), None).await.unwrap();
+    s.amend(SYS.permit("OPEN-1"), Some("the open root".into()), None).await.unwrap();
     let got = heard(&s, &sight, &mut rx);
     let root = got.iter().find_map(|c| match c {
         Change::Amended { ticket, .. } => Some(ticket),
@@ -90,8 +90,8 @@ async fn a_component_of_a_hidden_owner_is_said_as_gone_and_references_are_cut() 
     let s = tracker().await;
     let sight = s.watch_sight(&viewer_of(&["OPEN"])).unwrap();
     let mut rx = s.subscribe();
-    s.amend("SECRET-2", None, Some("```component m-secret\n<template>s2</template>\n```\n".into())).await.unwrap();
-    s.amend("OPEN-2", None, Some("```component m-open\n<template><m-secret></m-secret></template>\n```\n".into())).await.unwrap();
+    s.amend(SYS.permit("SECRET-2"), None, Some("```component m-secret\n<template>s2</template>\n```\n".into())).await.unwrap();
+    s.amend(SYS.permit("OPEN-2"), None, Some("```component m-open\n<template><m-secret></m-secret></template>\n```\n".into())).await.unwrap();
     let got = heard(&s, &sight, &mut rx);
     let t = text(&got);
     assert!(!t.contains("s2") && !t.contains("SECRET-"), "{t}");
@@ -108,7 +108,7 @@ async fn several_ticket_changes_are_cut_to_the_reach() {
     let mut rx = s.subscribe();
     let ids = vec!["OPEN-2".to_string(), "SECRET-2".to_string()];
     let selection = Selection::Ids(ids);
-    s.update_many(selection, Update { label: vec!["both".into()], ..Default::default() }).await.unwrap();
+    s.update_many(SYS, selection, Update { label: vec!["both".into()], ..Default::default() }).await.unwrap();
     let got = heard(&s, &sight, &mut rx);
     let many = got.iter().find_map(|c| match c {
         Change::UpdatedMany { ids, .. } => Some(ids.clone()),
@@ -147,7 +147,7 @@ async fn a_moved_reach_says_what_entered_and_left() {
 async fn a_reach_moving_past_the_threshold_recounts() {
     let s = tracker().await;
     for _ in 0..RECOUNT_OVER {
-        s.create(new("SECRET", Kind::Build, Some("SECRET-1"), &[], "")).await.unwrap();
+        s.create(SYS, new("SECRET", Kind::Build, Some("SECRET-1"), &[], "")).await.unwrap();
     }
     let (open, secret) = (s.watch_sight(&viewer_of(&["OPEN"])).unwrap(), s.watch_sight(&viewer_of(&["SECRET"])).unwrap());
     let moved = s.moved_between(open.lens(), secret.lens(), None);
@@ -161,12 +161,12 @@ async fn a_reach_moving_past_the_threshold_recounts() {
 async fn many_watchers_hear_many_changes_without_scanning_the_store() {
     let s = tracker().await;
     for i in 0..200 {
-        s.create(new(if i % 2 == 0 { "OPEN" } else { "SECRET" }, Kind::Build, Some(if i % 2 == 0 { "OPEN-1" } else { "SECRET-1" }), &[], "")).await.unwrap();
+        s.create(SYS, new(if i % 2 == 0 { "OPEN" } else { "SECRET" }, Kind::Build, Some(if i % 2 == 0 { "OPEN-1" } else { "SECRET-1" }), &[], "")).await.unwrap();
     }
     let watchers: Vec<WatchSight> = (0..100).map(|_| s.watch_sight(&viewer_of(&["OPEN"])).unwrap()).collect();
     let mut rx = s.subscribe();
     for i in 0..100 {
-        s.amend(&format!("{}-{}", if i % 2 == 0 { "OPEN" } else { "SECRET" }, 5 + i / 2), Some(format!("t{i}")), None).await.unwrap();
+        s.amend(SYS.permit(&format!("{}-{}", if i % 2 == 0 { "OPEN" } else { "SECRET" }, 5 + i / 2)), Some(format!("t{i}")), None).await.unwrap();
     }
     let mut changes = Vec::new();
     while let Ok(c) = rx.try_recv() {

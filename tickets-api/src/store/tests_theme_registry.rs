@@ -47,7 +47,7 @@ fn heard(rx: &mut tokio::sync::broadcast::Receiver<ThemeChange>) -> Vec<String> 
 async fn a_block_defines_its_theme_owned_by_its_ticket_and_amends_move_it() {
     let store = Store::new();
     let mut rx = store.subscribe_themes();
-    let t = store.create(ticket("PANTRY", &block("pantry", PANTRY))).await.unwrap();
+    let t = store.create(SYS, ticket("PANTRY", &block("pantry", PANTRY))).await.unwrap();
     let th = store.theme("pantry").unwrap();
     assert_eq!(th.owner.as_deref(), Some(t.id.as_str()));
     assert!(!th.orphan);
@@ -57,15 +57,15 @@ async fn a_block_defines_its_theme_owned_by_its_ticket_and_amends_move_it() {
     assert_eq!(th.rules, ["m-code::part(frame){border-radius:14px;}"]);
     assert_eq!(heard(&mut rx), ["changed pantry owner=PANTRY-1 orphan=false"]);
     // An amend that changes the block moves it; one that keeps it says nothing.
-    store.amend(&t.id, None, Some(block("pantry", ":root { --accent: #b2401c; }"))).await.unwrap();
+    store.amend(SYS.permit(&t.id), None, Some(block("pantry", ":root { --accent: #b2401c; }"))).await.unwrap();
     assert_eq!(store.theme("pantry").unwrap().light.get("--accent").map(String::as_str), Some("#b2401c"));
     assert!(store.theme("pantry").unwrap().dark.is_empty());
     assert_eq!(heard(&mut rx), ["changed pantry owner=PANTRY-1 orphan=false"]);
-    store.amend(&t.id, Some("retitled".into()), None).await.unwrap();
-    store.amend(&t.id, None, Some(format!("{}\nmore prose\n", block("pantry", ":root { --accent: #b2401c; }")))).await.unwrap();
+    store.amend(SYS.permit(&t.id), Some("retitled".into()), None).await.unwrap();
+    store.amend(SYS.permit(&t.id), None, Some(format!("{}\nmore prose\n", block("pantry", ":root { --accent: #b2401c; }")))).await.unwrap();
     assert!(heard(&mut rx).is_empty(), "the same block again is no move");
     // tickets.update takes the same path.
-    store.update(&t.id, Update { body: Some(block("pantry", ":root { --accent: #123456; }")), ..Default::default() }).await.unwrap();
+    store.update(SYS.updating(&t.id), Update { body: Some(block("pantry", ":root { --accent: #123456; }")), ..Default::default() }).await.unwrap();
     assert_eq!(store.theme("pantry").unwrap().light.get("--accent").map(String::as_str), Some("#123456"));
 }
 
@@ -74,7 +74,7 @@ async fn a_block_defines_its_theme_owned_by_its_ticket_and_amends_move_it() {
 #[tokio::test]
 async fn a_block_that_is_not_a_theme_refuses_the_write_naming_its_line() {
     let store = Store::new();
-    let t = store.create(ticket("PANTRY", "plain")).await.unwrap();
+    let t = store.create(SYS, ticket("PANTRY", "plain")).await.unwrap();
     for (css, line, why) in [
         (":root {\n  --accent: red;\n  --nope: 1px;\n}", 3, "is not a token of the contract"),
         ("body { color: red; }", 1, "a theme's rules are :root"),
@@ -85,9 +85,9 @@ async fn a_block_that_is_not_a_theme_refuses_the_write_naming_its_line() {
     ] {
         let body = block("pantry", css);
         for err in [
-            store.amend(&t.id, None, Some(body.clone())).await.unwrap_err().to_string(),
-            store.create(ticket("PANTRY", &body)).await.unwrap_err().to_string(),
-            store.update(&t.id, Update { body: Some(body.clone()), ..Default::default() }).await.unwrap_err().to_string(),
+            store.amend(SYS.permit(&t.id), None, Some(body.clone())).await.unwrap_err().to_string(),
+            store.create(SYS, ticket("PANTRY", &body)).await.unwrap_err().to_string(),
+            store.update(SYS.updating(&t.id), Update { body: Some(body.clone()), ..Default::default() }).await.unwrap_err().to_string(),
         ] {
             assert!(err.contains(&format!("```theme pantry: line {line}: ")) && err.contains(why), "{css}: {err}");
         }
@@ -99,7 +99,7 @@ async fn a_block_that_is_not_a_theme_refuses_the_write_naming_its_line() {
         ("```theme default\n:root{}\n```\n".to_string(), "`default` is the contract's"),
         (format!("{}\n{}", block("a", ":root{}"), block("a", ":root{}")), "a second ```theme block"),
     ] {
-        let err = store.amend(&t.id, None, Some(body)).await.unwrap_err().to_string();
+        let err = store.amend(SYS.permit(&t.id), None, Some(body)).await.unwrap_err().to_string();
         assert!(err.contains(why), "{err}");
     }
     assert!(store.get(SYS, "PANTRY-2").await.is_err(), "no id spent on a refused create");
@@ -108,20 +108,20 @@ async fn a_block_that_is_not_a_theme_refuses_the_write_naming_its_line() {
 #[tokio::test]
 async fn a_theme_has_one_owner_and_extends_never_go_round() {
     let store = Store::new();
-    let a = store.create(ticket("PANTRY", &block("pantry", ":root { --accent: #d4572a; }"))).await.unwrap();
-    let b = store.create(ticket("OCEAN", "plain")).await.unwrap();
-    let err = store.amend(&b.id, None, Some(block("pantry", ":root{}"))).await.unwrap_err().to_string();
+    let a = store.create(SYS, ticket("PANTRY", &block("pantry", ":root { --accent: #d4572a; }"))).await.unwrap();
+    let b = store.create(SYS, ticket("OCEAN", "plain")).await.unwrap();
+    let err = store.amend(SYS.permit(&b.id), None, Some(block("pantry", ":root{}"))).await.unwrap_err().to_string();
     assert!(err.contains("defined by PANTRY-1's block") && err.contains("one owner"), "{err}");
-    let err = store.define_theme("pantry", BTreeMap::new(), BTreeMap::new()).await.unwrap_err().to_string();
+    let err = store.define_theme(SYS, "pantry", BTreeMap::new(), BTreeMap::new()).await.unwrap_err().to_string();
     assert!(err.contains("defined by PANTRY-1's ```theme block"), "{err}");
     // extends: a chain to default; a cycle is refused, named, whole.
-    store.amend(&b.id, None, Some(format!("{}\n{}", block("sea extends=pantry", ":root[data-theme=dark] { --bg: #001; }"), block("deep extends=sea", ":root { --ink: #fff; }")))).await.unwrap();
+    store.amend(SYS.permit(&b.id), None, Some(format!("{}\n{}", block("sea extends=pantry", ":root[data-theme=dark] { --bg: #001; }"), block("deep extends=sea", ":root { --ink: #fff; }")))).await.unwrap();
     let all = store.themes();
     let deep = flatten("deep", |n| all.iter().find(|t| t.name == n));
     assert_eq!(deep.light.get("--accent").map(String::as_str), Some("#d4572a"), "from pantry, two up");
     assert_eq!(deep.dark.get("--bg").map(String::as_str), Some("#001"));
     assert_eq!(deep.light.get("--ink").map(String::as_str), Some("#fff"));
-    let err = store.amend(&a.id, None, Some(block("pantry extends=deep", ":root{}"))).await.unwrap_err().to_string();
+    let err = store.amend(SYS.permit(&a.id), None, Some(block("pantry extends=deep", ":root{}"))).await.unwrap_err().to_string();
     assert!(err.contains("its extends go round — pantry → deep → sea → pantry"), "{err}");
     assert_eq!(store.theme("pantry").unwrap().extends, None, "nothing written");
 }
@@ -134,44 +134,44 @@ async fn a_theme_has_one_owner_and_extends_never_go_round() {
 async fn an_orphan_is_kept_while_used_removed_when_not_and_adopted_by_a_block() {
     let store = Store::new();
     let mut rx = store.subscribe_themes();
-    let owner = store.create(ticket("PANTRY", &block("pantry", ":root { --accent: #d4572a; }"))).await.unwrap();
-    let user = store.create(ticket("PANTRY", "---\ntheme: pantry\n---\nwears it")).await.unwrap();
+    let owner = store.create(SYS, ticket("PANTRY", &block("pantry", ":root { --accent: #d4572a; }"))).await.unwrap();
+    let user = store.create(SYS, ticket("PANTRY", "---\ntheme: pantry\n---\nwears it")).await.unwrap();
     heard(&mut rx);
     // The block goes: an orphan, kept — a ticket's frontmatter names it.
-    store.amend(&owner.id, None, Some("no block".into())).await.unwrap();
+    store.amend(SYS.permit(&owner.id), None, Some("no block".into())).await.unwrap();
     let th = store.theme("pantry").unwrap();
     assert!(th.orphan && th.owner.is_none(), "{th:?}");
     assert_eq!(heard(&mut rx), ["changed pantry owner=- orphan=true"]);
     // A setting keeps it too, once the frontmatter lets go.
-    store.set_theme("PANTRY", Some("pantry"), None, None).await.unwrap();
-    store.amend(&user.id, None, Some("no longer".into())).await.unwrap();
+    store.set_theme(SYS, "PANTRY", Some("pantry"), None, None).await.unwrap();
+    store.amend(SYS.permit(&user.id), None, Some("no longer".into())).await.unwrap();
     assert!(store.theme("pantry").is_ok(), "the setting keeps it");
     heard(&mut rx);
     // The setting lets go: nothing uses it — it goes in that write.
-    store.set_theme("PANTRY", None, None, Some(Takeover::Off)).await.unwrap();
+    store.set_theme(SYS, "PANTRY", None, None, Some(Takeover::Off)).await.unwrap();
     assert!(store.theme("pantry").is_err());
     assert_eq!(heard(&mut rx), ["removed pantry", "set PANTRY"]);
     // A live theme's extends keeps an orphan; the orphan only an orphan
     // extends goes with it.
-    let base = store.create(ticket("OCEAN", &format!("{}\n{}", block("base", ":root { --ink: #000; }"), block("mid extends=base", ":root{}")))).await.unwrap();
-    let top = store.create(ticket("OCEAN", &block("top extends=mid", ":root{}"))).await.unwrap();
-    store.amend(&base.id, None, Some("gone".into())).await.unwrap();
+    let base = store.create(SYS, ticket("OCEAN", &format!("{}\n{}", block("base", ":root { --ink: #000; }"), block("mid extends=base", ":root{}")))).await.unwrap();
+    let top = store.create(SYS, ticket("OCEAN", &block("top extends=mid", ":root{}"))).await.unwrap();
+    store.amend(SYS.permit(&base.id), None, Some("gone".into())).await.unwrap();
     assert!(store.theme("base").unwrap().orphan && store.theme("mid").unwrap().orphan, "top extends mid extends base");
     heard(&mut rx);
-    store.amend(&top.id, None, Some("gone too".into())).await.unwrap();
+    store.amend(SYS.permit(&top.id), None, Some("gone too".into())).await.unwrap();
     assert!(store.theme("top").is_err() && store.theme("mid").is_err() && store.theme("base").is_err());
     let mut said = heard(&mut rx);
     said.sort();
     assert_eq!(said, ["removed base", "removed mid", "removed top"]);
     // Adoption: an orphan, and a theme `define` made, are a block's to take.
-    store.create(ticket("OCEAN", &block("sea", ":root{}"))).await.unwrap();
-    store.set_theme("site", Some("sea"), None, None).await.unwrap();
-    store.amend("OCEAN-3", None, Some("orphaned".into())).await.unwrap();
-    let adopter = store.create(ticket("PANTRY", &block("sea", ":root { --bg: #eef; }"))).await.unwrap();
+    store.create(SYS, ticket("OCEAN", &block("sea", ":root{}"))).await.unwrap();
+    store.set_theme(SYS, "site", Some("sea"), None, None).await.unwrap();
+    store.amend(SYS.permit("OCEAN-3"), None, Some("orphaned".into())).await.unwrap();
+    let adopter = store.create(SYS, ticket("PANTRY", &block("sea", ":root { --bg: #eef; }"))).await.unwrap();
     let sea = store.theme("sea").unwrap();
     assert_eq!((sea.owner.as_deref(), sea.orphan), (Some(adopter.id.as_str()), false));
-    store.define_theme("mint", BTreeMap::new(), BTreeMap::new()).await.unwrap();
-    store.amend(&adopter.id, None, Some(format!("{}\n{}", block("sea", ":root{}"), block("mint", ":root { --accent: #0a7; }")))).await.unwrap();
+    store.define_theme(SYS, "mint", BTreeMap::new(), BTreeMap::new()).await.unwrap();
+    store.amend(SYS.permit(&adopter.id), None, Some(format!("{}\n{}", block("sea", ":root{}"), block("mint", ":root { --accent: #0a7; }")))).await.unwrap();
     assert_eq!(store.theme("mint").unwrap().owner.as_deref(), Some(adopter.id.as_str()));
 }
 
@@ -181,10 +181,10 @@ async fn owners_orphans_and_references_survive_a_reopen() {
     let path = dir.path().join("t.db");
     {
         let store = Store::open(&path).unwrap();
-        let a = store.create(ticket("PANTRY", &block("pantry", PANTRY))).await.unwrap();
-        store.create(ticket("PANTRY", &block("sea extends=pantry", ":root{}"))).await.unwrap();
-        store.create(ticket("PANTRY", "---\nframe-theme: lost\n---\nnames a theme no one has")).await.unwrap();
-        store.amend(&a.id, None, Some("gone".into())).await.unwrap();
+        let a = store.create(SYS, ticket("PANTRY", &block("pantry", PANTRY))).await.unwrap();
+        store.create(SYS, ticket("PANTRY", &block("sea extends=pantry", ":root{}"))).await.unwrap();
+        store.create(SYS, ticket("PANTRY", "---\nframe-theme: lost\n---\nnames a theme no one has")).await.unwrap();
+        store.amend(SYS.permit(&a.id), None, Some("gone".into())).await.unwrap();
     }
     let store = Store::open(&path).unwrap();
     let pantry = store.theme("pantry").unwrap();
@@ -193,7 +193,7 @@ async fn owners_orphans_and_references_survive_a_reopen() {
     let sea = store.theme("sea").unwrap();
     assert_eq!((sea.owner.as_deref(), sea.extends.as_deref()), (Some("PANTRY-2"), Some("pantry")));
     // The references came back: dropping sea's block leaves both unused.
-    store.amend("PANTRY-2", None, Some("gone".into())).await.unwrap();
+    store.amend(SYS.permit("PANTRY-2"), None, Some("gone".into())).await.unwrap();
     assert_eq!(names(&store), ["default"]);
     let named: BTreeSet<String> = store.tickets.read().unwrap().themes.refs.keys().cloned().collect();
     assert_eq!(named, BTreeSet::from(["lost".to_string()]));

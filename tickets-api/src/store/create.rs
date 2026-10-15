@@ -8,7 +8,9 @@ use super::*;
 impl Store {
     /// [`Store::create`], and — NOTE-2 — the note `from` (if any) marked as
     /// the ticket it became, in the same write.
-    pub(super) async fn create_from(&self, new: NewTicket, from: Option<u64>, act: Act) -> Result<(Ticket, Option<crate::notes::Note>), StoreError> {
+    /// ACCESS-11: filed as `at` allows — checked under the write-serial
+    /// lock, once the parent (or root) and the blockers are resolved.
+    pub(super) async fn create_from(&self, at: Filing, new: NewTicket, from: Option<u64>, act: Act) -> Result<(Ticket, Option<crate::notes::Note>), StoreError> {
         // ORG-3: the shortcode as the reader names it — its code, or any
         // short form of its address — parsed here; which shortcode it is (or
         // whether it mints one) is decided under the lock, the namespace
@@ -182,6 +184,10 @@ impl Store {
                 (None, true) => None,
                 (None, _) => shortcode_root(tickets, &sc).map(|r| r.id.clone()).map(String::from),
             };
+            // ACCESS-11: the proofs name exactly where it is filed and what
+            // it waits on — the ticket checked is the ticket written.
+            let org = minted.as_ref().map(|m| m.ns.org.clone()).or_else(|| tickets.shortcodes.org(&sc).cloned());
+            at.check(tickets, parent.as_deref(), org.as_ref(), &blocked_by)?;
 
             // WAVE-10: a `_MENGER/` document lives directly under its
             // shortcode's scope root — which it cannot be itself (`seq == 1`)

@@ -56,8 +56,8 @@ async fn store() -> Arc<Store> {
         body: String::new(),
     };
     for (epic, parent) in [mk("PLEXUS", None), mk("IDENTITY", Some("PLEXUS-1")), mk("OUGHT", None)] {
-        s.create(new(&epic, Kind::Scope, parent)).await.unwrap();
-        s.create(new(&epic, Kind::Build, Some(format!("{epic}-1")))).await.unwrap();
+        s.create(SYS, new(&epic, Kind::Scope, parent)).await.unwrap();
+        s.create(SYS, new(&epic, Kind::Build, Some(format!("{epic}-1")))).await.unwrap();
     }
     s
 }
@@ -112,8 +112,8 @@ async fn no_grant_waits() {
 async fn reads_are_anded_with_where_the_grant_is_held() {
     let a = login(vec![]);
     let s = store().await;
-    s.grant(grant(ALICE, "IDENTITY", Role::Editor)).await.unwrap();
-    s.grant(grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "IDENTITY", Role::Editor)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
     a.attach(s);
     let me = ctx(json!({}));
     let c = a.verify_call(Some(&me), &reach_of(&a, &me, "tickets.list")).unwrap();
@@ -129,7 +129,7 @@ async fn reads_are_anded_with_where_the_grant_is_held() {
 async fn the_gate_resolves_a_ticket_through_its_shortcode_and_hosts() {
     let a = login(vec![]);
     let s = store().await;
-    s.grant(grant(ALICE, "PLEXUS", Role::Editor)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "PLEXUS", Role::Editor)).await.unwrap();
     a.attach(s.clone());
     let g = a.gate();
     let me = ctx(json!({}));
@@ -239,7 +239,7 @@ async fn every_check_needs_the_memberships_and_the_ceiling() {
 async fn a_ceiling_wider_than_the_memberships_gives_no_more() {
     let a = login(vec![]);
     let s = store().await;
-    s.grant(grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
     a.attach(s.clone());
     let g = a.gate();
     let me = ctx(json!({ CEILING_KEY: ceiling(&[&["admin@*"]]) }));
@@ -309,8 +309,8 @@ fn an_edited_role_is_kept_in_the_file_across_a_reopen() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     {
         let s = Store::open(&path).unwrap();
-        rt.block_on(s.set_role("viewer".into(), vec!["tickets.get".into(), "comments.list".into()])).unwrap();
-        rt.block_on(s.set_role("viewer".into(), vec!["tickets.get".into()])).unwrap();
+        rt.block_on(s.set_role(SYS, "viewer".into(), vec!["tickets.get".into(), "comments.list".into()])).unwrap();
+        rt.block_on(s.set_role(SYS, "viewer".into(), vec!["tickets.get".into()])).unwrap();
     }
     let s = Store::open(&path).unwrap();
     assert_eq!(s.role_edits(), BTreeMap::from([("viewer".to_string(), vec!["tickets.get".to_string()])]));
@@ -354,7 +354,7 @@ fn alice() -> crate::vocab::Principal {
 /// [`store`], and PLEXUS-3 under PLEXUS-2: a subtree to hold.
 async fn deeper() -> Arc<Store> {
     let s = store().await;
-    s.create(crate::store::NewTicket {
+    s.create(SYS, crate::store::NewTicket {
         epic: "PLEXUS".into(),
         title: "below".into(),
         kind: Kind::Build,
@@ -469,7 +469,7 @@ async fn a_grant_on_a_ticket_that_moves_follows_it() {
     assert!(under.permit::<Editor>(&t("PLEXUS-1"), &s).is_err());
     // A ticket filed elsewhere, then moved below the granted one: held.
     let four = s
-        .create(crate::store::NewTicket {
+        .create(SYS, crate::store::NewTicket {
             epic: "PLEXUS".into(),
             title: "elsewhere".into(),
             kind: Kind::Build,
@@ -483,18 +483,18 @@ async fn a_grant_on_a_ticket_that_moves_follows_it() {
         .unwrap()
         .id;
     assert!(under.permit::<Editor>(&four, &s).is_err());
-    s.set_parent(&four, "PLEXUS-3").await.unwrap();
+    s.set_parent(SYS.moving(&four, "PLEXUS-3")).await.unwrap();
     assert!(under.permit::<Editor>(&four, &s).is_ok(), "below PLEXUS-2 now");
     // The granted ticket itself moved (under the one it held): the grant
     // goes with it, its subtree too, and not to its new parent.
-    s.set_parent(&four, "PLEXUS-1").await.unwrap();
-    s.set_parent("PLEXUS-2", &four).await.unwrap();
+    s.set_parent(SYS.moving(&four, "PLEXUS-1")).await.unwrap();
+    s.set_parent(SYS.moving("PLEXUS-2", &four)).await.unwrap();
     assert_eq!(permitted(&under, &s), vec!["PLEXUS-2", "PLEXUS-3"]);
     assert!(under.permit::<Editor>(&four, &s).is_err(), "its new parent is not below it");
     // A shortcode's root moved under PLEXUS-2: the shortcode is hosted
     // there now, and a grant on PLEXUS (or under PLEXUS-2) covers it.
     assert!(shortcode.permit::<Editor>(&t("OUGHT-2"), &s).is_err());
-    s.set_parent("OUGHT-1", "PLEXUS-2").await.unwrap();
+    s.set_parent(SYS.moving("OUGHT-1", "PLEXUS-2")).await.unwrap();
     assert!(shortcode.permit::<Editor>(&t("OUGHT-2"), &s).is_ok(), "hosted under PLEXUS now");
     assert!(under.permit::<Editor>(&t("OUGHT-2"), &s).is_ok(), "below PLEXUS-2 now");
     assert!(readable(&under, &s).contains(&"OUGHT-2"), "a read follows it too");
@@ -504,8 +504,8 @@ async fn a_grant_on_a_ticket_that_moves_follows_it() {
 async fn team_grants_add_to_direct_ones() {
     let a = login(vec![]);
     let s = store().await;
-    s.grant(grant(ALICE, "hypermemetic:OUGHT", Role::Viewer)).await.unwrap();
-    s.grant(grant("team:crew", "hypermemetic:IDENTITY", Role::Editor)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "hypermemetic:OUGHT", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant("team:crew", "hypermemetic:IDENTITY", Role::Editor)).await.unwrap();
     a.attach(s.clone());
     let me = ctx(json!({}));
     let u = a.verify(&me).unwrap();
@@ -535,13 +535,13 @@ async fn the_generation_moves_on_every_grant_revoke_and_team_change() {
         assert_eq!(g, a.generation());
         seen.push(g);
     };
-    s.grant(grant(ALICE, "hypermemetic:OUGHT", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "hypermemetic:OUGHT", Role::Viewer)).await.unwrap();
     moved("a grant");
-    s.grant(grant(ALICE, "hypermemetic:OUGHT", Role::Editor)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "hypermemetic:OUGHT", Role::Editor)).await.unwrap();
     moved("a grant replacing a role");
-    s.grant(grant("idp:00000000-0000-0000-0000-000000000000", "*", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant("idp:00000000-0000-0000-0000-000000000000", "*", Role::Viewer)).await.unwrap();
     moved("someone else's grant");
-    s.revoke(ALICE.into(), "hypermemetic:OUGHT".into()).await.unwrap();
+    s.revoke(SYS, ALICE.into(), "hypermemetic:OUGHT".into()).await.unwrap();
     moved("a revoke");
     s.set_team_for_tests(ALICE, crate::vocab::TeamName::stored("crew"), true);
     moved("a team joined");
@@ -549,7 +549,7 @@ async fn the_generation_moves_on_every_grant_revoke_and_team_change() {
     moved("a team left");
     // Nothing that changes no one's grants moves it.
     let before = a.generation();
-    assert!(!s.revoke(ALICE.into(), "hypermemetic:OUGHT".into()).await.unwrap());
+    assert!(!s.revoke(SYS, ALICE.into(), "hypermemetic:OUGHT".into()).await.unwrap());
     s.set_team_for_tests(ALICE, crate::vocab::TeamName::stored("crew"), false);
     assert_eq!(a.generation(), before);
 }
@@ -580,8 +580,8 @@ async fn verify_needs_a_principal_and_never_falls_back_to_the_user_id() {
 async fn admin_of_is_held_on_the_scope_or_one_covering_it() {
     let a = login(vec![]);
     let s = store().await;
-    s.grant(grant(ALICE, "hypermemetic:PLEXUS", Role::Admin)).await.unwrap();
-    s.grant(grant(ALICE, "hypermemetic:OUGHT", Role::Editor)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "hypermemetic:PLEXUS", Role::Admin)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "hypermemetic:OUGHT", Role::Editor)).await.unwrap();
     a.attach(s.clone());
     let u = a.verify(&ctx(json!({}))).unwrap();
     let shortcode = |id: &str| Scope::Shortcode { org: org(), id: ShortcodeId::new(id) };
@@ -621,15 +621,15 @@ async fn a_ceiling_on_a_ticket_holds_permits_to_its_subtree() {
 async fn the_reach_key_moves_with_the_grants_and_is_compared_not_formatted() {
     let a = login(vec![]);
     let s = store().await;
-    s.grant(grant(ALICE, "hypermemetic:OUGHT", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "hypermemetic:OUGHT", Role::Viewer)).await.unwrap();
     a.attach(s.clone());
     let me = ctx(json!({}));
     let list = reach_of(&a, &me, "tickets.list");
     let before = a.verify_call(Some(&me), &list).unwrap().reach_key().unwrap();
     assert_eq!(a.verify_call(Some(&me), &list).unwrap().reach_key().unwrap(), before, "as it was");
-    s.grant(grant(ALICE, "hypermemetic:IDENTITY", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "hypermemetic:IDENTITY", Role::Viewer)).await.unwrap();
     assert_ne!(a.verify_call(Some(&me), &list).unwrap().reach_key().unwrap(), before);
-    s.grant(grant(ALICE, "*", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "*", Role::Viewer)).await.unwrap();
     assert_eq!(a.verify_call(Some(&me), &list).unwrap().reach_key().unwrap(), None, "everywhere");
 }
 
@@ -655,7 +655,7 @@ async fn wakes(f: &mut Following, ms: u64) -> bool {
 async fn a_followed_caller_is_verified_again_only_when_the_grants_move() {
     let a = login(vec![]);
     let s = store().await;
-    s.grant(grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
     a.attach(s.clone());
     let me = ctx(json!({}));
     let mut f = Following::open(&a, &s, Some(&me), &reach_of(&a, &me, "tickets.list")).unwrap();
@@ -663,22 +663,22 @@ async fn a_followed_caller_is_verified_again_only_when_the_grants_move() {
     assert!(!wakes(&mut f, 50).await);
     assert!(matches!(f.again(), Ok(Followed::Same)));
     // A ticket write moves no grant: still no wake.
-    s.amend("OUGHT-2", Some("t".into()), None).await.unwrap();
+    s.amend(SYS.permit("OUGHT-2"), Some("t".into()), None).await.unwrap();
     assert!(!wakes(&mut f, 50).await);
     // A grant: woken, verified again, the reach moved.
-    s.grant(grant(ALICE, "IDENTITY", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "IDENTITY", Role::Viewer)).await.unwrap();
     assert!(wakes(&mut f, 500).await, "a grant wakes the watch");
     assert!(matches!(f.again(), Ok(Followed::Moved { .. })));
     assert_eq!(f.user().reach_filter().unwrap().unwrap().format(), "under in (IDENTITY, OUGHT)");
     // A role's grants edited moves the generation too.
     let before = s.grants_generation();
-    s.set_role("viewer".into(), vec!["tickets.get".into(), "tickets.list".into()]).await.unwrap();
+    s.set_role(SYS, "viewer".into(), vec!["tickets.get".into(), "tickets.list".into()]).await.unwrap();
     assert!(s.grants_generation() > before);
     assert!(wakes(&mut f, 500).await);
     assert!(matches!(f.again(), Ok(Followed::Same)), "the same reach: nothing to recompute");
     // Every grant revoked: the watch ends, typed.
-    s.revoke(ALICE.into(), "OUGHT".into()).await.unwrap();
-    s.revoke(ALICE.into(), "IDENTITY".into()).await.unwrap();
+    s.revoke(SYS, ALICE.into(), "OUGHT".into()).await.unwrap();
+    s.revoke(SYS, ALICE.into(), "IDENTITY".into()).await.unwrap();
     assert!(wakes(&mut f, 500).await);
     let closed = f.again().unwrap_err();
     assert_eq!(closed.reason, crate::types::WatchEnd::Revoked, "{closed:?}");
@@ -692,7 +692,7 @@ async fn a_followed_caller_signed_out_or_expired_ends_typed() {
     let a = Access::with_login(live.clone(), true, vec![]);
     a.book().seed(declared());
     let s = store().await;
-    s.grant(grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
     a.attach(s.clone());
     // Signed out in the table: the next change it hears ends it.
     let me = ctx(json!({ SESSION_KEY: "k1" }));

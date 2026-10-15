@@ -16,6 +16,7 @@
 use super::history::Act;
 use super::queue::{record_of, store as store_queue};
 use super::{comments, lineage, QueueChange, Store, StoreError};
+use crate::access::{Editor, Permit};
 use crate::comments::{Anchor, Comment, CommentIntent, CommentState};
 use crate::queue::QueueAction;
 use std::sync::Arc;
@@ -45,13 +46,14 @@ impl Store {
     /// `comments.add` would refuse.
     pub async fn request_changes_by(
         &self,
-        id: &str,
+        on: Permit<Editor>,
         body: String,
         author: Option<String>,
         principal: Option<String>,
         act: Act,
     ) -> Result<(Comment, QueueChange), StoreError> {
-        let id = self.resolve(id)?;
+        // ACCESS-11: of the ticket `on` is for.
+        let id = self.resolve(on.id())?;
         let (mut anchor, author) =
             crate::comments::check(conversation_anchor(&id), &body, author.as_deref()).map_err(StoreError::CommentRefused)?;
         let serial = self.serial().await;
