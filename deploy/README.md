@@ -169,6 +169,13 @@ prod runs — the pictures show exactly what prod serves) and lists the changed
 files under `landing/media/`; commit them, merge, then `landing`. Infra is
 found at `MENGER_INFRA_DIR` (default `../hypermemetic-infra`).
 
+**The mock** (DESIGN-58). Before a change to the page goes live, the page is
+shown on the tracker as one document — DESIGN-49, `view: mockup` at 390 and
+1440 — made by `scripts/landing-mock.py [landing] OUT.html` (styles, fonts,
+media and script inlined) and put in the doc's body through
+`deploy/menger-call.mjs` (its usage says how). The whole way a change to
+menger.sh is made, shown, asked and shipped is the doc under DESIGN-49.
+
 **Link previews** (DESIGN-52, DESIGN-53). A link to menger.sh unfurls from
 the tags in each page's `<head>`: `og:*` (title, description, url, site
 name, image with its type, size and alt) and `twitter:card
