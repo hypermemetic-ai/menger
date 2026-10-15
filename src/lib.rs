@@ -52,6 +52,10 @@ pub mod wiring {
 
 pub mod shell;
 
+/// ACCESS-29: `menger.call` held to the calls one connection may have open,
+/// and a connection idle with none closed.
+pub mod calls;
+
 /// DIST-3: the whole server started from code, without login or REST —
 /// `LocalServer::start(LocalConfig)`.
 pub mod local;

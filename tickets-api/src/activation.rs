@@ -346,9 +346,9 @@ impl Tickets {
     /// MNG-9 adds the page: `after` is the exclusive cursor (a ticket id
     /// — the order is total and unique, so an id is a position), `limit`
     /// caps the page, and `summary` swaps the `ticket` rows for `summary`
-    /// rows that carry every field but the body. Without them the call is
-    /// what it always was — every match, with bodies — followed by
-    /// `page { next: null, remaining: 0 }`. An `after` naming no ticket
+    /// rows that carry every field but the body. ACCESS-29: a page is 1,000
+    /// rows unless `limit` says, and never past 10,000 ([`crate::limits`]).
+    /// An `after` naming no ticket
     /// is one in-band `error` and nothing else. SCALE-14: the rows come
     /// from the cache and the bodies from the database, read a page at a
     /// time as the rows go out — the same events, never every body at
@@ -379,7 +379,7 @@ impl Tickets {
             status = "Status filter: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled | Doc (optional)",
             parent = "Only this ticket's children, e.g. PERF-3 (optional)",
             after = "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
-            limit = "At most this many tickets; the page event carries the next cursor (optional)",
+            limit = "At most this many tickets (default 1000, at most 10000); the page event carries the next cursor (optional)",
             summary = "Yield summary rows (every field but the body) instead of full tickets (optional)",
             filter = "A filter, e.g. 'ready and kind build and in SCALE' (FILTER-3's language; optional): ANDed with epic, status and parent; the page event then carries first",
             at = "Start at this position among the matches, 0-based, instead of after a cursor (optional; not with after); the page event carries first",
@@ -406,6 +406,7 @@ impl Tickets {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let store = self.store.clone();
         let admitted = self.access.admit(auth, &reach);
+        let limit = Some(crate::limits::page(limit, crate::limits::LIST_PAGE_DEFAULT, crate::limits::LIST_PAGE_MAX));
         stream! {
             let caller = match admitted {
                 Ok(caller) => caller,

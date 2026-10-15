@@ -875,13 +875,52 @@ async fn the_login_page_says_only_its_own_words() {
 #[tokio::test]
 async fn a_storm_of_anonymous_starts_is_bounded() {
     // Each anonymous GET /login/start keeps a transaction; they are capped
-    // (sessions.rs, MAX_PENDING) — here, only that a burst is all answered
-    // and the latest still completes its round trip.
+    // (sessions.rs, MAX_PENDING), and ACCESS-29: one client's network takes
+    // a flow per start — the first 60 in ten minutes (AUTH-22's
+    // flows_per_client), then 429 with Retry-After and the page's words.
     let m = start().await;
+    let mut started = 0;
+    let mut refused = None;
     for _ in 0..200 {
         let r = m.http.get(m.url("/login/start?button=Google&next=/app/")).send().await.unwrap();
-        assert_eq!(r.status(), 302);
+        match r.status().as_u16() {
+            302 if refused.is_none() => started += 1,
+            429 => {
+                let wait: i64 = r.headers()["retry-after"].to_str().unwrap().parse().unwrap();
+                assert!(wait > 0 && wait <= 600, "{wait}");
+                let text = r.text().await.unwrap();
+                assert!(text.contains("Too many attempts"), "{text}");
+                refused.get_or_insert(started);
+            }
+            other => panic!("start #{started}: {other}"),
+        }
     }
+    assert_eq!(started, 60, "a client's flows, then refused");
+    // The same client's nostr sign-in is a flow too: refused before the
+    // event is read.
+    let r = m.http.post(m.url("/login/nostr")).header("authorization", "Nostr e30=").header("accept", "application/json").send().await.unwrap();
+    assert_eq!(r.status(), 429);
+    assert!(r.json::<Value>().await.unwrap()["error"].as_str().unwrap().contains("Too many attempts"));
+}
+
+#[tokio::test]
+async fn password_guesses_are_counted_per_account_before_the_idp_sees_them() {
+    // ACCESS-29 (ACCESS-4 M2): five wrong passwords for one account from one
+    // neighbourhood, then each further one waits (AUTH-22's backoff) — the
+    // IdP is not asked; another account is untouched, and the right
+    // password, once allowed, forgives the account.
+    let m = start().await;
+    let guess = |user: &'static str, pw: &'static str| {
+        let m = &m;
+        async move { m.http.post(m.url("/login")).form(&[("username", user), ("password", pw), ("next", "/app/")]).send().await.unwrap() }
+    };
+    for i in 0..5 {
+        assert_eq!(guess("alice", "wrong").await.status(), 401, "guess {i}: the IdP's verdict");
+    }
+    let r = guess("alice", "s3cret").await;
+    assert_eq!(r.status(), 429, "the sixth is not relayed, even the right one");
+    assert!(r.headers().contains_key("retry-after"));
+    assert_eq!(guess("bob", "wrong").await.status(), 401, "another account is its own");
 }
 
 

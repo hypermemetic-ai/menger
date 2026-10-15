@@ -71,6 +71,9 @@ pub struct LoginOptions {
     pub allowed_origins: Vec<String>,
     /// How long a sign-in lasts (default 12 h).
     pub session_ttl_secs: i64,
+    /// ACCESS-29: how long a browser's sign-in may go unused before it ends
+    /// (default [`crate::sessions::IDLE_SECS_DEFAULT`], 2 h; 0: never).
+    pub session_idle_secs: i64,
     /// `--require-login`: the shell's pages need a session.
     pub require: bool,
     /// Whether there is a shell to serve the login page on (`false` under
@@ -134,6 +137,7 @@ impl LoginOptions {
             public_url: None,
             allowed_origins: Vec::new(),
             session_ttl_secs: 12 * 3600,
+            session_idle_secs: crate::sessions::IDLE_SECS_DEFAULT,
             require: false,
             page: true,
             title: branding.app,
@@ -212,7 +216,7 @@ impl Wiring {
         // IDENTITY-42: a key proof names the socket it was made for.
         let sockets = login::socket_urls(opts.ws_port, opts.public_url.as_deref());
         let carriers = login::boundary_at(&opts.providers, &sockets)?;
-        let sessions = Arc::new(Sessions::for_shell(opts.session_ttl_secs, &opts.names, &public_url));
+        let sessions = Arc::new(Sessions::for_shell(opts.session_ttl_secs, &opts.names, &public_url).with_idle(opts.session_idle_secs));
         let shell_origins = shell_origins(opts.shell_port, &public_url);
         Ok(Self { opts, sessions, carriers, public_url, shell_origins })
     }
