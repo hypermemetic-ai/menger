@@ -781,9 +781,17 @@ pub(crate) fn Tray() -> impl IntoView {
         });
         open.update(|o| *o = if o.as_deref() == Some(id.as_str()) { None } else { Some(id) });
     };
+    // APP-25: the sheet slides down rather than vanishing — the last ticket
+    // drawn stays in it while it closes (on submit its row has already
+    // left), and is replaced when another opens.
+    let last = RwSignal::new(None::<Row>);
     let sheet = move || {
-        let id = open.get()?;
-        let row = rows.with(|r| r.iter().find(|x| x.entry.ticket == id).cloned())?;
+        let row = match open.get() {
+            Some(id) => rows.with(|r| r.iter().find(|x| x.entry.ticket == id).cloned()).or_else(|| last.get_untracked().filter(|r| r.entry.ticket == id))?,
+            None => last.get_untracked()?,
+        };
+        last.set(Some(row.clone()));
+        let id = row.entry.ticket.clone();
         let e = row.entry.clone();
         let input = named_input(&inputs_held, &e);
         // The time moves on its own: the sheet is not drawn again for it.
@@ -881,6 +889,7 @@ pub(crate) fn Tray() -> impl IntoView {
             <div
                 class="qsheet"
                 class:open=move || open.with(Option::is_some)
+                inert=move || open.with(Option::is_none)
                 class:loud=move || open.with(|o| o.as_ref().is_some_and(|id| rows.with(|r| r.iter().any(|x| &x.entry.ticket == id && x.entry.urgency.loud()))))
                 aria-live="polite"
             >

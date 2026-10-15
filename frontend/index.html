@@ -2679,6 +2679,7 @@
   html[data-motion="calm"] #qtray .qtab.fresh.loud { animation: menger-tab-in .45s cubic-bezier(.2, .9, .25, 1.2) both, menger-arrive .42s ease-in-out .5s 4; }
   html[data-motion="calm"] #qtray .qedge { display: none; }
   html[data-motion="none"] #qtray :is(.qedge, .qarrived) { display: none; }
+  html[data-motion="none"] #qtray .qsheet { transition: none; }
   html[data-motion="none"] #qtray .qtab.fresh.unseen { outline: 2px solid var(--flash); outline-offset: -2px; }
   /* Motion: none — nothing the app animates moves; calm — the state
      changes stay, the ambient moves (the breathe, the pulse) go (the boot
