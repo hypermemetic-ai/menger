@@ -104,6 +104,50 @@ impl Status {
         Status::Canceled,
     ];
 
+    /// ACT-10: **the worker line** — the order a ticket's work walks, Idea →
+    /// Pending → Ready → Coding → In Review → Complete. What the app's `]`
+    /// and `[` step along ([`Status::next`], [`Status::prev`]); Blocked,
+    /// Epic, Superseded, Canceled and Doc are off it, reached by choosing.
+    pub const LINE: [Status; 6] = [
+        Status::Idea,
+        Status::Pending,
+        Status::Ready,
+        Status::Coding,
+        Status::InReview,
+        Status::Complete,
+    ];
+
+    /// ACT-10: where this status sits on [`Status::LINE`], if it is on it.
+    pub const fn on_line(self) -> Option<usize> {
+        match self {
+            Status::Idea => Some(0),
+            Status::Pending => Some(1),
+            Status::Ready => Some(2),
+            Status::Coding => Some(3),
+            Status::InReview => Some(4),
+            Status::Complete => Some(5),
+            _ => None,
+        }
+    }
+
+    /// ACT-10: the next status on [`Status::LINE`] — `None` off it and at
+    /// its end (Complete).
+    pub const fn next(self) -> Option<Status> {
+        match self.on_line() {
+            Some(i) if i + 1 < Status::LINE.len() => Some(Status::LINE[i + 1]),
+            _ => None,
+        }
+    }
+
+    /// ACT-10: the previous status on [`Status::LINE`] — `None` off it and
+    /// at its start (Idea).
+    pub const fn prev(self) -> Option<Status> {
+        match self.on_line() {
+            Some(i) if i > 0 => Some(Status::LINE[i - 1]),
+            _ => None,
+        }
+    }
+
     /// The wire spelling — what serde writes and what `set_status` accepts.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -1814,6 +1858,31 @@ mod tests {
         assert!(err.contains("'review'"), "{err}");
         for s in Status::ALL {
             assert!(err.contains(s.as_str()), "names {s}: {err}");
+        }
+    }
+
+    /// ACT-10: the worker line, and a step along it — none off the line,
+    /// none past its ends.
+    #[test]
+    fn the_worker_line_steps_up_and_down() {
+        assert_eq!(
+            Status::LINE,
+            [Status::Idea, Status::Pending, Status::Ready, Status::Coding, Status::InReview, Status::Complete]
+        );
+        for w in Status::LINE.windows(2) {
+            assert_eq!(w[0].next(), Some(w[1]), "{:?}", w[0]);
+            assert_eq!(w[1].prev(), Some(w[0]), "{:?}", w[1]);
+        }
+        assert_eq!(Status::Ready.next(), Some(Status::Coding));
+        assert_eq!(Status::Coding.prev(), Some(Status::Ready));
+        assert_eq!(Status::Complete.next(), None, "the end");
+        assert_eq!(Status::Idea.prev(), None, "the start");
+        for off in [Status::Blocked, Status::Epic, Status::Superseded, Status::Canceled, Status::Doc] {
+            assert_eq!((off.on_line(), off.next(), off.prev()), (None, None, None), "{off:?}");
+        }
+        for (i, s) in Status::LINE.into_iter().enumerate() {
+            assert_eq!(s.on_line(), Some(i));
+            assert!(Status::LIFECYCLE.contains(&s), "the line is inside the lifecycle");
         }
     }
 

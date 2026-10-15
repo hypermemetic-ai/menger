@@ -295,6 +295,21 @@ and the tickets that wait on it (unblocked) — and then offers **Undo**
 (`undelete`) in its toast. A shortcode's row is its root's menu with the
 shortcode's Wave board. A tag outside any ticket keeps FILTER-22's menu.
 
+**The status chooser, three ways** (ACT-10). A status, kind, severity or
+label chip — on a row, a card, a nav row, the ticket page's Status / Kind /
+Severity — puts its own chooser first, flat: the same options, marks and
+writes as its submenu, then a rule and the rest of the menu, with no
+`Set … ▸` for it (a label chip's ends with Add a label…; a reader who cannot
+write gets the menu as before). `]` and `[` step the focused ticket — or the
+selection it is in, or the ticket page's own — along the worker line, Idea →
+Pending → Ready → Coding → In Review → Complete (`Status::LINE`, `next` /
+`prev` in `tickets-api`), through the menu's write (`set_status` for one,
+one `update_many` for a selection holding one status); off the line
+(Blocked, Epic, Superseded, Canceled), at an end, on a doc or over a mixed
+selection, nothing is written and a toast says why. `s` opens the one menu
+on the focused ticket with **Set status** already expanded and its current
+status focused: ↓/↑, Enter.
+
 The wave board (WAVE-5) is `#/waves/<SHORTCODE>` — e.g.
 `http://127.0.0.1:4456/app/#/waves/PLEXUS`, the platform's work in order:
 the shortcode and every shortcode hosted under it (the nav's `host` chain
@@ -546,6 +561,8 @@ a chord where both are live, another when a binding is dispatched nowhere.
 The `?` sheet and Settings → Keyboard (with a search by key or by words)
 draw the same table. To add a key: a row in `BINDINGS`, a match arm in the
 handler.
+The groups are Move, Open, Status (ACT-10's `]`, `[`, `s`), Select, Nav,
+Filter, Annotate, View, Menus & dialogs, Forms and Help.
 
 ## Surface
 

@@ -106,6 +106,15 @@
 //! app, listing every ticket and what moves, then offers Undo while the
 //! tombstone keeps them (src/menu/delete.rs). A shortcode's row in the nav is
 //! its root ticket's menu, plus the shortcode's Wave board.
+//!
+//! ACT-10: **the status chooser, three ways.** A status, kind, severity or
+//! label chip's right-click puts that chip's chooser first, flat
+//! (src/menu/model.rs's `chooser`); `]` and `[` on the focused ticket — or
+//! the selection it is in, or the ticket page's own — step its status along
+//! the worker line (`Status::LINE`: Idea → Pending → Ready → Coding → In
+//! Review → Complete) through the menu's own write ([`step_focused`]), a
+//! toast saying why when nothing is written ([`toast`]); and `s` opens this
+//! menu on it with Set status already expanded, focus on the current status.
 
 use js_sys::Reflect;
 use leptos::prelude::*;
@@ -129,7 +138,7 @@ use crate::bindings::{self, Context};
 use crate::lens::{self, Level};
 use crate::shape::{self, Item};
 use crate::tags::Tag;
-use crate::{cache, dom, keys, nav, selection, session, signin, st_class, tags, waves};
+use crate::{annotate, cache, dom, keys, nav, selection, session, signin, st_class, tags, waves};
 use menger_tickets_api::{AttrKind, KnowNothing, TicketSummary};
 use model::{Entry, Facts, Form, Grants, Mark, Sub};
 
@@ -137,6 +146,16 @@ thread_local! {
     /// MENGER-34: the one menu's open state, for the frame bridge to open
     /// it through ([`open_from_frame`]) — set when the menu mounts.
     static OPEN: Cell<Option<RwSignal<Option<Target>>>> = const { Cell::new(None) };
+    /// ACT-10: the mounted menu's toaster, for [`toast`].
+    static TOASTER: Cell<Option<Toaster>> = const { Cell::new(None) };
+}
+
+/// ACT-10: a short toast from outside the menu (the step keys' refusals) —
+/// the menu's own toaster, once it is mounted.
+pub(crate) fn toast(text: String) {
+    if let Some(t) = TOASTER.with(Cell::get) {
+        t.show(text, None);
+    }
 }
 
 /// MENGER-34: a ticket id as a frame wrote it, if it is one — `SHORTCODE-N`,
@@ -163,7 +182,7 @@ pub(crate) fn open_from_frame(id: String, x: f64, y: f64, keyboard: bool) {
         keys::remember_focus();
     }
     let ids = model::target_ids(&id, &selection::ids());
-    target.set(Some(Target { ids, shortcode: None, x, y, nav: None, chip: None, level: Level::Global, framed: true }));
+    target.set(Some(Target { ids, shortcode: None, x, y, nav: None, chip: None, level: Level::Global, framed: true, open: None }));
 }
 
 /// ACT-4: the ticket element `el` is (or sits in) — what the one menu opens
@@ -201,6 +220,7 @@ fn target_on(host: &web_sys::Element, el: &web_sys::Element, x: f64, y: f64, nav
         chip,
         level,
         framed: false,
+        open: None,
     })
 }
 
@@ -263,6 +283,9 @@ struct Target {
     level: Level,
     /// FILTER-25: opened on a chip in a framed body.
     framed: bool,
+    /// ACT-10: the submenu it opens with expanded (`s`: Set status) — none
+    /// everywhere else.
+    open: Option<Sub>,
 }
 
 /// How a copy ended (see module doc): the async API, the legacy command,
@@ -386,7 +409,61 @@ fn focused_ticket() -> Option<Target> {
     let rect = host.get_bounding_client_rect();
     match target_on(&host, &active, rect.left(), rect.bottom(), nav.clone()) {
         Some(t) => Some(Target { chip: None, ..t }),
-        None => Some(Target { ids: Vec::new(), shortcode: None, x: rect.left(), y: rect.bottom(), nav, chip: None, level: Level::Global, framed: false }),
+        None => Some(Target { ids: Vec::new(), shortcode: None, x: rect.left(), y: rect.bottom(), nav, chip: None, level: Level::Global, framed: false, open: None }),
+    }
+}
+
+/// ACT-10: what a status key acts on — the focused ticket element (a nav
+/// row, a board row, a card, a relation) as Menu / Shift+F10 finds it, or,
+/// on a ticket page with none focused (and focus not in the nav's tree), the
+/// page's own ticket at its heading. `None`: nothing to act on, nothing done.
+fn key_target() -> Option<Target> {
+    if let Some(t) = focused_ticket().filter(|t| !t.ids.is_empty()) {
+        return Some(t);
+    }
+    let crate::Route::Ticket(id) = crate::parse_route(&dom::window().location().hash().unwrap_or_default()) else { return None };
+    let active = document().active_element();
+    if active.as_ref().is_some_and(|a| a.closest("#nav .tree, #nav [role=treeitem]").ok().flatten().is_some()) {
+        return None;
+    }
+    let head = document().query_selector("#ticket-page h2[data-ticket-id]").ok().flatten();
+    let (x, y) = head.map_or((16.0, 16.0), |h| {
+        let r = h.get_bounding_client_rect();
+        (r.left(), r.bottom())
+    });
+    Some(Target {
+        ids: model::target_ids(&id, &selection::ids()),
+        shortcode: None,
+        x,
+        y,
+        nav: None,
+        chip: None,
+        level: Level::Global,
+        framed: false,
+        open: None,
+    })
+}
+
+/// ACT-10: `]` (`up`) or `[` on `ids` — the next (previous) status on the
+/// worker line, written exactly as the menu's status item writes it (one
+/// ticket: `set_status`, MENGER-13's restore prompt kept; a selection: one
+/// `update_many`). Nothing written, a toast says why: no write grant, a row
+/// not held, a doc, a mixed selection, off the line or at its end. Success
+/// says nothing: the row repaints from `watch`.
+fn step_focused(ids: &[String], up: bool, last_error: RwSignal<Option<String>>) {
+    if !view::grants().write {
+        toast("you cannot change statuses here".into());
+        return;
+    }
+    let rows: Vec<TicketSummary> = ids.iter().filter_map(|id| cache::find(id).map(|s| s.get_untracked())).collect();
+    match model::step_status(ids, &rows, up) {
+        Ok(to) => {
+            let change = model::Change::Status(to);
+            if let Some(c) = model::call(ids, &change) {
+                write::send(c, change, last_error);
+            }
+        }
+        Err(why) => toast(why),
     }
 }
 
@@ -394,7 +471,7 @@ fn focused_ticket() -> Option<Target> {
 /// (the component is mounted once): open on a right-click over a ticket
 /// element — or on Menu / Shift+F10 over the focused one — and close on
 /// Escape / outside mousedown / scroll / route change.
-fn install_listeners(target: RwSignal<Option<Target>>) {
+fn install_listeners(target: RwSignal<Option<Target>>, last_error: RwSignal<Option<String>>) {
     let doc = document();
     let win = dom::window();
 
@@ -417,7 +494,7 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
             // FILTER-22: a tag outside any ticket is the tag menu's.
         } else if nav.is_some() {
             ev.prevent_default();
-            target.set(Some(Target { ids: Vec::new(), shortcode: None, x, y, nav, chip: None, level: Level::Nav, framed: false }));
+            target.set(Some(Target { ids: Vec::new(), shortcode: None, x, y, nav, chip: None, level: Level::Nav, framed: false, open: None }));
         }
     });
     let _ = doc.add_event_listener_with_callback("contextmenu", on_context.as_ref().unchecked_ref());
@@ -461,6 +538,31 @@ fn install_listeners(target: RwSignal<Option<Target>>) {
                 keys::remember_focus();
                 target.set(Some(t));
             }
+            return;
+        }
+        // ACT-10: the status keys — on the focused ticket (or its selection,
+        // or the ticket page's), never over a text field, a dialog, a menu,
+        // an overlay or annotation mode, which own their keys.
+        if ev.default_prevented() || ev.is_composing() || annotate::is_on() || !keys::no_overlay() {
+            return;
+        }
+        if ev.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).is_some_and(|el| keys::defer_to_focus(&el)) {
+            return;
+        }
+        let (up, down, quick) =
+            (bindings::is(&ev, Context::Ticket, "status.up"), bindings::is(&ev, Context::Ticket, "status.down"), bindings::is(&ev, Context::Ticket, "status.quick"));
+        if !(up || down || quick) {
+            return;
+        }
+        let Some(t) = key_target() else { return };
+        ev.prevent_default();
+        if quick {
+            // The one menu, opened at Set status (a doc's has none: the menu
+            // as Menu opens it).
+            keys::remember_focus();
+            target.set(Some(Target { open: Some(Sub::Status), ..t }));
+        } else {
+            step_focused(&t.ids, up, last_error);
         }
     });
     let _ = doc.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
