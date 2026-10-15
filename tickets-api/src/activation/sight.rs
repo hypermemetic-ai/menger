@@ -225,6 +225,8 @@ pub(super) fn within(store: &Store, reach: Option<&Lens>, ev: TicketsEvent) -> O
         // ticket's.
         TicketsEvent::Queued { entry, .. } | TicketsEvent::Snoozed { entry, .. } | TicketsEvent::QueueRow { entry, .. } => Some(entry.ticket.clone()),
         TicketsEvent::Unqueued { id, .. } | TicketsEvent::NotQueued { id } | TicketsEvent::ChangesRequested { id, .. } => Some(id.clone()),
+        // APP-24: a wait's events are its ticket's.
+        TicketsEvent::Waiting { ticket, .. } | TicketsEvent::Replied { ticket, .. } | TicketsEvent::TimedOut { ticket } => Some(ticket.clone()),
         TicketsEvent::QueueRecord { record } => Some(record.ticket.clone()),
         TicketsEvent::DanglingBlocker { id } | TicketsEvent::Member { id, .. } | TicketsEvent::NotFound { id } => Some(id.clone()),
         TicketsEvent::Extent { shortcode, .. } | TicketsEvent::Count { shortcode, .. } | TicketsEvent::Recount { shortcode, .. } => {

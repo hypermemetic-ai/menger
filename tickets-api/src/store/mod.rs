@@ -5465,6 +5465,9 @@ pub use queue::QueueChange;
 /// APP-23: a change request — a comment and an unqueue, one write.
 mod changes;
 pub use changes::{conversation_anchor, CONVERSATION_PATH};
+/// APP-24: what answers an agent waiting on a ticket.
+mod replies;
+pub use replies::{comment_on, reply_key, Awaiting};
 pub use deployments::{DeployPage, DeployQuery};
 
 /// FILTER-4: the cells — every ticket's `(status, kind, severity, blocked,
@@ -5575,6 +5578,9 @@ mod tests_queue;
 /// APP-23: a change request.
 #[cfg(test)]
 mod tests_changes;
+/// APP-24: what answers a wait.
+#[cfg(test)]
+mod tests_replies;
 
 /// SDLC-7: all nine statuses through the system of record, and what the
 /// two worker states are not (ready, done, a satisfied blocker).

@@ -133,6 +133,11 @@ impl Comments {
         self.by_id.values().filter_map(|c| Some((c.anchor.ticket.as_deref()?, c.at)))
     }
 
+    /// APP-24: the comments left at or after `at`, oldest first.
+    pub(crate) fn since(&self, at: i64) -> impl Iterator<Item = &Comment> + '_ {
+        self.by_id.values().filter(move |c| c.at >= at)
+    }
+
     /// The cache's half of a committed write: `comment` as it is now.
     pub(crate) fn put(&mut self, comment: Comment) {
         self.by_id.insert(comment.id, comment);

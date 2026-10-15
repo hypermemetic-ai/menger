@@ -131,6 +131,10 @@
       const stream = this.rpc.call("tickets.answer", { input, rationale, source, ticket, value });
       yield* extractData(stream);
     }
+    async* awaitReply(id, input, since, timeoutMinutes) {
+      const stream = this.rpc.call("tickets.await_reply", { id, input, since, timeout_minutes: timeoutMinutes });
+      yield* extractData(stream);
+    }
     async* blockers(id) {
       const stream = this.rpc.call("tickets.blockers", { id });
       yield* extractData(stream);

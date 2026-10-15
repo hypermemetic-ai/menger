@@ -185,6 +185,8 @@ export interface ComponentDocs {
     slots: SlotDoc[];
     summary: string;
 }
+/** APP-24: how a ticket ended for an agent waiting on it. */
+export type Ending = "canceled" | "deleted";
 /** MNG-10: one shortcode's roll-up — the row AGS-20's nav draws for it,
 computed by the server so a client can draw the tree without holding
 every ticket.
@@ -425,6 +427,9 @@ export interface QueueRecord {
   the one it had (unqueued, closed). */
     urgency: Urgency;
 }
+/** APP-24: what answered an agent waiting on a ticket (`tickets.await_reply`)
+— the first response on it since the call's `since`. */
+export type Reply = never;
 /** AGS-23: a shortcode root's row as the nav draws it at the top of its
 shortcode — the three fields of the root ticket a row shows beside its
 id ([`Group::root`]). */
@@ -1173,6 +1178,26 @@ export interface TicketsEventChangesRequested {
     entry: QueueEntry;
     id: string;
 }
+/** APP-24: `await_reply`'s first event, at once — the ticket it waits
+on (its id as kept) and its queue entry, when it is queued. */
+export interface TicketsEventWaiting {
+    type: 'waiting';
+    queued: QueueEntry | null;
+    ticket: string;
+}
+/** APP-24: `await_reply`'s answer — the first response on the ticket
+since `since`; the stream ends after it. */
+export interface TicketsEventReplied {
+    type: 'replied';
+    reply: Reply;
+    ticket: string;
+}
+/** APP-24: `await_reply` waited `timeout_minutes` and nothing came; the
+stream ends. */
+export interface TicketsEventTimedOut {
+    type: 'timed_out';
+    ticket: string;
+}
 /** MENGER-39: `unqueue` of a ticket that is not queued — nothing written. */
 export interface TicketsEventNotQueued {
     type: 'not_queued';
@@ -1201,7 +1226,7 @@ export interface TicketsEventQueueRecord {
     type: 'queue_record';
     record: QueueRecord;
 }
-export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
+export type TicketsEvent = TicketsEventHealth | TicketsEventCreated | TicketsEventTicket | TicketsEventSummary | TicketsEventPage | TicketsEventStatusChanged | TicketsEventKindChanged | TicketsEventAmended | TicketsEventCommitsLinked | TicketsEventCommitsUnlinked | TicketsEventLabelsChanged | TicketsEventUnlocksChanged | TicketsEventUnlocksRemoved | TicketsEventBlockersChanged | TicketsEventSeverityChanged | TicketsEventUpdated | TicketsEventUpdatedMany | TicketsEventDeleted | TicketsEventUndeleted | TicketsEventReshortcoded | TicketsEventChildrenChanged | TicketsEventParentChanged | TicketsEventChildRemoved | TicketsEventLagged | TicketsEventGroup | TicketsEventGroupChanged | TicketsEventExtent | TicketsEventCount | TicketsEventFacet | TicketsEventEntered | TicketsEventLeft | TicketsEventRecount | TicketsEventPlaced | TicketsEventWaveCounts | TicketsEventWaveCycle | TicketsEventPlacementsChanged | TicketsEventComponent | TicketsEventComponentChanged | TicketsEventComponentRemoved | TicketsEventInput | TicketsEventInputChanged | TicketsEventBlocker | TicketsEventDanglingBlocker | TicketsEventMember | TicketsEventNotFound | TicketsEventAmbiguous | TicketsEventError | TicketsEventBodyTooLarge | TicketsEventNode | TicketsEventHit | TicketsEventSearched | TicketsEventTransition | TicketsEventHistoryEnd | TicketsEventQueued | TicketsEventUnqueued | TicketsEventSnoozed | TicketsEventChangesRequested | TicketsEventWaiting | TicketsEventReplied | TicketsEventTimedOut | TicketsEventNotQueued | TicketsEventQueueRow | TicketsEventQueueEnd | TicketsEventQueueRecord;
 export declare function isTicketsEventHealth(e: TicketsEvent): e is TicketsEventHealth;
 export declare function isTicketsEventCreated(e: TicketsEvent): e is TicketsEventCreated;
 export declare function isTicketsEventTicket(e: TicketsEvent): e is TicketsEventTicket;
@@ -1259,6 +1284,9 @@ export declare function isTicketsEventQueued(e: TicketsEvent): e is TicketsEvent
 export declare function isTicketsEventUnqueued(e: TicketsEvent): e is TicketsEventUnqueued;
 export declare function isTicketsEventSnoozed(e: TicketsEvent): e is TicketsEventSnoozed;
 export declare function isTicketsEventChangesRequested(e: TicketsEvent): e is TicketsEventChangesRequested;
+export declare function isTicketsEventWaiting(e: TicketsEvent): e is TicketsEventWaiting;
+export declare function isTicketsEventReplied(e: TicketsEvent): e is TicketsEventReplied;
+export declare function isTicketsEventTimedOut(e: TicketsEvent): e is TicketsEventTimedOut;
 export declare function isTicketsEventNotQueued(e: TicketsEvent): e is TicketsEventNotQueued;
 export declare function isTicketsEventQueueRow(e: TicketsEvent): e is TicketsEventQueueRow;
 export declare function isTicketsEventQueueEnd(e: TicketsEvent): e is TicketsEventQueueEnd;

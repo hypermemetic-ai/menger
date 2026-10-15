@@ -164,6 +164,12 @@
         "ticket",
         "value"
       ],
+      "await_reply": [
+        "id",
+        "input",
+        "since",
+        "timeout_minutes"
+      ],
       "blockers": [
         "id"
       ],

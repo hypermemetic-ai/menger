@@ -3236,6 +3236,47 @@ async fn the_queue_over_the_wire() {
     assert_eq!(evs.last().unwrap()["type"], "history_end");
 }
 
+/// APP-24: `await_reply` over the real protocol — an agent queues a ticket
+/// and awaits; `waiting` comes at once; the owner answers from a second
+/// connection; the agent's stream yields one `replied` (kind `answered`)
+/// and ends. Then a second wait hears a change request as
+/// `changes_requested`.
+#[tokio::test]
+async fn await_reply_over_the_wire() {
+    let port = start_server().await;
+    let agent = connect(port).await;
+    let owner = connect(port).await;
+    collect(call(&agent, "tickets.create", json!({"epic": "AWR", "title": "root", "kind": "scope"})).await).await;
+    let body = "<m-decision data-field=\"decision\" id=\"agent-owner\">\n\n\
+                <m-question data-field=\"question\">Who owns an agent?</m-question>\n\n\
+                <m-option data-field=\"option\" name=\"The granter\" value=\"granter\"></m-option>\n\
+                <m-option data-field=\"option\" name=\"Its creator\" value=\"creator\"></m-option>\n\n\
+                </m-decision>\n";
+    collect(call(&agent, "tickets.create", json!({"epic": "AWR", "title": "asks", "body": body})).await).await;
+    answer(&agent, "tickets.queue", json!({"id": "AWR-2", "urgency": "blocking", "input": "agent-owner", "reason": "idle until decided"})).await;
+    let mut wait = call(&agent, "tickets.await_reply", json!({"id": "AWR-2", "timeout_minutes": 5})).await;
+    let first = next_events(&mut wait, 1).await.pop().unwrap();
+    assert_eq!((first["type"].as_str(), first["ticket"].as_str(), first["queued"]["urgency"].as_str()), (Some("waiting"), Some("AWR-2"), Some("blocking")), "{first}");
+    answer(&owner, "tickets.answer", json!({"ticket": "AWR-2", "input": "agent-owner", "value": {"type": "choice", "option": "granter"}, "source": "app"})).await;
+    let replied = next_events(&mut wait, 1).await.pop().unwrap();
+    assert_eq!(replied["type"], "replied", "{replied}");
+    assert_eq!(
+        (replied["ticket"].as_str(), replied["reply"]["kind"].as_str(), replied["reply"]["input"].as_str(), replied["reply"]["value"]["option"].as_str()),
+        (Some("AWR-2"), Some("answered"), Some("agent-owner"), Some("granter")),
+        "{replied}"
+    );
+    let rest = collect(wait).await;
+    assert!(rest.iter().all(|e| e["type"] != "replied"), "one replied, then the end: {rest:?}");
+
+    // Queued again; the owner requests changes instead.
+    answer(&agent, "tickets.queue", json!({"id": "AWR-2", "urgency": "now", "reason": "reworked; look again"})).await;
+    let mut wait = call(&agent, "tickets.await_reply", json!({"id": "AWR-2", "input": "agent-owner"})).await;
+    assert_eq!(next_events(&mut wait, 1).await[0]["type"], "waiting");
+    answer(&owner, "tickets.request_changes", json!({"id": "AWR-2", "body": "neither: the agent's owner is whoever signs for it"})).await;
+    let replied = next_events(&mut wait, 1).await.pop().unwrap();
+    assert_eq!((replied["reply"]["kind"].as_str(), replied["reply"]["comment"]["intent"].as_str()), (Some("changes_requested"), Some("changes")), "{replied}");
+}
+
 /// APP-23: `request_changes` over the real protocol — one write: its answer
 /// `changes_requested` carries the comment (intent `changes`, on the
 /// ticket's conversation) and the entry; `watch` hears `unqueued` (action

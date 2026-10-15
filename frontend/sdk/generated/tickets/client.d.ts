@@ -6,6 +6,8 @@ export interface TicketsClient {
     amend(id: string, body?: string | null, title?: string | null): AsyncGenerator<TicketsEvent>;
     /** Answer an input: record a value (checked against its kind and options) with a rationale, a source and the time; yields input_changed */
     answer(input: string, ticket: string, value: InputValue, rationale?: string | null, source?: string | null): AsyncGenerator<TicketsEvent>;
+    /** Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, a comment or an unqueue by another, the ticket canceled or deleted — and the end; timed_out after timeout_minutes */
+    awaitReply(id: string, input?: string | null, since?: number | null, timeoutMinutes?: number | null): AsyncGenerator<TicketsEvent>;
     /** One ticket's blockers resolved to current statuses; dangling ids marked */
     blockers(id: string): AsyncGenerator<TicketsEvent>;
     /** Clear an input's answer (open again; kept in its history, with a source); yields input_changed */

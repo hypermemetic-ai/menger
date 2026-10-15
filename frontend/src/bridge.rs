@@ -509,6 +509,7 @@ pub(crate) fn admit_event(ev: TicketsEvent, reach: &Reach) -> Option<TicketsEven
         // queue's end and `not_queued` say nothing a frame reads.
         E::Queued { ref entry, .. } | E::Snoozed { ref entry, .. } | E::QueueRow { ref entry, .. } => reach.holds_id(&entry.ticket).then_some(ev),
         E::Unqueued { ref id, .. } | E::ChangesRequested { ref id, .. } => reach.holds_id(id).then_some(ev),
+        E::Waiting { ref ticket, .. } | E::Replied { ref ticket, .. } | E::TimedOut { ref ticket } => reach.holds_id(ticket).then_some(ev),
         E::QueueRecord { ref record } => reach.holds_id(&record.ticket).then_some(ev),
         E::QueueEnd { .. } | E::NotQueued { .. } => None,
         E::Group { group } => inside(group.shortcode.as_str()).then(|| E::Group { group: top(group) }),

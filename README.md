@@ -2178,6 +2178,7 @@ synapse -P 4455 menger tickets unqueue --id MENGER-41
 | `tickets.unqueue { id, source? }` | `unqueued { id, entry, action: unqueued, by, at_unix }`, or `not_queued { id }` (nothing written) |
 | `tickets.snooze { id, minutes, source? }` | `snoozed { entry, ticket }` — off the tray until `snoozed_until_unix` (1 minute to a week), still queued (`queued` holds). Not queued: one `error` |
 | `tickets.request_changes { id, body, source? }` | APP-23: `changes_requested { id, comment, entry, by, at_unix }` — one write: `body` kept as a comment on the ticket's conversation (APP-22's anchor, `path: conversation`) with `intent: changes`, signed as `comments.add` signs, and the entry taken out with `action: changes_requested`, its queue record naming the comment (`comment`). The named input stays open: a change request is not an answer. `watch` hears `unqueued` (that action), `comments.watch` the comment's `added`. A ticket not queued, a blank body: one `error`, nothing written |
+| `tickets.await_reply { id, since?, input?, timeout_minutes? }` | APP-24: `waiting { ticket, queued? }`, then one `replied { ticket, reply }` (`reply.kind`: `answered`, `changes_requested`, `commented`, `unqueued`, `ended`) or `timed_out { ticket }`, then the end; a ticket that is none `not_found`. Below |
 | `tickets.queued { snoozed? }` | a `queue_row { entry, ticket }` per entry in the caller's reach, most urgent first, then the oldest — without the snoozed ones when `snoozed: false` — then `queue_end { count, snoozed, now_unix }` |
 
 A `close_input` of the input an entry names takes it out in the same write:
@@ -2213,6 +2214,33 @@ it took first).
 ```sh
 synapse -P 4455 menger tickets request_changes --id APP-21 --body "Not a granter: the agent's owner. Rework the options."
 synapse -P 4455 menger comments list --intent changes --state open
+```
+
+**After queueing, an agent waits** (APP-24; owner, 2026-10-15: *"when
+queued an agent should then listen to that ticket for a response"*):
+`tickets.await_reply { id, since?, input?, timeout_minutes? }` streams
+`waiting { ticket, queued? }` at once, then nothing until a response, then
+one `replied { ticket, reply }`, and ends. A response, at or after `since`
+(default: the call's own time, what was already there set aside), is the
+first of: an input on the ticket answered (`kind: answered` — `input`,
+`value`, `rationale`, `source`, `at_unix`; with `input` given, only that
+one), a change request (`kind: changes_requested`, the `comment`), a comment
+on the ticket by someone other than the caller (`kind: commented`), the
+ticket unqueued by someone other than the caller (`kind: unqueued` —
+`action`, `by`, `at_unix`), the ticket canceled or deleted (`kind: ended` —
+`how`, `by`, `at_unix`). A snooze, a queueing or a raise is none. "Other
+than the caller" is by principal; with login off everyone is `anonymous`
+and nothing is set aside. `timeout_minutes` ends a wait with nothing as
+`timed_out { ticket }`. It is answered from the cache, asked again at every
+change on either channel (both subscribed before the first ask), so a
+response between the lookup and the subscription is neither lost nor said
+twice; a dropped connection loses nothing when the agent calls again with
+`since`. Under login it is a viewer's: the caller must see the ticket, and
+hears only the comments it may see.
+
+```sh
+synapse -P 4455 -j menger tickets await_reply --id APP-21 --input agent-owner --timeout-minutes 240
+synapse -P 4455 -j menger tickets await_reply --id APP-21 --since 1792072000
 ```
 
 ### Deployments (DEPLOY-11)
