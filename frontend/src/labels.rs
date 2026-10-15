@@ -4,7 +4,7 @@
 //! - **A chip** ([`chip`]) is one label: `needs-you` drawn as a small pill,
 //!   and a FILTER-22 tag (`data-tag="label:needs-you"`), so a right-click
 //!   builds `label needs-you`. `needs-you` wears its own colour: it is what
-//!   puts a ticket on Home's "Needs you" panel (src/needs.rs).
+//!   puts a ticket under the Needs you filter (`g n`, src/needs.rs).
 //! - **On a row** ([`row_chips`]): every label the row carries, after the
 //!   title — live, as the row is (`labels_changed` reaches the row cache).
 //! - **On the ticket page** ([`Editor`]): the chips, each with × to take it

@@ -2143,7 +2143,7 @@ fn App() -> impl IntoView {
     // FILTER-6: saved filters — each level's `Saved ▾` and Save as….
     saved::Saved::new(lens);
     // MENGER-12: Needs you — its saved filter and its live count, for the
-    // header's link and Home's panel.
+    // header's link; MENGER-43: `g n` puts it on the nav.
     needs::NeedsYou::install();
     // MENGER-39: a hidden tab's title carries the queue's count.
     queue::install_title();
@@ -2466,8 +2466,9 @@ fn App() -> impl IntoView {
                                 view! { <signin::Checking /> }.into_any()
                             }
                         }
-                        // MENGER-12: Needs you, first thing on Home.
-                        Route::Board => view! { <needs::Panel /> <Board board last_error viewport /> }.into_any(),
+                        // MENGER-43: Home is the board — Needs you is a
+                        // filter on the nav (`g n`, src/needs.rs).
+                        Route::Board => view! { <Board board last_error viewport /> }.into_any(),
                         Route::Ticket(id) => {
                             view! { <TicketPage id socket last_error /> }.into_any()
                         }

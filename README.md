@@ -443,19 +443,24 @@ their set of labels — answered from the cells on every filtered read and on
 `labels` columns: a form-9 (or older) file is built again once on first
 open, and an older build cannot open it after.
 
-**Needs you** (MENGER-12): the first thing on Home is a panel of what
-waits on the owner — the live result of the saved filter named "Needs you"
+**Needs you** (MENGER-12, MENGER-43) is a filter on the nav: what waits
+on the owner is the saved filter named "Needs you"
 (`VIEW/_MENGER/view/needs-you`; until one is saved, the default
-`(queued or asking or label needs-you)` — MENGER-39's queue first). Its header says "Needs you · N", and the
-header nav's **needs you N** link goes to it; each row is the ticket (id,
-title, status chip, label chips) and what it needs: each open input's
-question, with **answer ›** opening the ticket's frame at that input. It
-follows `watch` (`entered` / `left` / `recount` for its filter,
-`input_changed`, `labels_changed`), so an answer or a label in another
-window moves it at once; with nothing waiting it says "Nothing needs you."
-**change** edits its filter and saves it under that name — an ordinary
-saved filter, in `Saved ▾` at every level. `g n` focuses it (listed in
-`?`). Labels are chips on every row (board, nav, flat, wave cards) and on
+`(queued or asking or label needs-you)` — MENGER-39's queue first). `g n`,
+or a click on the header's **needs you N**, puts it on the nav exactly as
+`Saved ▾` puts a saved filter there (the nav's own clauses replaced; its
+pills, its text and the URL's `n=` following), focuses the nav's first row,
+and leaves the route where it is. The nav shows `global and nav`
+(FILTER-21), so the global filter reaches it: filtered to one shortcode,
+the nav shows what waits on the owner there. The same press while the nav
+holds exactly that filter puts the nav's default back. The header's count
+is the saved filter's, live (`entered` / `left` / `recount` of a membership
+watch), whatever the lens holds. The filter is changed as any saved filter
+is — apply it, edit the pills, **Save as…** "Needs you" (replace); the next
+`g n` applies the new text. The questions are where they are answered: the
+ticket page (its frame scrolls to the input), `#/inputs`, and the tray for
+a queued ticket. Home is the board; MENGER-12's panel, which answered to
+no filter, is gone. Labels are chips on every row (board, nav, flat, wave cards) and on
 the ticket page, where an editor adds and removes them; the menus offer
 **Asking** (yes / no) and **Label** (a value per label, with `facets`'
 counts), and the palette takes `filter <text>` — `filter label needs-you`,
@@ -825,9 +830,9 @@ call that moves nothing answers `labels_changed` with `added: []` and
 `removed: []` and writes nothing; an entry that is not a label (or a result
 past 16) is one in-band `error` naming it, and nothing is written. Labelling
 moves `updated_unix` and the ticket's cell (`label <name>`), nothing else.
-**`needs-you`** is the label that puts a ticket in front of the owner: Home's
-"Needs you" panel shows every ticket labelled `needs-you` beside every
-ticket `asking`. A database written before MENGER-12 gains the `labels`
+**`needs-you`** is the label that puts a ticket in front of the owner: the
+Needs you filter (`g n` puts it on the nav) admits every ticket labelled
+`needs-you` beside every ticket `asking` and queued. A database written before MENGER-12 gains the `labels`
 column on first open, durably — `ADD COLUMN … DEFAULT '[]'`, instant at any
 size.
 
@@ -1878,8 +1883,8 @@ when history began). In the nav a canceled ticket is drawn closed with its
 count ("3 hidden"); its descendants are not shown under it unless the reader
 opens it there (for this view only) or the open ticket is below it. `under
 X` still finds them everywhere. The board draws done-with rows (complete,
-superseded, canceled) quieter. Needs you never shows a canceled ticket
-(`not status Canceled` beside its filter).
+superseded, canceled) quieter. Needs you's count never counts a canceled
+ticket (`not status Canceled` beside its filter).
 
 **Filtering by history.** The language has four more predicates, answered
 from the log's kept indexes (each status's entries and exits, every
@@ -2031,8 +2036,8 @@ A `close_input` of the input an entry names takes it out in the same write:
 system`. `watch` carries `queued`, `unqueued` and `snoozed` as they happen.
 `queued` and `queued <urgency>` are filter cells (FILTER-3's language),
 answered from the queue's kept entries — a snoozed ticket is still queued —
-on every filtered read and watch; Home's Needs you is `queued or asking or
-label needs-you`. `history { id }` yields the ticket's **queue records**
+on every filtered read and watch; the Needs you filter (`g n`, on the nav)
+is `queued or asking or label needs-you`. `history { id }` yields the ticket's **queue records**
 after its transitions — `queue_record { record }`: `action` (queued,
 raised, requeued, snoozed, unqueued, closed), `urgency`, `reason`, `input`,
 `actor`, `name`, `source`, `at_unix`, `until_unix` for a snooze. They are a
