@@ -225,9 +225,11 @@ async fn prepare(n: usize, path: &Path) {
     write_shapes(path, &shapes);
     let started = Instant::now();
     let store = Store::open(path).unwrap();
+    // ACCESS-10: the spike reads as the store's System.
+    let system = store.system().expect("a store just opened holds its System");
     eprintln!(
         "built the derived state over {} tickets in {:?} (chain {}, fan {}, diamond {}x{})",
-        store.count(),
+        store.count(&system),
         started.elapsed(),
         shapes.chain,
         shapes.fan,
@@ -276,17 +278,19 @@ async fn measure(path: &Path, samples: usize) {
     let (rss0, _) = rss();
     let started = Instant::now();
     let store = Store::open(path).unwrap();
+    // ACCESS-10: the spike reads as the store's System.
+    let system = store.system().expect("a store just opened holds its System");
     let open = started.elapsed();
     let (rss1, hwm1) = rss();
     let place_all_ms = PLACE_ALL.lock().unwrap().last().map(|us| *us as f64 / 1000.0);
     passes();
-    let n = store.count();
+    let n = store.count(&system);
     let shapes = Shapes::of(n);
 
     // Synthetic tickets to write to: every epic but the shapes', each a
     // non-root, non-doc ticket in the ready lifecycle.
     let epics: Vec<(String, u32)> = store
-        .extents()
+        .extents(&system)
         .into_iter()
         .map(|(e, n)| (e.as_str().to_string(), n))
         .filter(|(e, _)| !["CHN", "FNX", "DIA"].contains(&e.as_str()))
@@ -302,7 +306,7 @@ async fn measure(path: &Path, samples: usize) {
     for _ in 0..samples / 2 {
         let (epic, last) = &epics[rng.below(epics.len())];
         let id = format!("{epic}-{}", 2 + rng.below((*last as usize).saturating_sub(1).max(1)));
-        let Ok(t) = store.get(&id).await else { continue };
+        let Ok(t) = store.get(&system, &id).await else { continue };
         if !t.kind.has_lifecycle() {
             continue;
         }

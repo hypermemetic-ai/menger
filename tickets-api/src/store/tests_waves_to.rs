@@ -35,7 +35,7 @@ async fn build(store: &Store, epic: &str, blocked_by: &[&str]) -> String {
 const EVERY: [Kind; 5] = [Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike];
 
 fn to(store: &Store, id: &str) -> WavesTo {
-    store.waves_to(id, &EVERY, None).unwrap()
+    store.waves_to(SYS, id, &EVERY).unwrap()
 }
 
 /// The answer as `(id, placement)` in yield order.
@@ -146,7 +146,7 @@ async fn a_scope_gathers_its_open_descendants() {
 
     // `kinds` filters what is yielded, not what is followed — the target
     // always shows.
-    let builds = store.waves_to(&s, &[Kind::Build], None).unwrap();
+    let builds = store.waves_to(SYS, &s, &[Kind::Build]).unwrap();
     assert_eq!(shape(&builds), [at(&b1, wave(1)), at(&ext, wave(1)), at(&b2, wave(2)), at(&b3, wave(3)), at(&s, wave(4))]);
 
     // A build's children are its own business.
@@ -155,8 +155,8 @@ async fn a_scope_gathers_its_open_descendants() {
     assert!(!w.waves.placed.iter().any(|p| p.summary.id == kid));
 
     // Only what the caller sees is yielded; the rest still counts.
-    let visible: std::collections::HashSet<ShortcodeId> = [ShortcodeId::from("SC"), ShortcodeId::from("SS")].into();
-    let seen = store.waves_to(&s, &EVERY, Some(&visible)).unwrap();
+    let viewer = super::tests_reach::viewer_of(&["SC", "SS"]);
+    let seen = store.waves_to(&viewer, &s, &EVERY).unwrap();
     assert!(!seen.waves.placed.iter().any(|p| p.summary.id == ext));
     assert_eq!(seen.waves.placed.last().unwrap().placement, wave(4));
 }
@@ -205,9 +205,9 @@ async fn unknown_ids_and_docs_are_refused() {
     let store = Store::new();
     make(&store, "NO", Kind::Scope, &[], None).await;
     let doc = make(&store, "NO", Kind::Doc, &[], None).await;
-    assert!(matches!(store.waves_to("NO-99", &EVERY, None), Err(StoreError::NotFound(_))));
-    assert!(matches!(store.waves_to(&doc, &EVERY, None), Err(StoreError::DocHasNoLifecycle { .. })));
-    assert!(matches!(store.waves_under("NO-99", &EVERY, None), Err(StoreError::NotFound(_))));
+    assert!(matches!(store.waves_to(SYS, "NO-99", &EVERY), Err(StoreError::NotFound(_))));
+    assert!(matches!(store.waves_to(SYS, &doc, &EVERY), Err(StoreError::DocHasNoLifecycle { .. })));
+    assert!(matches!(store.waves_under(SYS, "NO-99", &EVERY), Err(StoreError::NotFound(_))));
 }
 
 /// A ticket's subtree's board: it and everything under it, at any depth and
@@ -226,12 +226,12 @@ async fn waves_under_is_the_subtree_board() {
     let hosted = make(&store, "HO", Kind::Scope, &[], Some(&s)).await;
     let h = make(&store, "HO", Kind::Spike, &[&b1], Some(&hosted)).await;
 
-    let w = store.waves_under(&s, &super::waves::DEFAULT_KINDS, None).unwrap();
+    let w = store.waves_under(SYS, &s, &super::waves::DEFAULT_KINDS).unwrap();
     let got: Vec<(String, Placement)> = w.placed.iter().map(|p| (p.summary.id.to_string(), p.placement)).collect();
     assert_eq!(got, [at(&b2, wave(1)), at(&b1, wave(2)), at(&h, wave(3))]);
     assert_eq!(w.placed[1].waiting_on, vec![beside.clone()], "a blocker off the subtree still places it");
 
-    let all = store.waves_under(&s, &EVERY, None).unwrap();
+    let all = store.waves_under(SYS, &s, &EVERY).unwrap();
     let ids: Vec<&str> = all.placed.iter().map(|p| p.summary.id.as_str()).collect();
     for id in [&s, &e, &hosted, &b1, &b2, &h] {
         assert!(ids.contains(&id.as_str()), "{id} in {ids:?}");

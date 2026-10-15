@@ -74,7 +74,7 @@ fn admitted(store: &Store, text: &str, now: i64) -> Vec<String> {
     let clock = Clock { fixed: Some(now), ..Clock::default() };
     let lens = Lens::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")).with_clock(clock);
     let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
-    store.filtered_page(&q, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
+    store.filtered_page(SYS, &q, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
 }
 
 fn entered_left(ev: &DeploymentsEvent) -> (Vec<String>, Vec<String>) {

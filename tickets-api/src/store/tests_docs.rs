@@ -35,7 +35,7 @@ fn work(epic: &str, parent: Option<&str>) -> NewTicket {
 
 fn group(store: &Store, epic: &str) -> Group {
     store
-        .groups()
+        .groups(SYS)
         .into_iter()
         .find(|g| g.epic == epic)
         .unwrap_or_else(|| panic!("no group {epic}"))
@@ -68,7 +68,7 @@ async fn a_doc_is_born_in_doc_and_may_root_a_shortcode() {
     assert_eq!((root.id.as_str(), root.kind, root.status), ("MAN-1", Kind::Doc, Status::Doc));
     assert_eq!(root.parent, None, "a shortcode's root, top level");
     assert_eq!(
-        store.groups(),
+        store.groups(SYS),
         vec![Group {
             epic: "MAN".into(),
             shortcode: "MAN".into(),
@@ -83,7 +83,7 @@ async fn a_doc_is_born_in_doc_and_may_root_a_shortcode() {
         }],
         "a doc collection is a row: no work, one doc"
     );
-    assert_eq!(store.groups(), tests::nav(&store));
+    assert_eq!(store.groups(SYS), tests::nav(&store));
 
     let child = store.create(doc("MAN", None)).await.unwrap();
     assert_eq!((child.status, child.parent.as_deref()), (Status::Doc, Some("MAN-1")), "under the root");
@@ -102,7 +102,7 @@ async fn a_doc_is_born_in_doc_and_may_root_a_shortcode() {
     store.create(work("SUBD", None)).await.unwrap(); // SUBD-2 → SUBD-1
     let g = group(&store, "SUBD");
     assert_eq!((g.total, g.docs, g.root.as_deref(), g.host.as_deref()), (1, 1, Some("SUBD-1"), Some("SC-1")));
-    assert_eq!(store.groups(), tests::nav(&store));
+    assert_eq!(store.groups(SYS), tests::nav(&store));
 
     // The doc root may be re-hosted; a doc that is not the root may not leave.
     store.set_parent("SUBD-1", "MAN-3").await.unwrap();
@@ -113,7 +113,7 @@ async fn a_doc_is_born_in_doc_and_may_root_a_shortcode() {
         store.set_parent("MAN-2", "SC-1").await,
         Err(StoreError::ParentOutsideShortcode { .. })
     ));
-    assert_eq!(store.groups(), tests::nav(&store));
+    assert_eq!(store.groups(SYS), tests::nav(&store));
 
     // Anything that is neither scope nor doc is still refused as a first ticket.
     for kind in [Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike] {
@@ -140,7 +140,7 @@ async fn a_doc_takes_no_blocked_by_and_nothing_is_allocated() {
         }
         assert!(err.to_string().contains("a doc is never blocked"), "{err}");
     }
-    assert_eq!(store.count(), 2, "nothing was created");
+    assert_eq!(store.count(SYS), 2, "nothing was created");
     assert_eq!(store.create(doc("B", None)).await.unwrap().id, "B-3", "nothing was allocated");
 }
 
@@ -152,7 +152,7 @@ async fn set_status_on_a_doc_is_refused_whatever_the_status() {
     let store = Store::new();
     store.create(doc("D", None)).await.unwrap(); // D-1
     store.create(doc("D", None)).await.unwrap(); // D-2
-    let before = store.get("D-2").await.unwrap();
+    let before = store.get(SYS, "D-2").await.unwrap();
     let mut rx = store.subscribe();
     for status in Status::ALL {
         let err = store.set_status("D-2", status).await.unwrap_err();
@@ -162,7 +162,7 @@ async fn set_status_on_a_doc_is_refused_whatever_the_status() {
         }
         assert!(err.to_string().contains("a doc has no lifecycle"), "{err}");
     }
-    assert_eq!(store.get("D-2").await.unwrap(), before, "nothing changed");
+    assert_eq!(store.get(SYS, "D-2").await.unwrap(), before, "nothing changed");
     assert!(rx.try_change().is_err(), "nothing was broadcast");
 }
 
@@ -178,17 +178,17 @@ async fn doc_is_no_other_kinds_status() {
     }
     let mut rx = store.subscribe();
     for (id, kind) in &kinds {
-        let before = store.get(id).await.unwrap();
+        let before = store.get(SYS, id).await.unwrap();
         let err = store.set_status(id, Status::Doc).await.unwrap_err();
         match &err {
             StoreError::DocStatusOnWork { id: named, kind: k } => assert_eq!((named, k), (id, kind)),
             other => panic!("{id}: expected DocStatusOnWork, got {other:?}"),
         }
         assert!(err.to_string().contains("Doc is a doc's own status"), "{err}");
-        assert_eq!(store.get(id).await.unwrap(), before, "{id}: nothing changed");
+        assert_eq!(store.get(SYS, id).await.unwrap(), before, "{id}: nothing changed");
     }
     assert!(rx.try_change().is_err(), "nothing was broadcast");
-    assert!(store.list(None, Some(Status::Doc), None).await.unwrap().is_empty());
+    assert!(store.list(SYS, None, Some(Status::Doc), None).await.unwrap().is_empty());
     for status in Status::LIFECYCLE {
         store.set_status("W-3", status).await.unwrap();
     }
@@ -213,8 +213,8 @@ async fn nothing_may_wait_on_a_doc() {
         let msg = err.to_string();
         assert!(msg.contains("'N-1' is a doc") && msg.contains("never completes"), "{msg}");
     }
-    assert_eq!(store.count(), 2, "nothing was created");
-    assert!(store.get("N-1").await.unwrap().unlocks.is_empty(), "the doc unlocks nothing");
+    assert_eq!(store.count(SYS), 2, "nothing was created");
+    assert!(store.get(SYS, "N-1").await.unwrap().unlocks.is_empty(), "the doc unlocks nothing");
 
     // A forward reference to N-4, then a doc that would be N-4.
     let waiting = store.create(new("N", Kind::Build, None, &["N-4"])).await.unwrap();
@@ -225,7 +225,7 @@ async fn nothing_may_wait_on_a_doc() {
         other => panic!("expected DocAwaited, got {other:?}"),
     }
     assert!(err.to_string().contains("'N-4' cannot be born a doc"), "{err}");
-    assert_eq!(store.count(), 3, "nothing was created");
+    assert_eq!(store.count(SYS), 3, "nothing was created");
     let resolved = store.create(work("N", None)).await.unwrap();
     assert_eq!((resolved.id.as_str(), resolved.unlocks.as_slice()), ("N-4", &ids(["N-3"])[..]));
 }
@@ -244,10 +244,10 @@ async fn the_ready_set_never_holds_a_doc_and_list_filters_on_doc() {
     for id in ["R-3", "R-4"] {
         store.set_status(id, Status::Ready).await.unwrap();
     }
-    let ready = ids(store.ready_set(None).await.unwrap().iter().map(|t| t.id.clone()));
+    let ready = ids(store.ready_set(SYS, None).await.unwrap().iter().map(|t| t.id.clone()));
     assert_eq!(ready, ["R-3", "R-4"]);
-    assert_eq!(ids(store.ready_set(Some("R")).await.unwrap().iter().map(|t| t.id.clone())), ready);
-    let page = store.ready_page(None, None, Some(1)).unwrap();
+    assert_eq!(ids(store.ready_set(SYS, Some("R")).await.unwrap().iter().map(|t| t.id.clone())), ready);
+    let page = store.ready_page(SYS, None, None, Some(1)).unwrap();
     assert_eq!((page.tickets[0].id.as_str(), page.remaining), ("R-3", 1));
     {
         let cache = store.tickets.read().unwrap();
@@ -256,10 +256,10 @@ async fn the_ready_set_never_holds_a_doc_and_list_filters_on_doc() {
         assert_eq!((cache.ready.held(&ShortcodeId::from("R"), Status::Doc), cache.ready.held(&ShortcodeId::from("R"), Status::Ready)), (2, 2));
     }
 
-    let docs = ids(store.list(None, Some(Status::Doc), None).await.unwrap().iter().map(|t| t.id.clone()));
+    let docs = ids(store.list(SYS, None, Some(Status::Doc), None).await.unwrap().iter().map(|t| t.id.clone()));
     assert_eq!(docs, ["R-1", "R-2"]);
     let page = store
-        .page(PageQuery { status: Some(Status::Doc), limit: Some(1), ..PageQuery::default() })
+        .page(SYS, PageQuery { status: Some(Status::Doc), limit: Some(1), ..PageQuery::default() })
         .unwrap();
     assert_eq!((page.tickets[0].id.as_str(), page.next.as_deref(), page.remaining), ("R-1", Some("R-1"), 1));
 }
@@ -284,12 +284,12 @@ async fn roll_ups_ignore_docs_and_count_them_apart() {
         group(&store, "P"),
         Group { epic: "P".into(), shortcode: "P".into(), address: "hypermemetic:P".into(), total: 4, done: 0, docs: 2, root: Some("P-1".into()), root_row: Some(scope_row(Status::Pending)), host: None }
     );
-    assert_eq!(store.groups(), tests::nav(&store));
+    assert_eq!(store.groups(SYS), tests::nav(&store));
 
     let mut rx = store.subscribe();
     for id in ["P-2", "P-3", "P-6", "P-1"] {
         store.set_status(id, Status::Complete).await.unwrap();
-        assert_eq!(store.groups(), tests::nav(&store), "{id}");
+        assert_eq!(store.groups(SYS), tests::nav(&store), "{id}");
     }
     let moved = group_changes(&mut rx);
     assert_eq!(
@@ -348,7 +348,7 @@ async fn everything_else_works_for_a_doc() {
         other => panic!("expected Amended, got {other:?}"),
     }
     assert!(matches!(rx.try_change().unwrap(), Change::Amended { .. }));
-    assert_eq!(store.get("E-2").await.unwrap().body, "## Findings\n\nnone");
+    assert_eq!(store.get(SYS, "E-2").await.unwrap().body, "## Findings\n\nnone");
 
     match store.link_commits("E-2", vec!["77df9a0".into()]).await.unwrap() {
         Change::CommitsLinked { ticket, added } => {
@@ -368,12 +368,12 @@ async fn everything_else_works_for_a_doc() {
     store.set_parent("E-2", "E-3").await.unwrap();
     assert_eq!(children(&store, "E-1"), ["E-3"]);
     assert_eq!(children(&store, "E-3"), ["E-2"]);
-    assert_eq!(store.get("E-3").await.unwrap().child_count, 1);
+    assert_eq!(store.get(SYS, "E-3").await.unwrap().child_count, 1);
     let g = group(&store, "E");
     assert_eq!((g.total, g.done, g.docs), (1, 0, 2));
-    assert_eq!(store.groups(), tests::nav(&store));
+    assert_eq!(store.groups(SYS), tests::nav(&store));
 
-    let found = store.find_page("manifest", None, None).unwrap();
+    let found = store.find_page(SYS, "manifest", None, None).unwrap();
     assert_eq!(ids(found.tickets.iter().map(|t| t.id.clone())), ["E-2"]);
     assert!(store.extents_text().contains(&("E".to_string(), 3)));
 }
@@ -395,9 +395,9 @@ async fn a_file_with_docs_verifies_and_reopens_as_it_was() {
     store.create(doc("LONE", None)).await.unwrap(); // LONE-1, docs alone
     store.set_status("MAN-3", Status::Ready).await.unwrap();
     store.set_status("HOST-2", Status::Complete).await.unwrap();
-    let groups = store.groups();
+    let groups = store.groups(SYS);
     assert_eq!(groups, tests::nav(&store));
-    let ready = ids(store.ready_set(None).await.unwrap().iter().map(|t| t.id.clone()));
+    let ready = ids(store.ready_set(SYS, None).await.unwrap().iter().map(|t| t.id.clone()));
     assert_eq!(ready, ["MAN-3"]);
     drop(store);
 
@@ -410,11 +410,11 @@ async fn a_file_with_docs_verifies_and_reopens_as_it_was() {
     assert_eq!(form.groups[&ShortcodeId::from("LONE")].roll, (0, 0, 1));
 
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.groups(), groups, "the reopen reads what was stored");
-    assert_eq!(ids(store.ready_set(None).await.unwrap().iter().map(|t| t.id.clone())), ready);
+    assert_eq!(store.groups(SYS), groups, "the reopen reads what was stored");
+    assert_eq!(ids(store.ready_set(SYS, None).await.unwrap().iter().map(|t| t.id.clone())), ready);
     let lone = groups.iter().find(|g| g.epic == "LONE").unwrap();
     assert_eq!((lone.total, lone.docs, lone.drawn()), (0, 1, true));
-    assert_eq!(store.get("MAN-1").await.unwrap().status, Status::Doc);
+    assert_eq!(store.get(SYS, "MAN-1").await.unwrap().status, Status::Doc);
 }
 
 /// The file a binary from before SDLC-11 leaves — derived state in form 2:
@@ -430,7 +430,7 @@ async fn a_file_in_form_2_gains_the_docs_columns_once_on_its_first_open() {
     store.create(work("OLD", None)).await.unwrap(); // OLD-2
     store.create(new("SUB", Kind::Scope, Some("OLD-2"), &[])).await.unwrap(); // SUB-1, a cross tree
     store.set_status("OLD-2", Status::Complete).await.unwrap();
-    let groups = store.groups();
+    let groups = store.groups(SYS);
     drop(store);
     Connection::open(&path)
         .unwrap()
@@ -443,7 +443,7 @@ async fn a_file_in_form_2_gains_the_docs_columns_once_on_its_first_open() {
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 2")));
 
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.groups(), groups, "built again: every number as it was");
+    assert_eq!(store.groups(SYS), groups, "built again: every number as it was");
     assert_eq!(
         stored::state(&Connection::open(&path).unwrap()).unwrap(),
         State::Current,

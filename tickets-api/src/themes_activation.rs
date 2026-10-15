@@ -252,11 +252,14 @@ impl Themes {
         let store = self.store.clone();
         let admitted = self.access.verify_call(auth, &reach);
         stream! {
-            if let Err(message) = admitted {
-                yield ThemesEvent::Error { message };
-                return;
-            }
-            match store.theme_for(&id).await {
+            let caller = match admitted {
+                Ok(caller) => caller,
+                Err(message) => {
+                    yield ThemesEvent::Error { message };
+                    return;
+                }
+            };
+            match store.theme_for(&caller, &id).await {
                 Ok((id, regions, levels)) => yield ThemesEvent::Regions { id, regions, levels },
                 Err(StoreError::NotFound(_)) => yield ThemesEvent::Error { message: format!("no ticket {id}") },
                 Err(e) => yield refused(e),

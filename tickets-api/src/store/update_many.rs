@@ -160,7 +160,7 @@ impl Store {
         may(&ids).map_err(StoreError::Invalid)?;
         let (mut plans, mut refusals, mut unchanged) = (Vec::new(), Vec::new(), Vec::new());
         for id in &ids {
-            let current = match self.get(id).await {
+            let current = match self.get_unscoped(id).await {
                 Ok(t) => t,
                 Err(e) => {
                     refusals.push((id.clone(), vec![e]));
@@ -186,7 +186,7 @@ impl Store {
         if plans.is_empty() {
             let mut tickets = Vec::with_capacity(ids.len());
             for id in &ids {
-                tickets.push(self.get(id).await?);
+                tickets.push(self.get_unscoped(id).await?);
             }
             return Ok(UpdatedMany { tickets, ids: Vec::new(), unchanged: unchanged.into_iter().map(String::from).collect::<Vec<String>>(), changed: Vec::new() });
         }
@@ -235,7 +235,7 @@ impl Store {
                 if max > UPDATE_MANY_CEILING {
                     return Err(StoreError::Invalid(format!("max {max}: one write takes at most {UPDATE_MANY_CEILING}")));
                 }
-                let page = self.find_filtered("", &lens, None, Some(max as u32))?;
+                let page = self.find_filtered_unscoped("", &lens, None, Some(max as u32))?;
                 if page.remaining > 0 {
                     let n = page.tickets.len() as u64 + page.remaining;
                     return Err(StoreError::Invalid(format!(
@@ -307,7 +307,7 @@ impl Store {
         if steps.iter().all(|(_, m)| m.nothing()) {
             let mut answer = Vec::with_capacity(steps.len());
             for (row, moved) in steps {
-                answer.push(moved.change(self.get(&row.id).await?));
+                answer.push(moved.change(self.get_unscoped(&row.id).await?));
             }
             return Ok(answer);
         }

@@ -28,6 +28,9 @@ fn at(now: i64) -> Clock {
 
 fn row(epic: &str, seq: u32, status: Status, created: i64, updated: i64) -> Row {
     Row {
+        hidden_blocked_by: 0,
+        hidden_unlocks: 0,
+        parent_hidden: false,
         id: format!("{epic}-{seq}").into(),
         epic: epic.into(),
         shortcode: epic.into(),
@@ -84,7 +87,7 @@ fn scope(epic: &str) -> NewTicket {
 fn ids(store: &Store, text: &str, clock: Clock) -> Vec<String> {
     let lens = Lens::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")).with_clock(clock);
     let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
-    store.filtered_page(&q, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
+    store.filtered_page(SYS, &q, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
 }
 
 /// Random tickets — born over two months, some from before the log (no
@@ -249,7 +252,7 @@ async fn every_write_keeps_the_times_and_verify_checks_them() {
     };
     assert!(fresh(&store).is_empty(), "{:?}", fresh(&store));
     for id in ["T-1", "T-2", "T-3", "T-4"] {
-        let h = store.history(id).unwrap();
+        let h = store.history(SYS, id).unwrap();
         let last = h.own.iter().rev().find(|t| t.field == TransitionField::Status).unwrap();
         assert_eq!(h.since, Some((last.at_unix, true)), "{id}");
     }
@@ -306,9 +309,9 @@ async fn the_acceptance_filters_on_a_file_from_before_the_log() {
     assert_eq!(ids(&store, "left Pending this week", clock.clone()), ["O-5"]);
     assert_eq!(ids(&store, "kind build and status Pending for over 2w", clock.clone()), ["O-2"], "O-3's status since at least the log's start");
     assert_eq!(ids(&store, "status Pending for under 2w", clock.clone()), ["O-3", "O-4"]);
-    let h = store.history("O-2").unwrap();
+    let h = store.history(SYS, "O-2").unwrap();
     assert_eq!(h.since, Some((now - 30 * DAY, false)), "status since at least its last update");
-    assert_eq!(store.history("O-3").unwrap().since, Some((now - 2 * DAY, false)));
+    assert_eq!(store.history(SYS, "O-3").unwrap().since, Some((now - 2 * DAY, false)));
     drop(store);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
 }
@@ -332,7 +335,7 @@ async fn crossing_a_length_moves_a_watch_with_no_write() {
     store.create(scope("W")).await.unwrap();
     store.create(n).await.unwrap();
     let born = store.row("W-2").unwrap().0.created_unix;
-    let since = store.history("W-2").unwrap().since.unwrap().0;
+    let since = store.history(SYS, "W-2").unwrap().since.unwrap().0;
     let over = Lens::parse("kind build and status Pending for over 1h").unwrap().with_clock(at(born));
     assert_eq!(store.next_boundary(&over), Some(since + 3_600 + 1));
     assert!(store.aged(&over, born, since + 3_600, None).is_empty(), "not yet over the hour");
@@ -349,6 +352,6 @@ async fn crossing_a_length_moves_a_watch_with_no_write() {
     assert!(store.next_boundary(&day).is_some_and(|t| t > born && t <= born + DAY), "tomorrow's start");
     // A status write moves `since`: the boundary follows it.
     store.set_status("W-2", Status::Ready).await.unwrap();
-    let moved = store.history("W-2").unwrap().since.unwrap().0;
+    let moved = store.history(SYS, "W-2").unwrap().since.unwrap().0;
     assert_eq!(store.next_boundary(&over), Some(moved + 3_600 + 1));
 }

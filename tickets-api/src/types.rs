@@ -397,10 +397,23 @@ pub struct Ticket {
     pub blocked_by: Vec<String>,
     /// Ticket ids that can start once this one completes.
     pub unlocks: Vec<String>,
+    /// ACCESS-10: how many of `blocked_by` the reader may not see — dropped
+    /// from the list and counted here, so readiness stays honest. Omitted
+    /// (0) for a reader who sees them all.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub hidden_blocked_by: u32,
+    /// ACCESS-10: how many of `unlocks` the reader may not see, as
+    /// `hidden_blocked_by`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub hidden_unlocks: u32,
     /// AGS-19: the ticket this one is an output of, if any. Any epic; the
     /// parent must exist at creation and the chain is acyclic.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<TicketId>,
+    /// ACCESS-10: the parent is one the reader may not see — `parent` is
+    /// then none. Omitted (false) otherwise.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub parent_hidden: bool,
     /// SCALE-4: how many tickets name this one as their `parent` — derived
     /// and kept by the store. It replaces AGS-19's `children`, the list of
     /// every child id, which made a shortcode root's row (every ticket of
@@ -453,6 +466,16 @@ pub struct Ticket {
     pub moved_from: Vec<String>,
 }
 
+/// ACCESS-10: a count of hidden ids that is none — omitted on the wire.
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// ACCESS-10: a flag that is unset — omitted on the wire.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// MNG-9: a ticket row without its body — every field of [`Ticket`]
 /// except `body`.
 ///
@@ -480,9 +503,19 @@ pub struct TicketSummary {
     pub kind: Kind,
     pub severity: Option<Severity>,
     pub parent: Option<TicketId>,
+    /// ACCESS-10: as on [`Ticket`] — omitted unless the reader may not see
+    /// the parent.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub parent_hidden: bool,
     pub child_count: u64,
     pub blocked_by: Vec<String>,
     pub unlocks: Vec<String>,
+    /// ACCESS-10: as on [`Ticket`].
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub hidden_blocked_by: u32,
+    /// ACCESS-10: as on [`Ticket`].
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub hidden_unlocks: u32,
     /// SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
     /// the ticket page all have it without a `get`.
     pub commits: Vec<String>,
@@ -518,9 +551,12 @@ impl From<Ticket> for TicketSummary {
             kind: t.kind,
             severity: t.severity,
             parent: t.parent,
+            parent_hidden: t.parent_hidden,
             child_count: t.child_count,
             blocked_by: t.blocked_by,
             unlocks: t.unlocks,
+            hidden_blocked_by: t.hidden_blocked_by,
+            hidden_unlocks: t.hidden_unlocks,
             commits: t.commits,
             path: t.path,
             placement: t.placement,
@@ -2095,6 +2131,9 @@ mod tests {
             json!({"type": "wave_counts", "waves": [2, 0, 1], "missing": 1, "done": 4})
         );
         let summary = TicketSummary {
+            hidden_blocked_by: 0,
+            hidden_unlocks: 0,
+            parent_hidden: false,
             labels: Vec::new(),
             id: "W-2".into(),
             epic: "W".into(),
@@ -2167,6 +2206,9 @@ mod tests {
         // Every optional field set, so `Ticket`'s skip_serializing_if
         // does not hide one from the comparison.
         let ticket = Ticket {
+            hidden_blocked_by: 0,
+            hidden_unlocks: 0,
+            parent_hidden: false,
             id: "SUM-1".into(),
             epic: "SUM".into(),
             shortcode: "SUM".into(),

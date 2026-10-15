@@ -1,11 +1,12 @@
 //! ACCESS-9: **`System`** — the capability of acting for no user: the
 //! builder's startup, `--verify-derived`, seeding, the access layer's own
-//! reads of the grants (and, once ACCESS-10 makes every store read take a
-//! [`crate::access::VerifiedUser`] or this, Walk's spawned reads and a
-//! watch's membership).
+//! reads of the grants. ACCESS-10: every store read takes a
+//! [`crate::access::VerifiedUser`] or this ([`super::Reader`]); the
+//! system's reads answer everything.
 //!
 //! Only this module mints one, once per store, at its open; whoever opened
-//! the store takes it ([`Store::system`]) and hands it on. No `Clone`, no
+//! the store takes it ([`Store::system`]) and hands it on (the builder to
+//! the access layer, [`crate::access::Access::attach_with`]). No `Clone`, no
 //! `Default`, no `Deserialize`, no public constructor:
 //!
 //! ```compile_fail
@@ -29,10 +30,15 @@ impl System {
 
     /// A `System` for a test in another module (compiled out of the server).
     #[cfg(any(test, feature = "test-support"))]
-    pub fn for_tests() -> Self {
+    pub const fn for_tests() -> Self {
         Self(())
     }
 }
+
+/// ACCESS-10: the [`System`] a test of this crate reads as — `store.get(SYS,
+/// id)` — [`System::for_tests`], once.
+#[cfg(test)]
+pub(crate) const SYS: &System = &System::for_tests();
 
 impl Store {
     /// ACCESS-9: the store's one [`System`], to whoever opened it — `Some`

@@ -775,6 +775,9 @@ mod tests {
     fn ticket(id: &str, title: &str, body: &str) -> Ticket {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         Ticket {
+            hidden_blocked_by: 0,
+            hidden_unlocks: 0,
+            parent_hidden: false,
             labels: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),

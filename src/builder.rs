@@ -121,10 +121,13 @@ pub async fn build_rpc_login(
     let started = Instant::now();
     // MENGER-15: and its cap on a body (`--max-body-bytes`).
     let store = tokio::task::spawn_blocking(move || Store::open(&path)).await??.with_body_max(body_max);
+    // ACCESS-10: the store's System — the builder reads as it, then hands
+    // it to the access layer.
+    let system = store.system().expect("a store just opened holds its System");
     tracing::info!("database: {}", db_path.display());
     tracing::info!(
         "loaded {} tickets from the database in {:.1} ms",
-        store.count(),
+        store.count(&system),
         started.elapsed().as_secs_f64() * 1000.0
     );
 
@@ -150,7 +153,7 @@ pub async fn build_rpc_login(
                         r.edges,
                         r.generate.as_secs_f64() * 1000.0,
                         r.persist.as_secs_f64() * 1000.0,
-                        store.count()
+                        store.count(&system)
                     );
                 }
                 Err(StoreError::SeedRefused { existing }) => anyhow::bail!(
@@ -174,7 +177,7 @@ pub async fn build_rpc_login(
     // past that now, and every day after, inside the server.
     purge_daily(Arc::clone(&store));
     // IDENTITY-21: the members that decide, from the same store.
-    access.attach(Arc::clone(&store));
+    access.attach_with(Arc::clone(&store), system);
     let mut hub = DynamicHub::new("menger")
         .register(Tickets::with_access(Arc::clone(&store), access.clone()))
         .register(Comments::with_access(Arc::clone(&store), access.clone()))

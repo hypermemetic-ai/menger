@@ -46,7 +46,7 @@ fn entry(c: QueueChange) -> (QueueEntry, QueueAction) {
 }
 
 fn count(store: &Store, filter: &str) -> u64 {
-    store.counts(&Lens::parse(filter).unwrap()).into_iter().map(|(_, n)| n).sum()
+    store.counts(SYS, &Lens::parse(filter).unwrap()).into_iter().map(|(_, n)| n).sum()
 }
 
 #[tokio::test]
@@ -61,8 +61,8 @@ async fn queueing_is_one_entry_raised_never_lowered() {
     // Higher: raised.
     let (e, a) = entry(store.queue_by("Q-3", Urgency::Now, "prod is down", None, act("idp:ci")).await.unwrap());
     assert_eq!((e.urgency, a, e.queued_unix), (Urgency::Now, QueueAction::Raised, first), "the oldest stays oldest");
-    assert_eq!(store.queued(true, 0, |_| true).len(), 1, "one entry a ticket");
-    let history = store.queue_history("Q-3");
+    assert_eq!(store.queued(SYS, true, 0).len(), 1, "one entry a ticket");
+    let history = store.queue_history(SYS, "Q-3");
     let seen: Vec<(QueueAction, Urgency, &str)> = history.iter().map(|r| (r.action, r.urgency, r.actor.as_str())).collect();
     assert_eq!(
         seen,
@@ -85,8 +85,8 @@ async fn a_queue_entry_is_refused_without_its_parts() {
     assert!(matches!(store.queue_by("Q-99", Urgency::Now, "x", None, act("a")).await.unwrap_err(), StoreError::NotFound(_)));
     let e = store.snooze_by("Q-3", 10, act("a")).await.unwrap_err();
     assert!(e.to_string().contains("not queued"), "{e}");
-    assert!(store.queued(true, 0, |_| true).is_empty(), "nothing written");
-    assert!(store.queue_history("Q-2").is_empty());
+    assert!(store.queued(SYS, true, 0).is_empty(), "nothing written");
+    assert!(store.queue_history(SYS, "Q-2").is_empty());
 }
 
 #[tokio::test]
@@ -96,9 +96,9 @@ async fn the_queue_is_most_urgent_first_then_oldest() {
     store.queue_by("Q-4", Urgency::Whenever, "b", None, act("a")).await.unwrap();
     store.queue_by("Q-2", Urgency::Blocking, "c", Some("landing"), act("a")).await.unwrap();
     store.queue_by("Q-1", Urgency::Today, "d", None, act("a")).await.unwrap();
-    let ids: Vec<String> = store.queued(true, 0, |_| true).into_iter().map(|(e, _)| e.ticket).collect();
+    let ids: Vec<String> = store.queued(SYS, true, 0).into_iter().map(|(e, _)| e.ticket).collect();
     assert_eq!(ids, ["Q-2", "Q-3", "Q-1", "Q-4"]);
-    let ids: Vec<String> = store.queued(true, 0, |id| id != "Q-3").into_iter().map(|(e, _)| e.ticket).collect();
+    let ids: Vec<String> = store.queued(SYS, true, 0).into_iter().map(|(e, _)| e.ticket).filter(|id| id != "Q-3").collect();
     assert_eq!(ids, ["Q-2", "Q-1", "Q-4"], "what the caller cannot see is left out");
 }
 
@@ -110,8 +110,8 @@ async fn unqueue_and_snooze() {
     let until = entry.snoozed_until_unix.expect("snoozed");
     let now = chrono::Utc::now().timestamp();
     assert!((now + 590..=now + 601).contains(&until), "ten minutes: {until} vs {now}");
-    assert!(store.queued(false, now, |_| true).is_empty(), "off the alerting surfaces");
-    assert_eq!(store.queued(false, until, |_| true).len(), 1, "back on time");
+    assert!(store.queued(SYS, false, now).is_empty(), "off the alerting surfaces");
+    assert_eq!(store.queued(SYS, false, until).len(), 1, "back on time");
     assert_eq!(count(&store, "queued"), 1, "still queued");
     assert!(store.snooze_by("Q-3", 0, act("b")).await.is_err() && store.snooze_by("Q-3", 7 * 24 * 60 + 1, act("b")).await.is_err());
     // A requeue ends the snooze.
@@ -120,10 +120,10 @@ async fn unqueue_and_snooze() {
     let Some(QueueChange::Unqueued { id, action, by, .. }) = store.unqueue_by("Q-3", act("c")).await.unwrap() else { panic!() };
     assert_eq!((id.as_str(), action, by.as_str()), ("Q-3", QueueAction::Unqueued, "c"));
     assert!(store.unqueue_by("Q-3", act("c")).await.unwrap().is_none(), "not queued: nothing");
-    assert!(store.queue_entry("Q-3").is_none());
-    let actions: Vec<QueueAction> = store.queue_history("Q-3").iter().map(|r| r.action).collect();
+    assert!(store.queue_entry(SYS, "Q-3").is_none());
+    let actions: Vec<QueueAction> = store.queue_history(SYS, "Q-3").iter().map(|r| r.action).collect();
     assert_eq!(actions, [QueueAction::Queued, QueueAction::Snoozed, QueueAction::Requeued, QueueAction::Unqueued]);
-    assert_eq!(store.queue_history("Q-3")[1].until_unix, Some(until));
+    assert_eq!(store.queue_history(SYS, "Q-3")[1].until_unix, Some(until));
 }
 
 fn entry_of(c: QueueChange) -> (QueueEntry, QueueAction) {
@@ -138,10 +138,10 @@ async fn closing_the_named_input_unqueues() {
     let mut rx = store.subscribe();
     // An answer does not: the agent acts, then closes.
     store.answer("Q-2", "landing", InputValue::Choice { option: "archive".into() }, None, AnswerSource::App).await.unwrap();
-    assert!(store.queue_entry("Q-2").is_some(), "answered, still queued");
+    assert!(store.queue_entry(SYS, "Q-2").is_some(), "answered, still queued");
     store.close_input("Q-2", "landing").await.unwrap();
-    assert!(store.queue_entry("Q-2").is_none(), "closed: out of the queue");
-    assert!(store.queue_entry("Q-3").is_some(), "another ticket's entry stays");
+    assert!(store.queue_entry(SYS, "Q-2").is_none(), "closed: out of the queue");
+    assert!(store.queue_entry(SYS, "Q-3").is_some(), "another ticket's entry stays");
     let mut heard = Vec::new();
     while let Ok(c) = rx.try_change() {
         heard.push(c);
@@ -151,10 +151,10 @@ async fn closing_the_named_input_unqueues() {
         _ => None,
     });
     assert_eq!(unq, Some(("Q-2".into(), QueueAction::Closed, crate::types::SYSTEM_ACTOR.into())));
-    let last = store.queue_history("Q-2").pop().unwrap();
+    let last = store.queue_history(SYS, "Q-2").pop().unwrap();
     assert_eq!((last.action, last.reason.as_deref()), (QueueAction::Closed, Some("its input `landing` was closed")));
     // Closing an input no entry names is no queue write.
-    let ids: Vec<String> = store.queued(true, 0, |_| true).into_iter().map(|(e, _)| e.ticket).collect();
+    let ids: Vec<String> = store.queued(SYS, true, 0).into_iter().map(|(e, _)| e.ticket).collect();
     assert_eq!(ids, ["Q-3"]);
     // A closed input cannot be named again.
     let e = store.queue_by("Q-2", Urgency::Blocking, "again", Some("landing"), act("a")).await.unwrap_err();
@@ -209,15 +209,15 @@ async fn the_queue_survives_a_reopen() {
         store.unqueue_by("Q-1", act("idp:b")).await.unwrap();
     }
     let store = Store::open(&path).unwrap();
-    let rows = store.queued(true, 0, |_| true);
+    let rows = store.queued(SYS, true, 0);
     assert_eq!(rows.len(), 1);
     assert_eq!((rows[0].0.ticket.as_str(), rows[0].0.urgency, rows[0].0.input.as_deref()), ("Q-2", Urgency::Blocking, Some("landing")));
     assert_eq!(count(&store, "queued blocking"), 1);
-    assert_eq!(store.queue_history("Q-1").len(), 3);
+    assert_eq!(store.queue_history(SYS, "Q-1").len(), 3);
     // The log's ids go on from where they were.
     store.queue_by("Q-1", Urgency::Now, "again", None, act("idp:a")).await.unwrap();
-    let ids: Vec<u64> = store.queue_history("Q-1").iter().map(|r| r.id).collect();
+    let ids: Vec<u64> = store.queue_history(SYS, "Q-1").iter().map(|r| r.id).collect();
     assert_eq!(ids.len(), 4);
     assert!(ids.windows(2).all(|w| w[0] < w[1]), "{ids:?}");
-    assert!(store.queue_history("Q-2")[0].id < ids[0]);
+    assert!(store.queue_history(SYS, "Q-2")[0].id < ids[0]);
 }

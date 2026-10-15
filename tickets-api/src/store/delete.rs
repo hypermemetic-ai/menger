@@ -737,19 +737,13 @@ impl Store {
     ///
     /// ORG-3: by any address the resolver takes to it (today's ids are
     /// pinned, deleted or not).
-    pub fn tombstone(&self, id: &str) -> Option<Tombstone> {
+    pub(super) fn tombstone_unscoped(&self, id: &str) -> Option<Tombstone> {
         let cache = self.tickets.read().expect("store lock poisoned");
         let key = match cache.find_ticket(id, shortcodes::OrgReach::All) {
             shortcodes::Found::One(key) => key,
             _ => crate::address::folded(id),
         };
         cache.tombstones.get(&key).cloned()
-    }
-
-    /// ACT-5: the sequences below `last` that `epic` does not hold
-    /// ([`Cache::holes`]).
-    pub fn holes(&self, epic: &ShortcodeId, last: u32) -> Vec<u32> {
-        self.tickets.read().expect("store lock poisoned").holes(epic, last)
     }
 
     /// ACT-5: what `extents` answers — each shortcode's numbers as given out,
@@ -760,7 +754,7 @@ impl Store {
     /// not dense; nothing else past [`Store::extents`].
     ///
     /// ORG-3: each with its letters, beside its identity.
-    pub fn extents_holed(&self) -> Vec<(ShortcodeId, crate::address::Code, u32, Vec<u32>)> {
+    pub(super) fn extents_holed_unscoped(&self) -> Vec<(ShortcodeId, crate::address::Code, u32, Vec<u32>)> {
         let cache = self.tickets.read().expect("store lock poisoned");
         let mut last: BTreeMap<&ShortcodeId, u32> = cache.ids.last_seqs().collect();
         for (epic, seq) in &cache.tombstones.last {

@@ -44,6 +44,9 @@ fn write_titled(path: &Path, rows: &[(&str, &str)]) {
         db::upsert(
             &conn,
             &Ticket {
+                hidden_blocked_by: 0,
+                hidden_unlocks: 0,
+                parent_hidden: false,
                 labels: Vec::new(),
                 id: (*id).into(),
                 epic: epic.into(),
@@ -164,7 +167,7 @@ fn the_server_agrees_with_every_case_the_palettes_tests_name() {
     write_titled(&path, &tickets.into_iter().collect::<Vec<_>>());
     let store = Store::open(&path).unwrap();
     for (expected, code, title, query) in &cases {
-        let page = store.find_page(query, None, None).unwrap();
+        let page = store.find_page(SYS, query, None, None).unwrap();
         assert_eq!(found(&page).contains(&code.as_str()), *expected, "find {query:?} and {code} {title:?}");
     }
 }
@@ -217,19 +220,19 @@ fn find_answers_the_tickets_examples() {
     );
     let store = Store::open(&path).unwrap();
 
-    let page = store.find_page("ags-1", None, None).unwrap();
+    let page = store.find_page(SYS, "ags-1", None, None).unwrap();
     assert_eq!(found(&page), ["AGS-1", "AGS-18"], "in that order");
     assert_eq!((page.next, page.remaining), (None, 0));
 
-    let page = store.find_page("ticket page", None, None).unwrap();
+    let page = store.find_page(SYS, "ticket page", None, None).unwrap();
     assert_eq!(found(&page), ["MFE-7"]);
 
-    let page = store.find_page("zzz", None, None).unwrap();
+    let page = store.find_page(SYS, "zzz", None, None).unwrap();
     assert!(page.tickets.is_empty());
     assert_eq!((page.next, page.remaining), (None, 0), "no rows and page {{ next: null, remaining: 0 }}");
 
     // Ids and titles only: every body holds "needle".
-    assert!(store.find_page("needle", None, None).unwrap().tickets.is_empty());
+    assert!(store.find_page(SYS, "needle", None, None).unwrap().tickets.is_empty());
 }
 
 /// What `find` must answer, worked out from the whole store as a list:
@@ -237,7 +240,7 @@ fn find_answers_the_tickets_examples() {
 /// ticket that does not match is still one), the first `limit` the page,
 /// the rest counted.
 fn oracle(store: &Store, query: &str, after: Option<&str>, limit: Option<u32>) -> (Vec<String>, Option<String>, u64) {
-    let all = store.page(PageQuery::default()).unwrap().tickets;
+    let all = store.page(SYS, PageQuery::default()).unwrap().tickets;
     let start = match after {
         None => 0,
         Some(id) => all.iter().position(|t| t.id == id.to_ascii_uppercase()).expect("a cursor that names a ticket") + 1,
@@ -271,7 +274,7 @@ fn find_pages_every_match_exactly_once_by_mng9s_rules() {
             into_existing: false,
         })
         .unwrap();
-    let all = store.page(PageQuery::default()).unwrap().tickets;
+    let all = store.page(SYS, PageQuery::default()).unwrap().tickets;
     let (first_epic, root_title) = (all[0].epic.clone(), all[0].title.clone());
     let queries = [
         "".to_string(),
@@ -290,7 +293,7 @@ fn find_pages_every_match_exactly_once_by_mng9s_rules() {
         let mut walked: Vec<String> = Vec::new();
         let mut after: Option<String> = None;
         loop {
-            let page = store.find_page(query, after.as_deref(), Some(2)).unwrap();
+            let page = store.find_page(SYS, query, after.as_deref(), Some(2)).unwrap();
             assert!(page.tickets.len() <= 2);
             walked.extend(page.tickets.iter().map(|t| t.id.to_string()));
             assert_eq!(page.remaining as usize, expected.len() - walked.len(), "{query:?} after {after:?}");
@@ -308,7 +311,7 @@ fn find_pages_every_match_exactly_once_by_mng9s_rules() {
         for cursor in [None, Some(all[0].id.as_str()), Some(all[700].id.as_str()), Some(all[all.len() - 1].id.as_str())] {
             for limit in [None, Some(0), Some(1), Some(50)] {
                 assert_eq!(
-                    answered(store.find_page(query, cursor, limit).unwrap()),
+                    answered(store.find_page(SYS, query, cursor, limit).unwrap()),
                     oracle(&store, query, cursor, limit),
                     "{query:?} after {cursor:?} limit {limit:?}"
                 );
@@ -317,13 +320,13 @@ fn find_pages_every_match_exactly_once_by_mng9s_rules() {
     }
 
     // Blank is the unfiltered order, by arithmetic; padding and case fold.
-    let unfiltered = |after: Option<&str>| store.page(PageQuery { after, limit: Some(50), ..PageQuery::default() }).unwrap();
+    let unfiltered = |after: Option<&str>| store.page(SYS, PageQuery { after, limit: Some(50), ..PageQuery::default() }).unwrap();
     for blank in ["", " ", "\t \n"] {
-        assert_eq!(store.find_page(blank, None, Some(50)).unwrap(), unfiltered(None));
-        assert_eq!(store.find_page(blank, Some(all[9].id.as_str()), Some(50)).unwrap(), unfiltered(Some(all[9].id.as_str())));
+        assert_eq!(store.find_page(SYS, blank, None, Some(50)).unwrap(), unfiltered(None));
+        assert_eq!(store.find_page(SYS, blank, Some(all[9].id.as_str()), Some(50)).unwrap(), unfiltered(Some(all[9].id.as_str())));
     }
-    assert_eq!(store.find_page("  under LOAD ", None, None).unwrap(), store.find_page("under load", None, None).unwrap());
+    assert_eq!(store.find_page(SYS, "  under LOAD ", None, None).unwrap(), store.find_page(SYS, "under load", None, None).unwrap());
 
-    assert!(matches!(store.find_page("the", Some("NO-SUCH-1"), Some(2)), Err(StoreError::CursorNotFound(id)) if id == "NO-SUCH-1"));
-    assert!(matches!(store.find_page("", Some("no-such-1"), None), Err(StoreError::CursorNotFound(_))));
+    assert!(matches!(store.find_page(SYS, "the", Some("NO-SUCH-1"), Some(2)), Err(StoreError::CursorNotFound(id)) if id == "NO-SUCH-1"));
+    assert!(matches!(store.find_page(SYS, "", Some("no-such-1"), None), Err(StoreError::CursorNotFound(_))));
 }

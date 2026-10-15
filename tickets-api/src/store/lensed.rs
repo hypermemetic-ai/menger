@@ -76,7 +76,7 @@ pub fn ready_and(filter: &Filter, epic: Option<String>) -> Result<Filtered, Stor
 }
 
 /// The whole store under `lens`: no shortcode, status or parent beside it.
-fn everywhere(lens: &Lens) -> Filtered {
+pub(super) fn everywhere(lens: &Lens) -> Filtered {
     Filtered {
         lens: lens.clone(),
         epic: None,
@@ -173,7 +173,7 @@ impl Store {
     /// on the candidates the filter's cells admit (FILTER-3 §6.9). A blank
     /// query is every ticket the filter admits — FILTER-4's filtered page,
     /// by position.
-    pub fn find_filtered(&self, query: &str, lens: &Lens, after: Option<&str>, limit: Option<u32>) -> Result<Page, StoreError> {
+    pub(super) fn find_filtered_unscoped(&self, query: &str, lens: &Lens, after: Option<&str>, limit: Option<u32>) -> Result<Page, StoreError> {
         let after = after.map(str::to_ascii_uppercase);
         let cache = self.tickets.read().expect("store lock poisoned");
         let q = everywhere(lens);
@@ -213,19 +213,11 @@ impl Store {
         })
     }
 
-    /// FILTER-15: a page of `ready_set { epic, filter }` — `q` from
-    /// [`ready_and`] — cut as `ready_set` cuts one: `after` a position,
-    /// `limit`, an exact `remaining`, no `first`.
-    pub fn ready_filtered_page(&self, q: &Filtered, after: Option<&str>, limit: Option<u32>) -> Result<Page, StoreError> {
-        let page = self.filtered_page(q, after, None, limit)?;
-        Ok(Page { first: None, ..page })
-    }
-
     /// FILTER-15: `inputs { ticket, epic, state, filter }` — what
     /// [`Store::inputs`] answers, of the tickets `lens` admits: each ticket
     /// that declares an input is one lookup in the admitted bitmaps. The
     /// same `NotFound` for a `ticket` naming no ticket.
-    pub fn inputs_filtered(
+    pub(super) fn inputs_filtered_unscoped(
         &self,
         ticket: Option<&str>,
         epic: Option<&str>,
@@ -247,7 +239,7 @@ impl Store {
     /// admitted. A path address (`SHORTCODE/path`) names its ticket as `get`
     /// takes it. How many ids one call may ask ([`MEMBER_MAX`]) is the
     /// wire's to hold.
-    pub fn member(&self, ids: &[String], lens: &Lens) -> Vec<bool> {
+    pub(super) fn member_unscoped(&self, ids: &[String], lens: &Lens) -> Vec<bool> {
         let cache = self.tickets.read().expect("store lock poisoned");
         let view = view_lenient(&cache, &everywhere(lens));
         ids.iter()
@@ -257,7 +249,7 @@ impl Store {
 
     /// FILTER-24: the id of the ticket `id` names, as `member` takes it (a
     /// path address, or an id in any case) — `None` when it names none.
-    pub fn ticket_id(&self, id: &str) -> Option<String> {
+    pub(crate) fn ticket_id(&self, id: &str) -> Option<String> {
         let cache = self.tickets.read().expect("store lock poisoned");
         let key = locate(&cache, id)?;
         cache.order.get(key).map(|t| t.id.clone()).map(String::from)

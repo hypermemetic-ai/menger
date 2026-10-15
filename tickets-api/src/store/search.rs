@@ -1006,7 +1006,7 @@ impl Store {
     /// title and passage marked. On a read connection, off the runtime, in
     /// one transaction; the rows from the cache, the lens tested in its
     /// cells (one lookup a match). A query holding no word matches nothing.
-    pub async fn search(
+    pub(super) async fn search_unscoped(
         &self,
         query: &str,
         lens: Option<Lens>,

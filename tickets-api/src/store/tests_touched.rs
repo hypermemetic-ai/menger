@@ -47,7 +47,7 @@ const ASKS: &str = "<m-input id=\"notes\" kind=\"text\"><m-question>Anything els
 fn ids(store: &Store, text: &str) -> BTreeSet<String> {
     let lens = Lens::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")).with_clock(Clock::default());
     let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
-    store.filtered_page(&q, None, None, Some(10_000)).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
+    store.filtered_page(SYS, &q, None, None, Some(10_000)).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
 }
 
 /// The rule, ticket by ticket, from the rows, the comments and the inputs'

@@ -248,8 +248,8 @@ impl Plain {
 /// What the store answers now.
 fn answered(store: &Store, asked: Asked, epic: Option<&str>, after: Option<&str>, limit: Option<u32>) -> Result<Answer, String> {
     let page = match asked {
-        Asked::Ready => store.ready_page(epic, after, limit),
-        Asked::Status(status) => store.page(PageQuery {
+        Asked::Ready => store.ready_page(SYS, epic, after, limit),
+        Asked::Status(status) => store.page(SYS, PageQuery {
             epic,
             status: Some(status),
             after,
@@ -403,7 +403,7 @@ pub(super) async fn random_ask_or_label(store: &Store, own: &mut Rng, all: &[Row
     let decision = "<m-decision data-field=\"decision\" id=\"d\">\n\n<m-question data-field=\"question\">Which?</m-question>\n\n\
                     <m-option data-field=\"option\" name=\"A\" value=\"a\"></m-option>\n\
                     <m-option data-field=\"option\" name=\"B\" value=\"b\"></m-option>\n\n</m-decision>\n";
-    let held: Vec<String> = store.inputs(Some(&id), None, None).unwrap().into_iter().map(|i| i.id.into_string()).collect();
+    let held: Vec<String> = store.inputs(SYS, Some(&id), None, None).unwrap().into_iter().map(|i| i.id.into_string()).collect();
     match own.below(10) {
         0..=2 => {
             let body = match own.below(4) {
@@ -775,7 +775,7 @@ async fn membership_moves_on_exactly_the_three_writes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("three.db");
     let store = Store::open(&path).unwrap();
-    let ids = |store: &Store| -> Vec<String> { store.ready_page(None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect() };
+    let ids = |store: &Store| -> Vec<String> { store.ready_page(SYS, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect() };
     let count = |store: &Store, id: &str| store.tickets.read().unwrap().ready.counts().get(id).copied().unwrap_or(0);
     store.create(new_ticket("TH", Kind::Scope, None, vec![])).await.unwrap();
     // TH-2 names TH-5 (not born) twice, and TH-1.
@@ -848,7 +848,7 @@ async fn completing_a_ticket_that_blocks_many_moves_each_of_them_once() {
         let id = store.create(new_ticket("FAN", Kind::Build, None, blocked_by.into_iter().map(String::from).collect::<Vec<String>>())).await.unwrap().id;
         store.set_status(&id, Status::Ready).await.unwrap();
     }
-    let ready = |store: &Store| store.ready_page(Some("fan"), None, Some(0)).unwrap().remaining;
+    let ready = |store: &Store| store.ready_page(SYS, Some("fan"), None, Some(0)).unwrap().remaining;
     assert_eq!(ready(&store), 0);
     store.set_status(&hub, Status::Complete).await.unwrap();
     assert_eq!(ready(&store), (k - k.div_ceil(3)) as u64, "every one blocked by nothing else joins");
@@ -873,7 +873,7 @@ async fn a_canceled_blocker_is_done_with_and_survives_a_reopen() {
     let dropped = store.create(new_ticket("CAN", Kind::Build, None, vec![])).await.unwrap().id;
     let waiting = store.create(new_ticket("CAN", Kind::Build, None, vec![dropped.to_string()])).await.unwrap().id;
     store.set_status(&waiting, Status::Ready).await.unwrap();
-    let ready = |store: &Store| store.ready_page(Some("can"), None, Some(0)).unwrap().remaining;
+    let ready = |store: &Store| store.ready_page(SYS, Some("can"), None, Some(0)).unwrap().remaining;
     assert_eq!(ready(&store), 0);
     store.set_status(&dropped, Status::Canceled).await.unwrap();
     assert_eq!(ready(&store), 1, "a canceled blocker is satisfied");
@@ -881,7 +881,7 @@ async fn a_canceled_blocker_is_done_with_and_survives_a_reopen() {
     assert_kept_is_a_scan(&store, Some(&path), "canceled");
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get(&dropped).await.unwrap().status, Status::Canceled, "read back as written");
+    assert_eq!(store.get(SYS, &dropped).await.unwrap().status, Status::Canceled, "read back as written");
     assert_eq!(ready(&store), 1);
     assert_kept_is_a_scan(&store, Some(&path), "canceled, reopened");
 }
@@ -916,7 +916,7 @@ async fn a_hand_edit_that_breaks_the_unlocks_mirror_is_named_by_verify() {
     let store = Store::open(&path).unwrap();
     assert_kept_is_a_scan(&store, Some(&path), "the first open, a scan");
     store.set_status("MI-1", Status::Complete).await.unwrap();
-    let ids: Vec<String> = store.ready_page(None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect();
+    let ids: Vec<String> = store.ready_page(SYS, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect();
     assert_eq!(ids, ["MI-3", "MI-4"], "MI-3 once; MI-4 does not name MI-1 and is not moved; MI-2 is not found");
     drop(store);
     let Verdict::Differs(found) = Store::verify_derived(&path).unwrap() else {
@@ -952,7 +952,7 @@ async fn a_file_from_scale_28_gains_the_ready_state_once_on_first_open() {
     let want = kept(&store);
     let pages: Vec<Answer> = [None, Some(3)]
         .into_iter()
-        .map(|limit| answer(store.ready_page(None, None, limit).unwrap()))
+        .map(|limit| answer(store.ready_page(SYS, None, None, limit).unwrap()))
         .collect();
     drop(store);
     // What SCALE-28 left in a file: its own tables and form, nothing of ours.
@@ -969,7 +969,7 @@ async fn a_file_from_scale_28_gains_the_ready_state_once_on_first_open() {
     assert_kept_is_a_scan(&store, Some(&path), "the first open of a form-1 file");
     let again: Vec<Answer> = [None, Some(3)]
         .into_iter()
-        .map(|limit| answer(store.ready_page(None, None, limit).unwrap()))
+        .map(|limit| answer(store.ready_page(SYS, None, None, limit).unwrap()))
         .collect();
     assert_eq!(again, pages);
     drop(store);
@@ -989,7 +989,7 @@ async fn a_file_from_scale_28_gains_the_ready_state_once_on_first_open() {
     };
     let store = Store::open(&path).unwrap();
     let page = store
-        .page(PageQuery { epic: Some(&epic), status: Some(status.parse().unwrap()), limit: Some(0), ..PageQuery::default() })
+        .page(SYS, PageQuery { epic: Some(&epic), status: Some(status.parse().unwrap()), limit: Some(0), ..PageQuery::default() })
         .unwrap();
     assert_eq!(page.remaining, held + 7, "the status count as stored");
 }
@@ -1059,7 +1059,7 @@ async fn a_page_of_the_ready_set_is_a_range_of_the_files_index() {
     let mut after: Option<String> = None;
     let mut pages = 0;
     loop {
-        let page = store.ready_page(None, after.as_deref(), Some(50)).unwrap();
+        let page = store.ready_page(SYS, None, after.as_deref(), Some(50)).unwrap();
         let (from_epic, from_seq) = match &after {
             Some(id) => {
                 let key = store.tickets.read().unwrap().at[id].clone();
@@ -1097,7 +1097,7 @@ async fn a_walk_of_whole_tickets_answers_what_one_page_does() {
     let cursor = rows(&store)[300].id.clone();
     for select in [Select::Ready { epic: None }, Select::List { epic: None, status: Some(Status::Ready), parent: None }] {
         for (after, limit) in [(None, None), (None, Some(150)), (Some(cursor.as_str()), Some(7)), (Some(cursor.as_str()), None)] {
-            let mut walk = store.walk(select.clone(), after, limit);
+            let mut walk = store.walk(SYS, select.clone(), after, limit);
             let mut ids = Vec::new();
             let end = loop {
                 match walk.next(&store).await.unwrap() {
@@ -1106,8 +1106,8 @@ async fn a_walk_of_whole_tickets_answers_what_one_page_does() {
                 }
             };
             let page = match &select {
-                Select::Ready { .. } => store.ready_page(None, after, limit),
-                _ => store.page(PageQuery { status: Some(Status::Ready), after, limit, ..PageQuery::default() }),
+                Select::Ready { .. } => store.ready_page(SYS, None, after, limit),
+                _ => store.page(SYS, PageQuery { status: Some(Status::Ready), after, limit, ..PageQuery::default() }),
             }
             .unwrap();
             assert_eq!((ids, end.0, end.1), answer(page), "{select:?} after {after:?} limit {limit:?}");

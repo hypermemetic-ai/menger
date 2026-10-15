@@ -51,14 +51,6 @@ impl Comments {
     }
 }
 
-/// IDENTITY-21: the lens a caller sees comments through — `None`: all.
-/// AUTH-7: `under` where it holds the call's grant (`comments.list`,
-/// `comments.watch`).
-#[cfg(feature = "server")]
-fn reach_lens(caller: &VerifiedUser) -> Result<Option<Lens>, String> {
-    caller.reach_filter()?.map(|f| Lens::of(&f).map_err(|e| e.to_string())).transpose()
-}
-
 /// IDENTITY-37: the ticket an app route is the page of — `#/ticket/X`'s
 /// `X`, upper-cased — or `None`.
 #[cfg(feature = "server")]
@@ -80,10 +72,9 @@ fn named(c: &crate::comments::Comment) -> Vec<String> {
 /// its route is the page of, when it is one — a comment left on a ticket's
 /// page is that ticket's to see, whatever its anchor names.
 #[cfg(feature = "server")]
-fn sees(store: &Store, reach: Option<&Lens>, c: &crate::comments::Comment) -> bool {
-    let Some(lens) = reach else { return true };
+fn sees(store: &Store, caller: &VerifiedUser, c: &crate::comments::Comment) -> bool {
     let ids = named(c);
-    ids.is_empty() || store.member(&ids, lens).into_iter().all(|ok| ok)
+    ids.is_empty() || store.member(caller, &ids, &Lens::all()).into_iter().all(|ok| ok)
 }
 
 /// A write's answer: the comment as it is now, or the refusal in band.
@@ -227,13 +218,10 @@ impl Comments {
                     return;
                 }
             };
-            let reach = match reach_lens(&caller) {
-                Ok(r) => r,
-                Err(message) => {
-                    yield CommentsEvent::Error { message };
-                    return;
-                }
-            };
+            if let Err(message) = caller.read_filter() {
+                yield CommentsEvent::Error { message };
+                return;
+            }
             let s = |v: Option<String>| v.filter(|v| !v.trim().is_empty());
             let q = CommentQuery {
                 ticket: ticket.map(String::from),
@@ -246,12 +234,10 @@ impl Comments {
                 intent,
             };
             let limit = crate::limits::page(limit, crate::limits::COMMENTS_PAGE_DEFAULT, crate::limits::COMMENTS_PAGE_MAX);
-            match store.comments(&q, after.map(CommentId::get), Some(limit)) {
+            // ACCESS-10: the comments in reach, judged as the page is cut.
+            match store.comments(&caller, &q, after.map(CommentId::get), Some(limit)) {
                 Ok(page) => {
                     for comment in page.comments {
-                        if !sees(&store, reach.as_ref(), &comment) {
-                            continue;
-                        }
                         yield comment.into();
                     }
                     yield CommentsEvent::Page { next: page.next };
@@ -284,9 +270,11 @@ impl Comments {
             };
             // IDENTITY-21: the grant on the comment's ticket (held anywhere,
             // for a comment on the app).
-            let allowed = match store.comment(id).map(|c| named(&c)).filter(|n| !n.is_empty()) {
-                Some(ids) => caller.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &store),
-                None => caller.reach_filter().map(|_| ()),
+            // ACCESS-10: a comment out of reach is no comment, as one not there.
+            let allowed = match store.comment(&caller, id).map(|c| named(&c)) {
+                Err(e) => Err(e.to_string()),
+                Ok(ids) if ids.is_empty() => caller.reach_filter().map(|_| ()),
+                Ok(ids) => caller.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &store),
             };
             if let Err(message) = allowed {
                 yield CommentsEvent::Error { message };
@@ -318,9 +306,11 @@ impl Comments {
             };
             // IDENTITY-21: the grant on the comment's ticket (held anywhere,
             // for a comment on the app).
-            let allowed = match store.comment(id).map(|c| named(&c)).filter(|n| !n.is_empty()) {
-                Some(ids) => caller.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &store),
-                None => caller.reach_filter().map(|_| ()),
+            // ACCESS-10: a comment out of reach is no comment, as one not there.
+            let allowed = match store.comment(&caller, id).map(|c| named(&c)) {
+                Err(e) => Err(e.to_string()),
+                Ok(ids) if ids.is_empty() => caller.reach_filter().map(|_| ()),
+                Ok(ids) => caller.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &store),
             };
             if let Err(message) = allowed {
                 yield CommentsEvent::Error { message };
@@ -350,7 +340,10 @@ impl Comments {
         let who = auth.cloned();
         let store = self.store.clone();
         stream! {
-            let (mut held, mut lens) = match access.verify_call(who.as_ref(), &reach).and_then(|c| Ok((c.reach_key()?, reach_lens(&c)?))) {
+            let mut held = match access.verify_call(who.as_ref(), &reach).and_then(|c| {
+                c.read_filter()?;
+                c.reach_key()
+            }) {
                 Ok(r) => r,
                 Err(message) => {
                     yield CommentsEvent::Error { message };
@@ -381,19 +374,16 @@ impl Comments {
                     }
                 };
                 if key != held {
-                    match reach_lens(&caller) {
-                        Ok(r) => lens = r,
-                        Err(why) => {
-                            yield CommentsEvent::Error { message: format!("your access changed: {why}") };
-                            return;
-                        }
+                    if let Err(why) = caller.read_filter() {
+                        yield CommentsEvent::Error { message: format!("your access changed: {why}") };
+                        return;
                     }
                     held = key;
                 }
                 match next {
                     // IDENTITY-21: only comments the watcher can see.
                     Ok(CommentChange::Added(c) | CommentChange::Resolved(c) | CommentChange::Reopened(c))
-                        if !sees(&store, lens.as_ref(), &c) => {}
+                        if !sees(&store, &caller, &c) => {}
                     Ok(CommentChange::Added(comment)) => yield CommentsEvent::Added { comment },
                     Ok(CommentChange::Resolved(comment)) => yield CommentsEvent::Resolved { comment },
                     Ok(CommentChange::Reopened(comment)) => yield CommentsEvent::Reopened { comment },

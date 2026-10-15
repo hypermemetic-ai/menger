@@ -14,7 +14,7 @@ pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<VerifiedUser, St
                 return;
             }
         };
-        let filter = match caller.scoped(filter.as_deref()) {
+        let filter = match asked(filter.as_deref()) {
             Ok(v) => v,
             Err(message) => {
                 yield TicketsEvent::Error { message };
@@ -31,10 +31,10 @@ pub(super) fn counts_stream(store: Arc<Store>, admitted: Result<VerifiedUser, St
         match store.lens_or_all(filter.as_ref()) {
             Ok(lens) => {
                 let lens = lens.with_clock(clock);
-                let keep = kept(&store, &caller, keep.as_deref());
                 // ORG-3: a count per shortcode, by its identity — its
                 // letters beside it; an `under` naming several is refused.
-                match store.counts_read(&lens, keep.as_deref()) {
+                // ACCESS-10: within the caller's reach, `keep` only in it.
+                match store.counts_read(&caller, &lens, keep.as_deref()) {
                     Ok(counts) => {
                         for (shortcode, held) in counts {
                             let epic = store.shortcode_named_by(&shortcode).0;
@@ -59,25 +59,26 @@ pub(super) fn facets_stream(store: Arc<Store>, admitted: Result<VerifiedUser, St
                 return;
             }
         };
-        let filter = match caller.scoped(filter.as_deref()) {
+        let filter = match asked(filter.as_deref()) {
             Ok(v) => v,
             Err(message) => {
                 yield TicketsEvent::Error { message };
                 return;
             }
         };
-        let base = match caller.scoped(base.as_deref()) {
+        let base = match asked(base.as_deref()) {
             Ok(v) => v,
             Err(message) => {
                 yield TicketsEvent::Error { message };
                 return;
             }
         };
-        // FILTER-36: each read with its saved names resolved.
+        // FILTER-36: each read with its saved names resolved; ACCESS-10:
+        // the store answers it within the caller's reach.
         let answer = clock_of(&caller, tz.as_deref()).and_then(|clock| {
             let f = store.resolved(filter.as_ref())?;
             let b = store.resolved(base.as_ref())?;
-            store.facets_at(&f, &b, &clock).map_err(|e| e.to_string())
+            store.facets_at(&caller, &f, &b, &clock).map_err(|e| e.to_string())
         });
         match answer {
             Ok(facets) => {

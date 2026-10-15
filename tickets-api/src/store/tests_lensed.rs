@@ -147,7 +147,7 @@ fn assert_find_is_a_scan(store: &Store, plain: &Plain, filter: &Filter, rng: &mu
         let query = random_query(rng, plain);
         let m = matched(plain, |t, k| text_match(t, &query) && judge(t, k));
         let (after, limit) = (random_after(rng, plain), random_limit(rng));
-        let got = store.find_filtered(&query, &lens, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
+        let got = store.find_filtered(SYS, &query, &lens, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
         let want = cut(plain, &m, after.as_deref(), limit);
         match &want {
             Ok(w) if !w.0.is_empty() => seen.find_rows += 1,
@@ -164,7 +164,7 @@ fn assert_find_is_a_scan(store: &Store, plain: &Plain, filter: &Filter, rng: &mu
     let m = matched(plain, |t, k| text_match(t, &query) && judge(t, k));
     let (mut after, mut seen) = (None::<String>, Vec::new());
     loop {
-        let page = store.find_filtered(&query, &lens, after.as_deref(), Some(7)).unwrap();
+        let page = store.find_filtered(SYS, &query, &lens, after.as_deref(), Some(7)).unwrap();
         assert_eq!(page.first, None, "{what}: find gives no `first`");
         seen.extend(page.tickets.iter().map(|t| t.id.clone()));
         match page.next {
@@ -193,7 +193,7 @@ fn assert_ready_is_a_scan(store: &Store, plain: &Plain, filter: &Filter, epics: 
         });
         let (after, limit) = (random_after(rng, plain), random_limit(rng));
         let q = ready_and(filter, epic.clone()).unwrap();
-        let got = store.ready_filtered_page(&q, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
+        let got = store.ready_filtered_page(SYS, &q, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
         let want = cut(plain, &m, after.as_deref(), limit);
         seen.ready_rows += usize::from(want.as_ref().is_ok_and(|w| !w.0.is_empty()));
         match (&got, &want) {
@@ -227,7 +227,7 @@ fn assert_member_is_a_scan(store: &Store, plain: &Plain, filter: &Filter, rng: &
         .collect();
     seen.member_true += want.iter().filter(|m| **m).count();
     seen.member_false += want.iter().filter(|m| !**m).count();
-    assert_eq!(store.member(&ids, &Lens::of(filter).unwrap()), want, "{what}: member {ids:?} under `{}`", filter.format());
+    assert_eq!(store.member(SYS, &ids, &Lens::of(filter).unwrap()), want, "{what}: member {ids:?} under `{}`", filter.format());
 }
 
 /// Every read under one random filter.
@@ -380,17 +380,17 @@ async fn inputs_under_random_filters_are_the_inputs_of_the_tickets_the_filter_ad
                 filter.matches(&plain.facts(&plain.rows[i], plain.cells[i]))
             };
             let want: Vec<Input> = store
-                .inputs(ticket.as_deref(), epic.as_deref(), state)
+                .inputs(SYS, ticket.as_deref(), epic.as_deref(), state)
                 .unwrap()
                 .into_iter()
                 .filter(|i| admitted(&i.ticket))
                 .collect();
-            let got = store.inputs_filtered(ticket.as_deref(), epic.as_deref(), state, &lens).unwrap();
+            let got = store.inputs_filtered(SYS, ticket.as_deref(), epic.as_deref(), state, &lens).unwrap();
             assert_eq!(got, want, "step {step} ({what}): inputs {ticket:?} {epic:?} {state:?} under `{}`", filter.format());
         }
     }
-    assert!(store.inputs(None, None, None).unwrap().len() > 20, "enough inputs to filter");
-    assert!(matches!(store.inputs_filtered(Some("NONE-1"), None, None, &Lens::all()), Err(StoreError::NotFound(_))));
+    assert!(store.inputs(SYS, None, None, None).unwrap().len() > 20, "enough inputs to filter");
+    assert!(matches!(store.inputs_filtered(SYS, Some("NONE-1"), None, None, &Lens::all()), Err(StoreError::NotFound(_))));
 }
 
 // ---------------------------------------------------------------------------
@@ -427,13 +427,13 @@ async fn a_filter_admitting_everything_answers_as_no_filter() {
     for _ in 0..60 {
         let query = random_query(&mut rng, &plain);
         let (after, limit) = (random_after(&mut rng, &plain), random_limit(&mut rng));
-        let filtered = store.find_filtered(&query, &lens, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
-        let plain_find = store.find_page(&query, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
+        let filtered = store.find_filtered(SYS, &query, &lens, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
+        let plain_find = store.find_page(SYS, &query, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
         assert_eq!(filtered, plain_find, "find {query:?} after {after:?} limit {limit:?}");
         let epic = (rng.below(2) == 0).then(|| plain.rows[rng.below(plain.rows.len())].epic.to_string());
         let q = ready_and(&all, epic.clone()).unwrap();
-        let filtered = store.ready_filtered_page(&q, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
-        let ready = store.ready_page(epic.as_deref(), after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
+        let filtered = store.ready_filtered_page(SYS, &q, after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
+        let ready = store.ready_page(SYS, epic.as_deref(), after.as_deref(), limit).map(answer).map_err(|e| e.to_string());
         assert_eq!(filtered, ready, "ready_set in {epic:?} after {after:?} limit {limit:?}");
     }
 }
@@ -448,16 +448,16 @@ async fn find_under_a_filter_pages_by_position() {
     }
     let lens = Lens::parse("kind build").unwrap();
     let ids = |p: &Page| p.tickets.iter().map(|t| t.id.to_string()).collect::<Vec<_>>();
-    let page = store.find_filtered("a", &lens, None, Some(2)).unwrap();
+    let page = store.find_filtered(SYS, "a", &lens, None, Some(2)).unwrap();
     assert_eq!((ids(&page), page.next.as_deref(), page.remaining, page.first), (vec!["A-2".into(), "A-3".into()], Some("A-3"), 1, None));
-    let page = store.find_filtered("a", &lens, Some("b-1"), None).unwrap();
+    let page = store.find_filtered(SYS, "a", &lens, Some("b-1"), None).unwrap();
     assert_eq!((ids(&page), page.next, page.remaining), (vec!["B-2".to_string()], None, 0), "after a ticket the filter does not admit");
-    let page = store.find_filtered("a", &lens, Some("A-1"), Some(0)).unwrap();
+    let page = store.find_filtered(SYS, "a", &lens, Some("A-1"), Some(0)).unwrap();
     assert_eq!((ids(&page).len(), page.next.as_deref(), page.remaining), (0, Some("A-1"), 3), "an empty page hands its cursor back");
-    assert!(matches!(store.find_filtered("a", &lens, Some("C-1"), None), Err(StoreError::CursorNotFound(_))));
-    let page = store.find_filtered("", &lens, None, None).unwrap();
+    assert!(matches!(store.find_filtered(SYS, "a", &lens, Some("C-1"), None), Err(StoreError::CursorNotFound(_))));
+    let page = store.find_filtered(SYS, "", &lens, None, None).unwrap();
     assert_eq!((ids(&page).len(), page.remaining, page.first), (3, 0, None), "a blank query: every ticket the filter admits");
-    let page = store.find_filtered("scope", &lens, None, None).unwrap();
+    let page = store.find_filtered(SYS, "scope", &lens, None, None).unwrap();
     assert!(page.tickets.is_empty() && page.next.is_none(), "text matches the filter does not admit");
 }
 
@@ -480,12 +480,12 @@ async fn member_names_a_ticket_as_get_does() {
     let ready = Lens::parse("status Ready").unwrap();
     let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
     let asked = ids(&["low-1", "LOW-1", "low-2", "up-1", "UP-1", " UP-1 ", "NOPE-1", "", "UP-1"]);
-    assert_eq!(store.member(&asked, &ready), [true, false, false, true, true, true, false, false, true], "{asked:?}");
+    assert_eq!(store.member(SYS, &asked, &ready), [true, false, false, true, true, true, false, false, true], "{asked:?}");
     let docs = Lens::parse("kind doc").unwrap();
     let asked = ids(&["UP/_MENGER/board", "up/_MENGER/board", "UP/_MENGER/none", "UP-2", "UP-1"]);
-    assert_eq!(store.member(&asked, &docs), [true, true, false, true, false], "{asked:?}");
-    assert_eq!(store.member(&ids(&["low-1"]), &Lens::parse("in LOW").unwrap()), [true], "`in` reads a shortcode whatever its case");
-    assert!(store.member(&[], &ready).is_empty());
+    assert_eq!(store.member(SYS, &asked, &docs), [true, true, false, true, false], "{asked:?}");
+    assert_eq!(store.member(SYS, &ids(&["low-1"]), &Lens::parse("in LOW").unwrap()), [true], "`in` reads a shortcode whatever its case");
+    assert!(store.member(SYS, &[], &ready).is_empty());
 }
 
 /// Not a test: the store's own time for the reads that take the lens, at
@@ -534,7 +534,7 @@ fn reads_at_a_million() {
     let queries = ["audit", "zzqx", "the"];
     let mut unfiltered = Vec::new();
     for q in queries {
-        let ms = median(&mut || drop(store.find_page(q, None, Some(50)).unwrap()));
+        let ms = median(&mut || drop(store.find_page(SYS, q, None, Some(50)).unwrap()));
         unfiltered.push(ms);
         println!("find {q:?}: {ms:.3} ms");
     }
@@ -555,13 +555,13 @@ fn reads_at_a_million() {
             .iter()
             .zip(&unfiltered)
             .map(|(q, base)| {
-                let ms = median(&mut || drop(store.find_filtered(q, &lens, None, Some(50)).unwrap()));
+                let ms = median(&mut || drop(store.find_filtered(SYS, q, &lens, None, Some(50)).unwrap()));
                 format!("{q:?} {ms:.3} ms ({:.3}×)", ms / base)
             })
             .collect();
-        let member = median(&mut || drop(store.member(&ids, &lens)));
+        let member = median(&mut || drop(store.member(SYS, &ids, &lens)));
         let q = ready_and(&Filter::parse(text).unwrap(), None).unwrap();
-        let ready = median(&mut || drop(store.ready_filtered_page(&q, None, Some(200)).unwrap()));
+        let ready = median(&mut || drop(store.ready_filtered_page(SYS, &q, None, Some(200)).unwrap()));
         println!(
             "`{text}` admits {admits} ({:.2} %): find {}; member of {} ids {member:.3} ms; ready_set page of 200 {ready:.3} ms",
             100.0 * admits as f64 / total as f64,

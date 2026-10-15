@@ -599,7 +599,7 @@ fn tree_asked(
 ) -> Result<TreeAnswer, String> {
     let q = TreeQuery { parent: parent.map(String::from), epic: epic.map(String::from), lens: Lens::of(filter).unwrap(), matches_only, keep: keep.map(String::from) };
     store
-        .tree_page(&q, after, limit)
+        .tree_page(SYS, &q, after, limit)
         .map(|p| (p.nodes.into_iter().map(|n| (n.summary.id.into_string(), n.matched, n.below)).collect(), p.next, p.remaining))
         .map_err(|e| e.to_string())
 }
@@ -1095,7 +1095,7 @@ async fn a_kept_ticket_is_drawn_where_a_match_would_be() {
         }
     }
     let q = TreeQuery { parent: None, epic: Some("FILTER".into()), lens: Lens::of(&filter).unwrap(), matches_only: false, keep: Some("FILTER-3".into()) };
-    let off = store.tree_page(&q, None, None).unwrap().nodes.into_iter().map(|n| (n.summary.id.into_string(), n.matched, n.below)).collect::<Vec<_>>();
+    let off = store.tree_page(SYS, &q, None, None).unwrap().nodes.into_iter().map(|n| (n.summary.id.into_string(), n.matched, n.below)).collect::<Vec<_>>();
     assert_eq!(Ok(off), tree_answered(&store, &filter, None, Some("FILTER"), None, None).map(|a| a.0), "keep is the nav's that shows only matches");
 }
 
@@ -1107,11 +1107,11 @@ async fn tree_answers_one_address() {
     let lens = Lens::parse("").unwrap();
     for (parent, epic) in [(None, None), (Some("TA-1"), Some("TA"))] {
         let q = TreeQuery { parent: parent.map(String::from), epic: epic.map(String::from), lens: lens.clone(), matches_only: false, keep: None };
-        let e = store.tree_page(&q, None, None).unwrap_err().to_string();
+        let e = store.tree_page(SYS, &q, None, None).unwrap_err().to_string();
         assert!(e.contains("exactly one of them"), "{e}");
     }
     let q = TreeQuery { parent: None, epic: Some("ta".into()), lens, matches_only: false, keep: None };
-    let page = store.tree_page(&q, None, None).unwrap();
+    let page = store.tree_page(SYS, &q, None, None).unwrap();
     assert_eq!(page.nodes.iter().map(|n| (n.summary.id.as_str(), n.matched, n.below)).collect::<Vec<_>>(), [("TA-1", true, 0)]);
     assert_eq!((page.next, page.remaining), (None, 0));
 }

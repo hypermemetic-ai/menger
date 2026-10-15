@@ -29,7 +29,7 @@ async fn two_themes(store: &Store) {
 }
 
 async fn regions(store: &Store, id: &str) -> [(String, ThemeLevel); 3] {
-    let (_, r, _) = store.theme_for(id).await.unwrap();
+    let (_, r, _) = store.theme_for(SYS, id).await.unwrap();
     [(r.site.theme, r.site.level), (r.ticket.theme, r.ticket.level), (r.frame.theme, r.frame.level)]
 }
 
@@ -122,9 +122,9 @@ async fn theme_for_holds_every_row_of_who_wears_what() {
         let t = store.create(ticket("ROW", Kind::Build, &body, Some("ROW-1"))).await.unwrap();
         assert_eq!(regions(&store, &t.id).await, want, "row {i}: site {site:?}, {fm:?}");
     }
-    assert!(matches!(store.theme_for("ROW-99").await, Err(StoreError::NotFound(_))));
+    assert!(matches!(store.theme_for(SYS, "ROW-99").await, Err(StoreError::NotFound(_))));
     // The answer's levels say what each level said.
-    let (_, _, levels) = store.theme_for("ROW-9").await.unwrap();
+    let (_, _, levels) = store.theme_for(SYS, "ROW-9").await.unwrap();
     assert_eq!(levels.site.as_deref(), Some("ocean"));
     assert_eq!(levels.ticket.theme.as_deref(), Some("pantry"));
     assert_eq!(levels.frame.takeover, Takeover::Off);
@@ -149,11 +149,11 @@ async fn the_nearest_shortcode_says_it_for_its_tickets_and_hosted_ones() {
     store.set_theme("PANTRY", Some("pantry"), Some(ThemeReach::Site), None).await.unwrap();
     let r = regions(&store, "PANTRY-2").await;
     assert_eq!(r, [w("pantry", L::Shortcode), w("pantry", L::Shortcode), w("pantry", L::Shortcode)]);
-    let (_, regions_, _) = store.theme_for("SHELF-2").await.unwrap();
+    let (_, regions_, _) = store.theme_for(SYS, "SHELF-2").await.unwrap();
     assert_eq!(regions_.ticket.from.as_deref(), Some("PANTRY"), "a hosted shortcode inherits from its host");
     store.set_theme("SHELF", None, None, Some(Takeover::Off)).await.unwrap();
     assert_eq!(regions(&store, "SHELF-2").await, [w("ocean", L::Site), w("default", L::Shortcode), w("default", L::Shortcode)]);
-    assert_eq!(store.theme_for("SHELF-2").await.unwrap().1.ticket.from.as_deref(), Some("SHELF"));
+    assert_eq!(store.theme_for(SYS, "SHELF-2").await.unwrap().1.ticket.from.as_deref(), Some("SHELF"));
 }
 
 /// Kept in the file: a reopen reads the themes and settings back.

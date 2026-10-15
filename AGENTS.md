@@ -306,6 +306,11 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   `Access::verify` → `VerifiedUser` (its `Reach`), then `permit` /
   `admin_of`; `Hidden` for not-found ≡ not-yours (ACCESS-9, README
   "Capabilities"). Never build one by hand, and never read `ctx.user_id`.
+  Every public store read takes its reader — the `VerifiedUser`
+  (`user.sight()` to read as `tickets.get`), or the `System` for what acts
+  for no user — and answers only its reach, a hidden ticket not found and
+  never named in a visible row (ACCESS-10, README "Reads through a
+  reach"); store tests read as `SYS` or `tests_reach::viewer_of`.
 
   **Organizations** (ORG-4) are the `orgs` activation: every ticket and
   shortcode is in one (today's tracker is `hypermemetic`). `list` (the

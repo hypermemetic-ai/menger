@@ -200,9 +200,12 @@ fn whole(row: Row, body: String) -> Ticket {
         kind,
         severity,
         parent,
+        parent_hidden,
         child_count,
         blocked_by,
         unlocks,
+        hidden_blocked_by,
+        hidden_unlocks,
         commits,
         path,
         placement,
@@ -222,7 +225,10 @@ fn whole(row: Row, body: String) -> Ticket {
         severity,
         blocked_by,
         unlocks,
+        hidden_blocked_by,
+        hidden_unlocks,
         parent,
+        parent_hidden,
         child_count,
         commits,
         path,
@@ -596,6 +602,11 @@ pub struct Walk {
     over: Option<(Option<String>, u64)>,
     /// The step cut and reading ahead of the one handed out.
     ahead: Option<Reading>,
+    /// ACCESS-10: the reader's reach — what each step's tickets are
+    /// redacted by — and, when its reach could not be read, why: the first
+    /// step is that refusal, nothing walked.
+    seen: Seen,
+    refused: Option<StoreError>,
 }
 
 /// One step's whole tickets, being read off the runtime.
@@ -621,6 +632,10 @@ impl Walk {
     /// The next tickets of the walk, or its end. A cursor naming no ticket
     /// is [`StoreError::CursorNotFound`], at the first step: nothing walked.
     pub async fn next(&mut self, store: &Store) -> Result<Step, StoreError> {
+        if let Some(why) = self.refused.take() {
+            self.over = Some((None, 0));
+            return Err(why);
+        }
         let current = match self.ahead.take() {
             Some(reading) => Some(reading),
             None => self.step(store)?,
@@ -629,9 +644,15 @@ impl Walk {
             return self.end(store);
         };
         self.ahead = self.step(store)?;
-        let tickets = current
+        let mut tickets = current
             .await
             .map_err(|e| StoreError::Db(format!("read task failed: {e}")))??;
+        // ACCESS-10: whole tickets as the reader may read them.
+        if !self.seen.all() {
+            let cache = store.tickets.read().expect("store lock poisoned");
+            let sees = self.seen.sees(&cache);
+            tickets.iter_mut().for_each(|t| sees.ticket(t));
+        }
         Ok(Step::Tickets(tickets))
     }
 
@@ -3473,7 +3494,7 @@ impl Store {
     /// (only a legacy, pre-MNG-14 shape: a cross-shortcode child with no
     /// scope root of its own) has no row in the nav and so no group here;
     /// those tickets count in the groups they are drawn in.
-    pub fn groups(&self) -> Vec<Group> {
+    fn groups_unscoped(&self) -> Vec<Group> {
         let cache = self.tickets.read().expect("store lock poisoned");
         cache.rollups.groups().into_iter().map(|g| cache.dress(g)).collect()
     }
@@ -3487,7 +3508,7 @@ impl Store {
     /// shortcode's sequences are dense and it holds exactly that many
     /// tickets. A database edited by hand can hold a hole; the answer is
     /// still the highest sequence, never a count.
-    pub fn extents(&self) -> Vec<(ShortcodeId, u32)> {
+    fn extents_unscoped(&self) -> Vec<(ShortcodeId, u32)> {
         self.tickets
             .read()
             .expect("store lock poisoned")
@@ -3495,75 +3516,6 @@ impl Store {
             .last_seqs()
             .map(|(epic, seq)| (epic.clone(), seq))
             .collect()
-    }
-
-    /// WAVE-4: every ticket of the shortcodes `epics` (case-insensitive;
-    /// one with no tickets contributes nothing) whose kind is in `kinds` —
-    /// never a doc — placed in the order of work, with what it waits on,
-    /// and the tally ([`waves::Waves`]). Blockers are followed into every
-    /// shortcode, asked for or not, so a ticket's wave is the same whatever
-    /// board shows it. Rows only, under the read lock and nothing else —
-    /// no await, no body, no write — memoized for the call, so the cost is
-    /// the yielded tickets and their blocker closure.
-    ///
-    /// ORG-3: each of `epics` names letters, as `in` does — every shortcode
-    /// with them (`waves --epics THEME` is every THEME's board), or one an
-    /// address names.
-    pub fn waves(&self, epics: &[String], kinds: &[Kind]) -> waves::Waves {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let epics: std::collections::BTreeSet<ShortcodeId> = epics.iter().flat_map(|e| cache.shortcodes.in_set(e)).collect();
-        waves::waves(cache.rows(), &epics, kinds)
-    }
-
-    /// MENGER-31: the wave board of a ticket's subtree — `id` and every
-    /// ticket under it, at any depth and in any shortcode hosted there (the
-    /// kept tree, FILTER-13's `under`) — placed as [`Store::waves`] places a
-    /// shortcode's, of the kinds `kinds`, never a doc; only tickets whose
-    /// shortcode `visible` holds (all with `None`). Rows only, under the
-    /// read lock. [`StoreError::NotFound`] when `id` names no ticket.
-    pub fn waves_under(
-        &self,
-        id: &str,
-        kinds: &[Kind],
-        visible: Option<&std::collections::HashSet<ShortcodeId>>,
-    ) -> Result<waves::Waves, StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let id = cache.resolve(id)?;
-        let row = cache.get(&id).ok_or_else(|| StoreError::NotFound(id.to_string()))?;
-        let sub = lineage::subtree(&cache, &row.id, Some(row));
-        let tickets = sub
-            .iter()
-            .flat_map(|(epic, seqs)| seqs.iter().filter_map(|seq| cache.order.get(&OrderKey { shortcode: epic.clone(), seq })));
-        let admit = |t: &Row| visible.is_none_or(|v| v.contains(&t.shortcode));
-        Ok(waves::of(cache.rows(), tickets, kinds, &admit))
-    }
-
-    /// MENGER-31: the wave board whose final state is `id` ([`waves::to`]):
-    /// what must happen first — its blockers, theirs, transitively, and a
-    /// scope's or an execution's open descendants (the kept tree) and what
-    /// they wait on — each where the store keeps it, the ticket alone in the
-    /// last wave, done blockers `Done`, and the cycles among them named.
-    /// Rows only, under the read lock. [`StoreError::NotFound`] when `id`
-    /// names no ticket.
-    pub fn waves_to(
-        &self,
-        id: &str,
-        kinds: &[Kind],
-        visible: Option<&std::collections::HashSet<ShortcodeId>>,
-    ) -> Result<waves::WavesTo, StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let id = cache.resolve(id)?;
-        let row = cache.get(&id).ok_or_else(|| StoreError::NotFound(id.to_string()))?;
-        if row.kind == Kind::Doc {
-            return Err(StoreError::DocHasNoLifecycle { id: row.id.to_string() });
-        }
-        let sub = lineage::subtree(&cache, &row.id, None);
-        let descendants = sub
-            .iter()
-            .flat_map(|(epic, seqs)| seqs.iter().filter_map(|seq| cache.order.get(&OrderKey { shortcode: epic.clone(), seq })))
-            .filter(|t| t.id != row.id);
-        let admit = |t: &Row| visible.is_none_or(|v| v.contains(&t.shortcode));
-        Ok(waves::to(cache.rows(), row, descendants, kinds, &admit))
     }
 
     /// One ticket, whole. SCALE-14: its row from the cache and its body from
@@ -3578,7 +3530,7 @@ impl Store {
     /// short form that names one ticket, today's id (pinned), a path address
     /// with or without an org; one naming several is
     /// [`StoreError::Ambiguous`], each by its full address.
-    pub async fn get(&self, id: &str) -> Result<Ticket, StoreError> {
+    async fn get_unscoped(&self, id: &str) -> Result<Ticket, StoreError> {
         let (row, written) = self.addressed(id)?;
         // ACT-6: and the ids it had, when a move named it anew.
         let moved_from = self.tickets.read().expect("store lock poisoned").shortcodes.moved_from(&row.id);
@@ -3600,23 +3552,14 @@ impl Store {
     /// by text resolves it to, once, before it asks the rest
     /// ([`Cache::resolve`]): [`StoreError::NotFound`] or
     /// [`StoreError::Ambiguous`] as `get` answers.
-    pub fn resolve(&self, address: &str) -> Result<String, StoreError> {
+    pub(crate) fn resolve(&self, address: &str) -> Result<String, StoreError> {
         self.tickets.read().expect("store lock poisoned").resolve(address)
-    }
-
-    /// ORG-3: the key each of `addresses` names, in order — a name that
-    /// names none stays as given (a forward reference, or a ticket a caller
-    /// is told is not found by the write it asks); one naming several is
-    /// refused, naming each.
-    pub fn resolve_all(&self, addresses: &[String]) -> Result<Vec<String>, StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        addresses.iter().map(|a| cache.name_ticket(a)).collect()
     }
 
     /// ORG-3: the shortcode an address names — its identity, letters and
     /// full address; `None` when it names none; [`StoreError::Ambiguous`]
     /// when several in reach.
-    pub fn shortcode(&self, address: &str) -> Result<Option<Shortcode>, StoreError> {
+    pub(crate) fn shortcode(&self, address: &str) -> Result<Option<Shortcode>, StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
         Ok(cache.shortcode_named(address)?.and_then(|sc| cache.shortcodes.get(&sc).cloned()))
     }
@@ -3624,18 +3567,18 @@ impl Store {
     /// [`Store::extents`] with each shortcode's id as text — the tests'.
     #[cfg(test)]
     pub(crate) fn extents_text(&self) -> Vec<(String, u32)> {
-        self.extents().into_iter().map(|(sc, n)| (sc.as_str().to_string(), n)).collect()
+        self.extents(SYS).into_iter().map(|(sc, n)| (sc.as_str().to_string(), n)).collect()
     }
 
     /// [`Store::counts`] with each shortcode's id as text — the tests'.
     #[cfg(test)]
     pub(crate) fn counts_text(&self, lens: &Lens) -> Vec<(String, u64)> {
-        self.counts(lens).into_iter().map(|(sc, n)| (sc.as_str().to_string(), n)).collect()
+        self.counts(SYS, lens).into_iter().map(|(sc, n)| (sc.as_str().to_string(), n)).collect()
     }
 
     /// ORG-3: the root of the shortcode `epic` names — `None` for one with
     /// none, or naming none; [`StoreError::Ambiguous`] for several in reach.
-    pub fn root_of(&self, epic: &str) -> Result<Option<String>, StoreError> {
+    pub(crate) fn root_of(&self, epic: &str) -> Result<Option<String>, StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
         Ok(cache.shortcode_named(epic)?.and_then(|sc| cache.rollups.root(&sc).map(str::to_string)))
     }
@@ -3644,7 +3587,7 @@ impl Store {
     /// own when it names one, else the shortcode its address names (a
     /// hidden ticket and one naming none are placed alike, IDENTITY-37),
     /// else its letters as an id. `None` for text that is no address.
-    pub fn shortcode_of(&self, text: &str) -> Option<ShortcodeId> {
+    pub(crate) fn shortcode_of(&self, text: &str) -> Option<ShortcodeId> {
         let cache = self.tickets.read().expect("store lock poisoned");
         if let shortcodes::Found::One(key) = cache.find_ticket(text, shortcodes::OrgReach::All) {
             return cache.get(&key).map(|r| r.shortcode.clone());
@@ -3659,39 +3602,17 @@ impl Store {
 
     /// ORG-3: the shortcodes letters (or an address) name, as `in` reads
     /// them — every shortcode with those letters.
-    pub fn shortcodes_in(&self, letters: &str) -> Vec<ShortcodeId> {
+    #[cfg(test)]
+    pub(crate) fn shortcodes_in(&self, letters: &str) -> Vec<ShortcodeId> {
         self.tickets.read().expect("store lock poisoned").shortcodes.in_set(letters)
     }
 
     /// ORG-3: every shortcode, in the store's order, each with its full
     /// address.
-    pub fn shortcodes(&self) -> Vec<(Shortcode, String)> {
+    #[cfg(test)]
+    pub(crate) fn shortcodes(&self) -> Vec<(Shortcode, String)> {
         let cache = self.tickets.read().expect("store lock poisoned");
         cache.shortcodes.all().map(|s| (s.clone(), cache.shortcodes.address(&s.id))).collect()
-    }
-
-    /// Tickets ordered by (epic, seq), optionally filtered. The `parent`
-    /// filter (AGS-19) selects exactly that ticket's children (SCALE-4:
-    /// from the children index, still in the store's order). The unpaged
-    /// shape, kept: [`Store::page`] is the same walk with a cursor and a
-    /// limit (MNG-9).
-    ///
-    /// SCALE-14: whole tickets, every one with its body — so the answer
-    /// holds every match's body at once, by its own signature. The wire
-    /// never asks for it: `list {}` walks the same selection a page of
-    /// bodies at a time ([`Store::walk`]); this is that walk, collected.
-    pub async fn list(
-        &self,
-        epic: Option<&str>,
-        status: Option<Status>,
-        parent: Option<&str>,
-    ) -> Result<Vec<Ticket>, StoreError> {
-        let select = Select::List {
-            epic: epic.map(String::from),
-            status,
-            parent: parent.map(String::from),
-        };
-        self.collect(self.walk(select, None, None)).await
     }
 
     /// SCALE-14: a walk of whole tickets — `select`, after the `after`
@@ -3701,16 +3622,22 @@ impl Store {
     /// ORG-3: the selection's `epic` and `parent` are addresses, resolved at
     /// each cut ([`span_shortcode`], [`page_parent`]) — never upper-cased
     /// whole, which would make an org name a code.
-    pub fn walk(&self, select: Select, after: Option<&str>, limit: Option<u32>) -> Walk {
-        Walk {
-            select,
-            after: after.map(str::to_ascii_uppercase),
-            at: None,
-            first: None,
-            left: limit,
-            over: None,
-            ahead: None,
-        }
+    ///
+    /// ACCESS-10: as `who` may read it — the selection within its reach
+    /// ([`Seen::select`]), a cursor it may not see a cursor into nothing,
+    /// every ticket redacted.
+    pub fn walk(&self, who: &(impl Reader + ?Sized), select: Select, after: Option<&str>, limit: Option<u32>) -> Walk {
+        let after = after.map(str::to_ascii_uppercase);
+        let scoped = Seen::of(who).and_then(|seen| {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            seen.sees(&cache).cursor(after.as_deref())?;
+            Ok((seen.select(&cache, select.clone())?, seen))
+        });
+        let (select, seen, refused) = match scoped {
+            Ok((select, seen)) => (select, seen, None),
+            Err(e) => (select, Seen::everything(), Some(e)),
+        };
+        Walk { select, after, at: None, first: None, left: limit, over: None, ahead: None, seen, refused }
     }
 
     /// Every page of `walk`, gathered.
@@ -3747,7 +3674,7 @@ impl Store {
     /// row from the cursor until it has `limit` — the whole span, for a
     /// status none of it holds. An index on `(status, epic, seq)` would make
     /// it a range; nothing keeps one yet.
-    pub fn page(&self, q: PageQuery<'_>) -> Result<Page, StoreError> {
+    fn page_unscoped(&self, q: PageQuery<'_>) -> Result<Page, StoreError> {
         let select = Select::List {
             epic: q.epic.map(str::to_string),
             status: q.status,
@@ -3762,7 +3689,7 @@ impl Store {
     /// membership rule, cut with the same cursor and limit as
     /// [`Store::page`]. SCALE-14: of rows, as `page`. SCALE-32: from the
     /// set the cache keeps ([`Store::walk_ready`]): the page costs the page.
-    pub fn ready_page(
+    fn ready_page_unscoped(
         &self,
         epic: Option<&str>,
         after: Option<&str>,
@@ -3853,7 +3780,7 @@ impl Store {
     /// a scan of every id and title past the page — the price the ticket's
     /// Risks section accepts while the cache is a full mirror (an index is
     /// SCALE-13's B5).
-    pub fn find_page(
+    fn find_page_unscoped(
         &self,
         query: &str,
         after: Option<&str>,
@@ -4317,7 +4244,7 @@ impl Store {
         // INPUT-3: and the inputs it declares, the same way.
         let declares = body.as_deref().map(crate::inputs::read);
         let serial = self.serial().await;
-        let mut ticket = self.get(&id).await?;
+        let mut ticket = self.get_unscoped(&id).await?;
         let mut changed = Vec::new();
         if let Some(title) = title.filter(|t| *t != ticket.title) {
             ticket.title = title;
@@ -4460,29 +4387,8 @@ impl Store {
 
     /// COMP-3: every component in the registry, in name order — orphans
     /// included (`owner: None`), waiting names not. From the cache alone.
-    pub fn components(&self) -> Vec<Component> {
+    fn components_unscoped(&self) -> Vec<Component> {
         self.tickets.read().expect("store lock poisoned").components.components()
-    }
-
-    /// INPUT-3: every input of `ticket` (every ticket's, without one) whose
-    /// ticket is in the shortcode `epic` and which is in `state` — each with
-    /// its kind, its declaration, its answer and its history — in the store's
-    /// order of tickets and each ticket's order (the body's, then the
-    /// removed). A `ticket` naming no ticket is [`StoreError::NotFound`]; one
-    /// declaring none answers nothing. Ids and shortcodes fold to upper case.
-    /// From the cache alone.
-    pub fn inputs(
-        &self,
-        ticket: Option<&str>,
-        epic: Option<&str>,
-        state: Option<InputState>,
-    ) -> Result<Vec<Input>, StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        // ORG-3: the ticket by any address; the shortcode by its letters or
-        // address, one naming several refused.
-        let ticket = ticket.map(|t| cache.resolve(t)).transpose()?;
-        let epic = epic.map(|e| span_shortcode(&cache, Some(e))).transpose()?.flatten();
-        Ok(cache.inputs.query(ticket.as_deref(), epic.as_ref(), state))
     }
 
     /// INPUT-3: records `value` as the answer to `ticket`'s input `input` —
@@ -4771,12 +4677,12 @@ impl Store {
     }
 
     /// IDENTITY-21: a principal's grants, from the cache.
-    pub fn grants_of(&self, principal: &str) -> Vec<crate::members::Grant> {
+    fn grants_of_unscoped(&self, principal: &str) -> Vec<crate::members::Grant> {
         self.tickets.read().expect("store lock poisoned").members.of(principal)
     }
 
     /// IDENTITY-21: every grant, by principal then scope, from the cache.
-    pub fn grants(&self) -> Vec<crate::members::Grant> {
+    fn grants_unscoped(&self) -> Vec<crate::members::Grant> {
         self.tickets.read().expect("store lock poisoned").members.all()
     }
 
@@ -4849,7 +4755,7 @@ impl Store {
     /// naming several in reach names nothing (`None`): the gate never decides
     /// on a namesake's chain. A ticket the store does not hold is placed by
     /// the shortcode its address names, as before.
-    pub fn scope_chain(&self, target: &str) -> Option<Vec<String>> {
+    pub(crate) fn scope_chain(&self, target: &str) -> Option<Vec<String>> {
         let t = target.trim();
         if t.is_empty() {
             return None;
@@ -4889,19 +4795,6 @@ impl Store {
             // A shortcode no ticket is in: its own name, as before.
             shortcodes::Found::None => Some(vec![a.code.as_str().to_string()]),
         }
-    }
-
-    /// COMMENT-2: one page of the comments `q` admits, newest first — after
-    /// the comment `after` (exclusive), at most `limit` — with the cursor
-    /// for the next ([`comments::page`]). From the cache alone.
-    pub fn comments(&self, q: &CommentQuery, after: Option<u64>, limit: Option<u32>) -> Result<CommentPage, StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        comments::page(&cache, q, after, limit)
-    }
-
-    /// COMMENT-2: one comment as the cache holds it.
-    pub fn comment(&self, id: u64) -> Option<crate::comments::Comment> {
-        self.tickets.read().expect("store lock poisoned").comments.get(id).cloned()
     }
 
     /// COMMENT-2: resolves the comment `id` — `resolved`, the row's state
@@ -5183,26 +5076,11 @@ impl Store {
         Ok(refs)
     }
 
-    /// Tickets that can start now: status `Ready` and every `blocked_by`
-    /// entry resolves to a ticket whose status is `Complete` or
-    /// `Superseded`. A dangling blocker (id naming no existing ticket)
-    /// keeps its ticket out. The epic filter applies to membership;
-    /// blockers resolve globally. Ordered by (epic, seq).
-    ///
-    /// SCALE-14: whole tickets — the unpaged shape, as [`Store::list`]: a
-    /// [`Walk`] of the ready set, collected.
-    pub async fn ready_set(&self, epic: Option<&str>) -> Result<Vec<Ticket>, StoreError> {
-        let select = Select::Ready {
-            epic: epic.map(String::from),
-        };
-        self.collect(self.walk(select, None, None)).await
-    }
-
     /// One ticket's `blocked_by`, each entry resolved to the current
     /// ticket or marked dangling, in `blocked_by` order. SCALE-14: each
     /// blocker whole — its row from the cache, its body from the database,
     /// all of them in one read ([`Store::full`]).
-    pub async fn blockers(&self, id: &str) -> Result<Vec<BlockerRef>, StoreError> {
+    async fn blockers_unscoped(&self, id: &str) -> Result<Vec<BlockerRef>, StoreError> {
         // Per entry: `None` takes the next resolved blocker, `Some` dangles.
         let (slots, rows, written) = {
             let cache = self.tickets.read().expect("store lock poisoned");
@@ -5233,7 +5111,7 @@ impl Store {
             .collect())
     }
 
-    pub fn count(&self) -> usize {
+    fn count_unscoped(&self) -> usize {
         self.tickets.read().expect("store lock poisoned").len()
     }
 
@@ -5441,6 +5319,8 @@ mod members;
 // ACCESS-9: the capability of acting for no user, minted here alone.
 mod system;
 pub use system::System;
+#[cfg(test)]
+pub(crate) use system::SYS;
 pub use members::Members;
 // AUTH-7: an admin's edits of a role's grants.
 mod roles;
@@ -5519,6 +5399,10 @@ pub use lineage::{Node, TreePage, TreeQuery, UnderMoves, UNDERS_MAX};
 /// membership one lookup in the admitted bitmaps, `find` testing only the
 /// candidates the cells admit, the ready set a filtered page of `ready and
 /// (filter)`. Never a walk of the store.
+mod seen;
+use seen::Seen;
+pub use seen::Reader;
+mod reads;
 mod lensed;
 pub use lensed::{narrowing, narrowing_lens, narrowing_of, ready_and, MEMBER_MAX};
 
@@ -5562,6 +5446,8 @@ pub use waves::{Placed, Waves};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_reach;
 
 /// SCALE-4: the children index against a scan of every ticket's `parent`
 /// after every path that sets one, `child_count` against both, pages of

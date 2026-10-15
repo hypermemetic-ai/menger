@@ -31,6 +31,7 @@ use crate::address::ShortcodeId;
 use super::cells::{self, Admit, View};
 use super::children::Names;
 use super::filtered::{self, Lens};
+use super::seen::{Seen, Sees};
 use super::tree::{self, g_cell, g_epic};
 use super::*;
 use roaring::RoaringBitmap;
@@ -980,7 +981,33 @@ impl Store {
     /// would be, with its own node (`matched: false`), and its nearest
     /// matches answered under it rather than here. Every other answer is
     /// the one without it.
-    pub fn tree_page(&self, q: &TreeQuery, after: Option<&str>, limit: Option<u32>) -> Result<TreePage, StoreError> {
+    ///
+    /// ACCESS-10: as `who` may read it — the filter within its reach, so a
+    /// ticket it may not see never matches; and no row it may not see: a
+    /// holder or a hosted shortcode's root out of reach is not drawn
+    /// (ACCESS-3 #3), a parent it may not see answers as one that is not
+    /// there (nothing), a cursor naming one is a cursor into nothing, a
+    /// `keep` it may not see is no keep, and a shortcode whose root it may
+    /// not see has at its top the tickets of it it sees whose parent it
+    /// does not (ACCESS-1 decided 10: hidden ancestors are not drawn). Each
+    /// row redacted.
+    pub fn tree_page(&self, who: &(impl Reader + ?Sized), q: &TreeQuery, after: Option<&str>, limit: Option<u32>) -> Result<TreePage, StoreError> {
+        let seen = Seen::of(who)?;
+        if seen.all() {
+            return self.tree_page_unscoped(q, after, limit);
+        }
+        let q = TreeQuery { lens: seen.within(&q.lens)?, ..q.clone() };
+        self.tree_cut(&q, after, limit, Some(&seen))
+    }
+
+    /// [`Store::tree_page`] for the system: every row.
+    pub(super) fn tree_page_unscoped(&self, q: &TreeQuery, after: Option<&str>, limit: Option<u32>) -> Result<TreePage, StoreError> {
+        self.tree_cut(q, after, limit, None)
+    }
+
+    /// The tree read itself; `seen`, a restricted reader's reach (`q`'s lens
+    /// already within it).
+    fn tree_cut(&self, q: &TreeQuery, after: Option<&str>, limit: Option<u32>, seen: Option<&Seen>) -> Result<TreePage, StoreError> {
         let up = |s: Option<&str>| s.map(|s| s.trim().to_ascii_uppercase());
         let after = up(after);
         let cache = self.tickets.read().expect("store lock poisoned");
@@ -1001,22 +1028,111 @@ impl Store {
             None => None,
             Some(id) => Some(cache.at.get(id).cloned().ok_or_else(|| StoreError::CursorNotFound(id.to_string()))?),
         };
+        let sees = seen.map(|s| s.sees(&cache));
+        let sees = sees.as_ref();
+        if let Some(sees) = sees {
+            sees.cursor(after.as_deref())?;
+            // ACCESS-10: a parent out of reach is one that is not there.
+            if parent.as_deref().is_some_and(|p| cache.at.contains_key(p) && !sees.id(p)) {
+                return Ok(TreePage { nodes: Vec::new(), next: None, remaining: 0 });
+            }
+        }
         let mut c = Compiled::read(&cache, &q.lens, None)?;
         if let Some(id) = q.keep.as_deref().filter(|_| q.matches_only) {
-            c.keep(id);
+            if sees.is_none_or(|s| filtered::keep_row(&cache, id).is_some_and(|t| s.sees_row(t))) {
+                c.keep(id);
+            }
         }
-        let rowed = match (parent.as_deref(), epic.as_ref(), q.matches_only) {
+        // ACCESS-1 decided 10: a shortcode whose root is out of reach, its
+        // tickets in reach whose parent is not, at its top.
+        let hidden_root = |e: &ShortcodeId| sees.is_some_and(|s| cache.rollups.root(e).is_some_and(|r| cache.at.contains_key(r) && !s.id(r)));
+        let mut rowed = match (parent.as_deref(), epic.as_ref(), q.matches_only) {
+            (None, Some(e), m) if hidden_root(e) => c.visible_tops(e, sees.expect("a hidden root has a reach"), m),
             (Some(p), None, false) => c.children_rows(p),
             (None, Some(e), false) => c.top_rows(e),
             (Some(p), None, true) => c.nearest_rows(p, &c.placed()),
             (None, Some(e), true) => c.top_matches(e),
             _ => return Err(StoreError::TreeAddress),
         };
-        Ok(c.page(rowed, cursor.as_ref(), after, limit))
+        if let Some(sees) = sees {
+            rowed.within(sees);
+        }
+        let mut page = c.page(rowed, cursor.as_ref(), after, limit);
+        if let Some(sees) = sees {
+            page.nodes.iter_mut().for_each(|n| sees.row(&mut n.summary));
+        }
+        Ok(page)
+    }
+}
+
+impl<'c> Rowed<'c> {
+    /// ACCESS-10: only the rows `sees` admits — the holders, the matches and
+    /// the hosted roots out of reach taken out (a match is never one: the
+    /// lens is within the reach).
+    fn within(&mut self, sees: &Sees<'_>) {
+        for (e, b) in &mut self.by_epic {
+            if let Some(admitted) = sees.admitted(e) {
+                *b &= &admitted;
+            }
+        }
+        self.by_epic.retain(|(_, b)| !b.is_empty());
+        for (e, b) in &mut self.hit {
+            if let Some(admitted) = sees.admitted(e) {
+                *b &= &admitted;
+            }
+        }
+        self.tail.retain(|r| sees.sees_row(r));
+    }
+
+    /// ACCESS-10: `other`'s rows added to these (each top's own, at a
+    /// shortcode's top whose root is out of reach).
+    fn add(&mut self, other: Rowed<'c>) {
+        for (e, b) in other.by_epic {
+            match self.by_epic.binary_search_by(|(x, _)| (*x).cmp(e)) {
+                Ok(i) => self.by_epic[i].1 |= b,
+                Err(i) => self.by_epic.insert(i, (e, b)),
+            }
+        }
+        self.known.extend(other.known);
+        for (e, b) in other.hit {
+            *self.hit.entry(e).or_default() |= b;
+        }
+        for r in other.tail {
+            if !self.tail.iter().any(|t| t.id == r.id) {
+                self.tail.push(r);
+            }
+        }
     }
 }
 
 impl<'c> Compiled<'c> {
+    /// ACCESS-10 (ACCESS-1 decided 10): the top of a shortcode whose root
+    /// `sees` hides — its tickets in reach whose parent is out of reach (or
+    /// none), each drawn as a root is: with `matches_only`, itself when it
+    /// matches, else its nearest matches; otherwise itself when it matches
+    /// or holds a match.
+    fn visible_tops(&self, epic: &ShortcodeId, sees: &Sees<'_>, matches_only: bool) -> Rowed<'c> {
+        let cache = self.cache;
+        let Some((name, _)) = cache.cells.shortcodes().find(|(e, _)| *e == epic) else { return Rowed::default() };
+        let placed = if matches_only { self.placed() } else { Vec::new() };
+        let mut rowed = Rowed { alone: true, ..Rowed::default() };
+        for seq in sees.admitted(epic).unwrap_or_default() {
+            let Some(t) = cache.order.get(&OrderKey { shortcode: epic.clone(), seq }) else { continue };
+            if t.parent.as_deref().is_some_and(|p| sees.id(p)) {
+                continue;
+            }
+            let node = self.node_alone(t);
+            if matches_only && !node.0 {
+                rowed.add(self.nearest_rows(&t.id, &placed));
+                continue;
+            }
+            if node.0 || node.1 > 0 {
+                rowed.add(Rowed { by_epic: vec![(name, RoaringBitmap::from_iter([seq]))], known: HashMap::from([((name, seq), node)]), ..Rowed::default() });
+            }
+        }
+        rowed
+    }
+
     /// A parent's children that match or hold a match. All but the few on
     /// the way to an `under` ticket below the parent are under the same
     /// atoms — those over the parent — so their rows are bitmaps: the

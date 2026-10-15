@@ -190,7 +190,7 @@ impl Store {
     /// (a cascade's), when the log began, and (canceled) what a restore puts
     /// back. From the cache alone. [`StoreError::NotFound`] for an id that
     /// names no ticket.
-    pub fn history(&self, id: &str) -> Result<HistoryAnswer, StoreError> {
+    pub(super) fn history_unscoped(&self, id: &str) -> Result<HistoryAnswer, StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
         // ORG-3: by any address — a deleted ticket's by its pinned id or key.
         let id = match cache.find_ticket(id, shortcodes::OrgReach::All) {

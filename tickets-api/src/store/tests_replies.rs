@@ -138,7 +138,7 @@ async fn since_bounds_it_and_the_earliest_answers() {
     assert_eq!(reply(&store, &Awaiting { since: c.at, ..agent(None) }), Some(Reply::Commented { comment: c.clone() }), "at since");
     // Two after since: the earliest — at one second, the table's order (an answer first).
     store.answer("W-2", "landing", InputValue::Choice { option: "delete".into() }, None, AnswerSource::App).await.unwrap();
-    let answered_at = store.inputs(Some("W-2"), Some("W"), None).unwrap().into_iter().find(|i| i.id == "landing").unwrap().history[0].at_unix;
+    let answered_at = store.inputs(SYS, Some("W-2"), Some("W"), None).unwrap().into_iter().find(|i| i.id == "landing").unwrap().history[0].at_unix;
     let got = reply(&store, &agent(None)).unwrap();
     if answered_at == c.at {
         assert!(matches!(got, Reply::Answered { .. }), "{got:?}");

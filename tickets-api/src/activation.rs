@@ -173,7 +173,7 @@ impl Tickets {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 unix_now: chrono::Utc::now().timestamp(),
                 // IDENTITY-21: what this caller can see.
-                ticket_count: visible_count(&store, &caller),
+                ticket_count: store.count(&caller) as u64,
             };
         }
     }
@@ -257,13 +257,10 @@ impl Tickets {
                     return;
                 }
             };
-            let reach = match create_admits(&store, &caller, &epic, parent.as_deref(), blocked_by.as_deref()) {
-                Ok(r) => r,
-                Err(ev) => {
-                    yield ev;
-                    return;
-                }
-            };
+            if let Err(ev) = create_admits(&store, &caller, &epic, parent.as_deref(), blocked_by.as_deref()) {
+                yield ev;
+                return;
+            }
             let kind = kind.unwrap_or(Kind::Build);
             // MENGER-13: its first status is a transition, the caller's.
             let act = match act_of(&caller, None, None) {
@@ -285,7 +282,7 @@ impl Tickets {
             }, act).await {
                 Ok(ticket) => yield TicketsEvent::Created { ticket },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
-                Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, reach.as_ref(), id)) },
+                Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
             }
         }
     }
@@ -384,8 +381,9 @@ impl Tickets {
                     return;
                 }
             };
-            let keep = if filter.is_some() { kept(&store, &caller, keep.as_deref()) } else { None };
-            let filter = match caller.scoped(filter.as_deref()) {
+            // ACCESS-10: the caller's own filter; the store answers it within
+            // the caller's reach.
+            let filter = match asked(filter.as_deref()) {
                 Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
@@ -412,13 +410,14 @@ impl Tickets {
                         return;
                     }
                 };
+                let keep = filter.is_some().then(|| keep.map(String::from)).flatten();
                 let q = Filtered { lens, epic, status, parent, keep };
                 if summary.unwrap_or(false) {
-                    for ev in page_events(store.filtered_page(&q, after.as_deref(), at, limit)) {
+                    for ev in page_events(store.filtered_page(&caller, &q, after.as_deref(), at, limit)) {
                         yield ev;
                     }
                 } else {
-                    let walk = store.walk(Select::Filtered(q), after.as_deref(), limit).at(at);
+                    let walk = store.walk(&caller, Select::Filtered(q), after.as_deref(), limit).at(at);
                     let mut events = Box::pin(walk_events(store, walk));
                     while let Some(ev) = events.next().await {
                         yield ev;
@@ -427,7 +426,7 @@ impl Tickets {
                 return;
             }
             if summary.unwrap_or(false) {
-                let page = store.page(PageQuery {
+                let page = store.page(&caller, PageQuery {
                     epic: epic.as_deref(),
                     status,
                     parent: parent.as_deref(),
@@ -438,7 +437,7 @@ impl Tickets {
                     yield ev;
                 }
             } else {
-                let walk = store.walk(Select::List { epic, status, parent }, after.as_deref(), limit);
+                let walk = store.walk(&caller, Select::List { epic, status, parent }, after.as_deref(), limit);
                 let mut events = Box::pin(walk_events(store, walk));
                 while let Some(ev) = events.next().await {
                     yield ev;
@@ -623,7 +622,7 @@ impl Tickets {
             // moves inside its shortcode, and takes `tickets.set_parent` on
             // both sides. AUTH-7: the gate held the grant on `id` (the
             // target); the rest is its own question, as it stands now.
-            let root = store.groups().into_iter().any(|g| g.root.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(id.trim())));
+            let root = store.groups(&caller).into_iter().any(|g| g.root.as_deref().is_some_and(|r| r.eq_ignore_ascii_case(id.trim())));
             let wanted = if root { Some(Grant::new(ADMINISTER)) } else { caller.grant().cloned() };
             if let Some(g) = wanted {
                 if let Err(message) = caller.check(&g, &id).and_then(|()| caller.check(&g, &parent)) {
@@ -857,9 +856,9 @@ impl Tickets {
                     return;
                 }
             };
-            let (act, sight) = match (act_of(&caller, source, message), sight_lens(&caller)) {
-                (Ok(a), Ok(s)) => (a, s),
-                (Err(message), _) | (_, Err(message)) => {
+            let act = match act_of(&caller, source, message) {
+                Ok(a) => a,
+                Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
@@ -868,7 +867,7 @@ impl Tickets {
                 Ok(crate::store::Updated { ticket, changed }) => yield TicketsEvent::Updated { ticket, changed },
                 Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: id.into_string() },
                 Err(e @ StoreError::BodyTooLarge { .. }) => yield too_large(e),
-                Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, sight.as_ref(), id)) },
+                Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
             }
         }
     }
@@ -1048,7 +1047,7 @@ impl Tickets {
                     return;
                 }
             };
-            let filter = match caller.scoped(filter.as_deref()) {
+            let filter = match asked(filter.as_deref()) {
                 Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
@@ -1071,11 +1070,11 @@ impl Tickets {
                 Ok(Some(q)) => {
                     let q = Filtered { lens: q.lens.with_clock(clock), ..q };
                     if summary.unwrap_or(false) {
-                        for ev in page_events(store.ready_filtered_page(&q, after.as_deref(), limit)) {
+                        for ev in page_events(store.ready_filtered_page(&caller, &q, after.as_deref(), limit)) {
                             yield ev;
                         }
                     } else {
-                        let walk = store.walk(Select::Filtered(q), after.as_deref(), limit);
+                        let walk = store.walk(&caller, Select::Filtered(q), after.as_deref(), limit);
                         let mut events = Box::pin(walk_events(store, walk));
                         while let Some(ev) = events.next().await {
                             yield without_first(ev);
@@ -1086,14 +1085,16 @@ impl Tickets {
                 Ok(None) => {}
             }
             if summary.unwrap_or(false) {
-                for ev in page_events(store.ready_page(epic.as_deref(), after.as_deref(), limit)) {
+                for ev in page_events(store.ready_page(&caller, epic.as_deref(), after.as_deref(), limit)) {
                     yield ev;
                 }
             } else {
-                let walk = store.walk(Select::Ready { epic }, after.as_deref(), limit);
+                // ACCESS-10: a restricted reader's is the filtered walk of its
+                // reach — its page, as every ready set's, without `first`.
+                let walk = store.walk(&caller, Select::Ready { epic }, after.as_deref(), limit);
                 let mut events = Box::pin(walk_events(store, walk));
                 while let Some(ev) = events.next().await {
-                    yield ev;
+                    yield without_first(ev);
                 }
             }
         }
@@ -1148,7 +1149,7 @@ impl Tickets {
                     return;
                 }
             };
-            let filter = match caller.scoped(filter.as_deref()) {
+            let filter = match asked(filter.as_deref()) {
                 Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
@@ -1159,8 +1160,8 @@ impl Tickets {
             let page = match zoned_lens(&store, &caller, filter.as_ref(), tz.as_deref()) {
                 Err(e) => Err(e),
                 // FILTER-15: the candidates the cells admit.
-                Ok(Some(lens)) => store.find_filtered(&query, &lens, after.as_deref(), limit),
-                Ok(None) => store.find_page(&query, after.as_deref(), limit),
+                Ok(Some(lens)) => store.find_filtered(&caller, &query, &lens, after.as_deref(), limit),
+                Ok(None) => store.find_page(&caller, &query, after.as_deref(), limit),
             };
             for ev in page_events(page) {
                 yield ev;
@@ -1216,7 +1217,7 @@ impl Tickets {
                     return;
                 }
             };
-            let filter = match caller.scoped(filter.as_deref()) {
+            let filter = match asked(filter.as_deref()) {
                 Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
@@ -1231,7 +1232,7 @@ impl Tickets {
                 }
             };
             let limit = Some(limit.unwrap_or(SEARCH_LIMIT).min(SEARCH_MAX));
-            match store.search(&query, lens, limit, offset).await {
+            match store.search(&caller, &query, lens, limit, offset).await {
                 Ok(SearchPage { hits, matched, next, words }) => {
                     for hit in hits {
                         yield TicketsEvent::Hit {
@@ -1279,8 +1280,8 @@ impl Tickets {
                     return;
                 }
             };
-            let filter = match caller.scoped_text(&filter) {
-                Ok(v) => v,
+            let filter = match asked(Some(&filter)) {
+                Ok(v) => v.unwrap_or_default(),
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
@@ -1299,7 +1300,7 @@ impl Tickets {
                     return;
                 }
             };
-            let matched = store.member(&ids, &lens);
+            let matched = store.member(&caller, &ids, &lens);
             for (id, matched) in ids.into_iter().zip(matched) {
                 yield TicketsEvent::Member { id, matched };
             }
@@ -1333,24 +1334,13 @@ impl Tickets {
                     return;
                 }
             };
-            let visible = match visible_epics(&store, &caller) {
-                Ok(v) => v,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            for mut group in store.groups() {
-                if let Some(v) = &visible {
-                    if !v.contains(&group.shortcode) {
-                        continue;
-                    }
-                    // IDENTITY-21: hosted under a ticket out of reach, a
-                    // shortcode stands at the top for this caller.
-                    if group.host.as_deref().is_some_and(|h| store.shortcode_of(h).is_none_or(|sc| !v.contains(&sc))) {
-                        group.host = None;
-                    }
-                }
+            if let Err(message) = caller.read_filter() {
+                yield TicketsEvent::Error { message };
+                return;
+            }
+            // ACCESS-10: the shortcodes the caller sees; a root or host out
+            // of reach is none (the shortcode at the top for this caller).
+            for group in store.groups(&caller) {
                 yield TicketsEvent::Group { group };
             }
         }
@@ -1386,14 +1376,11 @@ impl Tickets {
                     return;
                 }
             };
-            let reach = match view_lens(&caller) {
-                Ok(r) => r,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            for component in visible_components(&store, reach.as_ref(), store.components()) {
+            if let Err(message) = caller.read_filter() {
+                yield TicketsEvent::Error { message };
+                return;
+            }
+            for component in store.components(&caller) {
                 yield TicketsEvent::Component { component };
             }
         }
@@ -1450,24 +1437,18 @@ impl Tickets {
                     return;
                 }
             };
-            let filter = match caller.scoped(filter.as_deref()) {
+            let filter = match asked(filter.as_deref()) {
                 Ok(v) => v,
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
                 }
             };
-            if let Some(t) = ticket.as_deref() {
-                if caller.require(&[t], &store).is_err() {
-                    yield TicketsEvent::NotFound { id: t.to_string() };
-                    return;
-                }
-            }
             // FILTER-15: of the tickets the filter admits, by the cells.
             let answer = match zoned_lens(&store, &caller, filter.as_ref(), tz.as_deref()) {
                 Err(e) => Err(e),
-                Ok(Some(lens)) => store.inputs_filtered(ticket.as_deref(), epic.as_deref(), state, &lens),
-                Ok(None) => store.inputs(ticket.as_deref(), epic.as_deref(), state),
+                Ok(Some(lens)) => store.inputs_filtered(&caller, ticket.as_deref(), epic.as_deref(), state, &lens),
+                Ok(None) => store.inputs(&caller, ticket.as_deref(), epic.as_deref(), state),
             };
             match answer {
                 Ok(inputs) => {
@@ -1475,7 +1456,8 @@ impl Tickets {
                         yield TicketsEvent::Input { input };
                     }
                 }
-                Err(StoreError::NotFound(id)) => yield TicketsEvent::NotFound { id },
+                // ACCESS-10: a ticket out of reach is not found, as one not there.
+                Err(StoreError::NotFound(id)) => yield TicketsEvent::NotFound { id: ticket.map_or(id, String::from) },
                 Err(e) => yield veiled(&caller, e),
             }
         }
@@ -1647,17 +1629,11 @@ impl Tickets {
                     return;
                 }
             };
-            let visible = match visible_epics(&store, &caller) {
-                Ok(v) => v,
-                Err(message) => {
-                    yield TicketsEvent::Error { message };
-                    return;
-                }
-            };
-            for (shortcode, epic, last_seq, holes) in store.extents_holed() {
-                if visible.as_ref().is_some_and(|v| !v.contains(&shortcode)) {
-                    continue;
-                }
+            if let Err(message) = caller.read_filter() {
+                yield TicketsEvent::Error { message };
+                return;
+            }
+            for (shortcode, epic, last_seq, holes) in store.extents_holed(&caller) {
                 yield TicketsEvent::Extent { epic, shortcode, last_seq, holes };
             }
         }
@@ -1784,8 +1760,8 @@ impl Tickets {
                     return;
                 }
             };
-            let filter = match caller.scoped_text(&filter) {
-                Ok(v) => v,
+            let filter = match asked(Some(&filter)) {
+                Ok(v) => v.unwrap_or_default(),
                 Err(message) => {
                     yield TicketsEvent::Error { message };
                     return;
@@ -1805,9 +1781,9 @@ impl Tickets {
                     return;
                 }
             };
-            let keep = kept(&store, &caller, keep.as_deref());
-            let q = TreeQuery { parent, epic, lens, matches_only: matches_only.unwrap_or(false), keep };
-            for ev in tree_events(store.tree_page(&q, after.as_deref(), limit)) {
+            // ACCESS-10: kept only when in the caller's reach (the store's).
+            let q = TreeQuery { parent, epic, lens, matches_only: matches_only.unwrap_or(false), keep: keep.map(String::from) };
+            for ev in tree_events(store.tree_page(&caller, &q, after.as_deref(), limit)) {
                 yield ev;
             }
         }
@@ -2106,7 +2082,7 @@ impl Tickets {
             let filter = caller.scoped(asked.as_deref())?;
             // MENGER-13: how its filter reads time.
             let clock = clock_of(&caller, tz.as_deref())?;
-            Ok((filter, Sight::of(&self.store, &caller)?, clock))
+            Ok((filter, Sight::of(&self.store, caller)?, clock))
         });
         let (filter, sight, clock, refused) = match opened {
             Ok((filter, sight, clock)) => (filter, Some(sight), clock, None),
@@ -2163,9 +2139,9 @@ impl Tickets {
                             return;
                         }
                         Ok(None) => {}
-                        Ok(Some((caller, gone))) => {
+                        Ok(Some(gone)) => {
                             // The filter again, under the reach as it stands.
-                            let rebuilt = caller.scoped(asked.as_deref()).and_then(|f| watcher_for(&store, f.as_ref(), epic.as_ref(), &clock));
+                            let rebuilt = sight.caller().scoped(asked.as_deref()).and_then(|f| watcher_for(&store, f.as_ref(), epic.as_ref(), &clock));
                             match rebuilt {
                                 Ok(w) => watcher = w,
                                 Err(message) => {
@@ -2224,7 +2200,7 @@ impl Tickets {
                         return;
                     }
                     Ok(None) => {}
-                    Ok(Some((_, gone))) => {
+                    Ok(Some(gone)) => {
                         for name in gone {
                             yield TicketsEvent::ComponentRemoved { name };
                         }

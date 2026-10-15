@@ -18,14 +18,11 @@ pub(super) fn get_stream(store: Arc<Store>, admitted: Result<VerifiedUser, Strin
         };
         // ORG-4: a short form read in the caller's organizations.
         let named = named_in(&store, &caller, id.clone());
-        if caller.require(&[named.as_str()], &store).is_err() {
-            yield TicketsEvent::NotFound { id };
-            return;
-        }
-        match store.get(&named).await {
+        // ACCESS-10: a ticket out of reach is not found, as one not there.
+        match store.get(&caller, &named).await {
             Ok(ticket) => yield TicketsEvent::Ticket { ticket },
             // ACT-5: a deleted ticket answers its tombstone.
-            Err(StoreError::NotFound(_)) => yield store.tombstone(&id).map_or(TicketsEvent::NotFound { id }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
+            Err(StoreError::NotFound(_)) => yield store.tombstone(&caller, &id).map_or(TicketsEvent::NotFound { id }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
             Err(e) => yield veiled(&caller, e),
         }
     }
@@ -42,23 +39,12 @@ pub(super) fn blockers_stream(store: Arc<Store>, admitted: Result<VerifiedUser, 
                 return;
             }
         };
-        if caller.require(&[id.as_str()], &store).is_err() {
-            yield TicketsEvent::NotFound { id };
-            return;
-        }
-        let reach = match view_lens(&caller) {
-            Ok(r) => r,
-            Err(message) => {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-        };
-        match store.blockers(&id).await {
+        // ACCESS-10: the blockers in reach, a hidden one not named.
+        match store.blockers(&caller, &id).await {
             Ok(refs) => {
                 for r in refs {
                     yield match r {
-                        BlockerRef::Resolved(ticket) if sees_id(&store, reach.as_ref(), &ticket.id) => TicketsEvent::Blocker { ticket },
-                        BlockerRef::Resolved(ticket) => TicketsEvent::DanglingBlocker { id: String::from(ticket.id) },
+                        BlockerRef::Resolved(ticket) => TicketsEvent::Blocker { ticket },
                         BlockerRef::Dangling(id) => TicketsEvent::DanglingBlocker { id },
                     };
                 }
@@ -80,33 +66,21 @@ pub(super) fn history_stream(store: Arc<Store>, admitted: Result<VerifiedUser, S
                 return;
             }
         };
-        if caller.require(&[id.as_str()], &store).is_err() {
-            yield TicketsEvent::NotFound { id };
-            return;
-        }
-        let reach = match view_lens(&caller) {
-            Ok(r) => r,
-            Err(message) => {
-                yield TicketsEvent::Error { message };
-                return;
-            }
-        };
-        match store.history(&id) {
+        // ACCESS-10: what it caused and what a restore puts back, in reach.
+        match store.history(&caller, &id) {
             Ok(h) => {
                 for transition in h.own {
                     yield TicketsEvent::Transition { transition };
                 }
-                // IDENTITY-21: what it caused, where the caller can see.
-                for transition in h.caused.into_iter().filter(|t| sees_id(&store, reach.as_ref(), &t.ticket)) {
+                for transition in h.caused {
                     yield TicketsEvent::Transition { transition };
                 }
                 // MENGER-39: who queued it, why, at what urgency.
-                for record in store.queue_history(&id) {
+                for record in store.queue_history(&caller, &id) {
                     yield TicketsEvent::QueueRecord { record };
                 }
-                let restorable = h.restorable.into_iter().filter(|t| sees_id(&store, reach.as_ref(), t)).collect();
                 let (status_since_unix, status_since_exact) = (h.since.map(|s| s.0), h.since.map(|s| s.1));
-                yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable, status_since_unix, status_since_exact, deletions: h.deletions };
+                yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable: h.restorable, status_since_unix, status_since_exact, deletions: h.deletions };
             }
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id },
             Err(e) => yield veiled(&caller, e),

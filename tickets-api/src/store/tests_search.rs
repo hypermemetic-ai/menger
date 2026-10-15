@@ -31,7 +31,7 @@ async fn holding(store: &Store, tickets: &[(&str, &str)]) {
 }
 
 async fn search(store: &Store, query: &str) -> SearchPage {
-    store.search(query, None, None, None).await.unwrap()
+    store.search(SYS, query, None, None, None).await.unwrap()
 }
 
 fn ids(page: &SearchPage) -> Vec<&str> {
@@ -313,7 +313,7 @@ async fn a_filter_keeps_what_it_admits_and_pages_are_windows() {
         store.set_status(id, Status::Ready).await.unwrap();
     }
     let ready = Lens::of(&Filter::parse("status Ready").unwrap()).unwrap();
-    let page = store.search("cache", Some(ready.clone()), None, None).await.unwrap();
+    let page = store.search(SYS, "cache", Some(ready.clone()), None, None).await.unwrap();
     let mut got = ids(&page);
     got.sort();
     assert_eq!(got, ["SR-3", "SR-5", "SR-6"]);
@@ -324,15 +324,15 @@ async fn a_filter_keeps_what_it_admits_and_pages_are_windows() {
     let mut walked = Vec::new();
     let mut offset = Some(0);
     while let Some(at) = offset {
-        let page = store.search("cache", None, Some(3), Some(at)).await.unwrap();
+        let page = store.search(SYS, "cache", None, Some(3), Some(at)).await.unwrap();
         assert_eq!(page.matched, 7);
         walked.extend(page.hits.iter().map(|h| h.summary.id.clone()));
         offset = page.next;
     }
     assert_eq!(walked, ids(&all), "the pages, in turn, are the whole answer");
-    let past = store.search("cache", None, Some(3), Some(50)).await.unwrap();
+    let past = store.search(SYS, "cache", None, Some(3), Some(50)).await.unwrap();
     assert!(past.hits.is_empty() && past.next.is_none() && past.matched == 7);
-    let capped = store.search("cache", None, Some(1_000), None).await.unwrap();
+    let capped = store.search(SYS, "cache", None, Some(1_000), None).await.unwrap();
     assert_eq!(capped.hits.len(), 7);
 }
 
@@ -353,7 +353,7 @@ async fn windows_cross_from_the_typed_matches_to_the_corrected_ones() {
     let refs: Vec<(&str, &str)> = tickets.iter().map(|(t, b)| (t.as_str(), b.as_str())).collect();
     holding(&store, &refs).await;
     let everything = Lens::of(&Filter::parse("(status Ready or not status Ready)").unwrap()).unwrap();
-    let whole = store.search("plcement", Some(everything.clone()), Some(100), None).await.unwrap();
+    let whole = store.search(SYS, "plcement", Some(everything.clone()), Some(100), None).await.unwrap();
     assert_eq!(whole.matched, 26);
     assert!(whole.hits[..3].iter().all(|h| !h.corrected) && whole.hits[3..].iter().all(|h| h.corrected));
     let order: Vec<String> = whole.hits.iter().map(|h| h.summary.id.to_string()).collect();
@@ -361,7 +361,7 @@ async fn windows_cross_from_the_typed_matches_to_the_corrected_ones() {
         for lens in [None, Some(everything.clone())] {
             let (mut walked, mut offset) = (Vec::new(), Some(0));
             while let Some(at) = offset {
-                let page = store.search("plcement", lens.clone(), Some(size), Some(at)).await.unwrap();
+                let page = store.search(SYS, "plcement", lens.clone(), Some(size), Some(at)).await.unwrap();
                 assert_eq!(page.matched, 26);
                 assert!(page.hits.len() <= size as usize);
                 walked.extend(page.hits.iter().map(|h| h.summary.id.clone()));
@@ -468,9 +468,9 @@ async fn a_seed_is_indexed_with_its_tickets() {
     let path = dir.path().join("seed.db");
     let store = Store::open(&path).unwrap();
     store.seed_synthetic(SeedSpec { count: 600, seed: 7, into_existing: false }).unwrap();
-    let page = store.search("disagree", None, Some(5), None).await.unwrap();
+    let page = store.search(SYS, "disagree", None, Some(5), None).await.unwrap();
     assert!(page.matched > 0 && page.hits.len() == 5, "{}", page.matched);
-    let begun = store.search("disagre readers", None, Some(5), None).await.unwrap();
+    let begun = store.search(SYS, "disagre readers", None, Some(5), None).await.unwrap();
     assert_eq!(begun.matched, page.matched, "a prefix: every ticket that disagrees has its readers");
     drop(store);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { indexed: Some(600), tickets: 600, .. }));

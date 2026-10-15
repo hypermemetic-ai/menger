@@ -182,7 +182,7 @@ impl Store {
         let uses = update.body.as_deref().map(components::read);
         let declares = update.body.as_deref().map(crate::inputs::read);
         let serial = self.serial().await;
-        let current = self.get(&id).await?;
+        let current = self.get_unscoped(&id).await?;
         let plan = {
             let cache = self.tickets.read().expect("store lock poisoned");
             plan(&cache, &current, update, uses, declares, &mut refusals)

@@ -80,7 +80,7 @@ async fn an_upgrade_makes_the_ticket_and_marks_the_note_in_one_write() {
     assert!(made.body.starts_with("## watch drops **events**\nseen twice\n\nNoted ") && made.body.ends_with(" — note 1."), "{}", made.body);
     assert_eq!(marked, Note { ticket: Some("SR-2".into()), upgraded_at: Some(made.created_unix), ..note.clone() });
     assert_eq!(store.note(1).unwrap(), marked, "the cache holds the mark");
-    assert_eq!(store.get("SR-2").await.unwrap().title, made.title);
+    assert_eq!(store.get(SYS, "SR-2").await.unwrap().title, made.title);
     assert!(matches!(watch.recv().await.unwrap(), Change::Created { ticket } if ticket.id == "SR-2"), "the birth is a create's");
     assert_eq!(all(&store, NoteQuery { state: Some(NoteState::Upgraded), ..Default::default() }), [1]);
     assert_eq!(all(&store, NoteQuery { state: Some(NoteState::Open), ..Default::default() }), Vec::<u64>::new());
@@ -133,7 +133,7 @@ async fn notes_and_their_tickets_survive_a_reopen_and_an_older_file_gains_the_ta
         let store = Store::open(&path).unwrap();
         assert_eq!(store.note(kept.id.get()).unwrap(), kept);
         assert_eq!(store.note(marked.id.get()).unwrap(), marked);
-        assert_eq!(store.get("SR-2").await.unwrap().title, "made a ticket");
+        assert_eq!(store.get(SYS, "SR-2").await.unwrap().title, "made a ticket");
         assert_eq!(store.add_note_as("after".into(), None, None).await.unwrap().id, 3, "ids go on from the file");
     }
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }), "notes are no derived state");
@@ -144,5 +144,5 @@ async fn notes_and_their_tickets_survive_a_reopen_and_an_older_file_gains_the_ta
     let store = Store::open(&path).unwrap();
     assert!(notes_table(&path));
     assert_eq!(all(&store, NoteQuery::default()), Vec::<u64>::new());
-    assert_eq!(store.get("SR-2").await.unwrap().title, "made a ticket", "the tickets as they were");
+    assert_eq!(store.get(SYS, "SR-2").await.unwrap().title, "made a ticket", "the tickets as they were");
 }

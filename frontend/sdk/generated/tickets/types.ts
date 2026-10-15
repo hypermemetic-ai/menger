@@ -582,6 +582,13 @@ lesson — a list on a row is bounded). */
 shows — two shortcodes of one code are told apart by `shortcode`
 and `address`, never by this. */
   epic: Code;
+  /** ACCESS-10: how many of `blocked_by` the reader may not see — dropped
+from the list and counted here, so readiness stays honest. Omitted
+(0) for a reader who sees them all. */
+  hiddenBlockedBy?: number;
+  /** ACCESS-10: how many of `unlocks` the reader may not see, as
+`hidden_blocked_by`. */
+  hiddenUnlocks?: number;
   /** `EPIC-N`, allocated by the store. ORG-3: the ticket's key — opaque
 and immutable ([`crate::TicketId`]): today's id for today's tickets,
 its shortcode's id, `-` and its number for a newborn. */
@@ -602,6 +609,9 @@ fields). */
   /** AGS-19: the ticket this one is an output of, if any. Any epic; the
 parent must exist at creation and the chain is acyclic. */
   parent?: TicketId | null;
+  /** ACCESS-10: the parent is one the reader may not see — `parent` is
+then none. Omitted (false) otherwise. */
+  parentHidden?: boolean;
   /** WAVE-10: the ticket's **path address** inside its shortcode, if it
 has one — `<SHORTCODE>/<path>` names it (`get { id:
 "PLEXUS/_MENGER/board" }`), and no other ticket of the shortcode
@@ -661,12 +671,19 @@ the ticket page all have it without a `get`. */
   commits: string[];
   createdUnix: number;
   epic: Code;
+  /** ACCESS-10: as on [`Ticket`]. */
+  hiddenBlockedBy?: number;
+  /** ACCESS-10: as on [`Ticket`]. */
+  hiddenUnlocks?: number;
   id: TicketId;
   kind: Kind;
   /** MENGER-12: as on [`Ticket`] — on the row, so the board, the nav and
 Home's "Needs you" draw a ticket's label chips without a `get`. */
   labels?: string[];
   parent?: TicketId | null;
+  /** ACCESS-10: as on [`Ticket`] — omitted unless the reader may not see
+the parent. */
+  parentHidden?: boolean;
   /** WAVE-10: as on [`Ticket`] — on the row, so the nav can hide
 `_MENGER/` documents without a `get`. Unlike `severity` and
 `parent`, omitted when there is none (the ticket's contract): every

@@ -1872,6 +1872,43 @@ None has a public field or constructor, a `Default` or a `Deserialize`
 (reads take `&VerifiedUser`), ACCESS-11 (writes take a `Permit`) and
 ACCESS-12 (watches re-verify on the generation) build on these.
 
+### Reads through a reach (ACCESS-10)
+
+Every public read of the store takes its **reader**
+(`tickets-api/src/store/seen.rs`): a `VerifiedUser` (answered from where
+the call's grant is held), one reading through another of its grants
+(`user.reading(grant)`, `user.sight()` for `tickets.get`), or the `System`
+(the code that opened the store: the builder, `--verify-derived`, the access
+layer's own reads of the grants). The trait is sealed and the unscoped
+forms are the store's own, so a read that forgets its caller does not
+compile (`compile_fail` doctests). The store ANDs the reader's reach into
+whatever the read asks, and answers only what it admits:
+
+| read | a ticket out of reach is answered as |
+|---|---|
+| `get`, `history`, `blockers`, `inputs { ticket }`, `waves_under`, `waves_to`, `tombstone`, `queue_*` | none: `not_found`, exactly as a ticket that is not there |
+| `list`, `ready_set`, `find`, `search`, `counts`, `facets`, `member`, `tree`, `inputs`, `comments`, `count` | not there: not listed, counted or admitted |
+| an `after` cursor naming one | a cursor into nothing (`after: no ticket …`) |
+| a comment on one | no comment: `no comment N` beside the newest the reader sees; no cursor |
+| a blocker of a visible ticket | not answered by `blockers`, nor named as dangling |
+| `waves` | not placed, not named in `waiting_on`; it still holds its waiter back |
+| `components` | those owned by a ticket in reach, references cut to it |
+| `groups`, `extents` | a shortcode the reader sees nothing of is never named; a root or host out of reach is none |
+| `tree` | never a row: a hidden parent answers nothing; a shortcode whose root is hidden has at its top the tickets of it the reader sees whose parent it does not (ACCESS-1 decided 10) |
+
+**A visible row names no hidden ticket.** Its `blocked_by`, `unlocks` and
+`parent` lose the ids the reader may not see, counted instead:
+`hidden_blocked_by`, `hidden_unlocks`, `parent_hidden` — so readiness stays
+honest (the placement is still the store's). The three are omitted when
+zero/false, so for a reader who sees everything nothing on the wire changes
+(`tests/golden_wire.rs`). A reach is closed under the kept tree (every scope
+holds a ticket's descendants), so a visible ticket's children are all
+visible and `child_count` needs no redaction. A reach no read can narrow to
+(single tickets alone) reads nothing, never everything.
+`store/tests_reach.rs` holds a test per ACCESS-3 read gap and a property:
+for random trees, grants and reads, nothing answered or named lies outside
+the reach, and the tree reaches everything in it.
+
 ### Addresses and namespaces (ORG-3)
 
 A shortcode is unique only within its **namespace** — its organization and
@@ -3074,7 +3111,8 @@ organization (`hypermemetic:PLEXUS`) — "Organizations" above.
 Every read is answered under the caller's filter **and** their viewer
 scopes. `list --filter 'status Ready'` from someone with IDENTITY and OUGHT
 is `status Ready and under in (IDENTITY, OUGHT)`. A ticket out of reach is
-`not_found`. `groups`, `extents`, `waves`, `health` and `watch` hear only
+`not_found` — and never named in a row that is (ACCESS-10: "Reads through
+a reach"). `groups`, `extents`, `waves`, `health` and `watch` hear only
 what is in reach. A write needs the role on every ticket it touches — AUTH-7:
 refused by the gate, typed (`forbidden { grant: tickets.amend, scope: OUGHT,
 roles, held_on }`). A comment is signed with the

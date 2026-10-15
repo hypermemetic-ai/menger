@@ -42,11 +42,11 @@ fn status(store: &Store, id: &str) -> Status {
 }
 
 fn own(store: &Store, id: &str) -> Vec<Transition> {
-    store.history(id).unwrap().own
+    store.history(SYS, id).unwrap().own
 }
 
 fn input_state(store: &Store, ticket: &str, input: &str) -> InputState {
-    store.inputs(Some(ticket), None, None).unwrap().into_iter().find(|i| i.id == input).unwrap().state
+    store.inputs(SYS, Some(ticket), None, None).unwrap().into_iter().find(|i| i.id == input).unwrap().state
 }
 
 /// A history predicate, as the language reads it.
@@ -61,7 +61,7 @@ fn pred(text: &str) -> History {
 fn admitted(store: &Store, text: &str, clock: Clock) -> Vec<String> {
     let lens = Lens::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")).with_clock(clock);
     let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
-    store.filtered_page(&q, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
+    store.filtered_page(SYS, &q, None, None, None).unwrap().tickets.into_iter().map(|t| t.id.into_string()).collect()
 }
 
 fn at(clock_now: i64) -> Clock {
@@ -101,13 +101,13 @@ async fn every_change_of_a_status_or_a_kind_is_a_transition() {
     assert_eq!((t[3].field, t[3].from.as_deref(), t[3].to.as_str()), (TransitionField::Status, Some("Coding"), "Complete"));
     assert_eq!(t[3].cause, Some(t[2].id), "the status moved because the kind did");
     assert!(t.windows(2).all(|w| w[0].id < w[1].id), "ids in the order written");
-    assert!(matches!(store.history("LG-9"), Err(StoreError::NotFound(_))));
+    assert!(matches!(store.history(SYS, "LG-9"), Err(StoreError::NotFound(_))));
 
-    let before = (own(&store, "LG-1"), own(&store, "LG-2"), store.history("LG-1").unwrap().began);
+    let before = (own(&store, "LG-1"), own(&store, "LG-2"), store.history(SYS, "LG-1").unwrap().began);
     assert!(before.2.is_some(), "a file's log began when the file gained it");
     drop(store);
     let store = Store::open(&path).unwrap();
-    assert_eq!((own(&store, "LG-1"), own(&store, "LG-2"), store.history("LG-1").unwrap().began), before, "durable");
+    assert_eq!((own(&store, "LG-1"), own(&store, "LG-2"), store.history(SYS, "LG-1").unwrap().began), before, "durable");
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { transitions: Some(5), .. }));
 }
 
@@ -169,7 +169,7 @@ async fn canceling_cascades_through_the_open_work_below() {
         assert_eq!(t.cause_ticket.as_deref(), Some("R-2"), "{id}");
     }
     assert_eq!(own(&store, "R-7").len(), 2, "canceled on its own already: untouched");
-    let h = store.history("R-2").unwrap();
+    let h = store.history(SYS, "R-2").unwrap();
     assert_eq!(h.caused.iter().map(|t| t.ticket.as_str()).collect::<Vec<_>>(), ["R-3", "R-4"]);
     assert_eq!(h.restorable, ["R-3", "R-4"]);
 
@@ -177,10 +177,10 @@ async fn canceling_cascades_through_the_open_work_below() {
     assert_eq!(input_state(&store, "R-2", "own"), InputState::Withdrawn);
     assert_eq!(input_state(&store, "R-3", "ask"), InputState::Withdrawn);
     assert_eq!(input_state(&store, "R-4", "done"), InputState::Answered);
-    let ask = store.inputs(Some("R-3"), None, None).unwrap().remove(0);
+    let ask = store.inputs(SYS, Some("R-3"), None, None).unwrap().remove(0);
     let last = ask.history.last().unwrap();
     assert_eq!((last.action, last.source, last.rationale.as_deref()), (InputAction::Withdrawn, AnswerSource::System, Some("canceled because R-2 was canceled by Ada")));
-    assert!(store.inputs(None, None, Some(InputState::Open)).unwrap().is_empty(), "nothing waits");
+    assert!(store.inputs(SYS, None, None, Some(InputState::Open)).unwrap().is_empty(), "nothing waits");
     assert!(admitted(&store, "asking", Clock::default()).is_empty(), "a withdrawn input asks no one");
     assert!(matches!(
         store.answer("R-3", "ask", InputValue::Choice { option: "yes".into() }, None, AnswerSource::Api).await,
@@ -223,7 +223,7 @@ async fn restoring_brings_back_exactly_what_the_cancel_canceled() {
     tree(&store).await;
     store.set_status("R-2", Status::Canceled).await.unwrap();
     store.set_status("R-4", Status::Ready).await.unwrap();
-    assert_eq!(store.history("R-2").unwrap().restorable, ["R-3"], "R-4 moved since");
+    assert_eq!(store.history(SYS, "R-2").unwrap().restorable, ["R-3"], "R-4 moved since");
     store.set_status_by("R-2", Status::Ready, act("idp:ada", TransitionSource::Api), true).await.unwrap();
     assert_eq!(status(&store, "R-2"), Status::Ready);
     assert_eq!(status(&store, "R-3"), Status::Pending, "back to what it had");
@@ -236,7 +236,7 @@ async fn restoring_brings_back_exactly_what_the_cancel_canceled() {
     assert_eq!(back.message.as_deref(), Some("restored to Pending because R-2 was restored by idp:ada"));
     assert_eq!(input_state(&store, "R-2", "own"), InputState::Open);
     assert_eq!(input_state(&store, "R-3", "ask"), InputState::Open);
-    assert!(store.history("R-2").unwrap().restorable.is_empty());
+    assert!(store.history(SYS, "R-2").unwrap().restorable.is_empty());
     assert_eq!(admitted(&store, "asking", Clock::default()), ["R-2", "R-3"]);
 
     // Without restore_children: the ticket, its inputs, nothing below.
@@ -244,7 +244,7 @@ async fn restoring_brings_back_exactly_what_the_cancel_canceled() {
     store.set_status("R-2", Status::Pending).await.unwrap();
     assert_eq!((status(&store, "R-2"), status(&store, "R-3"), status(&store, "R-4")), (Status::Pending, Status::Canceled, Status::Canceled));
     assert_eq!((input_state(&store, "R-2", "own"), input_state(&store, "R-3", "ask")), (InputState::Open, InputState::Withdrawn));
-    assert!(store.history("R-2").unwrap().restorable.is_empty(), "restorable only while canceled");
+    assert!(store.history(SYS, "R-2").unwrap().restorable.is_empty(), "restorable only while canceled");
 
     // A body written while canceled declares its new inputs withdrawn.
     store.amend("R-3", None, Some(format!("{}{}", decision("ask"), decision("later")))).await.unwrap();
@@ -494,7 +494,7 @@ async fn the_examples_read_the_log() {
     assert!(store.aged(&Lens::parse("entered Canceled since 2026-01-01").unwrap(), now, now + 9 * 86_400, None).is_empty(), "a fixed window does not age");
     // The tree under a history filter: R-2 holds the cascade's two.
     let q = TreeQuery { parent: Some("R-1".into()), epic: None, lens: Lens::parse("entered Canceled within 1d by system").unwrap(), matches_only: false, keep: None };
-    let page = store.tree_page(&q, None, None).unwrap();
+    let page = store.tree_page(SYS, &q, None, None).unwrap();
     assert_eq!(page.nodes.iter().map(|n| (n.summary.id.as_str(), n.matched, n.below)).collect::<Vec<_>>(), [("R-2", false, 2)]);
 }
 
@@ -517,6 +517,6 @@ async fn a_history_watch_hears_each_writes_transition() {
     }
     assert_eq!(heard, [Membership::Entered { id: "R-8".into(), shortcode: ShortcodeId::from("R"), seq: 8 }]);
     assert!(watcher.tick(&store, None).is_empty(), "no time has passed that moves it");
-    let kept = store.counts_keeping(&Lens::parse("entered Coding within 1h").unwrap(), Some("R-1"));
+    let kept = store.counts_keeping(SYS, &Lens::parse("entered Coding within 1h").unwrap(), Some("R-1"));
     assert_eq!(kept, [(ShortcodeId::from("R"), 3)], "R-4, R-8 and the kept R-1");
 }

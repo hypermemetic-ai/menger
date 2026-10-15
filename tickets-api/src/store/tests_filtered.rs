@@ -268,7 +268,7 @@ impl Plain {
         let history = rows
             .iter()
             .map(|t| {
-                let h = store.history(&t.id).ok();
+                let h = store.history(SYS, &t.id).ok();
                 let (own, began) = h.map(|h| (h.own, h.began)).unwrap_or_default();
                 vocab.iter().filter(|p| holds_of_row(p, t, &own, began, &clock)).map(crate::filter::History::format).collect()
             })
@@ -389,7 +389,7 @@ fn answered_keeping(
     keep: Option<&str>,
 ) -> Result<Answer, String> {
     let q = Filtered { lens: lens.clone(), epic: epic.map(String::from), status, parent: parent.map(String::from), keep: keep.map(String::from) };
-    store.filtered_page(&q, after, at, limit).map(answer).map_err(|e| e.to_string())
+    store.filtered_page(SYS, &q, after, at, limit).map(answer).map_err(|e| e.to_string())
 }
 
 /// For one lens: `counts`, and pages after a sample of cursors and at a
@@ -449,7 +449,7 @@ pub(super) fn assert_lens_is_a_scan(store: &Store, plain: &Plain, lens: &Lens, j
             let want = plain.page(kept, a.0, a.1, a.2, None, Some(at), limit);
             let got = answered_keeping(store, lens, a.0, a.1, a.2, None, Some(at), limit, Some(&keep));
             assert_eq!(got, want, "{what}: {a:?} keeping {keep} at {at} limit {limit:?}");
-            let counts: Vec<(String, u64)> = store.counts_keeping(lens, Some(&keep)).into_iter().map(|(e, n)| (e.as_str().to_string(), n)).collect();
+            let counts: Vec<(String, u64)> = store.counts_keeping(SYS, lens, Some(&keep)).into_iter().map(|(e, n)| (e.as_str().to_string(), n)).collect();
             assert_eq!(counts, plain.counts(kept), "{what}: counts keeping {keep}");
         }
     }

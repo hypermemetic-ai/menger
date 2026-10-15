@@ -123,17 +123,17 @@ async fn a_ticket_nothing_points_at_is_gone_from_every_read() {
     let t = &done.tombstones[0];
     assert_eq!((t.id.as_str(), t.title.as_str(), t.by.as_str(), t.message.as_deref()), ("M-6", "build 6", "anonymous", Some("filed twice")));
     assert_eq!(t.restorable_until_unix, Some(t.at_unix + KEEP_BODY_FOR));
-    assert!(matches!(store.get("M-6").await, Err(StoreError::NotFound(_))));
-    assert_eq!(store.tombstone("m-6").as_ref(), Some(t), "get's tombstone");
-    let listed = store.list(Some("M"), None, None).await.unwrap();
+    assert!(matches!(store.get(SYS, "M-6").await, Err(StoreError::NotFound(_))));
+    assert_eq!(store.tombstone(SYS, "m-6").as_ref(), Some(t), "get's tombstone");
+    let listed = store.list(SYS, Some("M"), None, None).await.unwrap();
     assert!(listed.iter().all(|t| t.id != "M-6"), "off the list");
-    assert!(store.find_page("build 6", None, None).unwrap().tickets.is_empty(), "off find");
-    assert!(store.search("build", None, Some(50), None).await.unwrap().hits.iter().all(|h| h.summary.id != "M-6"), "off search");
+    assert!(store.find_page(SYS, "build 6", None, None).unwrap().tickets.is_empty(), "off find");
+    assert!(store.search(SYS, "build", None, Some(50), None).await.unwrap().hits.iter().all(|h| h.summary.id != "M-6"), "off search");
     let after = store.counts_text(&lens);
     let m = |c: &[(String, u64)]| c.iter().find(|(e, _)| e == "M").map_or(0, |(_, n)| *n);
     assert_eq!(m(&after), m(&builds) - 1, "off every filter");
-    assert!(store.ready_set(None).await.unwrap().iter().all(|t| t.id != "M-6"));
-    assert_eq!(store.holes(&ShortcodeId::from("M"), 9), [6], "a hole the extents name");
+    assert!(store.ready_set(SYS, None).await.unwrap().iter().all(|t| t.id != "M-6"));
+    assert_eq!(store.tickets.read().unwrap().holes(&ShortcodeId::from("M"), 9), [6], "a hole the extents name");
     assert_eq!(store.tickets.read().unwrap().children.of("M-1").len(), 5, "off its parent's children");
     let sent = drained(&mut rx);
     let k = kinds(&sent);
@@ -175,7 +175,7 @@ async fn children_are_refused_unless_told_what_moves() {
     assert_eq!(done.ids, ["M-7"]);
     assert_eq!(done.tombstones[0].reparented, ["M-8", "M-9"]);
     for c in ["M-8", "M-9"] {
-        assert_eq!(store.get(c).await.unwrap().parent.as_deref(), Some("M-1"), "{c} moved to its grandparent");
+        assert_eq!(store.get(SYS, c).await.unwrap().parent.as_deref(), Some("M-1"), "{c} moved to its grandparent");
     }
     let k = kinds(&drained(&mut rx));
     assert_eq!(&k[..6], ["parent_changed", "children_changed", "parent_changed", "children_changed", "child_removed", "deleted"], "{k:?}");
@@ -195,11 +195,11 @@ async fn a_ticket_waited_on_is_refused_unless_unblocked() {
     assert!(why["M-2"].contains("M-3 waits on it — unblock"), "{why:?}");
     let mut rx = store.subscribe();
     store.delete(ids(&["M-2"]), how(None, true), Some("a mistake".into())).await.unwrap();
-    let m3 = store.get("M-3").await.unwrap();
+    let m3 = store.get(SYS, "M-3").await.unwrap();
     assert!(m3.blocked_by.is_empty(), "the block dropped");
     let k = kinds(&drained(&mut rx));
     assert_eq!(&k[..3], ["blockers_changed", "child_removed", "deleted"], "{k:?}");
-    let h = store.history("M-3").unwrap();
+    let h = store.history(SYS, "M-3").unwrap();
     assert_eq!(h.deletions.iter().map(|t| (t.id.as_str(), t.unblocked.clone())).collect::<Vec<_>>(), [("M-2", vec!["M-3".to_string()])]);
     assert_kept(&store, "an unblocking delete");
     // And a ticket that waited on it, deleted with it, needs no unblock.
@@ -212,7 +212,7 @@ async fn a_ticket_waited_on_is_refused_unless_unblocked() {
 async fn a_blocker_of_the_deleted_loses_it_from_unlocks() {
     let store = store().await;
     store.delete(ids(&["M-3"]), Deletion::default(), None).await.unwrap();
-    assert!(store.get("M-2").await.unwrap().unlocks.is_empty());
+    assert!(store.get(SYS, "M-2").await.unwrap().unlocks.is_empty());
     assert_kept(&store, "a blocked ticket's delete");
 }
 
@@ -223,8 +223,8 @@ async fn a_shortcodes_root_is_refused_while_it_holds_others() {
     assert!(why["N-1"].contains("roots the shortcode N, which holds 1 other ticket"), "{why:?}");
     let done = store.delete(ids(&["N-1"]), how(Some(Children::Delete), false), None).await.unwrap();
     assert_eq!(done.ids, ["N-1", "N-2"]);
-    assert!(store.groups().iter().all(|g| g.epic != "N"), "no group for an empty shortcode");
-    let n = store.extents_holed().into_iter().find(|(e, _, _, _)| e == "N").map(|(e, _, l, h)| (e.as_str().to_string(), l, h));
+    assert!(store.groups(SYS).iter().all(|g| g.epic != "N"), "no group for an empty shortcode");
+    let n = store.extents_holed(SYS).into_iter().find(|(e, _, _, _)| e == "N").map(|(e, _, l, h)| (e.as_str().to_string(), l, h));
     assert_eq!(n, Some(("N".to_string(), 2, vec![1, 2])), "its numbers given out, none held");
     // The number is never reused: N's next is N-3, and it roots N again.
     let refused = store.create(new("N", "a build first", Kind::Build, None)).await.unwrap_err();
@@ -261,7 +261,7 @@ async fn an_owner_or_a_live_input_is_refused() {
     assert!(why["M-11"].contains("an input (notes) — close it first"), "{why:?}");
     store.close_input("M-11", "notes").await.unwrap();
     store.delete(ids(&["M-11"]), Deletion::default(), None).await.unwrap();
-    assert!(store.inputs(None, Some("M"), None).unwrap().iter().all(|i| i.ticket != "M-11"), "its inputs out of every read");
+    assert!(store.inputs(SYS, None, Some("M"), None).unwrap().iter().all(|i| i.ticket != "M-11"), "its inputs out of every read");
     assert_kept(&store, "a closed input's ticket deleted");
 }
 
@@ -305,12 +305,12 @@ async fn undelete_puts_back_what_the_delete_moved() {
     assert_eq!(back.ids, ["M-2", "M-7"]);
     assert_eq!(back.tickets[1].body, "the body of an area", "whole, body and all");
     for c in ["M-8", "M-9"] {
-        assert_eq!(store.get(c).await.unwrap().parent.as_deref(), Some("M-7"), "{c} back under it");
+        assert_eq!(store.get(SYS, c).await.unwrap().parent.as_deref(), Some("M-7"), "{c} back under it");
     }
-    assert_eq!(store.get("M-3").await.unwrap().blocked_by, ["M-2"], "the block back");
-    assert_eq!(store.get("M-2").await.unwrap().unlocks, ["M-3"]);
-    assert_eq!(store.get("M-7").await.unwrap().child_count, 2);
-    assert!(store.tombstone("M-2").is_none() && store.tombstone("M-7").is_none());
+    assert_eq!(store.get(SYS, "M-3").await.unwrap().blocked_by, ["M-2"], "the block back");
+    assert_eq!(store.get(SYS, "M-2").await.unwrap().unlocks, ["M-3"]);
+    assert_eq!(store.get(SYS, "M-7").await.unwrap().child_count, 2);
+    assert!(store.tombstone(SYS, "M-2").is_none() && store.tombstone(SYS, "M-7").is_none());
     let k = kinds(&drained(&mut rx));
     assert_eq!(k[0], "undeleted", "{k:?}");
     assert_kept(&store, "an undelete");
@@ -335,7 +335,7 @@ async fn the_purge_keeps_the_tombstone_and_ends_the_undo() {
     let at = done.tombstones[0].at_unix;
     assert!(store.purge(at + KEEP_BODY_FOR - 1).await.unwrap().is_empty(), "not yet");
     assert_eq!(store.purge(at + KEEP_BODY_FOR).await.unwrap(), ["M-6"]);
-    let t = store.tombstone("M-6").unwrap();
+    let t = store.tombstone(SYS, "M-6").unwrap();
     assert_eq!((t.title.as_str(), t.restorable_until_unix), ("build 6", None));
     let why = store.undelete(&["M-6".into()]).await.unwrap_err().to_string();
     assert!(why.contains("M-6's body was purged"), "{why}");
@@ -378,7 +378,7 @@ async fn a_deleted_tickets_history_is_kept() {
     let store = store().await;
     store.set_status("M-5", Status::Ready).await.unwrap();
     store.delete(ids(&["M-5"]), Deletion::default(), None).await.unwrap();
-    let h = store.history("M-5").unwrap();
+    let h = store.history(SYS, "M-5").unwrap();
     assert_eq!(h.own.iter().map(|t| t.to.as_str()).collect::<Vec<_>>(), ["Pending", "Ready"]);
     // And a history filter does not count it.
     assert!(store.counts_text(&Lens::parse("entered Ready").unwrap()).iter().all(|(_, n)| *n == 0));
@@ -401,7 +401,7 @@ async fn the_file_holds_what_the_cache_holds_and_verify_agrees() {
     store.delete(ids(&["M-39"]), Deletion::default(), None).await.unwrap();
     assert_kept(&store, "the deletes");
     let rows: Vec<Row> = store.tickets.read().unwrap().order.values().cloned().collect();
-    let (groups, extents) = (store.groups(), store.extents_text());
+    let (groups, extents) = (store.groups(SYS), store.extents_text());
     drop(store);
     match Store::verify_derived(&path).unwrap() {
         Verdict::Consistent { tombstones: Some(4), .. } => {}
@@ -410,9 +410,9 @@ async fn the_file_holds_what_the_cache_holds_and_verify_agrees() {
     let again = Store::open(&path).unwrap();
     let reread: Vec<Row> = again.tickets.read().unwrap().order.values().cloned().collect();
     assert_eq!(reread, rows, "the file holds what the cache held");
-    assert_eq!((again.groups(), again.extents_text()), (groups, extents));
-    assert_eq!(again.tombstone("M-2").unwrap().unblocked, ["M-3"]);
-    assert_eq!(again.history("M-2").unwrap().own.len(), 1, "its birth, kept");
+    assert_eq!((again.groups(SYS), again.extents_text()), (groups, extents));
+    assert_eq!(again.tombstone(SYS, "M-2").unwrap().unblocked, ["M-3"]);
+    assert_eq!(again.history(SYS, "M-2").unwrap().own.len(), 1, "its birth, kept");
     assert_eq!(again.create(new("M", "after", Kind::Build, None)).await.unwrap().id, "M-40", "past the deleted M-39");
     assert_eq!(again.create(new("N", "n anew", Kind::Scope, None)).await.unwrap().id, "N-3");
 }

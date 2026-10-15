@@ -51,7 +51,7 @@ async fn a_menger_doc_is_born_under_the_scope_root_with_its_path() {
         Change::Created { ticket } => assert_eq!(ticket.path.as_deref(), Some("_MENGER/board")),
         other => panic!("expected Created, got {other:?}"),
     }
-    let row = store.page(PageQuery { epic: Some("PLX"), ..Default::default() }).unwrap();
+    let row = store.page(SYS, PageQuery { epic: Some("PLX"), ..Default::default() }).unwrap();
     assert_eq!(row.tickets[2].path.as_deref(), Some("_MENGER/board"), "on the row");
     assert_eq!(row.tickets[1].path, None, "a ticket without one has none");
 
@@ -73,22 +73,22 @@ async fn a_menger_doc_is_born_under_the_scope_root_with_its_path() {
 async fn get_resolves_a_path_address_case_insensitively_in_the_shortcode() {
     let store = platform().await;
     let t = store.create(board("PLX")).await.unwrap();
-    let by_id = store.get("PLX-3").await.unwrap();
+    let by_id = store.get(SYS, "PLX-3").await.unwrap();
     assert_eq!(by_id, t);
     for address in ["PLX/_MENGER/board", "plx/_MENGER/board", "Plx/_MENGER/board"] {
-        assert_eq!(store.get(address).await.unwrap(), t, "{address}");
+        assert_eq!(store.get(SYS, address).await.unwrap(), t, "{address}");
     }
     for missing in ["PLX/_MENGER/BOARD", "PLX/_MENGER/boards", "SUB/_MENGER/board", "NOPE/_MENGER/board", "PLX/board"] {
-        match store.get(missing).await {
+        match store.get(SYS, missing).await {
             Err(StoreError::NotFound(id)) => assert_eq!(id, missing, "names the address"),
             other => panic!("{missing}: expected NotFound, got {other:?}"),
         }
     }
-    assert!(matches!(store.get("PLX-9").await, Err(StoreError::NotFound(_))));
+    assert!(matches!(store.get(SYS, "PLX-9").await, Err(StoreError::NotFound(_))));
     // Not an address: a slash with nothing on one side, or a shortcode
     // that is no shortcode.
     for odd in ["/_MENGER/board", "PLX/", "P-X/_MENGER/board"] {
-        assert!(matches!(store.get(odd).await, Err(StoreError::NotFound(_))), "{odd}");
+        assert!(matches!(store.get(SYS, odd).await, Err(StoreError::NotFound(_))), "{odd}");
     }
 }
 
@@ -99,7 +99,7 @@ async fn get_resolves_a_path_address_case_insensitively_in_the_shortcode() {
 async fn a_path_taken_in_its_shortcode_is_refused_naming_the_holder() {
     let store = platform().await;
     store.create(board("PLX")).await.unwrap();
-    let before = store.count();
+    let before = store.count(SYS);
     match store.create(board("plx")).await {
         Err(e @ StoreError::PathTaken { .. }) => {
             let StoreError::PathTaken { epic, path, holder } = &e else { unreachable!() };
@@ -109,7 +109,7 @@ async fn a_path_taken_in_its_shortcode_is_refused_naming_the_holder() {
         }
         other => panic!("expected PathTaken, got {other:?}"),
     }
-    assert_eq!(store.count(), before, "nothing stored");
+    assert_eq!(store.count(SYS), before, "nothing stored");
     assert_eq!(store.create(new("PLX", Kind::Build, None, None)).await.unwrap().id, "PLX-4", "no id spent");
     assert_eq!(store.create(board("SUB")).await.unwrap().path.as_deref(), Some("_MENGER/board"));
 }
@@ -121,7 +121,7 @@ async fn a_path_taken_in_its_shortcode_is_refused_naming_the_holder() {
 async fn non_docs_wrong_parents_and_unreserved_paths_are_refused() {
     let store = platform().await;
     store.create(new("PLX", Kind::Doc, None, None)).await.unwrap(); // PLX-3, a plain doc
-    let before = store.count();
+    let before = store.count(SYS);
     for path in ["board", "MENGER/board", "_menger/board", "_MENGER/", "_MENGER", " _MENGER/board"] {
         match store.create(new("PLX", Kind::Doc, None, Some(path))).await {
             Err(e @ StoreError::PathNotReserved { .. }) => assert!(e.to_string().contains("_MENGER/"), "{e}"),
@@ -145,7 +145,7 @@ async fn non_docs_wrong_parents_and_unreserved_paths_are_refused() {
         Err(StoreError::PathNoRoot { epic, .. }) => assert_eq!(epic, "NEW"),
         other => panic!("expected PathNoRoot, got {other:?}"),
     }
-    assert_eq!(store.count(), before, "nothing stored");
+    assert_eq!(store.count(SYS), before, "nothing stored");
     assert!(store.extents_text().iter().all(|(e, _)| e != "NEW"), "no shortcode started");
 }
 
@@ -161,8 +161,8 @@ async fn a_path_is_durable_and_unique_in_the_file() {
         store.create(board("PLX")).await.unwrap();
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get("plx/_MENGER/board").await.unwrap().id, "PLX-2");
-    assert_eq!(store.get("PLX-2").await.unwrap().path.as_deref(), Some("_MENGER/board"));
+    assert_eq!(store.get(SYS, "plx/_MENGER/board").await.unwrap().id, "PLX-2");
+    assert_eq!(store.get(SYS, "PLX-2").await.unwrap().path.as_deref(), Some("_MENGER/board"));
     drop(store);
     let conn = Connection::open(&path).unwrap();
     let dup = conn.execute("UPDATE tickets SET path = '_MENGER/board' WHERE id = 'PLX-1'", []);
@@ -184,7 +184,7 @@ async fn an_older_database_gains_the_column_on_open_and_keeps_every_row() {
         store.create(new("OLD", Kind::Doc, None, None)).await.unwrap();
         store.set_status("OLD-2", Status::InReview).await.unwrap();
         store.link_commits("OLD-2", vec!["77df9a0".into()]).await.unwrap();
-        store.list(None, None, None).await.unwrap()
+        store.list(SYS, None, None, None).await.unwrap()
     };
     {
         let conn = Connection::open(&path).unwrap();
@@ -198,7 +198,7 @@ async fn an_older_database_gains_the_column_on_open_and_keeps_every_row() {
     );
     {
         let store = Store::open(&path).unwrap();
-        let after = store.list(None, None, None).await.unwrap();
+        let after = store.list(SYS, None, None, None).await.unwrap();
         assert_eq!(after, before, "every row as it was, none with a path");
         assert!(after.iter().all(|t| t.path.is_none()));
         let t = store.create(board("OLD")).await.unwrap();
@@ -211,7 +211,7 @@ async fn an_older_database_gains_the_column_on_open_and_keeps_every_row() {
     drop(conn);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get("OLD/_MENGER/board").await.unwrap().id, "OLD-4");
+    assert_eq!(store.get(SYS, "OLD/_MENGER/board").await.unwrap().id, "OLD-4");
 }
 
 /// The address grammar: a shortcode, a slash, a path — the shortcode

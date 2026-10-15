@@ -51,7 +51,7 @@ async fn saved_doc(store: &Store, name: &str, slug: &str, text: &str) -> String 
 /// The ids a filter admits, in the store's order.
 fn ids(store: &Store, text: &str) -> Vec<String> {
     let lens = store.lens(text).unwrap_or_else(|e| panic!("{text}: {e}"));
-    let page = store.filtered_page(&Filtered { lens, epic: None, status: None, parent: None, keep: None }, None, None, Some(500)).unwrap();
+    let page = store.filtered_page(SYS, &Filtered { lens, epic: None, status: None, parent: None, keep: None }, None, None, Some(500)).unwrap();
     page.tickets.into_iter().map(|t| t.id.to_string()).collect()
 }
 
@@ -78,7 +78,7 @@ async fn a_name_is_its_saved_filter_and_two_join_by_or_and_and() {
     assert_eq!(ids(&store, "in PLEXUS and not saved \"Needs you\""), ["PLEXUS-1", "PLEXUS-2"]);
     // counts agree with the page.
     let lens = store.lens("saved \"Needs you\" or saved Plexus-Ready").unwrap();
-    assert_eq!(store.counts(&lens).iter().map(|(_, n)| n).sum::<u64>(), 3);
+    assert_eq!(store.counts(SYS, &lens).iter().map(|(_, n)| n).sum::<u64>(), 3);
     // a read narrowed by it (FILTER-15) and facets' filter resolve too.
     assert!(store.narrowing(Some(&Filter::parse("saved Plexus-Ready").unwrap())).unwrap().is_some_and(|f| f.saved_names().is_empty()));
     assert_eq!(store.resolved(Some(&Filter::parse("saved Plexus-Ready").unwrap())).unwrap().format(), "in PLEXUS and status Ready");

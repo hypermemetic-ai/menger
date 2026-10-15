@@ -38,7 +38,7 @@ async fn build(store: &Store, epic: &str, blocked_by: &[&str]) -> String {
 
 fn ask(store: &Store, epics: &[&str], kinds: &[Kind]) -> Waves {
     let epics: Vec<String> = epics.iter().map(|e| e.to_string()).collect();
-    store.waves(&epics, kinds)
+    store.waves(SYS, &epics, kinds)
 }
 
 /// `id → placement` of the default (work) answer for `epics`.
@@ -384,6 +384,9 @@ async fn a_hand_edited_cycle_terminates_in_the_missing_lane() {
 fn a_chain_longer_than_any_call_stack_is_placed() {
     const N: u32 = 200_000;
     let row = |seq: u32| Row {
+        hidden_blocked_by: 0,
+        hidden_unlocks: 0,
+        parent_hidden: false,
         labels: Vec::new(),
         id: format!("LONG-{seq}").into(),
         epic: "LONG".into(),

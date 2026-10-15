@@ -58,7 +58,7 @@ pub mod reach;
 pub mod user;
 pub use crate::store::System;
 pub use reach::{Held, Reach, ReachKey};
-pub use user::{Admin, AdminOf, Editor, Hidden, Permit, Refusal, RoleMark, VerifiedUser, Viewer};
+pub use user::{Admin, AdminOf, Editor, Hidden, Permit, ReadingAs, Refusal, RoleMark, VerifiedUser, Viewer};
 
 /// The gate's reach for one call (plexus-core's): the grant a method was
 /// admitted for, and where.
@@ -170,8 +170,7 @@ fn now() -> i64 {
 pub struct Book {
     store: OnceLock<Arc<Store>>,
     /// ACCESS-9: the store's [`System`], taken at [`Access::attach`] — what
-    /// the access layer's own reads of the grants act as (ACCESS-10 makes
-    /// those reads take it).
+    /// the access layer's own reads of the grants act as (ACCESS-10).
     system: OnceLock<System>,
     admins: Vec<String>,
     /// Each role's grants as the activations declare them
@@ -206,6 +205,15 @@ impl Book {
         self.store.get()
     }
 
+    /// ACCESS-10: the stored grants of `principal`, read as the store's
+    /// [`System`] (none before a store is attached with it).
+    fn stored_grants(&self, principal: &str) -> Vec<Grant> {
+        match (self.store(), self.system.get()) {
+            (Some(store), Some(system)) => store.grants_of(system, principal),
+            _ => Vec::new(),
+        }
+    }
+
     /// The declared roles (`DynamicHub::declared_roles`): what a role holds
     /// until an admin edits it.
     pub fn seed(&self, declared: BTreeMap<String, Vec<String>>) {
@@ -222,10 +230,10 @@ impl Book {
     /// a grant to `team:<name>`; the store says which teams it is in), and
     /// admin on `*` for an operator's `--admin`.
     pub fn grants_of(&self, principal: &str) -> Vec<Grant> {
-        let mut grants = self.store().map(|s| s.grants_of(principal)).unwrap_or_default();
+        let mut grants = self.stored_grants(principal);
         if let Some(store) = self.store() {
             for team in store.teams_of(principal) {
-                grants.extend(store.grants_of(&crate::vocab::Grantee::Team(team).to_string()));
+                grants.extend(self.stored_grants(&crate::vocab::Grantee::Team(team).to_string()));
             }
         }
         if self.admins.iter().any(|a| a == principal) {
@@ -322,7 +330,7 @@ impl MembershipStore for Book {
         let store = self.store().ok_or_else(|| GateStoreError::new("no store is attached"))?;
         let scope = store.scope_named(scope.as_str()).map_err(|e| GateStoreError::new(e.to_string()))?;
         let who = principal.to_string();
-        let held = store.grants_of(&who).into_iter().find(|g| g.scope == scope);
+        let held = self.stored_grants(&who).into_iter().find(|g| g.scope == scope);
         let Some(held) = held.filter(|g| role.is_none_or(|r| r.as_str() == g.role.as_str())) else {
             return Ok(Vec::new());
         };
@@ -388,6 +396,29 @@ impl Access {
         Self::build(true, require_login, Some(sessions), admins)
     }
 
+    /// ACCESS-10: login on, for a test in another module (compiled out of
+    /// the server): no session to end, no operator, and the roles as the
+    /// activations declare a part of them — `viewer` the reads
+    /// (`tickets.get`, `tickets.list`), `editor` those and `tickets.set_status`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_tests() -> Self {
+        struct Never;
+        impl SessionCheck for Never {
+            fn alive(&self, _: &str) -> bool {
+                false
+            }
+            fn key(&self) -> &str {
+                "menger_session"
+            }
+        }
+        let a = Self::with_login(Arc::new(Never), false, Vec::new());
+        let viewer = vec!["tickets.get".to_string(), "tickets.list".to_string()];
+        let mut editor = viewer.clone();
+        editor.push("tickets.set_status".into());
+        a.book().seed(BTreeMap::from([("viewer".to_string(), viewer), ("editor".to_string(), editor)]));
+        a
+    }
+
     /// IDENTITY-42: `session.login` / `auth.login {session}` and the logouts
     /// mint and end sessions in `minter` (menger's session table).
     pub fn minting(mut self, minter: Arc<dyn SessionMint>) -> Self {
@@ -408,6 +439,14 @@ impl Access {
         if let Some(system) = store.system() {
             let _ = self.book.system.set(system);
         }
+        let _ = self.book.store.set(store);
+    }
+
+    /// ACCESS-10: [`Access::attach`], handed the store's [`System`] by
+    /// whoever took it at the open (the builder, which read the store as
+    /// the system first).
+    pub fn attach_with(&self, store: Arc<Store>, system: System) {
+        let _ = self.book.system.set(system);
         let _ = self.book.store.set(store);
     }
 
@@ -438,6 +477,16 @@ impl Access {
         self.book.grants_of(principal)
     }
 
+    /// ACCESS-10: every stored grant, by principal then scope — read as the
+    /// store's [`System`] (`members.list` cuts it to where its caller is
+    /// admin).
+    pub fn stored(&self) -> Vec<Grant> {
+        match (self.book.store(), self.book.system.get()) {
+            (Some(store), Some(system)) => store.grants(system),
+            _ => Vec::new(),
+        }
+    }
+
     /// The operator's `--admin` principals.
     pub fn admins(&self) -> Vec<String> {
         self.book.admins.clone()
@@ -459,7 +508,7 @@ impl Access {
     pub async fn dev_set_grants(&self, principal: &str, grants: &[(Role, String)]) -> Result<(), String> {
         let store = self.book.store().cloned().ok_or("no store is attached")?;
         let named: Vec<String> = grants.iter().map(|(_, s)| store.scope_named(s).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
-        for g in store.grants_of(principal) {
+        for g in self.book.stored_grants(principal) {
             if !named.contains(&g.scope) {
                 store.revoke(principal.into(), g.scope).await.map_err(|e| e.to_string())?;
             }

@@ -151,7 +151,7 @@ async fn a_create_dropped_mid_commit_still_reaches_the_cache_and_watch_and_the_n
     assert_eq!(counts.0, counts.1, "every write begun is applied: committing {} vs written {}", counts.0, counts.1);
     assert_eq!(next.id, "AB-3", "the next create gets the next id");
     assert_eq!(ab2_after, stored, "and AB-2 is as the dropped write stored it");
-    assert_eq!(store.get("AB-1").await.unwrap().child_count, 2);
+    assert_eq!(store.get(SYS, "AB-1").await.unwrap().child_count, 2);
 }
 
 /// Criterion 2: `set_status`, dropped mid-commit — the cache's row is the
@@ -184,7 +184,7 @@ async fn a_set_status_dropped_mid_commit_still_reaches_the_cache_and_watch() {
         "watch carried it, the roll-up it moved and (WAVE-6) the placement"
     );
     assert_eq!(counts.0, counts.1, "committing {} vs written {}", counts.0, counts.1);
-    assert_eq!(store.groups()[0].done, 1, "the roll-up counts it");
+    assert_eq!(store.groups(SYS)[0].done, 1, "the roll-up counts it");
 }
 
 /// Criterion 2: `set_parent`, dropped mid-commit — the child's row and both
@@ -214,7 +214,7 @@ async fn a_set_parent_dropped_mid_commit_still_reaches_the_cache_and_watch() {
     );
     assert_eq!(kinds(&said), ["parent_changed", "children_changed", "child_removed"]);
     assert_eq!(counts.0, counts.1, "committing {} vs written {}", counts.0, counts.1);
-    let page = store.page(PageQuery { parent: Some("SP-2"), ..PageQuery::default() }).unwrap();
+    let page = store.page(SYS, PageQuery { parent: Some("SP-2"), ..PageQuery::default() }).unwrap();
     assert_eq!(page.tickets.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), ["SP-3"], "the index moved");
     assert_eq!((store.row("SP-1").unwrap().0.child_count, store.row("SP-2").unwrap().0.child_count), (1, 1));
 }

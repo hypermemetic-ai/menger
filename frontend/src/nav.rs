@@ -503,6 +503,9 @@ pub(crate) fn face(g: &Group) -> Option<TicketSummary> {
 
 fn root_summary(id: &str, epic: &str, host: Option<String>, title: String, status: Status, kind: Kind) -> TicketSummary {
     TicketSummary {
+        hidden_blocked_by: 0,
+        hidden_unlocks: 0,
+        parent_hidden: false,
         labels: Vec::new(),
         id: menger_tickets_api::TicketId::new(id),
         // ORG-3: `epic` is the shortcode's identity (THEME, or a namesake's
@@ -4361,6 +4364,9 @@ mod tests {
     fn row(id: &str, parent: Option<&str>) -> TicketSummary {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         TicketSummary {
+            hidden_blocked_by: 0,
+            hidden_unlocks: 0,
+            parent_hidden: false,
             labels: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),

@@ -37,7 +37,7 @@ pub(super) fn scanned(rows: &[Row], asking: &BTreeSet<String>) -> BTreeMap<Order
 /// MENGER-12: the tickets with an open input, by the inputs store's own
 /// answer (`inputs { state: open }`) — what the oracle's `asking` reads.
 pub(super) fn asking(store: &Store) -> BTreeSet<String> {
-    store.inputs(None, None, Some(InputState::Open)).unwrap().into_iter().map(|i| i.ticket.into_string()).collect()
+    store.inputs(SYS, None, None, Some(InputState::Open)).unwrap().into_iter().map(|i| i.ticket.into_string()).collect()
 }
 
 /// The cells a stored form holds, by ticket.
@@ -370,7 +370,7 @@ async fn asking_and_labels_move_a_tickets_cell() {
     // Durable: the next open reads what was kept; the file verifies.
     let store = Store::open(&path).unwrap();
     assert!(asking(&store, "AS-2") && !asking(&store, "AS-3"));
-    assert_eq!(store.get("AS-3").await.unwrap().labels, ["needs-you", "p1"]);
+    assert_eq!(store.get(SYS, "AS-3").await.unwrap().labels, ["needs-you", "p1"]);
     assert_cells_are_a_scan(&store, Some(&path), "the reopen");
     drop(store);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 4, .. }));
@@ -512,7 +512,7 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
             .map(|text| {
                 let lens = Lens::parse(text).unwrap();
                 let q = Filtered { lens: lens.clone(), epic: None, status: None, parent: None, keep: None };
-                let page = store.filtered_page(&q, None, Some(3), Some(50)).unwrap();
+                let page = store.filtered_page(SYS, &q, None, Some(3), Some(50)).unwrap();
                 (store.counts_text(&lens), page.tickets.into_iter().map(|t| t.id.into_string()).collect())
             })
             .collect()

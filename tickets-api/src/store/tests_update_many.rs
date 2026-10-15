@@ -62,7 +62,7 @@ fn written(store: &Store) -> u64 {
 }
 
 async fn status_of(store: &Store, id: &str) -> Status {
-    store.get(id).await.unwrap().status
+    store.get(SYS, id).await.unwrap().status
 }
 
 fn status(s: Status) -> Update {
@@ -168,7 +168,7 @@ async fn a_parent_cycle_among_the_moved_is_refused_for_the_tickets_involved() {
     assert!(matches!(done, Err(StoreError::RefusedMany { ref refusals }) if refusals.len() == 1 && refusals[0].0 == "N-2"), "{done:?}");
     let done = store.update_many(ids(&["M-2", "M-3"]), Update { parent: Some("M-8".into()), ..Update::default() }).await.unwrap();
     assert_eq!(done.changed, ["parent"]);
-    assert_eq!(store.get("M-8").await.unwrap().child_count, 3);
+    assert_eq!(store.get(SYS, "M-8").await.unwrap().child_count, 3);
     // A blocker that waits on one of them is a cycle for that one.
     store.update("M-5", Update { block: vec!["M-4".into()], ..Update::default() }).await.unwrap();
     match store.update_many(ids(&["M-3", "M-4"]), Update { block: vec!["M-5".into()], ..Update::default() }).await.unwrap_err() {
@@ -183,15 +183,15 @@ async fn the_message_is_on_every_transition_with_one_shared_cause() {
     let store = store().await;
     let act = Act { message: Some("swept".into()), ..Act::default() };
     store.update_many_by(ids(&["M-2", "M-3", "M-4"]), status(Status::Ready), act, |_| Ok(())).await.unwrap();
-    let first = store.history("M-2").unwrap().own.pop().unwrap();
+    let first = store.history(SYS, "M-2").unwrap().own.pop().unwrap();
     assert_eq!((first.message.as_deref(), first.cause), (Some("swept"), None));
     for id in ["M-3", "M-4"] {
-        let t = store.history(id).unwrap().own.pop().unwrap();
+        let t = store.history(SYS, id).unwrap().own.pop().unwrap();
         assert_eq!(t.message.as_deref(), Some("swept"), "{id}");
         assert_eq!((t.cause, t.cause_ticket.as_deref()), (Some(first.id), Some("M-2")), "{id}");
     }
     // The first's history names what it caused: the write.
-    let caused: Vec<String> = store.history("M-2").unwrap().caused.into_iter().map(|t| t.ticket.into_string()).collect();
+    let caused: Vec<String> = store.history(SYS, "M-2").unwrap().caused.into_iter().map(|t| t.ticket.into_string()).collect();
     assert_eq!(caused, ["M-3", "M-4"]);
 }
 
@@ -202,7 +202,7 @@ async fn a_cancel_cascading_into_a_selected_ticket_moves_it_once() {
     assert_eq!(done.ids, ["M-8", "M-9"]);
     assert_eq!(status_of(&store, "M-9").await, Status::Canceled);
     // M-9 was canceled by M-8's cascade, once.
-    let own = store.history("M-9").unwrap().own;
+    let own = store.history(SYS, "M-9").unwrap().own;
     assert_eq!(own.iter().filter(|t| t.to == "Canceled").count(), 1, "{own:?}");
     assert_kept(&store, "a cancel over a parent and its child");
 }
@@ -267,7 +267,7 @@ async fn labels_move_with_update_many_and_with_label_over_many_ids() {
     assert!(matches!(store.label_many(&["M-2".into(), "M-40".into()], vec!["x".into()], vec![]).await, Err(StoreError::RefusedMany { .. })));
     assert!(store.label_many(&["M-2".into()], vec!["no spaces".into()], vec![]).await.is_err());
     assert_eq!(written(&store), before);
-    assert!(store.get("M-2").await.unwrap().labels == ["needs-you"]);
+    assert!(store.get(SYS, "M-2").await.unwrap().labels == ["needs-you"]);
     assert_kept(&store, "labels");
 }
 
@@ -284,7 +284,7 @@ async fn link_commits_over_many_ids_is_one_write_all_or_none() {
     assert!(store.link_commits_many(&["M-2".into(), "M-40".into()], vec!["c8c5678".into()]).await.is_err());
     assert!(store.link_commits_many(&["M-2".into()], vec!["not;a;hash".into()]).await.is_err());
     assert_eq!(written(&store), before);
-    assert_eq!(store.get("M-2").await.unwrap().commits, ["77df9a0"]);
+    assert_eq!(store.get(SYS, "M-2").await.unwrap().commits, ["77df9a0"]);
 }
 
 #[test]

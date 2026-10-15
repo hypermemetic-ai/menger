@@ -127,6 +127,7 @@ impl Registry {
     }
 
     /// Every shortcode, in the store's order.
+    #[cfg(test)]
     pub(super) fn all(&self) -> impl Iterator<Item = &Shortcode> {
         self.entries.values().map(|e| &e.sc)
     }

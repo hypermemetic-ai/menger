@@ -117,6 +117,11 @@ impl Comments {
         self.by_id.get(&id)
     }
 
+    /// ACCESS-10: the newest comment `seen` admits.
+    pub(crate) fn newest_where(&self, seen: impl Fn(&Comment) -> bool) -> Option<u64> {
+        self.by_id.iter().rev().find(|(_, c)| seen(c)).map(|(id, _)| *id)
+    }
+
     /// The newest comment's id, if there is one.
     pub(crate) fn newest(&self) -> Option<u64> {
         self.by_id.keys().next_back().copied()
@@ -197,9 +202,10 @@ fn under_identity(cache: &Cache, name: &str) -> Result<String, StoreError> {
 /// to resume from. `next` is the page's last id when more match past it —
 /// for `limit: 0`, the cursor it was cut with — else `None`. Under the
 /// read lock, from the cache alone.
-pub(super) fn page(cache: &Cache, q: &CommentQuery, after: Option<u64>, limit: Option<u32>) -> Result<CommentPage, StoreError> {
+pub(super) fn page(cache: &Cache, q: &CommentQuery, after: Option<u64>, limit: Option<u32>, seen: &dyn Fn(&Comment) -> bool) -> Result<CommentPage, StoreError> {
     let comments = &cache.comments;
-    if let Some(a) = after.filter(|a| comments.get(*a).is_none()) {
+    // ACCESS-10: a comment the reader may not see is no cursor, as none.
+    if let Some(a) = after.filter(|a| comments.get(*a).is_none_or(|c| !seen(c))) {
         return Err(StoreError::CommentCursor(a));
     }
     let ticket = given(&q.ticket);
@@ -210,6 +216,9 @@ pub(super) fn page(cache: &Cache, q: &CommentQuery, after: Option<u64>, limit: O
     // `under`, judged once per ticket a comment names.
     let mut lineage_holds: HashMap<String, bool> = HashMap::new();
     let mut admits = |c: &Comment| -> bool {
+        if !seen(c) {
+            return false;
+        }
         if q.state.is_some_and(|s| c.state != s)
             || q.intent.is_some_and(|i| c.intent != i)
             || route.is_some_and(|r| c.anchor.route != r)

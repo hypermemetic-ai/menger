@@ -62,12 +62,12 @@ async fn a_change_request_is_a_comment_and_an_unqueue_in_one_write() {
         }
         other => panic!("expected unqueued, got {other:?}"),
     }
-    assert!(store.queue_entry("Q-2").is_none(), "out of the queue");
-    assert_eq!(store.comment(c.id.get()), Some(c.clone()));
-    let rec = store.queue_history("Q-2").pop().unwrap();
+    assert!(store.queue_entry(SYS, "Q-2").is_none(), "out of the queue");
+    assert_eq!(store.comment(SYS, c.id.get()).ok(), Some(c.clone()));
+    let rec = store.queue_history(SYS, "Q-2").pop().unwrap();
     assert_eq!((rec.action, rec.comment, rec.actor.as_str(), rec.source), (QueueAction::ChangesRequested, Some(c.id.get()), "idp:owner", TransitionSource::App));
     // The named input is untouched: requesting changes is no answer.
-    let input = store.inputs(Some("Q-2"), None, None).unwrap().into_iter().find(|i| i.id == "landing").unwrap();
+    let input = store.inputs(SYS, Some("Q-2"), None, None).unwrap().into_iter().find(|i| i.id == "landing").unwrap();
     assert_eq!(input.state, InputState::Open);
     // Heard: the comment's `added`, and the queue's `unqueued`.
     assert_eq!(comments.try_recv().unwrap(), CommentChange::Added(c.clone()));
@@ -82,7 +82,7 @@ async fn a_change_request_is_a_comment_and_an_unqueue_in_one_write() {
     // `list { intent }`.
     store.add_comment(crate::comments::Anchor { ..conversation_anchor("Q-2") }, "a plain one".into(), None).await.unwrap();
     let only = |i| CommentQuery { intent: Some(i), ..CommentQuery::default() };
-    let ids = |q: &CommentQuery| store.comments(q, None, None).unwrap().comments.into_iter().map(|c| c.id).collect::<Vec<_>>();
+    let ids = |q: &CommentQuery| store.comments(SYS, q, None, None).unwrap().comments.into_iter().map(|c| c.id).collect::<Vec<_>>();
     assert_eq!(ids(&only(CommentIntent::Changes)), [c.id]);
     assert_eq!(ids(&only(CommentIntent::Comment)), [c.id.get() + 1]);
     // Re-queued after acting: back in the queue, a new entry.
@@ -100,16 +100,16 @@ async fn a_refused_change_request_writes_nothing() {
     let store = Store::open(&path).unwrap();
     fill(&store).await;
     let mut comments = store.subscribe_comments();
-    let records = store.queue_history("Q-2").len();
+    let records = store.queue_history(SYS, "Q-2").len();
     let e = store.request_changes_by("Q-3", "x".into(), None, None, act("o")).await.unwrap_err();
     assert!(e.to_string().contains("Q-3 is not queued"), "{e}");
     assert!(matches!(store.request_changes_by("Q-99", "x".into(), None, None, act("o")).await, Err(StoreError::NotFound(_))));
     let e = store.request_changes_by("Q-2", " \n".into(), None, None, act("o")).await.unwrap_err();
     assert!(e.to_string().contains("the comment's body is empty"), "{e}");
     assert!(comments.try_recv().is_err(), "nothing said");
-    assert!(store.comments(&CommentQuery::default(), None, None).unwrap().comments.is_empty(), "nothing kept");
-    assert!(store.queue_entry("Q-2").is_some(), "still queued");
-    assert_eq!(store.queue_history("Q-2").len(), records, "no record");
+    assert!(store.comments(SYS, &CommentQuery::default(), None, None).unwrap().comments.is_empty(), "nothing kept");
+    assert!(store.queue_entry(SYS, "Q-2").is_some(), "still queued");
+    assert_eq!(store.queue_history(SYS, "Q-2").len(), records, "no record");
 }
 
 /// Both halves are durable and read back as written: the comment's intent,
@@ -130,8 +130,8 @@ async fn a_change_request_is_kept_across_a_restart_and_an_older_file_gains_the_c
         store.request_changes_by("Q-2", "split it".into(), Some("ada".into()), None, act("idp:ada")).await.unwrap().0
     };
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.comment(c.id.get()).map(|c| (c.intent, c.author)), Some((CommentIntent::Changes, "ada".to_string())));
-    let rec = store.queue_history("Q-2").pop().unwrap();
+    assert_eq!(store.comment(SYS, c.id.get()).ok().map(|c| (c.intent, c.author)), Some((CommentIntent::Changes, "ada".to_string())));
+    let rec = store.queue_history(SYS, "Q-2").pop().unwrap();
     assert_eq!((rec.action, rec.comment), (QueueAction::ChangesRequested, Some(c.id.get())));
-    assert!(store.queue_entry("Q-2").is_none());
+    assert!(store.queue_entry(SYS, "Q-2").is_none());
 }

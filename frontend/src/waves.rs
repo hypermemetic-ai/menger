@@ -1560,6 +1560,9 @@ mod tests {
     fn summary(id: &str, status: Status) -> TicketSummary {
         let (epic, seq) = id.rsplit_once('-').unwrap();
         TicketSummary {
+            hidden_blocked_by: 0,
+            hidden_unlocks: 0,
+            parent_hidden: false,
             labels: Vec::new(),
             id: menger_tickets_api::TicketId::new(id),
             epic: menger_tickets_api::Code::stored(epic), shortcode: menger_tickets_api::ShortcodeId::new(epic), address: String::new(),
@@ -1682,6 +1685,9 @@ mod tests {
     fn ticket(id: &str) -> Ticket {
         let s = summary(id, Status::Pending);
         Ticket {
+            hidden_blocked_by: 0,
+            hidden_unlocks: 0,
+            parent_hidden: false,
             labels: Vec::new(),
             id: s.id,
             epic: s.epic,

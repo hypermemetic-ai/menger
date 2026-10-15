@@ -45,13 +45,12 @@ pub(super) fn delete_stream(
                 return;
             }
         };
-        let sight = sight_lens(&caller).ok().flatten();
         let caller = Arc::new(caller);
         let (gate, at) = (Arc::clone(&caller), store.clone());
         let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);
         match store.delete_by(select, how, act, may).await {
             Ok(Deleted { ids, tombstones }) => yield TicketsEvent::Deleted { ids, tombstones },
-            Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, sight.as_ref(), id)) },
+            Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
         }
     }
 }
@@ -100,13 +99,12 @@ pub(super) fn reshortcode_stream(
         };
         // ORG-4: the ids, `to` and `parent` read in the caller's organizations.
         ask.orgs = caller.orgs();
-        let sight = sight_lens(&caller).ok().flatten();
         let caller = Arc::new(caller);
         let (gate, at) = (Arc::clone(&caller), store.clone());
         let may = move |ids: &[String]| gate.require(&ids.iter().map(String::as_str).collect::<Vec<_>>(), &at);
         match store.reshortcode_by(ask, act, may).await {
             Ok(Reshortcoded { moves, tickets }) => yield TicketsEvent::Reshortcoded { moves, tickets },
-            Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, sight.as_ref(), id)) },
+            Err(e) => yield TicketsEvent::Error { message: redacted(e, |id| sees_id(&store, &caller.sight(), id)) },
         }
     }
 }

@@ -68,6 +68,9 @@ pub(super) fn write_runs(path: &Path, rows: &[(&str, u32)]) {
         db::upsert(
             &conn,
             &Ticket {
+                hidden_blocked_by: 0,
+                hidden_unlocks: 0,
+                parent_hidden: false,
                 labels: Vec::new(),
                 id: format!("{epic}-{seq}").into(),
                 epic: (*epic).into(),
@@ -164,7 +167,7 @@ impl Oracle {
 
 fn answered(store: &Store, q: &PageQuery<'_>) -> Result<Answer, String> {
     store
-        .page(*q)
+        .page(SYS, *q)
         .map(|p| (p.tickets.iter().map(|t| t.id.to_string()).collect(), p.next, p.remaining))
         .map_err(|e| e.to_string())
 }
@@ -203,7 +206,7 @@ fn walk(store: &Store, oracle: &Oracle, epic: Option<&str>, limit: u32, what: &s
             ..PageQuery::default()
         };
         assert_page(store, oracle, q, what);
-        let Ok(page) = store.page(q) else {
+        let Ok(page) = store.page(SYS, q) else {
             return seen;
         };
         seen.extend(page.tickets.iter().map(|t| t.id.to_string()));
@@ -327,7 +330,7 @@ async fn a_hole_in_a_shortcode_still_pages_by_the_count() {
     // The numbers themselves, for the cursors the ticket names.
     let page = |after, epic| {
         store
-            .page(PageQuery {
+            .page(SYS, PageQuery {
                 epic,
                 after,
                 limit: Some(1),
@@ -341,7 +344,7 @@ async fn a_hole_in_a_shortcode_still_pages_by_the_count() {
     assert_eq!(page(Some("GAP-5"), Some("GAP")).remaining, 0, "inside, after the hole");
     assert_eq!(page(Some("ZED-1"), None).remaining, 0, "after GAP");
     assert!(matches!(
-        store.page(PageQuery {
+        store.page(SYS, PageQuery {
             after: Some("GAP-3"),
             ..PageQuery::default()
         }),
@@ -374,7 +377,7 @@ async fn a_sequence_zero_is_not_dense() {
     assert_eq!(runs[&ShortcodeId::new("ODD")], (0, 2, 3, false));
     assert_eq!(runs[&ShortcodeId::new("ZRO")], (0, 3, 3, false), "held == last, and still a hole");
     let page = store
-        .page(PageQuery {
+        .page(SYS, PageQuery {
             after: Some("ZRO-0"),
             limit: Some(0),
             ..PageQuery::default()
@@ -503,7 +506,7 @@ async fn the_kept_runs_are_a_scan_after_every_path_that_brings_tickets_in() {
         }
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.get("OLD-2").await.unwrap().parent.as_deref(), Some("OLD-1"), "migrated");
+    assert_eq!(store.get(SYS, "OLD-2").await.unwrap().parent.as_deref(), Some("OLD-1"), "migrated");
     assert_runs_are_a_scan(&store, "the AGS-19 migration");
     assert_every_page_is_counted(&store, &mut Rng(19), "the AGS-19 migration");
 
