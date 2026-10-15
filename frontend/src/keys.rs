@@ -1403,7 +1403,7 @@ fn Palette(overlay: RwSignal<Overlay>) -> impl IntoView {
                 PalCmd::Code(code) => tags::filter_globally(lens, &code),
                 PalCmd::Text(text) => {
                     if let Ok(f) = menger_tickets_api::filter::Filter::parse(&text) {
-                        lens.edit(lens::Level::Global, |k| *k = crate::saved::chosen(f));
+                        lens.apply(lens::Level::Global, Some(crate::saved::chosen(f)));
                     }
                 }
                 PalCmd::Theme(name) => crate::scopes::pick(name),

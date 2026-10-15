@@ -34,6 +34,12 @@
 //!   leaves a line naming nothing. Every refusal (a dead socket, the
 //!   server's in-band words) is shown where the action was taken.
 //!
+//! - FILTER-37: **naming saves** (src/naming.rs) writes through the same
+//!   `save`, `rename` and `remove` — a tree given a name is saved from that
+//!   moment and every edit after amends its doc ([`amend_filter`]); a filter
+//!   chosen here binds its level to its name (the bar shows it), and so
+//!   does a Save as…, which stays as a second door.
+//!
 //! Everything that decides — the slug, the list read from `VIEW-1` and
 //! rewritten, the saved text and its reading, collisions and free paths,
 //! what is left out — is a pure function here, pinned by native tests.
@@ -526,6 +532,11 @@ fn ticket_of(events: Vec<TicketsEvent>) -> Result<Ticket, String> {
 }
 
 /// `get { id }` — `None` when nothing is there.
+pub(crate) async fn get_doc(id: &str) -> Result<Option<Ticket>, String> {
+    get(&connected()?, id).await
+}
+
+/// `get { id }` — `None` when nothing is there.
 async fn get(client: &session::Client, id: &str) -> Result<Option<Ticket>, String> {
     let events = client.get_all(id.to_string()).await.map_err(|e| session::describe(&e))?;
     if events.iter().any(|e| matches!(e, TicketsEvent::NotFound { .. })) {
@@ -554,7 +565,7 @@ fn connected() -> Result<session::Client, String> {
 }
 
 /// The collection's list, read now — empty while there is no collection.
-async fn read_list() -> Result<Vec<Entry>, String> {
+pub(crate) async fn read_list() -> Result<Vec<Entry>, String> {
     let client = connected()?;
     Ok(get(&client, COLLECTION).await?.map(|t| entries(&t.body)).unwrap_or_default())
 }
@@ -569,7 +580,7 @@ pub(crate) enum Failure {
 /// Save as… `name` with `filter`: the collection first (created, the first
 /// time, under [`COLLECTION_PARENT`]), then the doc, then the line —
 /// the entry saved and the list after.
-async fn save(filter: Filter, name: String, replace: bool) -> Result<(Entry, Vec<Entry>), Failure> {
+pub(crate) async fn save(filter: Filter, name: String, replace: bool) -> Result<(Entry, Vec<Entry>), Failure> {
     let failed = Failure::Failed;
     let client = connected().map_err(failed)?;
     let held = get(&client, COLLECTION).await.map_err(failed)?;
@@ -606,7 +617,7 @@ async fn save(filter: Filter, name: String, replace: bool) -> Result<(Entry, Vec
 }
 
 /// Rename `id` to `name`: the doc's title, then the line — the list after.
-async fn rename(id: String, name: String) -> Result<Vec<Entry>, Failure> {
+pub(crate) async fn rename(id: String, name: String) -> Result<Vec<Entry>, Failure> {
     let failed = Failure::Failed;
     let client = connected().map_err(failed)?;
     let view = get(&client, COLLECTION).await.map_err(failed)?.ok_or(Failure::Refused(Refusal::Unlisted))?;
@@ -622,7 +633,7 @@ async fn rename(id: String, name: String) -> Result<Vec<Entry>, Failure> {
 }
 
 /// Take `id`'s line out of the collection (its doc stays) — the list after.
-async fn remove(id: String) -> Result<Vec<Entry>, String> {
+pub(crate) async fn remove(id: String) -> Result<Vec<Entry>, String> {
     let client = connected()?;
     let Some(view) = get(&client, COLLECTION).await? else { return Ok(Vec::new()) };
     let after = match with_removed(&view.body, &id) {
@@ -630,6 +641,20 @@ async fn remove(id: String) -> Result<Vec<Entry>, String> {
         None => view.body,
     };
     Ok(entries(&after))
+}
+
+/// FILTER-37: the saved filter `id`'s doc amended to hold `filter` — what
+/// naming saves writes after every edit of a named tree.
+pub(crate) async fn amend_filter(id: &str, filter: &Filter) -> Result<(), String> {
+    let client = connected()?;
+    let address = address_of(id);
+    let doc = get(&client, &address).await?.ok_or_else(|| format!("{address}: not found"))?;
+    let body = saved_text(filter);
+    if filter_of(&doc.body).ok().as_ref() != Some(filter) {
+        amend(&client, &doc.id, None, Some(body)).await?;
+    }
+    crate::needs::saved_changed(id, filter);
+    Ok(())
 }
 
 /// MENGER-12: the filter `id`'s doc holds, or `None` while nothing is saved
@@ -790,8 +815,29 @@ impl Saved {
         s
     }
 
+    /// FILTER-37: the collection's list as last read.
+    pub(crate) fn listing(self) -> Listing {
+        self.list.get_untracked()
+    }
+
+    /// FILTER-37: the collection's list as a write answered it.
+    pub(crate) fn set_list(self, list: Vec<Entry>) {
+        self.list.try_set(Listing::Read(list));
+    }
+
+    /// FILTER-37: the list's names (tracked) — read once when unread.
+    pub(crate) fn listed(self) -> Vec<Entry> {
+        if self.list.with_untracked(|l| matches!(l, Listing::Unread)) && !self.reading.get_untracked() {
+            self.refresh();
+        }
+        self.list.with(|l| match l {
+            Listing::Read(list) => list.clone(),
+            _ => Vec::new(),
+        })
+    }
+
     /// The collection read again; the list shown meanwhile is kept.
-    fn refresh(self) {
+    pub(crate) fn refresh(self) {
         if !matches!(self.list.get_untracked(), Listing::Read(_)) {
             self.list.set(Listing::Reading);
         }
@@ -848,7 +894,8 @@ impl Saved {
     /// FILTER-27: a suggestion chosen — its filter becomes the level's.
     fn suggest(self, level: Level, name: &'static str, text: &'static str) {
         let Ok(filter) = Filter::parse(text) else { return };
-        self.lens.commit(level, Some(chosen(filter)));
+        self.lens.apply(level, Some(chosen(filter)));
+        self.lens.pop(level).tree_open.set(false);
         self.close_menu(true);
         self.say(level, format!("\u{201c}{name}\u{201d} applied"));
     }
@@ -888,7 +935,12 @@ impl Saved {
             self.busy.try_set(false);
             match got {
                 Ok(filter) => {
-                    self.lens.commit(level, Some(chosen(filter)));
+                    // FILTER-37: chosen, the level is that filter, by name.
+                    if let Some(n) = crate::naming::hook() {
+                        n.bind(level, crate::naming::Bound { id: e.id.clone(), name: e.name.clone() }, filter.format());
+                    }
+                    self.lens.apply(level, Some(chosen(filter)));
+                    self.lens.pop(level).tree_open.set(false);
                     self.close_menu(true);
                     self.say(level, format!("\u{201c}{}\u{201d} applied", e.name));
                 }
@@ -1001,6 +1053,12 @@ impl Saved {
             match got {
                 Ok((entry, list)) => {
                     self.list.try_set(Listing::Read(list));
+                    // FILTER-37: saved under a name, the level wears it.
+                    if let Some(n) = crate::naming::hook() {
+                        if untrack(|| self.lens.filter(d.level).get()) == d.filter {
+                            n.bind(d.level, crate::naming::Bound { id: entry.id.clone(), name: entry.name.clone() }, d.filter.format());
+                        }
+                    }
                     self.close_dialog();
                     self.say(d.level, format!("saved as \u{201c}{}\u{201d}", entry.name));
                 }

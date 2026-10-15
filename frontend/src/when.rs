@@ -20,7 +20,7 @@
 //! - **FILTER-30**: Hasn't changed is `not touched <window>` — the ticket's
 //!   last touch (any write to it, a comment, an answer) outside the window:
 //!   "hasn't changed in 2 weeks". And any time pill turns around with
-//!   [`negate`] (its ⋯ menu's Negate; a group's, for its time members).
+//!   [`negate`] (FILTER-37: the pill's own `negate` button, wherever it sits).
 //! - **DEPLOY-13**: `deployed <env> [window]` is a time pill too — its
 //!   environment a part of its own ([`Part::Env`]) — built from the filter
 //!   menu's own Deployed category: Deployed to ▸ and Not deployed to ▸ an

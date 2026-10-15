@@ -97,8 +97,6 @@ pub(crate) enum Context {
     Chip,
     /// On a link in a body, a comment or a note.
     Link,
-    /// On a filter bar's pills.
-    FilterBar,
     /// Inside a ticket's framed body (its SDK posts the keys out).
     Frame,
     /// Annotation mode is on: a click is a comment's anchor.
@@ -119,7 +117,7 @@ pub(crate) enum Context {
 
 impl Context {
     #[cfg(test)]
-    pub(crate) const ALL: [Context; 17] = [
+    pub(crate) const ALL: [Context; 16] = [
         Context::Anywhere,
         Context::Global,
         Context::Nav,
@@ -128,7 +126,6 @@ impl Context {
         Context::Ticket,
         Context::Chip,
         Context::Link,
-        Context::FilterBar,
         Context::Frame,
         Context::Annotate,
         Context::Palette,
@@ -150,7 +147,6 @@ impl Context {
             Context::Ticket => "on any ticket",
             Context::Chip => "on any chip",
             Context::Link => "on a link in a body",
-            Context::FilterBar => "on a filter's pills",
             Context::Frame => "inside a framed body",
             Context::Annotate => "in annotation mode",
             Context::Palette => "in the palette",
@@ -184,11 +180,11 @@ impl Context {
         if self.modal() || other.modal() {
             return false;
         }
-        let region = |c: Context| matches!(c, Context::Nav | Context::Board | Context::TicketPage | Context::FilterBar);
+        let region = |c: Context| matches!(c, Context::Nav | Context::Board | Context::TicketPage);
         if region(self) && region(other) {
             return false;
         }
-        let rows = |c: Context| matches!(c, Context::Nav | Context::Board | Context::FilterBar);
+        let rows = |c: Context| matches!(c, Context::Nav | Context::Board);
         !((self == Context::Link && rows(other)) || (other == Context::Link && rows(self)))
     }
 }
@@ -303,14 +299,13 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("filter.view", &[C::Global, C::Nav, C::TicketPage], &["f"], G::Filter, "filter this view; on a ticket page, the nav to this ticket and its children"),
     b("filter.global", &[C::Global], &["Shift+f"], G::Filter, "filter every view (the global filter)"),
     b("chip.filter-everywhere", &[C::Chip], &["Alt+Click"], G::Filter, "the chip becomes the global filter"),
-    b("filter.pick", &[C::FilterBar], &["Shift+Click"], G::Filter, "pick a pill, or let it go — two or more picked group as any of"),
     // -- Annotate
     b("annotate.toggle", &[C::Global, C::Frame], &["a", "Shift+a"], G::Annotate, "annotation mode: outline the page, click anything to comment on it; again, it ends"),
     b("annotate.pick", &[C::Annotate], &["Click"], G::Annotate, "comment on what was clicked"),
     b("comment.save", &[C::Dialog], &["Mod+Enter"], G::Annotate, "save the comment being written"),
     // -- View
     b("view.full-screen", &[C::TicketPage, C::Frame], &["z"], G::View, "the ticket's framed body full screen, and back (from inside the body too)"),
-    b("app.escape", &[C::Global, C::Frame], &["Escape"], G::View, "close the palette or this list; leave annotation mode; leave full screen; clear the selection"),
+    b("app.escape", &[C::Global, C::Frame], &["Escape"], G::View, "close the palette or this list; fold an open query tree; leave annotation mode; leave full screen; clear the selection"),
     // -- Menus & dialogs
     b("list.next", &[C::Palette, C::Menu], &["ArrowDown"], G::Dialogs, "the next item (from the last, the first)"),
     b("list.prev", &[C::Palette, C::Menu], &["ArrowUp"], G::Dialogs, "the previous item (from the first, the last)"),

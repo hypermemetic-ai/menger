@@ -2402,7 +2402,8 @@ fn step_selected(id: String, down: bool, ctx: Ctx, lens: Lens) {
 /// and its row opens to show them. The open ticket is centred in the new tree
 /// ([`reveal`], once per filter).
 fn filter_to(id: &str, ctx: Ctx, lens: Lens) {
-    lens.edit(Level::Nav, |k| *k = tags::only(&tags::TagClause::Under(id.to_string()), k));
+    let next = untrack(|| lens.kept(Level::Nav)).map(|k| tags::only(&tags::TagClause::Under(id.to_string()), &k));
+    lens.apply(Level::Nav, next);
     if ctx.expanded.with_untracked(|e| !e.marked_open(id)) {
         ctx.expanded.update(|e| e.force_open(id));
     }

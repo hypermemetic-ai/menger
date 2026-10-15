@@ -291,6 +291,7 @@ mod queue;
 
 mod mermaid;
 mod motion;
+mod naming;
 mod needs;
 // ORG-4: the organizations held, and the header's switcher.
 mod orgs;
@@ -2143,7 +2144,9 @@ fn App() -> impl IntoView {
     let lens = lens::Lens::new(tree);
     lens.install();
     // FILTER-6: saved filters — each level's `Saved ▾` and Save as….
-    saved::Saved::new(lens);
+    let saved_filters = saved::Saved::new(lens);
+    // FILTER-37: naming saves — a name at the top of a tree is its save.
+    naming::Naming::new(lens, saved_filters);
     // MENGER-12: Needs you — its saved filter and its live count, for the
     // header's link; MENGER-43: `g n` puts it on the nav.
     needs::NeedsYou::install();

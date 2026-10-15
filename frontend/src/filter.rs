@@ -18,15 +18,34 @@
 //!   showing its canonical text, which × removes. A clause is
 //!   [`Clause`]: an operator and canonical values; a flag's is one value,
 //!   `is yes` or `is no`, and its operator turns the value over.
-//! - **The bar** ([`FilterBar`]): a `Filter` button opening the menu, then
-//!   — on a surface — the global pills, muted, marked `global`, not
-//!   editable there (a click opens the global menu at its category), then
-//!   the level's own pills, `reset` when the level differs from its
-//!   default, and a `text` toggle: the level's filter as canonical text,
-//!   editable; Enter applies it, and a parse error lists every bad chunk
-//!   under the box and applies nothing. Under the bar, when the surface's
-//!   effective filter admits nothing, "Nothing can match" and the clashing
-//!   groups, each marked with its level.
+//! - **The bar** ([`FilterBar`]; FILTER-37, the query tree): one line,
+//!   folded until worked on — the `Filter` button, a chevron, the query's
+//!   **name** (an editable field; empty: "unnamed query"; a name saves it,
+//!   src/naming.rs), the canonical text (one line, wrapping once open; on a
+//!   surface the global filter's before it, muted), `done` while open, then
+//!   `text`, `reset`, Make global (the nav) and `Saved ▾`. The chevron,
+//!   focusing the name or any edit opens the tree; `done`, Escape or
+//!   applying a filter (Enter in the text mode, a `Saved ▾` pick) folds it.
+//!   The `text` toggle shows the level's filter as canonical text, editable:
+//!   Enter applies it, and a parse error lists every bad chunk under the box
+//!   and applies nothing. Under the bar, when the surface's effective filter
+//!   admits nothing, "Nothing can match" and the clashing groups, each
+//!   marked with its level.
+//! - **The tree** ([`QueryTree`], src/anyof.rs's edits): a root block and
+//!   blocks within, each drawn as its head — the joiner a button (`any of`
+//!   ⇄ `all of`; the root's flips too), `+ clause` (the category menu,
+//!   adding to that block: [`Pop::into`]), `+ group` (a block within under
+//!   the other join, the menu opened adding to it), `+ saved` (a
+//!   search-first picker of the saved queries), × on all but the root — and
+//!   its items in a hairline: a clause as its pill (its operator toggles,
+//!   its values reopen its category in that block, ×; a time pill's parts
+//!   reopen the When pane, `negate` turns it around), a saved query as
+//!   `SAVED · Name` with a peek at its clauses and `inline`, a block within.
+//!   On a surface the global root comes first, read-only and muted (a pill
+//!   opens the global menu at its category); the surface's own categories
+//!   after the tree. With names, "as evaluated" says the filter with them
+//!   expanded. FILTER-31's box, the `⋯` menu, Or…, Group as any of and
+//!   Shift-click's picks are gone: every option is a button in the tree.
 //! - **The menu** (WAVE-12's): a search field over the categories and,
 //!   typed into, every category's values ([`search`]); a category opens its
 //!   values beside it (in place, with a ‹ back row, on a narrow window): a
@@ -44,18 +63,11 @@
 //!   value checked from the search's results keeps its clause's operator
 //!   (`is` for a new one). One button: Tab from the search reaches it, Space
 //!   or Enter flips it.
-//! - **Any of** (FILTER-31): a group of two pills or more is drawn as a box,
-//!   its members joined by `or` (any of) or `and` (all of) — the joiner a
-//!   button that flips it; `+ or` adds an alternative. Each own pill has a
-//!   `⋯` menu ([`pill_menu_view`]): **Or…** (the menu opens adding to that
-//!   pill: what is picked joins it in an any-of group), and on a group
-//!   **Make it all of / any of**, **Ungroup**, **Remove**. Shift-click picks
-//!   pills; two or more picked, **Group as any of**. While the menu adds to
-//!   a group ([`Pop::into`]) its categories are the language's, its checks
-//!   are the group's members, and an edit the group cannot hold (a group
-//!   inside a group) is refused with why ([`Pop::refusal`]). A category
-//!   used inside a group is marked in the menu. The decisions are
-//!   src/anyof.rs's.
+//! - **Adding to a block** ([`Pop::into`]): the menu's categories are the
+//!   language's, its checks are the block's clauses (the pill's own, opened
+//!   from one: [`Pop::item`]), and what the language refuses (`text` inside
+//!   a block) is refused with why ([`Pop::refusal`]). A category used in a
+//!   block below the root is marked in the menu.
 //!
 //! Everything that decides — the categories and their values, a clause's
 //! edits, the tree and its tri-state, the menu's rows, a pill's words — is
@@ -69,7 +81,7 @@ use menger_tickets_api::filter::Conj;
 use menger_tickets_api::{Group, Status};
 use wasm_bindgen::JsCast;
 
-use crate::anyof::{self, Member, Slot};
+use crate::anyof::{self, Block, Button, Member, Node, Path, Slot};
 use crate::bindings::{self, Context};
 use crate::keys::palette_match;
 use crate::lens::{self, Lens, Level};
@@ -1038,6 +1050,11 @@ impl CountsProvider {
         self.0.and_then(|s| s.try_with(|k| k.get(&c).and_then(|m| m.get(v)).copied()).flatten())
     }
 
+    /// FILTER-37: whether the level has a provider at all.
+    pub(crate) fn is_some(self) -> bool {
+        self.0.is_some()
+    }
+
     /// The counts, tracked (empty with no provider).
     pub(crate) fn get(self) -> Counts {
         self.0.and_then(|s| s.try_get()).unwrap_or_default()
@@ -1219,17 +1236,25 @@ pub(crate) struct Pop {
     /// (Custom…) is open.
     pub(crate) when: RwSignal<crate::when_view::Step>,
     pub(crate) custom: RwSignal<bool>,
-    /// FILTER-31: the group the menu adds to and edits — Or… on a pill, a
-    /// group's `+ or`, a member's values: the level's group at that place;
-    /// `None`, the level's own clauses.
-    pub(crate) into: RwSignal<Option<usize>>,
-    /// FILTER-31: why the last edit was refused (an alternative that would
-    /// put a group inside a group) — shown in the menu, or under the bar.
+    /// FILTER-37: the block the menu adds to and edits — a block's `+
+    /// clause`, a pill's values there: its path in the query tree; `None`,
+    /// the root (and the surface's own categories).
+    pub(crate) into: RwSignal<Option<Path>>,
+    /// FILTER-37: the item the menu was opened from — its category's edits
+    /// go to that clause.
+    pub(crate) item: RwSignal<Option<usize>>,
+    /// Why the last edit was refused (what the language refuses) — shown in
+    /// the menu, or under the bar.
     pub(crate) refusal: RwSignal<Option<String>>,
-    /// FILTER-31: the pills Shift-clicked, by their group's place.
-    pub(crate) picked: RwSignal<Vec<usize>>,
-    /// FILTER-31: whose `⋯` menu is open — a pill's group's place.
-    pub(crate) more: RwSignal<Option<usize>>,
+    /// FILTER-37: whether the query tree is open (folded: the bar's one
+    /// line).
+    pub(crate) tree_open: RwSignal<bool>,
+    /// FILTER-37: the block whose `+ saved` picker is open, and what is
+    /// typed in its search.
+    pub(crate) picking: RwSignal<Option<Path>>,
+    pub(crate) pick_q: RwSignal<String>,
+    /// FILTER-37: the saved queries peeked at, by block and item.
+    pub(crate) peeks: RwSignal<Vec<(Path, usize)>>,
 }
 
 impl Pop {
@@ -1247,9 +1272,12 @@ impl Pop {
             when: RwSignal::new(crate::when_view::Step::Root),
             custom: RwSignal::new(false),
             into: RwSignal::new(None),
+            item: RwSignal::new(None),
             refusal: RwSignal::new(None),
-            picked: RwSignal::new(Vec::new()),
-            more: RwSignal::new(None),
+            tree_open: RwSignal::new(false),
+            picking: RwSignal::new(None),
+            pick_q: RwSignal::new(String::new()),
+            peeks: RwSignal::new(Vec::new()),
         }
     }
 
@@ -1300,6 +1328,8 @@ impl Pop {
         self.when.set(crate::when_view::Step::Root);
         self.custom.set(false);
         self.into.set(None);
+        self.item.set(None);
+        self.picking.set(None);
         self.refusal.set(None);
         self.cat.set(cat);
         self.open.set(Some(Anchor { sel, direct: direct && cat.is_some() }));
@@ -1319,6 +1349,7 @@ impl Pop {
         self.open.set(None);
         self.cat.set(None);
         self.into.set(None);
+        self.item.set(None);
         self.held.set(Op::Is);
         self.query.set(String::new());
         if restore {
@@ -1358,26 +1389,25 @@ impl Pop {
         }
     }
 
-    /// FILTER-31: the menu opened adding to the group at `at` (Or… on a
-    /// pill, a group's `+ or`) — under `sel`, on `cat` when given (alone,
-    /// `direct`).
-    pub(crate) fn show_into(self, lens: Lens, at: usize, sel: String, cat: Option<Cat>, direct: bool) {
+    /// FILTER-37: the menu opened adding to the block at `path` (its `+
+    /// clause`, a pill's values there — `item`, that pill) — under `sel`, on
+    /// `cat` when given (alone, `direct`).
+    pub(crate) fn show_in(self, lens: Lens, path: Path, item: Option<usize>, sel: String, cat: Option<Cat>, direct: bool) {
         self.close(false);
         lens.open_menu(self.level, cat, Some((sel, direct)));
-        self.into.set(Some(at));
+        self.into.set((!path.is_root()).then_some(path));
+        self.item.set(item);
     }
 
-    /// FILTER-31: an edit made through the menu — `f` given the group it
-    /// adds to; refused, why is kept to be shown; a group the edit took
-    /// away is no longer added to.
-    fn edit(self, lens: Lens, f: impl FnOnce(Option<usize>) -> Result<(), String>) {
-        let into = self.into.get_untracked();
-        let count = move || untrack(|| lens.kept(self.level)).map_or(0, |k| k.filter.groups.len());
-        let before = count();
-        match f(into) {
+    /// An edit made through the menu — `f` given the block it adds to and
+    /// the pill it edits; refused, why is kept to be shown; a block the
+    /// edit took away is no longer added to.
+    fn edit(self, lens: Lens, f: impl FnOnce(Option<Path>, Option<usize>) -> Result<(), String>) {
+        let (into, item) = (self.into.get_untracked(), self.item.get_untracked());
+        match f(into, item) {
             Ok(()) => {
                 self.refusal.set(None);
-                if into.is_some() && count() < before {
+                if into.is_some_and(|p| untrack(|| anyof::block_at(&lens.tree(self.level), p).is_none())) {
                     self.into.set(None);
                 }
             }
@@ -1385,10 +1415,10 @@ impl Pop {
         }
     }
 
-    /// The clauses the menu checks: the level's, or the group's it adds to
-    /// (FILTER-31). Tracked.
+    /// The clauses the menu checks: the root's, or the block's it adds to
+    /// (FILTER-37). Tracked.
     fn clauses(self, lens: Lens) -> Clauses {
-        lens.clauses_in(self.level, self.into.get())
+        lens.clauses_in(self.level, self.into.get(), self.item.get())
     }
 
     /// FILTER-19: the operator `c`'s switch shows. Tracked.
@@ -1412,7 +1442,7 @@ impl Pop {
     fn flip_switch(self, lens: Lens, c: Cat) {
         let next = untrack(|| self.op(lens, c)).flip();
         self.held.set(next);
-        self.edit(lens, |into| lens.edit_in(self.level, into, |k| k.set_op(c, next)));
+        self.edit(lens, |into, item| lens.edit_in(self.level, into, item, |k| k.set_op(c, next)));
     }
 
     /// A value's box clicked (or Enter on its row): in the open category's
@@ -1420,7 +1450,7 @@ impl Pop {
     /// clause's operator kept — `is` for a new one.
     fn check(self, lens: Lens, c: Cat, token: &str, scoped: bool) {
         let op = if scoped { Op::Is } else { self.pane_op(lens, c) };
-        self.edit(lens, |into| lens.toggle(self.level, into, c, token, op));
+        self.edit(lens, |into, item| lens.toggle(self.level, into, item, c, token, op));
     }
 
     /// The menu's facts, read (and tracked) for `f`.
@@ -1451,7 +1481,7 @@ impl Pop {
             Row::Group { cat, tokens, .. } => {
                 let op = self.pane_op(lens, *cat);
                 let (cat, tokens) = (*cat, *tokens);
-                self.edit(lens, |into| lens.edit_in(self.level, into, |k| k.edit_as(cat, op, |k| k.toggle_all(cat, tokens))));
+                self.edit(lens, |into, item| lens.edit_in(self.level, into, item, |k| k.edit_as(cat, op, |k| k.toggle_all(cat, tokens))));
             }
             Row::TitleContains(text) => {
                 let text = text.clone();
@@ -1517,13 +1547,6 @@ pub(crate) fn button_sel(level: Level) -> String {
     format!("[data-fbtn=\"{}\"]", level.name())
 }
 
-/// The selector of a pill's values: `level`'s pill of `c` in the bar of
-/// `bar` (a surface's bar draws the global pills too).
-fn pill_sel(bar: Level, level: Level, c: Option<Cat>) -> String {
-    let cat = c.map_or_else(|| "[data-custom]".to_string(), |c| format!("[data-cat=\"{}\"]", c.key()));
-    format!("[data-fbar=\"{}\"] [data-fpill=\"{}\"]{cat} .p-vals", bar.name(), level.name())
-}
-
 fn document() -> Option<web_sys::Document> {
     dom::window().document()
 }
@@ -1584,10 +1607,13 @@ pub(crate) fn place(level: Level, sel: &str) {
 // ---------------------------------------------------------------------
 // The view: the bar
 
-/// The generic filter bar — a level's `Filter` button, the global pills
-/// (on a surface: muted, marked `global`), the level's own pills, `reset`,
-/// the `text` toggle, `Saved ▾` (FILTER-6) and the menu; under it, the
-/// contradiction notice.
+/// The generic filter bar — FILTER-37: one builder, the query tree, folded
+/// until worked on. One line: the level's `Filter` button, the chevron, the
+/// query's name ([`QueryHead`]; a name saves it, src/naming.rs), its
+/// canonical text (on a surface, the global filter's before it, muted),
+/// `done` while open, the `text` toggle, `reset`, Make global (the nav),
+/// `Saved ▾` (FILTER-6). Opened, the tree under it ([`QueryTree`]); under
+/// the bar, the contradiction notice.
 /// `cats`: the level's categories, server-backed and local, in its menu's
 /// order; `counts`: what the menu's values count.
 #[component]
@@ -1605,19 +1631,35 @@ pub(crate) fn FilterBar(
     let texting = RwSignal::new(false);
     let hint = hint.unwrap_or_else(|| "Filter (f)".into());
     view! {
-        <div class="fbar" data-fbar=level.name() data-level=level.name()>
-            <FilterButton level hint />
-            {move || (!texting.get()).then(|| view! { <Pills bar=level /> })}
-            <TextMode level texting />
-            <Reset level />
-            // FILTER-26: the nav's filter made global.
-            {(level == Level::Nav).then(|| view! { <crate::promote::MakeGlobal /> })}
-            // FILTER-6: the level's saved filters, and Save as….
-            <crate::saved::SavedButton level />
+        <div class="fbar qbar" data-fbar=level.name() data-level=level.name() class:open=move || pop.tree_open.get() on:keydown=move |ev| fold_key(pop, ev)>
+            <div class="qline">
+                <FilterButton level hint />
+                <QueryHead level texting />
+                <TextMode level texting />
+                <Reset level />
+                // FILTER-26: the nav's filter made global.
+                {(level == Level::Nav).then(|| view! { <crate::promote::MakeGlobal /> })}
+                // FILTER-6: the level's saved filters, and Save as….
+                <crate::saved::SavedButton level />
+            </div>
+            <QueryTree level texting />
             <Popover level />
         </div>
         <Clash level />
     }
+}
+
+/// FILTER-37: Escape anywhere in an open tree — but a field, which keeps
+/// its own, and the menu, which closes first — folds it (`app.escape`'s
+/// row: "fold an open query tree").
+pub(crate) fn fold_key(pop: Pop, ev: web_sys::KeyboardEvent) {
+    if ev.default_prevented() || !pop.tree_open.get_untracked() || !bindings::is(&ev, Context::Global, "app.escape") {
+        return;
+    }
+    ev.prevent_default();
+    ev.stop_propagation();
+    pop.picking.set(None);
+    pop.tree_open.set(false);
 }
 
 /// A level's `Filter` button: it opens the level's menu, or closes it.
@@ -1651,555 +1693,622 @@ pub(crate) fn FilterButton(level: Level, #[prop(into)] hint: String, #[prop(opti
     }
 }
 
-/// The pills of `bar`'s bar ([`lens::bar_pills`]): on a surface, the
-/// global ones first — muted, marked `global`, opening the global menu at
-/// their category — then its own, editable. FILTER-31: a group is a box;
-/// while the bar holds one, `and` stands between the pills; then what the
-/// Shift-click picked offers, and a refusal while the menu is closed.
+/// FILTER-37: the bar's one line — the chevron (open ⇄ folded), the
+/// query's name (empty: "unnamed query"; saved, underlined in `--live`),
+/// on a surface the global filter's text (muted), the level's canonical
+/// text (one line, wrapping once open), and `done` while open. The
+/// chevron, focusing the name, or an edit opens the tree; `done`, Escape
+/// or applying a filter folds it.
 #[component]
-pub(crate) fn Pills(bar: Level) -> impl IntoView {
+pub(crate) fn QueryHead(level: Level, texting: RwSignal<bool>) -> impl IntoView {
     let lens = lens::use_lens();
-    let pop = lens.pop(bar);
-    // A pick, an open ⋯ menu: forgotten once the filter changes under them.
-    Effect::new(move |_| {
-        let _ = lens.kept(bar);
-        pop.picked.set(Vec::new());
-        pop.more.set(None);
-    });
-    let outside = window_event_listener(leptos::ev::mousedown, move |ev: web_sys::MouseEvent| {
-        if pop.more.get_untracked().is_none() {
-            return;
-        }
-        let inside = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-            .is_some_and(|el| el.closest(".pmenu, .p-more").ok().flatten().is_some());
-        if !inside {
-            pop.more.set(None);
-        }
-    });
-    on_cleanup(move || outside.remove());
-    move || {
-        let route = lens.route_sc(bar);
-        let tree = lens.sctree().get();
-        let global = if bar == Level::Global { Vec::new() } else { lens.pills(Level::Global) };
-        let pills = lens::bar_pills(bar, global, lens.pills(bar));
-        let grouped = pills.iter().any(|(_, p)| matches!(p, Pill::Group { .. }));
-        let drawn = pills
-            .into_iter()
-            .enumerate()
-            .map(|(i, (level, p))| {
-                let fat = pill_at(lens, level, &p);
-                view! {
-                    {(grouped && i > 0).then(|| view! { <span class="fand" aria-hidden="true">"and"</span> })}
-                    {pill_view(lens, bar, level, level != bar, p, fat, route.as_deref(), tree.as_ref())}
+    let pop = lens.pop(level);
+    let naming = crate::naming::use_naming();
+    let open = pop.tree_open;
+    let text = Memo::new(move |_| lens.filter(level).with(|f| f.format()));
+    let global = Memo::new(move |_| (level != Level::Global).then(|| lens.filter(Level::Global).with(|f| f.format())).filter(|t| !t.is_empty()));
+    let name = Memo::new(move |_| naming.bound(level).map(|b| b.name).or_else(|| naming.pending(level)).unwrap_or_default());
+    let field = NodeRef::<leptos::html::Input>::new();
+    let fold = move || {
+        open.set(false);
+        pop.picking.set(None);
+    };
+    view! {
+        <button
+            class="qchev"
+            data-qchev=level.name()
+            aria-expanded=move || open.get().to_string()
+            title=move || if open.get() { "fold the query tree" } else { "open the query tree" }
+            on:click=move |_| if open.get_untracked() { fold() } else { open.set(true) }
+        >
+            {move || if open.get() { "\u{25be}" } else { "\u{25b8}" }}
+        </button>
+        <input
+            class="qname"
+            data-qname=level.name()
+            node_ref=field
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            maxlength=crate::saved::NAME_MAX.to_string()
+            placeholder="unnamed query"
+            aria-label=format!("the {} query's name — a name saves it", level.name())
+            class:saved=move || naming.bound(level).is_some()
+            title=move || match naming.bound(level) {
+                Some(b) => format!("saved as \u{201c}{}\u{201d} — every edit keeps it saved; empty the name to unlist it", b.name),
+                None => "a name saves this query".to_string(),
+            }
+            prop:value=move || name.get()
+            on:focus=move |_| open.set(true)
+            on:change=move |ev| naming.name(level, &event_target_value(&ev))
+            on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Field) {
+                Some("form.submit") => {
+                    ev.prevent_default();
+                    if let Some(el) = field.get() {
+                        let _ = el.blur();
+                    }
                 }
-            })
-            .collect_view();
-        view! {
-            {drawn}
-            {picked_view(lens, bar)}
-            {refused_view(pop)}
-        }
-    }
-}
-
-/// FILTER-31: which of its level's groups a pill is — `None` for a
-/// surface's own category's (no group holds it).
-fn pill_at(lens: Lens, level: Level, p: &Pill) -> Option<usize> {
-    match p {
-        Pill::Clause { cat, .. } if cat.is_local() => None,
-        Pill::Clause { cat, .. } => untrack(|| lens.kept(level)).and_then(|k| k.at_of(*cat)),
-        Pill::Time { at, .. } | Pill::Custom { at, .. } | Pill::Group { at, .. } => Some(*at),
-    }
-}
-
-/// FILTER-31: a Shift-click on an own pill picks it (or lets it go) — taken
-/// before the pill's own buttons see the click.
-fn pick(pop: Pop, fat: Option<usize>, inherited: bool) -> impl Fn(web_sys::MouseEvent) + 'static {
-    move |ev: web_sys::MouseEvent| {
-        let shift = bindings::hit_mouse(&ev, Context::FilterBar) == Some("filter.pick");
-        let Some(at) = fat.filter(|_| !inherited && shift) else { return };
-        ev.prevent_default();
-        ev.stop_propagation();
-        pop.picked.update(|p| match p.iter().position(|x| *x == at) {
-            Some(i) => {
-                p.remove(i);
+                Some("form.cancel") => {
+                    ev.prevent_default();
+                    ev.stop_propagation();
+                    if let Some(el) = field.get() {
+                        el.set_value(&name.get_untracked());
+                        let _ = el.blur();
+                    }
+                    fold();
+                }
+                _ => {}
             }
-            None => p.push(at),
-        });
+        />
+        {move || global.get().map(|g| view! {
+            <span class="qglobal" title=format!("the global filter, above this one: {g}")>
+                <span class="p-lvl">"global"</span>
+                <code>{g.clone()}</code>
+            </span>
+        })}
+        {move || (!texting.get()).then(|| view! {
+            <code class="qtext" data-qtext=level.name() title=move || text.get() on:click=move |_| open.set(true)>
+                {move || {
+                    let t = text.get();
+                    if t.is_empty() { "every ticket".to_string() } else { t }
+                }}
+            </code>
+        })}
+        {move || open.get().then(|| view! {
+            <button class="qdone" data-qdone=level.name() title="fold the tree (Escape)" on:click=move |_| fold()>"done"</button>
+        })}
     }
 }
 
-/// FILTER-31: a Shift-press on a pill picks it, never a run of text.
-fn no_shift_select(ev: web_sys::MouseEvent) {
-    if bindings::hit_mouse(&ev, Context::FilterBar) == Some("filter.pick") {
-        ev.prevent_default();
+/// FILTER-37: under the bar's line — naming's prompt (a name already
+/// saved: replace it, or another) and its note; opened, the tree: on a
+/// surface the global root, read-only and muted, then the level's own, then
+/// the surface's own categories; and, the filter naming saved queries,
+/// "as evaluated" — the names expanded.
+#[component]
+pub(crate) fn QueryTree(level: Level, texting: RwSignal<bool>) -> impl IntoView {
+    let lens = lens::use_lens();
+    let pop = lens.pop(level);
+    let naming = crate::naming::use_naming();
+    let open = Memo::new(move |_| pop.tree_open.get() && !texting.get());
+    view! {
+        {move || naming.taken(level).map(|(typed, e)| view! {
+            <div class="qtaken" role="alert" data-level=level.name()>
+                <span>{crate::saved::taken_words(&typed, &e)}</span>
+                <button class="primary" data-act="replace" disabled=move || naming.busy(level) on:click=move |_| naming.replace(level)>"Replace it"</button>
+                <button data-act="another" on:click=move |_| {
+                    naming.another(level);
+                    if let Some(el) = document().and_then(|d| d.query_selector(&format!("[data-qname=\"{}\"]", level.name())).ok().flatten()).and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) {
+                        let _ = el.focus();
+                        el.select();
+                    }
+                }>"Choose another name"</button>
+            </div>
+        })}
+        {move || naming.note(level).map(|(bad, words)| view! {
+            <div class="qnote" class:sproblem=bad role="status" data-level=level.name()>
+                {words}
+                <button class="p-x" title="dismiss" aria-label="dismiss" on:click=move |_| naming.dismiss(level)>"\u{d7}"</button>
+            </div>
+        })}
+        {move || open.get().then(|| view! {
+            <div class="qtree" data-qtree=level.name()>
+                {(level != Level::Global).then(|| inherited_view(lens, level))}
+                {move || tree_view(lens, level, level, false)}
+                {move || local_view(lens, level)}
+            </div>
+            {evaluated_view(lens, level)}
+        })}
+        {refused_view(pop)}
     }
 }
 
-/// FILTER-31: what the picked pills offer — one picked, a hint; two or
-/// more, Group as any of.
-fn picked_view(lens: Lens, bar: Level) -> impl IntoView {
-    let pop = lens.pop(bar);
+/// On a surface's tree: the global filter's root, read-only and muted — a
+/// pill opens the global menu at its category, as the header's bar edits it.
+fn inherited_view(lens: Lens, bar: Level) -> impl IntoView {
     move || {
-        let n = pop.picked.with(Vec::len);
-        let group = move |_| {
-            let ats = pop.picked.get_untracked();
-            match lens.edit_groups(bar, |gs| anyof::group_any(gs, &ats)) {
-                Ok(_) => pop.refusal.set(None),
-                Err(why) => pop.refusal.set(Some(why)),
-            }
-            pop.picked.set(Vec::new());
-        };
-        (n > 0).then(|| {
+        let t = lens.tree(Level::Global);
+        (!t.items.is_empty()).then(|| {
             view! {
-                <span class="fpick" role="group" aria-label="picked filters">
-                    {if n > 1 {
-                        view! { <button class="fgroup-any" title="make the picked pills one group, any of which matches" on:click=group>"Group as any of"</button> }.into_any()
-                    } else {
-                        view! { <span class="fpick-h">"Shift-click another pill to group"</span> }.into_any()
-                    }}
-                    <button class="p-x" title="let the picked pills go" aria-label="let the picked pills go" on:click=move |_| pop.picked.set(Vec::new())>"×"</button>
-                </span>
+                <div class="qinherited" title="the global filter — every view shows what it admits; it is edited in the header">
+                    <span class="p-lvl">"global"</span>
+                    {tree_view(lens, bar, Level::Global, true)}
+                </div>
             }
         })
     }
 }
 
-/// FILTER-31: an edit refused, under the bar while the menu is closed (the
-/// menu shows it while open).
+/// `level`'s tree, drawn in `bar`'s bar — `read_only`: no button (the
+/// global root on a surface). Walked as [`anyof::sketch`] walks it.
+fn tree_view(lens: Lens, bar: Level, level: Level, read_only: bool) -> AnyView {
+    let t = lens.tree(level);
+    block_view(lens, bar, level, read_only, &t, Path::ROOT)
+}
+
+fn answer(pop: Pop, r: Result<(), String>) {
+    match r {
+        Ok(()) => pop.refusal.set(None),
+        Err(why) => pop.refusal.set(Some(why)),
+    }
+}
+
+/// A block: its head — the joiner a button (`any of` ⇄ `all of`), `+
+/// clause` (the category menu adding here), `+ group` (a block within, the
+/// other join, the menu opened adding to it), `+ saved` (the picker), × but
+/// on the root ([`anyof::buttons`]) — the picker while open, then its items.
+fn block_view(lens: Lens, bar: Level, level: Level, ro: bool, b: &Block, path: Path) -> AnyView {
+    let pop = lens.pop(level);
+    let key = path.key();
+    let block_sel = move |p: Path| format!("[data-fbar=\"{}\"] [data-qlevel=\"{}\"][data-block=\"{}\"] > .qhead [data-add=\"clause\"]", bar.name(), level.name(), p.key());
+    let conj = b.conj;
+    let words = anyof::conj_words(conj);
+    let flipped = anyof::conj_words(anyof::other(conj));
+    let head = if ro {
+        view! { <span class="qjoin ro">{words}</span> }.into_any()
+    } else {
+        anyof::buttons(path, false)
+            .into_iter()
+            .map(|button| match button {
+                Button::Joiner => view! {
+                    <button class="qjoin" data-act="joiner" title=format!("{words} — click for {flipped}") aria-label=format!("{words} — flip to {flipped}") on:click=move |_| answer(pop, lens.edit_tree(level, |t| anyof::flip(t, path)))>
+                        {words}
+                    </button>
+                }
+                .into_any(),
+                Button::Clause => {
+                    let sel = block_sel(path);
+                    view! {
+                        <button class="qadd" data-add="clause" data-fopen=level.name() title=format!("add a clause to this {words} block") on:click=move |_| pop.show_in(lens, path, None, sel.clone(), None, false)>
+                            "+ clause"
+                        </button>
+                    }
+                    .into_any()
+                }
+                Button::Group => view! {
+                    <button class="qadd" data-add="group" data-fopen=level.name() title=format!("add a group within — {flipped} its clauses") on:click=move |_| match lens.edit_tree(level, |t| anyof::add_group(t, path)) {
+                        Ok(g) => {
+                            pop.refusal.set(None);
+                            pop.show_in(lens, g, None, block_sel(g), None, false);
+                        }
+                        Err(why) => pop.refusal.set(Some(why)),
+                    }>
+                        "+ group"
+                    </button>
+                }
+                .into_any(),
+                Button::Saved => view! {
+                    <button
+                        class="qadd"
+                        data-add="saved"
+                        aria-expanded=move || (pop.picking.get() == Some(path)).to_string()
+                        title="add a saved query by name"
+                        on:click=move |_| {
+                            pop.close(false);
+                            pop.pick_q.set(String::new());
+                            pop.picking.update(|p| *p = if *p == Some(path) { None } else { Some(path) });
+                        }
+                    >
+                        "+ saved"
+                    </button>
+                }
+                .into_any(),
+                Button::Remove => {
+                    let (parent, i) = path.split().unwrap_or((Path::ROOT, 0));
+                    view! {
+                        <button class="p-x qrm" title="remove this group" aria-label=format!("remove this {words} group") on:click=move |_| answer(pop, lens.edit_tree(level, |t| anyof::remove(t, parent, i)))>
+                            "\u{d7}"
+                        </button>
+                    }
+                    .into_any()
+                }
+            })
+            .collect_view()
+            .into_any()
+    };
+    let picking = !ro && pop.picking.get() == Some(path);
+    let kids = b.items.iter().enumerate().map(|(i, n)| node_view(lens, bar, level, ro, path, i, n)).collect_view();
+    let empty = (b.items.is_empty() && !ro).then(|| {
+        view! { <span class="qempty">{if path.is_root() { "no clause yet — every ticket" } else { "empty — + clause adds one" }}</span> }
+    });
+    view! {
+        <div
+            class="qblock"
+            class:qroot=path.is_root()
+            class:ro=ro
+            role="group"
+            aria-label=format!("{words}: {}", anyof::block_words(b))
+            data-qlevel=level.name()
+            data-block=key
+            data-conj=if conj == Conj::Any { "any" } else { "all" }
+        >
+            <div class="qhead">{head}</div>
+            {picking.then(|| picker_view(lens, level, path))}
+            <div class="qkids">
+                {kids}
+                {empty}
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// Item `i` of the block at `path`: a clause as its pill (its operator,
+/// its values reopening its category in that block, ×), a time pill (its
+/// parts, `negate`, ×), a clause no category draws (its text), a saved
+/// query ([`saved_view`]), a block within.
+fn node_view(lens: Lens, bar: Level, level: Level, ro: bool, path: Path, i: usize, n: &Node) -> AnyView {
+    let pop = lens.pop(level);
+    let slot = Slot { block: path, item: i };
+    let skey = format!("{}.{i}", path.key());
+    let base = format!("[data-fbar=\"{}\"] [data-fpill=\"{}\"][data-slot=\"{skey}\"]", bar.name(), level.name());
+    let words = anyof::node_words(n);
+    let x = (!ro).then(|| {
+        view! {
+            <button class="p-x" title="remove it" aria-label=format!("remove {words}") on:click=move |_| answer(pop, lens.edit_tree(level, |t| anyof::remove(t, path, i)))>
+                "\u{d7}"
+            </button>
+        }
+    });
+    let inner = match n {
+        Node::Leaf(Member::Clause { cat, clause: cl }) => {
+            let c = *cat;
+            let route = lens.route_sc(level);
+            let shown = lens.sctree().with(|t| display_order(c, cl, route.as_deref(), t.as_ref()));
+            let (first, more_n) = pill_values(c, &shown);
+            let all = shown.iter().map(|v| c.value_label(v)).collect::<Vec<_>>().join(", ");
+            let op = op_label(c, cl.op, cl.values.len());
+            let sel = format!("{base} .p-vals");
+            let open = move |_| {
+                if ro {
+                    // An inherited pill opens the global menu at its category.
+                    pop.close(false);
+                    lens.open_menu(level, Some(c), Some((sel.clone(), false)));
+                } else if pop.open.with_untracked(|a| a.as_ref().is_some_and(|a| a.sel == sel)) {
+                    pop.close(true);
+                } else {
+                    pop.show_in(lens, path, Some(i), sel.clone(), Some(c), true);
+                }
+            };
+            let op_view = if ro {
+                view! { <span class="p-op">{op}</span> }.into_any()
+            } else {
+                view! { <button class="p-op" title="toggle the operator" on:click=move |_| answer(pop, lens.edit_tree(level, |t| anyof::flip_member(t, slot)))>{op}</button> }.into_any()
+            };
+            view! {
+                <span class="pill" class:inherited=ro data-fpill=level.name() data-slot=skey.clone() data-cat=c.key() data-op=cl.op.word()>
+                    <span class="p-cat">{c.label()}</span>
+                    {op_view}
+                    <button class="p-vals" data-fopen=level.name() title=all on:click=open>
+                        {first}
+                        {more_n.map(|m| view! { <span class="more">" "{m}</span> })}
+                    </button>
+                    {x}
+                </span>
+            }
+            .into_any()
+        }
+        Node::Leaf(Member::Time(t)) => {
+            let words = crate::when::words(t, crate::calendar::reader_h12());
+            let turned = crate::when::words(&crate::when::negate(t), crate::calendar::reader_h12());
+            let segs = time_segments(lens, level, ro, slot, t, &base);
+            let neg = (!ro).then(|| {
+                view! {
+                    <button class="p-op p-neg" data-act="negate" title=format!("negate: {turned}") on:click=move |_| answer(pop, lens.edit_tree(level, |t| anyof::negate(t, slot)))>
+                        "negate"
+                    </button>
+                }
+            });
+            view! {
+                <span class="pill when" class:inherited=ro data-fpill=level.name() data-slot=skey.clone() data-cat=time_cat(t).key() title=words>
+                    <span class="p-cat">{time_cat(t).label()}</span>
+                    {segs}
+                    {neg}
+                    {x}
+                </span>
+            }
+            .into_any()
+        }
+        Node::Leaf(Member::Custom(g)) => {
+            let text = g.format();
+            view! {
+                <span class="pill custom" class:inherited=ro data-fpill=level.name() data-slot=skey.clone() data-custom="">
+                    <span class="p-cat">"custom"</span>
+                    <span class="p-vals" title=format!("{text} — edited in the text mode")>{text.clone()}</span>
+                    {x}
+                </span>
+            }
+            .into_any()
+        }
+        Node::Saved { name, not } => saved_view(lens, level, ro, slot, &skey, name, *not, x),
+        Node::Block(b) => match path.child(i) {
+            Some(q) => block_view(lens, bar, level, ro, b, q),
+            None => view! { <span class="pill custom" data-slot=skey.clone()><span class="p-vals">{words.clone()}</span>{x}</span> }.into_any(),
+        },
+    };
+    view! { <div class="qnode">{inner}</div> }.into_any()
+}
+
+/// FILTER-37: a saved query in the tree — `SAVED · Name`, a peek at its
+/// clauses (read-only, its text fetched the first time), `inline` (the name
+/// replaced by its clauses), ×.
+#[allow(clippy::too_many_arguments)]
+fn saved_view(lens: Lens, level: Level, ro: bool, slot: Slot, skey: &str, name: &str, not: bool, x: Option<impl IntoView + 'static>) -> AnyView {
+    let pop = lens.pop(level);
+    let naming = crate::naming::use_naming();
+    let at = (slot.block, slot.item);
+    let peeked = pop.peeks.with(|p| p.contains(&at));
+    let peek = {
+        let name = name.to_string();
+        move |_| {
+            naming.fetch(&name);
+            pop.peeks.update(|p| match p.iter().position(|x| *x == at) {
+                Some(i) => {
+                    p.remove(i);
+                }
+                None => p.push(at),
+            });
+        }
+    };
+    let inline = {
+        let name = name.to_string();
+        move |_| {
+            let name = name.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match naming.text_now(&name).await {
+                    Ok(text) => answer(pop, lens.edit_tree(level, |t| anyof::inline(t, slot.block, slot.item, &text))),
+                    Err(why) => {
+                        let _ = pop.refusal.try_set(Some(format!("\u{201c}{name}\u{201d} not inlined: {why}")));
+                    }
+                }
+            });
+        }
+    };
+    let peek_name = name.to_string();
+    view! {
+        <span class="qref" class:inherited=ro data-fpill=level.name() data-slot=skey.to_string() data-saved=name.to_string()>
+            {not.then(|| view! { <span class="qnot">"not"</span> })}
+            <span class="qlab">"saved"</span>
+            <b class="qrname">{name.to_string()}</b>
+            <button class="qpeek" data-act="peek" aria-expanded=peeked.to_string() title=if peeked { "hide its clauses" } else { "peek at its clauses" } on:click=peek>
+                {if peeked { "\u{25be}" } else { "\u{25b8}" }}
+            </button>
+            {(!ro && !not).then(|| view! { <button class="qinline" data-act="inline" title="replace the name by its clauses" on:click=inline>"inline"</button> })}
+            {x}
+        </span>
+        {peeked.then(|| view! {
+            <div class="qpeeked" data-peek=peek_name.clone()>{let n = peek_name.clone(); move || peek_words(naming.text(&n))}</div>
+        })}
+    }
+    .into_any()
+}
+
+/// A peek's words: the saved query's clauses as their pills read, its join
+/// first.
+fn peek_words(f: Option<crate::naming::Fetch>) -> String {
+    use crate::naming::Fetch;
+    match f {
+        None | Some(Fetch::Loading) => "reading\u{2026}".to_string(),
+        Some(Fetch::Text(t)) => match menger_tickets_api::filter::Filter::parse(&t) {
+            Ok(f) => {
+                let tree = anyof::from_filter(&f);
+                format!("{}: {}", anyof::conj_words(tree.conj), anyof::block_words(&tree))
+            }
+            Err(e) => format!("its text does not read — {e}"),
+        },
+        Some(Fetch::Missing) => "no saved filter has this name".to_string(),
+        Some(Fetch::Failed(why)) => format!("could not be read: {why}"),
+    }
+}
+
+/// FILTER-37: `+ saved`'s picker — the category menu's own search-first
+/// popover: a search box, then the names (src/naming.rs's order: the
+/// recently used, the level's own, the collection's order), eight shown,
+/// "N more: type to narrow"; a name in the tree marked ✓; each with its
+/// count where the level has a counts provider; Enter takes the first,
+/// Escape closes.
+fn picker_view(lens: Lens, level: Level, path: Path) -> AnyView {
+    let pop = lens.pop(level);
+    let naming = crate::naming::use_naming();
+    let saved = crate::saved::use_saved();
+    let counted = pop.counts.get_untracked().is_some();
+    untrack(|| naming.fresh_counts());
+    let field = NodeRef::<leptos::html::Input>::new();
+    focus_each_load(field);
+    let in_tree = Memo::new(move |_| anyof::saved_names(&lens.tree(level)));
+    let all = Memo::new(move |_| crate::naming::names(&saved.listed()));
+    let picks = Memo::new(move |_| {
+        let q = pop.pick_q.get();
+        all.with(|all| crate::naming::shown(crate::naming::order(all, &naming.recent(), &[], &q)))
+    });
+    let take = move |name: String| match lens.edit_tree(level, |t| anyof::add_saved(t, path, &name)) {
+        Ok(()) => {
+            naming.touch(&name);
+            pop.picking.set(None);
+            pop.pick_q.set(String::new());
+            pop.refusal.set(None);
+        }
+        Err(why) => pop.refusal.set(Some(why)),
+    };
+    view! {
+        <div class="fmenu qpick" role="dialog" aria-label="add a saved query" data-pick=path.key()>
+            <input
+                class="fsearch qpick-q"
+                node_ref=field
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                aria-label="search the saved queries"
+                placeholder=move || format!("search saved\u{2026} ({})", all.with(Vec::len))
+                prop:value=move || pop.pick_q.get()
+                on:input=move |ev| pop.pick_q.set(event_target_value(&ev))
+                on:keydown=move |ev: web_sys::KeyboardEvent| match bindings::hit(&ev, Context::Menu) {
+                    Some("list.choose") => {
+                        ev.prevent_default();
+                        if let Some(p) = picks.with_untracked(|(shown, _)| shown.first().cloned()) {
+                            take(p.name);
+                        }
+                    }
+                    Some("dialog.close") => {
+                        ev.prevent_default();
+                        ev.stop_propagation();
+                        pop.picking.set(None);
+                    }
+                    _ => {}
+                }
+            />
+            <div class="qnames" role="listbox" aria-label="saved queries">
+                {move || {
+                    let (shown, more) = picks.get();
+                    if shown.is_empty() {
+                        return view! { <span class="qmore">"no saved query named so"</span> }.into_any();
+                    }
+                    let have = in_tree.get();
+                    let rows = shown
+                        .into_iter()
+                        .map(|p| {
+                            let marked = have.iter().any(|h| crate::saved::slug(h) == crate::saved::slug(&p.name));
+                            if counted {
+                                naming.ask_count(&p.name);
+                            }
+                            let (name, label, counted_name) = (p.name.clone(), p.name.clone(), p.name.clone());
+                            view! {
+                                <button class="frow qpick-n" role="option" data-name=p.name.clone() class:in=marked on:mousedown=|ev| ev.prevent_default() on:click=move |_| take(name.clone())>
+                                    <span class="flabel">{label}</span>
+                                    {marked.then(|| view! { <span class="qin" title="already in the tree">"\u{2713}"</span> })}
+                                    {p.recent.then(|| view! { <span class="qrecent">"recent"</span> })}
+                                    {counted.then(|| view! {
+                                        <span class="fcount">{move || naming.count(&counted_name).flatten().map(|n| n.to_string()).unwrap_or_default()}</span>
+                                    })}
+                                </button>
+                            }
+                        })
+                        .collect_view();
+                    view! {
+                        {rows}
+                        {(more > 0).then(|| view! { <span class="qmore">{format!("{more} more: type to narrow")}</span> })}
+                    }
+                    .into_any()
+                }}
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// A surface's own categories (the wave board's, the inputs page's) beside
+/// the root — the language has not got them; they join with `and`.
+fn local_view(lens: Lens, level: Level) -> Option<impl IntoView> {
+    let pop = lens.pop(level);
+    let local = lens.kept(level).map(|k| k.local).unwrap_or_default();
+    let pills: Vec<(Cat, Clause)> = local.iter().map(|(c, cl)| (c, cl.clone())).collect();
+    (!pills.is_empty()).then(|| {
+        let drawn = pills
+            .into_iter()
+            .map(|(c, cl)| {
+                let (first, more_n) = pill_values(c, &cl.values);
+                let all = cl.values.iter().map(|v| c.value_label(v)).collect::<Vec<_>>().join(", ");
+                let op = op_label(c, cl.op, cl.values.len());
+                let sel = format!("[data-fbar=\"{0}\"] .qlocal [data-cat=\"{1}\"] .p-vals", level.name(), c.key());
+                let open = move |_| {
+                    if pop.open.with_untracked(|a| a.as_ref().is_some_and(|a| a.sel == sel)) {
+                        pop.close(true);
+                    } else {
+                        pop.close(false);
+                        lens.open_menu(level, Some(c), Some((sel.clone(), true)));
+                    }
+                };
+                view! {
+                    <span class="pill" data-fpill=level.name() data-cat=c.key() data-op=cl.op.word()>
+                        <span class="p-cat">{c.label()}</span>
+                        <button class="p-op" title="toggle the operator" on:click=move |_| lens.edit(level, |k| k.flip(c))>{op}</button>
+                        <button class="p-vals" data-fopen=level.name() title=all on:click=open>
+                            {first}
+                            {more_n.map(|m| view! { <span class="more">" "{m}</span> })}
+                        </button>
+                        <button class="p-x" title="remove this filter" aria-label=format!("remove the {} filter", c.label()) on:click=move |_| lens.edit(level, |k| k.remove(c))>
+                            "\u{d7}"
+                        </button>
+                    </span>
+                }
+            })
+            .collect_view();
+        view! {
+            <div class="qlocal" title=format!("{} — beside the query, joined by and", crate::saved::surface_words(level))>
+                <span class="p-lvl">"this view"</span>
+                {drawn}
+            </div>
+        }
+    })
+}
+
+/// FILTER-37: "as evaluated" — the level's filter with its saved names
+/// expanded ([`anyof::evaluated`]), "…" until every name's text is in.
+fn evaluated_view(lens: Lens, level: Level) -> impl IntoView {
+    let naming = crate::naming::use_naming();
+    move || {
+        let f = lens.filter(level).get();
+        if f.saved_names().is_empty() {
+            return None;
+        }
+        let said = match anyof::evaluated(&f, &|n| naming.lookup(n)) {
+            Err(missing) => {
+                wasm_bindgen_futures::spawn_local(async move {
+                    for m in missing {
+                        naming.fetch(&m);
+                    }
+                });
+                "\u{2026}".to_string()
+            }
+            Ok(Ok(text)) => text,
+            Ok(Err(why)) => why,
+        };
+        Some(view! {
+            <div class="qeval" data-qeval=level.name()>
+                <span class="qeval-l">"as evaluated: "</span>
+                <code>{said}</code>
+            </div>
+        })
+    }
+}
+
+/// An edit refused, under the bar while the menu is closed (the menu shows
+/// it while open).
 fn refused_view(pop: Pop) -> impl IntoView {
     move || {
         (!pop.open_tracked()).then(|| pop.refusal.get()).flatten().map(|why| {
             view! {
                 <span class="frefused" role="alert">
                     {why}
-                    <button class="p-x" title="dismiss" aria-label="dismiss" on:click=move |_| pop.refusal.set(None)>"×"</button>
+                    <button class="p-x" title="dismiss" aria-label="dismiss" on:click=move |_| pop.refusal.set(None)>"\u{d7}"</button>
                 </span>
             }
         })
     }
-}
-
-/// FILTER-31: the `⋯` on an own pill at `at` and, open, its menu.
-fn more_view(lens: Lens, bar: Level, at: usize) -> impl IntoView {
-    let pop = lens.pop(bar);
-    let open = move || pop.more.get() == Some(at);
-    view! {
-        <span class="pm-wrap">
-            <button
-                class="p-more"
-                title="Or…, negate, group, remove"
-                aria-label="more for this filter"
-                aria-haspopup="menu"
-                aria-expanded=move || open().to_string()
-                on:click=move |_| pop.more.set(if pop.more.get_untracked() == Some(at) { None } else { Some(at) })
-            >
-                "⋯"
-            </button>
-            {move || open().then(|| pill_menu_view(lens, bar, at))}
-        </span>
-    }
-}
-
-/// FILTER-31: a pill's menu — **Or…** (the filter menu opens adding to the
-/// pill: what is picked joins it in an any-of group; off, with why, where
-/// it cannot), and on a group **Make it all of / any of**, **Ungroup**;
-/// **Remove**. The decisions are src/anyof.rs's; FILTER-30's items go here.
-pub(crate) fn pill_menu_view(lens: Lens, bar: Level, at: usize) -> impl IntoView {
-    let pop = lens.pop(bar);
-    let Some(g) = untrack(|| lens.kept(bar)).and_then(|k| k.filter.groups.get(at).cloned()) else {
-        return ().into_any();
-    };
-    let boxed = anyof::is_group(&g);
-    let or_why = anyof::or_refusal(&g);
-    let flip_why = anyof::flip_refusal(&g);
-    // FILTER-30: Negate — the time pill, or each time member of a box.
-    let negatable = anyof::negatable(&g, at);
-    let answer = move |r: Result<(), String>| {
-        pop.more.set(None);
-        match r {
-            Ok(()) => pop.refusal.set(None),
-            Err(why) => pop.refusal.set(Some(why)),
-        }
-    };
-    let sel = format!("[data-fbar=\"{0}\"] [data-fpill=\"{0}\"][data-fat=\"{at}\"] .p-more", bar.name());
-    let or = move |_| {
-        pop.more.set(None);
-        pop.show_into(lens, at, sel.clone(), None, false);
-    };
-    let flip_label = if g.conj == Conj::Any { "Make it all of" } else { "Make it any of" };
-    let menu = NodeRef::<leptos::html::Span>::new();
-    // The first item takes focus, so the keys reach the menu.
-    Effect::new(move |_| {
-        if let Some(el) = menu.get() {
-            if let Ok(Some(first)) = el.query_selector("button:not([disabled])") {
-                if let Ok(b) = first.dyn_into::<web_sys::HtmlElement>() {
-                    let _ = b.focus();
-                }
-            }
-        }
-    });
-    view! {
-        <span
-            class="pmenu"
-            role="menu"
-            node_ref=menu
-            on:keydown=move |ev: web_sys::KeyboardEvent| {
-                if bindings::is(&ev, Context::Menu, "dialog.close") {
-                    ev.prevent_default();
-                    ev.stop_propagation();
-                    pop.more.set(None);
-                }
-            }
-        >
-            <button class="pm-i" role="menuitem" data-act="or" data-fopen=bar.name() disabled=or_why.is_some() title=or_why.clone().unwrap_or_else(|| "add an alternative: any of them matches".into()) on:click=or>
-                "Or…"
-            </button>
-            {or_why.map(|why| view! { <span class="pm-why">{why}</span> })}
-            {boxed.then(|| view! {
-                <button class="pm-i" role="menuitem" data-act="flip" disabled=flip_why.is_some() title=flip_why.clone().unwrap_or_default() on:click=move |_| answer(lens.edit_groups(bar, |gs| anyof::flip(gs, at)))>
-                    {flip_label}
-                </button>
-                <button class="pm-i" role="menuitem" data-act="ungroup" title="each pill back on its own, joined by and" on:click=move |_| answer(lens.edit_groups(bar, |gs| { anyof::ungroup(gs, at); Ok(()) }))>
-                    "Ungroup"
-                </button>
-            })}
-            {negatable.into_iter().map(|(slot, t)| {
-                let label = match slot.member {
-                    None => "Negate".to_string(),
-                    Some(_) => format!("Negate “{}”", crate::when::words(&t, crate::calendar::reader_h12())),
-                };
-                let turned = crate::when::words(&crate::when::negate(&t), crate::calendar::reader_h12());
-                view! {
-                    <button class="pm-i" role="menuitem" data-act="negate" data-member=slot.member title=format!("turn it around: {turned}") on:click=move |_| answer(lens.edit_groups(bar, |gs| anyof::negate(gs, slot)))>
-                        {label}
-                    </button>
-                }
-            }).collect_view()}
-            <button class="pm-i" role="menuitem" data-act="remove" on:click=move |_| answer(lens.edit_groups(bar, |gs| { if at < gs.len() { gs.remove(at); } Ok(()) }))>
-                "Remove"
-            </button>
-        </span>
-    }
-    .into_any()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn pill_view(lens: Lens, bar: Level, level: Level, inherited: bool, p: Pill, fat: Option<usize>, route: Option<&str>, tree: Option<&ScTree>) -> AnyView {
-    let pop = lens.pop(level);
-    let mark = inherited.then(|| view! { <span class="p-lvl" title=format!("set at the {} level", level.name())>{level.name()}</span> });
-    let picked = move || fat.is_some_and(|a| pop.picked.with(|p| p.contains(&a)));
-    let more = fat.filter(|_| !inherited).map(|at| more_view(lens, bar, at));
-    match p {
-        Pill::Clause { cat: c, clause: cl } => {
-            let shown = display_order(c, &cl, route, tree);
-            let (first, more_n) = pill_values(c, &shown);
-            let all = shown.iter().map(|v| c.value_label(v)).collect::<Vec<_>>().join(", ");
-            let op = op_label(c, cl.op, cl.values.len());
-            let sel = pill_sel(bar, level, Some(c));
-            let open = move |_| {
-                if pop.open.with_untracked(|a| a.as_ref().is_some_and(|a| a.sel == sel)) {
-                    pop.close(true);
-                } else {
-                    pop.close(false);
-                    // An inherited pill opens the global menu at its
-                    // category; an own pill, that category's values alone.
-                    lens.open_menu(level, Some(c), Some((sel.clone(), !inherited)));
-                }
-            };
-            let op_view = if inherited {
-                view! { <span class="p-op">{op}</span> }.into_any()
-            } else {
-                view! { <button class="p-op" title="toggle the operator" on:click=move |_| lens.edit(level, |k| k.flip(c))>{op}</button> }
-                    .into_any()
-            };
-            let x = (!inherited).then(|| {
-                view! {
-                    <button
-                        class="p-x"
-                        title="remove this filter"
-                        aria-label=format!("remove the {} filter", c.label())
-                        on:click=move |_| lens.edit(level, |k| k.remove(c))
-                    >
-                        "×"
-                    </button>
-                }
-            });
-            view! {
-                <span
-                    class="pill"
-                    class:inherited=inherited
-                    class:picked=picked
-                    data-fpill=level.name()
-                    data-fat=fat
-                    data-cat=c.key()
-                    data-op=cl.op.word()
-                    on:mousedown=no_shift_select on:click:capture=pick(pop, fat, inherited)
-                >
-                    <span class="p-cat">{c.label()}</span>
-                    {op_view}
-                    <button class="p-vals" data-fopen=level.name() title=all on:click=open>
-                        {first}
-                        {more_n.map(|m| view! { <span class="more">" "{m}</span> })}
-                    </button>
-                    {mark}
-                    {more}
-                    {x}
-                </span>
-            }
-            .into_any()
-        }
-        Pill::Time { at, t } => time_pill_view(lens, bar, level, inherited, Slot { at, member: None }, t, more),
-        Pill::Group { at, conj, members } => group_view(lens, bar, level, inherited, at, conj, members, more),
-        Pill::Custom { text, at } => {
-            let sel = pill_sel(bar, level, None);
-            let x = (!inherited).then(|| {
-                view! {
-                    <button class="p-x" title="remove this filter" aria-label="remove this filter" on:click=move |_| lens.remove_custom(level, at)>
-                        "×"
-                    </button>
-                }
-            });
-            // A custom group is edited as text; a click opens the menu (the
-            // global one, from a surface's bar).
-            let open = move |_| lens.open_menu(level, None, Some((sel.clone(), false)));
-            view! {
-                <span
-                    class="pill custom"
-                    class:inherited=inherited
-                    class:picked=picked
-                    data-fpill=level.name()
-                    data-fat=at
-                    data-custom=""
-                    on:mousedown=no_shift_select on:click:capture=pick(pop, fat, inherited)
-                >
-                    <span class="p-cat">"custom"</span>
-                    <button class="p-vals" data-fopen=level.name() title=text.clone() on:click=open>{text.clone()}</button>
-                    {mark}
-                    {more}
-                    {x}
-                </span>
-            }
-            .into_any()
-        }
-    }
-}
-
-/// FILTER-31: a group's box — its join's words, its members joined by the
-/// joiner (a button: a click flips any of ⇄ all of, or says why it can't),
-/// `+ or` (the menu opens adding to it), its `⋯`. A member is drawn as its
-/// pill would be, and edited where it is: its operator, its values (the
-/// menu, on its category, adding to this group), its ×.
-#[allow(clippy::too_many_arguments)]
-fn group_view(lens: Lens, bar: Level, level: Level, inherited: bool, at: usize, conj: Conj, members: Vec<Member>, more: Option<impl IntoView + 'static>) -> AnyView {
-    let pop = lens.pop(level);
-    let base = format!("[data-fbar=\"{}\"] [data-fpill=\"{}\"][data-fat=\"{at}\"]", bar.name(), level.name());
-    let words = members.iter().map(Member::words).collect::<Vec<_>>().join(&format!(" {} ", anyof::joiner(conj)));
-    let flip_why = untrack(|| lens.kept(level)).and_then(|k| k.filter.groups.get(at).and_then(anyof::flip_refusal));
-    let mark = inherited.then(|| view! { <span class="p-lvl" title=format!("set at the {} level", level.name())>{level.name()}</span> });
-    let picked = move || pop.picked.with(|p| p.contains(&at));
-    let other = if conj == Conj::Any { "all of" } else { "any of" };
-    let join_title = flip_why.clone().unwrap_or_else(|| format!("{} — click for {other}", anyof::conj_words(conj)));
-    let parts = members
-        .into_iter()
-        .enumerate()
-        .map(|(i, m)| {
-            let join = (i > 0).then(|| {
-                if inherited {
-                    view! { <span class="g-join">{anyof::joiner(conj)}</span> }.into_any()
-                } else {
-                    view! {
-                        <button
-                            class="g-join"
-                            class:stuck=flip_why.is_some()
-                            title=join_title.clone()
-                            aria-label=format!("{} — flip to {other}", anyof::conj_words(conj))
-                            on:click=move |_| match lens.edit_groups(level, |gs| anyof::flip(gs, at)) {
-                                Ok(()) => pop.refusal.set(None),
-                                Err(why) => pop.refusal.set(Some(why)),
-                            }
-                        >
-                            {anyof::joiner(conj)}
-                        </button>
-                    }
-                    .into_any()
-                }
-            });
-            view! { {join} {member_view(lens, bar, level, inherited, at, i, m, &base)} }
-        })
-        .collect_view();
-    let add_sel = format!("{base} .g-add");
-    let add = (!inherited).then(|| {
-        view! {
-            <button
-                class="g-add"
-                data-fopen=level.name()
-                title=format!("add an alternative to this {} group", anyof::conj_words(conj))
-                on:click=move |_| pop.show_into(lens, at, add_sel.clone(), None, false)
-            >
-                {format!("+ {}", anyof::joiner(conj))}
-            </button>
-        }
-    });
-    let x = (!inherited).then(|| {
-        view! {
-            <button class="p-x" title="remove this group" aria-label=format!("remove the group {words}") on:click=move |_| lens.remove_custom(level, at)>
-                "×"
-            </button>
-        }
-    });
-    view! {
-        <span
-            class="fgrp"
-            class:inherited=inherited
-            class:picked=picked
-            role="group"
-            aria-label=format!("{}: {words}", anyof::conj_words(conj))
-            data-fpill=level.name()
-            data-fat=at
-            data-conj=if conj == Conj::Any { "any" } else { "all" }
-            title=words.clone()
-            on:mousedown=no_shift_select on:click:capture=pick(pop, Some(at), inherited)
-        >
-            <span class="g-l">{anyof::conj_words(conj)}</span>
-            {parts}
-            {add}
-            {mark}
-            {more}
-            {x}
-        </span>
-    }
-    .into_any()
-}
-
-/// FILTER-31: member `i` of the group at `at`, as its own pill would be.
-#[allow(clippy::too_many_arguments)]
-fn member_view(lens: Lens, bar: Level, level: Level, inherited: bool, at: usize, i: usize, m: Member, base: &str) -> AnyView {
-    let pop = lens.pop(level);
-    let answer = move |r: Result<(), String>| match r {
-        Ok(()) => pop.refusal.set(None),
-        Err(why) => pop.refusal.set(Some(why)),
-    };
-    let x = move |label: String| {
-        (!inherited).then(|| {
-            view! {
-                <button
-                    class="p-x"
-                    title="take this alternative out"
-                    aria-label=format!("take {label} out of the group")
-                    on:click=move |_| answer(lens.edit_groups(level, |gs| { anyof::remove_member(gs, at, i); Ok(()) }))
-                >
-                    "×"
-                </button>
-            }
-        })
-    };
-    let words = m.words();
-    match m {
-        Member::Clause { cat: c, clause: cl } => {
-            let (first, more_n) = pill_values(c, &cl.values);
-            let all = cl.values.iter().map(|v| c.value_label(v)).collect::<Vec<_>>().join(", ");
-            let op = op_label(c, cl.op, cl.values.len());
-            let sel = format!("{base} [data-member=\"{i}\"] .p-vals");
-            let op_view = if inherited {
-                view! { <span class="p-op">{op}</span> }.into_any()
-            } else {
-                view! {
-                    <button class="p-op" title="toggle the operator" on:click=move |_| answer(lens.edit_groups(level, |gs| anyof::flip_member(gs, at, i)))>
-                        {op}
-                    </button>
-                }
-                .into_any()
-            };
-            let open = move |_| pop.show_into(lens, at, sel.clone(), Some(c), !inherited);
-            view! {
-                <span class="pill gm" data-member=i data-cat=c.key() data-op=cl.op.word()>
-                    <span class="p-cat">{c.label()}</span>
-                    {op_view}
-                    <button class="p-vals" data-fopen=level.name() title=all on:click=open>
-                        {first}
-                        {more_n.map(|m| view! { <span class="more">" "{m}</span> })}
-                    </button>
-                    {x(words)}
-                </span>
-            }
-            .into_any()
-        }
-        Member::Time(t) => time_member_view(lens, bar, level, inherited, Slot { at, member: Some(i) }, t, x(words)),
-        Member::Custom(g) => {
-            let text = g.format();
-            view! {
-                <span class="pill custom gm" data-member=i data-custom="">
-                    <span class="p-vals" title=text.clone()>{text.clone()}</span>
-                    {x(words)}
-                </span>
-            }
-            .into_any()
-        }
-    }
-}
-
-/// FILTER-27: a time pill — `When`, then its segments: the event's words,
-/// and each part (status, window, length, who) a button reopening the When
-/// pane on that part; × removes it. Inherited (a global pill on a
-/// surface's bar), a part opens the global menu there.
-fn time_pill_view(lens: Lens, bar: Level, level: Level, inherited: bool, slot: Slot, t: crate::when::Timed, more: Option<impl IntoView + 'static>) -> AnyView {
-    let pop = lens.pop(level);
-    let at = slot.at;
-    let words = crate::when::words(&t, crate::calendar::reader_h12());
-    let mark = inherited.then(|| view! { <span class="p-lvl" title=format!("set at the {} level", level.name())>{level.name()}</span> });
-    let base = format!("[data-fbar=\"{}\"] [data-fpill=\"{}\"][data-ftime=\"{at}\"]", bar.name(), level.name());
-    let segs = time_segments(lens, level, inherited, slot, &t, &base);
-    let x = (!inherited).then(|| {
-        view! {
-            <button class="p-x" title="remove this filter" aria-label=format!("remove the filter {words}") on:click=move |_| lens.remove_custom(level, at)>
-                "×"
-            </button>
-        }
-    });
-    let picked = move || pop.picked.with(|p| p.contains(&at));
-    view! {
-        <span
-            class="pill when"
-            class:inherited=inherited
-            class:picked=picked
-            data-fpill=level.name()
-            data-fat=at
-            data-cat=time_cat(&t).key()
-            data-ftime=at
-            title=words.clone()
-            on:mousedown=no_shift_select on:click:capture=pick(pop, Some(at), inherited)
-        >
-            <span class="p-cat">{time_cat(&t).label()}</span>
-            {segs}
-            {mark}
-            {more}
-            {x}
-        </span>
-    }
-    .into_any()
-}
-
-/// FILTER-31: a time clause inside a group, at `slot` — its segments as a
-/// time pill's, edited where it is.
-fn time_member_view(lens: Lens, bar: Level, level: Level, inherited: bool, slot: Slot, t: crate::when::Timed, x: Option<impl IntoView + 'static>) -> AnyView {
-    let words = crate::when::words(&t, crate::calendar::reader_h12());
-    let base = format!("[data-fbar=\"{}\"] [data-fpill=\"{}\"][data-fat=\"{}\"] [data-member=\"{}\"]", bar.name(), level.name(), slot.at, slot.member.unwrap_or(0));
-    let segs = time_segments(lens, level, inherited, slot, &t, &base);
-    view! {
-        <span class="pill when gm" data-member=slot.member data-cat=time_cat(&t).key() title=words>
-            {segs}
-            {x}
-        </span>
-    }
-    .into_any()
 }
 
 /// A time clause's segments: the event's words, and each part a button
-/// reopening the When pane on that part (FILTER-31: inside a group, the
-/// menu adds to that group).
+/// reopening the When pane on that part — in the block it sits in.
 fn time_segments(lens: Lens, level: Level, inherited: bool, slot: Slot, t: &crate::when::Timed, base: &str) -> impl IntoView {
     let pop = lens.pop(level);
     let cat = time_cat(t);
@@ -2213,8 +2322,8 @@ fn time_segments(lens: Lens, level: Level, inherited: bool, slot: Slot, t: &crat
                 let open = move |_| {
                     pop.close(false);
                     lens.open_menu(level, Some(cat), Some((sel.clone(), !inherited)));
-                    if slot.member.is_some() {
-                        pop.into.set(Some(slot.at));
+                    if !slot.block.is_root() {
+                        pop.into.set(Some(slot.block));
                     }
                     pop.when.set(crate::when_view::Step::Edit { at: slot, only: Some(part) });
                 };
@@ -2263,9 +2372,9 @@ fn focus_each_load(field: NodeRef<leptos::html::Input>) {
 }
 
 /// The text mode: a toggle; on, the level's filter as canonical text,
-/// editable — Enter applies it; a parse error lists every bad chunk under
-/// the box and applies nothing; Escape (or the toggle) goes back to the
-/// pills.
+/// editable — Enter applies it (and folds the tree); a parse error lists
+/// every bad chunk under the box and applies nothing; Escape (or the
+/// toggle) goes back to the tree.
 #[component]
 pub(crate) fn TextMode(level: Level, texting: RwSignal<bool>) -> impl IntoView {
     let lens = lens::use_lens();
@@ -2286,6 +2395,8 @@ pub(crate) fn TextMode(level: Level, texting: RwSignal<bool>) -> impl IntoView {
         Ok(()) => {
             errors.set(Vec::new());
             texting.set(false);
+            // FILTER-37: applied, the tree folds.
+            lens.pop(level).tree_open.set(false);
         }
         Err(bad) => errors.set(bad),
     };
@@ -2426,7 +2537,7 @@ fn popover(lens: Lens, pop: Pop) -> impl IntoView {
         >
             {(level == Level::Global).then(|| view! { <div class="flevel">"global — every view"</div> })}
             {(level == Level::Nav).then(|| view! { <crate::promote::MakeGlobal menu=true /> })}
-            {move || pop.into.get().and_then(|at| lens.kept(level).and_then(|k| k.filter.groups.get(at).map(anyof::into_words))).map(|w| view! {
+            {move || pop.into.get().and_then(|at| anyof::into_words(&lens.tree(level), at)).map(|w| view! {
                 <div class="finto" role="note">{w}</div>
             })}
             {move || pop.refusal.get().map(|w| view! { <div class="frefused" role="alert">{w}</div> })}
@@ -2612,15 +2723,15 @@ fn row_view(lens: Lens, pop: Pop, row: Row, at: Option<usize>, live: impl Fn() -
             .into_any()
         }
         Row::Cat(c) => {
-            let applied = move || match (c, pop.into.get()) {
-                (Cat::When | Cat::Deployed, None) => lens.pills(level).iter().any(|p| matches!(p, Pill::Time { t, .. } if time_cat(t) == c)),
-                (Cat::When | Cat::Deployed, Some(at)) => lens
-                    .kept(level)
-                    .and_then(|k| k.filter.groups.get(at).map(|g| anyof::members(g).iter().any(|m| matches!(m, Member::Time(t) if time_cat(t) == c))))
-                    .unwrap_or(false),
+            let applied = move || match c {
+                Cat::When | Cat::Deployed => {
+                    let at = pop.into.get().unwrap_or(Path::ROOT);
+                    anyof::block_at(&lens.tree(level), at)
+                        .is_some_and(|b| b.items.iter().any(|n| matches!(n, Node::Leaf(Member::Time(t)) if time_cat(t) == c)))
+                }
                 _ => pop.clauses(lens).get(c).is_some(),
             };
-            // FILTER-31: a category used inside a group says so.
+            // FILTER-37: a category used in a block below the root says so.
             let grouped = move || pop.into.get().is_none() && lens.in_group(level, c);
             view! {
                 <div
@@ -2640,7 +2751,7 @@ fn row_view(lens: Lens, pop: Pop, row: Row, at: Option<usize>, live: impl Fn() -
                     <span class="glyph" aria-hidden="true">{c.glyph()}</span>
                     <span class="flabel">{c.menu_label()}</span>
                     {move || applied().then(|| view! { <span class="dot" title="applied"></span> })}
-                    {move || grouped().then(|| view! { <span class="ingrp" title="used inside a group of alternatives">"∨"</span> })}
+                    {move || grouped().then(|| view! { <span class="ingrp" title="used in a group within the tree">"∨"</span> })}
                     <span class="arrow" aria-hidden="true">"▸"</span>
                 </div>
             }
@@ -2692,7 +2803,7 @@ fn row_view(lens: Lens, pop: Pop, row: Row, at: Option<usize>, live: impl Fn() -
                 move |ev: web_sys::MouseEvent| {
                     ev.stop_propagation();
                     let op = pop.pane_op(lens, Cat::Shortcode);
-                    pop.edit(lens, |into| lens.only(level, into, &token, op));
+                    pop.edit(lens, |into, item| lens.only(level, into, item, &token, op));
                 }
             };
             let pad = format!("padding-left: {}px", 8 + depth * 14);

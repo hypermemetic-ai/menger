@@ -1683,55 +1683,122 @@
   .fclash .p-lvl { margin-right: .3rem; }
   .fbar .pill.custom .p-cat { font-style: italic; }
   .fbar .pill.custom .p-vals { max-width: 26rem; }
-  /* FILTER-31: any of — a group of pills in a box, its members joined by
-     the joiner (a button: it flips any of / all of), `+ or`, the ⋯ menu on
-     a pill, the Shift-click pick, a refusal, and `and` between the pills
-     while the bar holds a group. */
-  .fbar .fand { font-size: calc(11px * var(--text-scale)); color: var(--muted); font-family: var(--sans); }
-  .fbar .fgrp {
-    display: inline-flex; flex-wrap: wrap; align-items: center; gap: .25rem; padding: .1rem .3rem;
-    border: var(--border) solid var(--accent); border-radius: var(--radius-xl); background: var(--panel);
-    font-size: calc(12px * var(--text-scale)); line-height: 1.6;
+  /* FILTER-37: the query tree — the bar one line, folded (a chevron, the
+     name — underlined in --live once saved —, the canonical text, `done`
+     while open); opened, a root block and blocks within, each its head
+     (the joiner a button: the accent's one place but focus; `+ clause`,
+     `+ group`, `+ saved`, ×) and its items in a hairline; a saved query as
+     `SAVED · Name`, its peek; the picker, the category menu's card; "as
+     evaluated". No block is filled: the tree is drawn in --line. */
+  .fbar.qbar { display: block; }
+  .qbar .qline { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; min-width: 0; }
+  .qbar button.qchev {
+    font: inherit; font-size: calc(12px * var(--text-scale)); line-height: 1.6; background: none; border: 0; padding: 0 .2rem; color: var(--muted); cursor: pointer;
   }
-  .fbar .fgrp.inherited { opacity: .72; border-style: dashed; border-color: var(--line); }
-  .fbar .fgrp .g-l {
-    font-family: var(--sans); font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-strong); letter-spacing: .04em;
-    text-transform: uppercase; color: var(--accent); padding: 0 .15rem;
+  .qbar button.qchev:hover, .qbar button.qchev:focus-visible { color: var(--accent); }
+  .qbar input.qname {
+    font: var(--weight-strong) calc(12.5px * var(--text-scale)) var(--sans); color: var(--ink); background: transparent;
+    border: 0; border-bottom: var(--border) dashed var(--line); border-radius: 0; padding: .05rem .2rem; width: 10rem; min-width: 6rem; outline: none;
   }
-  .fbar .fgrp > button, .fbar .fgrp > .g-join, .fbar .fgrp > .pm-wrap > button {
-    font: inherit; background: none; border: 0; padding: 0 .3rem; color: var(--muted); cursor: pointer; border-radius: var(--radius);
+  .qbar input.qname::placeholder { color: var(--muted); font-weight: var(--weight-medium); }
+  .qbar input.qname:focus { border-bottom-color: var(--accent); }
+  .qbar input.qname.saved { border-bottom: 2px solid var(--live); }
+  .qbar .qtext {
+    flex: 1 1 12rem; min-width: 8rem; font: calc(11.5px * var(--text-scale)) var(--mono); color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
   }
-  .fbar .fgrp > button:hover, .fbar .fgrp > .pm-wrap > button:hover { background: var(--hover); color: var(--accent); }
-  .fbar .fgrp .g-join { font-family: var(--sans); font-style: italic; color: var(--accent); }
-  .fbar .fgrp .g-join.stuck { color: var(--muted); cursor: help; }
-  .fbar .fgrp .g-add { color: var(--accent); }
-  .fbar .pill.picked, .fbar .fgrp.picked { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .fbar .pm-wrap { position: relative; display: inline-flex; }
-  .fbar .pill > .pm-wrap { padding: 0; }
-  .fbar .pill:has(.pmenu) { overflow: visible; }
-  .fbar .pill .p-more { font: inherit; background: none; border: 0; padding: .05rem .4rem; color: var(--muted); cursor: pointer; }
-  .fbar .pmenu {
-    position: absolute; z-index: 31; top: calc(100% + 4px); right: 0; display: flex; flex-direction: column; min-width: 12rem; max-width: 22rem;
-    padding: 4px; background: var(--bg); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius-lg);
-    box-shadow: 0 10px 30px var(--shadow); font: calc(12.5px * var(--text-scale))/1.5 var(--sans); white-space: normal;
+  .qbar.open .qtext { white-space: normal; overflow-wrap: anywhere; cursor: default; }
+  .qbar .qglobal { display: inline-flex; align-items: baseline; gap: .3rem; max-width: 40%; opacity: .72; }
+  .qbar .qglobal code { font: calc(11px * var(--text-scale)) var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qbar.open .qglobal code { white-space: normal; }
+  .qbar button.qdone {
+    font: inherit; font-size: calc(12px * var(--text-scale)); line-height: 1.6; padding: 0 .6rem; cursor: pointer;
+    background: var(--card); color: var(--ink); border: var(--border) solid var(--line); border-radius: var(--radius-pill);
   }
-  .fbar .pmenu .pm-i {
-    font: inherit; text-align: left; background: none; border: 0; border-radius: var(--radius); padding: .2rem .55rem; color: var(--ink); cursor: pointer;
+  .qbar button.qdone:hover, .qbar button.qdone:focus-visible { color: var(--accent); }
+  .qbar .p-lvl {
+    font-family: var(--sans); font-size: calc(10px * var(--text-scale)); font-weight: var(--weight-strong); letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
   }
-  .fbar .pmenu .pm-i:hover, .fbar .pmenu .pm-i:focus-visible { background: var(--hover); color: var(--accent); outline: none; }
-  .fbar .pmenu .pm-i[disabled] { color: var(--muted); cursor: not-allowed; }
-  .fbar .pmenu .pm-why { padding: 0 .55rem .3rem; font-size: calc(11px * var(--text-scale)); color: var(--muted); }
-  .fbar .fpick { display: inline-flex; align-items: center; gap: .3rem; font-size: calc(12px * var(--text-scale)); }
-  .fbar .fpick .fgroup-any {
-    font: inherit; background: var(--accent); color: var(--bg); border: 0; border-radius: var(--radius-lg); padding: .05rem .6rem; cursor: pointer;
+  .qbar .qtree {
+    margin: .45rem 0 0; padding-top: .45rem; border-top: var(--border) solid var(--line);
+    font: calc(12px * var(--text-scale))/1.7 var(--mono); display: flex; flex-direction: column; gap: .2rem;
   }
-  .fbar .fpick .fpick-h { color: var(--muted); font-style: italic; }
-  .fbar .fpick .p-x, .fbar .frefused .p-x { font: inherit; background: none; border: 0; color: var(--muted); cursor: pointer; }
+  .qbar .qblock { display: flex; flex-direction: column; gap: .15rem; }
+  .qbar .qhead { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
+  .qbar .qkids {
+    display: flex; flex-direction: column; gap: .15rem; margin-left: .55rem; padding-left: .7rem; border-left: var(--border) dashed var(--line);
+  }
+  .qbar .qnode { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; min-width: 0; }
+  .qbar .qnode > .qblock { flex: 1 1 100%; }
+  .qbar button.qjoin, .qbar span.qjoin {
+    font: var(--weight-strong) calc(11px * var(--text-scale))/1.6 var(--mono); letter-spacing: .03em; color: var(--accent);
+    background: transparent; border: var(--border) dashed transparent; border-radius: var(--radius); padding: 0 .35rem;
+  }
+  .qbar button.qjoin { cursor: pointer; }
+  .qbar button.qjoin:hover, .qbar button.qjoin:focus-visible { border-color: var(--accent); outline: none; }
+  .qbar span.qjoin.ro { color: var(--muted); }
+  .qbar button.qadd {
+    font: calc(11.5px * var(--text-scale))/1.6 var(--mono); color: var(--muted); background: transparent; cursor: pointer;
+    border: var(--border) dashed var(--line); border-radius: var(--radius-pill); padding: 0 .5rem;
+  }
+  .qbar button.qadd:hover, .qbar button.qadd:focus-visible, .qbar button.qadd[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); outline: none; }
+  .qbar button.qrm, .qbar .qref .p-x, .qbar .qnote .p-x, .qbar .frefused .p-x {
+    font: inherit; background: none; border: 0; padding: 0 .3rem; color: var(--muted); cursor: pointer;
+  }
+  .qbar button.qrm:hover, .qbar .qref .p-x:hover { color: var(--err-fg); }
+  .qbar .qempty { color: var(--muted); font-style: italic; font-family: var(--sans); font-size: calc(11.5px * var(--text-scale)); }
+  .qbar .qref {
+    display: inline-flex; align-items: center; gap: .3rem; padding: 0 .15rem 0 .5rem; white-space: nowrap;
+    border: var(--border) solid var(--line); border-radius: var(--radius-pill); background: var(--card); color: var(--ink);
+  }
+  .qbar .qref .qlab, .qbar .qref .qnot {
+    font: var(--weight-strong) calc(10px * var(--text-scale)) var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  }
+  .qbar .qref button.qpeek, .qbar .qref button.qinline {
+    font: inherit; background: none; border: 0; padding: 0 .25rem; color: var(--muted); cursor: pointer;
+  }
+  .qbar .qref button.qinline { border: var(--border) dashed var(--line); border-radius: var(--radius-pill); padding: 0 .45rem; font-size: calc(11px * var(--text-scale)); }
+  .qbar .qref button:hover, .qbar .qref button:focus-visible { color: var(--accent); }
+  .qbar .qref.inherited, .qbar .qblock.ro .pill { opacity: .72; border-style: dashed; }
+  .qbar .qpeeked {
+    flex-basis: 100%; margin: 0 0 .1rem 1.2rem; font: calc(11.5px * var(--text-scale))/1.5 var(--mono); color: var(--muted); white-space: normal;
+  }
+  .qbar .qinherited { display: flex; flex-direction: column; gap: .15rem; padding-bottom: .3rem; border-bottom: var(--border) dashed var(--line); }
+  .qbar .qinherited > .p-lvl { align-self: flex-start; }
+  .qbar .qlocal { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; padding-top: .3rem; border-top: var(--border) dashed var(--line); }
+  .qbar .qeval { margin: .35rem 0 0; font: calc(11px * var(--text-scale))/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+  .qbar .qeval .qeval-l { font-family: var(--sans); }
+  .qbar .qpick {
+    position: static; display: flex; flex-direction: column; gap: .3rem; margin: .1rem 0 .2rem 1.2rem; padding: .4rem .5rem; max-width: 28rem;
+    max-height: none; box-shadow: none;
+  }
+  .qbar .qpick .qnames { display: flex; flex-direction: column; }
+  .qbar .qpick .qpick-n { display: flex; align-items: center; gap: .4rem; width: 100%; text-align: left; font: inherit; background: none; border: 0; cursor: pointer; }
+  .qbar .qpick .qpick-n .qin { color: var(--live); }
+  .qbar .qpick .qpick-n .qrecent { font: calc(10px * var(--text-scale)) var(--sans); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .qbar .qpick .qpick-n .fcount { margin-left: auto; }
+  .qbar .qpick .qmore { padding: .15rem .5rem; font: calc(11px * var(--text-scale)) var(--mono); color: var(--muted); }
+  .qbar .qtaken, .qbar .qnote {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .35rem 0 0; padding: .2rem .55rem;
+    font-size: calc(12px * var(--text-scale)); font-family: var(--sans); border: var(--border) solid var(--line); border-radius: var(--radius-lg); background: var(--card);
+  }
+  .qbar .qtaken button { font: inherit; padding: 0 .55rem; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--card); color: var(--ink); cursor: pointer; }
+  .qbar .qtaken button.primary { border-color: var(--accent); color: var(--accent); }
+  .qbar .qnote.sproblem { background: var(--err-bg); color: var(--err-fg); border-color: var(--err-line); }
+  .qbar .frefused { display: block; margin: .35rem 0 0; }
+  .lensbar.qbar .qline { gap: .4rem; }
+  @media (max-width: 640px) {
+    .qbar .qkids { margin-left: .2rem; padding-left: .45rem; }
+    .qbar input.qname { width: 7rem; }
+    .qbar .qglobal { max-width: 100%; }
+    .qbar .qpick { margin-left: .3rem; }
+  }
   .fbar .frefused, .fmenu .frefused {
     padding: .2rem .55rem; font-size: calc(12px * var(--text-scale)); font-family: var(--sans);
     background: var(--err-bg); color: var(--err-fg); border: var(--border) solid var(--err-line); border-radius: var(--radius-lg);
   }
   .fbar .frefused { flex-basis: 100%; order: 9; }
+  .fbar .frefused .p-x { font: inherit; background: none; border: 0; color: var(--muted); cursor: pointer; }
   .fmenu .frefused { flex: none; margin: 4px 8px; }
   .fmenu .finto {
     flex: none; padding: 4px 10px; border-bottom: var(--border) solid var(--line); font-family: var(--sans); font-size: calc(11.5px * var(--text-scale)); color: var(--accent);

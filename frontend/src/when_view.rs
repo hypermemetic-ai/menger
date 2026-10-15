@@ -40,9 +40,8 @@ pub(crate) enum Step {
     Root,
     /// A new clause of this kind: its first choice.
     New(Kind),
-    /// The clause at `at` among the level's groups, or among the members
-    /// of the group there (FILTER-31) — `only` one part of it (opened from a
-    /// pill's segment).
+    /// The clause at `at` in the level's query tree (FILTER-37) — `only`
+    /// one part of it (opened from a pill's segment).
     Edit { at: Slot, only: Option<Part> },
 }
 
@@ -63,17 +62,17 @@ fn keep_focus(level: Level) {
     });
 }
 
-/// The time clause at `at` among `level`'s groups (FILTER-31: or a
-/// group's members).
+/// The time clause at `at` in `level`'s query tree (FILTER-37).
 fn clause_at(lens: Lens, level: Level, at: Slot) -> Option<Timed> {
-    lens.kept(level).and_then(|k| anyof::time_in(&k.filter.groups, at))
+    anyof::time_at(&lens.tree(level), at)
 }
 
-/// `t` written at `at` (replacing that clause) or — `None` — added: to the
-/// group the menu adds to (FILTER-31's Or…), else last; where it now is.
+/// `t` written at `at` (replacing that clause) or — `None` — added last to
+/// the block the menu adds to (FILTER-37: a block's `+ clause`, else the
+/// root); where it now is.
 fn put(lens: Lens, pop: Pop, at: Option<Slot>, t: &Timed) -> Option<Slot> {
-    let into = pop.into.get_untracked();
-    match lens.edit_groups(pop.level, |gs| anyof::put_time(gs, into, at, t)) {
+    let into = pop.into.get_untracked().unwrap_or(anyof::Path::ROOT);
+    match lens.edit_tree(pop.level, |tree| anyof::put_time(tree, into, at, t)) {
         Ok(slot) => Some(slot),
         Err(why) => {
             pop.refusal.set(Some(why));
@@ -306,7 +305,7 @@ fn edit_view(lens: Lens, pop: Pop, at: Slot, only: Option<Part>) -> impl IntoVie
     let who_sec = (shows(Part::Who) && kind.has_who()).then(|| who_view(current, set));
     let said = move || current.get().map(|t| when::words(&t, h12)).unwrap_or_default();
     view! {
-        <div class="when-pane wform" data-when=kind.key() data-at=at.at data-member=at.member.map(|m| m.to_string())>
+        <div class="when-pane wform" data-when=kind.key() data-at=at.block.key() data-item=at.item>
             <button type="button" class="wback" title="another time clause" on:mousedown=|ev| ev.prevent_default() on:click=move |_| pop.when.set(Step::Root)>
                 <span class="glyph">"‹"</span>
                 <span class="flabel">"another time clause"</span>
