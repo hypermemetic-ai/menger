@@ -2087,6 +2087,49 @@
   }
   #comments .cflip:hover { border-color: var(--accent); color: var(--accent); }
   #comments .cerr { color: var(--err-fg); font-size: calc(.75rem * var(--text-scale)); }
+  /* APP-22: a ticket page's Conversation — its comments, oldest first, then a box
+     for one on the ticket as a whole. */
+  section.convsec { margin-top: 1.5rem; padding-top: .9rem; border-top: var(--border) solid var(--line); font-family: var(--sans); font-size: calc(13px * var(--text-scale)); }
+  section.convsec h3 {
+    display: flex; align-items: center; gap: .5rem; margin: 0 0 .5rem;
+    font-size: calc(11px * var(--text-scale)); text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  }
+  section.convsec .ccn { font-family: var(--mono); text-transform: none; letter-spacing: 0; }
+  section.convsec p.none, section.convsec p.loading { color: var(--muted); margin: 0 0 .6rem; }
+  section.convsec ol.cthread { list-style: none; margin: 0 0 .7rem; padding: 0; display: flex; flex-direction: column; gap: .45rem; }
+  section.convsec li.cpost {
+    border: var(--border) solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-lg);
+    background: var(--card); padding: .45rem .7rem;
+  }
+  section.convsec li.cpost.pinned { border-left-color: var(--line); }
+  section.convsec li.cpost[data-state="resolved"] { opacity: .75; border-left-color: var(--live); }
+  section.convsec li.cpost.fresh { animation: menger-cpost-in .32s ease-out both; }
+  @keyframes menger-cpost-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  section.convsec .chead { display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem; }
+  section.convsec .cwho { font-weight: var(--weight-medium); }
+  section.convsec .cwhen { color: var(--muted); font-size: calc(.75rem * var(--text-scale)); cursor: help; }
+  section.convsec a.cpin { color: var(--accent); font-size: calc(.75rem * var(--text-scale)); text-decoration: none; }
+  section.convsec a.cpin:hover { text-decoration: underline; }
+  section.convsec .cstate { font: calc(11px * var(--text-scale))/1.5 var(--mono); border: var(--border) solid var(--live); color: var(--live); border-radius: var(--radius-lg); padding: 0 5px; }
+  section.convsec .cflip, section.convsec .csend {
+    font: inherit; font-size: calc(.75rem * var(--text-scale)); cursor: pointer; background: var(--panel); color: var(--ink);
+    border: var(--border) solid var(--line); border-radius: var(--radius); padding: 0 .55rem;
+  }
+  section.convsec .cflip { margin-left: auto; }
+  section.convsec .cflip:hover, section.convsec .csend:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  section.convsec .cbody { margin: .25rem 0 0; overflow-wrap: anywhere; }
+  section.convsec .cbody > :first-child { margin-top: 0; }
+  section.convsec .cbody > :last-child { margin-bottom: 0; }
+  section.convsec .cerr { color: var(--err-fg); font-size: calc(.75rem * var(--text-scale)); }
+  section.convsec .cnew { display: flex; flex-direction: column; gap: .35rem; }
+  section.convsec textarea.cbox {
+    font: inherit; color: var(--ink); background: var(--bg); resize: vertical; min-height: 4.2em;
+    border: var(--border) solid var(--line); border-radius: var(--radius); padding: .4rem .55rem;
+  }
+  section.convsec textarea.cbox:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  section.convsec .cnewacts { display: flex; align-items: center; justify-content: flex-end; gap: .6rem; }
+  section.convsec .csend { padding: .15rem .9rem; }
+  section.convsec .csend:disabled { opacity: .5; cursor: default; }
   /* MENGER-12: a ticket's labels — chips on its rows and its page;
      `needs-you` wears the accent (it puts the ticket under Needs you, on the nav). */
   .lchips { display: inline-flex; flex-wrap: nowrap; gap: .25rem; margin-left: .4rem; vertical-align: 1px; }
@@ -2551,6 +2594,7 @@
     html:not([data-motion]) :is(#conn.live .cell, #nav .carpet.pip) { animation: none; }
     html:not([data-motion]) :is(tbody#board td, #nav .row) { transition: none; }
     html:not([data-motion]) #qtray .qtab.loud { animation: none; }
+    html:not([data-motion]) section.convsec li.cpost.fresh { animation: none; }
     html:not([data-motion]) #qtray .qtab.fresh { animation: none; }
     html:not([data-motion]) #qtray .qtab.fresh.unseen { outline: 2px solid var(--flash); outline-offset: -2px; }
     html:not([data-motion]) #qtray :is(.qedge, .qarrived) { display: none; }

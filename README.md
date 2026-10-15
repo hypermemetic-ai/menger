@@ -1958,6 +1958,23 @@ comment, filtered by the route's query (`?ticket=&under=&state=&author=&text=`),
 each linking back to its page and element (`…?comment=<id>`); a ticket page's
 side panel counts its open ones. All of it is live through `comments.watch`.
 
+**A ticket's Conversation** (APP-22): a ticket page ends with its comments,
+oldest first — every comment whose anchor names the ticket, whole-ticket and
+pinned alike (a pinned one says what it is on and links to its pin), each
+with its author, time, body as markdown and Resolve / Reopen — then a box,
+"Comment on <ID> — Ctrl+Enter sends" (`c` on the page focuses it; Esc
+leaves it). A comment sent there is on the ticket as a whole: its anchor is
+`{ route: "#/ticket/<ID>", path: "conversation", label: "Conversation",
+ticket: "<ID>" }`, no pin is drawn for it in annotation mode, and its link
+back (`?comment=<id>`) flashes its row. Agents read them as any comment:
+
+```sh
+synapse -P 4455 menger comments list --ticket APP-22
+synapse -P 4455 -p '{"ticket": "APP-22", "path": "conversation"}' menger comments list   # whole-ticket only
+synapse -P 4455 menger comments add --anchor.route '#/ticket/APP-22' --anchor.path conversation \
+  --anchor.label Conversation --anchor.ticket APP-22 --body "not what I meant: do X instead"
+```
+
 ### History and cancellation (MENGER-13)
 
 **Every change of a ticket's status or kind is a transition**, kept by the
