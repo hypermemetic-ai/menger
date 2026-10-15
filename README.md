@@ -394,8 +394,9 @@ admit — `global.and(own)`, which merges groups on the same field (lists
 intersect, exclusions unite) and names a contradiction under the bar. Every
 bar is the same component (WAVE-12's menu made generic, `src/lens.rs`):
 categories with counts (`facets`, Linear's: a category's counts ignore its
-own clause, never the global one), pills, a text mode in FILTER-3's
-language, and the global pills shown muted in each surface's bar. The
+own clause, never the global one), the query tree (FILTER-37, below), a
+text mode in FILTER-3's language, and the global filter shown muted in
+each surface's bar. The
 board windows over `counts` (FILTER-12); the nav shows each shortcode with
 its matches and, inside, only the matches, each with the matches below it —
 a ticket the filter excludes is not drawn, and the matches under it move up
@@ -418,6 +419,40 @@ makes, and values checked under it are excluded — Filter ▸ Kind, `is not`,
 doc and spike is `not kind in (spike, doc)`. A flag (Ready, Blocked,
 Commits) has no switch; its `yes` / `no` is the negation. Tab from the
 search reaches the switch; Space or Enter flips it.
+
+**The query tree** (FILTER-37) is every bar's one builder. Folded — the
+default, "when not working on it" — the bar is one line: a chevron, the
+query's **name** (a field; empty, "unnamed query"), its canonical text (one
+line; on a surface the global filter's first, muted), then `text`, `reset`,
+Make global (the nav) and `Saved ▾`. The chevron, focusing the name or any
+edit opens it; **done**, Escape or applying a filter (Enter in the text
+mode, a `Saved ▾` pick) folds it. Open, the tree is a root block and blocks
+within, each drawn as its head and its items in a hairline: the head's
+joiner is a button, `any of` ⇄ `all of` (the root's too: `Needs you or
+Plexus-Ready` is an any-of root of two names), then **+ clause** (the
+category menu, adding to that block), **+ group** (a block within under the
+other join, so the nesting shows, the menu opened adding to it), **+ saved**
+and, but on the root, ×. A clause is its pill — its operator toggles, its
+values reopen its category in that block, × takes it out; a time pill's
+parts reopen the When pane and **negate** turns it around. A saved query is
+a node, `SAVED · Name`, with a peek at its clauses (its doc's text, read
+the first time) and **inline** (the name replaced by its clauses, one level;
+its own names stay names). **+ saved** opens a search-first picker: a search
+box, then the names — the most recently used first (kept per viewer), then
+the collection's order (a level's own, filed under its shortcode, will come
+between) — eight shown, "N more: type to narrow", a name already in the tree
+marked ✓, each counted (`counts { filter: saved "Name" }`) where the level
+counts; Enter takes the first, Escape closes; "Needs you" is always there.
+With names, a second line says the filter **as evaluated**, the names
+expanded by the texts fetched ("…" until they are in). On a surface the
+global root is drawn first, read-only and muted (a pill opens the global
+menu at its category); the wave board's and the inputs page's own
+categories sit after the tree, joined by `and`. Every edit is a pure
+function of `src/anyof.rs`; the tree last edited is kept while the filter
+still says it, so a new empty group or an any-of root of one name keeps its
+shape. FILTER-31's box, the `⋯` menu, Or…, Group as any of and Shift-click
+are gone. Colour: blocks in `--line`, the accent on the joiners and focus
+only.
 
 Menger's own documents are a filter (FILTER-21): `menger doc` admits the
 tickets whose path starts with `_MENGER/` (each shortcode's board note) on
@@ -456,7 +491,8 @@ the nav shows what waits on the owner there. The same press while the nav
 holds exactly that filter puts the nav's default back. The header's count
 is the saved filter's, live (`entered` / `left` / `recount` of a membership
 watch), whatever the lens holds. The filter is changed as any saved filter
-is — apply it, edit the pills, **Save as…** "Needs you" (replace); the next
+is — apply it (the bar wears its name), edit the tree (every edit amends
+it), or **Save as…** "Needs you" (replace); the next
 `g n` applies the new text. The questions are where they are answered: the
 ticket page (its frame scrolls to the input), `#/inputs`, and the tray for
 a queued ticket. Home is the board; MENGER-12's panel, which answered to
@@ -483,6 +519,24 @@ again takes it over. The wave board's Wave, Readiness, Off-board blockers
 and Title (the inputs page's State and Removed) are not in the language,
 so Save as… leaves them out and says so. The app reads `VIEW-1` when a
 menu opens — nothing at startup — and, once read, follows its `amended`.
+
+**Naming saves** (FILTER-37, `src/naming.rs`): the name at the top of a
+tree *is* its save. Given a name (Enter, or leaving the field), the level's
+filter is written as Save as… writes it — the doc at `_MENGER/view/<slug>`
+and its line in `VIEW-1` — and the name is underlined in `--live`; from then
+on **every edit** amends that doc, 400 ms after the last change, one write
+at a time, the last always written. A name another listed filter holds
+offers to replace it or to choose another; typing another name renames it
+(the title and the line; the path stays); emptying the name unlists it (the
+line goes, the doc stays). A name given to an empty tree is saved with its
+first clause. A filter chosen in `Saved ▾` opens with its name in the bar,
+and editing it there edits it — and every filter that names it. What lets
+go of a name: a filter applied from outside the bar (a link's `g=` / `n=`,
+another `Saved ▾` pick, Make global and its undo, `reset`, `g n`, the
+palette's `filter …`); the binding is kept per viewer and level and comes
+back while the level holds the text it last wrote. An unnamed tree is the
+level's filter alone. `Save as…` stays as a second door, and binds the
+level to what it saved.
 
 **Nesting and names** (FILTER-36). The language (FILTER-10's, in
 `tickets-api/src/filter.rs`) is groups joined by `and`, each group one `or`
@@ -520,9 +574,8 @@ asked: when a filter it names changes — its doc amended, renamed, deleted —
 it says what that did, `entered` / `left` per ticket (a `recount` per
 shortcode past 256), after the change that did it; a name that stops
 resolving ends it with the `error`. The app reads and carries any such
-text (the URL's `g=` / `n=` too); until FILTER-37's tree it draws a group
-holding a group or a name as one custom pill of its canonical text, edited
-in the bar's text mode — every unnested filter is drawn as before.
+text (the URL's `g=` / `n=` too); FILTER-37's tree draws every such shape —
+a group within a group is a block within a block, a name a saved node.
 
 ```sh
 synapse -P 4455 menger tickets list --filter 'saved "Needs you" or saved Plexus-Ready' --summary true
@@ -556,9 +609,8 @@ tokens, never the browser's date input; `#/components` shows them live
 under "The app's own" (the registry above them is the tickets'
 components). **Hasn't changed** (FILTER-30) builds `not touched <window>`
 — within 1d · 3d · 1w · 2w · 1mo, or Custom… for since a day — a pill
-reading "hasn't changed in 2 weeks"; any time pill's ⋯ menu has
-**Negate** (`created today` ⇄ `not created today`), and a group's ⋯ menu
-one per time clause inside it. `Saved ▾` suggests four filters until one of
+reading "hasn't changed in 2 weeks"; any time pill has **negate**
+(`created today` ⇄ `not created today`), wherever it sits in the tree. `Saved ▾` suggests four filters until one of
 their names is saved — **New today** (`created today`), **Moved today**
 (`changed today`), **Stuck** (`category in (ready, active, review) for over
 1w`), **Untouched 2w** (`not touched within 2w and not category done and
@@ -3506,8 +3558,11 @@ scripts/shot.mjs       screenshots of the app once it is ready, signed in where
 web/index.html         the day-one reactive shell
 frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
                        src/waves.rs the wave board (WAVE-5, WAVE-6),
-                       src/filter.rs the generic filter bar and menu (WAVE-12,
-                       FILTER-11), src/lens.rs the levels — global, nav,
+                       src/filter.rs the generic filter bar, its query tree
+                       and the menu (WAVE-12, FILTER-11, FILTER-37),
+                       src/anyof.rs the tree's edits, src/naming.rs naming
+                       saves and + saved's picker (FILTER-37),
+                       src/lens.rs the levels — global, nav,
                        board, waves, inputs — their URL and storage, the
                        header's bar (FILTER-11), src/counts.rs menu counts and
                        the header's n of N (FILTER-12), src/saved.rs saved

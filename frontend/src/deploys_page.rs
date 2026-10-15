@@ -235,7 +235,7 @@ fn Waiting(project: String, last: Memo<Option<String>>) -> impl IntoView {
     let lens = crate::lens::use_lens();
     let on_board = move |_| {
         if let Some(f) = filter.get_untracked().and_then(|f| menger_tickets_api::filter::Filter::parse(&f).ok()) {
-            lens.edit(crate::lens::Level::Global, |k| *k = crate::saved::chosen(f));
+            lens.apply(crate::lens::Level::Global, Some(crate::saved::chosen(f)));
             crate::dom::window().location().set_hash("#/").ok();
         }
     };

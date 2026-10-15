@@ -7,7 +7,8 @@
 //!   is a **saved filter** (FILTER-6, src/saved.rs): the one named "Needs
 //!   you" (`VIEW/_MENGER/view/needs-you`) when one is saved, else the
 //!   default. It is changed as any saved filter is: apply it, edit the
-//!   pills, **Save as…** "Needs you" (replace) — the count follows the save
+//!   tree (FILTER-37: applied, the bar wears its name and every edit
+//!   amends it), or **Save as…** "Needs you" (replace) — the count follows the save
 //!   ([`saved_changed`]), and the next `g n` applies the new text.
 //! - **Where it is seen is the nav** ([`go`]): `g n`, or a click on the
 //!   header's `needs you N`, puts the saved filter on the nav's level
@@ -232,7 +233,7 @@ pub(crate) fn go() {
         let Some(f) = needs.filter.try_get_untracked() else { return };
         let said = match plan(&lens.text(Level::Nav), &f.format()) {
             Go::Apply(_) => {
-                lens.commit(Level::Nav, Some(saved::chosen(f)));
+                lens.apply(Level::Nav, Some(saved::chosen(f)));
                 format!("\u{201c}{SAVED_NAME}\u{201d} applied")
             }
             Go::Reset => {
