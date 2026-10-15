@@ -62,43 +62,58 @@ impl Drop for Server {
 /// default — parallel test servers must not collide on 4457) and waits
 /// until the REST listener accepts connections.
 async fn spawn_server() -> Server {
-    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let ws_port = free_port().await;
-    let rest_port = free_port().await;
-    let db: PathBuf = dir.path().join("tickets.db");
-    let child = Command::new(env!("CARGO_BIN_EXE_menger"))
-        .arg("--no-shell")
-        .arg("--port")
-        .arg(ws_port.to_string())
-        .arg("--rest-port")
-        .arg(rest_port.to_string())
-        .arg("--db-path")
-        .arg(&db)
-        // Hermetic: never inherit an override or a filter from the
-        // developer's environment.
-        .env_remove("MENGER_DB_PATH")
-        .env_remove("RUST_LOG")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn menger");
+    // ACCESS-49: free ports are picked by bind-and-release, so a parallel
+    // test can take one first and this server dies at bind — after REST
+    // already answered. So: wait for REST *and* the WebSocket, give a
+    // failed bind a beat to take the process down, and retry from scratch
+    // with fresh ports when it did (as tests/app.rs does, ACCESS-46).
+    for attempt in 1..=3 {
+        let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+        let ws_port = free_port().await;
+        let rest_port = free_port().await;
+        let db: PathBuf = dir.path().join("tickets.db");
+        let child = Command::new(env!("CARGO_BIN_EXE_menger"))
+            .arg("--no-shell")
+            .arg("--port")
+            .arg(ws_port.to_string())
+            .arg("--rest-port")
+            .arg(rest_port.to_string())
+            .arg("--db-path")
+            .arg(&db)
+            // Hermetic: never inherit an override or a filter from the
+            // developer's environment.
+            .env_remove("MENGER_DB_PATH")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn menger");
 
-    let server = Server {
-        child,
-        rest_port,
-        _dir: dir,
-    };
-    for _ in 0..100 {
-        if TcpStream::connect(("127.0.0.1", server.rest_port))
-            .await
-            .is_ok()
-        {
-            return server;
+        let mut server = Server {
+            child,
+            rest_port,
+            _dir: dir,
+        };
+        for _ in 0..100 {
+            if server.child.try_wait().expect("try_wait").is_some() {
+                break;
+            }
+            let rest_up = TcpStream::connect(("127.0.0.1", rest_port)).await.is_ok();
+            let ws_up = TcpStream::connect(("127.0.0.1", ws_port)).await.is_ok();
+            if rest_up && ws_up {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                if server.child.try_wait().expect("try_wait").is_none() {
+                    return server;
+                }
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(server);
+        eprintln!("menger startup attempt {attempt} failed; retrying with fresh ports");
     }
-    panic!("REST listener never came up on {}", server.rest_port);
+    panic!("menger failed to start after 3 attempts");
 }
 
 /// One HTTP/1.1 connection to the server's REST port.
