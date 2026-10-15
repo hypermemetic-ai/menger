@@ -117,10 +117,13 @@ async fn spawn_server_in(app_dist: &Path, rest: bool, env: Option<&str>) -> Serv
                 .await
                 .is_ok();
             let rest_up = !rest || TcpStream::connect(("127.0.0.1", rest_port)).await.is_ok();
-            if shell_up && rest_up {
-                // The WS bind has no probe of its own; give a failed one
-                // a beat to take the process down before trusting it.
-                tokio::time::sleep(Duration::from_millis(50)).await;
+            // ACCESS-46: the WebSocket listener is a TCP listener too — probe
+            // it, so the loser of a port race (it dies after the shell
+            // answered) is never trusted; then a beat long enough under a
+            // loaded machine for a failed bind to take the process down.
+            let ws_up = TcpStream::connect(("127.0.0.1", ws_port)).await.is_ok();
+            if shell_up && rest_up && ws_up {
+                tokio::time::sleep(Duration::from_millis(250)).await;
                 if server.child.try_wait().expect("try_wait").is_none() {
                     return server;
                 }
