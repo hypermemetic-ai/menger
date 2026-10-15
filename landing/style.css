@@ -159,25 +159,13 @@ h1 .l > span { color: color-mix(in srgb, var(--ink) calc(40% + var(--alpha) * 60
 .js .hero .a1 { animation-delay: 1.4s; } .js .hero .a2 { animation-delay: 2.1s; } .js .hero .a3 { animation-delay: 1.6s; }
 @keyframes fadeup { from { opacity: 0; transform: translateY(calc(10px * var(--s))); } to { opacity: 1; transform: none; } }
 
-/* the wall: the carpet in the status colours, as translucent layers */
-.wall { margin: 0; position: relative; }
-.carpet { width: 100%; height: auto; display: block; overflow: visible; }
-.carpet-still { fill: color-mix(in srgb, var(--epic) calc(var(--alpha) * 45%), transparent); }
-.wall .legend { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-top: 16px; }
-.sq { transform-box: fill-box; transform-origin: center; fill: color-mix(in srgb, var(--panel) calc(var(--alpha) * 100%), transparent); stroke: color-mix(in srgb, var(--line-2) calc(var(--alpha) * 100%), transparent); stroke-width: .1;
-  transition: fill .4s ease, stroke .4s ease, transform .45s cubic-bezier(.2,.8,.2,1), opacity .5s ease; transition-delay: 0s, 0s, var(--d, 0ms), var(--d, 0ms); }
-.sq.enter { transform: scale(.15); opacity: 0; }
-.sq.gone { opacity: calc(var(--alpha) * .35); }
-.sq.s0 { fill: color-mix(in srgb, var(--pending) calc(var(--alpha) * 55%), transparent); stroke: color-mix(in srgb, var(--pending) calc(var(--alpha) * 100%), transparent); }
-.sq.s1 { fill: color-mix(in srgb, var(--ready) calc(var(--alpha) * 55%), transparent); stroke: color-mix(in srgb, var(--ready) calc(var(--alpha) * 100%), transparent); }
-.sq.s2 { fill: color-mix(in srgb, var(--coding) calc(var(--alpha) * 55%), transparent); stroke: color-mix(in srgb, var(--coding) calc(var(--alpha) * 100%), transparent); }
-.sq.s3 { fill: color-mix(in srgb, var(--review) calc(var(--alpha) * 55%), transparent); stroke: color-mix(in srgb, var(--review) calc(var(--alpha) * 100%), transparent); }
-.sq.s4 { fill: color-mix(in srgb, var(--complete) calc(var(--alpha) * 55%), transparent); stroke: color-mix(in srgb, var(--complete) calc(var(--alpha) * 100%), transparent); }
-.sq.scope { fill: color-mix(in srgb, var(--epic) calc(var(--alpha) * 40%), transparent); stroke: color-mix(in srgb, var(--epic) calc(var(--alpha) * 100%), transparent); stroke-width: .14; }
-.sq.near { transform: scale(calc(1 + .16 * var(--s))); stroke-width: calc(.1 + .14 * var(--s)); transition-delay: 0s; }
-.cell-label { font-family: var(--mono); font-size: .6px; letter-spacing: .06em; text-transform: uppercase; fill: var(--ink); pointer-events: none; transition: opacity .4s ease; }
-.cell-label .st { fill: var(--muted); }
-@media (max-width: 899px) { .wall { max-width: 420px; } }
+/* DESIGN-48: the hero's figure is the product — an agent's mockup inside its
+   ticket, the tray beneath — in a night window on the panel, tighter than a
+   band's; its caption in the panel's ink. (The carpet wall of DESIGN-37–45
+   left the hero here; the boot and the wordmark keep it.) */
+.hero-fig { padding: clamp(12px, 2vw, 22px); }
+.hero-fig > .fig { color: var(--night-dim); } .hero-fig > .fig b { color: var(--night-ink); }
+@media (max-width: 899px) { .hero-fig { max-width: 640px; } }
 
 /* ── the product in a night window on a grained, gridded panel ── */
 .panel, .shot { margin: 0; }

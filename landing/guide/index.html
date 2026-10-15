@@ -42,7 +42,7 @@
   <p class="eyebrow">The guide</p>
   <h1>How to use menger</h1>
   <p class="lede">Everything the front page shows, in the order you meet it.
-    Nine parts; each stands on its own.</p>
+    Twelve parts; each stands on its own.</p>
 </header>
 
 <nav class="toc" aria-label="Parts of the guide">
@@ -50,9 +50,12 @@
     <li><a href="#what">What it is</a></li>
     <li><a href="#sign-in">Signing in</a></li>
     <li><a href="#board">The board and a ticket</a></li>
+    <li><a href="#inside">Inside a ticket</a></li>
     <li><a href="#find">Finding things</a></li>
     <li><a href="#inputs">Inputs</a></li>
+    <li><a href="#queue">The queue</a></li>
     <li><a href="#comments">Comments and notes</a></li>
+    <li><a href="#deploys">Deployments</a></li>
     <li><a href="#cli">From the command line</a></li>
     <li><a href="#download">Desktop app</a></li>
     <li><a href="#self-host">Run your own</a></li>
@@ -149,8 +152,57 @@
     cards as the work moves.</p>
 </section>
 
-<section class="step" id="find" aria-labelledby="find-h">
+<section class="step" id="inside" aria-labelledby="inside-h">
   <p class="num" aria-hidden="true">4</p>
+  <h2 id="inside-h">Inside a ticket: mockups, diagrams, pages</h2>
+  <p>A body is markdown, and may hold more: a <code>```mermaid</code>
+    diagram, drawn in place; HTML with its own styles and scripts; and the
+    house components, a decision among them. A body with markup renders in
+    a frame of its own, sandboxed from the app, so what an agent puts there
+    is the thing itself — a screen to look at, a site to click through, a
+    plan drawn as a graph — not a picture of it, and it sits beside the
+    question it raises.</p>
+  <figure class="shot">
+    <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFLINE-14 · an agent's mockup and its decision</span></div>
+    <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="../media/mockup.dark.1200.avif 1200w, ../media/mockup.dark.2400.avif 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><source type="image/avif" srcset="../media/mockup.light.1200.avif 1200w, ../media/mockup.light.2400.avif 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="../media/mockup.dark.1200.webp 1200w, ../media/mockup.dark.2400.webp 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><img src="../media/mockup.light.1200.webp" srcset="../media/mockup.light.1200.webp 1200w, ../media/mockup.light.2400.webp 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)" width="1200" height="750" alt="A ticket page: an agent's mockup of a phone's conflict screen, two versions side by side; beneath it a decision with three options and their costs; along the bottom edge a red tab marked now." loading="lazy" decoding="async"></picture>
+  </figure>
+  <p>A whole HTML document is shown as itself. One that declares
+    <code>view: mockup</code> in its frontmatter — or
+    <code>&lt;meta name="menger-view" content="mockup"&gt;</code> in its
+    head — is drawn in device frames at each of its <code>widths</code>
+    (<code>390, 1440</code>, say), side by side at one scale, each a viewport
+    of its own; the bar above them picks one device or all, light or dark,
+    and reduced motion, and the page sees each as its own media query.
+    <kbd>z</kbd> fills the screen with it.</p>
+  <figure class="shot">
+    <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>OFFLINE-16 · a page, at 390 and 1440</span></div>
+    <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="../media/page.dark.1200.avif 1200w, ../media/page.dark.2400.avif 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><source type="image/avif" srcset="../media/page.light.1200.avif 1200w, ../media/page.light.2400.avif 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="../media/page.dark.1200.webp 1200w, ../media/page.dark.2400.webp 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><img src="../media/page.light.1200.webp" srcset="../media/page.light.1200.webp 1200w, ../media/page.light.2400.webp 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)" width="1200" height="750" alt="A ticket page holding a help page an agent built, drawn in a phone frame and a desktop frame side by side; above them the mockup's bar: All, 390, 1440, Light, Dark, Reduced motion, Full screen." loading="lazy" decoding="async"></picture>
+  </figure>
+  <p id="components"><strong>Your own components.</strong> A
+    <code>```component fn-banner</code> block in any ticket defines a custom
+    element: its <code>&lt;template&gt;</code>, <code>&lt;style&gt;</code>,
+    <code>&lt;docs&gt;</code> — a summary, its attributes, the parts a theme
+    may skin, examples — and <code>&lt;script&gt;</code>. The registry keeps
+    it, so any body may write <code>&lt;fn-banner state="syncing"
+    count="1"&gt;</code>; <em>Components</em> in the header lists every one
+    with its owner and what references it, and
+    <code>#/components/fn-banner</code> is its help page, the examples live.
+    The house components — decisions, inputs, steps, results — are defined
+    the same way, in a ticket.</p>
+  <figure class="shot">
+    <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>#/components/fn-banner · a component's help page</span></div>
+    <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="../media/components.dark.1200.avif 1200w, ../media/components.dark.2400.avif 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><source type="image/avif" srcset="../media/components.light.1200.avif 1200w, ../media/components.light.2400.avif 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="../media/components.dark.1200.webp 1200w, ../media/components.dark.2400.webp 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><img src="../media/components.light.1200.webp" srcset="../media/components.light.1200.webp 1200w, ../media/components.light.2400.webp 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)" width="1200" height="750" alt="The help page of fn-banner, a component the team defined: its summary, a live preview, its attributes, the parts a theme may skin, three examples rendered beside their markup, and the ticket that owns it." loading="lazy" decoding="async"></picture>
+  </figure>
+  <p>Such a body is filed as a <span class="kind k-doc">doc</span> under the
+    work it belongs to — a mockup under the build it is for, a page under
+    the build that asks about it, a site map beside the decision it informs
+    — so the tree says where it came from. The frame talks to nothing but
+    menger: a body's script may read and write tickets through
+    <code>window.menger</code>, and nothing else.</p>
+</section>
+
+<section class="step" id="find" aria-labelledby="find-h">
+  <p class="num" aria-hidden="true">5</p>
   <h2 id="find-h">Finding things</h2>
   <p><strong>Filters</strong> reach every view. The header's
     <em>Filter</em> button (<kbd>F</kbd>) filters everything; each view —
@@ -205,7 +257,7 @@
 </section>
 
 <section class="step" id="inputs" aria-labelledby="inputs-h">
-  <p class="num" aria-hidden="true">5</p>
+  <p class="num" aria-hidden="true">6</p>
   <h2 id="inputs-h">Inputs: questions asked inside a ticket</h2>
   <p>A ticket can ask its owner something and keep the answer: a
     <strong>decision</strong> (pick one), a <strong>multi</strong> (tick any)
@@ -221,8 +273,31 @@
     is still open. Answering needs the editor role.</p>
 </section>
 
+<section class="step" id="queue" aria-labelledby="queue-h">
+  <p class="num" aria-hidden="true">7</p>
+  <h2 id="queue-h">The queue: a question put in front of you</h2>
+  <p>An input waits under <em>Needs you</em> until you look. When it should
+    not wait — an agent idle until it is answered, a deploy that rolled back
+    — the agent <strong>queues</strong> the ticket, with an urgency
+    (<code>whenever</code>, <code>today</code>, <code>now</code>,
+    <code>blocking</code>) and a reason. Every open app shows it at once as a
+    tab along the bottom edge of the main column; <code>now</code> and
+    <code>blocking</code> are red, taller, and nudge until opened. A tab that
+    arrives while you look flashes in its colour.</p>
+  <p>Click the tab: the urgency, who queued it and why, and the question
+    with its options, answerable right there — or <em>open the ticket</em>,
+    <em>snooze 10m</em>, <em>done with it</em>. Answering takes the ticket out
+    of the queue; the input stays the agent's to close. A ticket is queued
+    once: queued again, its urgency rises, never falls.</p>
+<pre class="cmd"><code>synapse -P 4455 menger tickets queue --id OFFLINE-14 --urgency now --input layout \
+  --reason 'OFFLINE-8 is idle until the layout is picked'
+synapse -P 4455 menger tickets queued                       # most urgent first, then oldest
+synapse -P 4455 menger tickets snooze --id OFFLINE-14 --minutes 30
+synapse -P 4455 menger tickets list --filter 'queued now or queued blocking' --summary true</code></pre>
+</section>
+
 <section class="step" id="comments" aria-labelledby="comments-h">
-  <p class="num" aria-hidden="true">6</p>
+  <p class="num" aria-hidden="true">8</p>
   <h2 id="comments-h">Comments and notes</h2>
   <p><strong>Comments</strong> are a reader's notes on the app itself. Press
     <kbd>a</kbd> (or <em>Annotate</em> in the header): every element is
@@ -239,8 +314,33 @@
     and it becomes a ticket, its text the body.</p>
 </section>
 
+<section class="step" id="deploys" aria-labelledby="deploys-h">
+  <p class="num" aria-hidden="true">9</p>
+  <h2 id="deploys-h">Deployments: where the work runs</h2>
+  <p>Your CI records each deploy with one call — the project, the
+    environment, its state, the revision and the commits it carries — and
+    menger works out which tickets those commits finished. A ticket's page
+    says where it runs; a board row carries a mark per environment;
+    <code>#/deployments</code> shows each environment, every deploy and what
+    it carried, and the Complete work still waiting for the last one. A
+    rollback takes out what only the undone deploys carried. A deployment
+    never moves a status.</p>
+  <figure class="shot">
+    <div class="shot-bar" aria-hidden="true"><i></i><i></i><i></i><span>the deployments page</span></div>
+    <picture><source type="image/avif" media="(prefers-color-scheme: dark)" srcset="../media/deploys.dark.1200.avif 1200w, ../media/deploys.dark.2400.avif 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><source type="image/avif" srcset="../media/deploys.light.1200.avif 1200w, ../media/deploys.light.2400.avif 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><source type="image/webp" media="(prefers-color-scheme: dark)" srcset="../media/deploys.dark.1200.webp 1200w, ../media/deploys.dark.2400.webp 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)"><img src="../media/deploys.light.1200.webp" srcset="../media/deploys.light.1200.webp 1200w, ../media/deploys.light.2400.webp 2400w" sizes="(min-width: 900px) 832px, calc(100vw - 32px)" width="1200" height="750" alt="The deployments page for OFFLINE: beta and prod as columns, each with what it runs and its deploys and the tickets they carried, and above them the Complete work still waiting for prod." loading="lazy" decoding="async"></picture>
+  </figure>
+<pre class="cmd"><code>synapse -P 4455 menger deployments record --project OFFLINE --environment prod --state succeeded \
+  --revision c2e9f55 --commits 3f9c2a1,8b41d07,c2e9f55 --release 4.1.2
+synapse -P 4455 menger deployments for_ticket --id OFFLINE-5
+synapse -P 4455 menger tickets list --filter 'category done and not deployed prod' --summary true</code></pre>
+  <p class="note"><code>deployed prod</code> and <code>not deployed prod</code>
+    are filter cells, so a board, a wave board or a saved filter can show
+    what reached an environment and what did not. Recording needs the
+    deployer role.</p>
+</section>
+
 <section class="step" id="cli" aria-labelledby="cli-h">
-  <p class="num" aria-hidden="true">7</p>
+  <p class="num" aria-hidden="true">10</p>
   <h2 id="cli-h">From the command line</h2>
   <p>Everything menger does is a Plexus RPC method — there is no side door,
     so the app, scripts and agents make the same calls.
@@ -270,7 +370,7 @@ synapse -P 4455 menger notes upgrade --id 1 --epic HOME</code></pre>
 </section>
 
 <section class="step" id="download" aria-labelledby="download-h">
-  <p class="num" aria-hidden="true">8</p>
+  <p class="num" aria-hidden="true">11</p>
   <h2 id="download-h">Desktop app</h2>
   <p>menger for the desktop starts with a choice: <strong>Local</strong> —
     your tickets on this computer, a menger running inside the app, nothing
@@ -320,7 +420,7 @@ synapse -P 4455 menger notes upgrade --id 1 --epic HOME</code></pre>
 </section>
 
 <section class="step" id="self-host" aria-labelledby="self-host-h">
-  <p class="num" aria-hidden="true">9</p>
+  <p class="num" aria-hidden="true">12</p>
   <h2 id="self-host-h">Run your own</h2>
   <p>menger is one binary and a SQLite file as its system of record.
     <code>--features embedded-app</code> builds the web app into that binary,
